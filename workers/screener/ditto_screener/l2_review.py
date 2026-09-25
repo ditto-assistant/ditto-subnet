@@ -177,6 +177,81 @@ _DOSSIER_ANALYZERS = (
     "integrity_surfaces",
     "scorer_field_flow",
 )
+_SUBMISSION_VALIDATION_HINTS = {
+    "schema": "Match every required submit_l2_review field, type, and enum value.",
+    "artifact_citation": (
+        "Re-read exact source. Match analyzed_files SHA-256 values to the archive "
+        "and cite real artifact paths and lines."
+    ),
+    "invariant_sweep": (
+        "Submit each V13 invariant I1-I8 exactly once. A pass needs its compatible "
+        "pass_clause and no evidence indices; a breach needs source evidence."
+    ),
+    "causal_link": (
+        "Bind the trigger, authority decision, and effect to exact source "
+        "locations and include the required causal roles."
+    ),
+    "basis_category": (
+        "Align risk, categories, category evidence, and resolution basis with "
+        "the cited mechanism."
+    ),
+    "multi_location": "Cite two distinct source locations for each required category.",
+}
+
+
+def _submission_validation_subcode(error: ValueError) -> str:
+    """Map host failures to fixed, source-free model correction codes."""
+    message = str(error)
+    if "multi-location evidence" in message:
+        return "multi_location"
+    if any(
+        phrase in message
+        for phrase in (
+            "not artifact-bound",
+            "not evidence-bound",
+            "did not analyze every L1",
+            "analyzed-file digest does not match artifact",
+            "evidence line is invalid",
+        )
+    ):
+        return "artifact_citation"
+    if any(
+        phrase in message
+        for phrase in (
+            "SourceReviewInvariantAssessment",
+            "invariant pass clause",
+            "invariant decisions",
+            "invariant breach requires source evidence",
+            "invariant evidence indices",
+            "policy-v10 invariant",
+        )
+    ):
+        return "invariant_sweep"
+    if any(
+        phrase in message
+        for phrase in (
+            "causal",
+            "invariant breach",
+            "authority transition",
+            "trigger/effect",
+        )
+    ):
+        return "causal_link"
+    if any(
+        phrase in message
+        for phrase in (
+            "category evidence",
+            "resolution basis",
+            "categories",
+            "not elevated",
+            "prohibited risk",
+            "contradictory evidence",
+        )
+    ):
+        return "basis_category"
+    return "schema"
+
+
 _BENCHMARK_CONTRACT_CAPSULE = {
     "supported_versions": [3, 4, 5, 6],
     "v5": {
@@ -3763,12 +3838,19 @@ class TerraSolSourceReviewAgent:
         pending_tool_corrections: set[str] = set()
         no_call_corrections = 0
 
-        def request_submit_correction(call: object) -> None:
+        def request_submit_correction(
+            call: object, *, validation_error: ValueError | None = None
+        ) -> None:
             try:
                 call_id = _call_id_value(call)
             except ValueError as error:
                 logger.warning("L2 model-tool-contract: invalid submit call id")
                 raise failure("model-tool-contract") from error
+            subcode = (
+                _submission_validation_subcode(validation_error)
+                if validation_error is not None
+                else None
+            )
             items.append(
                 {
                     "type": "function_call_output",
@@ -3776,9 +3858,14 @@ class TerraSolSourceReviewAgent:
                     "output": json.dumps(
                         {
                             "error": "submission-contract",
+                            "validation_subcode": subcode,
                             "message": (
-                                "Correct submit_l2_review and retry it as the only "
-                                "call after resolving any analyzer corrections."
+                                "The host rejected this final review: "
+                                + _SUBMISSION_VALIDATION_HINTS[subcode]
+                                + " Retry submit_l2_review as the only call."
+                                if subcode is not None
+                                else "Retry submit_l2_review as the only call after "
+                                "resolving analyzer corrections."
                             ),
                         },
                         separators=(",", ":"),
@@ -3913,8 +4000,8 @@ class TerraSolSourceReviewAgent:
                                 policy_version=policy_version,
                             )
                         )
-                    except (json.JSONDecodeError, ValueError):
-                        request_submit_correction(submitted[0])
+                    except (json.JSONDecodeError, ValueError) as error:
+                        request_submit_correction(submitted[0], validation_error=error)
                         continue
                     return L2RunResult(
                         observation=observation,

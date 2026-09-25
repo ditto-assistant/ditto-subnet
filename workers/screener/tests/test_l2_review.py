@@ -4079,8 +4079,14 @@ async def test_adjudicator_retry_reuses_analyst_and_critic_stage_caches(
     assert second.usage.input_tokens == 1_000, "only adjudicator usage is new"
 
 
+@pytest.mark.parametrize(
+    ("invalid_kind", "expected_subcode"),
+    [("contradictory", "basis_category"), ("digest", "artifact_citation")],
+)
 async def test_invalid_final_tool_result_is_correctable_in_same_trajectory(
     tmp_path: Path,
+    invalid_kind: str,
+    expected_subcode: str,
 ) -> None:
     source = "fn main() {}"
     archive, artifact_sha = _tar(tmp_path, source)
@@ -4108,6 +4114,10 @@ async def test_invalid_final_tool_result_is_correctable_in_same_trajectory(
             }
         ],
     }
+    bad_digest = {
+        **safe,
+        "analyzed_files": [{"path": "src/main.rs", "sha256": "0" * 64}],
+    }
     requests: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -4117,13 +4127,12 @@ async def test_invalid_final_tool_result_is_correctable_in_same_trajectory(
                 [_tool_call("4", "read_file", {"path": "src/main.rs"})],
                 model="openai/gpt-5.6-sol-20260709",
             )
-        result = (
-            contradictory
-            if len(requests) == 1
-            else _clearance_certificate(safe)
-            if len(requests) == 5
-            else safe
-        )
+        if len(requests) == 1:
+            result = contradictory if invalid_kind == "contradictory" else bad_digest
+        elif len(requests) == 5:
+            result = _clearance_certificate(safe)
+        else:
+            result = safe
         return _response(
             [_tool_call(str(len(requests)), "submit_l2_review", result)],
             model=(
@@ -4146,6 +4155,7 @@ async def test_invalid_final_tool_result_is_correctable_in_same_trajectory(
     correction = requests[1]["input"][-1]  # type: ignore[index]
     assert correction["type"] == "function_call_output"
     assert json.loads(correction["output"])["error"] == "submission-contract"
+    assert json.loads(correction["output"])["validation_subcode"] == expected_subcode
 
 
 async def test_malformed_submit_arguments_are_correctable_in_same_trajectory(
@@ -4210,6 +4220,24 @@ async def test_malformed_submit_arguments_are_correctable_in_same_trajectory(
     correction = requests[1]["input"][-1]  # type: ignore[index]
     assert correction["call_id"] == "1"
     assert json.loads(correction["output"])["error"] == "submission-contract"
+    assert json.loads(correction["output"])["validation_subcode"] == "schema"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("L2 result has unexpected fields", "schema"),
+        ("L2 analyzed-file digest does not match artifact", "artifact_citation"),
+        ("1 validation error for SourceReviewInvariantAssessment", "invariant_sweep"),
+        ("L2 violation lacks a causal trigger/effect path", "causal_link"),
+        ("L2 violation is missing category evidence", "basis_category"),
+        ("L2 violation lacks multi-location evidence", "multi_location"),
+    ],
+)
+def test_submission_validation_feedback_has_fixed_source_free_categories(
+    message: str, expected: str
+) -> None:
+    assert l2_review._submission_validation_subcode(ValueError(message)) == expected
 
 
 async def test_submit_mixed_with_analyzer_call_is_correctable(
