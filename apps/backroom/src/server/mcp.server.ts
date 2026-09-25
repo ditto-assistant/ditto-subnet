@@ -11,6 +11,8 @@ import {
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
+import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
+import { fetchTreasuryQuote, fetchTreasurySettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
   cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema } from '../lib/benchmark-canary.schemas'
@@ -3167,6 +3169,49 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           REVISION_LISTS,
         ),
       ),
+  )
+
+  registerTool(
+    'get_treasury_settings',
+    {
+      title: 'Get SN118 treasury shadow policy',
+      description: 'Read separate maintenance-bounty and GM inference-credit allocation proposals, destinations, bounds, revision history, and the explicit none weight effect. This is shadow-only and changes neither weights nor funds. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchTreasurySettings()),
+  )
+
+  registerTool(
+    'record_treasury_settings',
+    {
+      title: 'Record SN118 treasury shadow policy',
+      description: 'Append a reviewed shadow allocation revision with expectedRevision, reason, and exact confirmation RECORD TREASURY SHADOW POLICY. Combined proposed share is at most 500 basis points. This records policy only; it cannot change validator weights or send funds. Requires backroom:write.',
+      inputSchema: recordTreasurySettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => recordTreasurySettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'quote_treasury_topup',
+    {
+      title: 'Quote both GM credit funding routes',
+      description: 'Read the finalized Finney SN118 and SN28 pools at one block and quote DITTO alpha to TAO versus DITTO alpha to TAO to GM alpha. Reports pool price impact but no USD credit estimate; GM sets credits when its deposit confirms. Does not sign, trade, or move funds. Requires backroom:read.',
+      inputSchema: treasuryQuoteInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchTreasuryQuote(input)),
+  )
+
+  registerTool(
+    'preview_treasury_topup',
+    {
+      title: 'Dry run one GM top-up route',
+      description: 'Read a fresh finalized two-pool quote and the current shadow treasury policy, then check proposed GM share, single top-up limit and price impact for TAO or SN28 alpha. Wallet linking, current GM instructions and daily spending remain unverified, so execution_enabled is always false. Requires backroom:read.',
+      inputSchema: treasuryPreviewInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await previewTreasuryTopup(input)),
   )
 
   registerTool(

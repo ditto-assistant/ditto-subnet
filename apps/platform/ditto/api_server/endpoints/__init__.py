@@ -128,6 +128,12 @@ from ditto.api_server.endpoints.admin_submission_settings import (
 from ditto.api_server.endpoints.admin_traces import (
     router as admin_traces_router,
 )
+from ditto.api_server.endpoints.admin_treasury_quote import (
+    router as admin_treasury_quote_router,
+)
+from ditto.api_server.endpoints.admin_treasury_settings import (
+    router as admin_treasury_settings_router,
+)
 from ditto.api_server.endpoints.admin_v13_private_generation import (
     router as admin_v13_private_generation_router,
 )
@@ -211,6 +217,8 @@ __all__ = [
     "admin_attestation_router",
     "admin_benchmark_rollout_router",
     "admin_burn_settings_router",
+    "admin_treasury_settings_router",
+    "admin_treasury_quote_router",
     "admin_inference_concurrency_settings_router",
     "admin_inference_observability_router",
     "admin_traces_router",

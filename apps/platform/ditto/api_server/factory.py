@@ -108,6 +108,8 @@ from ditto.api_server.endpoints import (
     admin_submission_deposit_address_router,
     admin_submission_settings_router,
     admin_traces_router,
+    admin_treasury_quote_router,
+    admin_treasury_settings_router,
     admin_v13_private_generation_router,
     admin_v13_scorer_cohort_router,
     admin_validation_retry_router,
@@ -787,6 +789,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_core_qualification_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
+    app.include_router(admin_treasury_settings_router, prefix="/api/v1")
+    app.include_router(admin_treasury_quote_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
     app.include_router(admin_conversation_router, prefix="/api/v1")
     app.include_router(screener_conversation_router, prefix="/api/v1")

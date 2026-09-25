@@ -236,6 +236,9 @@ describe('Backroom MCP tools', () => {
         'get_source_release_policy',
         'get_owner_attestations',
         'get_submission_cooldown',
+        'get_treasury_settings',
+        'quote_treasury_topup',
+        'preview_treasury_topup',
         'get_validation_retry',
         'list_stuck_submissions',
         'list_lease_revocations',
@@ -272,6 +275,7 @@ describe('Backroom MCP tools', () => {
         'summarize_screening_failures',
         'read_screening_source_file',
         'record_v13_benign_approval',
+        'record_treasury_settings',
         'record_v13_replay_private_group',
         'search_screening_source',
         'rebuild_screened_image',
@@ -392,9 +396,10 @@ describe('Backroom MCP tools', () => {
     // measured 163,528 bytes together.
     // The no-input outlier-escalation read adds about 360 bytes; its bounds
     // live on the Platform endpoint. With later main tools the catalog measured
-    // 164,066 bytes. The guarded ATH withdrawal adds two bounded operations;
-    // the merged catalog measures 166,765 bytes with under 0.5 KB headroom.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(167_250)
+    // 164,066 bytes. Four treasury policy, quote and preview tools bring the
+    // measured catalog to 167,798 bytes. Guarded ATH withdrawal adds two
+    // bounded operations; the combined catalog measures 170,497 bytes.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(171_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -420,9 +425,11 @@ describe('Backroom MCP tools', () => {
       // reopened-hold reason, three process-key summaries, and current V13
       // provenance reads plus scorer pin rotation and history; measured at 29,121.
       // The one-line outlier-escalation read (79 chars; detail in tool help)
-      // plus later main summaries measured 29,329. ATH withdrawal adds two
-      // bounded summaries; the merged descriptions measure 29,604 chars.
-      30_000,
+      // plus later main summaries measured 29,329. Two short treasury
+      // shadow-policy descriptions bring the measured total to 29,850.
+      // Guarded ATH withdrawal adds two more bounded summaries; the combined
+      // descriptions measure 30,717 characters.
+      31_200,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
