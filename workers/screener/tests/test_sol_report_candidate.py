@@ -170,6 +170,91 @@ async def test_l1_step_limit_hands_partial_notes_to_l2_without_clearance(
     assert report["l2"]["result"]["disposition"] == "HOLD"
 
 
+@pytest.mark.asyncio
+async def test_l2_step_limit_returns_host_hold_with_usage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "source.tar.gz"
+    sha = _archive(archive)
+    monkeypatch.setattr(sol_report_candidate, "_MAX_STEPS", 1)
+    responses = iter(
+        [
+            _response(
+                "l1",
+                "record_note",
+                {
+                    "kind": "context",
+                    "path": "src/main.go",
+                    "line": 1,
+                    "summary": "Go source",
+                },
+            ),
+            _response("l2", "list_files", {"prefix": ""}),
+        ]
+    )
+
+    def respond(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=next(responses))
+
+    report = await run_report_candidate(
+        archive,
+        identity=Identity(sha, 13, "agent-1", "attempt-1"),
+        api_key="test-only",
+        transport=httpx.MockTransport(respond),
+    )
+    assert report["authority"] == "none"
+    assert report["l2"]["result"] == {
+        "disposition": "HOLD",
+        "summary": "L2 bounded review ended without a submitted conclusion",
+        "citations": [],
+        "origin": "host_budget_hold",
+        "reason_code": "step_cap",
+    }
+    assert report["l2"]["usage"]["accounted_cost_usd"] == 0.001
+
+
+@pytest.mark.asyncio
+async def test_l2_deadline_returns_host_hold_without_model_call(tmp_path: Path) -> None:
+    workspace = _Workspace(tmp_path)
+    notes_path = tmp_path / "l1-notes.md"
+    notes_path.write_text("# notes\n", encoding="utf-8")
+    workspace.attach_notes(notes_path)
+    total_usage = dict.fromkeys(
+        (
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reported_cost_usd",
+            "estimated_cost_usd",
+            "accounted_cost_usd",
+        ),
+        0.0,
+    )
+
+    def unexpected(_request: httpx.Request) -> httpx.Response:
+        pytest.fail("expired L2 deadline must not call the model")
+
+    async with httpx.AsyncClient(
+        base_url="https://openrouter.ai/api/v1",
+        transport=httpx.MockTransport(unexpected),
+    ) as client:
+        result = await sol_report_candidate._phase(
+            client,
+            key="test-only",
+            workspace=workspace,
+            identity=Identity("a" * 64, 13, "agent-1", "attempt-1"),
+            phase="l2",
+            notes_path=notes_path,
+            deadline=0,
+            total_usage=total_usage,
+            l1_notes=[],
+            l1_complete=False,
+        )
+    assert result["result"]["disposition"] == "HOLD"
+    assert result["result"]["origin"] == "host_budget_hold"
+    assert result["result"]["reason_code"] == "deadline_exceeded"
+
+
 @pytest.mark.parametrize(
     ("path", "valid", "invalid", "parser"),
     [

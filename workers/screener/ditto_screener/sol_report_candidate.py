@@ -439,12 +439,16 @@ async def _phase(
     final: dict[str, Any] | None = None
     model_names: list[str] = []
     started = time.monotonic()
+    boundary_reason = "step_cap"
     for step in range(_MAX_STEPS):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             if l1 and notes:
                 break
-            raise TimeoutError(f"{phase} deadline exceeded")
+            if l1:
+                raise TimeoutError(f"{phase} deadline exceeded")
+            boundary_reason = "deadline_exceeded"
+            break
         if len(items) > 80:
             # Restart the conversation at a clean boundary. Source and the
             # persisted note ledger remain available through tools.
@@ -702,6 +706,20 @@ async def _phase(
             "duration_seconds": round(time.monotonic() - started, 3),
             "models": sorted(set(model_names)),
             "notes": notes,
+        }
+    if not l1:
+        return {
+            "result": {
+                "disposition": "HOLD",
+                "summary": "L2 bounded review ended without a submitted conclusion",
+                "citations": [],
+                "origin": "host_budget_hold",
+                "reason_code": boundary_reason,
+            },
+            "steps": min(_MAX_STEPS, step + 1),
+            "usage": usage,
+            "duration_seconds": round(time.monotonic() - started, 3),
+            "models": sorted(set(model_names)),
         }
     raise ValueError(f"{phase} step cap reached")
 
