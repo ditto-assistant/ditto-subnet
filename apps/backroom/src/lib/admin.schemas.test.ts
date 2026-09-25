@@ -38,6 +38,7 @@ import {
   validatorAssignmentListSchema,
   screenerReviewControlSchema,
   screenerReviewSettingsSchema,
+  screenReviewAuditSchema,
   applyScreenerReviewSettingsInputSchema,
   efficiencyBonusConfirmation,
   efficiencyBonusSettingsControlSchema,
@@ -2078,6 +2079,20 @@ describe('screener review settings schemas', () => {
       settings: { ...settings, l2_fallback_models: ['openai/gpt-5.6-terra'] },
       reason: 'short', confirmation: 'APPLY SCREENER REVIEW * SHADOW',
     })).toThrow()
+  })
+})
+
+describe('screen review audit schema', () => {
+  it('accepts the configured L2 step and output ceilings', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l2-model-inconclusive', prompt_revision: 'l2-v13',
+      max_steps: 256, steps_used: 256,
+      max_output_tokens: 1_000_000, output_tokens_used: 1_000_000,
+      max_cost_usd: 25, cost_usd_used: 20,
+    }
+    expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
+    expect(() => screenReviewAuditSchema.parse({ ...audit, max_steps: 257 })).toThrow()
+    expect(() => screenReviewAuditSchema.parse({ ...audit, output_tokens_used: 1_000_001 })).toThrow()
   })
 })
 

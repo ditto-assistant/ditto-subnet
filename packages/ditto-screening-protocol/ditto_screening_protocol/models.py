@@ -1132,17 +1132,17 @@ class ScreenReviewAudit(BaseModel):
     reason_code: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
     prompt_revision: Annotated[str, Field(min_length=1, max_length=64)]
     harness_revision: Annotated[str | None, Field(min_length=1, max_length=64)] = None
-    # L1 source review can be configured up to 240 steps by Platform and worker.
-    max_steps: Annotated[int, Field(ge=1, le=240)]
-    steps_used: Annotated[int, Field(ge=0, le=240)]
+    # L1 allows 240 steps; ordinary L2 can be configured up to 256.
+    max_steps: Annotated[int, Field(ge=1, le=256)]
+    steps_used: Annotated[int, Field(ge=0, le=256)]
     max_read_bytes: Annotated[int | None, Field(ge=1, le=256 * 1024**2)] = None
     read_bytes_used: Annotated[int | None, Field(ge=0, le=256 * 1024**2)] = None
     max_input_tokens: Annotated[int | None, Field(ge=1, le=2_000_000)] = None
     # Aggregate usage can exceed the configured per-trajectory input budget
     # across L2 reviewer roles; the old 2M wire cap rejected a 2.6M audit.
     input_tokens_used: Annotated[int | None, Field(ge=0, le=20_000_000)] = None
-    max_output_tokens: Annotated[int | None, Field(ge=1, le=256_000)] = None
-    output_tokens_used: Annotated[int | None, Field(ge=0, le=256_000)] = None
+    max_output_tokens: Annotated[int | None, Field(ge=1, le=1_000_000)] = None
+    output_tokens_used: Annotated[int | None, Field(ge=0, le=1_000_000)] = None
     max_cost_usd: Annotated[float | None, Field(gt=0, le=100)] = None
     cost_usd_used: Annotated[float | None, Field(ge=0, le=100)] = None
     # Optional V13 L2 diagnostics contain only fixed labels and counts. Keep
