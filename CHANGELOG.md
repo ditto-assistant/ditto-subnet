@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.317.0 (2026-09-25)
+
+### Bug Fixes
+
+- **screener**: Expose bounded L3 inconclusive canary audit
+  ([#2332](https://github.com/ditto-assistant/ditto-subnet/pull/2332),
+  [`1074cd0`](https://github.com/ditto-assistant/ditto-subnet/commit/1074cd0e1ea08987420a1194299c16b4bf8df8c8))
+
+### Features
+
+- **platform**: Add public treasury receipt activity feed
+  ([#2328](https://github.com/ditto-assistant/ditto-subnet/pull/2328),
+  [`39713e2`](https://github.com/ditto-assistant/ditto-subnet/commit/39713e2e1cce266143f6e94d7ce339000d599312))
+
+
 ## v0.316.0 (2026-09-25)
 
 ### Features
