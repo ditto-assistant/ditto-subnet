@@ -3416,6 +3416,293 @@ async def test_timeout_exhaustion_still_recommends_retry(
     assert item["dominant_failure_code"] is None
 
 
+async def _seed_provider_parked_submission(
+    maker: async_sessionmaker[AsyncSession], *, circuit_state: str
+) -> UUID:
+    """ditto-subnet#2087: two accepted scores, third slot parked by the circuit.
+
+    The remaining ticket already spent its one no-fault outage resume, so the
+    park charged its budget and left it exhausted with ``provider_outage_parked``.
+    """
+    agent_id = await _seed_states(
+        maker,
+        name=f"provider-parked-{circuit_state}",
+        tickets=[
+            ("val-0", TicketStatus.SCORED, 1, None),
+            ("val-1", TicketStatus.SCORED, 1, None),
+            ("val-2", TicketStatus.EXPIRED, 3, _PAST),
+        ],
+    )
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        ticket = await session.scalar(
+            select(ValidatorTicket).where(
+                ValidatorTicket.agent_id == agent_id,
+                ValidatorTicket.validator_hotkey == "val-2",
+            )
+        )
+        assert ticket is not None
+        ticket.manual_retry_grants = 2
+        ticket.provider_outage_epoch = None
+        ticket.provider_outage_attempted_epoch = uuid4()
+        ticket.failure_reason = "infrastructure"
+        ticket.failure_detail = "provider_outage_parked"
+        ticket.failed_at = ticket.issued_at + timedelta(minutes=4)
+        session.add(
+            ProviderOutageCircuit(
+                provider="openrouter",
+                state=circuit_state,
+                epoch=uuid4(),
+                opened_at=now - timedelta(hours=6),
+                retry_at=now + timedelta(minutes=2),
+                last_failure_at=(
+                    now - timedelta(hours=1)
+                    if circuit_state == "closed"
+                    else now - timedelta(minutes=1)
+                ),
+                closed_at=(
+                    now - timedelta(minutes=5) if circuit_state == "closed" else None
+                ),
+                failure_count=41,
+                last_status=503,
+                last_error_code="upstream_http_503",
+                updated_at=now,
+            )
+        )
+    return agent_id
+
+
+async def test_open_provider_outage_blocks_plain_retry_recommendation_and_grant(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_provider_parked_submission(retry_maker, circuit_state="open")
+    _install(app, retry_maker)
+
+    listing = await client.get("/api/v1/admin/validation-retries", headers=_HEADERS)
+    assert listing.status_code == 200, listing.text
+    item = listing.json()["submissions"][0]
+    assert item["retry_state"] == "exhausted"
+    assert item["recommended_action"] is None
+    assert item["recovery_allowed"] is False
+    assert item["provider_outage_blocks_retry"] is True
+    assert item["provider_outage"]["state"] == "open"
+    assert item["provider_outage"]["last_error_code"] == "upstream_http_503"
+    assert "provider outage circuit is still open" in item["blocking_reason"]
+
+    detail = await client.get(
+        f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["recommended_action"] is None
+    assert body["recovery_allowed"] is False
+    assert body["provider_outage_blocks_retry"] is True
+    assert body["provider_outage"]["failure_count"] == 41
+    assert body["provider_outage"]["closed_at"] is None
+    assert body["score_count"] == 2
+
+    refused = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/retry",
+        headers=_HEADERS,
+        json={
+            "request_id": str(uuid4()),
+            "expected_snapshot": body["snapshot"],
+            "reason": "retry into a still-open provider outage",
+        },
+    )
+    assert refused.status_code == 409, refused.text
+    assert "acknowledge_provider_outage" in refused.text
+
+    batch = await client.post(
+        "/api/v1/admin/validation-retries/batch-retry",
+        headers=_HEADERS,
+        json={
+            "reason": "batch retry into a still-open provider outage",
+            "items": [
+                {
+                    "agent_id": str(agent_id),
+                    "request_id": str(uuid4()),
+                    "expected_snapshot": body["snapshot"],
+                }
+            ],
+        },
+    )
+    assert batch.status_code == 200, batch.text
+    assert batch.json()["granted"] == 0
+    assert batch.json()["results"][0]["status"] == "skipped"
+
+    async with retry_maker() as session:
+        ticket = await session.scalar(
+            select(ValidatorTicket).where(
+                ValidatorTicket.agent_id == agent_id,
+                ValidatorTicket.validator_hotkey == "val-2",
+            )
+        )
+        assert ticket is not None and ticket.manual_retry_grants == 2
+        assert (
+            await session.scalar(
+                select(ValidatorRetryRecovery).where(
+                    ValidatorRetryRecovery.agent_id == agent_id
+                )
+            )
+            is None
+        )
+
+    acknowledged = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/retry",
+        headers=_HEADERS,
+        json={
+            "request_id": str(uuid4()),
+            "expected_snapshot": body["snapshot"],
+            "reason": "operator verified the provider lane recovered",
+            "acknowledge_provider_outage": True,
+        },
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+    assert acknowledged.json()["recovery"]["granted_validator_hotkeys"] == ["val-2"]
+    assert acknowledged.json()["recovery"]["score_count"] == 2
+
+
+async def test_closed_provider_circuit_still_recommends_retry_for_parked_slot(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_provider_parked_submission(
+        retry_maker, circuit_state="closed"
+    )
+    _install(app, retry_maker)
+
+    listing = await client.get("/api/v1/admin/validation-retries", headers=_HEADERS)
+    assert listing.status_code == 200, listing.text
+    item = listing.json()["submissions"][0]
+    assert item["retry_state"] == "exhausted"
+    assert item["recommended_action"] == "retry"
+    assert item["recovery_allowed"] is True
+    assert item["provider_outage_blocks_retry"] is False
+    # Still surfaced, so the operator can see when the provider last recovered.
+    assert item["provider_outage"]["state"] == "closed"
+    assert item["provider_outage"]["closed_at"] is not None
+
+    granted = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/retry",
+        headers=_HEADERS,
+        json={
+            "request_id": str(uuid4()),
+            "expected_snapshot": item["snapshot"],
+            "reason": "provider circuit closed; restore the parked slot",
+        },
+    )
+    assert granted.status_code == 200, granted.text
+
+
+async def test_closed_circuit_is_not_reported_for_an_unrelated_submission(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A closed circuit no slot was parked by is noise, not evidence."""
+    agent_id = await _seed(retry_maker, score_count=2, ticket_count=3)
+    now = datetime.now(UTC)
+    async with retry_maker() as session, session.begin():
+        session.add(
+            ProviderOutageCircuit(
+                provider="openrouter",
+                state="closed",
+                epoch=uuid4(),
+                opened_at=now - timedelta(days=2),
+                retry_at=now - timedelta(days=2),
+                last_failure_at=now - timedelta(days=2),
+                closed_at=now - timedelta(days=2),
+                failure_count=1,
+                last_status=429,
+                last_error_code="upstream_http_429",
+                updated_at=now - timedelta(days=2),
+            )
+        )
+    _install(app, retry_maker)
+
+    detail = await client.get(
+        f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["recommended_action"] == "retry"
+    assert detail.json()["provider_outage"] is None
+    assert detail.json()["provider_outage_blocks_retry"] is False
+
+
+async def test_open_provider_outage_blocks_retry_after_any_failure_cause(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The guard is the circuit, not the slot's last failure code.
+
+    ``park_scoring_leases`` parks every issued lease while the circuit is open,
+    so a slot that died of some unrelated infrastructure failure is restored
+    into exactly the same outage. Reviewed on #2090: the first cut of this guard
+    only covered ``provider_outage_parked`` slots and let this case through.
+    """
+    agent_id = await _seed(retry_maker, score_count=2, ticket_count=3)
+    now = datetime.now(UTC)
+    async with retry_maker() as session, session.begin():
+        session.add(
+            ProviderOutageCircuit(
+                provider="openrouter",
+                state="open",
+                epoch=uuid4(),
+                opened_at=now,
+                retry_at=now + timedelta(minutes=2),
+                last_failure_at=now,
+                failure_count=1,
+                last_status=429,
+                last_error_code="upstream_http_429",
+                updated_at=now,
+            )
+        )
+    _install(app, retry_maker)
+
+    detail = await client.get(
+        f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    # No slot here carries provider_outage_parked; the open circuit alone is
+    # what makes the grant unsafe, and it is reported as the reason.
+    assert {ticket["failure_detail"] for ticket in body["tickets"]} == {None}
+    assert body["recommended_action"] is None
+    assert body["recovery_allowed"] is False
+    assert body["provider_outage_blocks_retry"] is True
+    assert body["provider_outage"]["state"] == "open"
+    assert "every scoring lease is parked" in body["blocking_reason"]
+
+    refused = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/retry",
+        headers=_HEADERS,
+        json={
+            "request_id": str(uuid4()),
+            "expected_snapshot": body["snapshot"],
+            "reason": "unrelated scoring failure during a provider outage",
+        },
+    )
+    assert refused.status_code == 409, refused.text
+    assert "acknowledge_provider_outage" in refused.text
+
+    acknowledged = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/retry",
+        headers=_HEADERS,
+        json={
+            "request_id": str(uuid4()),
+            "expected_snapshot": body["snapshot"],
+            "reason": "operator accepts the outage risk for this slot",
+            "acknowledge_provider_outage": True,
+        },
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+
+
 async def test_historical_infra_grant_does_not_authorize_retry(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -3700,11 +3987,10 @@ async def test_open_provider_circuit_withholds_retry_whatever_exhausted_the_slot
         retry_maker, state="open", epoch=uuid4(), last_failure_at=now
     )
     detail = await _detail(client, agent_id)
-    assert detail["recovery_allowed"] is True
+    assert detail["recovery_allowed"] is False
     assert detail["recommended_action"] is None
-    # The outage did not park this slot, so it is not counted as one.
-    assert detail["provider_outage_slot_count"] == 0
-    assert detail["provider_outage_active"] is True
+    assert detail["provider_outage_blocks_retry"] is True
+    assert detail["provider_outage"]["state"] == "open"
 
     # Closed but still inside the recovery window: this slot was not parked by
     # the circuit and no park is in force, so the ordinary retry path returns.
@@ -3715,7 +4001,7 @@ async def test_open_provider_circuit_withholds_retry_whatever_exhausted_the_slot
         last_failure_at=now - timedelta(minutes=5),
     )
     detail = await _detail(client, agent_id)
-    assert detail["provider_outage_active"] is True
+    assert detail["provider_outage_blocks_retry"] is False
     assert detail["recommended_action"] == "retry"
 
 
@@ -3746,13 +4032,12 @@ async def test_provider_outage_exhaustion_withholds_retry_until_provider_recover
         retry_maker, state="open", epoch=epoch, last_failure_at=now
     )
     detail = await _detail(client, agent_id)
-    assert detail["recovery_allowed"] is True
+    assert detail["recovery_allowed"] is False
     assert detail["recommended_action"] is None
     assert detail["dominant_failure_code"] is None
-    assert detail["provider_outage_slot_count"] == 1
-    assert detail["provider_outage_active"] is True
-    assert detail["provider_circuit"]["state"] == "open"
-    assert detail["provider_circuit"]["epoch"] == str(epoch)
+    assert detail["provider_outage_blocks_retry"] is True
+    assert detail["provider_outage"]["state"] == "open"
+    assert detail["provider_outage"]["epoch"] == str(epoch)
 
     listed = await client.get(
         "/api/v1/admin/validation-retries",
@@ -3761,13 +4046,12 @@ async def test_provider_outage_exhaustion_withholds_retry_until_provider_recover
     )
     assert listed.status_code == 200, listed.text
     body = listed.json()
-    assert body["provider_outage_active"] is True
-    assert body["provider_circuit"]["state"] == "open"
     (row,) = [item for item in body["submissions"] if item["agent_id"] == str(agent_id)]
     assert row["retry_state"] == "exhausted"
-    assert row["recovery_allowed"] is True
+    assert row["recovery_allowed"] is False
     assert row["recommended_action"] is None
-    assert row["provider_outage_slot_count"] == 1
+    assert row["provider_outage_blocks_retry"] is True
+    assert row["provider_outage"]["state"] == "open"
 
     # A circuit that just closed after a recent failure is still flapping.
     await _set_provider_circuit(
@@ -3777,8 +4061,9 @@ async def test_provider_outage_exhaustion_withholds_retry_until_provider_recover
         last_failure_at=now - timedelta(minutes=5),
     )
     detail = await _detail(client, agent_id)
-    assert detail["provider_outage_active"] is True
+    assert detail["provider_outage_blocks_retry"] is True
     assert detail["recommended_action"] is None
+    assert detail["recovery_allowed"] is False
 
     # A provider that has stayed quiet is healthy again: retry is the remedy.
     await _set_provider_circuit(
@@ -3788,7 +4073,7 @@ async def test_provider_outage_exhaustion_withholds_retry_until_provider_recover
         last_failure_at=now - timedelta(hours=6),
     )
     detail = await _detail(client, agent_id)
-    assert detail["provider_outage_active"] is False
-    assert detail["provider_circuit"]["state"] == "closed"
-    assert detail["provider_outage_slot_count"] == 1
+    assert detail["provider_outage_blocks_retry"] is False
+    assert detail["provider_outage"]["state"] == "closed"
+    assert detail["recovery_allowed"] is True
     assert detail["recommended_action"] == "retry"

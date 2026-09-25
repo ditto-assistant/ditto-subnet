@@ -32,10 +32,7 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
-from ditto.db.queries.provider_outages import (
-    PROVIDER_OUTAGE_PARKED_DETAIL,
-    provider_outage_active,
-)
+from ditto.db.queries.provider_outages import provider_outage_active
 from ditto.db.queries.queue_removal import is_in_force, removal_in_force
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.tickets import ticket_retry_budget_spent
@@ -58,6 +55,14 @@ AGENT_ATTRIBUTABLE_FAILURE_DETAILS = frozenset(
 )
 AGENT_ATTRIBUTABLE_WITHDRAW_REASON = (
     "exhausted on agent-attributable failures; withdraw rather than retry"
+)
+# Written by ``park_scoring_leases`` when the relay's provider circuit parks a
+# live scoring lease. Infrastructure, never the agent's fault.
+PROVIDER_OUTAGE_PARKED_DETAIL = "provider_outage_parked"
+PROVIDER_OUTAGE_RETRY_BLOCKING_REASON = (
+    "inference provider outage circuit is still open (every scoring lease is "
+    "parked) or a provider-parked slot is inside the recovery quiet window. "
+    "Wait for provider recovery, or retry with acknowledge_provider_outage=true"
 )
 
 
@@ -199,46 +204,49 @@ def dominant_agent_failure_detail(
     return detail if detail in AGENT_ATTRIBUTABLE_FAILURE_DETAILS else None
 
 
-def provider_outage_slot_count(
+def provider_outage_parked_exhaustion(
     *, scores: list[Score], tickets: list[ValidatorTicket]
-) -> int:
-    """Exhausted quorum slots whose current lease a provider outage parked."""
-    return sum(
-        1
+) -> bool:
+    """Whether a remaining exhausted slot was last parked by the provider circuit."""
+    return any(
+        current_failure_detail(ticket) == PROVIDER_OUTAGE_PARKED_DETAIL
         for ticket in remaining_exhausted_tickets(scores=scores, tickets=tickets)
-        if current_failure_detail(ticket) == PROVIDER_OUTAGE_PARKED_DETAIL
     )
 
 
-def provider_outage_withholds_retry(
+def provider_outage_blocks_retry(
     *,
     circuit: ProviderOutageCircuit | None,
     scores: list[Score],
     tickets: list[ValidatorTicket],
     now: datetime,
 ) -> bool:
-    """Whether a grant now would be re-leased straight into the outage.
+    """Whether a retry grant would restore a slot the outage parks again.
 
-    Two windows, because the exposure differs (ditto-subnet#2087):
+    ``park_scoring_leases`` selects **every** ``ISSUED`` validator ticket while
+    the circuit is open — no filter on purpose, benchmark version, or prior
+    failure cause — and exempts only the one live half-open scoring probe. So a
+    grant made in that window cannot be consumed safely whatever killed the
+    slot before: the first claim the gate admits is that probe, the next
+    provider failure re-parks it, and because the ticket has already spent its
+    one no-fault resume the park charges the operator's new grant. That is the
+    ditto-subnet#2087 loop, and it does not depend on the failure detail being
+    ``provider_outage_parked``.
 
-    * While the circuit is ``open``, ``park_scoring_leases`` expires *every*
-      issued ticket and revokes its grant, exempting only the live half-open
-      probe. It filters on nothing else, so no exhausted slot is safe to spend
-      a grant on, whatever failed last.
-    * Once it closes, only the slots the outage itself parked stay withheld,
-      and only until the provider has been quiet for
-      ``PROVIDER_RECOVERY_QUIET_WINDOW``. The relay's two-minute cooldown means
-      one successful half-open probe closes the circuit even when the next
-      request re-opens it, and a grant landing in that gap is parked again and
-      charged.
+    There is no safe subset to exempt. Every scoring lease carries an inference
+    grant that ``park_scoring_leases`` revokes, so a version or purpose that
+    made no hosted-inference call would still lose the lease.
+
+    Once closed, only provider-parked exhausted slots wait for the 30-minute
+    quiet window. Unrelated exhausted slots can be granted immediately.
     """
     if circuit is None:
         return False
     if circuit.state == "open":
         return True
-    return provider_outage_active(circuit, now=now) and bool(
-        provider_outage_slot_count(scores=scores, tickets=tickets)
-    )
+    if not provider_outage_parked_exhaustion(scores=scores, tickets=tickets):
+        return False
+    return provider_outage_active(circuit, now=now)
 
 
 def recommended_retry_action(
@@ -246,20 +254,14 @@ def recommended_retry_action(
     scores: list[Score],
     tickets: list[ValidatorTicket],
     recovery_allowed: bool,
-    provider_outage_withheld: bool = False,
+    provider_outage_blocked: bool = False,
 ) -> RecommendedRetryAction | None:
-    """Operator next step for a below-quorum row, or ``None`` when none applies.
-
-    While the provider is still failing the row waits for it instead of
-    recommending another grant that the same outage would park
-    (ditto-subnet#2087). Operator authority is unchanged: ``recovery_allowed``
-    still gates a grant.
-    """
+    """Operator next step for a below-quorum row, or ``None`` when none applies."""
     if is_agent_attributable_exhaustion(scores=scores, tickets=tickets):
         return "withdraw"
-    if not recovery_allowed or provider_outage_withheld:
-        return None
-    return "retry"
+    if recovery_allowed and not provider_outage_blocked:
+        return "retry"
+    return None
 
 
 def recovery_gate(

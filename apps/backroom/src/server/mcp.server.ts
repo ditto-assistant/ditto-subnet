@@ -307,6 +307,18 @@ import {
 export const BACKROOM_READ_SCOPE = 'backroom:read'
 export const BACKROOM_ARTIFACT_SCOPE = 'backroom:artifact:read'
 export const BACKROOM_WRITE_SCOPE = 'backroom:write'
+/**
+ * The scope an unauthenticated /mcp challenge advertises. MCP clients request
+ * exactly the challenged scope, so pinning backroom:read here meant every
+ * client connected read-only and consent could never offer the other levels.
+ * Advertising the full set lets the operator pick the level on consent, which
+ * still caps the grant to the account's live entitlement.
+ */
+export const BACKROOM_CHALLENGE_SCOPE = [
+  BACKROOM_READ_SCOPE,
+  BACKROOM_ARTIFACT_SCOPE,
+  BACKROOM_WRITE_SCOPE,
+].join(' ')
 export type McpGrantProps = {
   session: BackroomSession
   scopes: Array<string>
@@ -713,7 +725,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_validation_retry:
     'Read parked tickets plus snapshot fields: failure_reason, silently_expired, infra_retry_grants, live_ticket_count, eviction_allowed, eviction_blocking_reason, evicted_validator_hotkeys, reinstatement_allowed, and reinstated_at. Use before retry or queue action.',
   retry_validator_evaluation:
-    'Manually restore exhausted slots for one verified infrastructure failure using a fresh snapshot; preserves scores and history.',
+    'Manually restore exhausted slots for one verified infra failure with a fresh snapshot; keeps scores/history. Open provider outage: acknowledgeProviderOutage.',
   set_validator_slot_settings:
     'Apply the complete two-field validator-slot policy with expectedRevision and "APPLY VALIDATOR SLOT CAP <n>". It is deliberately not derived from settings, a partial write is rejected, and a lower cap never revokes tickets a validator already holds. This is subnet dispatch policy; Ditto app entitlement flags are not served by this server.',
   reinstate_evicted_submission_to_queue:
@@ -738,7 +750,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_lease_revocations:
     'Page ended leases with operator_evicted and exact verdicts. Evidence is WHOLE AND UNTYPED validator_lease_audit context. AN EMPTY RESULT IS A FINDING, NOT AN UNWIRED FEATURE.',
   list_stuck_submissions:
-    'Page current-benchmark stuck-submission triage order. generation=all spans benchmarks. Includes ticket counts and silent_expiry_count; provider_outage_active with null recommended_action means wait. get_validation_retry has ticket history and infra_retry_grants.',
+    'Page stuck-submission urgency order with ticket counts and silent_expiry_count. generation=all spans benchmarks; get_validation_retry includes infra_retry_grants.',
   summarize_screening_failures:
     'Group active-benchmark screening / screening_failed agents by reason_code. Pass generation=all only for a cross-benchmark audit. Use get_screening_submission for one row.',
   get_screening_failure_diagnostic:
@@ -790,7 +802,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   retry_failed_screening_now:
     'Manually retry the latest terminal screening attempt with fresh artifact/score-count/attempt guards; preserves history.',
   get_screening_baseline_diff:
-    'Compare miner-authored residual source against the platform starter-kit baseline. Stock detection is platform-owned; use the file reader for full sanitized bodies. Requires artifact scope.',
+    'Compare miner-authored residual source against the platform starter-kit baseline. Stock detection is platform-owned; use the file reader for full sanitized bodies. If custom_added_lines_complete is false, the total is a lower bound (omitted_paths not compared). Requires artifact scope.',
   list_screening_source_files:
     'Read the readable file manifest for one quarantined submission tarball in archive order. The default limit is the platform listing cap, so a default call returns the WHOLE manifest and pages only when you pass a smaller limit. count is the pageable total and returned is this response; has_more is the only field reporting MCP paging, while truncated reports paths the platform dropped before paging, which no offset recovers. NEVER treat a manifest with has_more or truncated set as the complete inventory of a submission. Requires artifact scope.',
   get_efficiency_bonus_settings:
@@ -1236,7 +1248,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get starter-kit baseline diff',
       description:
-        "Return a per-file diff manifest between one submission and the official starter kit every miner begins from. Each path is classified added, removed, modified, or identical, and carries a stock_kit flag that is true when the content is kit code at ANY revision in the pinned lineage — not merely identical to the tip — so a miner who forked an older commit is not credited with authoring it. The headline custom_added_lines counts only lines that are neither baseline nor kit code, i.e. the surface the miner actually wrote. Start a quarantine review here: it turns reading a whole crate into reading a small delta, and it distinguishes a real custom harness from a kit variant with a few lines changed. Pair with read_screening_baseline_diff_file for line-level changes. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.",
+        "Return a per-file diff manifest between one submission and the official starter kit every miner begins from. Each path is classified added, removed, modified, or identical, and carries a stock_kit flag that is true when the content is kit code at ANY revision in the pinned lineage — not merely identical to the tip — so a miner who forked an older commit is not credited with authoring it. The headline custom_added_lines counts only lines that are neither baseline nor kit code, i.e. the surface the miner actually wrote, summed over every compared file. When custom_added_lines_complete is false that total is a lower bound: the files in omitted_paths (omitted_file_count in all) were past the platform's bounded source read and were NOT compared, so they appear in no row or count; read them with read_screening_source_file. Start a quarantine review here: it turns reading a whole crate into reading a small delta, and it distinguishes a real custom harness from a kit variant with a few lines changed. Pair with read_screening_baseline_diff_file for line-level changes. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.",
       inputSchema: { agentId: z.string().uuid() },
       annotations: toolAnnotations('read'),
     },
@@ -1567,8 +1579,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         'Also reports what each operator remedy would do right now: withdrawal_allowed/withdrawal_blocking_reason for remove_failed_submission_from_queue, and eviction_allowed/eviction_blocking_reason plus live_ticket_count — the leases evict_live_validator_leases would revoke, i.e. the validator slots it would return to the pool immediately. A past removal reports evicted_validator_hotkeys under withdrawal, which is null for an ordinary withdrawal, [] for an eviction that found nothing live left to take, and the revoked validators for one that did. ' +
         'All four eviction fields read null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "eviction is blocked". ' +
         'Queue removal is reversible: reinstatement_allowed/reinstatement_blocking_reason say whether reinstate_evicted_submission_to_queue would work right now for either an ordinary withdrawal or a live-lease eviction. A reversed removal reports reinstated_at under withdrawal plus the reversal itself under reinstatement. Read reinstated_at before concluding a submission is out of the queue — a non-null withdrawal means a removal was recorded, not that it is still in force. Both reinstatement fields read null on a platform that predates the reinstate route, with the same meaning as above. ' +
-        'Each ticket also carries why it ended: silently_expired (the lease ran out with nothing reported about that attempt), failure_reason and failed_at (history, not current state — a manual reissue preserves the last report), slot_id, purpose (canonical_quorum or continual_retest), first_reported_at (null means the validator never advertised the slot as active), and infra_retry_grants. infra_retry_grants is historical evidence from deployments that minted automatic infrastructure grants; it no longer authorizes a lease. Every current failure parks after one attempt until retry_validator_evaluation or retry_validator_evaluations is issued manually. silently_expired reads null against a platform that predates #515. If a lease was ended by the platform rather than by a validator report, list_lease_revocations carries the verdict and its evidence. ' +
-        'Provider outages: failure_detail provider_outage_parked means the OpenRouter circuit parked that lease fleetwide — infrastructure, never miner failure. provider_outage_slot_count counts exhausted slots in that state, provider_outage_active says the circuit is open or failed within the last 30 minutes, and provider_circuit is the circuit row itself. While provider_outage_active is true, recommended_action is null instead of retry: a grant now is parked again by the same outage and consumed. That covers every recoverable row while the circuit is open, because the park expires every issued lease, and the parked slots until the provider goes quiet. Wait for provider_outage_active to clear, then retry. All three read null on a platform that predates them. Requires backroom:read and exposes no miner source.',
+        'Each ticket also carries why it ended: silently_expired (the lease ran out with nothing reported about that attempt), failure_reason and failed_at (history, not current state — a manual reissue preserves the last report), slot_id, purpose (canonical_quorum or continual_retest), first_reported_at (null means the validator never advertised the slot as active), and infra_retry_grants. infra_retry_grants is historical evidence from deployments that minted automatic infrastructure grants; it no longer authorizes a lease. provider_outage is the provider-wide relay circuit (state, last_failure_at, last_error_code, closed_at = last recovery, a current-state observation only); provider_outage_blocks_retry means the circuit is open, or a provider-parked slot remains inside the 30-minute quiet window; recommended_action is not retry and a grant needs acknowledgeProviderOutage. Every current failure parks after one attempt until retry_validator_evaluation or retry_validator_evaluations is issued manually. silently_expired reads null against a platform that predates #515. If a lease was ended by the platform rather than by a validator report, list_lease_revocations carries the verdict and its evidence. Requires backroom:read and exposes no miner source.',
       inputSchema: validationRetryLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1601,7 +1612,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Retry validation after validator infrastructure failure',
       description:
-        'Restore only the exhausted validation slots needed for quorum after an operator verifies validator-owned infrastructure failure. Preserves scores, screening verdicts, artifacts, payments, ownership, and all ticket history. This is not rescreening and acts on one agent only. Requires backroom:write.',
+        'Restore only the exhausted validation slots needed for quorum after an operator verifies validator-owned infrastructure failure. Preserves scores, screening verdicts, artifacts, payments, ownership, and all ticket history. This is not rescreening and acts on one agent only. Refused (409) while provider_outage_blocks_retry is true unless acknowledgeProviderOutage=true: the provider-wide circuit is open or a provider-parked slot remains inside the recovery quiet window. Requires backroom:write.',
       inputSchema: retryValidationInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -1665,11 +1676,10 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List stuck SN118 submissions',
       description:
-        'Paginated fleet triage view of SN118 submissions whose validator tickets may be stuck: which submissions need an operator right now. generation=active (default) shows the active benchmark era plus newer in-progress rollout work, while hiding closed historical eras; generation=all is the explicit cross-benchmark audit. Returns count (the full selected-generation total), returned (rows in this response), limit, offset, has_more, per-state counts before any state filter, and one compact page with accepted-score count, retry state, recommended_action, cooldown/budget flags, blocking reason, exhausted-validator count, per-state ticket counts, and the opaque concurrency snapshot a retry needs. Complete ticket history is deliberately excluded; use get_validation_retry for one agent. Optionally filter by one or more retry states (running, retry_available, cooling_down, exhausted, queued); omit to page through every submission. ' +
+        'Paginated fleet triage view of SN118 submissions whose validator tickets may be stuck: which submissions need an operator right now. generation=active (default) shows the active benchmark era plus newer in-progress rollout work, while hiding closed historical eras; generation=all is the explicit cross-benchmark audit. Returns count (the full selected-generation total), returned (rows in this response), limit, offset, has_more, per-state counts before any state filter, and one compact page with accepted-score count, retry state, recommended_action, provider_outage and provider_outage_blocks_retry, cooldown/budget flags, blocking reason, exhausted-validator count, per-state ticket counts, and the opaque concurrency snapshot a retry needs. Complete ticket history is deliberately excluded; use get_validation_retry for one agent. Optionally filter by one or more retry states (running, retry_available, cooling_down, exhausted, queued); omit to page through every submission. ' +
         'Rows stay in platform triage priority order (retry state, earliest retry time, then agent ID), not newest-first. Each row is scoped by the platform to its resolved ticket/score work era, and the default removes only closed historical generations. ' +
         'Read silent_expiry_count first: it counts tickets that ran their whole lease and reported nothing about that attempt. A submission whose silent_expiry_count climbs while score_count stays at zero is hanging, not merely slow — and because a reported failure and a silent expiry both land as an expired ticket with a rewritten deadline, that count is the only thing in this feed that tells them apart. Use get_validation_retry(agentId) for complete per-validator ticket history, including silently_expired, failure_reason, failure_detail, failed_at, slot_id, and infra_retry_grants. ' +
-        'silent_expiry_count reads null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "zero". ' +
-        'Each row also carries provider_outage_slot_count (exhausted slots the OpenRouter circuit parked), and the response carries provider_outage_active plus the provider_circuit row. A row with recovery_allowed true and recommended_action null while provider_outage_active is true is waiting on the provider, not a dead end: do not batch-retry it until provider_outage_active clears. While the circuit is open that covers every recoverable row, because the park expires every issued lease; once it closes, only the rows provider_outage_slot_count counts stay withheld. Requires backroom:read and exposes no miner source.',
+        'silent_expiry_count reads null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "zero". Requires backroom:read and exposes no miner source.',
       inputSchema: listStuckSubmissionsInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1703,7 +1713,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Batch retry validation after validator infrastructure failure',
       description:
-        'Restore exhausted validation slots for up to 100 submissions in one atomic operation after an operator verifies validator-owned infrastructure failure. Each item is gated and snapshot-checked exactly like retry_validator_evaluation: a submission whose snapshot has moved is skipped, never force-granted, and all grants commit together. Fetch the current snapshot for each submission fresh via list_stuck_submissions or get_validation_retry immediately before calling. agent_id must be unique across the batch; the idempotency key is derived from the action and is not an argument. Preserves scores, screening verdicts, artifacts, payments, ownership, and ticket history. Requires backroom:write. Answers with per-status counts and one row per agent carrying only what differs; the reason, actor, timestamp, and any validator hotkeys common to the whole batch appear once in the shared block for that status group.',
+        'Restore exhausted validation slots for up to 100 submissions in one atomic operation after an operator verifies validator-owned infrastructure failure. Each item is gated and snapshot-checked exactly like retry_validator_evaluation: a submission whose snapshot has moved is skipped, never force-granted, and all grants commit together. Fetch the current snapshot for each submission fresh via list_stuck_submissions or get_validation_retry immediately before calling. Items with provider_outage_blocks_retry are skipped unless acknowledgeProviderOutage=true. agent_id must be unique across the batch; the idempotency key is derived from the action and is not an argument. Preserves scores, screening verdicts, artifacts, payments, ownership, and ticket history. Requires backroom:write. Answers with per-status counts and one row per agent carrying only what differs; the reason, actor, timestamp, and any validator hotkeys common to the whole batch appear once in the shared block for that status group.',
       inputSchema: batchRetryValidationInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2984,7 +2994,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get hosted inference runtime metrics',
       description:
-        'Read the current hosted chat and embedding load plus 1, 5, 15, and 60 minute calls, tokens, latency, failures, timeouts, concurrency peaks, live concurrency AND request-per-minute admission limits, exact relay revisions, and per-process capacity-decline counters. Compare peak_*_concurrency_60m to per_*_limit AND to per_*_rpm_limit. A ticket glued to per_ticket_rpm_limit with idle concurrency is a rate-limit failure, not a full lane. This is the first tool to call before changing a concurrency or RPM setting. provider_circuit is the relay-owned OpenRouter overload circuit: while state is open, Platform parks every non-probe scoring lease as provider_outage_parked; epoch, retry_at, last_failure_at, failure_count, and the half-open probe_* fields show whether it is flapping. null means no circuit row exists yet.',
+        'Read the current hosted chat and embedding load plus 1, 5, 15, and 60 minute calls, tokens, latency, failures, timeouts, concurrency peaks, live concurrency AND request-per-minute admission limits, exact relay revisions, and per-process capacity-decline counters. Compare peak_*_concurrency_60m to per_*_limit AND to per_*_rpm_limit. A ticket glued to per_ticket_rpm_limit with idle concurrency is a rate-limit failure, not a full lane. This is the first tool to call before changing a concurrency or RPM setting.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchInferenceRuntimeMetrics()),

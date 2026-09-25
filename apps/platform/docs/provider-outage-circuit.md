@@ -66,11 +66,12 @@ Validation-retry triage therefore reports `recommended_action: null` instead of
   closes the circuit even when the next request re-opens it, and a grant
   landing in that gap is parked again and charged.
 
-Operator authority is unchanged: `recovery_allowed` still permits a grant. The
-detail and list responses carry `provider_outage_slot_count`,
-`provider_outage_active`, and the `provider_circuit` row so the wait is
-explained rather than inferred. Provider outage parking is infrastructure and
-never agent-attributable, so it never recommends withdrawal.
+The detail and list responses carry `provider_outage_blocks_retry` and the
+`provider_outage` circuit snapshot so the wait is explained rather than
+inferred. While blocked, a plain grant is refused; a deliberate operator
+override must set `acknowledge_provider_outage=true`. Provider outage parking
+is infrastructure and never agent-attributable, so it never recommends
+withdrawal.
 
 Valid verdicts remain authoritative even if another request opens the circuit
 at the same time. An exhausted source-review 429 completion is instead stored
@@ -87,7 +88,7 @@ so a rolling relay cannot consume a screening attempt.
 Backroom's inference runtime metrics include the current provider circuit
 snapshot (`state`, `epoch`, cooldown, failure count, and probe ownership). This
 is the authoritative operator view; dashboards and process logs are supporting
-telemetry only. Backroom must declare `provider_circuit` in its response
+telemetry only. Backroom must declare `provider_outage` in its response
 schema: zod strips undeclared keys, and before ditto-subnet#2087 the MCP tool
 silently dropped the snapshot the Platform served. `get_validation_retry` and
 `list_stuck_submissions` carry the same circuit row beside their outage-aware

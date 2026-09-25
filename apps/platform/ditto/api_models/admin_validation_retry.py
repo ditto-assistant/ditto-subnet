@@ -185,20 +185,29 @@ class AdminValidationRetryDetail(BaseModel):
     ``inference_allowance_exhausted``, ``model_inference_required``) cannot be
     repaired by re-leasing the same image. The documented terminal path is
     queue withdrawal, not a retry grant and not a platform-minted score of 0.
-
-    ``None`` while :attr:`provider_outage_active` is true means "wait for the
-    provider", not a dead end: a grant now would be parked by the same outage.
-    That covers every recoverable row while the circuit is open, and the rows
-    :attr:`provider_outage_slot_count` counts until the provider goes quiet.
     """
     dominant_failure_code: str | None = None
     """The remaining tickets' current ``failure_detail`` when they all agree."""
-    provider_outage_slot_count: int = 0
-    """Exhausted quorum slots whose current lease the provider circuit parked."""
-    provider_outage_active: bool = False
-    """The provider circuit is open, or failed within the recovery quiet window."""
-    provider_circuit: ProviderCircuitSnapshot | None = None
-    """The authoritative OpenRouter circuit row this recommendation read."""
+    provider_outage: ProviderCircuitSnapshot | None = None
+    """The relay's provider circuit, when it bears on this submission's retry.
+
+    Reported while the circuit is open (it is then why a grant is refused), and
+    also while it is closed if a remaining exhausted slot was parked by it
+    (``failure_detail == "provider_outage_parked"``), because ``closed_at`` --
+    last time a provider request succeeded and closed the circuit -- is
+    recovery evidence. ``last_failure_at``/``last_error_code`` are the
+    newest outage evidence. ``None`` when the circuit is unrelated.
+    """
+    provider_outage_blocks_retry: bool = False
+    """An open circuit or a recently provider-parked slot blocks plain retry.
+
+    ``park_scoring_leases`` parks every issued lease while the circuit is open,
+    exempting only the single half-open probe. After it closes, a slot parked
+    by that outage waits for 30 minutes without another failure. While true,
+    ``recovery_allowed`` is false, ``recommended_action`` is not ``retry``, and
+    the retry routes require ``acknowledge_provider_outage=true``. A closed
+    circuit is a current-state observation, not proof of a healthy route.
+    """
     withdrawal_allowed: bool
     withdrawal_blocking_reason: str | None
     eviction_allowed: bool
@@ -231,9 +240,7 @@ class AdminStuckSubmission(BaseModel):
     * ``exhausted`` — no ticket can advance without an operator. Read
       ``recommended_action``: ``retry`` is a verified-infrastructure grant;
       ``withdraw`` is an agent-attributable dead end that should leave this
-      list via queue withdrawal, not another lease. ``None`` on a recoverable
-      row while the response's ``provider_outage_active`` is true means wait
-      for the provider, not a dead end.
+      list via queue withdrawal, not another lease.
     * ``queued`` — below quorum with slots that have simply never been leased
       yet; it will advance on its own.
     """
@@ -251,13 +258,15 @@ class AdminStuckSubmission(BaseModel):
     blocking_reason: str | None
     recommended_action: RecommendedRetryAction | None = None
     """``withdraw`` for named agent-attributable exhaustion; ``retry`` when a
-    grant can still restore quorum. ``None`` on rows that are not exhausted,
-    and on recoverable rows while the provider circuit is still failing.
+    grant can still restore quorum. ``None`` on rows that are not exhausted.
     """
     dominant_failure_code: str | None = None
     """Remaining current ``failure_detail`` when every leftover slot agrees."""
-    provider_outage_slot_count: int = 0
-    """Exhausted quorum slots whose current lease the provider circuit parked."""
+    provider_outage: ProviderCircuitSnapshot | None = None
+    """Provider circuit when a remaining slot was parked by it; see
+    :attr:`AdminValidationRetryDetail.provider_outage`."""
+    provider_outage_blocks_retry: bool = False
+    """See :attr:`AdminValidationRetryDetail.provider_outage_blocks_retry`."""
     earliest_retry_after: datetime | None
     attempts_used: int
     exhausted_validator_count: int
@@ -289,10 +298,6 @@ class AdminStuckSubmissionsResponse(BaseModel):
     offset: int
     has_more: bool
     submissions: list[AdminStuckSubmission]
-    provider_outage_active: bool = False
-    """The provider circuit is open, or failed within the recovery quiet window."""
-    provider_circuit: ProviderCircuitSnapshot | None = None
-    """The authoritative OpenRouter circuit row every row's recommendation read."""
 
 
 class AdminValidationRetryRequest(BaseModel):
@@ -304,6 +309,11 @@ class AdminValidationRetryRequest(BaseModel):
         str,
         StringConstraints(strip_whitespace=True, min_length=3),
     ]
+    acknowledge_provider_outage: bool = False
+    """Grant even though the provider-wide outage circuit is still open.
+
+    Without it the grant is refused: while the circuit is open every scoring
+    lease is parked, so the restored slot would be parked again."""
 
 
 class AdminValidationRetryResponse(BaseModel):
@@ -460,6 +470,9 @@ class AdminBatchRetryRequest(BaseModel):
         StringConstraints(strip_whitespace=True, min_length=3),
     ]
     items: Annotated[list[AdminBatchRetryItem], Field(min_length=1, max_length=100)]
+    acknowledge_provider_outage: bool = False
+    """Applies to every item; see
+    :attr:`AdminValidationRetryRequest.acknowledge_provider_outage`."""
 
     @field_validator("items")
     @classmethod

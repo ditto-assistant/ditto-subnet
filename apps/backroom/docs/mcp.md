@@ -119,6 +119,11 @@ operator selected on consent, and the account's live level. Consent can narrow
 a request but never widen it: a `scope=backroom:read` request yields a
 read-only grant whatever is selected, and a client that needs more must
 reconnect and request the broader scope (the step-up challenge above names it).
+The unauthenticated `/mcp` 401 challenge advertises all three scopes, because
+MCP clients request exactly the challenged scope: a first connection asks for
+everything, and the operator narrows it on consent. The consent screen always
+shows all four levels and disables any this request or account cannot receive,
+with the reason.
 Approving a client replaces every earlier grant that client id held, and a
 token request can only downscope within its grant. `get_backroom_access`
 reports the connection's exact `grant` id and client id, the token's

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import statistics
 from collections import Counter
 from datetime import UTC, datetime
@@ -96,10 +97,7 @@ from ditto.db.queries.lease_liveness import (
     ACTION_OPERATOR_EVICTED,
     expire_issued_tickets,
 )
-from ditto.db.queries.provider_outages import (
-    OPENROUTER_PROVIDER,
-    provider_outage_active,
-)
+from ditto.db.queries.provider_outages import OPENROUTER_PROVIDER
 from ditto.db.queries.queue_removal import (
     is_in_force,
     load_queue_removal,
@@ -110,14 +108,15 @@ from ditto.db.queries.retry_budget import (
     agent_infra_retry_grants,
 )
 from ditto.db.queries.retry_state import (
+    PROVIDER_OUTAGE_RETRY_BLOCKING_REASON,
     classify_agent_retry_states,
     dominant_agent_failure_detail,
     eviction_closes_era,
     eviction_gate,
     is_exhausted,
     is_open_rollout_qualification,
-    provider_outage_slot_count,
-    provider_outage_withholds_retry,
+    provider_outage_blocks_retry,
+    provider_outage_parked_exhaustion,
     recommended_retry_action,
     recovery_gate,
     reinstatement_gate,
@@ -141,6 +140,7 @@ from ditto_screening_protocol.bench_v9 import (
     V9_SCORE_CONTRACT_REVISION,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
@@ -164,17 +164,6 @@ OUTLIER_GAP_RATIO = 2.0
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
-
-async def _provider_outage_state(
-    session: AsyncSession, *, now: datetime
-) -> tuple[ProviderOutageCircuit | None, ProviderCircuitSnapshot | None, bool]:
-    """Read the relay-owned circuit once so every row's recommendation agrees."""
-    circuit = await session.get(ProviderOutageCircuit, OPENROUTER_PROVIDER)
-    snapshot = (
-        ProviderCircuitSnapshot.model_validate(circuit) if circuit is not None else None
-    )
-    return circuit, snapshot, provider_outage_active(circuit, now=now)
 
 
 def _ticket_wire(ticket: ValidatorTicket) -> dict[str, object]:
@@ -559,6 +548,39 @@ async def _load_withdrawal(
     )
 
 
+async def _provider_circuit(session: AsyncSession) -> ProviderOutageCircuit | None:
+    """The relay-owned provider circuit every scoring lease is gated on."""
+    return await session.get(ProviderOutageCircuit, OPENROUTER_PROVIDER)
+
+
+def _provider_outage_view(
+    *,
+    circuit: ProviderOutageCircuit | None,
+    scores: list[Score],
+    tickets: list[ValidatorTicket],
+    now: datetime,
+) -> tuple[ProviderCircuitSnapshot | None, bool]:
+    """``(circuit snapshot, blocks_retry)`` for one submission's remaining slots.
+
+    The snapshot is shown in two cases: the circuit is open, so it is why a
+    grant is blocked whatever the slots last failed on; or it is closed but a
+    remaining exhausted slot was parked by it, so ``last_failure_at`` and
+    ``closed_at`` explain whether the quiet window still blocks retry.
+    Otherwise the circuit is unrelated to this submission and
+    reporting it would be noise.
+    """
+    if circuit is None:
+        return None, False
+    blocked = provider_outage_blocks_retry(
+        circuit=circuit, scores=scores, tickets=tickets, now=now
+    )
+    if not blocked and not provider_outage_parked_exhaustion(
+        scores=scores, tickets=tickets
+    ):
+        return None, False
+    return ProviderCircuitSnapshot.model_validate(circuit), blocked
+
+
 @router.get("/validation-retries", response_model=AdminStuckSubmissionsResponse)
 async def list_validation_retries(
     _admin: AdminDep,
@@ -589,9 +611,6 @@ async def list_validation_retries(
             detail="unknown retry state: " + ", ".join(sorted(unknown)),
         )
 
-    circuit, provider_circuit, outage_active = await _provider_outage_state(
-        session, now=now
-    )
     agents = await list_agents_by_status(
         session, statuses=[AgentStatus.EVALUATING], limit=_STUCK_SCAN_LIMIT
     )
@@ -622,6 +641,7 @@ async def list_validation_retries(
         canonical_version=active_version,
     )
     agents_by_id = {agent.agent_id: agent for agent in agents}
+    circuit = await _provider_circuit(session)
     admitted_to_active = await admitted_agent_ids(
         session,
         bench_version=active_version,
@@ -650,6 +670,9 @@ async def list_validation_retries(
             continue
         agent = agents_by_id[agent_id]
         scored_hotkeys = {s.validator_hotkey for s in retry.scores}
+        provider_outage, provider_blocked = _provider_outage_view(
+            circuit=circuit, scores=retry.scores, tickets=retry.tickets, now=now
+        )
         submissions.append(
             AdminStuckSubmission(
                 agent_id=agent.agent_id,
@@ -661,25 +684,23 @@ async def list_validation_retries(
                 quorum=SCORING_QUORUM,
                 retry_state=retry.state,
                 automatic_retry_available=retry.automatic_retry_available,
-                recovery_allowed=retry.recovery_allowed,
-                blocking_reason=retry.blocking_reason,
+                recovery_allowed=retry.recovery_allowed and not provider_blocked,
+                blocking_reason=(
+                    PROVIDER_OUTAGE_RETRY_BLOCKING_REASON
+                    if retry.recovery_allowed and provider_blocked
+                    else retry.blocking_reason
+                ),
                 recommended_action=recommended_retry_action(
                     scores=retry.scores,
                     tickets=retry.tickets,
                     recovery_allowed=retry.recovery_allowed,
-                    provider_outage_withheld=provider_outage_withholds_retry(
-                        circuit=circuit,
-                        scores=retry.scores,
-                        tickets=retry.tickets,
-                        now=now,
-                    ),
+                    provider_outage_blocked=provider_blocked,
                 ),
                 dominant_failure_code=dominant_agent_failure_detail(
                     scores=retry.scores, tickets=retry.tickets
                 ),
-                provider_outage_slot_count=provider_outage_slot_count(
-                    scores=retry.scores, tickets=retry.tickets
-                ),
+                provider_outage=provider_outage,
+                provider_outage_blocks_retry=provider_blocked,
                 earliest_retry_after=retry.earliest_retry_after,
                 attempts_used=max((t.attempt_count for t in retry.tickets), default=0),
                 exhausted_validator_count=sum(
@@ -718,8 +739,6 @@ async def list_validation_retries(
         offset=offset,
         has_more=offset + len(page) < count,
         submissions=page,
-        provider_outage_active=outage_active,
-        provider_circuit=provider_circuit,
     )
 
 
@@ -789,9 +808,20 @@ async def get_validation_retry(
         if withdrawal is not None
         else eviction_reason
     )
-    circuit, provider_circuit, outage_active = await _provider_outage_state(
-        session, now=now
+    provider_outage, provider_blocked = _provider_outage_view(
+        circuit=await _provider_circuit(session),
+        scores=scores,
+        tickets=tickets,
+        now=now,
     )
+    grantable = allowed and withdrawal is None
+    blocking_reason: str | None
+    if withdrawal is not None:
+        blocking_reason = "submission is removed from this benchmark queue"
+    elif grantable and provider_blocked:
+        blocking_reason = PROVIDER_OUTAGE_RETRY_BLOCKING_REASON
+    else:
+        blocking_reason = reason
     return AdminValidationRetryDetail(
         agent_id=agent.agent_id,
         miner_hotkey=agent.miner_hotkey,
@@ -802,28 +832,19 @@ async def get_validation_retry(
         quorum=SCORING_QUORUM,
         snapshot=_snapshot(agent=agent, scores=scores, tickets=tickets),
         automatic_retry_available=automatic,
-        recovery_allowed=allowed and withdrawal is None,
-        blocking_reason=(
-            "submission is removed from this benchmark queue"
-            if withdrawal is not None
-            else reason
-        ),
+        recovery_allowed=grantable and not provider_blocked,
+        blocking_reason=blocking_reason,
         recommended_action=recommended_retry_action(
             scores=scores,
             tickets=tickets,
-            recovery_allowed=allowed and withdrawal is None,
-            provider_outage_withheld=provider_outage_withholds_retry(
-                circuit=circuit, scores=scores, tickets=tickets, now=now
-            ),
+            recovery_allowed=grantable,
+            provider_outage_blocked=provider_blocked,
         ),
         dominant_failure_code=dominant_agent_failure_detail(
             scores=scores, tickets=tickets
         ),
-        provider_outage_slot_count=provider_outage_slot_count(
-            scores=scores, tickets=tickets
-        ),
-        provider_outage_active=outage_active,
-        provider_circuit=provider_circuit,
+        provider_outage=provider_outage,
+        provider_outage_blocks_retry=provider_blocked,
         withdrawal_allowed=withdrawal_allowed,
         withdrawal_blocking_reason=withdrawal_blocking_reason,
         eviction_allowed=eviction_allowed,
@@ -853,6 +874,7 @@ async def _apply_recovery(
     request_id: UUID,
     expected_snapshot: str,
     now: datetime,
+    acknowledge_provider_outage: bool = False,
 ) -> tuple[str, str | None, ValidatorRetryRecovery | None]:
     """Grant one audited recovery inside the caller's transaction.
 
@@ -916,6 +938,23 @@ async def _apply_recovery(
     )
     if not allowed:
         return "skipped", gate_reason or "retry unavailable", None
+    # Advisory read, deliberately unlocked: the lease path locks the circuit
+    # before tickets, and this transaction already holds ticket locks.
+    if provider_outage_blocks_retry(
+        circuit=await _provider_circuit(session),
+        scores=scores,
+        tickets=tickets,
+        now=now,
+    ):
+        if not acknowledge_provider_outage:
+            return "skipped", PROVIDER_OUTAGE_RETRY_BLOCKING_REASON, None
+        logger.warning(
+            "validator retry granted during provider outage recovery agent_id=%s "
+            "actor=%s request_id=%s",
+            agent_id,
+            actor,
+            request_id,
+        )
 
     ticket_snapshot = [_ticket_wire(ticket) for ticket in tickets]
     for ticket in selected:
@@ -1414,6 +1453,7 @@ async def retry_validation_after_infrastructure_failure(
             request_id=payload.request_id,
             expected_snapshot=payload.expected_snapshot,
             now=datetime.now(UTC),
+            acknowledge_provider_outage=payload.acknowledge_provider_outage,
         )
         if status == "skipped":
             code = 404 if detail == "agent not found" else 409
@@ -1453,6 +1493,7 @@ async def batch_retry_validation(
                 request_id=item.request_id,
                 expected_snapshot=item.expected_snapshot,
                 now=now,
+                acknowledge_provider_outage=payload.acknowledge_provider_outage,
             )
             results.append(
                 AdminBatchRetryResult(

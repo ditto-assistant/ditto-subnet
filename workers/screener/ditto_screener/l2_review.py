@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tarfile
@@ -177,32 +178,146 @@ _DOSSIER_ANALYZERS = (
     "integrity_surfaces",
     "scorer_field_flow",
 )
+_COMPACT_DOSSIER_SECTIONS = (
+    *(f"deterministic.{name}" for name in _DOSSIER_ANALYZERS),
+    "deterministic.main_call_graph",
+    "bounded_source_inventory",
+)
+
+
+def _dossier_section(dossier: Mapping[str, object], name: str) -> object:
+    if name == "bounded_source_inventory":
+        return dossier[name]
+    prefix, _, section = name.partition(".")
+    if prefix != "deterministic" or not section:
+        raise ValueError("unknown compact dossier section")
+    deterministic = dossier.get("deterministic")
+    if not isinstance(deterministic, Mapping) or section not in deterministic:
+        raise ValueError("missing compact dossier section")
+    return deterministic[section]
+
+
+def _compact_dossier_packet(dossier: Mapping[str, object]) -> dict[str, object]:
+    """Bind every omitted analyzer byte to an on-demand exact section."""
+    sections = []
+    for name in _COMPACT_DOSSIER_SECTIONS:
+        value = _dossier_section(dossier, name)
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        sections.append(
+            {
+                "name": name,
+                "sha256": hashlib.sha256(encoded).hexdigest(),
+                "bytes": len(encoded),
+            }
+        )
+    packet = {
+        key: value
+        for key, value in dossier.items()
+        if key not in {"deterministic", "bounded_source_inventory"}
+    }
+    packet["full_dossier_sha256"] = hashlib.sha256(
+        json.dumps(dossier, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    packet["on_demand_sections"] = sections
+    packet["section_contract"] = (
+        "Every omitted section remains available through dossier_section. "
+        "Use read_file and search against the full SHA-bound archive."
+    )
+    return packet
+
+
+def _dossier_section_output(dossier: Mapping[str, object], name: str) -> str:
+    if name not in _COMPACT_DOSSIER_SECTIONS:
+        raise ValueError("unknown compact dossier section")
+    value = _dossier_section(dossier, name)
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return json.dumps(
+        {
+            "section": name,
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+            "content": value,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _compact_safe_has_coverage(
+    fetched_sections: set[str], read_files: set[str]
+) -> bool:
+    return set(_COMPACT_DOSSIER_SECTIONS) <= fetched_sections and bool(read_files)
+
+
 _SUBMISSION_VALIDATION_HINTS = {
-    "schema": "Match every required submit_l2_review field, type, and enum value.",
+    "schema": (
+        "Match the submit_l2_review schema exactly, including every required "
+        "field, type, and enum value."
+    ),
     "artifact_citation": (
-        "Re-read exact source. Match analyzed_files SHA-256 values to the archive "
-        "and cite real artifact paths and lines."
+        "Include every distinct L1 evidence file in analyzed_files with its "
+        "exact SHA-256, even when that exceeds the usual 12-file suggestion. "
+        "Add every other cited source file, then use real artifact lines."
     ),
     "invariant_sweep": (
-        "Submit each required policy invariant exactly once. A pass needs its "
-        "compatible pass_clause and no evidence indices; a breach needs "
-        "source evidence."
+        "Submit each V13 invariant I1-I8 exactly once. A passing invariant "
+        "needs a compatible pass_clause and no evidence indices; a breach needs "
+        "null pass_clause and valid source-evidence indices."
     ),
     "causal_link": (
-        "Bind the trigger, authority decision, and effect to exact source "
-        "locations and include the required causal roles."
+        "Bind the trigger, authority decision, and observed effect to exact "
+        "source locations and satisfy the required causal roles."
+    ),
+    "causal_path": (
+        "For a violation, causal_path needs at least two exact artifact "
+        "path/line entries, including one trigger and one effect role."
+    ),
+    "causal_roles": (
+        "For benchmark_emulation or scorer_contract_manipulation, use a v2 "
+        "causal_evidence object with served_trigger, authority_bypass, "
+        "scorer_visible_effect, and reachability_link role bindings. Each "
+        "binding must match a digest-bound violation evidence location."
+    ),
+    "safe_basis": (
+        "A safe result needs low risk and a safe resolution basis: "
+        "authoritative_model_tool_path or unreachable_nonruntime_code. "
+        "Use categories=[none] and evidence=[] when no finding remains."
     ),
     "basis_category": (
-        "Align risk, categories, category evidence, and resolution basis with "
-        "the cited mechanism."
+        "Align the risk level, categories, category evidence, and resolution "
+        "basis with the host-verified mechanism."
     ),
-    "multi_location": "Cite two distinct source locations for each required category.",
+    "multi_location": (
+        "Cite two distinct artifact path/line locations for each category "
+        "that requires independent multi-location evidence."
+    ),
 }
 
 
 def _submission_validation_subcode(error: ValueError) -> str:
-    """Map host failures to fixed, source-free model correction codes."""
+    """Reduce fixed host validation failures to source-free correction codes."""
     message = str(error)
+    if "L2 violation lacks a causal trigger/effect path" in message:
+        return "causal_path"
+    if any(
+        phrase in message
+        for phrase in (
+            "L2 causal evidence is invalid",
+            "L2 causal evidence schema version is invalid",
+            "L2 causal role bindings are invalid",
+            "L2 causal role binding is invalid",
+            "L2 causal role binding is not evidence-bound",
+        )
+    ):
+        return "causal_roles"
+    if any(
+        phrase in message
+        for phrase in (
+            "L2 safe result has a non-safe resolution basis",
+            "L2 safe result contains prohibited risk",
+            "L2 safe result contains contradictory evidence",
+        )
+    ):
+        return "safe_basis"
     if "multi-location evidence" in message:
         return "multi_location"
     if any(
@@ -251,6 +366,26 @@ def _submission_validation_subcode(error: ValueError) -> str:
     ):
         return "basis_category"
     return "schema"
+
+
+def _compact_consumed_tool_outputs(items: list[dict[str, object]]) -> None:
+    """Retain a reloadable digest after the model has consumed exact tool bytes."""
+    for item in items:
+        if item.get("type") != "function_call_output":
+            continue
+        output = item.get("output")
+        if not isinstance(output, str) or len(output) <= 4_096:
+            continue
+        item["output"] = json.dumps(
+            {
+                "archived_output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+                "bytes": len(output.encode()),
+                "reload": (
+                    "Repeat the original tool call against the immutable archive."
+                ),
+            },
+            separators=(",", ":"),
+        )
 
 
 _BENCHMARK_CONTRACT_CAPSULE = {
@@ -994,7 +1129,10 @@ an independent SOL adversarial critic. For a safe causal path, include request
 context, the authoritative model/tool decision, and the returned answer sink.
 Keep the final tool call compact: list only files
 materially consulted for the decision, never echo the full dossier/index, and
-normally use at most 12 analyzed files.
+normally use at most 12 analyzed files. Every distinct L1 evidence file is
+mandatory in analyzed_files, even when that exceeds 12; add every other file
+cited in evidence, causal_path, or generator_components. Never truncate
+required files to satisfy the usual compactness suggestion.
 Always include generator_components in the final tool call. Use an empty list
 unless the resolution basis is generator_mirroring; for that basis include two
 to four exact digest-bound input-construction locations that also appear in the
@@ -1915,6 +2053,29 @@ def _l2_tools_for_policy(policy_version: int) -> list[dict[str, object]]:
     return tools
 
 
+def _compact_dossier_tool() -> dict[str, object]:
+    return {
+        "type": "function",
+        "name": "dossier_section",
+        "description": (
+            "Fetch one exact SHA-bound analyzer or source-inventory section "
+            "from the retained dossier."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "section": {
+                    "type": "string",
+                    "enum": list(_COMPACT_DOSSIER_SECTIONS),
+                }
+            },
+            "required": ["section"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    }
+
+
 @dataclass(frozen=True)
 class L2Usage:
     input_tokens: int = 0
@@ -2305,6 +2466,12 @@ class TerraSolSourceReviewAgent:
         max_completion_tokens: int,
         max_cost_usd: float,
         cache_ttl_seconds: float,
+        max_completion_request_seconds: float | None = None,
+        independent_analyst: bool = False,
+        terminal_verdict_required: bool = False,
+        retry_provider_body_fault_once: bool = False,
+        analyst_provider: str | None = None,
+        compact_review_packet: bool = False,
         analyst_reasoning_effort: str = "model_default",
         critic_reasoning_effort: str = "medium",
         model: str = L2_MODEL,
@@ -2336,6 +2503,20 @@ class TerraSolSourceReviewAgent:
         self._max_completion_tokens = max_completion_tokens
         self._max_cost_usd = max_cost_usd
         self._cache_ttl_seconds = cache_ttl_seconds
+        if max_completion_request_seconds is not None and not (
+            30 <= max_completion_request_seconds <= 600
+        ):
+            raise ValueError("L2 completion request timeout must be 30-600 seconds")
+        self._max_completion_request_seconds = max_completion_request_seconds
+        self._independent_analyst = independent_analyst
+        if terminal_verdict_required and l3_enabled:
+            raise ValueError("terminal-only comparator cannot enable L3")
+        self._terminal_verdict_required = terminal_verdict_required
+        self._retry_provider_body_fault_once = retry_provider_body_fault_once
+        self._analyst_provider = analyst_provider
+        if compact_review_packet and not terminal_verdict_required:
+            raise ValueError("compact review packet is report-only terminal mode")
+        self._compact_review_packet = compact_review_packet
         if analyst_reasoning_effort != "model_default":
             raise ValueError("L2 analyst reasoning effort must be model_default")
         if critic_reasoning_effort not in {"low", "medium", "high"}:
@@ -2571,7 +2752,7 @@ class TerraSolSourceReviewAgent:
                 audit = ScreenReviewAudit(
                     stage="l2",
                     reason_code="l2-model-inconclusive",
-                    prompt_revision=l2_prompt_revision(policy_version),
+                    prompt_revision=self._analyst_prompt_revision(policy_version),
                     harness_revision=L2_HARNESS_REVISION,
                     max_steps=self._max_steps,
                     steps_used=min(len(result.response_models), self._max_steps),
@@ -2652,7 +2833,7 @@ class TerraSolSourceReviewAgent:
                 ScreenReviewAudit(
                     stage="l2",
                     reason_code=f"l2-{error.code}",
-                    prompt_revision=l2_prompt_revision(policy_version),
+                    prompt_revision=self._analyst_prompt_revision(policy_version),
                     harness_revision=L2_HARNESS_REVISION,
                     max_steps=self._max_steps,
                     steps_used=min(error.steps_used, self._max_steps),
@@ -2779,7 +2960,7 @@ class TerraSolSourceReviewAgent:
                     reasoning_effort=self._analyst_reasoning_effort,
                     model=self._model,
                     fallback_models=self._fallback_models,
-                    provider=None,
+                    provider=self._analyst_provider,
                     usage_before=L2Usage(),
                     deadline=deadline,
                     policy_version=policy_version,
@@ -3755,8 +3936,34 @@ class TerraSolSourceReviewAgent:
     ) -> L2RunResult:
         if role == "analyst":
             task = (
-                "Resolve the L1 quarantine lead using the dossier and targeted tools."
+                "No L1 finding is supplied. Independently review the entire served "
+                "artifact against I1-I7 using the dossier and targeted tools. "
+                "Reach a grounded terminal safe or violation verdict when the "
+                "evidence permits; return inconclusive only for a specific "
+                "unresolved causal link."
+                if self._independent_analyst
+                else "Resolve the L1 quarantine lead using the dossier and "
+                "targeted tools."
             )
+            if self._terminal_verdict_required:
+                task += (
+                    " This report-only comparator requires a terminal verdict. "
+                    "Inspect more source before deciding; submit safe or violation "
+                    "only with grounded causal evidence. Never invent a finding "
+                    "to satisfy the terminal requirement."
+                )
+            if self._compact_review_packet:
+                task += (
+                    " The initial packet omits large analyzer and inventory "
+                    "sections by SHA-256; fetch any needed section with "
+                    "dossier_section. First search/index the full isolated "
+                    "archive and fetch only sections that answer a concrete "
+                    "question. Prior large tool results may become digest "
+                    "receipts; repeat that tool call to reload exact bytes. "
+                    "For safe, inspect every listed "
+                    "section and at least one exact source file. Cite only "
+                    "host-checkable source locations in the final verdict."
+                )
         elif role == "critic":
             task = (
                 "Adversarially falsify the provisional safe result, then try to "
@@ -3791,11 +3998,16 @@ class TerraSolSourceReviewAgent:
                 if mixed_scorer
                 else _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK
             )
+        model_dossier = (
+            _compact_dossier_packet(dossier)
+            if self._compact_review_packet and role == "analyst"
+            else dossier
+        )
         content: list[dict[str, object]] = [
             {
                 "type": "input_text",
                 "text": json.dumps(
-                    {"compressed_l1_dossier": dossier},
+                    {"compressed_l1_dossier": model_dossier},
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
@@ -3838,22 +4050,82 @@ class TerraSolSourceReviewAgent:
         steps_used = 0
         read_bytes_used = 0
         read_files: set[str] = set()
+        fetched_sections: set[str] = set()
         pending_tool_corrections: set[str] = set()
         no_call_corrections = 0
+        rejected_violation_certificate = False
 
         def request_submit_correction(
-            call: object, *, validation_error: ValueError | None = None
+            call: object,
+            *,
+            reason: str,
+            validation_subcode: str | None = None,
+            missing_sections: tuple[str, ...] = (),
+            needs_source_read: bool = False,
         ) -> None:
+            nonlocal rejected_violation_certificate
             try:
                 call_id = _call_id_value(call)
             except ValueError as error:
                 logger.warning("L2 model-tool-contract: invalid submit call id")
                 raise failure("model-tool-contract") from error
-            subcode = (
-                _submission_validation_subcode(validation_error)
-                if validation_error is not None
-                else None
-            )
+            proposed_disposition = "unknown"
+            if isinstance(call, Mapping):
+                raw_arguments = call.get("arguments")
+                if isinstance(raw_arguments, str):
+                    with contextlib.suppress(json.JSONDecodeError):
+                        proposed = json.loads(raw_arguments)
+                        if (
+                            isinstance(proposed, dict)
+                            and isinstance(proposed.get("disposition"), str)
+                            and proposed.get("disposition")
+                            in {"safe", "violation", "inconclusive"}
+                        ):
+                            proposed_disposition = proposed["disposition"]
+            if self._terminal_verdict_required:
+                if proposed_disposition == "violation":
+                    rejected_violation_certificate = True
+                self._audit.record(
+                    {
+                        "recorded_at": time.time(),
+                        "event_type": "report_only_submit_correction",
+                        "artifact_sha256": artifact_sha256,
+                        "role": role,
+                        "step": steps_used,
+                        "reason": reason,
+                        "validation_subcode": validation_subcode,
+                        "proposed_disposition": proposed_disposition,
+                        "missing_sections": list(missing_sections),
+                        "needs_source_read": needs_source_read,
+                        "pending_analyzer_tools": sorted(pending_tool_corrections),
+                    }
+                )
+            guidance = {
+                "validation": (
+                    "The host rejected this final review: "
+                    + _SUBMISSION_VALIDATION_HINTS[validation_subcode or "schema"]
+                    + " Do not change the verdict to bypass checks."
+                ),
+                "safe_coverage": (
+                    "Before submitting safe, fetch these exact dossier sections: "
+                    + (", ".join(missing_sections) or "none")
+                    + (
+                        "; read at least one exact source file"
+                        if needs_source_read
+                        else ""
+                    )
+                    + ". Then resubmit as the only call."
+                ),
+                "pending_analyzer": (
+                    "These analyzer outputs remain incomplete: "
+                    + ", ".join(sorted(pending_tool_corrections))
+                    + ". Re-run each named tool until it returns without an "
+                    "error or truncation, then submit the final review alone."
+                ),
+                "submit_not_only_call": (
+                    "Submit the final review as the only call in the response."
+                ),
+            }[reason]
             items.append(
                 {
                     "type": "function_call_output",
@@ -3861,16 +4133,9 @@ class TerraSolSourceReviewAgent:
                     "output": json.dumps(
                         {
                             "error": "submission-contract",
-                            "validation_subcode": subcode,
-                            "message": (
-                                "The host rejected this final review: "
-                                + _SUBMISSION_VALIDATION_HINTS[subcode]
-                                + " Keep the evidence-based disposition and retry "
-                                "submit_l2_review as the only call."
-                                if subcode is not None
-                                else "Retry submit_l2_review as the only call after "
-                                "resolving analyzer corrections."
-                            ),
+                            "reason": reason,
+                            "validation_subcode": validation_subcode,
+                            "message": guidance,
                         },
                         separators=(",", ":"),
                     ),
@@ -3892,18 +4157,51 @@ class TerraSolSourceReviewAgent:
 
         for _step in range(max_steps or self._max_steps):
             steps_used = _step + 1
-            response = await self._post(
-                client,
-                api_key,
-                items,
-                artifact_sha256=artifact_sha256,
-                reasoning_effort=reasoning_effort,
-                model=model,
-                fallback_models=fallback_models,
-                provider=provider,
-                deadline=deadline,
-                policy_version=policy_version,
-            )
+            turn_started = time.monotonic()
+            if self._terminal_verdict_required:
+                self._audit.record(
+                    {
+                        "recorded_at": time.time(),
+                        "event_type": "report_only_turn_start",
+                        "artifact_sha256": artifact_sha256,
+                        "role": role,
+                        "step": steps_used,
+                        "request_items": len(items),
+                        "request_bytes": len(
+                            json.dumps(items, separators=(",", ":")).encode()
+                        ),
+                        "model": model,
+                        "requested_provider": provider,
+                    }
+                )
+            try:
+                response = await self._post(
+                    client,
+                    api_key,
+                    items,
+                    artifact_sha256=artifact_sha256,
+                    reasoning_effort=reasoning_effort,
+                    model=model,
+                    fallback_models=fallback_models,
+                    provider=provider,
+                    deadline=deadline,
+                    policy_version=policy_version,
+                )
+            except (TimeoutError, httpx.TimeoutException):
+                if self._terminal_verdict_required:
+                    self._audit.record(
+                        {
+                            "recorded_at": time.time(),
+                            "event_type": "report_only_turn_timeout",
+                            "artifact_sha256": artifact_sha256,
+                            "role": role,
+                            "step": steps_used,
+                            "elapsed_seconds": round(
+                                time.monotonic() - turn_started, 3
+                            ),
+                        }
+                    )
+                raise
             payload: object | None = None
             try:
                 payload = response.json()
@@ -3916,8 +4214,68 @@ class TerraSolSourceReviewAgent:
                     error,
                     _response_contract_detail(payload),
                 )
+                if self._terminal_verdict_required:
+                    response_body = payload if isinstance(payload, dict) else {}
+                    details = response_body.get("incomplete_details")
+                    reason = (
+                        details.get("reason") if isinstance(details, dict) else None
+                    )
+                    raw_usage = response_body.get("usage")
+                    raw_cost = (
+                        raw_usage.get("cost") if isinstance(raw_usage, dict) else None
+                    )
+                    self._audit.record(
+                        {
+                            "recorded_at": time.time(),
+                            "event_type": "report_only_turn_contract_fault",
+                            "artifact_sha256": artifact_sha256,
+                            "role": role,
+                            "step": steps_used,
+                            "http_status": response.status_code,
+                            "response_status": response_body.get("status")
+                            if isinstance(response_body.get("status"), str)
+                            and response_body.get("status")
+                            in {"completed", "failed", "cancelled", "incomplete"}
+                            else "other",
+                            "incomplete_reason": reason
+                            if isinstance(reason, str)
+                            and reason in {"content_filter", "max_output_tokens"}
+                            else "other"
+                            if reason is not None
+                            else None,
+                            "reported_cost_usd": float(raw_cost)
+                            if isinstance(raw_cost, (int, float))
+                            and not isinstance(raw_cost, bool)
+                            and raw_cost >= 0
+                            else None,
+                            "elapsed_seconds": round(
+                                time.monotonic() - turn_started, 3
+                            ),
+                        }
+                    )
                 raise failure("model-response-contract") from error
             usage = _add_usage(usage, turn_usage)
+            if self._terminal_verdict_required:
+                self._audit.record(
+                    {
+                        "recorded_at": time.time(),
+                        "event_type": "report_only_turn_usage",
+                        "artifact_sha256": artifact_sha256,
+                        "role": role,
+                        "step": steps_used,
+                        "request_items": len(items),
+                        "request_bytes": len(
+                            json.dumps(items, separators=(",", ":")).encode()
+                        ),
+                        "model": response_model,
+                        "provider": response_provider,
+                        "input_tokens": turn_usage.input_tokens,
+                        "cached_input_tokens": turn_usage.cached_input_tokens,
+                        "cache_write_input_tokens": turn_usage.cache_write_input_tokens,
+                        "output_tokens": turn_usage.output_tokens,
+                        "reported_cost_usd": turn_usage.reported_cost_usd,
+                    }
+                )
             combined = _add_usage(usage_before, usage)
             try:
                 self._require_budget(combined)
@@ -3927,8 +4285,31 @@ class TerraSolSourceReviewAgent:
                 response_models.append(response_model)
             if response_provider:
                 response_providers.append(response_provider)
+            if self._compact_review_packet:
+                _compact_consumed_tool_outputs(items)
             items.extend(output)
             calls = [item for item in output if item.get("type") == "function_call"]
+            if self._terminal_verdict_required:
+                allowed_tool_names = {
+                    str(tool["name"]) for tool in _l2_tools_for_policy(policy_version)
+                }
+                if self._compact_review_packet:
+                    allowed_tool_names.add("dossier_section")
+                self._audit.record(
+                    {
+                        "recorded_at": time.time(),
+                        "event_type": "report_only_turn_tools",
+                        "artifact_sha256": artifact_sha256,
+                        "role": role,
+                        "step": steps_used,
+                        "tool_names": [
+                            name
+                            if (name := call.get("name")) in allowed_tool_names
+                            else "unknown"
+                            for call in calls
+                        ],
+                    }
+                )
             if not calls:
                 if role == "analyst" and no_call_corrections < 2:
                     no_call_corrections += 1
@@ -3989,7 +4370,7 @@ class TerraSolSourceReviewAgent:
                                     )
                                 ),
                                 prompt_revision=(
-                                    l2_prompt_revision(policy_version)
+                                    self._analyst_prompt_revision(policy_version)
                                     if role == "analyst"
                                     else l2_cause_tiebreaker_prompt_revision(
                                         policy_version
@@ -4005,8 +4386,52 @@ class TerraSolSourceReviewAgent:
                             )
                         )
                     except (json.JSONDecodeError, ValueError) as error:
-                        request_submit_correction(submitted[0], validation_error=error)
+                        request_submit_correction(
+                            submitted[0],
+                            reason="validation",
+                            validation_subcode=_submission_validation_subcode(error),
+                        )
                         continue
+                    if (
+                        self._compact_review_packet
+                        and role == "analyst"
+                        and observation.ok
+                        and observation.risk_level == "low"
+                        and not _compact_safe_has_coverage(fetched_sections, read_files)
+                    ):
+                        request_submit_correction(
+                            submitted[0],
+                            reason="safe_coverage",
+                            missing_sections=tuple(
+                                name
+                                for name in _COMPACT_DOSSIER_SECTIONS
+                                if name not in fetched_sections
+                            ),
+                            needs_source_read=not read_files,
+                        )
+                        continue
+                    if (
+                        self._terminal_verdict_required
+                        and rejected_violation_certificate
+                        and observation.ok
+                        and observation.risk_level == "low"
+                    ):
+                        # A rejected violation certificate remains an unresolved
+                        # lead. A single-layer comparator cannot clear it by
+                        # switching labels later in the same trajectory.
+                        self._audit.record(
+                            {
+                                "recorded_at": time.time(),
+                                "event_type": "report_only_unresolved_violation",
+                                "artifact_sha256": artifact_sha256,
+                                "role": role,
+                                "step": steps_used,
+                            }
+                        )
+                        observation = _failure(
+                            "l2-unresolved-violation", "inconclusive"
+                        )
+                        resolution_basis = "insufficient_static_evidence"
                     return L2RunResult(
                         observation=observation,
                         analyzed_files=analyzed,
@@ -4020,7 +4445,14 @@ class TerraSolSourceReviewAgent:
                         dossier_complete=trajectory_complete,
                     )
                 for call in submitted:
-                    request_submit_correction(call)
+                    request_submit_correction(
+                        call,
+                        reason=(
+                            "pending_analyzer"
+                            if pending_tool_corrections
+                            else "submit_not_only_call"
+                        ),
+                    )
             for call in (
                 call for call in calls if call.get("name") != "submit_l2_review"
             ):
@@ -4039,9 +4471,16 @@ class TerraSolSourceReviewAgent:
                     raise failure("model-tool-budget")
                 tool_names.append(name)
                 try:
-                    tool_output = await self._harness.run(
-                        workspace, name, arguments, deadline=deadline
-                    )
+                    if self._compact_review_packet and name == "dossier_section":
+                        section = arguments.get("section")
+                        if not isinstance(section, str):
+                            raise ValueError("missing compact dossier section")
+                        tool_output = _dossier_section_output(dossier, section)
+                        fetched_sections.add(section)
+                    else:
+                        tool_output = await self._harness.run(
+                            workspace, name, arguments, deadline=deadline
+                        )
                 except ValueError as error:
                     raise failure("analyzer-contract") from error
                 read_bytes_used += len(tool_output.encode("utf-8"))
@@ -4113,15 +4552,40 @@ class TerraSolSourceReviewAgent:
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> httpx.Response:
+        tools = _l2_tools_for_policy(policy_version)
+        if self._compact_review_packet:
+            tools.insert(-1, _compact_dossier_tool())
+        if self._terminal_verdict_required:
+            parameters = tools[-1]["parameters"]
+            assert isinstance(parameters, dict)
+            properties = parameters["properties"]
+            assert isinstance(properties, dict)
+            disposition = properties["disposition"]
+            assert isinstance(disposition, dict)
+            disposition["enum"] = ["safe", "violation"]
+            resolution_basis = properties["resolution_basis"]
+            assert isinstance(resolution_basis, dict)
+            resolution_basis["enum"] = [
+                value
+                for value in resolution_basis["enum"]
+                if value != "insufficient_static_evidence"
+            ]
         request: dict[str, object] = {
             "model": model,
             "instructions": _l2_review_system_prompt(policy_version),
             "input": items,
-            "tools": _l2_tools_for_policy(policy_version),
+            "tools": tools,
             "tool_choice": "required",
             "max_output_tokens": self._max_completion_tokens,
             "store": False,
-            "prompt_cache_key": l2_prompt_cache_key(policy_version),
+            "prompt_cache_key": (
+                "ditto-report-"
+                + hashlib.sha256(
+                    self._analyst_prompt_revision(policy_version).encode()
+                ).hexdigest()[:32]
+                if self._terminal_verdict_required
+                else l2_prompt_cache_key(policy_version)
+            ),
         }
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -4147,6 +4611,8 @@ class TerraSolSourceReviewAgent:
                 request["models"] = [model, *fallback_models]
             if provider is not None:
                 request["provider"]["only"] = [provider]  # type: ignore[index]
+                if self._terminal_verdict_required and provider.startswith("azure"):
+                    request["provider"]["zdr"] = True  # type: ignore[index]
             # OpenRouter returns the metered cost only when asked for metadata.
             headers["X-OpenRouter-Metadata"] = "enabled"
         # Ditto Inference resolves the requested model id through the endpoint's
@@ -4158,7 +4624,10 @@ class TerraSolSourceReviewAgent:
         # A provider can keep a broken response alive with occasional bytes, so
         # bound each turn and allow one fresh connection before escalating.
         for attempt in range(_MAX_COMPLETION_REQUEST_ATTEMPTS):
-            timeout = min(self._turn_timeout(deadline), _MAX_COMPLETION_REQUEST_SECONDS)
+            timeout = min(
+                self._turn_timeout(deadline),
+                self._max_completion_request_seconds or _MAX_COMPLETION_REQUEST_SECONDS,
+            )
             try:
                 async with asyncio.timeout(timeout):
                     response = await client.post(
@@ -4167,7 +4636,105 @@ class TerraSolSourceReviewAgent:
                         json=request,
                         timeout=timeout,
                     )
-                break
+                response.raise_for_status()
+                payload: object | None = None
+                with contextlib.suppress(ValueError, TypeError):
+                    payload = response.json()
+                model_error = _retryable_model_error_type(payload)
+                if self._terminal_verdict_required and model_error is not None:
+                    error = payload.get("error") if isinstance(payload, dict) else None
+                    metadata = (
+                        payload.get("openrouter_metadata")
+                        if isinstance(payload, dict)
+                        else None
+                    )
+                    selected_provider = None
+                    if isinstance(metadata, dict):
+                        endpoints = metadata.get("endpoints")
+                        if isinstance(endpoints, dict):
+                            available = endpoints.get("available")
+                            if isinstance(available, list):
+                                for endpoint in available:
+                                    if (
+                                        isinstance(endpoint, dict)
+                                        and endpoint.get("selected") is True
+                                    ):
+                                        selected_provider = endpoint.get("provider")
+                                        break
+
+                    def safe_code(value: object) -> str | None:
+                        if not isinstance(value, str):
+                            return None
+                        return (
+                            value
+                            if re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", value)
+                            else None
+                        )
+
+                    rate_headers = {
+                        name: value
+                        for name in (
+                            "retry-after",
+                            "x-ratelimit-limit",
+                            "x-ratelimit-remaining",
+                            "x-ratelimit-reset",
+                            "x-openrouter-ratelimit-limit",
+                            "x-openrouter-ratelimit-remaining",
+                            "x-openrouter-ratelimit-reset",
+                        )
+                        if (value := response.headers.get(name)) is not None
+                        and re.fullmatch(r"[a-zA-Z0-9, .:-]{1,80}", value)
+                    }
+                    self._audit.record(
+                        {
+                            "recorded_at": time.time(),
+                            "event_type": "report_only_provider_fault",
+                            "artifact_sha256": artifact_sha256,
+                            "model": model,
+                            "requested_provider": provider,
+                            "http_status": response.status_code,
+                            "response_status": safe_code(payload.get("status"))
+                            if isinstance(payload, dict)
+                            else None,
+                            "error_type": safe_code(payload.get("error_type"))
+                            if isinstance(payload, dict)
+                            else None,
+                            "error_code": safe_code(error.get("code"))
+                            if isinstance(error, dict)
+                            else None,
+                            "route_provider": safe_code(selected_provider),
+                            "route_region": safe_code(metadata.get("region"))
+                            if isinstance(metadata, dict)
+                            else None,
+                            "route_attempt": metadata.get("attempt")
+                            if isinstance(metadata, dict)
+                            and isinstance(metadata.get("attempt"), int)
+                            else None,
+                            "rate_limit_headers": rate_headers,
+                            "turn_attempt": attempt + 1,
+                        }
+                    )
+                if (
+                    self._retry_provider_body_fault_once
+                    and model_error is not None
+                    and attempt + 1 < _MAX_COMPLETION_REQUEST_ATTEMPTS
+                    and (
+                        deadline is None or asyncio.get_running_loop().time() < deadline
+                    )
+                ):
+                    logger.warning(
+                        "L2/L3 provider body fault %s; retrying exact turn once",
+                        model_error,
+                    )
+                    continue
+                if model_error is not None:
+                    logger.warning(
+                        "L2/L3 model body reported a provider fault; parking "
+                        "attempt: fault=%s signature=%s",
+                        model_error,
+                        _body_signature(payload),
+                    )
+                return response
             except (TimeoutError, httpx.TimeoutException):
                 if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
                     raise
@@ -4181,21 +4748,7 @@ class TerraSolSourceReviewAgent:
                     attempt + 1,
                     _MAX_COMPLETION_REQUEST_ATTEMPTS,
                 )
-        else:  # pragma: no cover - the loop either breaks or raises.
-            raise RuntimeError("L2/L3 model turn retry loop exhausted")
-        response.raise_for_status()
-        payload: object | None = None
-        with contextlib.suppress(ValueError, TypeError):
-            payload = response.json()
-        model_error = _retryable_model_error_type(payload)
-        if model_error is not None:
-            logger.warning(
-                "L2/L3 model body reported a provider fault; parking attempt: "
-                "fault=%s signature=%s",
-                model_error,
-                _body_signature(payload),
-            )
-        return response
+        raise RuntimeError("L2/L3 model turn retry loop exhausted")
 
     def _turn_timeout(self, deadline: float | None) -> float:
         if deadline is None:
@@ -4204,6 +4757,15 @@ class TerraSolSourceReviewAgent:
         if remaining <= 0:
             raise ValueError("L2 review exceeded lease budget")
         return min(self._timeout_seconds, remaining)
+
+    def _analyst_prompt_revision(self, policy_version: int) -> str:
+        revision = l2_prompt_revision(policy_version)
+        if not self._terminal_verdict_required:
+            return revision
+        input_mode = "independent" if self._independent_analyst else "l1-guided"
+        if self._compact_review_packet:
+            return f"{revision}-sol-{input_mode}-compact-v1"
+        return f"{revision}-report-gpt6sol-{input_mode}-terminal-v1"
 
     def _client_transport(self) -> httpx.AsyncBaseTransport | None:
         if self._transport is not None:
@@ -4285,10 +4847,15 @@ class TerraSolSourceReviewAgent:
             "artifact_sha256": artifact_sha256,
             "l1_finding_digest": l1_observation.finding_digest,
             "model": self._model,
+            "independent_analyst": self._independent_analyst,
+            "terminal_verdict_required": self._terminal_verdict_required,
+            "retry_provider_body_fault_once": self._retry_provider_body_fault_once,
+            "analyst_provider": self._analyst_provider,
+            "compact_review_packet": self._compact_review_packet,
             "fallback_models": list(self._fallback_models),
             "critic_model": self._critic_model,
             "critic_provider": self._critic_provider,
-            "prompt_revision": l2_prompt_revision(policy_version),
+            "prompt_revision": self._analyst_prompt_revision(policy_version),
             "critic_prompt_revision": l2_critic_prompt_revision(policy_version),
             "safety_prompt_revision": l2_safety_prompt_revision(policy_version),
             "static_hold_revision": L2_STATIC_HOLD_REVISION,
@@ -4472,7 +5039,15 @@ class TerraSolSourceReviewAgent:
                 "analyst_fallback_models": list(self._fallback_models),
                 "critic_model": self._critic_model,
                 "critic_provider": self._critic_provider,
-                "prompt_revision": l2_prompt_revision(policy_version),
+                "prompt_revision": self._analyst_prompt_revision(policy_version),
+                "review_mode": (
+                    "report_only_single_layer_sol"
+                    if self._terminal_verdict_required
+                    else "production_multilayer"
+                ),
+                "retry_provider_body_fault_once": (
+                    self._retry_provider_body_fault_once
+                ),
                 "critic_prompt_revision": l2_critic_prompt_revision(policy_version),
                 "cause_prompt_revision": l2_cause_prompt_revision(policy_version),
                 "cause_tiebreaker_prompt_revision": (
@@ -6155,6 +6730,11 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 call graph is not an object": "call-graph-invalid",
     "L2 analyst reasoning effort must be model_default": "config-invalid",
     "L2 critic reasoning effort must be low, medium, or high": "config-invalid",
+    "L2 completion request timeout must be 30-600 seconds": "config-invalid",
+    "terminal-only comparator cannot enable L3": "config-invalid",
+    "compact review packet is report-only terminal mode": "config-invalid",
+    "missing compact dossier section": "dossier-section-missing",
+    "unknown compact dossier section": "dossier-section-invalid",
     "at least one starter provenance manifest is required": "config-invalid",
     "invalid L2 mode": "config-invalid",
     "L2 review exceeded lease budget": "lease-budget-exhausted",

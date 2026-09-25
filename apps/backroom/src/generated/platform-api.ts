@@ -1129,7 +1129,9 @@ export interface paths {
          *     Classifies every path as added / removed / modified / identical / renamed
          *     with change stats so an operator can see at a glance which files were copied
          *     verbatim, which were altered, and which were only moved. Unified-diff
-         *     bodies come from the per-file endpoint.
+         *     bodies come from the per-file endpoint. Readable files the bounded source
+         *     read skipped in either artifact are listed in ``omitted_paths``, never
+         *     classified as added or removed.
          */
         get: operations["get_copy_review_source_diff_api_v1_admin_copy_reviews__agent_id__source_diff_get"];
         put?: never;
@@ -2433,6 +2435,10 @@ export interface paths {
          *     actually wrote. This classifies each path against the pinned baseline and
          *     marks stock kit code — including files that match an older kit revision
          *     rather than the tip — so the operator can go straight to the custom surface.
+         *
+         *     Totals cover every compared file. Readable files the bounded source read
+         *     skipped are listed in ``omitted_paths`` rather than diffed; when any exist,
+         *     ``custom_added_lines_complete`` is false and the total is a lower bound.
          *
          *     Unified-diff bodies come from the per-file endpoint.
          */
@@ -5241,9 +5247,11 @@ export interface paths {
          * @description Record the screener's verdict and advance the agent's lifecycle.
          *
          *     Ordering is cheap-before-expensive; no DB write happens until every check
-         *     passes: (1) dedicated screener bearer authentication, (2) signature over
-         *     the versioned verdict, (3) generate the per-submission
-         *     dataset (pass + generation enabled), (4) one transaction that promotes
+         *     passes: (1) dedicated screener bearer authentication plus a named claimed
+         *     attempt, (2) signature over the versioned verdict and that attempt's
+         *     ownership (agent, claiming hotkey, policy version), (3) generate the
+         *     per-submission dataset (pass + generation enabled), (4) one transaction that
+         *     re-checks ownership under the row lock and promotes
          *     ``uploaded -> evaluating`` (pass, pinning the dataset) or ``uploaded ->
          *     screening_failed``.
          *
@@ -8302,6 +8310,8 @@ export interface components {
             baseline: components["schemas"]["AdminStarterKitProvenance"];
             /** Custom Added Lines */
             custom_added_lines: number;
+            /** Custom Added Lines Complete */
+            custom_added_lines_complete: boolean;
             /** Custom File Count */
             custom_file_count: number;
             /** File Count */
@@ -8312,6 +8322,10 @@ export interface components {
             identical_count: number;
             /** Modified Count */
             modified_count: number;
+            /** Omitted File Count */
+            omitted_file_count: number;
+            /** Omitted Paths */
+            omitted_paths: string[];
             /** Path Aligned */
             path_aligned: boolean;
             /** Removed Count */
@@ -8345,6 +8359,11 @@ export interface components {
          *     an item whose state moved is skipped, never force-granted.
          */
         AdminBatchRetryRequest: {
+            /**
+             * Acknowledge Provider Outage
+             * @default false
+             */
+            acknowledge_provider_outage: boolean;
             /** Items */
             items: components["schemas"]["AdminBatchRetryItem"][];
             /** Reason */
@@ -12025,6 +12044,13 @@ export interface components {
             /** Modified Count */
             modified_count: number;
             /**
+             * Omitted File Count
+             * @default 0
+             */
+            omitted_file_count: number;
+            /** Omitted Paths */
+            omitted_paths?: string[];
+            /**
              * Reference Agent Id
              * Format: uuid
              */
@@ -12175,9 +12201,7 @@ export interface components {
          *     * ``exhausted`` — no ticket can advance without an operator. Read
          *       ``recommended_action``: ``retry`` is a verified-infrastructure grant;
          *       ``withdraw`` is an agent-attributable dead end that should leave this
-         *       list via queue withdrawal, not another lease. ``None`` on a recoverable
-         *       row while the response's ``provider_outage_active`` is true means wait
-         *       for the provider, not a dead end.
+         *       list via queue withdrawal, not another lease.
          *     * ``queued`` — below quorum with slots that have simply never been leased
          *       yet; it will advance on its own.
          */
@@ -12207,11 +12231,12 @@ export interface components {
             exhausted_validator_count: number;
             /** Miner Hotkey */
             miner_hotkey: string;
+            provider_outage?: components["schemas"]["ProviderCircuitSnapshot"] | null;
             /**
-             * Provider Outage Slot Count
-             * @default 0
+             * Provider Outage Blocks Retry
+             * @default false
              */
-            provider_outage_slot_count: number;
+            provider_outage_blocks_retry: boolean;
             /** Quorum */
             quorum: number;
             /** Recommended Action */
@@ -12260,12 +12285,6 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
-            provider_circuit?: components["schemas"]["ProviderCircuitSnapshot"] | null;
-            /**
-             * Provider Outage Active
-             * @default false
-             */
-            provider_outage_active: boolean;
             /** Quorum */
             quorum: number;
             /** Returned */
@@ -12778,17 +12797,12 @@ export interface components {
             live_ticket_count: number;
             /** Miner Hotkey */
             miner_hotkey: string;
-            provider_circuit?: components["schemas"]["ProviderCircuitSnapshot"] | null;
+            provider_outage?: components["schemas"]["ProviderCircuitSnapshot"] | null;
             /**
-             * Provider Outage Active
+             * Provider Outage Blocks Retry
              * @default false
              */
-            provider_outage_active: boolean;
-            /**
-             * Provider Outage Slot Count
-             * @default 0
-             */
-            provider_outage_slot_count: number;
+            provider_outage_blocks_retry: boolean;
             /** Quorum */
             quorum: number;
             /** Recommended Action */
@@ -12816,6 +12830,11 @@ export interface components {
         };
         /** AdminValidationRetryRequest */
         AdminValidationRetryRequest: {
+            /**
+             * Acknowledge Provider Outage
+             * @default false
+             */
+            acknowledge_provider_outage: boolean;
             /** Expected Snapshot */
             expected_snapshot: string;
             /** Reason */
@@ -22137,6 +22156,11 @@ export interface components {
             /** @description Latest aggregate Coding-shadow status for this exact submission artifact, screened image, and active benchmark. Display-only; never changes pipeline state, rank, score, weights, or emissions. */
             coding_shadow?: components["schemas"]["PublicCodingShadowScore"] | null;
             /**
+             * Deferred Review Triggers
+             * @description Why an active deferred source review hold was opened: ``top_five`` when the canonical score placed the submission in the top five, ``anomaly`` when a robust score anomaly check fired. Empty when the submission is not held for deferred source review. Ranks, thresholds, and evidence are not exposed.
+             */
+            deferred_review_triggers?: ("top_five" | "anomaly")[];
+            /**
              * Duplicate Hotkey
              * @description Hotkey of the matched submission. Equal to miner_hotkey when this hold is a same-miner rename or re-upload of that earlier row, not a comparison against someone else's agent.
              */
@@ -22214,6 +22238,11 @@ export interface components {
              * @description Why a below-quorum submission is or isn't advancing: running, retry_available, cooling_down, exhausted (needs operator recovery), or queued. Null once finalized or not yet evaluating.
              */
             retry_state?: ("running" | "retry_available" | "cooling_down" | "exhausted" | "queued") | null;
+            /**
+             * Review Conclusion
+             * @description What the automated source review concluded for a held (``under_review``) submission. ``pending``: the automated deep review has not reported yet, or it was interrupted and awaits a retry. ``not_completed``: no automated review completed with a recorded conclusion (there is no recorded review audit, or the review stopped before its model stage, for example because a runtime lease was unavailable or review was disabled), and no finding was recorded; an operator decision is pending. ``no_finding``: a recorded audit shows a model review ran and ended without a decision or finding. ``budget_exhausted``: a recorded audit shows a model review ran and exhausted its read, step, tool, or model budget without a finding, and its recorded concerns did not reach the hold threshold. ``adverse_signal``: it reported a concern that an operator must adjudicate, including a budget-terminated review held because of its recorded concerns. Null when the hold has no automated review conclusion (for example a copy review) or the submission is not held.
+             */
+            review_conclusion?: ("pending" | "not_completed" | "no_finding" | "budget_exhausted" | "adverse_signal") | null;
             /**
              * Review Event
              * @description Latest public ATH lifecycle event. Null when the submission has no durable ATH review record.
@@ -22446,6 +22475,11 @@ export interface components {
              * @description Public URL for this miner's signed profile picture, if set.
              */
             avatar_url?: string | null;
+            /**
+             * Deferred Review Triggers
+             * @description Why an active deferred source review hold was opened: ``top_five`` when the canonical score placed the submission in the top five, ``anomaly`` when a robust score anomaly check fired. Empty when the submission is not held for deferred source review. Ranks, thresholds, and evidence are not exposed.
+             */
+            deferred_review_triggers?: ("top_five" | "anomaly")[];
             /** Duplicate Hotkey */
             duplicate_hotkey?: string | null;
             /** Duplicate Name */
@@ -22477,6 +22511,11 @@ export interface components {
             preserved_composite?: number | null;
             /** Quorum */
             quorum: number;
+            /**
+             * Review Conclusion
+             * @description What the automated source review concluded for a held (``under_review``) submission. ``pending``: the automated deep review has not reported yet, or it was interrupted and awaits a retry. ``not_completed``: no automated review completed with a recorded conclusion (there is no recorded review audit, or the review stopped before its model stage, for example because a runtime lease was unavailable or review was disabled), and no finding was recorded; an operator decision is pending. ``no_finding``: a recorded audit shows a model review ran and ended without a decision or finding. ``budget_exhausted``: a recorded audit shows a model review ran and exhausted its read, step, tool, or model budget without a finding, and its recorded concerns did not reach the hold threshold. ``adverse_signal``: it reported a concern that an operator must adjudicate, including a budget-terminated review held because of its recorded concerns. Null when the hold has no automated review conclusion (for example a copy review) or the submission is not held.
+             */
+            review_conclusion?: ("pending" | "not_completed" | "no_finding" | "budget_exhausted" | "adverse_signal") | null;
             /** Review Event */
             review_event?: ("opened" | "reopened" | "cleared" | "rejected") | null;
             /** Review Event At */

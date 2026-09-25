@@ -174,7 +174,7 @@ def _build_reviewer(
     ) or default_review_base_url(inference_provider)
     l1 = OpenRouterSourceReviewAgent(
         api_key_file=key_file,
-        model=os.environ.get("SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-5.6-luna"),
+        model=os.environ.get("SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-6-luna"),
         base_url=review_base_url,
         inference_provider=inference_provider,
         timeout_seconds=timeout_seconds,
@@ -208,14 +208,16 @@ def _build_reviewer(
                 os.environ.get("SCREENER_L2_AUDIT_RETENTION_DAYS", "30")
             ),
         ),
-        timeout_seconds=float(os.environ.get("SCREENER_L2_TIMEOUT_SECONDS", "1200")),
-        max_steps=int(os.environ.get("SCREENER_L2_MAX_STEPS", "32")),
-        max_input_tokens=int(os.environ.get("SCREENER_L2_MAX_INPUT_TOKENS", "425000")),
-        max_output_tokens=int(os.environ.get("SCREENER_L2_MAX_OUTPUT_TOKENS", "20000")),
-        max_completion_tokens=int(
-            os.environ.get("SCREENER_L2_MAX_COMPLETION_TOKENS", "2400")
+        timeout_seconds=float(os.environ.get("SCREENER_L2_TIMEOUT_SECONDS", "1800")),
+        max_steps=int(os.environ.get("SCREENER_L2_MAX_STEPS", "256")),
+        max_input_tokens=int(os.environ.get("SCREENER_L2_MAX_INPUT_TOKENS", "5000000")),
+        max_output_tokens=int(
+            os.environ.get("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000000")
         ),
-        max_cost_usd=float(os.environ.get("SCREENER_L2_MAX_COST_USD", "6.00")),
+        max_completion_tokens=int(
+            os.environ.get("SCREENER_L2_MAX_COMPLETION_TOKENS", "16000")
+        ),
+        max_cost_usd=float(os.environ.get("SCREENER_L2_MAX_COST_USD", "25.00")),
         analyst_reasoning_effort=os.environ.get(
             "SCREENER_L2_ANALYST_REASONING_EFFORT", "model_default"
         ),
@@ -225,12 +227,10 @@ def _build_reviewer(
         cache_ttl_seconds=float(
             os.environ.get("SCREENER_L2_CACHE_TTL_SECONDS", str(7 * 86_400))
         ),
-        model=os.environ.get("SCREENER_L2_REVIEW_MODEL", "openai/gpt-5.6-terra"),
-        fallback_models=_parse_csv(
-            "SCREENER_L2_FALLBACK_MODELS", "z-ai/glm-5.2,openai/gpt-5.6-sol"
-        ),
+        model=os.environ.get("SCREENER_L2_REVIEW_MODEL", "openai/gpt-6-sol"),
+        fallback_models=_parse_csv("SCREENER_L2_FALLBACK_MODELS", "z-ai/glm-5.2"),
         l3_enabled=_parse_bool("SCREENER_L3_REVIEW_ENABLED", "true"),
-        critic_model=os.environ.get("SCREENER_L3_REVIEW_MODEL", "openai/gpt-5.6-sol"),
+        critic_model=os.environ.get("SCREENER_L3_REVIEW_MODEL", "openai/gpt-6-sol"),
         critic_provider=os.environ.get(
             "SCREENER_L3_REVIEW_PROVIDER", inference_provider
         ),

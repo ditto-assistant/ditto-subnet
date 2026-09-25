@@ -2,6 +2,55 @@
 
 <!-- version list -->
 
+## v0.313.2 (2026-09-25)
+
+### Bug Fixes
+
+- **dittobench**: Accept Docker 29 capability names in the executor policy check
+  ([#1926](https://github.com/ditto-assistant/ditto-subnet/pull/1926),
+  [`e9cbe05`](https://github.com/ditto-assistant/ditto-subnet/commit/e9cbe058280ff7caf32ef51b51627fd06e3131c4))
+
+- **screener**: Require L1 evidence coverage in L2 feedback
+  ([#2297](https://github.com/ditto-assistant/ditto-subnet/pull/2297),
+  [`32554be`](https://github.com/ditto-assistant/ditto-subnet/commit/32554be40475489440be8b1f206526ca3ad1ed63))
+
+- **screener**: Treat lost BuildKit sessions as retryable infrastructure
+  ([#2293](https://github.com/ditto-assistant/ditto-subnet/pull/2293),
+  [`e77efd6`](https://github.com/ditto-assistant/ditto-subnet/commit/e77efd6442995d7b0b10aa65c76a2115aa42c904))
+
+
+## v0.313.1 (2026-09-25)
+
+### Bug Fixes
+
+- **platform**: Require every screener verdict to name the caller's claimed attempt
+  ([#2208](https://github.com/ditto-assistant/ditto-subnet/pull/2208),
+  [`847a87b`](https://github.com/ditto-assistant/ditto-subnet/commit/847a87b03c0bec3be30b01853ff5bf358760a135))
+
+- **platform**: Stop recommending quorum retries into a parked provider outage
+  ([#2090](https://github.com/ditto-assistant/ditto-subnet/pull/2090),
+  [`c9f43f7`](https://github.com/ditto-assistant/ditto-subnet/commit/c9f43f7da2e1e116e52df576ef94f54bec99ce77))
+
+- **platform,dashboard**: Show why a submission is in deferred source review and that no finding was
+  made ([#2257](https://github.com/ditto-assistant/ditto-subnet/pull/2257),
+  [`4163550`](https://github.com/ditto-assistant/ditto-subnet/commit/41635501925bb398209fe4313d1ec474fae0da8b))
+
+
+## v0.313.0 (2026-09-25)
+
+### Bug Fixes
+
+- **backroom**: Offer every OAuth access level on MCP consent
+  ([#2286](https://github.com/ditto-assistant/ditto-subnet/pull/2286),
+  [`2111306`](https://github.com/ditto-assistant/ditto-subnet/commit/21113064032b3f4edca4d79bfe3f7bfdb0dfe5fc))
+
+### Features
+
+- **screener**: Add strict local L1-L3 source replay gate
+  ([#2289](https://github.com/ditto-assistant/ditto-subnet/pull/2289),
+  [`5ca68bf`](https://github.com/ditto-assistant/ditto-subnet/commit/5ca68bf67f3aa44dab67675f5495da00fdd6f7cd))
+
+
 ## v0.312.0 (2026-09-25)
 
 ### Features

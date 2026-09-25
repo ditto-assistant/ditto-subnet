@@ -734,6 +734,95 @@ def test_unportable_build_context_owner_is_infrastructure_failure() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "ERROR: failed to solve: rpc error: code = Unknown desc = no http "
+        "response from session for qmxu3s09iqv12evun9jcoq2we",
+        "ERROR: failed to solve: no active session for "
+        "qmxu3s09iqv12evun9jcoq2we: context deadline exceeded",
+        "ERROR: failed to receive status: rpc error: code = Unavailable "
+        "desc = error reading from server: EOF",
+    ],
+)
+def test_lost_buildkit_session_is_infrastructure_failure(detail: str) -> None:
+    assert _docker_infrastructure_failure(detail)
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101',
+        "ERROR: failed to solve: failed to compute cache key: failed to "
+        'calculate checksum of ref abc::xyz: "/Cargo.lock": not found',
+        "ERROR: failed to solve: dockerfile parse error on line 3: "
+        "unknown instruction: RUNN",
+    ],
+)
+def test_artifact_build_failure_is_not_infrastructure(detail: str) -> None:
+    assert not _docker_infrastructure_failure(detail)
+
+
+def _rustc_failure(source_line: str) -> str:
+    return (
+        "#12 [builder 5/6] RUN cargo build --release --locked\n"
+        "#12 43.02 error[E0308]: mismatched types\n"
+        "#12 43.02    --> src/relay.rs:88:24\n"
+        "#12 43.02     |\n"
+        f"#12 43.02 88  |         {source_line}\n"
+        "#12 43.02     |                       ^^^^ expected `RelayError`\n"
+        "#12 43.05 error: could not compile `dittobench-miner` due to 1 "
+        "previous error\n"
+        '#12 ERROR: process "/bin/sh -c cargo build --release --locked" did '
+        "not complete successfully: exit code: 101\n"
+        "------\n"
+        " > [builder 5/6] RUN cargo build --release --locked:\n"
+        f"43.02 88  |         {source_line}\n"
+        "------\n"
+        "Dockerfile:14\n"
+        "--------------------\n"
+        "  14 | >>> RUN cargo build --release --locked\n"
+        "--------------------\n"
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101'
+    )
+
+
+@pytest.mark.parametrize(
+    "source_line",
+    [
+        '503 => return Err("service unavailable"),',
+        '429 => bail!("too many requests"),',
+        'Err(e) => log::warn!("connection refused: {e}"),',
+    ],
+)
+def test_compiler_quoted_source_is_not_infrastructure(source_line: str) -> None:
+    assert not _docker_infrastructure_failure(_rustc_failure(source_line))
+
+
+def test_dockerfile_excerpt_is_not_infrastructure() -> None:
+    assert not _docker_infrastructure_failure(
+        "Dockerfile:9\n"
+        "--------------------\n"
+        '   9 | >>> RUN ./check.sh || (echo "killed" && exit 1)\n'
+        "--------------------\n"
+        'ERROR: failed to solve: process "/bin/sh -c ./check.sh" did not '
+        "complete successfully: exit code: 1"
+    )
+
+
+def test_dependency_fetch_failure_stays_infrastructure() -> None:
+    assert _docker_infrastructure_failure(
+        "#12 3.21 error: failed to get `serde` as a dependency of package "
+        "`dittobench-miner v0.1.0 (/app)`\n"
+        "#12 3.21 Caused by:\n"
+        "#12 3.21   [6] Could not resolve host: index.crates.io\n"
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101'
+    )
+
+
 async def test_export_image_hashes_exact_docker_archive(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1895,6 +1984,31 @@ async def test_unloaded_buildx_result_is_retryable_infrastructure(
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "docker-build-infrastructure"
     assert "No such image" in result.detail
+
+
+async def test_lost_buildkit_session_is_retryable_infrastructure(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+
+    async def session_lost(
+        args: list[str], *, stdin: Any = None, **_: Any
+    ) -> tuple[int, str]:
+        if args[0] == "build" and stdin is not None:
+            stdin.read()
+            return 1, (
+                "ERROR: failed to solve: rpc error: code = Unknown desc = no "
+                "http response from session for qmxu3s09iqv12evun9jcoq2we"
+            )
+        return 0, ""
+
+    gate = _gate_with(make_config(), session_lost, tarball=tarball)
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert result.evidence[-1].code == "docker-build-infrastructure"
+    assert "no http response from session" in result.detail
 
 
 async def test_build_uses_daemon_image_id_resolved_from_unique_tag(

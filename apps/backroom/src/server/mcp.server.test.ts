@@ -385,6 +385,8 @@ describe('Backroom MCP tools', () => {
     // Eight digest-only V13 provenance/analysis tools and three process-key
     // tools add bounded entries. Detailed procedures remain in tool help.
     // The scorer-pin rotation/history/current-packet controls add bounded entries.
+    // The two validator-retry inputs gain acknowledgeProviderOutage (#2087);
+    // measured 163,528 bytes together.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(164_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
@@ -3561,54 +3563,6 @@ describe('Backroom MCP tools', () => {
     expect(
       taxonomy.groups.some((group) => group.route_basis === 'confirmed_selected'),
     ).toBe(false)
-
-    await client.close()
-    await server.close()
-  })
-
-  it('surfaces the provider outage circuit the platform serves', async () => {
-    // ditto-subnet#2087: the platform already served provider_circuit here,
-    // but the zod schema did not declare it and silently stripped it, so an
-    // operator agent could not see the outage that kept parking a slot.
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const circuit = {
-      provider: 'openrouter',
-      state: 'open',
-      epoch: '5e0e6f1c-5f3c-4a7e-9d1a-1f2e3d4c5b6a',
-      opened_at: '2026-09-21T22:49:00Z',
-      retry_at: '2026-09-21T22:55:00Z',
-      last_failure_at: '2026-09-21T22:53:00Z',
-      closed_at: null,
-      failure_count: 3,
-      last_status: 429,
-      last_error_code: 'upstream_http_429',
-      probe_kind: 'scoring',
-      probe_key: '5Validator:slot-0',
-      probe_expires_at: '2026-09-21T23:05:00Z',
-    }
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValueOnce(
-        Response.json({
-          observed_at: '2026-09-21T22:54:00Z',
-          settings_revision: 14,
-          settings_checksum: 'ab'.repeat(32),
-          lanes: [],
-          windows: [],
-          relays: [],
-          provider_circuit: circuit,
-        }),
-      ),
-    )
-    const { client, server } = await connect([BACKROOM_READ_SCOPE])
-
-    const response = await client.callTool({
-      name: 'get_inference_runtime_metrics',
-      arguments: {},
-    })
-
-    expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toMatchObject({ provider_circuit: circuit })
 
     await client.close()
     await server.close()
@@ -7019,6 +6973,15 @@ describe('Backroom MCP tools', () => {
       arguments: { agentId },
     })
     expect(allowed.isError).not.toBe(true)
+    // This payload has an older Platform's shape: no omission fields, so the
+    // tool reports none it can name and leaves completeness unknown (null)
+    // rather than claiming the total is complete.
+    expect(readJsonResult(allowed)).toMatchObject({
+      custom_added_lines: 3,
+      omitted_file_count: 0,
+      omitted_paths: [],
+      custom_added_lines_complete: null,
+    })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/baseline-diff`,
       expect.objectContaining({
@@ -7609,9 +7572,8 @@ describe('Backroom MCP tools', () => {
         blocking_reason: null,
         recommended_action: null,
         dominant_failure_code: null,
-        // A platform that predates ditto-subnet#2087 omits the outage signal;
-        // `null` is "this deployment cannot tell you", never "no outage".
-        provider_outage_slot_count: null,
+        provider_outage: null,
+        provider_outage_blocks_retry: null,
         earliest_retry_after: null,
         attempts_used: 3,
         exhausted_validator_count: 3,
@@ -7619,13 +7581,7 @@ describe('Backroom MCP tools', () => {
         ticket_states: { expired: 2 },
       },
     ])
-    expect(summarised).toMatchObject({
-      count: 2,
-      limit: 1,
-      offset: 1,
-      provider_outage_active: null,
-      provider_circuit: null,
-    })
+    expect(summarised).toMatchObject({ count: 2, limit: 1, offset: 1 })
     expect(summarised).not.toHaveProperty('submissions_shared')
     expect(fetchMock).toHaveBeenLastCalledWith(
       'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?generation=active&limit=1&offset=1',
@@ -7889,6 +7845,7 @@ describe('Backroom MCP tools', () => {
               expected_snapshot: snapshotB,
             },
           ],
+          acknowledge_provider_outage: false,
         }),
       }),
     )

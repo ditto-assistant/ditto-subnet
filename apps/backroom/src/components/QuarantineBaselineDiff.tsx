@@ -179,6 +179,9 @@ export function QuarantineBaselineDiff({
               custom lines reads very differently from a real custom harness. */}
           <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2.5">
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+              {manifest.custom_added_lines_complete === false ? (
+                <span className="text-xs text-[var(--amber)]">at least</span>
+              ) : null}
               <span className="font-mono text-lg text-[var(--acid)]">
                 {manifest.custom_added_lines.toLocaleString()}
               </span>
@@ -197,6 +200,29 @@ export function QuarantineBaselineDiff({
                 Paths realigned by stripping one wrapping directory to match the kit
                 layout.
               </p>
+            ) : null}
+            {manifest.omitted_file_count > 0 ? (
+              <div className="mt-1 text-[11px] text-[var(--amber)]">
+                <p>
+                  {manifest.omitted_file_count}{' '}
+                  {manifest.omitted_file_count === 1 ? 'file was' : 'files were'} past
+                  the source read budget and not compared, so the custom total is a
+                  lower bound:
+                </p>
+                <ul className="mt-1 space-y-0.5 font-mono">
+                  {manifest.omitted_paths.map((path) => (
+                    <li key={path} className="truncate">
+                      {sanitizeSourceLine(path)}
+                    </li>
+                  ))}
+                </ul>
+                {manifest.omitted_paths.length < manifest.omitted_file_count ? (
+                  <p className="mt-1">
+                    and {manifest.omitted_file_count - manifest.omitted_paths.length}{' '}
+                    more.
+                  </p>
+                ) : null}
+              </div>
             ) : null}
           </div>
 
