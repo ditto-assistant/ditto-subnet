@@ -22,6 +22,7 @@ from ditto.treasury.store import TreasuryStore
 
 HOST_NAME = "sn118-treasury-signer"
 SECRET_ID = "sn118-treasury-signing-key"
+SECRET_VERSION = "1"  # Rotation requires a reviewed code/config update.
 MIN_FEE_RESERVE_RAO = 1_000_000
 
 
@@ -50,7 +51,7 @@ def _load_wallet(project: str) -> SimpleNamespace:
             "secrets",
             "versions",
             "access",
-            "latest",
+            SECRET_VERSION,
             f"--secret={SECRET_ID}",
             f"--project={project}",
         ],
