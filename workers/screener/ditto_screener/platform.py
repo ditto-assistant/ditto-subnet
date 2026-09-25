@@ -500,7 +500,9 @@ class PlatformClient:
             raise PlatformError(
                 f"screening claim rejected ({resp.status_code}): {resp.text[:200]}"
             )
-        return ScreenerQueueResponse.model_validate(resp.json())
+        # The nested signed V13 runtime lease keeps UUID fields strict. Parse
+        # the HTTP JSON bytes as JSON, where UUID strings are the wire form.
+        return ScreenerQueueResponse.model_validate_json(resp.content)
 
     async def get_artifact(
         self, agent_id: UUID, *, attempt_id: UUID | None = None

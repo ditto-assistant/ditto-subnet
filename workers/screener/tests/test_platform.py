@@ -141,6 +141,65 @@ async def test_claim_next_parses_leased_item(
     assert resp.items[0].sha256 == "de" * 32
 
 
+async def test_claim_next_parses_strict_v13_runtime_lease_from_json_wire(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    review_settings = bootstrap_review_settings(make_config())
+    source_revision = "ab" * 20
+    injected_keys = ["OPENAI_API_KEY"]
+    env_sha = hashlib.sha256(
+        f"scored-runtime-env-v1\n13\n{source_revision}\nOPENAI_API_KEY".encode()
+    ).hexdigest()
+    attempt_id = uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/screener/claim"
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "agent_id": str(_AGENT),
+                        "bench_version": 13,
+                        "miner_hotkey": _MINER,
+                        "name": "v13-agent",
+                        "sha256": "de" * 32,
+                        "status": "screening",
+                        "created_at": "2026-09-25T01:52:23Z",
+                        "attempt_id": str(attempt_id),
+                        "lease_deadline": "2026-09-25T02:02:28Z",
+                        "policy_version": 13,
+                        "scored_runtime_evidence": {
+                            "attempt_id": str(attempt_id),
+                            "artifact_sha256": "de" * 32,
+                            "policy_version": 13,
+                            "bench_version": 13,
+                            "scorer_source_revision": source_revision,
+                            "release_descriptor_digest": "sha256:" + "cd" * 32,
+                            "scorer_image_digest": "sha256:" + "ef" * 32,
+                            "scorer_env_sha256": env_sha,
+                            "injected_keys": injected_keys,
+                            "validator_count": 3,
+                            "observed_at": 1_790_300_000,
+                        },
+                    }
+                ],
+                "count": 1,
+                "required_policy_version": 13,
+            },
+        )
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        response = await client.claim_next(
+            policy_version=13,
+            review_settings=review_settings,
+            instance_id="worker-1",
+        )
+    assert response.items[0].scored_runtime_evidence is not None
+    assert response.items[0].scored_runtime_evidence.attempt_id == attempt_id
+
+
 async def test_policy_preflight_is_read_only(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
