@@ -47,6 +47,16 @@ deletions; any unexpected change blocks apply. The protected apply requires a
 separate decision on that exact sealed plan. A local `-backend=false` validate
 cannot establish the production resource diff.
 
+A plan-only baseline on the merged disabled main commit
+`a6b0b23cd9d7bb49dd91a84209421876893fb9f2` succeeded in
+[run 36186363984](https://github.com/ditto-assistant/ditto-subnet/actions/runs/36186363984)
+with checksum `3a1060a55d33a544ee2ee80243b6733f43c122e61a518d361576594fecf276f7`.
+It planned **no treasury resources**, as both flags were false. The complete
+production plan nevertheless reported one add, one change, and one destroy:
+an unrelated screener fleet instance-template replacement and regional group
+manager update. Do not apply this baseline plan. Any later plan for this PR
+must separately review and resolve those unrelated changes.
+
 ## Economic proposal and remaining decisions
 
 Propose **25 bps of the released miner vector for maintenance bounties and
@@ -57,6 +67,11 @@ additive full-vector shares. Decide that denominator, the burn-recovery policy,
 and the dedicated non-owner treasury hotkey/coldkey before any nonzero shadow
 revision or validator weight change. A shadow policy record alone cannot route
 emission.
+
+At 1 DITTO per block, 7,200 blocks per day, and a 41% miner share, a fully
+released miner vector would be 2,952 DITTO/day. Each proposed 25 bps bucket
+would be 7.38 DITTO/day; together they would be 14.76 DITTO/day, 0.205% of
+total emission. These are conditional planning figures, not current accrual.
 
 The signer prototype remains **paused and unfunded**. Its allocation amounts,
 spending bounds, reviewer names, and later-leg quote are operator supplied;
