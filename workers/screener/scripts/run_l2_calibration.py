@@ -34,7 +34,11 @@ from ditto_screener.l2_review import (
     l2_safety_prompt_revision,
 )
 from ditto_screener.policy import SourceReviewObservation
-from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from ditto_screener.source_review import OpenRouterSourceReviewAgent
+from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
+    ScoredRuntimeEvidenceLease,
+)
 
 
 def _arguments() -> argparse.Namespace:
@@ -49,6 +53,30 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--analyzer-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--analyzer-cpus", type=float, default=0.5)
+    parser.add_argument("--timeout-seconds", type=float, default=900.0)
+    parser.add_argument("--max-steps", type=int, default=18)
+    parser.add_argument("--max-input-tokens", type=int, default=425_000)
+    parser.add_argument("--max-output-tokens", type=int, default=20_000)
+    parser.add_argument("--max-completion-tokens", type=int, default=2_400)
+    parser.add_argument("--max-cost-usd", type=float, default=2.0)
+    parser.add_argument("--run-l1", action="store_true")
+    parser.add_argument("--l1-model", default="openai/gpt-5.6-luna")
+    parser.add_argument("--l1-timeout-seconds", type=float, default=600.0)
+    parser.add_argument("--l1-max-steps", type=int, default=160)
+    parser.add_argument("--l1-max-read-bytes", type=int, default=8_000_000)
+    parser.add_argument("--l1-max-completion-tokens", type=int, default=8_000)
+    parser.add_argument(
+        "--require-label-match",
+        action="store_true",
+        help="exit nonzero if any disposition or resolution basis misses its label",
+    )
+    parser.add_argument("--scorer-capabilities-url")
+    parser.add_argument("--expected-scorer-revision")
+    parser.add_argument(
+        "--local-cohort-packet-file",
+        type=Path,
+        help="simulate attempt binding from a Backroom cohort; not a signed lease",
+    )
     parser.add_argument(
         "--artifact-sha256",
         action="append",
@@ -91,6 +119,40 @@ async def _main() -> None:
         raise SystemExit("--analyzer-timeout-seconds must be between 30 and 300")
     if not 0.5 <= args.analyzer_cpus <= 2.0:
         raise SystemExit("--analyzer-cpus must be between 0.5 and 2.0")
+    if not 30 <= args.timeout_seconds <= 1_800:
+        raise SystemExit("--timeout-seconds must be between 30 and 1800")
+    if not 1 <= args.max_steps <= 256:
+        raise SystemExit("--max-steps must be between 1 and 256")
+    if not 1 <= args.max_input_tokens <= 5_000_000:
+        raise SystemExit("--max-input-tokens must be between 1 and 5000000")
+    if not 1 <= args.max_output_tokens <= 1_000_000:
+        raise SystemExit("--max-output-tokens must be between 1 and 1000000")
+    if not 1 <= args.max_completion_tokens <= 16_000:
+        raise SystemExit("--max-completion-tokens must be between 1 and 16000")
+    if not 0 < args.max_cost_usd <= 25:
+        raise SystemExit("--max-cost-usd must be between 0 and 25")
+    if not 30 <= args.l1_timeout_seconds <= 600:
+        raise SystemExit("--l1-timeout-seconds must be between 30 and 600")
+    if not 1 <= args.l1_max_steps <= 160:
+        raise SystemExit("--l1-max-steps must be between 1 and 160")
+    if not 1 <= args.l1_max_read_bytes <= 8_000_000:
+        raise SystemExit("--l1-max-read-bytes must be between 1 and 8000000")
+    if not 1 <= args.l1_max_completion_tokens <= 8_000:
+        raise SystemExit("--l1-max-completion-tokens must be between 1 and 8000")
+    if bool(args.scorer_capabilities_url) != bool(args.expected_scorer_revision):
+        raise SystemExit("scorer capabilities URL and revision must be set together")
+    if args.local_cohort_packet_file and args.scorer_capabilities_url:
+        raise SystemExit("choose either a cohort packet or scorer capabilities URL")
+    cohort: dict[str, object] | None = None
+    if args.local_cohort_packet_file:
+        raw_cohort = json.loads(args.local_cohort_packet_file.read_text())
+        if not isinstance(raw_cohort, dict) or raw_cohort.get("bench_version") != 13:
+            raise SystemExit("local cohort packet must be a V13 Backroom response")
+        if not isinstance(raw_cohort.get("packet"), dict):
+            raise SystemExit("local cohort packet is missing its immutable packet")
+        if not isinstance(raw_cohort.get("hotkeys"), list) or not raw_cohort["hotkeys"]:
+            raise SystemExit("local cohort packet is missing validator hotkeys")
+        cohort = raw_cohort
     manifest = json.loads(args.manifest.read_text())
     items = manifest.get("items")
     if not isinstance(items, list) or not items:
@@ -115,17 +177,36 @@ async def _main() -> None:
         ),
         cache_dir=str(cache_dir),
         audit_journal=L2AuditJournal(str(audit_file), retention_days=30),
-        timeout_seconds=900,
-        max_steps=18,
-        max_input_tokens=425_000,
-        max_output_tokens=20_000,
-        max_completion_tokens=2_400,
-        max_cost_usd=2.00,
+        timeout_seconds=args.timeout_seconds,
+        max_steps=args.max_steps,
+        max_input_tokens=args.max_input_tokens,
+        max_output_tokens=args.max_output_tokens,
+        max_completion_tokens=args.max_completion_tokens,
+        max_cost_usd=args.max_cost_usd,
         cache_ttl_seconds=7 * 86_400,
+        scorer_capabilities_url=args.scorer_capabilities_url,
+        expected_scorer_revision=args.expected_scorer_revision,
         # Local IPv6 paths to OpenRouter can be unstable on some developer
         # networks. Production keeps the platform default; this read-only
         # calibration pins its disposable clients to IPv4 for repeatability.
         local_address="0.0.0.0",
+    )
+    l1_agent = (
+        OpenRouterSourceReviewAgent(
+            api_key_file=str(args.api_key_file),
+            model=args.l1_model,
+            base_url="https://openrouter.ai/api/v1",
+            timeout_seconds=args.l1_timeout_seconds,
+            max_steps=args.l1_max_steps,
+            max_read_bytes=args.l1_max_read_bytes,
+            max_completion_tokens=args.l1_max_completion_tokens,
+            reasoning_effort="high",
+            static_preflight_v2_mode="off",
+            concern_hold_count=3,
+            clear_min_notes=3,
+        )
+        if args.run_l1
+        else None
     )
     metadata = {
         "models": {
@@ -151,16 +232,24 @@ async def _main() -> None:
             ],
         },
         "budgets": {
-            "timeout_seconds": 900,
+            "timeout_seconds": args.timeout_seconds,
             "analyzer_timeout_seconds": args.analyzer_timeout_seconds,
             "analyzer_cpus": args.analyzer_cpus,
-            "max_steps": 18,
-            "max_analyzer_calls": 36,
-            "max_input_tokens": 425_000,
-            "max_output_tokens": 20_000,
-            "max_completion_tokens": 2_400,
-            "max_cost_usd": 2.00,
+            "max_steps": args.max_steps,
+            "max_analyzer_calls": 2 * args.max_steps,
+            "max_input_tokens": args.max_input_tokens,
+            "max_output_tokens": args.max_output_tokens,
+            "max_completion_tokens": args.max_completion_tokens,
+            "max_cost_usd": args.max_cost_usd,
         },
+        "runtime_evidence_origin": (
+            "local_cohort_packet_simulation"
+            if cohort
+            else "scorer_capabilities"
+            if args.scorer_capabilities_url
+            else "absent"
+        ),
+        "l1_mode": "fresh_local_review" if l1_agent else "archived_observation",
     }
     semaphore = asyncio.Semaphore(args.concurrency)
     output_lock = asyncio.Lock()
@@ -173,21 +262,59 @@ async def _main() -> None:
             archive = args.artifact_root / artifact_sha / "agent.tar.gz"
             if _sha256(archive) != artifact_sha:
                 raise ValueError("calibration artifact digest mismatch")
-            raw_observation = item["l1_observation"]
-            if not isinstance(raw_observation, dict):
-                raise ValueError("calibration L1 observation is not an object")
-            observation_value = dict(raw_observation)
-            observation_value["categories"] = tuple(
-                observation_value.get("categories", ())
-            )
             started = time.monotonic()
-            deadline = asyncio.get_running_loop().time() + 900
+            deadline = asyncio.get_running_loop().time() + args.timeout_seconds
+            if l1_agent:
+                l1_observation = await l1_agent.review(
+                    str(archive),
+                    artifact_sha256=artifact_sha,
+                    deadline=min(
+                        deadline,
+                        asyncio.get_running_loop().time() + args.l1_timeout_seconds,
+                    ),
+                )
+                if not l1_observation.ok:
+                    raise ValueError(
+                        "local L1 did not produce a complete observation: "
+                        f"{l1_observation.error_code}"
+                    )
+            else:
+                raw_observation = item.get("l1_observation")
+                if not isinstance(raw_observation, dict):
+                    raise ValueError("calibration L1 observation is not an object")
+                observation_value = dict(raw_observation)
+                observation_value["categories"] = tuple(
+                    observation_value.get("categories", ())
+                )
+                l1_observation = SourceReviewObservation(**observation_value)
+            local_lease = None
+            if cohort:
+                packet = cohort["packet"]
+                assert isinstance(packet, dict)
+                local_lease = ScoredRuntimeEvidenceLease.model_validate(
+                    {
+                        "attempt_id": UUID(str(item["attempt_id"])),
+                        "artifact_sha256": artifact_sha,
+                        "policy_version": 13,
+                        "bench_version": 13,
+                        "scorer_source_revision": packet["source_revision"],
+                        "release_descriptor_digest": packet[
+                            "release_descriptor_digest"
+                        ],
+                        "scorer_image_digest": packet["scorer_image_digest"],
+                        "scorer_env_sha256": packet["scorer_env_sha256"],
+                        "injected_keys": packet["injected_keys"],
+                        "validator_count": len(cohort["hotkeys"]),
+                        "observed_at": int(time.time()),
+                    }
+                )
             result = await agent.review(
                 str(archive),
                 artifact_sha256=artifact_sha,
                 attempt_id=UUID(str(item["attempt_id"])),
-                l1_observation=SourceReviewObservation(**observation_value),
+                l1_observation=l1_observation,
                 deadline=deadline,
+                scored_runtime_evidence=local_lease,
             )
             observation = result.observation
             disposition = (
@@ -216,6 +343,14 @@ async def _main() -> None:
                 "response_providers": list(result.response_providers),
                 "usage": result.usage.__dict__,
                 "error_code": observation.error_code,
+                "l1_risk_level": l1_observation.risk_level,
+                "l1_categories": list(l1_observation.categories),
+                "l1_finding_digest": l1_observation.finding_digest,
+                "l1_finding": l1_observation.finding,
+                "l1_review_audit": l1_observation.review_audit,
+                "l1_notes_count": len(l1_observation.notes),
+                "finding_digest": observation.finding_digest,
+                "review_audit": observation.review_audit,
                 **causal_audit_fields(observation.finding),
                 "disposition_match": disposition == item["expected_disposition"],
                 "basis_match": result.resolution_basis
@@ -254,7 +389,9 @@ async def _main() -> None:
         usage = item["usage"]
         if not isinstance(usage, dict):
             raise ValueError("calibration usage is not an object")
-        cost += float(usage.get("reported_cost_usd") or 0.0)
+        cost += float(
+            usage.get("reported_cost_usd") or usage.get("estimated_cost_usd") or 0.0
+        )
     print(
         json.dumps(
             {
@@ -269,6 +406,10 @@ async def _main() -> None:
             sort_keys=True,
         )
     )
+    if args.require_label_match and (
+        disposition_matches != len(results) or basis_matches != len(results)
+    ):
+        raise SystemExit("calibration did not match all expected labels")
 
 
 if __name__ == "__main__":

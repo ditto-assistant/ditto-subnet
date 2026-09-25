@@ -232,6 +232,57 @@ platform contract tracked in issue #224.
 
 ## Offline calibration
 
+Before changing an L2 prompt or rolling it to workers, replay the exact held
+artifact and independently labeled CLEAR and REJECT artifacts locally. Store
+their SHA-verified `agent.tar.gz` files under
+`<private-artifact-root>/<sha256>/agent.tar.gz`; keep the manifest, key, cache,
+audit, and results outside the repository with owner-only permissions. Each
+manifest item supplies `agent_id`, `attempt_id`, `artifact_sha256`,
+`expected_disposition`, and `expected_resolution_basis`. Supply the complete
+sanitized `l1_observation` only when replaying a retained L1 result; `--run-l1`
+generates it afresh. Select only exact full digests with repeated
+`--artifact-sha256` arguments when a larger protected manifest is available.
+
+Build the isolated analyzer from the proposed checkout and run the production
+reviewer with the current effective step, token, and time ceilings. For example,
+the 2026-09-25 settings can be tested with a local $20 per-case stop (the live
+ceiling is $25):
+
+```bash
+docker build -f workers/screener/deploy/l2-analyzer.Dockerfile \
+  -t ditto-screener-l2-analyzer:local workers/screener
+uv run --project workers/screener python workers/screener/scripts/run_l2_calibration.py \
+  --manifest <private-manifest.json> --artifact-root <private-artifact-root> \
+  --api-key-file <owner-only-key-file> \
+  --analyzer-image ditto-screener-l2-analyzer:local \
+  --results-file <private-results.json> --concurrency 1 \
+  --timeout-seconds 1800 --max-steps 256 \
+  --max-input-tokens 5000000 --max-output-tokens 1000000 \
+  --max-completion-tokens 16000 --max-cost-usd 20 \
+  --run-l1 --l1-timeout-seconds 600 --l1-max-steps 160 \
+  --l1-max-read-bytes 8000000 --l1-max-completion-tokens 8000 \
+  --require-label-match
+```
+
+The strict flag fails if any case is inconclusive or disagrees with its label or
+expected resolution basis. Inspect each private audit and the full result,
+including error code and budget stop, before a PR; a summary classification
+metric alone does not certify a CLEAR. The per-case cost ceiling is a stop, so
+use a separate total key limit for the corpus. `--run-l1` reruns the actual
+Luna source reviewer locally before L2; omit it only when testing a retained,
+exact L1 observation. A scored runtime capabilities
+endpoint may be supplied with `--scorer-capabilities-url` and
+`--expected-scorer-revision` together; without that trusted endpoint, local
+replay lacks signed scorer runtime evidence. To compare with an active cohort,
+save the read-only Backroom `get_v13_scorer_cohort` JSON privately and pass it
+with `--local-cohort-packet-file`. The runner binds the supplied packet fields
+to each local attempt, but this is an explicitly labeled
+**simulation**, not a Platform-signed attempt lease or clearance proof. This
+review exercises L2/L3 source
+analysis but cannot produce a trusted image, served runtime, private challenge,
+or validator receipt. Those still require an isolated report-only live replay
+before a primary retry.
+
 `scripts/run_l2_calibration.py` accepts a protected SHA-bound manifest plus a
 directory of already verified artifacts. It rechecks every tarball digest,
 runs the production reviewer and analyzer image with bounded concurrency, and
