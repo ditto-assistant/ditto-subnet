@@ -381,6 +381,7 @@ async def _phase(
     deadline: float,
     total_usage: dict[str, float],
     l1_notes: list[dict[str, Any]] | None = None,
+    l1_complete: bool = True,
 ) -> dict[str, Any]:
     l1 = phase == "l1"
     l1_notes = l1_notes or []
@@ -400,7 +401,10 @@ async def _phase(
             "Record concise concern, cleared, or context notes after each "
             "area; then finish_notes. Do not decide a verdict."
             if l1
-            else "List or search L1 notes, read bounded note ranges, verify "
+            else "L1 notes may be partial when its bounded time or step share "
+            "ended; verify the served path independently and HOLD unless "
+            "your own review closes the required coverage. List or search "
+            "L1 notes, read bounded note ranges, verify "
             "the causal path independently, then "
             "submit CLEAR, REJECT, or HOLD with source citations. HOLD when "
             "the evidence is insufficient."
@@ -417,6 +421,7 @@ async def _phase(
                     "identity": identity.__dict__,
                     "phase": phase,
                     "file_count": len(workspace.paths),
+                    "l1_complete": l1_complete if not l1 else None,
                     "instruction": "Begin with list_files; inspect source using tools.",
                 }
             ),
@@ -437,6 +442,8 @@ async def _phase(
     for step in range(_MAX_STEPS):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            if l1 and notes:
+                break
             raise TimeoutError(f"{phase} deadline exceeded")
         if len(items) > 80:
             # Restart the conversation at a clean boundary. Source and the
@@ -587,6 +594,7 @@ async def _phase(
                     final = {
                         "summary": str(args.get("summary", ""))[:500],
                         "note_count": len(notes),
+                        "complete": True,
                     }
                     result = {"finished": True}
             elif not l1 and name == "list_l1_notes":
@@ -682,6 +690,19 @@ async def _phase(
             if l1:
                 result_report["notes"] = notes
             return result_report
+    if l1 and notes:
+        return {
+            "result": {
+                "summary": "L1 bounded share ended; notes are partial",
+                "note_count": len(notes),
+                "complete": False,
+            },
+            "steps": min(_MAX_STEPS, step + 1),
+            "usage": usage,
+            "duration_seconds": round(time.monotonic() - started, 3),
+            "models": sorted(set(model_names)),
+            "notes": notes,
+        }
     raise ValueError(f"{phase} step cap reached")
 
 
@@ -730,7 +751,9 @@ async def run_report_candidate(
         notes_path.write_text(_notes_document(identity, []), encoding="utf-8")
         os.chmod(notes_path, 0o600)
         workspace.attach_notes(notes_path)
-        deadline = time.monotonic() + timeout_seconds
+        started = time.monotonic()
+        deadline = started + timeout_seconds
+        l1_deadline = min(deadline, started + timeout_seconds * 0.6)
         total_usage = {
             "input_tokens": 0.0,
             "cached_input_tokens": 0.0,
@@ -749,7 +772,7 @@ async def run_report_candidate(
                 identity=identity,
                 phase="l1",
                 notes_path=notes_path,
-                deadline=deadline,
+                deadline=l1_deadline,
                 total_usage=total_usage,
             )
             l2 = await _phase(
@@ -762,6 +785,7 @@ async def run_report_candidate(
                 deadline=deadline,
                 total_usage=total_usage,
                 l1_notes=l1["notes"],
+                l1_complete=bool(l1["result"].get("complete")),
             )
         notes_sha = hashlib.sha256(notes_path.read_bytes()).hexdigest()
         return {

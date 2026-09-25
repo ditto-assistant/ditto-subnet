@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from ditto_screener import sol_report_candidate
 from ditto_screener.sol_report_candidate import (
     Identity,
     _Workspace,
@@ -115,6 +116,58 @@ async def test_l1_notes_reach_l2_and_report_stays_non_authoritative(
     assert "read_l1_notes" in l2_tools
     assert "submit_candidate_review" in l2_tools
     assert "Entrypoint inspected" in json.dumps(requests[-1]["input"])
+
+
+@pytest.mark.asyncio
+async def test_l1_step_limit_hands_partial_notes_to_l2_without_clearance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "source.tar.gz"
+    sha = _archive(archive)
+    monkeypatch.setattr(sol_report_candidate, "_MAX_STEPS", 1)
+    responses = iter(
+        [
+            _response(
+                "l1",
+                "record_note",
+                {
+                    "kind": "context",
+                    "path": "src/main.go",
+                    "line": 1,
+                    "summary": "Go source inspected",
+                },
+            ),
+            _response(
+                "l2",
+                "submit_candidate_review",
+                {
+                    "disposition": "HOLD",
+                    "summary": "Partial L1 coverage needs independent review",
+                    "citations": [
+                        {"path": "src/main.go", "line": 1, "reason": "Source path"}
+                    ],
+                },
+            ),
+        ]
+    )
+    requests: list[dict[str, object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=next(responses))
+
+    report = await run_report_candidate(
+        archive,
+        identity=Identity(sha, 13, "agent-1", "attempt-1"),
+        api_key="test-only",
+        transport=httpx.MockTransport(respond),
+    )
+    assert report["authority"] == "none"
+    assert report["l1"]["result"]["complete"] is False
+    assert report["l1"]["result"]["note_count"] == 1
+    l2_task = json.loads(requests[1]["input"][0]["content"])
+    assert l2_task["l1_complete"] is False
+    assert report["l2"]["result"]["disposition"] == "HOLD"
 
 
 @pytest.mark.parametrize(
