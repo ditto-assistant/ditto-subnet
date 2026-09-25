@@ -735,9 +735,12 @@ def test_safety_clearance_requires_the_configured_l3_model() -> None:
         resolution_basis="authoritative_model_tool_path",
         dossier_complete=True,
     )
-    assert _safety_clearance_gaps(
-        _l1("low"), adjudicator, expected_model="openai/gpt-6-sol"
-    ) == ()
+    assert (
+        _safety_clearance_gaps(
+            _l1("low"), adjudicator, expected_model="openai/gpt-6-sol"
+        )
+        == ()
+    )
     assert any(
         gap.startswith("models:")
         for gap in _safety_clearance_gaps(
