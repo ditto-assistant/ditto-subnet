@@ -4326,10 +4326,11 @@ class TerraSolSourceReviewAgent:
                     }
                 )
             if not calls:
-                if role == "analyst" and no_call_corrections < 2:
+                if role in {"analyst", "adjudicator"} and no_call_corrections < 2:
                     no_call_corrections += 1
                     logger.warning(
-                        "L2 model returned no tool call; correction %d/2",
+                        "L2 %s returned no tool call; correction %d/2",
+                        role,
                         no_call_corrections,
                     )
                     items.append(
@@ -4340,7 +4341,7 @@ class TerraSolSourceReviewAgent:
                                 {
                                     "type": "input_text",
                                     "text": (
-                                        "No tool call was returned. Use a supplied "
+                                        "No tool call was returned. Use a declared "
                                         "source tool or submit_l2_review when "
                                         "evidence is complete. This correction "
                                         "does not imply clearance."
