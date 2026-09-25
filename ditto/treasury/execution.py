@@ -227,7 +227,16 @@ def execute_one_leg(
     instructions: bytes,
     now: datetime | None = None,
 ) -> FinalizedLeg:
-    """Run one live leg; any error leaves a durable ambiguity and pauses."""
+    """Fail closed until a reviewed authority can prove every spending input."""
+    # The journal currently accepts self-attested allocation, reviewer names,
+    # and later-leg quote metadata. Those fields cannot authorize a transfer.
+    # No environment flag or operator confirmation may bypass this gate. A
+    # separate reviewed change must first bind finalized treasury receipts,
+    # current policy/burn, authenticated reviewers, and signer-side quotes.
+    raise RuntimeError(
+        "live treasury dispatch is blocked pending verified allocation, "
+        "reviewer identity, and signer-side quote authorization"
+    )
     if not project:
         raise ValueError("GCP project is required")
     instant = now or datetime.now(UTC)

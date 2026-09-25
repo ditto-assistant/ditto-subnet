@@ -1,5 +1,11 @@
 # SN118 treasury activation and GM top-up runbook
 
+**Current signer code blocks every live `execute` call before loading the
+signing key.** The allocation amounts, reviewer names, and later-leg quote
+metadata in its journal are operator supplied. A separate reviewed change
+must prove finalized receipts, active policy and burn, authenticated reviewers,
+and a signer-side fresh quote before this runbook can authorize a payment.
+
 This is a proposed operator sequence for the five draft PRs. **None of these
 activation steps has been performed.** The Platform policy is shadow-only, the
 Terraform signer and planner hosts are disabled in `prod.auto.tfvars`, and the daily timer is

@@ -268,7 +268,7 @@ def test_gm_alpha_route_and_daily_cap(tmp_path: Path) -> None:
         store.create_plan(_plan("payment-0002"), _bounds(), now=NOW)
 
 
-def test_failed_dispatch_is_paused_and_never_retried(
+def test_operator_approved_plan_cannot_enter_live_dispatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = TreasuryStore(tmp_path / "treasury.db")
@@ -285,44 +285,16 @@ def test_failed_dispatch_is_paused_and_never_retried(
         "payment-0001", reviewer="reviewer", expected_plan_hash=plan_hash, now=NOW
     )
 
-    class _Key:
-        ss58_address = "reviewed-wallet"
+    def no_key(_project: str) -> None:
+        raise AssertionError("signing key must not be loaded")
 
-    monkeypatch.setattr(
-        execution,
-        "_load_wallet",
-        lambda _project: type("W", (), {"coldkeypub": _Key()})(),
-    )
-    calls = 0
-
-    def fail_dispatch(*_args: object) -> None:
-        nonlocal calls
-        calls += 1
-        raise TimeoutError("ambiguous chain response")
-
-    monkeypatch.setattr(execution, "dispatch_chain_leg", fail_dispatch)
-    with pytest.raises(ValueError, match="instruction fields"):
+    monkeypatch.setattr(execution, "_load_wallet", no_key)
+    with pytest.raises(RuntimeError, match="live treasury dispatch is blocked"):
         execution.execute_one_leg(
-            store, "payment-0001", project="project", instructions=b"{}", now=NOW
+            store,
+            "payment-0001",
+            project="project",
+            instructions=_instructions("tao"),
+            now=NOW,
         )
     assert store.status()["plans"][0]["state"] == "approved"
-    with pytest.raises(TimeoutError):
-        execution.execute_one_leg(
-            store,
-            "payment-0001",
-            project="project",
-            instructions=_instructions("tao"),
-            now=NOW,
-        )
-    assert calls == 1
-    assert store.status()["paused"] is True
-    assert store.status()["plans"][0]["state"] == "dispatching"
-    with pytest.raises(ValueError, match="paused"):
-        execution.execute_one_leg(
-            store,
-            "payment-0001",
-            project="project",
-            instructions=_instructions("tao"),
-            now=NOW,
-        )
-    assert calls == 1
