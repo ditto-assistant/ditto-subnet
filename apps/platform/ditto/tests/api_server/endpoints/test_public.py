@@ -139,7 +139,11 @@ from ditto.tests.legacy_era import (
 )
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
-from ditto_screening_protocol.models import ScreenReviewAudit
+from ditto_screening_protocol.models import (
+    ScreenReviewAudit,
+    SourceReviewNote,
+    source_review_notes_digest,
+)
 
 # Every use of SCREENING_POLICY_VERSION in this module means "the version the
 # platform REQUIRES," which — with no scheduled activation written — is the
@@ -6992,14 +6996,6 @@ class TestPublicActivity:
             final_stage="preflight",
             cause_detail="lease_unavailable",
         ).model_dump(mode="json")
-        budget_result: dict[str, object] = {
-            "attempt_id": str(uuid4()),
-            "outcome": "inconclusive",
-            "reason_code": "source-review-inconclusive",
-            "finding_digest": None,
-            "review_audit": l1_budget_audit,
-            "review_notes": [{"summary": private_note}],
-        }
         concern_site = "src/PRIVATE_CONCERN_SITE.rs"
         concern_notes = [
             {
@@ -7023,6 +7019,29 @@ class TestPublicActivity:
             },
             {"kind": "cleared", "category": "none", "summary": "ok", "stage": "l1"},
         ]
+
+        def ledger_digest(notes: list[dict[str, object]]) -> str:
+            """The digest a genuine writer records with ``notes``."""
+            return source_review_notes_digest(
+                [SourceReviewNote.model_validate(note) for note in notes]
+            )
+
+        budget_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "inconclusive",
+            "reason_code": "source-review-inconclusive",
+            "finding_digest": None,
+            "review_audit": l1_budget_audit,
+            "review_notes": thin_notes,
+            "review_notes_digest": ledger_digest(thin_notes),
+        }
+        # A thin ledger presented with the digest of the concern-bearing ledger
+        # it replaced: unverifiable, so it must not lower the conclusion.
+        tampered_result: dict[str, object] = {
+            **budget_result,
+            "attempt_id": str(uuid4()),
+            "review_notes_digest": ledger_digest(concern_notes),
+        }
         pinned_attempt = uuid4()
         concern_result: dict[str, object] = {
             "attempt_id": str(uuid4()),
@@ -7031,6 +7050,7 @@ class TestPublicActivity:
             "finding_digest": None,
             "review_audit": l1_budget_audit,
             "review_notes": concern_notes,
+            "review_notes_digest": ledger_digest(concern_notes),
         }
         unbound_attempt = uuid4()
         concern_unbound_result: dict[str, object] = {
@@ -7038,6 +7058,7 @@ class TestPublicActivity:
             "attempt_id": str(unbound_attempt),
             # One substantiated concern: below every configured threshold.
             "review_notes": concern_notes[:1],
+            "review_notes_digest": ledger_digest(concern_notes[:1]),
         }
         concern_pinned_result: dict[str, object] = {
             **concern_result,
@@ -7124,6 +7145,16 @@ class TestPublicActivity:
                 AgentStatus.ATH_PENDING_REVIEW,
                 None,
                 deferred_evidence(["top_five"], concern_unbound_result),
+            ),
+            "tampered-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], tampered_result),
+            ),
+            "quarantine-stale-digest": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
             ),
             "quarantine-budget-no-notes": (
                 AgentStatus.QUARANTINED,
@@ -7259,6 +7290,15 @@ class TestPublicActivity:
                 },
                 [],
             ),
+            # A concern-bearing ledger replaced by an empty list, keeping the
+            # original digest: unverifiable.
+            "quarantine-stale-digest": (
+                "source-review-inconclusive",
+                None,
+                None,
+                l1_budget_audit,
+                [],
+            ),
             # A legacy quarantine with a budget audit but no retained ledger.
             "quarantine-budget-no-notes": (
                 "source-review-inconclusive",
@@ -7384,7 +7424,11 @@ class TestPublicActivity:
                         finding=q_finding,
                         review_notes=q_notes,
                         review_notes_digest=(
-                            "ef" * 32 if q_notes is not None else None
+                            ledger_digest(concern_notes)
+                            if name == "quarantine-stale-digest"
+                            else ledger_digest(q_notes)
+                            if q_notes is not None
+                            else None
                         ),
                         status="active",
                     )
@@ -7407,6 +7451,8 @@ class TestPublicActivity:
             "concern-deep": (["top_five"], "adverse_signal"),
             "concern-pinned-deep": (["top_five"], "budget_exhausted"),
             "concern-unbound-deep": (["top_five"], "adverse_signal"),
+            "tampered-deep": (["top_five"], "adverse_signal"),
+            "quarantine-stale-digest": ([], "adverse_signal"),
             "quarantine-budget-no-notes": ([], "adverse_signal"),
             "quarantine-concern": ([], "adverse_signal"),
             "quarantine-thin": ([], "budget_exhausted"),

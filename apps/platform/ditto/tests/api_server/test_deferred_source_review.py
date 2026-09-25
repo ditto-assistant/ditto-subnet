@@ -17,6 +17,7 @@ from ditto.api_server.deferred_source_review import (
     is_no_finding_reason_code,
     public_deferred_review_triggers,
     public_review_conclusion,
+    verified_review_notes,
 )
 from ditto.api_server.endpoints.validator import (
     _deferred_screening_attempt,
@@ -35,7 +36,11 @@ from ditto.db.models import (
 )
 from ditto.db.queries.scores import LedgerRow
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
-from ditto_screening_protocol.models import ScreenReviewAudit
+from ditto_screening_protocol.models import (
+    ScreenReviewAudit,
+    SourceReviewNote,
+    source_review_notes_digest,
+)
 
 # Seeded versions mean "the version the platform REQUIRES" — the floor in the
 # default no-scheduled-activation state.
@@ -948,6 +953,18 @@ def test_no_finding_codes_are_an_exact_allowlist(
     assert is_no_finding_reason_code(code) is expected
 
 
+def _digest(notes: object) -> str | None:
+    """The digest a genuine writer records with ``notes`` (None if unparsable)."""
+    if not isinstance(notes, list):
+        return None
+    try:
+        return source_review_notes_digest(
+            [SourceReviewNote.model_validate(note) for note in notes]
+        )
+    except ValueError:
+        return None
+
+
 def _conclude(
     *,
     active: bool,
@@ -958,6 +975,7 @@ def _conclude(
     quarantine_finding: object = None,
     quarantine_audit: object = None,
     quarantine_notes: object = None,
+    quarantine_notes_digest: object = "matching",
     hold_count: int = 3,
 ) -> object:
     return public_review_conclusion(
@@ -970,6 +988,12 @@ def _conclude(
         quarantine_finding=quarantine_finding,
         quarantine_review_audit=quarantine_audit,
         quarantine_review_notes=quarantine_notes,
+        # "matching": the digest recorded with a genuine ledger.
+        quarantine_review_notes_digest=(
+            _digest(quarantine_notes)
+            if quarantine_notes_digest == "matching"
+            else quarantine_notes_digest
+        ),
         quarantine_concern_hold_count=hold_count,
     )
 
@@ -1085,7 +1109,11 @@ def test_deferred_no_verdict_requires_a_recorded_review_audit(
 ) -> None:
     # A recorded, concern-free ledger: the audit alone decides the state.
     evidence = _deep(
-        outcome=outcome, reason_code=code, review_audit=audit, review_notes=[]
+        outcome=outcome,
+        reason_code=code,
+        review_audit=audit,
+        review_notes=[],
+        review_notes_digest=_digest([]),
     )
     assert _conclude(active=True, evidence=evidence) == expected
 
@@ -1299,6 +1327,7 @@ def test_concern_threshold_decides_a_budget_hold_on_both_paths(
         reason_code="source-review-inconclusive",
         review_audit=L1_READ_BUDGET_AUDIT,
         review_notes=notes,
+        review_notes_digest=_digest(notes),
     )
     assert _conclude(active=True, evidence=deferred, hold_count=hold_count) == (
         expected
@@ -1353,6 +1382,7 @@ def test_unknown_threshold_floor_makes_any_concern_adverse() -> None:
         reason_code="source-review-inconclusive",
         review_audit=L1_READ_BUDGET_AUDIT,
         review_notes=[_concern("a.rs", 1)],
+        review_notes_digest=_digest([_concern("a.rs", 1)]),
     )
     assert _conclude(active=True, evidence=one, hold_count=1) == "adverse_signal"
     empty = _deep(
@@ -1360,5 +1390,92 @@ def test_unknown_threshold_floor_makes_any_concern_adverse() -> None:
         reason_code="source-review-inconclusive",
         review_audit=L1_READ_BUDGET_AUDIT,
         review_notes=[],
+        review_notes_digest=_digest([]),
     )
     assert _conclude(active=True, evidence=empty, hold_count=1) == "budget_exhausted"
+
+
+# ── Only a complete, digest-verified ledger may lower a budget hold ──────────
+
+_STALE_CONCERN_DIGEST = _digest(CONCERN_NOTES)
+_MALFORMED_NOTE = {"kind": "concern", "category": "none", "summary": ""}
+
+
+@pytest.mark.parametrize(
+    ("notes", "digest"),
+    [
+        # A concern-bearing ledger replaced by an empty list, stale digest.
+        ([], _STALE_CONCERN_DIGEST),
+        # Truncated to a shorter (thin) list, stale digest.
+        (CONCERN_NOTES[:1], _STALE_CONCERN_DIGEST),
+        # A digest that matches nothing recorded.
+        (THIN_NOTES, "00" * 32),
+        # A malformed entry is never dropped to make the rest verify.
+        ([*THIN_NOTES, _MALFORMED_NOTE], _digest(THIN_NOTES)),
+        (["not-a-note", *THIN_NOTES], _digest(THIN_NOTES)),
+        # No recorded digest at all, even for an otherwise valid list.
+        (THIN_NOTES, None),
+        ([], None),
+        # Over the protocol bound.
+        ([THIN_NOTES[2]] * 49, _digest([THIN_NOTES[2]] * 49)),
+    ],
+)
+def test_unverified_ledger_keeps_a_budget_hold_adverse_on_both_paths(
+    notes: object, digest: object
+) -> None:
+    deferred = _deep(
+        outcome="inconclusive",
+        reason_code="source-review-inconclusive",
+        review_audit=L1_READ_BUDGET_AUDIT,
+        review_notes=notes,
+        review_notes_digest=digest,
+    )
+    assert _conclude(active=True, evidence=deferred) == "adverse_signal"
+    assert (
+        _conclude(
+            active=False,
+            evidence=None,
+            quarantined=True,
+            code="source-review-inconclusive",
+            quarantine_audit=L1_READ_BUDGET_AUDIT,
+            quarantine_notes=notes,
+            quarantine_notes_digest=digest,
+        )
+        == "adverse_signal"
+    )
+
+
+@pytest.mark.parametrize("notes", [THIN_NOTES, []])
+def test_verified_thin_ledger_reads_budget_exhausted_on_both_paths(
+    notes: list[dict[str, object]],
+) -> None:
+    deferred = _deep(
+        outcome="inconclusive",
+        reason_code="source-review-inconclusive",
+        review_audit=L1_READ_BUDGET_AUDIT,
+        review_notes=notes,
+        review_notes_digest=_digest(notes),
+    )
+    assert _conclude(active=True, evidence=deferred) == "budget_exhausted"
+    assert (
+        _conclude(
+            active=False,
+            evidence=None,
+            quarantined=True,
+            code="source-review-inconclusive",
+            quarantine_audit=L1_READ_BUDGET_AUDIT,
+            quarantine_notes=notes,
+        )
+        == "budget_exhausted"
+    )
+
+
+def test_verified_review_notes_contract() -> None:
+    # The empty ledger's digest is the canonical digest of ``[]``.
+    empty_digest = source_review_notes_digest([])
+    assert verified_review_notes([], empty_digest) == []
+    assert verified_review_notes([], None) is None
+    parsed = verified_review_notes(THIN_NOTES, _digest(THIN_NOTES))
+    assert parsed is not None and len(parsed) == len(THIN_NOTES)
+    assert verified_review_notes(THIN_NOTES, _STALE_CONCERN_DIGEST) is None
+    assert verified_review_notes({"kind": "concern"}, empty_digest) is None

@@ -226,6 +226,7 @@ from ditto.api_server.deferred_source_review import (
     deep_review_attempt_id,
     public_deferred_review_triggers,
     public_review_conclusion,
+    verified_review_notes,
 )
 from ditto.api_server.efficiency import (
     EfficiencyBoardView,
@@ -429,7 +430,6 @@ from ditto.db.queries.tickets import (
 from ditto.score_order import score_order_key
 from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
-from ditto_screening_protocol.models import SourceReviewNote, source_review_notes_digest
 
 logger = logging.getLogger(__name__)
 
@@ -981,22 +981,17 @@ def _public_terminal_screening_review(
     # These bounded reviewer-authored summaries are public-safe by protocol.
     # They are working observations, not additional final rejection findings.
     notes: list[PublicScreeningReviewNote] = []
-    if isinstance(quarantine.review_notes, list) and len(quarantine.review_notes) <= 48:
+    parsed_notes = verified_review_notes(
+        quarantine.review_notes, quarantine.review_notes_digest
+    )
+    if parsed_notes is not None:
         try:
-            parsed_notes = [
-                SourceReviewNote.model_validate(item)
-                for item in quarantine.review_notes
+            notes = [
+                PublicScreeningReviewNote.model_validate(note.model_dump())
+                for note in parsed_notes
             ]
-            if (
-                source_review_notes_digest(parsed_notes)
-                == quarantine.review_notes_digest
-            ):
-                notes = [
-                    PublicScreeningReviewNote.model_validate(note.model_dump())
-                    for note in parsed_notes
-                ]
         except ValueError:
-            pass
+            notes = []
 
     evidence: list[PublicScreeningReviewEvidence] = []
     if isinstance(quarantine.evidence, list):
@@ -5989,6 +5984,7 @@ class _QuarantineFinding:
     finding: dict[str, Any] | None
     review_audit: dict[str, Any] | None
     review_notes: list[Any] | None
+    review_notes_digest: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -6092,6 +6088,7 @@ async def _public_review_inputs(
                 ScreeningQuarantine.finding,
                 ScreeningQuarantine.review_audit,
                 ScreeningQuarantine.review_notes,
+                ScreeningQuarantine.review_notes_digest,
             ).where(
                 ScreeningQuarantine.agent_id.in_(agent_ids),
                 ScreeningQuarantine.status == "active",
@@ -6104,6 +6101,7 @@ async def _public_review_inputs(
                 finding=finding,
                 review_audit=review_audit,
                 review_notes=review_notes,
+                review_notes_digest=review_notes_digest,
             )
             for (
                 agent_id,
@@ -6112,6 +6110,7 @@ async def _public_review_inputs(
                 finding,
                 review_audit,
                 review_notes,
+                review_notes_digest,
             ) in result.tuples()
         }
     attempt_ids = {quarantine.attempt_id for quarantine in quarantines.values()}
@@ -6159,6 +6158,9 @@ def _public_review_projection(
             ),
             quarantine_review_notes=(
                 quarantine.review_notes if quarantine is not None else None
+            ),
+            quarantine_review_notes_digest=(
+                quarantine.review_notes_digest if quarantine is not None else None
             ),
             quarantine_concern_hold_count=inputs.concern_hold_count(
                 quarantine.attempt_id if quarantine is not None else None

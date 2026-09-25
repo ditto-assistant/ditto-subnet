@@ -15,7 +15,11 @@ from ditto.api_models.public import (
     PublicReviewConclusion,
 )
 from ditto.api_models.queue_policy_settings import DeferredSourceReviewSettings
-from ditto_screening_protocol.models import ScreenReviewAudit
+from ditto_screening_protocol.models import (
+    ScreenReviewAudit,
+    SourceReviewNote,
+    source_review_notes_digest,
+)
 from ditto_screening_protocol.review_ledger import concern_threshold_reached
 
 if TYPE_CHECKING:
@@ -330,8 +334,42 @@ def _recorded_review_outcome(
     return "no_finding"
 
 
+MAX_REVIEW_NOTES = 48
+
+
+def verified_review_notes(
+    raw_notes: object, recorded_digest: object
+) -> list[SourceReviewNote] | None:
+    """The recorded notes ledger, only if it is complete and digest-bound.
+
+    Every entry must parse as ``SourceReviewNote`` (nothing is dropped), the
+    ledger must be within the protocol bound, and the canonical
+    ``source_review_notes_digest`` of the parsed ledger must equal the digest
+    recorded with it. Anything else -- a missing or mismatched digest, a
+    malformed entry, or a truncated or replaced list carrying a stale digest --
+    returns ``None``. The empty ledger is valid only with the digest of ``[]``.
+    """
+    if (
+        not isinstance(raw_notes, list)
+        or len(raw_notes) > MAX_REVIEW_NOTES
+        or not isinstance(recorded_digest, str)
+    ):
+        return None
+    try:
+        parsed = [SourceReviewNote.model_validate(item) for item in raw_notes]
+    except ValueError:
+        return None
+    if source_review_notes_digest(parsed) != recorded_digest:
+        return None
+    return parsed
+
+
 def _no_verdict_conclusion(
-    raw_audit: object, raw_notes: object, *, concern_hold_count: int
+    raw_audit: object,
+    raw_notes: object,
+    raw_notes_digest: object,
+    *,
+    concern_hold_count: int,
 ) -> PublicReviewConclusion:
     """The recorded audit's outcome, unless the hold is concern-driven.
 
@@ -341,21 +379,26 @@ def _no_verdict_conclusion(
     budget, so it reads ``adverse_signal``. The threshold rule is the one the
     worker applies, shared through ``ditto_screening_protocol.review_ledger``,
     evaluated on the notes ledger recorded with the result against the review
-    settings pinned on that attempt. A budget hold without a recorded notes
-    ledger is ``adverse_signal``: nothing on record shows it was thin coverage.
+    settings pinned on that attempt. A budget hold without a complete,
+    digest-verified notes ledger is ``adverse_signal``: nothing trustworthy on
+    record shows it was thin coverage.
     """
     outcome = _recorded_review_outcome(raw_audit)
     if outcome != "budget_exhausted":
         return outcome
-    if not isinstance(raw_notes, list):
-        # Fail closed: without the recorded ledger nothing shows the hold was
-        # thin coverage rather than concern-driven (legacy quarantines, or any
-        # path that did not retain ``review_notes``). The operator-facing
-        # ``evidence`` trail is never parsed back into notes: it is a lossy,
-        # reshaped copy and could only soften the conclusion.
+    notes = verified_review_notes(raw_notes, raw_notes_digest)
+    if notes is None:
+        # Fail closed: only a complete, digest-verified ledger may show the hold
+        # was thin coverage rather than concern-driven. A missing ledger (legacy
+        # quarantines, or a path that kept none), a malformed entry, or a list
+        # that does not match its recorded digest keeps ``adverse_signal``. The
+        # operator-facing ``evidence`` trail is never parsed back into notes:
+        # it is a lossy, reshaped copy and could only soften the conclusion.
         return "adverse_signal"
-    notes = [note for note in raw_notes if isinstance(note, dict)]
-    if concern_threshold_reached(notes, concern_hold_count=concern_hold_count):
+    if concern_threshold_reached(
+        [note.model_dump(mode="json") for note in notes],
+        concern_hold_count=concern_hold_count,
+    ):
         return "adverse_signal"
     return outcome
 
@@ -371,6 +414,7 @@ def public_review_conclusion(
     quarantine_finding: object,
     quarantine_review_audit: object,
     quarantine_review_notes: object,
+    quarantine_review_notes_digest: object,
     quarantine_concern_hold_count: int,
 ) -> PublicReviewConclusion | None:
     """What the automated review concluded for a held submission.
@@ -385,8 +429,9 @@ def public_review_conclusion(
        ``no_finding`` only when it proves a model review ran, and
        ``not_completed`` when there is no such proof;
     5. a ``budget_exhausted`` hold whose recorded substantiated concerns reach
-       the attempt's ``concern_hold_count`` -- or that has no recorded notes
-       ledger at all -- is ``adverse_signal``.
+       the attempt's ``concern_hold_count`` -- or whose notes ledger is missing,
+       malformed, or does not match its recorded digest -- is
+       ``adverse_signal``.
 
     For an active deferred review the post-score deep attempt's result, its
     ``review_audit`` and ``review_notes`` decide, and the review is ``pending``
@@ -412,6 +457,7 @@ def public_review_conclusion(
         return _no_verdict_conclusion(
             result.get("review_audit"),
             result.get("review_notes"),
+            result.get("review_notes_digest"),
             concern_hold_count=deferred_concern_hold_count,
         )
     if quarantined:
@@ -423,6 +469,7 @@ def public_review_conclusion(
             return _no_verdict_conclusion(
                 quarantine_review_audit,
                 quarantine_review_notes,
+                quarantine_review_notes_digest,
                 concern_hold_count=quarantine_concern_hold_count,
             )
     return "pending" if deferred_review_active else None
