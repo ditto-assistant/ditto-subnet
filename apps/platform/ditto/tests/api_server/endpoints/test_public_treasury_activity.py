@@ -26,10 +26,10 @@ async def test_empty_then_exact_public_receipt_and_cursor(app, client, session_m
                     burn_revision="8",
                     denominator="released_miner_emission",
                     allocation_bps=25,
-                    allocated_alpha_rao=1000,
+                    allocated_alpha_rao=9_007_199_254_740_993,
                     route="alpha_to_tao",
                     asset="TAO",
-                    gross_amount_atomic=99,
+                    gross_amount_atomic=9_007_199_254_740_993,
                     realized_amount_atomic=None,
                     public_sender="public-sender",
                     public_recipient="public-recipient",
@@ -48,6 +48,8 @@ async def test_empty_then_exact_public_receipt_and_cursor(app, client, session_m
     assert page["items"][0]["payment_id"] == "payment-2"
     assert page["items"][0]["block_hash"] == "0xpayment-2"
     assert page["items"][0]["allocation_bps"] == 25
+    assert page["items"][0]["allocated_alpha_rao"] == "9007199254740993"
+    assert page["items"][0]["gross_amount_atomic"] == "9007199254740993"
     assert "gm_account" not in response.text
     assert "api_key" not in response.text
     assert page["next_before"] is not None

@@ -27,11 +27,11 @@ interface TreasuryEvent {
   burn_revision: string;
   denominator: "miner_emission" | "released_miner_emission";
   allocation_bps: number;
-  allocated_alpha_rao: number;
+  allocated_alpha_rao: string;
   route: string;
   asset: string;
-  gross_amount_atomic: number;
-  realized_amount_atomic: number | null;
+  gross_amount_atomic: string;
+  realized_amount_atomic: string | null;
   public_sender: string;
   public_recipient: string;
   block_hash: string;

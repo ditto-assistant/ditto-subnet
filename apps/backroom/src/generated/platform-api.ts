@@ -26516,7 +26516,7 @@ export interface components {
             /** Actor Provenance */
             actor_provenance: string;
             /** Allocated Alpha Rao */
-            allocated_alpha_rao: number;
+            allocated_alpha_rao: string;
             /** Allocation Bps */
             allocation_bps: number;
             /** Asset */
@@ -26545,7 +26545,7 @@ export interface components {
             /** Extrinsic Index */
             extrinsic_index: number;
             /** Gross Amount Atomic */
-            gross_amount_atomic: number;
+            gross_amount_atomic: string;
             /** Id */
             id: number;
             /** Payment Id */
@@ -26557,7 +26557,7 @@ export interface components {
             /** Public Sender */
             public_sender: string;
             /** Realized Amount Atomic */
-            realized_amount_atomic: number | null;
+            realized_amount_atomic: string | null;
             /**
              * Recorded At
              * Format: date-time

@@ -12,7 +12,8 @@ identify its exact public transfer. Two states for one payment are linked by
 once, not as two purchases. Policy revision, burn revision, denominator,
 allocation bps, allocated alpha rao, route, gross and realized amounts, asset,
 public sender and recipient, actor provenance, and verification source are
-explicit columns. The public response has no arbitrary JSON field. The table
+explicit columns. Atomic amounts are decimal strings in the public JSON so
+JavaScript cannot round 64-bit values. The response has no arbitrary JSON field. The table
 rejects updates and deletes in PostgreSQL and enforces unique payment-state
 and chain-event-state pairs.
 

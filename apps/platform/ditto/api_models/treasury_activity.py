@@ -18,11 +18,11 @@ class PublicTreasuryEvent(BaseModel):
     burn_revision: str
     denominator: Literal["miner_emission", "released_miner_emission"]
     allocation_bps: int
-    allocated_alpha_rao: int
+    allocated_alpha_rao: str
     route: str
     asset: str
-    gross_amount_atomic: int
-    realized_amount_atomic: int | None
+    gross_amount_atomic: str
+    realized_amount_atomic: str | None
     public_sender: str
     public_recipient: str
     block_hash: str
