@@ -16,6 +16,13 @@ Merging this document approves the rules below. It does not activate anything:
 activation follows the phases in [Rollout](#rollout), and each phase needs its
 own signed policy revision.
 
+An earlier [emission-funded proposal](maintenance-treasury.md) is a separate,
+unadopted alternative. Merging this contract selects submission-fee funding
+for #2054; it does not authorize a treasury UID or a miner-emission fold.
+Adopting that alternative later requires a reviewed contract change and its
+signed activation or [policy revision](#policy-revisions), including the
+validator and custody changes it proposes.
+
 ## Summary
 
 | Question | Answer |
@@ -86,7 +93,8 @@ are needed only to record what happened and to reopen it.
 | Pause | The owner or any one custodian | Immediately, from whatever channel it is first seen; appended to the ledger once it accepts writes ([Manual pause](#manual-pause)) |
 | Close the spending gate on a failed or unreadable condition | Nobody: the [spending gate](#spending-gate) closes itself | Immediately |
 | Record an incident or its resolution | The owner or any one custodian | When appended. Neither reopens the gate. |
-| Unpause | Two different people among the owner and the custodians | Only when every gate condition holds; after a trip or an incident, only through [Unpause after repair](#unpause-after-repair) |
+| Unpause | Two different people among the owner and the custodians | Only after the scoped G2–G5 precheck and the all-six postcheck in [Unpause after repair](#unpause-after-repair) |
+| Ledger recovery | The owner coldkey and two different custodian coldkeys | A signed recovery bridge may be published while the ledger is unwritable; its signed `ledger_recovery` entry takes effect only after its finalized anchor and the replacement-chain proof are verified. It does not open the gate. |
 | Protective change: lower the cap or fee share, return to an earlier phase, remove a reviewer, replace a staking hotkey that breached policy | The owner and one custodian who is not the owner | Immediately. It never affects existing claims, earmarks, or commitments. |
 | Emergency custody rotation | Two custodians | Immediately |
 | Any other policy change, including adopting a new revision of this document | The owner and one custodian who is not the owner | After `policy_notice_days` |
@@ -469,7 +477,7 @@ and its references (bounty id, issue, commit or evidence hash, claim,
 receipt). Entry types:
 
 - **Decisions**, signed by the keys in [Authority](#authority):
-  `policy_revision`, `custody_change`, `pause`, `unpause`,
+  `policy_revision`, `custody_change`, `pause`, `unpause`, `ledger_recovery`,
   `bounty_published`, `earmark`, `acceptance`, `rejection`, `approval`,
   `commitment`, `revocation`, `cancellation`, `release`, `appeal_decision`,
   `dispute_finding`, `reconciliation_resolution`, `incident`,
@@ -499,6 +507,17 @@ Construction requirements:
 - With each weekly reconciliation, a custodian anchors the ledger head on chain
   with `System.remark_with_event`. The anchor is itself a ledger entry, so
   rewriting history before an anchor is detectable by anyone.
+- A `ledger_recovery` is the only decision that may be appended to a replacement
+  chain while G2 is closed. Under the ledger lock, its append must verify the
+  owner-coldkey and two distinct custodian-coldkey signatures, the complete
+  archived segment, the finalized recovery-bridge anchor, and a passing
+  reconciliation. Its signed `replacement_parent_head` must equal the current
+  head; it is the first entry appended after that head. The entry's `prev_hash`
+  links it to that parent; its payload links the old verified head, bridge and
+  archive digests, recovery anchor receipt, and the passing reconciliation
+  report hash and finalized block. Its resulting entry hash is the replacement
+  head every evaluator verifies and repins. The exception cannot authorize any
+  other decision or any spending.
 
 ### Published
 
@@ -567,7 +586,7 @@ it.
 | # | Condition | Established from |
 |---|---|---|
 | G1 | No [manual pause](#manual-pause) is in force. | Signed `pause` and `unpause` entries, and any signed pause seen outside the ledger |
-| G2 | The ledger is readable, its hash chain verifies from genesis to its head, and the head extends both the last on-chain anchor and the head this evaluator last verified. | The ledger and the `System.remark_with_event` anchors |
+| G2 | The ledger is readable and its hash chain verifies from genesis to its head. The head extends every on-chain ledger-head anchor. It also either extends this evaluator's last verified head or replaces that head through a verified `ledger_recovery` entry and bridge before unpause. | The ledger, signed recovery bridges, and the `System.remark_with_event` anchors |
 | G3 | The latest reconciliation passed, or its failure has a signed `reconciliation_resolution`, and it ran within `reconciliation_max_age_days`. | `reconciliation` entries |
 | G4 | Every sweep window whose deadline has passed has its full sweep. | `inflow` entries and the published fee rows |
 | G5 | The treasury's finalized balances, held TAO and alpha staked on the staking hotkey, are no lower than the balances the ledger explains at that block. | A finalized chain read and the ledger |
@@ -596,7 +615,8 @@ below evaluates it for itself, from primary sources, before acting:
 - **The Platform's ledger append path** evaluates the gate inside the append
   transaction, under the ledger lock. It refuses `earmark`, `approval`, and
   `commitment` entries while the gate is closed, and when it finds a new trip
-  it appends the `gate_trip` record first.
+  it appends the `gate_trip` record first, except that a G2 integrity recovery
+  must append its verified `ledger_recovery` entry before the deferred trip.
 - **Each custodian's signing tool** evaluates the gate from the public ledger
   export and its own finalized chain read, never from a Platform "paused"
   field. It pins the last ledger head it verified, and refuses to sign any
@@ -648,35 +668,67 @@ steps, in order:
 1. **Trip record.** A `gate_trip` automatic record names the violated
    condition, the first finalized block at which it held, and the entries or
    chain figures that establish it, so anyone can recompute it. The append path
-   writes it when it detects the trip. If the ledger could not accept writes
-   then, it is appended as soon as the ledger does, before any other decision.
+   writes it when it detects the trip. If the ledger could not accept writes or
+   G2 integrity recovery is required, it is appended after the required
+   `ledger_recovery` entry but before any spending-authorizing decision.
    An incident with no automatic trip, such as a suspected key compromise, is
    recorded from step 2.
 2. **Incident record.** The owner or any one custodian appends a signed
    `incident` that references the `gate_trip`, or the `pause`, that closed the
    gate. It is due within
-   `incident_record_hours` of the trip becoming visible, or first once the
-   ledger accepts writes. It classifies the cause (reconciliation mismatch,
-   missed sweep, unexplained movement, ledger integrity, key compromise, or
-   breach) and lists the affected entries and receipts. A late or missing
-   incident record never opens the gate; it keeps it closed longer.
-3. **Verified repair.** The cause is repaired and every gate condition is
-   established again from primary sources. The repair is itself recorded: a
-   late sweep as its `inflow`, an accounting difference as a
-   `reconciliation_resolution`, a rotation as a `custody_change`. A restored
-   ledger must extend every on-chain anchor; if it cannot extend a head a
-   custodian had verified, the resolution names the lost entries and the new
-   head, and custodians re-pin only after the unpause. A new reconciliation run
-   after the repair must pass. An assertion that the problem is fixed is not
-   enough.
+   `incident_record_hours` of the trip becoming visible, or as soon as the
+   ledger accepts writes; a required `ledger_recovery` entry precedes it. It
+   classifies the cause (reconciliation mismatch, missed sweep, unexplained
+   movement, ledger integrity, key compromise, or breach) and lists the
+   affected entries and receipts. A late or missing incident record never
+   opens the gate; it keeps it closed longer.
+3. **Verified repair.** The cause is repaired and conditions G2–G5 must be
+   established again from primary sources before step 5. G1 and G6 remain
+   closed until the unpause. The repair is itself recorded: a late sweep as its
+   `inflow`, an accounting difference as a `reconciliation_resolution`, and a
+   rotation as a `custody_change`. A restored ledger must extend every on-chain
+   ledger-head anchor. If it cannot extend a head a
+   custodian previously verified, spending stays closed while an independent
+   archive supplies the complete orphaned segment and its hash-chain proof.
+   The owner coldkey and two different custodian coldkeys sign an out-of-ledger
+   recovery bridge naming the old verified head, the replacement ledger's
+   current `replacement_parent_head`, orphaned entry hashes, the archive digest,
+   disposition of every reservation and unpaid award, and the finalized chain
+   block used for reconciliation. The signed bridge and archive are published;
+   a domain-tagged digest of the bridge is anchored with
+   `System.remark_with_event` and its receipt is finalized. This recovery
+   anchor commits to the bridge, not to an ordinary weekly ledger head.
+   Once the replacement ledger accepts writes, the owner coldkey and two
+   different custodian coldkeys sign a `ledger_recovery` decision referencing
+   that exact bridge digest, archive digest, anchor receipt, old head, parent
+   head, and the hash and finalized block of the passing balance/liability
+   reconciliation report. Under the ledger lock, the append path verifies
+   those proofs and appends it as the first entry after the signed parent head,
+   despite the closed G2; any intervening head requires a new bridge and
+   signatures. The entry's resulting hash is the replacement head.
+   Deferred `gate_trip` and `incident` records are appended next, before any
+   spending-authorizing decision. The Platform append path, each custodian
+   signing tool, and the payout verifier independently verify the old segment,
+   replacement chain, both sets of signatures, recovery entry, bridge anchor,
+   and reconciliation, then pin that resulting head (or a verified descendant)
+   **before** accepting or signing an unpause. G2 accepts the replacement only
+   for an evaluator with that verified bridge and repin; if the archive or any
+   proof is unavailable, recovery remains closed. A new `reconciliation` entry
+   after the repair and deferred records must pass before resolution or
+   unpause. An assertion that the problem is fixed is not enough.
 4. **Resolution.** The owner or any one custodian appends a signed
    `incident_resolution`: the cause, the repair, the passing reconciliation it
    relies on, and what changed to prevent a repeat. This is the written
    post-incident record.
 5. **Unpause.** Two different people among the owner and the custodians sign an
-   `unpause` that references the `incident_resolution`. The append path refuses
-   an `unpause` while any gate condition fails, and custodian tools ignore one
-   that does not reference a resolution for every open trip and incident.
+   `unpause` that references the `incident_resolution` for every open trip and
+   incident. Under the ledger lock, the append path first validates the
+   proposed entry's signatures and references and rechecks G2–G5 against the
+   repaired ledger and current finalized block. It allows G1 and G6 to remain
+   false only for this scoped append. It then appends the entry and recomputes
+   all six conditions in the same transaction. If any fails, the append rolls
+   back and the gate stays closed; otherwise the gate opens. Custodian tools
+   independently make the same final check before any spending signature.
 
 A waiting gate needs none of this. It reopens when its inputs can be read
 again.
@@ -769,7 +821,7 @@ ledger stays public.
 | A custodian key is stolen | 2-of-3 multisig on chain; offline keys, no proxies; pause by any one custodian from any channel; rotation allowed while paused, even before the ledger accepts writes |
 | A mismatch happens while the ledger or Platform is unreadable | The spending gate is closed whenever a condition cannot be verified; each custodian evaluates it from the public ledger and the chain, so stopping payouts needs no signature and no writable ledger |
 | The Platform reports "not paused" while broken or compromised | Custodian signing tools compute the gate themselves and never trust a Platform flag; two independent evaluations precede every payout |
-| A tripped gate is reopened quietly | Trips latch; reopening needs a trip record, a signed incident, a repair verified by a new passing reconciliation, a signed resolution, and a two-person unpause that the append path refuses early |
+| A tripped gate is reopened quietly | Trips latch; reopening needs a trip record, a signed incident, a repair verified by a new passing reconciliation, a signed resolution, and a two-person unpause with G2–G5 checked before append and all six conditions after |
 | One insider pays themselves or a friend | Reviewer approval separate from custody; conflict rules; tiered approvals on bounty totals; public ledger with receipts |
 | The shared Platform admin token is used to fake a decision | Every decision entry is signed by an authorized key; the token only carries entries |
 | One person unpauses or changes policy alone | Unpause and policy changes need two different people |
@@ -824,8 +876,15 @@ What the other epic issues must build to satisfy this contract:
   - a custodian signing tool that evaluates the gate from the public ledger and
     its own chain read, pins the last verified head, and honors a signed pause
     from any channel;
-  - the `gate_trip`, `incident`, and `incident_resolution` entries, and the
-    append path's refusal of an `unpause` before every gate condition holds;
+  - the `gate_trip`, `incident`, `incident_resolution`, and three-person-signed
+    `ledger_recovery` entries, including bridge, archive, anchor, and
+    replacement-head verification, with tests for missing signatures, an
+    incomplete archive, an unfinalized anchor, and a changed parent head;
+  - the append path's scoped `unpause` rule: validate signatures and
+    references and require G2–G5 before append, allow G1 and G6 to remain
+    false only for that append, then recompute all six conditions in the same
+    transaction and roll back the `unpause` unless all six pass, including a
+    regression test where the postcheck fails;
   - owner-tier verification through the same roster verifier plus the `owner`
     mark, including the three-reviewer rule when the owner is conflicted;
   - tests for replay, partial awards, key rotation, expiry, and failed
