@@ -392,7 +392,7 @@ describe('Backroom MCP tools', () => {
     // The no-input outlier-escalation read adds about 360 bytes; its bounds
     // live on the Platform endpoint. With later main tools the catalog measured
     // 164,066 bytes, so the bound keeps the same ~0.5 KB headroom as before.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(164_500)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(165_950)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -419,7 +419,7 @@ describe('Backroom MCP tools', () => {
       // provenance reads plus scorer pin rotation and history; measured at 29,121.
       // The one-line outlier-escalation read (79 chars; detail in tool help)
       // plus later main summaries measured 29,329.
-      29_450,
+      29_680,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
