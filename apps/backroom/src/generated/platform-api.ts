@@ -29409,13 +29409,13 @@ export interface components {
              *       "openai/gpt-5.6-sol"
              *     ]
              */
-            l2_fallback_models: ("openai/gpt-5.6-terra" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol")[];
+            l2_fallback_models: ("openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol")[];
             /**
              * L2 Model
              * @default openai/gpt-5.6-terra
              * @enum {string}
              */
-            l2_model: "openai/gpt-5.6-terra" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol";
+            l2_model: "openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol";
             /**
              * L3 Enabled
              * @default true
@@ -29424,9 +29424,9 @@ export interface components {
             /**
              * L3 Model
              * @default openai/gpt-5.6-sol
-             * @constant
+             * @enum {string}
              */
-            l3_model: "openai/gpt-5.6-sol";
+            l3_model: "openai/gpt-5.6-sol" | "openai/gpt-6-sol";
             /**
              * Max Completion Tokens
              * @default 2400
@@ -29487,9 +29487,9 @@ export interface components {
             /**
              * Source Review Model
              * @default openai/gpt-5.6-luna
-             * @constant
+             * @enum {string}
              */
-            source_review_model: "openai/gpt-5.6-luna";
+            source_review_model: "openai/gpt-5.6-luna" | "openai/gpt-6-luna";
             /**
              * Source Review Reasoning Effort
              * @default high

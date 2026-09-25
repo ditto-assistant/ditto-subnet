@@ -544,9 +544,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT must be low, medium, or high"
         )
-    if config.source_review_model != "openai/gpt-5.6-luna":
+    if config.source_review_model not in {"openai/gpt-5.6-luna", "openai/gpt-6-luna"}:
         raise ScreenerConfigError(
-            "SCREENER_SOURCE_REVIEW_MODEL must be openai/gpt-5.6-luna"
+            "SCREENER_SOURCE_REVIEW_MODEL must be openai/gpt-5.6-luna or "
+            "openai/gpt-6-luna"
         )
     if not 60 <= config.source_review_timeout_seconds <= 3_600:
         raise ScreenerConfigError(
@@ -602,11 +603,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         )
     if config.l2_review_model not in {
         "openai/gpt-5.6-terra",
+        "openai/gpt-6-sol",
         "moonshotai/kimi-k3",
     }:
         raise ScreenerConfigError(
-            "SCREENER_L2_REVIEW_MODEL must be openai/gpt-5.6-terra or "
-            "moonshotai/kimi-k3"
+            "SCREENER_L2_REVIEW_MODEL must be openai/gpt-5.6-terra, "
+            "openai/gpt-6-sol, or moonshotai/kimi-k3"
         )
     if config.review_inference_provider not in REVIEW_INFERENCE_PROVIDERS:
         raise ScreenerConfigError(
@@ -620,8 +622,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_FALLBACK_MODELS must be z-ai/glm-5.2,openai/gpt-5.6-sol"
         )
-    if config.l3_review_model != "openai/gpt-5.6-sol":
-        raise ScreenerConfigError("SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol")
+    if config.l3_review_model not in {"openai/gpt-5.6-sol", "openai/gpt-6-sol"}:
+        raise ScreenerConfigError(
+            "SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol or openai/gpt-6-sol"
+        )
     if config.l3_review_provider != config.review_inference_provider:
         raise ScreenerConfigError(
             "SCREENER_L3_REVIEW_PROVIDER must match SCREENER_REVIEW_INFERENCE_PROVIDER"

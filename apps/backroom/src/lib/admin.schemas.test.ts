@@ -2048,6 +2048,18 @@ describe('screener review settings schemas', () => {
     audit_retention_days: 30,
   }
 
+  it('accepts opt-in GPT-6 review stages', () => {
+    const parsed = screenerReviewSettingsSchema.parse({
+      ...settings,
+      l2_model: 'openai/gpt-6-sol',
+      source_review_model: 'openai/gpt-6-luna',
+      l3_model: 'openai/gpt-6-sol',
+    })
+    expect(parsed.l2_model).toBe('openai/gpt-6-sol')
+    expect(parsed.source_review_model).toBe('openai/gpt-6-luna')
+    expect(parsed.l3_model).toBe('openai/gpt-6-sol')
+  })
+
   it('parses current, history, and signed worker application status', () => {
     const parsed = screenerReviewControlSchema.parse({
       current: [],

@@ -264,11 +264,12 @@ export const screeningDisputeKindSchema = z.enum(['screening', 'gate_notes'])
 export const screenerReviewModeSchema = z.enum(['off', 'shadow', 'enforce', 'inherit'])
 export const screenerReviewModelSchema = z.enum([
   'openai/gpt-5.6-terra',
+  'openai/gpt-6-sol',
   'moonshotai/kimi-k3',
   'z-ai/glm-5.2',
   'openai/gpt-5.6-sol',
 ])
-export const sourceReviewModelSchema = z.enum(['openai/gpt-5.6-luna'])
+export const sourceReviewModelSchema = z.enum(['openai/gpt-5.6-luna', 'openai/gpt-6-luna'])
 export const fanoutShadowStatusSchema = z.enum([
   'queued',
   'leased',
@@ -292,7 +293,7 @@ export const screenerReviewSettingsSchema = z
     l2_model: screenerReviewModelSchema,
     l2_fallback_models: z.array(screenerReviewModelSchema).max(2),
     l3_enabled: z.boolean().default(true),
-    l3_model: z.literal('openai/gpt-5.6-sol'),
+    l3_model: z.enum(['openai/gpt-5.6-sol', 'openai/gpt-6-sol']),
     timeout_seconds: z.number().int().min(30).max(1_800),
     max_steps: z.number().int().min(1).max(256),
     source_review_max_steps: z.number().int().min(1).max(240).default(200),

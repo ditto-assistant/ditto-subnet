@@ -77,6 +77,17 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.require_signed_runtime_lease is False
 
 
+def test_gpt6_sol_l2_model_is_valid_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_L2_REVIEW_MODEL", "openai/gpt-6-sol")
+    monkeypatch.setenv("SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-6-luna")
+    monkeypatch.setenv("SCREENER_L3_REVIEW_MODEL", "openai/gpt-6-sol")
+    config = parse_screener_config_from_env()
+    assert config.l2_review_model == "openai/gpt-6-sol"
+    assert config.source_review_model == "openai/gpt-6-luna"
+    assert config.l3_review_model == "openai/gpt-6-sol"
+
+
 def test_signed_runtime_lease_requires_explicit_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

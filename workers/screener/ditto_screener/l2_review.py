@@ -3511,7 +3511,9 @@ class TerraSolSourceReviewAgent:
         claimed_safe = (
             adjudicator.observation.ok and adjudicator.observation.risk_level == "low"
         )
-        clearance_gaps = _safety_clearance_gaps(safety_evidence, adjudicator)
+        clearance_gaps = _safety_clearance_gaps(
+            safety_evidence, adjudicator, expected_model=self._critic_model
+        )
         adjudicated_safe = claimed_safe and not clearance_gaps
         adjudicated_analyzed = _merge_digest_items(
             analyst.analyzed_files,
@@ -5002,7 +5004,10 @@ def _qualifies_safety_clearance(
 
 
 def _safety_clearance_gaps(
-    evidence_observation: SourceReviewObservation, adjudicator: L2RunResult
+    evidence_observation: SourceReviewObservation,
+    adjudicator: L2RunResult,
+    *,
+    expected_model: str = L3_MODEL,
 ) -> tuple[str, ...]:
     """Name every mechanical certificate miss. Empty means the clearance holds."""
     finding = adjudicator.observation.finding
@@ -5031,7 +5036,7 @@ def _safety_clearance_gaps(
     unexpected = [
         model
         for model in adjudicator.response_models
-        if model != L3_MODEL and not model.startswith(f"{L3_MODEL}-")
+        if model != expected_model and not model.startswith(f"{expected_model}-")
     ]
     if unexpected:
         gaps.append("models:" + "+".join(unexpected[:4]))
