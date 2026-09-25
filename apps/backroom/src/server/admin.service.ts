@@ -1,4 +1,60 @@
 import '@tanstack/react-start/server-only'
+import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema } from '../lib/treasury.schemas'
+
+export async function previewTreasuryTopup(rawInput: unknown) {
+  const input = treasuryPreviewInputSchema.parse(rawInput)
+  const [policy, quote] = await Promise.all([
+    fetchTreasurySettings(), fetchTreasuryQuote(input),
+  ])
+  const proposed = policy.effective
+  const quoteImpact = input.route === 'tao'
+    ? quote.tao_path.price_impact_bps
+    : quote.tao_path.price_impact_bps + quote.gm_alpha_path.price_impact_bps
+  return {
+    dry_run: true as const,
+    execution_enabled: false as const,
+    route: input.route,
+    quote,
+    policy_revision: policy.revision,
+    checks: {
+      gm_allocation_proposed: proposed.gm_bps > 0,
+      single_topup_within_limit: quote.tao_path.amount_rao <= proposed.max_single_topup_rao,
+      price_impact_within_limit: quoteImpact <= proposed.max_slippage_bps,
+      linked_wallet_verified: false,
+      current_payment_instructions_verified: false,
+      daily_spend_reconciled: false,
+    },
+  }
+}
+
+export async function fetchTreasuryQuote(rawInput: unknown) {
+  const input = treasuryQuoteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/treasury-quote?source_alpha_rao=${input.sourceAlphaRao}`,
+  )
+  return treasuryQuoteSchema.parse(payload)
+}
+
+export async function fetchTreasurySettings() {
+  return treasuryControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-settings'))
+}
+
+export async function recordTreasurySettings(rawInput: unknown, actor: string) {
+  const input = recordTreasurySettingsInputSchema.parse(rawInput)
+  const revision = await platformAdminRequest('/api/v1/admin/treasury-settings', {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      settings: input.settings,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  treasuryRevisionSchema.parse(revision)
+  return fetchTreasurySettings()
+}
 
 import {
   listV13BenignApprovalsInputSchema,
@@ -245,6 +301,8 @@ import {
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
   sourceReviewQueueSloSchema,
+  outlierEscalationInputSchema,
+  outlierEscalationSchema,
   queuePolicySettingsControlSchema,
   setInferenceConcurrencySettingsInputSchema,
   runtimeProfileArtifactSchema,
@@ -1409,6 +1467,19 @@ const SOURCE_REVIEW_QUEUE_SLO_PATH = '/api/v1/admin/source-review-queue-slo'
 export async function fetchSourceReviewQueueSlo() {
   const payload = await platformAdminRequest(SOURCE_REVIEW_QUEUE_SLO_PATH)
   return sourceReviewQueueSloSchema.parse(payload)
+}
+
+export async function fetchOutlierEscalation(rawInput: unknown = {}) {
+  const input = outlierEscalationInputSchema.parse(rawInput)
+  const params = new URLSearchParams({
+    limit: String(input.limit),
+    window_hours: String(input.windowHours),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/outlier-escalation?${params.toString()}`,
+    { retries: 1 },
+  )
+  return outlierEscalationSchema.parse(payload)
 }
 
 export async function fetchInferenceFailureTaxonomy() {

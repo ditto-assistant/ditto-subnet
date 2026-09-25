@@ -2668,6 +2668,45 @@ async def test_partial_dossier_safe_consensus_cannot_clear(tmp_path: Path) -> No
     assert not result.dossier_complete
 
 
+async def test_l3_no_tool_failure_reports_bounded_subcode(tmp_path: Path) -> None:
+    source = "fn main() { serve(); }\nfn serve() {}"
+    archive, artifact_sha = _tar(tmp_path, source)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    safe = _clearance_certificate(
+        {
+            "disposition": "safe",
+            "risk_level": "low",
+            "confidence": 1.0,
+            "resolution_basis": "authoritative_model_tool_path",
+            "categories": ["none"],
+            "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+            "evidence": [],
+            "summary": "sanitized",
+        }
+    )
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests >= 3:
+            return _response([])
+        return _response([_tool_call(str(requests), "submit_l2_review", safe)])
+
+    result = await _sol_agent(tmp_path, _PartialHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert requests == 3
+    assert result.observation.error_code == "l3-adjudicator-model-tool-contract"
+    assert result.observation.failure_disposition == "retryable_infra"
+    assert result.failure_subcode == "no_tool_call_after_corrections"
+
+
 async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     tmp_path: Path,
 ) -> None:
@@ -4707,6 +4746,95 @@ def test_logan_certificate_contract_with_synthetic_archive(tmp_path: Path) -> No
     _assert_logan_certificate_contract(
         TarSourceRepository(str(archive)), artifact_sha256, "src/main.rs"
     )
+
+
+def test_scorer_slot_rewrite_requires_i4_without_spurious_i3_breach(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha256 = _tar(tmp_path, "// fixture\n" * 2476)
+    repository = TarSourceRepository(str(archive))
+    certificate = _logan_v13_certificate(repository, path="src/main.rs")
+    certificate["causal_evidence"]["authority_transition"] = "scorer_field_rewritten"
+    for decision in certificate["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="pass",
+                pass_clause="model_dissent_preserved",
+                evidence_indices=[],
+            )
+    observation, _, _, basis = _parse_l2_review(
+        certificate,
+        artifact_sha256=artifact_sha256,
+        repository=repository,
+        policy_version=13,
+    )
+    assert observation.ok and basis == "scorer_field_manipulation"
+
+    invalid = copy.deepcopy(certificate)
+    for decision in invalid["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="breach", pass_clause=None, evidence_indices=[3]
+            )
+        elif decision["invariant"] == "i4_derived_value_authority":
+            decision.update(
+                disposition="pass", pass_clause="no_derived_value", evidence_indices=[]
+            )
+    with pytest.raises(
+        ValueError, match="scorer field rewrite requires I4 breach"
+    ) as raised:
+        _parse_l2_review(
+            invalid,
+            artifact_sha256=artifact_sha256,
+            repository=repository,
+            policy_version=13,
+        )
+    assert l2_review._submission_validation_subcode(raised.value) == (
+        "slot_rewrite_invariant"
+    )
+
+
+def test_pre_v12_scorer_slot_rewrite_keeps_i3_binding(tmp_path: Path) -> None:
+    archive, artifact_sha256 = _tar(tmp_path, "// fixture\n" * 2476)
+    repository = TarSourceRepository(str(archive))
+    certificate = _logan_v13_certificate(repository, path="src/main.rs")
+    certificate["causal_evidence"]["authority_transition"] = "scorer_field_rewritten"
+    certificate["invariants"] = [
+        item
+        for item in certificate["invariants"]
+        if item["invariant"] != "i8_evaluation_independence"
+    ]
+    for decision in certificate["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="pass",
+                pass_clause="model_dissent_preserved",
+                evidence_indices=[],
+            )
+    with pytest.raises(ValueError, match="required invariant breach"):
+        _parse_l2_review(
+            certificate,
+            artifact_sha256=artifact_sha256,
+            repository=repository,
+            policy_version=11,
+        )
+
+    for decision in certificate["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="breach", pass_clause=None, evidence_indices=[3]
+            )
+        elif decision["invariant"] == "i4_derived_value_authority":
+            decision.update(
+                disposition="pass", pass_clause="no_derived_value", evidence_indices=[]
+            )
+    observation, _, _, _ = _parse_l2_review(
+        certificate,
+        artifact_sha256=artifact_sha256,
+        repository=repository,
+        policy_version=11,
+    )
+    assert observation.ok and observation.risk_level == "high"
 
 
 def test_submit_tool_schema_has_host_only_artifact_and_invariant_checks() -> None:

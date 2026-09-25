@@ -95,6 +95,7 @@ def _report(
         "critic_disposition": shadow.critic_disposition,
         "dossier_complete": shadow.dossier_complete,
         "direct_clear_graph_complete": shadow.direct_clear_graph_complete,
+        "failure_subcode": shadow.failure_subcode,
     }
     return report
 

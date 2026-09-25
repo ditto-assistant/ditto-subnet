@@ -8945,3 +8945,102 @@ export const sourceReviewQueueSloSchema = z.object({
 })
 
 export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
+
+// Anomalous-score outlier escalation (issue #476): the env-only posture that
+// can open ATH holds, each value's source, and its audit-chain activity.
+// Read-only. Distinct from /admin/score-outliers (validator disagreement).
+type GeneratedOutlierEscalationSettings =
+  PlatformComponents['schemas']['OutlierEscalationSettingsView']
+type GeneratedOutlierEscalationSources =
+  PlatformComponents['schemas']['OutlierEscalationSettingSourcesView']
+type GeneratedOutlierEscalationEvidence =
+  PlatformComponents['schemas']['OutlierEscalationEvidence']
+type GeneratedOutlierEscalationEntry =
+  PlatformComponents['schemas']['OutlierEscalationEntryView']
+type GeneratedOutlierEscalationActivity =
+  PlatformComponents['schemas']['OutlierEscalationActivityView']
+type GeneratedOutlierEscalationResponse =
+  PlatformComponents['schemas']['AdminOutlierEscalationResponse']
+
+const outlierSettingFieldSchema = z.enum([
+  'mode',
+  'min_bench_version',
+  'min_cohort_size',
+  'modified_z_threshold',
+  'min_composite_floor',
+])
+const outlierSettingSourceSchema = z.enum(['env', 'default', 'default_invalid_env'])
+
+const outlierEscalationSettingsSchema = z.object({
+  mode: z.enum(['off', 'observe', 'enforce']),
+  min_bench_version: z.number().int(),
+  min_cohort_size: z.number().int(),
+  // Null only for a non-finite env value (nan/inf) that scoring IS using.
+  modified_z_threshold: z.number().nullable(),
+  min_composite_floor: z.number().nullable(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationSettings>)
+
+const outlierEscalationSourcesSchema = z.object({
+  mode: outlierSettingSourceSchema,
+  min_bench_version: outlierSettingSourceSchema,
+  min_cohort_size: outlierSettingSourceSchema,
+  modified_z_threshold: outlierSettingSourceSchema,
+  min_composite_floor: outlierSettingSourceSchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationSources>)
+
+const outlierEscalationEvidenceSchema = z.object({
+  composite: z.number().nullish(),
+  cohort_size: z.number().int().nullish(),
+  cohort_median: z.number().nullish(),
+  cohort_mad: z.number().nullish(),
+  modified_z: z.number().nullish(),
+  min_cohort_size: z.number().int().nullish(),
+  modified_z_threshold: z.number().nullish(),
+  min_composite_floor: z.number().nullish(),
+  upward: z.boolean().nullish(),
+  above_floor: z.boolean().nullish(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationEvidence>)
+
+const outlierEscalationEntrySchema = z.object({
+  seq: z.number().int().positive(),
+  agent_id: z.string().uuid(),
+  recorded_at: z.string(),
+  enforced: z.boolean(),
+  bench_version: z.number().int().nullish(),
+  algorithm_version: z.string().nullish(),
+  evidence: outlierEscalationEvidenceSchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationEntry>)
+
+const outlierEscalationActivitySchema = z.object({
+  window_hours: z.number().int().positive(),
+  window_started_at: z.string(),
+  observed_total: z.number().int().nonnegative(),
+  enforced_total: z.number().int().nonnegative(),
+  observed_in_window: z.number().int().nonnegative(),
+  enforced_in_window: z.number().int().nonnegative(),
+  latest_recorded_at: z.string().nullish(),
+  recent_limit: z.number().int().positive(),
+  recent: z.array(outlierEscalationEntrySchema).max(100),
+  recent_truncated: z.boolean(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationActivity>)
+
+export const outlierEscalationSchema = z.object({
+  generated_at: z.string(),
+  settings_loaded_at: z.string(),
+  settings: outlierEscalationSettingsSchema,
+  defaults: outlierEscalationSettingsSchema,
+  sources: outlierEscalationSourcesSchema,
+  env_vars: z.record(z.string(), z.string()),
+  invalid_env_fields: z.array(outlierSettingFieldSchema).max(5),
+  review_kind: z.string(),
+  algorithm_version: z.string(),
+  pending_review_count: z.number().int().nonnegative(),
+  activity: outlierEscalationActivitySchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationResponse>)
+
+export const outlierEscalationInputSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(20),
+  windowHours: z.number().int().min(1).max(720).default(168),
+})
+
+export type OutlierEscalation = z.infer<typeof outlierEscalationSchema>
