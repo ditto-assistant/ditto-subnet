@@ -235,9 +235,7 @@ class _Workspace:
             "HOME": str(self.source),
             "RUSTUP_AUTO_INSTALL": "0",
         }
-        rustup_home = os.environ.get("RUSTUP_HOME") or str(
-            Path.home() / ".rustup"
-        )
+        rustup_home = os.environ.get("RUSTUP_HOME") or str(Path.home() / ".rustup")
         if rustup_home:
             environment["RUSTUP_HOME"] = rustup_home
         try:
