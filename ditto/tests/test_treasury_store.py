@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -112,6 +113,13 @@ def test_gm_cannot_spend_maintenance_or_unallocated_alpha(tmp_path: Path) -> Non
     )
     with pytest.raises(ValueError, match="GM budget"):
         store.create_plan(_plan(), _bounds(), now=NOW)
+
+
+def test_manual_bounds_cannot_raise_hard_source_cap(tmp_path: Path) -> None:
+    store = TreasuryStore(tmp_path / "treasury.db")
+    raised = replace(_bounds(), max_source_alpha_rao=11_000_000_000)
+    with pytest.raises(ValueError, match="10 DITTO"):
+        store.create_plan(_plan(), raised, now=NOW)
 
 
 def test_tao_payment_requires_reviewer_and_reconciles(tmp_path: Path) -> None:

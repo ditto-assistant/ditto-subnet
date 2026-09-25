@@ -22,6 +22,7 @@ from typing import Any
 from ditto.treasury.preflight import TopUpBounds, TopUpIntent, preflight
 
 GENESIS = "0" * 64
+MAX_SOURCE_ALPHA_RAO = 10_000_000_000
 LEGS = {
     "tao": ("unstake", "deposit_tao"),
     "gm_alpha": ("unstake", "stake_gm", "deposit_gm"),
@@ -319,6 +320,11 @@ class TreasuryStore:
             raise ValueError("operator and reviewed chain identities are required")
         if intent.route == "gm_alpha" and not plan.gm_hotkey:
             raise ValueError("GM alpha route needs the exact linked hotkey")
+        if (
+            intent.source_alpha_rao > MAX_SOURCE_ALPHA_RAO
+            or bounds.max_source_alpha_rao > MAX_SOURCE_ALPHA_RAO
+        ):
+            raise ValueError("source alpha exceeds the 10 DITTO prototype ceiling")
         if plan.gm_balance_before_nano_usd < 0:
             raise ValueError("GM credit balance must be nonnegative")
         if not 0 < plan.min_tao_proceeds_rao <= intent.tao_value_rao:
