@@ -5373,6 +5373,71 @@ def test_gpt6_sol_cost_fallback_uses_its_own_conservative_rates() -> None:
         cached_input_tokens=200_000,
         model="openai/gpt-6-sol-20260922",
     ) == pytest.approx(0.528)
+    assert _cost(
+        272_000,
+        8_000,
+        cached_input_tokens=200_000,
+        cache_write_input_tokens=20_000,
+        model="openai/gpt-6-sol",
+    ) == pytest.approx(0.548)
+
+
+def test_gpt6_astra_cost_fallback_prices_route_and_cache_writes() -> None:
+    kwargs = {
+        "cached_input_tokens": 200_000,
+        "cache_write_input_tokens": 100_000,
+        "model": "openai/gpt-6-astra",
+    }
+    # 100k uncached, 200k cached read, 100k cached write, 8k output.
+    assert _cost(400_000, 8_000, provider="OpenAI", **kwargs) == pytest.approx(2.85)
+    assert _cost(400_000, 8_000, provider="Azure", **kwargs) == pytest.approx(2.85)
+    assert _cost(400_000, 8_000, provider="OpenAI Fast", **kwargs) == pytest.approx(5.7)
+    assert _cost(400_000, 8_000, provider=None, **kwargs) == pytest.approx(5.7)
+    _, usage, model, provider = _response_output_and_usage(
+        {
+            "output": [],
+            "model": "openai/gpt-6-astra",
+            "openrouter_metadata": {
+                "endpoints": {
+                    "available": [{"selected": True, "provider": "OpenAI Fast"}]
+                }
+            },
+            "usage": {
+                "input_tokens": 400_000,
+                "output_tokens": 8_000,
+                "input_tokens_details": {
+                    "cached_tokens": 200_000,
+                    "cache_write_tokens": 100_000,
+                },
+            },
+        }
+    )
+    assert (model, provider) == ("openai/gpt-6-astra", "OpenAI Fast")
+    assert usage.estimated_cost_usd == pytest.approx(5.7)
+
+
+def test_zero_or_missing_provider_price_cannot_bypass_cost_budget(
+    tmp_path: Path,
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: _response([]))
+    _, zero_price_turn, _, _ = _response_output_and_usage(
+        {
+            "output": [],
+            "model": "openai/gpt-6-astra",
+            "usage": {"input_tokens": 100_000, "output_tokens": 10_000, "cost": 0},
+        }
+    )
+    assert zero_price_turn.reported_cost_usd is None
+    assert zero_price_turn.estimated_cost_usd == pytest.approx(3.0)
+    with pytest.raises(ValueError, match="token or cost budget"):
+        agent._require_budget(zero_price_turn)
+    mixed = l2_review._add_usage(
+        L2Usage(input_tokens=10_000, reported_cost_usd=0.2, estimated_cost_usd=0.3),
+        zero_price_turn,
+    )
+    assert mixed.reported_cost_usd is None
+    with pytest.raises(ValueError, match="token or cost budget"):
+        agent._require_budget(mixed)
 
 
 def test_exact_reported_cost_precedes_conservative_fallback(

@@ -144,7 +144,7 @@ L2_DOSSIER_REVISION = "l1-compressed-dossier-v11"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
 L2_HARNESS_REVISION = "l2-isolated-coding-harness-v19"
-L2_PRICING_REVISION = "openrouter-catalog-2026-08-31-terra-glm-5-2-sol-reported-cost-v3"
+L2_PRICING_REVISION = "openrouter-catalog-2026-09-25-gpt6-astra-budget-v4"
 L2_STARTER_MANIFESTS = tuple(
     sorted((Path(__file__).parent / "data").glob("starter-kit-provenance-*.json"))
 )
@@ -4518,7 +4518,7 @@ class TerraSolSourceReviewAgent:
         )
         billable_cost = (
             usage.reported_cost_usd
-            if usage.reported_cost_usd is not None
+            if usage.reported_cost_usd is not None and usage.reported_cost_usd > 0
             else usage.estimated_cost_usd
         )
         if (
@@ -6247,10 +6247,14 @@ def _response_output_and_usage(
                 input_tokens,
                 output_tokens,
                 cached_input_tokens=cached,
+                cache_write_input_tokens=cache_write,
                 model=model,
+                provider=provider,
             ),
             reported_cost_usd=(
-                float(reported_cost) if reported_cost is not None else None
+                float(reported_cost)
+                if reported_cost is not None and reported_cost > 0
+                else None
             ),
         ),
         model,
@@ -6284,11 +6288,22 @@ def _nonnegative_int(value: object) -> int:
 
 
 def _add_usage(left: L2Usage, right: L2Usage) -> L2Usage:
-    reported = (
-        None
-        if left.reported_cost_usd is None and right.reported_cost_usd is None
-        else (left.reported_cost_usd or 0.0) + (right.reported_cost_usd or 0.0)
+    # An absent (or zero) provider price for a billed turn makes the aggregate
+    # price incomplete. Preserve that fact so the budget uses the estimate.
+    left_empty = (
+        left.input_tokens == left.output_tokens == 0 and left.estimated_cost_usd == 0
     )
+    right_empty = (
+        right.input_tokens == right.output_tokens == 0 and right.estimated_cost_usd == 0
+    )
+    if left_empty:
+        reported = right.reported_cost_usd
+    elif right_empty:
+        reported = left.reported_cost_usd
+    elif left.reported_cost_usd is None or right.reported_cost_usd is None:
+        reported = None
+    else:
+        reported = left.reported_cost_usd + right.reported_cost_usd
     return L2Usage(
         input_tokens=left.input_tokens + right.input_tokens,
         output_tokens=left.output_tokens + right.output_tokens,
@@ -6328,15 +6343,31 @@ def _cost(
     output_tokens: int,
     *,
     cached_input_tokens: int = 0,
+    cache_write_input_tokens: int = 0,
     model: str | None = None,
+    provider: str | None = None,
 ) -> float:
+    if model == "openai/gpt-6-astra" or (model or "").startswith("openai/gpt-6-astra-"):
+        # OpenRouter 2026-09-25: standard $10/$50, cached read $1,
+        # cache write $12.50 per million. OpenAI Fast doubles those rates.
+        # An unrecognized route uses the Fast ceiling until its price is known.
+        multiplier = 1 if provider in {"OpenAI", "Azure"} else 2
+        uncached = max(0, input_tokens - cached_input_tokens - cache_write_input_tokens)
+        return multiplier * (
+            uncached * 10.0 / 1_000_000
+            + cached_input_tokens * 1.0 / 1_000_000
+            + cache_write_input_tokens * 12.5 / 1_000_000
+            + output_tokens * 50.0 / 1_000_000
+        )
     if model == "openai/gpt-6-sol" or (model or "").startswith("openai/gpt-6-sol-"):
         # OpenRouter 2026-09-25: standard Sol6 is $2/$10 per million;
         # use the $4/$20 OpenAI Fast ceiling when exact reported cost is absent.
-        uncached = max(0, input_tokens - cached_input_tokens)
+        # Its Fast cache-write ceiling is $5/M, separately from uncached input.
+        uncached = max(0, input_tokens - cached_input_tokens - cache_write_input_tokens)
         return (
             uncached * 4.0 / 1_000_000
             + cached_input_tokens * 0.4 / 1_000_000
+            + cache_write_input_tokens * 5.0 / 1_000_000
             + output_tokens * 20.0 / 1_000_000
         )
     # Conservative GPT-5.6 SOL upper bound from the OpenRouter 2026-07-18
