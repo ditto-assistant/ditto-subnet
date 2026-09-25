@@ -307,6 +307,18 @@ import {
 export const BACKROOM_READ_SCOPE = 'backroom:read'
 export const BACKROOM_ARTIFACT_SCOPE = 'backroom:artifact:read'
 export const BACKROOM_WRITE_SCOPE = 'backroom:write'
+/**
+ * The scope an unauthenticated /mcp challenge advertises. MCP clients request
+ * exactly the challenged scope, so pinning backroom:read here meant every
+ * client connected read-only and consent could never offer the other levels.
+ * Advertising the full set lets the operator pick the level on consent, which
+ * still caps the grant to the account's live entitlement.
+ */
+export const BACKROOM_CHALLENGE_SCOPE = [
+  BACKROOM_READ_SCOPE,
+  BACKROOM_ARTIFACT_SCOPE,
+  BACKROOM_WRITE_SCOPE,
+].join(' ')
 export type McpGrantProps = {
   session: BackroomSession
   scopes: Array<string>
