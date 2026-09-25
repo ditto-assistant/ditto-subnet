@@ -8044,6 +8044,8 @@ export interface components {
             expected_sha256: string;
             /** Reason */
             reason: string;
+            /** Reason Codes */
+            reason_codes?: string[];
         };
         /** AdminAthRulingExecuteItem */
         AdminAthRulingExecuteItem: {
@@ -8117,6 +8119,8 @@ export interface components {
             ok: boolean;
             /** Reason */
             reason: string;
+            /** Reason Codes */
+            reason_codes?: string[];
             /** Score Count */
             score_count?: number | null;
             /** Stale Guard */
@@ -9252,12 +9256,20 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Evidence References */
+            evidence_references?: string[];
+            /** Policy Version */
+            policy_version?: number | null;
             /** Previous Status */
             previous_status?: string | null;
             /** Reason */
             reason: string;
+            /** Reason Codes */
+            reason_codes?: string[];
             /** Score Count */
             score_count?: number | null;
+            /** Violation Proven */
+            violation_proven?: boolean | null;
         };
         /**
          * AdminCopyReviewAudit
@@ -9561,8 +9573,12 @@ export interface components {
         };
         /** AdminCopyReviewResolveRequest */
         AdminCopyReviewResolveRequest: {
+            /** Evidence References */
+            evidence_references: string[];
             /** Reason */
             reason: string;
+            /** Reason Codes */
+            reason_codes?: string[];
             /**
              * Resolution
              * @enum {string}

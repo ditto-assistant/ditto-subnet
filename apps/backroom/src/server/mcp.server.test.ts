@@ -5013,6 +5013,7 @@ describe('Backroom MCP tools', () => {
       expected_score_count: 3,
       reason: 'Reject lets_623 v1 under screening policy v12 for I5 (production-general engine)',
       evidence_references: ['routing.py:357-395', 'baseline.py:1884-1887'],
+      reason_codes: ['I5.benchmark_semantic_compiler'],
     }
     const board = {
       bench_version: 12,
@@ -5051,6 +5052,7 @@ describe('Backroom MCP tools', () => {
           steps: ['open', 'reject'],
           reason: ruling.reason,
           evidence_references: ruling.evidence_references,
+          reason_codes: ruling.reason_codes,
           message: 'will open then reject',
         },
       ],
@@ -5404,6 +5406,7 @@ describe('Backroom MCP tools', () => {
         agentId,
         resolution: 'clear',
         reason: detailedReason,
+        evidenceReferences: ['src/agent.py:42'],
       },
     })
 
@@ -5416,6 +5419,8 @@ describe('Backroom MCP tools', () => {
         body: JSON.stringify({
           resolution: 'clear',
           reason: detailedReason,
+          evidence_references: ['src/agent.py:42'],
+          reason_codes: [],
         }),
       }),
     )

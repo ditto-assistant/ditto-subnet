@@ -40,6 +40,11 @@ _TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_TOKEN}", "X-Admin-Actor": "operator"}
 _T0 = datetime(2026, 7, 16, 12, tzinfo=UTC)
 _CORPUS_ID = reference_corpus_provenance()["corpus_id"]
+_CLEAR_CITATION = {"evidence_references": ["src/agent.py:42"]}
+_REJECT_CITATION = {
+    "evidence_references": ["src/agent.py:42"],
+    "reason_codes": ["I5.benchmark_semantic_compiler"],
+}
 
 
 @pytest.fixture
@@ -391,7 +396,11 @@ async def test_clearing_manual_hold_restores_live_status(
 
     resolved = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "General behavior confirmed"},
+        json={
+            "resolution": "clear",
+            "reason": "General behavior confirmed",
+            **_CLEAR_CITATION,
+        },
         headers=_HEADERS,
     )
 
@@ -423,7 +432,7 @@ async def test_detailed_manual_hold_reasons_are_preserved_without_truncation(
 
     resolved = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": resolution_reason},
+        json={"resolution": "clear", "reason": resolution_reason, **_CLEAR_CITATION},
         headers=_HEADERS,
     )
     assert resolved.status_code == 200
@@ -466,7 +475,11 @@ async def test_resolved_review_reopens_without_rewriting_original_evidence(
     assert opened.json()["reopened"] is False
     cleared = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Initial source review cleared it"},
+        json={
+            "resolution": "clear",
+            "reason": "Initial source review cleared it",
+            **_CLEAR_CITATION,
+        },
         headers=_HEADERS,
     )
     assert cleared.status_code == 200
@@ -517,11 +530,19 @@ async def test_resolved_review_reopens_without_rewriting_original_evidence(
         "previous_status": "live",
         "artifact_sha256": sha256,
         "score_count": 3,
+        "evidence_references": [],
+        "reason_codes": [],
+        "policy_version": None,
+        "violation_proven": None,
     }
 
     recleared = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Second review also cleared it"},
+        json={
+            "resolution": "clear",
+            "reason": "Second review also cleared it",
+            **_CLEAR_CITATION,
+        },
         headers=_HEADERS,
     )
     assert recleared.status_code == 200
@@ -562,7 +583,11 @@ async def test_rejected_review_reopens_and_clear_restores_previous_status(
     assert opened.status_code == 200
     rejected = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "reject", "reason": "Initial review rejected it"},
+        json={
+            "resolution": "reject",
+            "reason": "Initial review rejected it",
+            **_REJECT_CITATION,
+        },
         headers=_HEADERS,
     )
     assert rejected.status_code == 200
@@ -606,6 +631,7 @@ async def test_rejected_review_reopens_and_clear_restores_previous_status(
         json={
             "resolution": "clear",
             "reason": "Reconsideration found no current-policy violation",
+            **_CLEAR_CITATION,
         },
         headers=_HEADERS,
     )
@@ -647,7 +673,7 @@ async def test_reopened_queue_row_shows_the_reconsideration_not_the_withdrawn_re
     assert (
         await client.post(
             f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-            json={"resolution": "reject", "reason": reject_reason},
+            json={"resolution": "reject", "reason": reject_reason, **_REJECT_CITATION},
             headers=_HEADERS,
         )
     ).status_code == 200
@@ -745,7 +771,7 @@ async def test_active_rejection_and_open_hold_keep_their_own_reason(
     reject_reason = "Reject under policy v13 for I5: transform-audited overfit"
     rejected = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "reject", "reason": reject_reason},
+        json={"resolution": "reject", "reason": reject_reason, **_REJECT_CITATION},
         headers=_HEADERS,
     )
     assert rejected.status_code == 200
@@ -775,7 +801,11 @@ async def test_rejected_score_finalization_copy_hold_reopens_without_previous_st
 
     rejected = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "reject", "reason": "Third-party clone pending owner-link"},
+        json={
+            "resolution": "reject",
+            "reason": "Third-party clone pending owner-link",
+            **_REJECT_CITATION,
+        },
         headers=_HEADERS,
     )
     assert rejected.status_code == 200
@@ -806,6 +836,7 @@ async def test_rejected_score_finalization_copy_hold_reopens_without_previous_st
         json={
             "resolution": "clear",
             "reason": "Same-owner after owner-link; no current-policy violation",
+            **_CLEAR_CITATION,
         },
         headers=_HEADERS,
     )
@@ -848,7 +879,11 @@ async def test_reject_expires_live_retest_leases(
         )
     rejected = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "reject", "reason": "Family compiler on served /run"},
+        json={
+            "resolution": "reject",
+            "reason": "Family compiler on served /run",
+            **_REJECT_CITATION,
+        },
         headers=_HEADERS,
     )
     assert rejected.status_code == 200
@@ -881,7 +916,11 @@ async def test_resolved_clear_does_not_reopen_an_unrelated_ban(
     assert opened.status_code == 200
     cleared = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Initial evidence was clear"},
+        json={
+            "resolution": "clear",
+            "reason": "Initial evidence was clear",
+            **_CLEAR_CITATION,
+        },
         headers=_HEADERS,
     )
     assert cleared.status_code == 200
@@ -920,7 +959,11 @@ async def test_reopen_still_fails_closed_on_changed_score_count(
     assert opened.status_code == 200
     cleared = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Initial evidence was clear"},
+        json={
+            "resolution": "clear",
+            "reason": "Initial evidence was clear",
+            **_CLEAR_CITATION,
+        },
         headers=_HEADERS,
     )
     assert cleared.status_code == 200
@@ -1363,7 +1406,11 @@ async def test_clear_is_durable_preserves_evidence_and_retries_idempotently(
 ) -> None:
     agent_id, original_id = await _seed(maker)
     _install(app, maker)
-    payload = {"resolution": "release", "reason": "Corrected comparison clears it"}
+    payload = {
+        "resolution": "release",
+        "reason": "Corrected comparison clears it",
+        **_CLEAR_CITATION,
+    }
     first = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve", json=payload, headers=_HEADERS
     )
@@ -1395,10 +1442,109 @@ async def test_conflicting_retry_and_changed_snapshot_fail_closed(
         agent.duplicate_of = None
     mismatch = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "ban", "reason": "Confirmed copied implementation"},
+        json={
+            "resolution": "ban",
+            "reason": "Confirmed copied implementation",
+            **_REJECT_CITATION,
+        },
         headers=_HEADERS,
     )
     assert mismatch.status_code == 409
+
+
+async def test_reject_requires_published_code_and_citation_without_mutation(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id, _ = await _seed(maker)
+    _install(app, maker)
+    for decision in (
+        {
+            "resolution": "reject",
+            "reason": "source violation",
+            "reason_codes": ["I5.benchmark_semantic_compiler"],
+        },
+        {
+            "resolution": "reject",
+            "reason": "source violation",
+            "evidence_references": ["src/agent.py:42"],
+            "reason_codes": ["I5.unpublished"],
+        },
+    ):
+        response = await client.post(
+            f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+            json=decision,
+            headers=_HEADERS,
+        )
+        assert response.status_code == 422
+    async with maker() as session:
+        agent = await session.get(Agent, agent_id)
+        review = await session.scalar(
+            select(AthReview).where(AthReview.agent_id == agent_id)
+        )
+        assert agent is not None and agent.status == AgentStatus.ATH_PENDING_REVIEW
+        assert review is not None and review.resolution is None
+        actions = (
+            await session.scalars(
+                select(AthReviewAction).where(
+                    AthReviewAction.review_id == review.review_id
+                )
+            )
+        ).all()
+        assert actions == []
+
+
+async def test_reject_audit_records_exact_artifact_policy_and_public_evidence(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id, _ = await _seed(maker)
+    _install(app, maker)
+    response = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={
+            "resolution": "reject",
+            "reason": "Source violates I5",
+            **_REJECT_CITATION,
+        },
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200
+    audit = await client.get(
+        f"/api/v1/admin/copy-reviews/{agent_id}/audit", headers=_HEADERS
+    )
+    assert audit.status_code == 200
+    action = audit.json()["action_history"][-1]
+    async with maker() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        assert action["artifact_sha256"] == agent.sha256
+    assert action["evidence_references"] == _REJECT_CITATION["evidence_references"]
+    assert action["reason_codes"] == _REJECT_CITATION["reason_codes"]
+    assert action["policy_version"] == 13
+    assert action["violation_proven"] is True
+
+
+async def test_future_policy_reject_fails_closed_without_published_catalog(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id, _ = await _seed(maker)
+    _install(app, maker)
+    async with maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.screening_policy_version = 14
+    response = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={
+            "resolution": "reject",
+            "reason": "Source violates I5",
+            **_REJECT_CITATION,
+        },
+        headers=_HEADERS,
+    )
+    assert response.status_code == 422
+    async with maker() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None and agent.status == AgentStatus.ATH_PENDING_REVIEW
 
 
 async def test_whitespace_actor_and_reason_are_rejected(
@@ -1430,7 +1576,11 @@ async def test_changed_hold_reason_fails_closed(
         agent.review_reason = "different evidence"
     response = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Operator cleared evidence"},
+        json={
+            "resolution": "clear",
+            "reason": "Operator cleared evidence",
+            **_CLEAR_CITATION,
+        },
         headers=_HEADERS,
     )
     assert response.status_code == 409
