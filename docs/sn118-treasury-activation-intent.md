@@ -81,3 +81,11 @@ fresh signer-side quotes, and an exact pinned host deployment remain required
 before any payment. The GM account owner must link the verified public sender
 and provide current Billing instructions through GM's account UI. No treasury
 key or GM credential should be provisioned as part of host planning.
+
+Corrective drafts are tracked separately: [#2328](https://github.com/ditto-assistant/ditto-subnet/pull/2328)
+adds the public receipt feed (without a verified producer),
+[#2330](https://github.com/ditto-assistant/ditto-subnet/pull/2330) binds the
+shadow policy actor to the bearer principal, and
+[#2331](https://github.com/ditto-assistant/ditto-subnet/pull/2331) blocks live
+dispatch before key loading. Even after those drafts merge, the proof and
+identity system listed above remains an activation prerequisite.
