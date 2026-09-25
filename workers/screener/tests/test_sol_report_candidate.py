@@ -5,13 +5,18 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import shutil
 import tarfile
 from pathlib import Path
 
 import httpx
 import pytest
 
-from ditto_screener.sol_report_candidate import Identity, run_report_candidate
+from ditto_screener.sol_report_candidate import (
+    Identity,
+    _Workspace,
+    run_report_candidate,
+)
 
 
 def _archive(path: Path, member: str = "src/main.go") -> str:
@@ -105,9 +110,47 @@ async def test_l1_notes_reach_l2_and_report_stays_non_authoritative(
     assert "submit_review" not in l1_tools
     assert "analyze_binary" not in l1_tools
     assert "record_note" in l1_tools
+    assert "verify_syntax" in l1_tools
+    assert "verify_syntax" in l2_tools
     assert "read_l1_notes" in l2_tools
     assert "submit_candidate_review" in l2_tools
     assert "Entrypoint inspected" in json.dumps(requests[-1]["input"])
+
+
+@pytest.mark.parametrize(
+    ("path", "valid", "invalid", "parser"),
+    [
+        (
+            "app/service.py",
+            'x = """closed\ntext"""\n',
+            'x = """unclosed\n',
+            "python-ast",
+        ),
+        (
+            "src/main.go",
+            "package main\nfunc main() {}\n",
+            "package main\nfunc main( {\n",
+            "gofmt",
+        ),
+        ("src/main.rs", "fn main() {}\n", "fn main( {\n", "rustfmt"),
+    ],
+)
+def test_syntax_receipts_parse_source_without_executing_it(
+    tmp_path: Path, path: str, valid: str, invalid: str, parser: str
+) -> None:
+    if parser != "python-ast" and shutil.which(parser) is None:
+        pytest.skip(f"{parser} unavailable")
+    target = tmp_path / path
+    target.parent.mkdir(parents=True)
+    target.write_text(valid, encoding="utf-8")
+    workspace = _Workspace(tmp_path)
+    good = workspace.call("verify_syntax", {"path": path})
+    assert good["parser"] == parser
+    assert good["syntax_valid"] is True
+    target.write_text(invalid, encoding="utf-8")
+    bad = workspace.call("verify_syntax", {"path": path})
+    assert bad["parser"] == parser
+    assert bad["syntax_valid"] is False
 
 
 @pytest.mark.asyncio
