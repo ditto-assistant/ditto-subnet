@@ -7149,6 +7149,7 @@ async def submit_score(
             )
             await _publish_finalized_run(
                 storage,
+                session=session,
                 agent=agent,
                 scores=replacement_scores,
                 median=replacement_median,
@@ -7571,6 +7572,7 @@ async def submit_score(
                 # key, so a retried request republishes identical content.
                 await _publish_finalized_run(
                     storage,
+                    session=session,
                     agent=agent,
                     scores=agent_scores,
                     median=median_composite,
@@ -7636,6 +7638,7 @@ async def submit_score(
                 )
                 await _publish_finalized_run(
                     storage,
+                    session=session,
                     agent=agent,
                     scores=migrated_scores,
                     median=migrated_median,
@@ -7799,6 +7802,7 @@ async def submit_score(
 async def _publish_finalized_run(
     storage: S3StorageClient,
     *,
+    session: AsyncSession,
     agent: Agent,
     scores: Sequence[Score],
     median: float,
@@ -7820,11 +7824,11 @@ async def _publish_finalized_run(
     if storage.public_bucket is None:
         return
     bench_version = scores[0].bench_version if scores else None
-    if bench_version == 13:
-        # V13 private work can share a CRN artifact beyond this agent's
-        # finalization. Full-detail mirrors require work-set closure first.
-        # Public aggregate/signed digest projections remain available.
-        return
+    for score in scores:
+        if await _score_uses_private_dataset(session, score):
+            # Full-detail records and transcripts both wait for private
+            # work-set closure, even after this agent reaches quorum.
+            return
     record = {
         "agent_id": str(agent.agent_id),
         "miner_hotkey": agent.miner_hotkey,
@@ -7906,16 +7910,18 @@ async def _publish_finalized_run(
                 key,
             )
     if mirror_transcripts:
-        await _mirror_quorum_transcripts(storage, scores)
+        await _mirror_quorum_transcripts(storage, session, scores)
 
 
 async def _mirror_quorum_transcripts(
-    storage: S3StorageClient, scores: Sequence[Score]
+    storage: S3StorageClient, session: AsyncSession, scores: Sequence[Score]
 ) -> None:
     """Copy already-stored transcript bytes after quorum, never during the PUT."""
     if storage.public_bucket is None:
         return
     for score in scores:
+        if await _score_uses_private_dataset(session, score):
+            continue
         digest = _score_transcript_sha256(score)
         if digest is None:
             continue
@@ -7934,6 +7940,24 @@ async def _mirror_quorum_transcripts(
             )
         except Exception:  # noqa: BLE001 - additive mirror, never fail finalization
             logger.exception("public transcript mirror failed for %s", digest)
+
+
+async def _score_uses_private_dataset(session: AsyncSession, score: Score) -> bool:
+    """Preserve the submit-transcript privacy rule for every public mirror."""
+    if score.bench_version == 13:
+        return True
+    dataset_sha = (
+        score.details.get("dataset_sha256") if isinstance(score.details, dict) else None
+    )
+    return bool(
+        dataset_sha
+        and await session.scalar(
+            select(PrivateBenchmarkDataset.dataset_id)
+            .where(PrivateBenchmarkDataset.dataset_sha256 == dataset_sha)
+            .limit(1)
+        )
+        is not None
+    )
 
 
 # Transcript artifacts are content-addressed in the public bucket so a record

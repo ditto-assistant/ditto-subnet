@@ -4968,6 +4968,43 @@ CREATE TABLE public.submission_source_reviews (
 
 
 --
+-- Name: transcript_mirror_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.transcript_mirror_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    enabled boolean DEFAULT false NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_transcript_mirror_settings_revisions_transcript_mirr_4f0e CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_transcript_mirror_settings_revisions_transcript_mirr_9b9e CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_transcript_mirror_settings_revisions_transcript_mirr_d58a CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120)))
+);
+
+
+--
+-- Name: transcript_mirror_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.transcript_mirror_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: transcript_mirror_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.transcript_mirror_settings_revisions_revision_seq OWNED BY public.transcript_mirror_settings_revisions.revision;
+
+
+--
 -- Name: trusted_image_builds; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5685,6 +5722,13 @@ ALTER TABLE ONLY public.submission_deposit_address_revisions ALTER COLUMN revisi
 --
 
 ALTER TABLE ONLY public.submission_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.submission_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: transcript_mirror_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.transcript_mirror_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.transcript_mirror_settings_revisions_revision_seq'::regclass);
 
 
 --
@@ -7462,6 +7506,14 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 
 --
+-- Name: transcript_mirror_settings_revisions pk_transcript_mirror_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.transcript_mirror_settings_revisions
+    ADD CONSTRAINT pk_transcript_mirror_settings_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: trusted_image_builds pk_trusted_image_builds; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7875,6 +7927,14 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 ALTER TABLE ONLY public.screening_verification_replays
     ADD CONSTRAINT svrp_request_id_key UNIQUE (request_id);
+
+
+--
+-- Name: transcript_mirror_settings_revisions transcript_mirror_settings_parent_revision_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.transcript_mirror_settings_revisions
+    ADD CONSTRAINT transcript_mirror_settings_parent_revision_key UNIQUE (parent_revision);
 
 
 --

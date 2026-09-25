@@ -19,7 +19,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import bittensor
@@ -9566,6 +9566,108 @@ class TestTranscriptPublication:
 
     _TRANSCRIPT = b'{"run_id":"run_t_0","cases":[{"case_id":"a","response":{}}]}'
     _digest = hashlib.sha256(_TRANSCRIPT).hexdigest()
+
+    async def test_quorum_mirror_never_exposes_v13_transcript(self) -> None:
+        storage = MagicMock()
+        storage.public_bucket = "ditto-public"
+        storage.object_exists = AsyncMock()
+        storage.put_object = AsyncMock()
+        session = AsyncMock(spec=AsyncSession)
+
+        await validator_endpoint._mirror_quorum_transcripts(
+            storage,
+            session,
+            [Score(bench_version=13, details={"transcript_sha256": self._digest})],
+        )
+
+        session.scalar.assert_not_awaited()
+        storage.object_exists.assert_not_awaited()
+
+        await validator_endpoint._publish_finalized_run(
+            storage,
+            session=session,
+            agent=MagicMock(),
+            scores=[
+                Score(bench_version=13, details={"transcript_sha256": self._digest})
+            ],
+            median=0.5,
+            mirror_transcripts=True,
+        )
+        storage.put_object.assert_not_awaited()
+
+    async def test_quorum_mirror_respects_private_dataset_pin(self) -> None:
+        storage = MagicMock()
+        storage.public_bucket = "ditto-public"
+        storage.object_exists = AsyncMock()
+        storage.put_object = AsyncMock()
+        session = AsyncMock(spec=AsyncSession)
+        session.scalar.return_value = uuid4()
+
+        await validator_endpoint._mirror_quorum_transcripts(
+            storage,
+            session,
+            [
+                Score(
+                    bench_version=14,
+                    details={
+                        "dataset_sha256": "cd" * 32,
+                        "transcript_sha256": self._digest,
+                    },
+                )
+            ],
+        )
+
+        session.scalar.assert_awaited_once()
+        storage.object_exists.assert_not_awaited()
+
+        await validator_endpoint._publish_finalized_run(
+            storage,
+            session=session,
+            agent=MagicMock(),
+            scores=[
+                Score(
+                    bench_version=14,
+                    details={
+                        "dataset_sha256": "cd" * 32,
+                        "transcript_sha256": self._digest,
+                    },
+                )
+            ],
+            median=0.5,
+            mirror_transcripts=True,
+        )
+        storage.put_object.assert_not_awaited()
+
+    async def test_quorum_mirror_copies_eligible_public_transcript(self) -> None:
+        storage = MagicMock()
+        storage.public_bucket = "ditto-public"
+        storage.object_exists = AsyncMock(side_effect=[False, True])
+        storage.get_object = AsyncMock(return_value=self._TRANSCRIPT)
+        storage.put_object = AsyncMock()
+        session = AsyncMock(spec=AsyncSession)
+        session.scalar.return_value = None
+
+        await validator_endpoint._mirror_quorum_transcripts(
+            storage,
+            session,
+            [
+                Score(
+                    bench_version=7,
+                    details={
+                        "dataset_sha256": "cd" * 32,
+                        "transcript_sha256": self._digest,
+                    },
+                )
+            ],
+        )
+
+        key = f"transcripts/{self._digest}.json"
+        storage.put_object.assert_awaited_once_with(
+            key=key,
+            body=self._TRANSCRIPT,
+            content_type="application/json",
+            bucket="ditto-public",
+        )
 
     async def test_score_signature_binds_transcript_digest(
         self,
