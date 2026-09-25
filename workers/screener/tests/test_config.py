@@ -148,7 +148,7 @@ def test_remote_build_timeout_is_independent_and_configurable(
             "must match SCREENER_REVIEW_INFERENCE_PROVIDER",
         ),
         ("SCREENER_L2_MAX_INPUT_TOKENS", "1000001", "1000000"),
-        ("SCREENER_L2_MAX_COST_USD", "20", r"in \(0, 10\]"),
+        ("SCREENER_L2_MAX_COST_USD", "25.01", r"in \(0, 25\]"),
         ("SCREENER_L2_ANALYST_REASONING_EFFORT", "high", "model_default"),
         ("SCREENER_L2_CRITIC_REASONING_EFFORT", "none", "low, medium, or high"),
         (
@@ -327,18 +327,27 @@ def test_openrouter_stays_the_default_review_gateway(monkeypatch) -> None:
 
 def test_platform_review_budget_limits_are_accepted(monkeypatch):
     _base_env(monkeypatch)
-    monkeypatch.setenv("SCREENER_L2_MAX_STEPS", "48")
+    monkeypatch.setenv("SCREENER_L2_MAX_STEPS", "256")
+    monkeypatch.setenv("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000000")
+    monkeypatch.setenv("SCREENER_L2_MAX_COST_USD", "25")
     monkeypatch.setenv("SCREENER_L2_TIMEOUT_SECONDS", "1800")
     monkeypatch.setenv("SCREENER_L2_CRITIC_REASONING_EFFORT", "high")
     config = parse_screener_config_from_env()
-    assert config.l2_max_steps == 48
+    assert config.l2_max_steps == 256
+    assert config.l2_max_output_tokens == 1_000_000
+    assert config.l2_max_cost_usd == 25
     assert config.l2_timeout_seconds == 1800
     assert config.l2_critic_reasoning_effort == "high"
 
 
 @pytest.mark.parametrize(
     ("name", "value"),
-    [("SCREENER_L2_MAX_STEPS", "49"), ("SCREENER_L2_TIMEOUT_SECONDS", "1801")],
+    [
+        ("SCREENER_L2_MAX_STEPS", "257"),
+        ("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000001"),
+        ("SCREENER_L2_MAX_COST_USD", "25.01"),
+        ("SCREENER_L2_TIMEOUT_SECONDS", "1801"),
+    ],
 )
 def test_review_budgets_remain_bounded(monkeypatch, name, value):
     _base_env(monkeypatch)

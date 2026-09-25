@@ -641,15 +641,15 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         config.l2_workspace_root
     ):
         raise ScreenerConfigError("SCREENER_L2_WORKSPACE_ROOT must be absolute")
-    if not 1 <= config.l2_max_steps <= 48:
-        raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 48")
+    if not 1 <= config.l2_max_steps <= 256:
+        raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 256")
     if not 30 <= config.l2_timeout_seconds <= 1_800:
         raise ScreenerConfigError(
             "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 1800"
         )
-    if not 1 <= config.l2_max_output_tokens <= 128_000:
+    if not 1 <= config.l2_max_output_tokens <= 1_000_000:
         raise ScreenerConfigError(
-            "SCREENER_L2_MAX_OUTPUT_TOKENS must be between 1 and 128000"
+            "SCREENER_L2_MAX_OUTPUT_TOKENS must be between 1 and 1000000"
         )
     if not 1 <= config.l2_max_completion_tokens <= config.l2_max_output_tokens:
         raise ScreenerConfigError(
@@ -659,8 +659,8 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_MAX_INPUT_TOKENS must be between 1 and 1000000"
         )
-    if not 0 < config.l2_max_cost_usd <= 10:
-        raise ScreenerConfigError("SCREENER_L2_MAX_COST_USD must be in (0, 10]")
+    if not 0 < config.l2_max_cost_usd <= 25:
+        raise ScreenerConfigError("SCREENER_L2_MAX_COST_USD must be in (0, 25]")
     if config.l2_analyst_reasoning_effort != "model_default":
         raise ScreenerConfigError(
             "SCREENER_L2_ANALYST_REASONING_EFFORT must be model_default"

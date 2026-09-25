@@ -84,7 +84,7 @@ class ScreenerReviewSettings(BaseModel):
     l3_enabled: bool = True
     l3_model: Literal["openai/gpt-5.6-sol"] = "openai/gpt-5.6-sol"
     timeout_seconds: Annotated[int, Field(ge=30, le=1_800)] = 1_200
-    max_steps: Annotated[int, Field(ge=1, le=48)] = 32
+    max_steps: Annotated[int, Field(ge=1, le=256)] = 32
     # L1 Luna inspection depth. Distinct from ``max_steps``, which bounds L2.
     # Exhausting either bound no longer decides the artifact's fate on its
     # own: the recorded notes ledger does, through the gradient thresholds
@@ -105,9 +105,9 @@ class ScreenerReviewSettings(BaseModel):
     source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
     source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 3_600
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)] = 425_000
-    max_output_tokens: Annotated[int, Field(ge=1, le=128_000)] = 20_000
+    max_output_tokens: Annotated[int, Field(ge=1, le=1_000_000)] = 20_000
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)] = 2_400
-    max_cost_usd: Annotated[float, Field(gt=0, le=10)] = 6.0
+    max_cost_usd: Annotated[float, Field(gt=0, le=25)] = 6.0
     critic_reasoning_effort: ReasoningEffort = "medium"
     # Gradient thresholds for a budget-terminated review's notes ledger.
     # ``concern_hold_count`` counts SUBSTANTIATED concerns -- distinct cited
