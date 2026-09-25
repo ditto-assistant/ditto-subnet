@@ -267,6 +267,15 @@ _SUBMISSION_VALIDATION_HINTS = {
         "Bind the trigger, authority decision, and observed effect to exact "
         "source locations and satisfy the required causal roles."
     ),
+    "slot_rewrite_invariant": (
+        "For a scorer_field_rewritten transition under policy V12 or later, "
+        "mark I4 derived-value authority as breach with a null pass_clause "
+        "and bind its evidence indices to the authority-bypass source line."
+    ),
+    "invariant_binding": (
+        "Mark the invariant required by the authority transition and resolution "
+        "basis as breach, with evidence indices bound to the authority line."
+    ),
     "causal_path": (
         "For a violation, causal_path needs at least two exact artifact "
         "path/line entries, including one trigger and one effect role."
@@ -296,6 +305,12 @@ _SUBMISSION_VALIDATION_HINTS = {
 def _submission_validation_subcode(error: ValueError) -> str:
     """Reduce fixed host validation failures to source-free correction codes."""
     message = str(error)
+    if "L2 scorer field rewrite requires I4 breach" in message:
+        return "slot_rewrite_invariant"
+    if "L2 causal mechanism lacks its required invariant breach" in message:
+        return "invariant_binding"
+    if "L2 invariant breach is not bound to authority evidence" in message:
+        return "invariant_binding"
     if "L2 violation lacks a causal trigger/effect path" in message:
         return "causal_path"
     if any(
@@ -5705,6 +5720,7 @@ def _validate_violation_invariant_binding(
     resolution_basis: str,
     causal_evidence: SourceReviewCausalEvidence | None,
     evidence: list[SourceReviewEvidenceItem],
+    policy_version: int,
 ) -> None:
     """Bind a model-authored v10 breach to the host-validated causal mechanism."""
 
@@ -5713,8 +5729,17 @@ def _validate_violation_invariant_binding(
     transition_invariant = _INVARIANT_BY_AUTHORITY_TRANSITION[
         causal_evidence.authority_transition
     ]
+    scorer_slot_rewrite = (
+        policy_version >= 12
+        and causal_evidence.authority_transition
+        == SourceReviewAuthorityTransition.SCORER_FIELD_REWRITTEN
+    )
+    if scorer_slot_rewrite:
+        transition_invariant = SourceReviewInvariant.DERIVED_VALUE_AUTHORITY
     expected = {transition_invariant}
     basis_invariant = _INVARIANT_BY_RESOLUTION_BASIS.get(resolution_basis)
+    if scorer_slot_rewrite and resolution_basis == "scorer_field_manipulation":
+        basis_invariant = SourceReviewInvariant.DERIVED_VALUE_AUTHORITY
     if basis_invariant is not None:
         expected.add(basis_invariant)
     authority_locations = {
@@ -5732,6 +5757,8 @@ def _validate_violation_invariant_binding(
         decisions[invariant].disposition != SourceReviewInvariantDisposition.BREACH
         for invariant in expected
     ):
+        if scorer_slot_rewrite:
+            raise ValueError("L2 scorer field rewrite requires I4 breach")
         raise ValueError("L2 causal mechanism lacks its required invariant breach")
     transition_decision = decisions[transition_invariant]
     if authority_indices and not authority_indices.intersection(
@@ -6010,6 +6037,7 @@ def _parse_l2_review(
             resolution_basis=str(resolution_basis),
             causal_evidence=causal_evidence,
             evidence=public_evidence,
+            policy_version=policy_version,
         )
     summary = (
         "Level-2 review found no causally established policy violation."
@@ -6750,6 +6778,7 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 causal evidence is invalid": "inconsistent-verdict",
     "L2 causal evidence schema version is invalid": "inconsistent-verdict",
     "L2 causal mechanism lacks its required invariant breach": "inconsistent-verdict",
+    "L2 scorer field rewrite requires I4 breach": "inconsistent-verdict",
     "L2 causal path is invalid": "inconsistent-verdict",
     "L2 causal role binding is invalid": "inconsistent-verdict",
     "L2 causal role bindings are invalid": "inconsistent-verdict",
