@@ -1,0 +1,7 @@
+---
+coding_hosted_worker_credentials_journal_check_enabled: false
+coding_hosted_worker_credentials_journal_check_confirmation: ""
+coding_hosted_worker_credentials_journal_check_source_revision: ""
+# No path, pattern or source input exists. The credential directory, journal
+# command, log directory and temp locations are literals in tasks/check.yml, and
+# the module returns only per-class counts and booleans.
