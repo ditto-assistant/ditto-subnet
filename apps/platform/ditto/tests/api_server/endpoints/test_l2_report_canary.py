@@ -125,11 +125,8 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
             )
         )
     packet = _packet(attempt_id, sha)
-    monkeypatch.setattr(
-        endpoints,
-        "scored_runtime_evidence_for_lease",
-        AsyncMock(return_value=packet),
-    )
+    evidence_lookup = AsyncMock(return_value=packet)
+    monkeypatch.setattr(endpoints, "scored_runtime_evidence_for_lease", evidence_lookup)
     monkeypatch.setattr(
         endpoints,
         "_resolve_effective_review_settings",
@@ -158,6 +155,8 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
             storage,
         )
     assert claim is not None
+    assert evidence_lookup.await_args is not None
+    assert evidence_lookup.await_args.kwargs["report_only_current_packet"] is True
     assert claim.source_attempt_id == attempt_id
     assert claim.scored_runtime_evidence == packet
     async with session_maker() as session:

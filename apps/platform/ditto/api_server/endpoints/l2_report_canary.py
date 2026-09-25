@@ -288,6 +288,7 @@ async def claim_l2_report_canary(
             policy_version=13,
             bench_version=13,
             now=now,
+            report_only_current_packet=True,
         )
         if evidence is None:
             return None

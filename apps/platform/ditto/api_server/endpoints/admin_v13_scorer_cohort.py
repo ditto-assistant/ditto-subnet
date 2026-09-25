@@ -1,4 +1,4 @@
-"""One-way, exact V13 scorer cohort activation after nonmember drain."""
+"""Guarded, append-only V13 scorer cohort activation and packet rotation."""
 
 from __future__ import annotations
 
@@ -6,10 +6,18 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_models.upload import _SS58_PATTERN
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
@@ -20,8 +28,15 @@ from ditto.api_server.v13_scorer_cohort import (
     current_pin,
     packet_for_heartbeat,
     pinned_cohort_packet,
+    report_only_current_cohort_packet,
 )
-from ditto.db.models import V13ScorerCohortPin, ValidatorHeartbeat, ValidatorTicket
+from ditto.db.models import (
+    V13ScorerCohortPin,
+    V13ScorerCohortRotation,
+    ValidatorHeartbeat,
+    ValidatorTicket,
+)
+from ditto.db.queries.benchmark_rollout import heartbeat_supports_version
 from ditto.db.queries.rollout_dispatch import try_lock_rollout_dispatch
 from ditto.db.queries.validator_slot_settings import (
     latest_validator_slot_settings_revision,
@@ -67,6 +82,11 @@ class ActivateV13ScorerCohortRequest(BaseModel):
         return value
 
 
+class RotateV13ScorerCohortRequest(ActivateV13ScorerCohortRequest):
+    expected_current_packet: V13ScorerPacket
+    expected_current_rotation_id: int | None = Field(default=None, ge=1)
+
+
 class V13ScorerCohortView(BaseModel):
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
@@ -78,6 +98,8 @@ class V13ScorerCohortView(BaseModel):
     reason: str
     actor: str
     created_at: datetime
+    rotation_id: int | None = None
+    previous_packet: V13ScorerPacket | None = None
 
 
 class V13ScorerPreflightValidator(BaseModel):
@@ -96,9 +118,56 @@ class V13ScorerPreflight(BaseModel):
     validators: list[V13ScorerPreflightValidator]
 
 
+class V13ReportOnlyCurrentPacket(BaseModel):
+    hotkeys: list[str]
+    packet: V13ScorerPacket
+    oldest_scorer_observed_at: int
+    matches_effective_pin: bool
+
+
 @router.get("", response_model=V13ScorerCohortView | None)
-async def get_pin(_admin: AdminDep, session: SessionDep) -> V13ScorerCohortPin | None:
+async def get_pin(
+    _admin: AdminDep, session: SessionDep
+) -> V13ScorerCohortPin | V13ScorerCohortRotation | None:
     return await current_pin(session)
+
+
+@router.get("/history", response_model=list[V13ScorerCohortView])
+async def get_history(
+    _admin: AdminDep, session: SessionDep
+) -> list[V13ScorerCohortView]:
+    original = await session.get(V13ScorerCohortPin, 13)
+    rotations = (
+        await session.scalars(
+            select(V13ScorerCohortRotation)
+            .where(V13ScorerCohortRotation.bench_version == 13)
+            .order_by(V13ScorerCohortRotation.rotation_id)
+        )
+    ).all()
+    rows = ([original] if original is not None else []) + list(rotations)
+    return [V13ScorerCohortView.model_validate(row) for row in rows]
+
+
+@router.get(
+    "/report-only-current-packet", response_model=V13ReportOnlyCurrentPacket | None
+)
+async def get_report_only_current_packet(
+    _admin: AdminDep, session: SessionDep
+) -> V13ReportOnlyCurrentPacket | None:
+    """Read the unanimous current member packet, without changing authority."""
+    pin = await current_pin(session)
+    if pin is None:
+        return None
+    observed = await report_only_current_cohort_packet(session, now=datetime.now(UTC))
+    if observed is None:
+        return None
+    packet, oldest = observed
+    return V13ReportOnlyCurrentPacket(
+        hotkeys=pin.hotkeys,
+        packet=packet,
+        oldest_scorer_observed_at=oldest,
+        matches_effective_pin=packet.model_dump(mode="json") == pin.packet,
+    )
 
 
 @router.get("/preflight", response_model=V13ScorerPreflight)
@@ -228,5 +297,99 @@ async def activate_pin(
         await session.flush()
         if await pinned_cohort_packet(session, now=now) is None:
             raise HTTPException(409, "pinned validators are not all routable")
+    await session.refresh(row)
+    return row
+
+
+@router.post("/rotate", response_model=V13ScorerCohortView)
+async def rotate_pin(
+    payload: RotateV13ScorerCohortRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> V13ScorerCohortRotation:
+    if payload.confirmation != "ROTATE V13 SCORER PACKET":
+        raise HTTPException(409, "confirmation must be ROTATE V13 SCORER PACKET")
+    async with session.begin():
+        if not await try_lock_rollout_dispatch(session):
+            raise HTTPException(409, "ticket dispatch is busy; retry after it settles")
+        current = await current_pin(session)
+        if current is None:
+            raise HTTPException(409, "activate the V13 cohort before rotating")
+        current_rotation_id = (
+            current.rotation_id
+            if isinstance(current, V13ScorerCohortRotation)
+            else None
+        )
+        if (
+            current_rotation_id != payload.expected_current_rotation_id
+            or current.hotkeys != list(payload.hotkeys)
+            or current.packet != payload.expected_current_packet.model_dump(mode="json")
+        ):
+            raise HTTPException(409, "current V13 cohort changed; refresh first")
+        if payload.packet == payload.expected_current_packet:
+            raise HTTPException(409, "new scorer packet must differ from current pin")
+        settings = await latest_validator_slot_settings_revision(session)
+        if settings is None or (
+            settings.revision != payload.expected_slot_settings_revision
+            or settings.checksum != payload.expected_slot_settings_checksum
+        ):
+            raise HTTPException(409, "validator slot settings changed; refresh first")
+        paused = set(
+            ValidatorSlotSettings.model_validate(
+                settings.settings
+            ).paused_validator_hotkeys
+        )
+        now = datetime.now(UTC)
+        heartbeats = (await session.scalars(select(ValidatorHeartbeat))).all()
+        for heartbeat in heartbeats:
+            if heartbeat.validator_hotkey in payload.hotkeys:
+                continue
+            if heartbeat_supports_version(heartbeat, now=now, version=13) and (
+                heartbeat.validator_hotkey not in paused
+            ):
+                raise HTTPException(409, "a nonmember V13 validator is not paused")
+        for hotkey in payload.hotkeys:
+            member_heartbeat = await session.get(ValidatorHeartbeat, hotkey)
+            if (
+                packet_for_heartbeat(member_heartbeat, now=now) != payload.packet
+                or hotkey in paused
+            ):
+                raise HTTPException(409, "member signed packet or pause state changed")
+            assert member_heartbeat is not None
+            try:
+                capacity = BenchmarkCapacity.model_validate(
+                    member_heartbeat.benchmark_capacity
+                )
+            except ValidationError as exc:
+                raise HTTPException(
+                    409, "member V13 scorer capacity is invalid"
+                ) from exc
+            if capacity.admission != "accepting" or not capacity.healthy_slots:
+                raise HTTPException(409, "member V13 scorer is not accepting")
+        live_ticket = await session.scalar(
+            select(ValidatorTicket.agent_id)
+            .where(
+                ValidatorTicket.bench_version == 13,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.deadline > now,
+            )
+            .limit(1)
+        )
+        if live_ticket is not None:
+            raise HTTPException(409, "all live V13 tickets must drain before rotation")
+        row = V13ScorerCohortRotation(
+            bench_version=13,
+            hotkeys=list(payload.hotkeys),
+            packet=payload.packet.model_dump(mode="json"),
+            previous_packet=current.packet,
+            slot_settings_revision=settings.revision,
+            slot_settings_checksum=settings.checksum,
+            reason=payload.reason,
+            actor=payload.actor.strip(),
+        )
+        session.add(row)
+        await session.flush()
+        if await pinned_cohort_packet(session, now=now) is None:
+            raise HTTPException(409, "rotated validators are not all routable")
     await session.refresh(row)
     return row

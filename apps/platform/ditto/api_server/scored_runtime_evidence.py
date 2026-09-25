@@ -12,7 +12,10 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ditto.api_server.v13_scorer_cohort import pinned_cohort_packet
+from ditto.api_server.v13_scorer_cohort import (
+    pinned_cohort_packet,
+    report_only_current_cohort_packet,
+)
 from ditto_screening_protocol import ScoredRuntimeEvidenceLease
 
 
@@ -24,11 +27,15 @@ async def scored_runtime_evidence_for_lease(
     policy_version: int,
     bench_version: int,
     now: datetime | None = None,
+    report_only_current_packet: bool = False,
 ) -> ScoredRuntimeEvidenceLease | None:
     if policy_version != 13 or bench_version != 13:
         return None
     now = now or datetime.now(UTC)
-    pinned = await pinned_cohort_packet(session, now=now)
+    if report_only_current_packet:
+        pinned = await report_only_current_cohort_packet(session, now=now)
+    else:
+        pinned = await pinned_cohort_packet(session, now=now)
     if pinned is None:
         return None
     packet, oldest_observation = pinned

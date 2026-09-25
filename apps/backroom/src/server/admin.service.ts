@@ -1582,6 +1582,14 @@ export async function fetchV13ScorerCohortPreflight() {
   return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/preflight`)
 }
 
+export async function fetchV13ScorerCohortHistory() {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/history`)
+}
+
+export async function fetchV13ReportOnlyCurrentPacket() {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/report-only-current-packet`)
+}
+
 export async function activateV13ScorerCohort(input: {
   hotkeys: [string, string, string]
   packet: {
@@ -1601,6 +1609,44 @@ export async function activateV13ScorerCohort(input: {
     body: {
       hotkeys: input.hotkeys,
       packet: input.packet,
+      expected_slot_settings_revision: input.expectedSlotSettingsRevision,
+      expected_slot_settings_checksum: input.expectedSlotSettingsChecksum,
+      reason: input.reason,
+      confirmation: input.confirmation,
+      actor,
+    },
+  })
+}
+
+export async function rotateV13ScorerCohort(input: {
+  hotkeys: [string, string, string]
+  packet: {
+    source_revision: string
+    release_descriptor_digest: string
+    scorer_image_digest: string
+    scorer_env_sha256: string
+    injected_keys: string[]
+  }
+  expectedCurrentPacket: {
+    source_revision: string
+    release_descriptor_digest: string
+    scorer_image_digest: string
+    scorer_env_sha256: string
+    injected_keys: string[]
+  }
+  expectedCurrentRotationId?: number
+  expectedSlotSettingsRevision: number
+  expectedSlotSettingsChecksum: string
+  reason: string
+  confirmation: string
+}, actor: string) {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/rotate`, {
+    method: 'POST', actor,
+    body: {
+      hotkeys: input.hotkeys,
+      packet: input.packet,
+      expected_current_packet: input.expectedCurrentPacket,
+      expected_current_rotation_id: input.expectedCurrentRotationId ?? null,
       expected_slot_settings_revision: input.expectedSlotSettingsRevision,
       expected_slot_settings_checksum: input.expectedSlotSettingsChecksum,
       reason: input.reason,

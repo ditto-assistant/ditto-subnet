@@ -145,6 +145,7 @@ describe('Backroom MCP tools', () => {
     expect(response.tools.map((tool) => tool.name).sort()).toEqual(
       [
         'activate_v13_scorer_cohort',
+        'rotate_v13_scorer_cohort',
         'advance_scored_policy_rescreen',
         'execute_screening_quarantine_batch',
         'expand_benchmark_rollout_cohort',
@@ -227,7 +228,9 @@ describe('Backroom MCP tools', () => {
         'get_v13_replay_private_receipt',
         'get_v13_replay_private_statistics',
         'get_v13_scorer_cohort',
+        'get_v13_scorer_cohort_history',
         'get_v13_scorer_cohort_preflight',
+        'get_v13_report_only_current_packet',
         'get_screening_submission',
         'get_source_release_policy',
         'get_owner_attestations',
@@ -381,8 +384,8 @@ describe('Backroom MCP tools', () => {
     // anything that quotes a reason back to a miner, not a tutorial.
     // Eight digest-only V13 provenance/analysis tools and three process-key
     // tools add bounded entries. Detailed procedures remain in tool help.
-    // The scorer-pin controls and exact-validator pause add bounded entries.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(161_000)
+    // The scorer-pin rotation/history/current-packet controls add bounded entries.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(164_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -406,8 +409,8 @@ describe('Backroom MCP tools', () => {
       // Includes the V13 clock, independent replay, infra-retry, ordinary
       // source-review queue-age SLO, failure taxonomy route_basis,
       // reopened-hold reason, three process-key summaries, and current V13
-      // provenance reads plus three scorer pin controls; measured at 28,729.
-      28_850,
+      // provenance reads plus scorer pin rotation and history; measured at 29,121.
+      29_250,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

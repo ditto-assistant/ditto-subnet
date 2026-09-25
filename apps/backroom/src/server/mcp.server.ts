@@ -9,7 +9,7 @@ import {
   v13ReplayPackageWriteInputSchema,
 } from '../lib/v13-private.schemas'
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
-import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, activateV13ScorerCohort } from './admin.service'
+import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
@@ -399,6 +399,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_validator_slot_settings',
   'set_validator_issuance_pause',
   'activate_v13_scorer_cohort',
+  'rotate_v13_scorer_cohort',
   'apply_copy_court_settings',
   'set_inference_concurrency_settings',
   'start_runtime_profile',
@@ -683,8 +684,14 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read the immutable three-validator V13 scorer pin, including exact signed runtime packet.',
   get_v13_scorer_cohort_preflight:
     'Read fresh V13 validator packets, admission, pause state, and live-ticket drain before pinning.',
+  get_v13_scorer_cohort_history:
+    'Read the original immutable V13 scorer pin and every append-only packet rotation.',
+  get_v13_report_only_current_packet:
+    'Read the unanimous live signed packet of pinned members without changing primary authority.',
   activate_v13_scorer_cohort:
     'Pin three exact managed V13 validators after nonmembers are paused and live tickets drain. One-way activation.',
+  rotate_v13_scorer_cohort:
+    'Rotate the exact pinned V13 cohort to a unanimously signed packet after all V13 tickets drain; preserves pin history.',
   schedule_l2_report_canary:
     'Queue one isolated L2 report on an enrolled Hetzner node; never changes screening, scoring, or quarantine.',
   get_copy_court_settings:
@@ -2811,6 +2818,28 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_v13_scorer_cohort_history',
+    {
+      title: 'Get V13 scorer cohort history',
+      description: 'Read the original immutable pin and all append-only packet rotations. Requires backroom:read.',
+      inputSchema: z.object({}),
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchV13ScorerCohortHistory()),
+  )
+
+  registerTool(
+    'get_v13_report_only_current_packet',
+    {
+      title: 'Get V13 report-only current packet',
+      description: 'Read unanimous current signed scorer packet for the pinned three validators, including whether it matches the effective primary pin. Never changes authority. Requires backroom:read.',
+      inputSchema: z.object({}),
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchV13ReportOnlyCurrentPacket()),
+  )
+
+  registerTool(
     'activate_v13_scorer_cohort',
     {
       title: 'Activate V13 scorer cohort pin',
@@ -2832,6 +2861,38 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => activateV13ScorerCohort(input, props.session.email)),
+  )
+
+  registerTool(
+    'rotate_v13_scorer_cohort',
+    {
+      title: 'Rotate V13 scorer cohort packet',
+      description: 'Append one guarded scorer packet rotation for the same three sorted validators. Requires exact current packet and rotation ID, fresh unanimous signed target packet, current slot settings, accepting members, paused nonmembers, zero live V13 tickets, and confirmation ROTATE V13 SCORER PACKET. Requires backroom:write.',
+      inputSchema: z.object({
+        hotkeys: z.tuple([z.string(), z.string(), z.string()]),
+        packet: z.object({
+          source_revision: z.string().regex(/^[0-9a-f]{40}$/),
+          release_descriptor_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+          scorer_image_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+          scorer_env_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+          injected_keys: z.array(z.string()).min(1),
+        }),
+        expectedCurrentPacket: z.object({
+          source_revision: z.string().regex(/^[0-9a-f]{40}$/),
+          release_descriptor_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+          scorer_image_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+          scorer_env_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+          injected_keys: z.array(z.string()).min(1),
+        }),
+        expectedCurrentRotationId: z.number().int().min(1).optional(),
+        expectedSlotSettingsRevision: z.number().int().min(1),
+        expectedSlotSettingsChecksum: z.string().regex(/^[0-9a-f]{64}$/),
+        reason: z.string().min(8),
+        confirmation: z.literal('ROTATE V13 SCORER PACKET'),
+      }),
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => rotateV13ScorerCohort(input, props.session.email)),
   )
 
   registerTool(

@@ -1,4 +1,4 @@
-"""Exact, immutable V13 scorer routing and signed packet checks."""
+"""Exact, append-only V13 scorer routing and signed packet checks."""
 
 from __future__ import annotations
 
@@ -14,7 +14,12 @@ from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_models.validator_capabilities import ValidatorStackIdentity
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
-from ditto.db.models import V13ScorerCohortPin, ValidatorHeartbeat, ValidatorTicket
+from ditto.db.models import (
+    V13ScorerCohortPin,
+    V13ScorerCohortRotation,
+    ValidatorHeartbeat,
+    ValidatorTicket,
+)
 from ditto.db.queries.benchmark_rollout import (
     heartbeat_supports_version,
     verified_scorer_for_version,
@@ -69,8 +74,18 @@ def packet_for_heartbeat(
         return None
 
 
-async def current_pin(session: AsyncSession) -> V13ScorerCohortPin | None:
-    return await session.get(V13ScorerCohortPin, 13)
+async def current_pin(
+    session: AsyncSession,
+) -> V13ScorerCohortPin | V13ScorerCohortRotation | None:
+    rotation = await session.scalar(
+        select(V13ScorerCohortRotation)
+        .where(V13ScorerCohortRotation.bench_version == 13)
+        .order_by(V13ScorerCohortRotation.rotation_id.desc())
+        .limit(1)
+    )
+    return (
+        rotation if rotation is not None else await session.get(V13ScorerCohortPin, 13)
+    )
 
 
 async def pinned_validator_allowed(
@@ -89,15 +104,34 @@ async def pinned_validator_allowed(
 async def pinned_cohort_packet(
     session: AsyncSession, *, now: datetime
 ) -> tuple[V13ScorerPacket, int] | None:
+    return await _cohort_packet(session, now=now, report_only=False)
+
+
+async def report_only_current_cohort_packet(
+    session: AsyncSession, *, now: datetime
+) -> tuple[V13ScorerPacket, int] | None:
+    """Observe the current pinned members without changing primary authority."""
+    return await _cohort_packet(session, now=now, report_only=True)
+
+
+async def _cohort_packet(
+    session: AsyncSession, *, now: datetime, report_only: bool
+) -> tuple[V13ScorerPacket, int] | None:
     pin = await current_pin(session)
     if pin is None:
+        return None
+    if len(pin.hotkeys) != 3 or len(set(pin.hotkeys)) != 3:
         return None
     try:
         expected = V13ScorerPacket.model_validate(pin.packet)
     except ValidationError:
         return None
-    if len(pin.hotkeys) != 3 or len(set(pin.hotkeys)) != 3:
-        return None
+    if report_only:
+        first = await session.get(ValidatorHeartbeat, pin.hotkeys[0])
+        current = packet_for_heartbeat(first, now=now)
+        if current is None:
+            return None
+        expected = current
     settings = await latest_validator_slot_settings_revision(session)
     if settings is None:
         return None

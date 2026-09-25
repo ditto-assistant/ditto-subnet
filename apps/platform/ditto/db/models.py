@@ -7105,6 +7105,37 @@ class V13ScorerCohortPin(Base):
     )
 
 
+class V13ScorerCohortRotation(Base):
+    """Append-only successor to the original V13 scorer pin."""
+
+    __tablename__ = "v13_scorer_cohort_rotations"
+
+    rotation_id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkeys: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    packet: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    previous_packet: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    slot_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("bench_version = 13", name="v13_scorer_rotation_version_check"),
+        CheckConstraint(
+            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            name="v13_scorer_rotation_three_hotkeys_check",
+        ),
+        CheckConstraint(
+            "length(slot_settings_checksum) = 64",
+            name="v13_scorer_rotation_settings_checksum_check",
+        ),
+    )
+
+
 class ValidatorTicket(Base):
     """One validator's evaluation ticket for one agent (a k=3 scoring grant).
 
