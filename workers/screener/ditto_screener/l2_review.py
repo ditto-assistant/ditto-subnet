@@ -254,8 +254,9 @@ _SUBMISSION_VALIDATION_HINTS = {
         "field, type, and enum value."
     ),
     "artifact_citation": (
-        "Re-read exact source. Put every cited file and its SHA-256 in "
-        "analyzed_files, then cite real artifact paths and line numbers."
+        "Include every distinct L1 evidence file in analyzed_files with its "
+        "exact SHA-256, even when that exceeds the usual 12-file suggestion. "
+        "Add every other cited source file, then use real artifact lines."
     ),
     "invariant_sweep": (
         "Submit each V13 invariant I1-I8 exactly once. A passing invariant "
@@ -1128,7 +1129,10 @@ an independent SOL adversarial critic. For a safe causal path, include request
 context, the authoritative model/tool decision, and the returned answer sink.
 Keep the final tool call compact: list only files
 materially consulted for the decision, never echo the full dossier/index, and
-normally use at most 12 analyzed files.
+normally use at most 12 analyzed files. Every distinct L1 evidence file is
+mandatory in analyzed_files, even when that exceeds 12; add every other file
+cited in evidence, causal_path, or generator_components. Never truncate
+required files to satisfy the usual compactness suggestion.
 Always include generator_components in the final tool call. Use an empty list
 unless the resolution basis is generator_mirroring; for that basis include two
 to four exact digest-bound input-construction locations that also appear in the

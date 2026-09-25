@@ -4551,6 +4551,7 @@ def test_compact_history_replaces_consumed_source_with_reloadable_digest() -> No
         ("L2 result has unexpected fields", "schema"),
         ("L2 evidence is not artifact-bound", "artifact_citation"),
         ("L2 analyzed-file digest does not match artifact", "artifact_citation"),
+        ("L2 did not analyze every L1 evidence file", "artifact_citation"),
         (
             "1 validation error for SourceReviewInvariantAssessment",
             "invariant_sweep",
@@ -4567,6 +4568,15 @@ def test_submission_validation_subcode_is_fixed_and_source_free(
 ) -> None:
     assert l2_review._submission_validation_subcode(ValueError(message)) == expected
     assert message not in l2_review._SUBMISSION_VALIDATION_HINTS[expected]
+
+
+def test_l2_coverage_guidance_overrides_soft_analyzed_file_target() -> None:
+    prompt = l2_review._l2_review_system_prompt(SCREENING_POLICY_VERSION)
+    correction = l2_review._SUBMISSION_VALIDATION_HINTS["artifact_citation"]
+    assert "Every distinct L1 evidence file is\nmandatory" in prompt
+    assert "even when that exceeds 12" in prompt
+    assert "every distinct L1 evidence file" in correction
+    assert "even when that exceeds the usual 12-file suggestion" in correction
 
 
 def _logan_v13_certificate(
