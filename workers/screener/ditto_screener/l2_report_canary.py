@@ -96,6 +96,7 @@ def _report(
         "dossier_complete": shadow.dossier_complete,
         "direct_clear_graph_complete": shadow.direct_clear_graph_complete,
         "failure_subcode": shadow.failure_subcode,
+        "inconclusive_model_audit": observation.inconclusive_model_audit,
     }
     return report
 
