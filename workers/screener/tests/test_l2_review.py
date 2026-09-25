@@ -4460,6 +4460,7 @@ async def test_report_only_terminal_schema_is_local_to_single_layer(
 
     tools = captured["tools"]
     assert isinstance(tools, list)
+    assert len(captured["prompt_cache_key"]) <= 64
     final = tools[-1]["parameters"]["properties"]
     assert final["disposition"]["enum"] == ["safe", "violation"]
     assert "insufficient_static_evidence" not in final["resolution_basis"]["enum"]

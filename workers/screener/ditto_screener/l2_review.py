@@ -4166,7 +4166,10 @@ class TerraSolSourceReviewAgent:
             "max_output_tokens": self._max_completion_tokens,
             "store": False,
             "prompt_cache_key": (
-                self._analyst_prompt_revision(policy_version)
+                "ditto-report-"
+                + hashlib.sha256(
+                    self._analyst_prompt_revision(policy_version).encode()
+                ).hexdigest()[:32]
                 if self._terminal_verdict_required
                 else l2_prompt_cache_key(policy_version)
             ),
