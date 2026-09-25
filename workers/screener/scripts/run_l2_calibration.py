@@ -137,6 +137,24 @@ def _write_private_json(path: Path, value: object) -> None:
             tmp.unlink()
 
 
+def _report_only_audit_cost(path: Path, *, started_at: float) -> float:
+    """Count billed turns even when a later provider fault loses final usage."""
+    if not path.exists():
+        return 0.0
+    cost = 0.0
+    for line in path.read_text().splitlines():
+        event = json.loads(line)
+        if (
+            event.get("event_type") == "report_only_turn_usage"
+            and isinstance(event.get("recorded_at"), (int, float))
+            and event["recorded_at"] >= started_at
+        ):
+            value = event.get("reported_cost_usd")
+            if isinstance(value, (int, float)) and value >= 0:
+                cost += float(value)
+    return cost
+
+
 async def _main() -> None:
     args = _arguments()
     if not 1 <= args.concurrency <= 8:
@@ -206,6 +224,7 @@ async def _main() -> None:
             raise SystemExit("no manifest item matched --artifact-sha256")
     cache_dir = args.cache_dir or args.results_file.parent / "cache"
     audit_file = args.audit_file or args.results_file.parent / "audit.jsonl"
+    run_started_at = time.time()
     analyst_model = "openai/gpt-6-sol" if args.single_layer_sol else L2_MODEL
     agent = TerraSolSourceReviewAgent(
         api_key_file=str(args.api_key_file),
@@ -479,6 +498,25 @@ async def _main() -> None:
         cost += float(
             usage.get("reported_cost_usd") or usage.get("estimated_cost_usd") or 0.0
         )
+    terminal_decisions = sum(
+        item["actual_disposition"] in {"safe", "violation"} for item in results
+    )
+    if args.single_layer_sol:
+        cost = max(cost, _report_only_audit_cost(audit_file, started_at=run_started_at))
+    _write_private_json(
+        args.results_file,
+        {
+            "revision": manifest.get("revision"),
+            "review": metadata,
+            "completed": len(results),
+            "total": len(items),
+            "classification": classification_metrics(results),
+            "reported_cost_usd": round(cost, 6),
+            "terminal_decisions": terminal_decisions,
+            "no_decision_cases": len(results) - terminal_decisions,
+            "items": sorted(results, key=lambda row: str(row["agent_id"])),
+        },
+    )
     print(
         json.dumps(
             {
@@ -488,6 +526,8 @@ async def _main() -> None:
                 "classification": classification_metrics(results),
                 "uncached_runs": len(uncached),
                 "reported_cost_usd": round(cost, 6),
+                "terminal_decisions": terminal_decisions,
+                "no_decision_cases": len(results) - terminal_decisions,
                 "review": metadata,
             },
             sort_keys=True,

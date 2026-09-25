@@ -319,6 +319,11 @@ terminal tool can be accepted. Violation citations still undergo host-side
 path and line validation. The private audit records only per-turn byte/token
 counts, selected model/provider, and cost for comparing this path with the
 full-dossier baseline. No local comparator result authorizes a live decision.
+The final report separately counts `terminal_decisions` and
+`no_decision_cases`. Its reported cost includes successful model turns from
+the private audit even when a later provider timeout prevents a final verdict;
+the legacy binary classification summary treats that no-verdict case as a
+negative prediction, so use the decision counts when interpreting accuracy.
 
 `scripts/run_l2_calibration.py` accepts a protected SHA-bound manifest plus a
 directory of already verified artifacts. It rechecks every tarball digest,
