@@ -1180,6 +1180,8 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
         raw_review, inspection_complete = await self._run(
             repository,
             self._read_api_key(),
+            artifact_sha256=artifact_sha256,
+            validate_submission=False,
             deadline=deadline,
             notes=notes,
             policy_version=policy_version,

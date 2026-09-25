@@ -4055,6 +4055,81 @@ async def test_internally_inconsistent_review_is_retryable_not_a_weak_finding(
     assert observation.error_code == "source-review-inconsistent-verdict"
 
 
+async def test_gpt6_sol_l1_can_correct_rejected_final_tool_call(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    invalid = {
+        **_BENIGN_REVIEW,
+        "risk_level": "high",
+        "categories": ["benchmark_emulation"],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if len(seen) == 1:
+            tool_calls = [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 2},
+                )
+            ]
+        elif len(seen) == 2:
+            tool_calls = [_tool("invalid-1", "submit_review", invalid)]
+        else:
+            tool_calls = [_tool("corrected-1", "submit_review", _BENIGN_REVIEW)]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-6-sol",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=4,
+        transport=httpx.MockTransport(handler),
+    )
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn serve() { route(); }\nfn route() {}")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok
+    assert observation.risk_level == "low"
+    assert len(seen) == 3
+    feedback = [
+        message
+        for message in seen[2]["messages"]
+        if message.get("role") == "tool" and message.get("tool_call_id") == "invalid-1"
+    ]
+    assert len(feedback) == 1
+    assert json.loads(feedback[0]["content"]) == {
+        "error": "submit-review-contract",
+        "subcode": "category_evidence",
+        "guidance": (
+            "Every medium/high category needs its own real artifact path:line "
+            "citation. Do not use none with elevated risk."
+        ),
+        "correctable": True,
+    }
+
+
 async def test_expired_lease_deadline_stops_review_before_first_call(
     tmp_path: Path,
 ) -> None:
