@@ -178,18 +178,7 @@ _DOSSIER_ANALYZERS = (
     "scorer_field_flow",
 )
 _BENCHMARK_CONTRACT_CAPSULE = {
-    "supported_versions": [3, 4, 5, 6, 13],
-    "v13": {
-        "inference_base_url_origin": "validator_minted_per_run_case_scoped_broker_url",
-        "inference_base_url_role": "attribution_not_model_or_admission_control",
-        "inference_base_url_scored_origin": "validator_supplied",
-        "credential_review_boundary": (
-            "A scored /run's inference_base_url is supplied by the validator. "
-            "Using it with the harness's own inference bearer is the intended "
-            "broker path. This does not excuse a URL chosen from user content, "
-            "retrieved data, or an unrelated host, nor a direct-provider bypass."
-        ),
-    },
+    "supported_versions": [3, 4, 5, 6],
     "v5": {
         "relay_usage_authority": "validator_owned",
         "submission_usage_fields": "untrusted",
@@ -213,6 +202,29 @@ _BENCHMARK_CONTRACT_CAPSULE = {
         "blanket_refusal_alone": "quality_issue_not_violation",
     },
 }
+_BENCHMARK_CONTRACT_V13 = {
+    "v13": {
+        "inference_base_url_origin": "validator_minted_per_run_case_scoped_broker_url",
+        "inference_base_url_role": "attribution_not_model_or_admission_control",
+        "inference_base_url_scored_origin": "validator_supplied",
+        "credential_review_boundary": (
+            "A scored /run's inference_base_url is supplied by the validator. "
+            "Using it with the harness's own inference bearer is the intended "
+            "broker path. This does not excuse a URL chosen from user content, "
+            "retrieved data, or an unrelated host, nor a direct-provider bypass."
+        ),
+    },
+}
+
+
+def _benchmark_contract_capsule(policy_version: int) -> dict[str, object]:
+    capsule: dict[str, object] = dict(_BENCHMARK_CONTRACT_CAPSULE)
+    if policy_version >= 13:
+        capsule["supported_versions"] = [3, 4, 5, 6, 13]
+        capsule.update(_BENCHMARK_CONTRACT_V13)
+    return capsule
+
+
 _RESOLUTION_BASES = frozenset(
     {
         "authoritative_model_tool_path",
@@ -2668,6 +2680,7 @@ class TerraSolSourceReviewAgent:
             repository,
             artifact_sha256=artifact_sha256,
             l1_observation=l1_observation,
+            policy_version=policy_version,
             deadline=deadline,
             runtime_evidence=runtime_evidence,
         )
@@ -3575,6 +3588,7 @@ class TerraSolSourceReviewAgent:
         *,
         artifact_sha256: str,
         l1_observation: SourceReviewObservation,
+        policy_version: int,
         deadline: float | None,
         runtime_evidence: Mapping[str, object] | None = None,
     ) -> tuple[dict[str, object], tuple[str, ...], bool, bool]:
@@ -3621,7 +3635,7 @@ class TerraSolSourceReviewAgent:
             {
                 "dossier_revision": L2_DOSSIER_REVISION,
                 "artifact_sha256": artifact_sha256,
-                "benchmark_contract": _BENCHMARK_CONTRACT_CAPSULE,
+                "benchmark_contract": _benchmark_contract_capsule(policy_version),
                 "trusted_scored_runtime_env": runtime_evidence,
                 "starter_revision": selected_starter_revision,
                 "supported_starter_revisions": list(self._starter_revisions),

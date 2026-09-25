@@ -416,7 +416,11 @@ def test_l2_policy_v12_prompt_adds_scorer_slot_rewrite_i4() -> None:
 
 
 def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
-    from ditto_screener.l2_review import _L2_POLICY_TAILS, _l2_tools_for_policy
+    from ditto_screener.l2_review import (
+        _L2_POLICY_TAILS,
+        _benchmark_contract_capsule,
+        _l2_tools_for_policy,
+    )
 
     v13 = _l2_review_system_prompt(13)
 
@@ -432,6 +436,12 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "A URL derived from user text" in v13
     assert "validator mints `inference_base_url`" not in _l2_review_system_prompt(12)
     assert l2_prompt_revision(13) == "l2-terra-source-review-v41-policy-v13"
+    assert "v13" not in _benchmark_contract_capsule(12)
+    assert _benchmark_contract_capsule(12)["supported_versions"] == [3, 4, 5, 6]
+    assert (
+        _benchmark_contract_capsule(13)["v13"]["inference_base_url_scored_origin"]
+        == "validator_supplied"
+    )
 
     legacy = _l2_tools_for_policy(12)[-1]["parameters"]["properties"]["invariants"]
     current = _l2_tools_for_policy(13)[-1]["parameters"]["properties"]["invariants"]
