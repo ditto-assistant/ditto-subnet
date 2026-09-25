@@ -1,9 +1,11 @@
 # SN118 treasury prototype: maintenance and GM credits
 
-Status: **shadow only**. Deploying this change records a proposed policy but
-does not change validator weights, create a production key, move tokens, buy GM
-credit, or approve a bounty. The two allocation fields default to zero and the
-API rejects `mode=active`.
+Status: **shadow allocation; execution code present but not activated**.
+Deploying the Platform/Backroom change records a proposed policy but does not
+change validator weights, create a production key, move tokens, buy GM credit,
+or approve a bounty. The two allocation fields default to zero and the API
+rejects `mode=active`. The isolated signer runner has not been installed or run
+on a production host.
 
 ## Why this exists
 
@@ -53,10 +55,11 @@ release and synchronized policy serving. This PR adds none of those live paths.
    receipt, and before/after `GET /v1/credits` readings. No GitHub label,
    Discord message, merger, or quote can authorize a payment.
 5. A paused or unreconciled state prevents signing. Each attempt gets an
-   idempotency key; a submitted or ambiguous extrinsic is reconciled by chain
-   hash before any retry. Daily/single limits and a short quote lifetime are
-   enforced again by the isolated signer. This remains an activation obligation,
-   not behavior supplied by the current prototype.
+   idempotency key. The signer journal commits `dispatch_started` before any
+   chain call; an interrupted or ambiguous call stays blocked and is never
+   retried automatically. Daily/single limits, fresh quotes, independent
+   review, and current instruction digests are checked on the signer host.
+   Recovery from an ambiguous submission remains a separate reviewed action.
 
 ## Custody boundary
 
@@ -128,6 +131,63 @@ observation. It cannot purchase credits and cannot prove which deposit caused a
 balance change; the operator must correlate GM's deposit row, chain receipt,
 and intervening inference usage.
 
+## Durable execution and daily trigger
+
+`ditto/treasury/store.py` uses a private SQLite WAL journal with full synchronous
+commits and an append-only, hash-chained event table. It starts paused. A plan
+binds one idempotency key, policy revision, GM account reference, linked sender,
+destination, hotkey, finalized quote, input amount, minimum outputs, spending
+caps, and the digest of current Billing instructions. Only one unresolved plan
+may exist. A different reviewer approves the exact plan hash. Each chain leg
+needs a fresh review and quote. The journal reserves the proposed TAO amount
+against the UTC-day cap even if a call later fails. A separate allocation table
+records finalized epoch inflows for GM and maintenance with an independent
+reviewer. The signer deducts every noncancelled GM plan from **GM-allocated**
+alpha; maintenance and unallocated alpha cannot fund a top-up. Allocation
+entries currently require human verification of the finalized chain block and
+epoch accounting, since emission routing is still inactive.
+
+`scripts/treasury_payment.py` supplies status, pause/unpause, proposal,
+approval, one-leg execution, cancellation of an unapproved plan, and GM
+reconciliation. `execute` reads the mnemonic only on the named Shielded signer
+VM from its one Secret Manager secret. The key stays in process memory. It
+uses Bittensor SDK price-protected `unstake` on SN118, optionally price-protected
+`add_stake` on SN28, and either `transfer` of TAO or `transfer_stake` of SN28
+alpha to the current GM Billing recipient. All calls request finalization. The
+SDK receipt's extrinsic and block hashes are recorded before the next leg may
+be approved. An ambiguous response pauses the journal and leaves the leg in
+`dispatching`; the tool will not submit it again. An independently checked
+Billing deposit reference, credited nano-USD amount, intervening usage, and
+before/after API balances must satisfy exact arithmetic to complete
+reconciliation. The CLI does not infer deposit or usage values from a balance
+delta; the operator must check both in GM Billing and usage records.
+
+The daily timer under `infra/systemd/sn118-treasury-daily.*` is for a separate
+planner host with a read-only GM API key and no wallet key. At 09:00 UTC it
+reads `GET /v1/credits` and, below a reviewed floor, writes one private,
+idempotent request for that UTC date. The request is capped at 10 DITTO alpha
+and names the route and credit target. It does not sign or purchase. The
+operator must obtain current Billing instructions, take a fresh chain quote,
+and turn that request into a reviewed signer plan. GM currently documents a
+Billing UI instruction flow and no public purchase/instruction API, so an
+unattended daily payment would rely on stale or unverified recipient data.
+
+The instruction JSON file contains exactly `asset`, `source`, `destination`,
+`hotkey`, and `account_ref`; its canonical SHA-256 is pinned in the plan. The
+TAO route uses an empty `hotkey`; the SN28 route uses the exact hotkey in GM
+Billing. The signer will not dispatch if the file, route, sender, recipient,
+or reviewed digest differs. Approvals must be renewed for each leg against
+current instructions and a finalized quote no more than 120 seconds old. The
+account owner must link the wallet through Taostats Auth before the first plan.
+
+The local runner is an executable implementation, **not** an activation
+decision. No live signing, testnet transaction, key creation, protected plan,
+or transfer has been performed. Before enabling it, reviewers must inspect
+the exact Terraform plan against production state, test SDK receipt and fee
+semantics with a funded disposable wallet, verify SN28 same-hotkey transfer
+behavior, review every operator plan file and GM account linkage, and establish
+an independently audited recovery procedure for an ambiguous dispatch.
+
 ## Existing work audit
 
 - [#2119](https://github.com/ditto-assistant/ditto-subnet/pull/2119) usefully
@@ -160,10 +220,10 @@ and intervening inference usage.
 2. Review registered treasury hotkey and ownership, signer architecture,
    source-emission accounting, chain dispatch/quote semantics, fee schedule,
    and destination allowlist. Register the hotkey only after this review.
-3. Build a durable, independently reconciled transaction ledger and signer
-   service; add Backroom read-only quote, execution preview, and exact bounded
-   execution tools. Current JSONL records **dry runs only**, and there is no
-   live swap or payment code.
+3. Review and deploy the isolated signer journal/runner and separate daily
+   planner. The earlier JSONL still records **dry runs only**; the newer SQLite
+   journal can drive bounded live SDK legs after explicit activation. Build a
+   chain-verified ambiguous-dispatch recovery tool and a public spend report.
 4. Reconcile GM account ownership and current payment instructions, test a
    human-linked wallet with a small reviewed payment, compare GM credit balance
    before/after, and publish a source-safe receipt. Keep GM API keys away from
