@@ -4113,6 +4113,45 @@ class TerraSolSourceReviewAgent:
                     error,
                     _response_contract_detail(payload),
                 )
+                if self._terminal_verdict_required:
+                    response_body = payload if isinstance(payload, dict) else {}
+                    details = response_body.get("incomplete_details")
+                    reason = (
+                        details.get("reason") if isinstance(details, dict) else None
+                    )
+                    raw_usage = response_body.get("usage")
+                    raw_cost = (
+                        raw_usage.get("cost") if isinstance(raw_usage, dict) else None
+                    )
+                    self._audit.record(
+                        {
+                            "recorded_at": time.time(),
+                            "event_type": "report_only_turn_contract_fault",
+                            "artifact_sha256": artifact_sha256,
+                            "role": role,
+                            "step": steps_used,
+                            "http_status": response.status_code,
+                            "response_status": response_body.get("status")
+                            if isinstance(response_body.get("status"), str)
+                            and response_body.get("status")
+                            in {"completed", "failed", "cancelled", "incomplete"}
+                            else "other",
+                            "incomplete_reason": reason
+                            if isinstance(reason, str)
+                            and reason in {"content_filter", "max_output_tokens"}
+                            else "other"
+                            if reason is not None
+                            else None,
+                            "reported_cost_usd": float(raw_cost)
+                            if isinstance(raw_cost, (int, float))
+                            and not isinstance(raw_cost, bool)
+                            and raw_cost >= 0
+                            else None,
+                            "elapsed_seconds": round(
+                                time.monotonic() - turn_started, 3
+                            ),
+                        }
+                    )
                 raise failure("model-response-contract") from error
             usage = _add_usage(usage, turn_usage)
             if self._terminal_verdict_required:

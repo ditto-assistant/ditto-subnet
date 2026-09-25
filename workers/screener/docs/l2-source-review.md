@@ -324,9 +324,9 @@ The final report separately counts `terminal_decisions` and
 the private audit even when a later provider timeout prevents a final verdict;
 the legacy binary classification summary treats that no-verdict case as a
 negative prediction, so use the decision counts when interpreting accuracy.
-Report-only turn start, completion, timeout, and fixed tool names are logged
-without tool arguments or source text to distinguish slow providers from
-request growth. A longer local per-turn timeout remains bounded by the same
+Report-only turn start, completion, timeout, fixed response status/incomplete
+reason, and fixed tool names are logged without response bodies, tool arguments,
+or source text. A longer local per-turn timeout remains bounded by the same
 whole-review lease and cost cap.
 
 `scripts/run_l2_calibration.py` accepts a protected SHA-bound manifest plus a

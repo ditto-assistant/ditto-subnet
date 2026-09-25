@@ -4605,6 +4605,71 @@ async def test_report_only_audit_records_turn_timeout_and_tool_names_without_sou
     assert "private-source-marker" not in audit_path.read_text()
 
 
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [("content_filter", "content_filter"), ("private-source-marker", "other")],
+)
+async def test_report_only_audit_records_fixed_incomplete_reason_without_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str, expected: str
+) -> None:
+    audit_path = tmp_path / "contract-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit_path), retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+    )
+
+    async def post(*_args: object, **_kwargs: object) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "incomplete",
+                "incomplete_details": {"reason": reason},
+                "output": [{"private": "private-source-marker"}],
+                "usage": {"cost": 0.2},
+            },
+        )
+
+    monkeypatch.setattr(agent, "_post", post)
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(
+            l2_review.L2TrajectoryError, match="model-response-contract"
+        ):
+            await agent._run_trajectory(
+                client,
+                "test-key",
+                tmp_path,
+                None,  # type: ignore[arg-type]
+                artifact_sha256="d" * 64,
+                dossier={"source": "private-source-marker"},
+                role="analyst",
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider="azure",
+                usage_before=l2_review.L2Usage(),
+                deadline=None,
+                dossier_complete=True,
+            )
+    events = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    assert events[-1]["event_type"] == "report_only_turn_contract_fault"
+    assert events[-1]["response_status"] == "incomplete"
+    assert events[-1]["incomplete_reason"] == expected
+    assert events[-1]["reported_cost_usd"] == 0.2
+    assert "private-source-marker" not in audit_path.read_text()
+
+
 async def test_report_only_provider_body_fault_retries_exact_turn_once(
     tmp_path: Path,
 ) -> None:

@@ -94,13 +94,13 @@ def test_report_only_cost_includes_paid_turns_before_infra_failure(
                     "reported_cost_usd": 0.4,
                 },
                 {
-                    "event_type": "report_only_provider_fault",
+                    "event_type": "report_only_turn_contract_fault",
                     "recorded_at": 101.0,
-                    "reported_cost_usd": 1.0,
+                    "reported_cost_usd": 0.2,
                 },
             )
         )
         + "\n"
     )
 
-    assert _report_only_audit_cost(audit, started_at=100.0) == 0.4
+    assert _report_only_audit_cost(audit, started_at=100.0) == pytest.approx(0.6)

@@ -145,7 +145,8 @@ def _report_only_audit_cost(path: Path, *, started_at: float) -> float:
     for line in path.read_text().splitlines():
         event = json.loads(line)
         if (
-            event.get("event_type") == "report_only_turn_usage"
+            event.get("event_type")
+            in {"report_only_turn_usage", "report_only_turn_contract_fault"}
             and isinstance(event.get("recorded_at"), (int, float))
             and event["recorded_at"] >= started_at
         ):
