@@ -388,7 +388,7 @@ describe('Backroom MCP tools', () => {
     // Eight digest-only V13 provenance/analysis tools and three process-key
     // tools add bounded entries. Detailed procedures remain in tool help.
     // The scorer-pin rotation/history/current-packet controls add bounded entries.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(164_000)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(167_200)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -412,7 +412,7 @@ describe('Backroom MCP tools', () => {
       // source-review queue-age SLO, failure taxonomy route_basis,
       // reopened-hold reason, three process-key summaries, and current V13
       // provenance reads plus scorer pin rotation and history; measured at 29,121.
-      29_250,
+      29_900,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

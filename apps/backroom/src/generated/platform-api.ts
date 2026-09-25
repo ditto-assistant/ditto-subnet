@@ -27330,29 +27330,6 @@ export interface components {
             /** Representative */
             representative: boolean;
         };
-        /** RotateV13ScorerCohortRequest */
-        RotateV13ScorerCohortRequest: {
-            /** Actor */
-            actor: string;
-            /** Confirmation */
-            confirmation: string;
-            expected_current_packet: components["schemas"]["V13ScorerPacket"];
-            /** Expected Current Rotation Id */
-            expected_current_rotation_id?: number | null;
-            /** Expected Slot Settings Checksum */
-            expected_slot_settings_checksum: string;
-            /** Expected Slot Settings Revision */
-            expected_slot_settings_revision: number;
-            /** Hotkeys */
-            hotkeys: [
-                string,
-                string,
-                string
-            ];
-            packet: components["schemas"]["V13ScorerPacket"];
-            /** Reason */
-            reason: string;
-        };
         /**
          * ReviewCapacityThresholdsView
          * @description Published review-capacity, completion, latency and backlog thresholds.
@@ -27399,6 +27376,29 @@ export interface components {
              * @enum {string}
              */
             terminal_outcome: "clear" | "reject" | "review_timed_out";
+        };
+        /** RotateV13ScorerCohortRequest */
+        RotateV13ScorerCohortRequest: {
+            /** Actor */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            expected_current_packet: components["schemas"]["V13ScorerPacket"];
+            /** Expected Current Rotation Id */
+            expected_current_rotation_id?: number | null;
+            /** Expected Slot Settings Checksum */
+            expected_slot_settings_checksum: string;
+            /** Expected Slot Settings Revision */
+            expected_slot_settings_revision: number;
+            /** Hotkeys */
+            hotkeys: [
+                string,
+                string,
+                string
+            ];
+            packet: components["schemas"]["V13ScorerPacket"];
+            /** Reason */
+            reason: string;
         };
         /**
          * RouteCalibrationRequest
