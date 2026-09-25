@@ -22,6 +22,9 @@ Lifecycle + scope decisions (documented so they're easy to revisit):
 - **Dedicated auth.** Every request carries a bearer token and the configured
   screener hotkey. Result POSTs additionally verify the hotkey's sr25519
   signature over the verdict and its policy version.
+- **Every verdict names the caller's claimed attempt.** A result without an
+  ``attempt_id``, or naming an attempt that is not this caller's claim for this
+  agent and policy version, is a 409 with no state change.
 """
 
 from __future__ import annotations
@@ -164,6 +167,7 @@ from ditto.api_server.endpoints.validator import (
 )
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
+from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.api_server.screener_node_identity import is_enrolled_node_heartbeat_instance
 from ditto.api_server.screener_policy_activation import (
     EffectiveScreenerPolicy,
@@ -237,6 +241,7 @@ from ditto.db.queries.screening import (
     try_acquire_screening_claim_lock,
 )
 from ditto.db.queries.screening_infra_retry import INFRA_AUTO_RETRY_REASON_CODES
+from ditto.db.queries.screening_review_events import append_automated_review_event
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScreenResultOutcome,
@@ -428,11 +433,6 @@ _LEGACY_INSTANCE_ID = "legacy"
 # so a briefly-offline worker is never pruned out from under the dashboard.
 _HEARTBEAT_RETENTION = timedelta(days=1)
 _CLAIM_FALLBACK_LOCK = asyncio.Lock()
-
-# Policy v1 used the legacy three-field signature. Every policy from v2 onward
-# binds its version, including an older worker reporting a failure during a
-# future rolling policy upgrade.
-_FIRST_VERSIONED_POLICY = 2
 
 
 def _artifact_key(agent_id: UUID) -> str:
@@ -3490,6 +3490,19 @@ async def get_submission_source_review_source(
         agent_id = row.agent_id
         artifact_sha256 = row.artifact_sha256
         policy_version = attempt.policy_version
+        agent = await session.get(Agent, agent_id)
+        if agent is None:
+            raise HTTPException(
+                status_code=409, detail="source-review agent is unavailable"
+            )
+        bench_version = await arrival_bench_version(session, agent=agent)
+        scored_runtime_evidence = await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt.attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=policy_version,
+            bench_version=bench_version,
+        )
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
@@ -3498,6 +3511,7 @@ async def get_submission_source_review_source(
         source_url_b64=base64.b64encode(url.encode()).decode(),
         artifact_sha256=artifact_sha256,
         policy_version=policy_version,
+        scored_runtime_evidence=scored_runtime_evidence,
     )
 
 
@@ -4538,6 +4552,25 @@ async def heartbeat(
     instance_id = request_body.instance_id or _LEGACY_INSTANCE_ID
     renewed_lease_deadline: datetime | None = None
     async with session.begin():
+        replay_process: dict | None = None
+        if enrolled_node_id == "subnet-screener-2" and request.headers.get(
+            "x-replay-process-proof"
+        ):
+            from ditto.api_server.endpoints.verification_replay import (
+                verify_replay_process_request,
+            )
+
+            node = await session.get(ScreenerNode, enrolled_node_id)
+            if node is None:
+                raise ScreenerAuthError("replay process node unavailable")
+            key_sha256 = await verify_replay_process_request(
+                request,
+                session,
+                node=node,
+                instance_id=instance_id,
+                purpose="heartbeat",
+            )
+            replay_process = {"key_sha256": key_sha256}
         previous_heartbeat = await session.get(
             ScreenerHeartbeat,
             (screener_hotkey, instance_id),
@@ -4641,6 +4674,7 @@ async def heartbeat(
                 if request_body.release is not None
                 else None
             ),
+            replay_process=replay_process,
             reported_at=reported_at,
             seen_at=now,
             signature=request_body.signature,
@@ -5005,6 +5039,16 @@ async def claim(
         agent.agent_id: await arrival_bench_version(session, agent=agent)
         for agent, _, _ in claimed
     }
+    runtime_leases = {
+        attempt.attempt_id: await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt.attempt_id,
+            artifact_sha256=agent.sha256,
+            policy_version=attempt.policy_version,
+            bench_version=bench_versions[agent.agent_id],
+        )
+        for agent, attempt, _ in claimed
+    }
     items = [
         ScreenerQueueItem(
             agent_id=agent.agent_id,
@@ -5017,6 +5061,7 @@ async def claim(
             attempt_id=attempt.attempt_id,
             lease_deadline=attempt.deadline,
             policy_version=attempt.policy_version,
+            scored_runtime_evidence=runtime_leases[attempt.attempt_id],
             # ``precheck_reason_code`` is the exact-duplicate channel and the
             # signed queue contract requires it to be paired with
             # ``duplicate_of``. Mechanical deferred admission has its own
@@ -5189,7 +5234,34 @@ async def screened_image_upload(
     if payload.image_ref != expected_ref:
         raise AgentNotScreenableError("screened image ref does not match agent")
     now = datetime.now(UTC)
+    image_upload_id = payload.image_upload_id or uuid4()
     required_policy = (await _required_policy(session)).required_policy_version
+
+    def existing_response(upload: ScreenedImageUpload) -> ScreenedImageUploadResponse:
+        expires_at = upload.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if (
+            upload.agent_id != agent_id
+            or upload.attempt_id != payload.attempt_id
+            or upload.screener_hotkey != screener_hotkey
+            or upload.sha256 != payload.sha256
+            or upload.size_bytes != payload.size_bytes
+            or upload.image_id != payload.image_id
+            or upload.image_ref != payload.image_ref
+            or upload.status != "initiated"
+            or datetime.now(UTC) > expires_at
+        ):
+            raise AgentNotScreenableError(
+                "screened image upload ID does not match an active initiation"
+            )
+        return ScreenedImageUploadResponse(
+            image_upload_id=upload.image_upload_id,
+            storage_upload_id=upload.storage_upload_id,
+            part_size_bytes=_SCREENED_IMAGE_PART_SIZE,
+            expires_at=upload.expires_at,
+        )
+
     async with session.begin():
         attempt = await get_screening_attempt(
             session, attempt_id=payload.attempt_id, for_update=True
@@ -5209,8 +5281,10 @@ async def screened_image_upload(
             deadline = deadline.replace(tzinfo=UTC)
         if now > deadline:
             raise AgentNotScreenableError("screened image upload lease has expired")
+        existing = await session.get(ScreenedImageUpload, image_upload_id)
+        if existing is not None:
+            return existing_response(existing)
 
-    image_upload_id = uuid4()
     expires_at = min(now + _SCREENED_IMAGE_UPLOAD_TTL, deadline)
     metadata = {
         "sha256": payload.sha256,
@@ -5224,6 +5298,7 @@ async def screened_image_upload(
         key=key,
         metadata=metadata,
     )
+    reused: ScreenedImageUploadResponse | None = None
     try:
         async with session.begin():
             attempt = await get_screening_attempt(
@@ -5239,24 +5314,41 @@ async def screened_image_upload(
                 raise AgentNotScreenableError(
                     "screened image upload lease changed during initiation"
                 )
-            session.add(
-                ScreenedImageUpload(
-                    image_upload_id=image_upload_id,
-                    agent_id=agent_id,
-                    attempt_id=payload.attempt_id,
-                    screener_hotkey=screener_hotkey,
-                    storage_upload_id=storage_upload_id,
-                    sha256=payload.sha256,
-                    size_bytes=payload.size_bytes,
-                    image_id=payload.image_id,
-                    image_ref=payload.image_ref,
-                    status="initiated",
-                    expires_at=expires_at,
+            deadline = attempt.deadline
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=UTC)
+            if datetime.now(UTC) > deadline:
+                raise AgentNotScreenableError(
+                    "screened image upload lease expired during initiation"
                 )
-            )
+            # Another request with the same ID may have completed while this
+            # one was creating the storage session. The attempt row lock
+            # serializes this decision without holding it across storage I/O.
+            existing = await session.get(ScreenedImageUpload, image_upload_id)
+            if existing is not None:
+                reused = existing_response(existing)
+            else:
+                session.add(
+                    ScreenedImageUpload(
+                        image_upload_id=image_upload_id,
+                        agent_id=agent_id,
+                        attempt_id=payload.attempt_id,
+                        screener_hotkey=screener_hotkey,
+                        storage_upload_id=storage_upload_id,
+                        sha256=payload.sha256,
+                        size_bytes=payload.size_bytes,
+                        image_id=payload.image_id,
+                        image_ref=payload.image_ref,
+                        status="initiated",
+                        expires_at=expires_at,
+                    )
+                )
     except Exception:
         await storage.abort_multipart_upload(key=key, upload_id=storage_upload_id)
         raise
+    if reused is not None:
+        await storage.abort_multipart_upload(key=key, upload_id=storage_upload_id)
+        return reused
     return ScreenedImageUploadResponse(
         image_upload_id=image_upload_id,
         storage_upload_id=storage_upload_id,
@@ -6027,6 +6119,31 @@ def _backfill_private_failure_feedback(
     attempt.failure_captured_at = datetime.now(UTC)
 
 
+def _require_claimed_attempt_owner(
+    attempt: ScreeningAttempt | None,
+    *,
+    agent_id: UUID,
+    screener_hotkey: str,
+    policy_version: int,
+) -> ScreeningAttempt:
+    """Return ``attempt`` only when it is the caller's claim for this verdict.
+
+    A verdict may only settle an attempt that exists, belongs to ``agent_id``,
+    was claimed by the authenticated ``screener_hotkey`` (the shared fleet
+    principal included), and was claimed under the reported policy version.
+    """
+    if (
+        attempt is None
+        or attempt.agent_id != agent_id
+        or attempt.screener_hotkey != screener_hotkey
+        or attempt.policy_version != policy_version
+    ):
+        raise AgentNotScreenableError(
+            "verdict does not match the claimed screening attempt"
+        )
+    return attempt
+
+
 @router.post(
     "/agent/{agent_id}/result",
     response_model=ScreenResultResponse,
@@ -6051,9 +6168,11 @@ async def submit_result(
     """Record the screener's verdict and advance the agent's lifecycle.
 
     Ordering is cheap-before-expensive; no DB write happens until every check
-    passes: (1) dedicated screener bearer authentication, (2) signature over
-    the versioned verdict, (3) generate the per-submission
-    dataset (pass + generation enabled), (4) one transaction that promotes
+    passes: (1) dedicated screener bearer authentication plus a named claimed
+    attempt, (2) signature over the versioned verdict and that attempt's
+    ownership (agent, claiming hotkey, policy version), (3) generate the
+    per-submission dataset (pass + generation enabled), (4) one transaction that
+    re-checks ownership under the row lock and promotes
     ``uploaded -> evaluating`` (pass, pinning the dataset) or ``uploaded ->
     screening_failed``.
 
@@ -6069,6 +6188,14 @@ async def submit_result(
 
     if payload.screener_hotkey != screener_hotkey:
         raise ScreenerAuthError("payload hotkey does not match authenticated screener")
+    # Every verdict is bound to the caller's own claimed screening attempt.
+    # Without one there is no lease to check ownership against, so refuse
+    # before any signature, storage, or database work.
+    claimed_attempt_id = payload.attempt_id
+    if claimed_attempt_id is None:
+        raise AgentNotScreenableError(
+            "verdict must name the caller's claimed screening attempt"
+        )
     if payload.policy_version >= 9 and payload.outcome is None:
         raise AgentNotScreenableError("policy-9 verdicts require a typed outcome")
     image_upload_id = payload.image_upload_id
@@ -6080,7 +6207,7 @@ async def submit_result(
         signed = verdict_signing_message(
             screener_hotkey=payload.screener_hotkey,
             agent_id=agent_id,
-            attempt_id=payload.attempt_id,
+            attempt_id=claimed_attempt_id,
             passed=payload.passed,
             policy_version=payload.policy_version,
             outcome=payload.outcome,
@@ -6104,26 +6231,28 @@ async def submit_result(
             image_ref=payload.image_ref,
             image_upload_id=image_upload_id,
         )
-    elif payload.attempt_id is not None:
-        signed = verdict_signing_message(
-            screener_hotkey=payload.screener_hotkey,
-            agent_id=agent_id,
-            attempt_id=payload.attempt_id,
-            passed=payload.passed,
-            policy_version=payload.policy_version,
-        )
-    elif payload.policy_version >= _FIRST_VERSIONED_POLICY:
-        signed = verdict_signing_message(
-            screener_hotkey=payload.screener_hotkey,
-            agent_id=agent_id,
-            passed=payload.passed,
-            policy_version=payload.policy_version,
-        )
     else:
-        signed = f"{payload.screener_hotkey}:{agent_id}:{payload.passed}".encode()
+        signed = verdict_signing_message(
+            screener_hotkey=payload.screener_hotkey,
+            agent_id=agent_id,
+            attempt_id=claimed_attempt_id,
+            passed=payload.passed,
+            policy_version=payload.policy_version,
+        )
     if not _verify_signature(payload.screener_hotkey, signed, payload.signature):
         raise ScreenerAuthError(
             f"verdict signature did not verify for hotkey {payload.screener_hotkey}"
+        )
+    if (
+        payload.policy_version >= 13
+        and payload.adjudication is not None
+        and payload.adjudication.decision in {"clear", "reject"}
+        and payload.outcome != ScreenResultOutcome.QUARANTINE
+    ):
+        # A rolling-upgrade worker may still report a v13 source-only CLEAR as
+        # PASS. Do not admit it before the private/runtime receipt gate exists.
+        raise AgentNotScreenableError(
+            "v13 source adjudication requires quarantine transport"
         )
 
     # A legacy worker may still report a failure during a rolling deploy, but it
@@ -6153,7 +6282,7 @@ async def submit_result(
             verified_upload is None
             or verified_upload.status != "verified"
             or verified_upload.agent_id != agent_id
-            or verified_upload.attempt_id != payload.attempt_id
+            or verified_upload.attempt_id != claimed_attempt_id
             or verified_upload.screener_hotkey != screener_hotkey
             or verified_upload.sha256 != payload.image_sha256
             or verified_upload.size_bytes != payload.image_size_bytes
@@ -6199,42 +6328,47 @@ async def submit_result(
     deferred_deep_attempt = False
     restore_status = AgentStatus.SCORED
     effective_settings = ScreenerReviewSettings()
-    if payload.attempt_id is not None:
-        async with session.begin():
-            reported_attempt = await get_screening_attempt(
-                session, attempt_id=payload.attempt_id
+    async with session.begin():
+        current_agent = await get_agent_by_id(session, agent_id=agent_id)
+        if current_agent is None:
+            raise AgentNotFoundError(f"no agent with id={agent_id}")
+        # Cheap early refusal before any dataset generation. The locked
+        # re-check inside the verdict transaction below remains authoritative.
+        reported_attempt = _require_claimed_attempt_owner(
+            await get_screening_attempt(session, attempt_id=claimed_attempt_id),
+            agent_id=agent_id,
+            screener_hotkey=screener_hotkey,
+            policy_version=payload.policy_version,
+        )
+        deferred_review = await session.scalar(
+            select(AthReview).where(
+                AthReview.agent_id == agent_id,
+                AthReview.algorithm_provenance["review_kind"].as_string()
+                == DEFERRED_REVIEW_KIND,
             )
-            current_agent = await get_agent_by_id(session, agent_id=agent_id)
-            if current_agent is not None:
-                deferred_review = await session.scalar(
-                    select(AthReview).where(
-                        AthReview.agent_id == agent_id,
-                        AthReview.algorithm_provenance["review_kind"].as_string()
-                        == DEFERRED_REVIEW_KIND,
-                    )
-                )
-            review_started_at = (
-                deferred_review.reopened_at or deferred_review.opened_at
-                if deferred_review is not None
-                else None
-            )
-            deferred_attempt_lifecycle = bool(
-                reported_attempt is not None
-                and not reported_attempt.build_only
-                and review_started_at is not None
-                and reported_attempt.started_at >= review_started_at
-            )
-            deferred_deep_attempt = bool(
-                deferred_attempt_lifecycle
-                and current_agent is not None
-                and current_agent.status == AgentStatus.ATH_PENDING_REVIEW
-                and deferred_review is not None
-                and deferred_review.status == "pending"
-            )
-            if deferred_review is not None:
-                previous = deferred_review.original_evidence.get("previous_status")
-                if previous == AgentStatus.LIVE.value:
-                    restore_status = AgentStatus.LIVE
+        )
+        review_started_at = (
+            deferred_review.reopened_at or deferred_review.opened_at
+            if deferred_review is not None
+            else None
+        )
+        deferred_attempt_lifecycle = bool(
+            reported_attempt is not None
+            and not reported_attempt.build_only
+            and review_started_at is not None
+            and reported_attempt.started_at >= review_started_at
+        )
+        deferred_deep_attempt = bool(
+            deferred_attempt_lifecycle
+            and current_agent is not None
+            and current_agent.status == AgentStatus.ATH_PENDING_REVIEW
+            and deferred_review is not None
+            and deferred_review.status == "pending"
+        )
+        if deferred_review is not None:
+            previous = deferred_review.original_evidence.get("previous_status")
+            if previous == AgentStatus.LIVE.value:
+                restore_status = AgentStatus.LIVE
 
     receipt = (
         payload.adjudication.completion_receipt
@@ -6243,8 +6377,7 @@ async def submit_result(
     )
     if receipt is not None:
         if (
-            payload.attempt_id is None
-            or payload.adjudication_digest is None
+            payload.adjudication_digest is None
             or payload.completion_receipt_signature is None
             or reported_attempt is None
             or current_agent is None
@@ -6258,7 +6391,7 @@ async def submit_result(
         receipt_message = completion_receipt_signing_message(
             screener_hotkey=screener_hotkey,
             agent_id=agent_id,
-            attempt_id=payload.attempt_id,
+            attempt_id=claimed_attempt_id,
             artifact_sha256=reported_attempt.artifact_sha256.lower(),
             adjudication_digest=payload.adjudication_digest,
             receipt=receipt,
@@ -6457,7 +6590,7 @@ async def submit_result(
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
         if agent is None:
             raise AgentNotFoundError(f"no agent with id={agent_id}")
-        attempt: ScreeningAttempt | None = None
+        prior_review_agent_status = agent.status
         attempt_status = (
             "passed"
             if deferred_attempt_lifecycle
@@ -6470,171 +6603,163 @@ async def submit_result(
             if payload.passed
             else ("rejected" if target == AgentStatus.REJECTED else "failed")
         )
-        if payload.attempt_id is not None:
-            attempt = await get_screening_attempt(
-                session, attempt_id=payload.attempt_id, for_update=True
-            )
-            if (
-                attempt is None
-                or attempt.agent_id != agent_id
-                or attempt.screener_hotkey != screener_hotkey
-                or attempt.policy_version != payload.policy_version
-            ):
-                raise AgentNotScreenableError(
-                    "verdict does not match the claimed screening attempt"
-                )
-            binding = (
+        attempt = _require_claimed_attempt_owner(
+            await get_screening_attempt(
+                session, attempt_id=claimed_attempt_id, for_update=True
+            ),
+            agent_id=agent_id,
+            screener_hotkey=screener_hotkey,
+            policy_version=payload.policy_version,
+        )
+        binding = (
+            payload.review_settings_revision,
+            payload.review_settings_instance_id,
+            payload.review_settings_scope,
+            payload.review_settings_checksum,
+        )
+        if all(value is not None for value in binding):
+            revision = await session.get(
+                ScreenerReviewSettingsRevision,
                 payload.review_settings_revision,
-                payload.review_settings_instance_id,
-                payload.review_settings_scope,
-                payload.review_settings_checksum,
             )
-            if all(value is not None for value in binding):
-                revision = await session.get(
-                    ScreenerReviewSettingsRevision,
-                    payload.review_settings_revision,
+            if revision is None:
+                raise AgentNotScreenableError(
+                    "verdict references an unknown reviewer settings revision"
                 )
-                if revision is None:
-                    raise AgentNotScreenableError(
-                        "verdict references an unknown reviewer settings revision"
-                    )
-                settings = ScreenerReviewSettings.model_validate(revision.settings)
-                allowed_scopes = {"*", payload.review_settings_instance_id}
-                if attempt.review_settings_scope == INTEGRITY_DOUBLE_CHECK_SCOPE:
-                    # Platform pinned this claim to the double-check posture;
-                    # the exact claimed binding is still compared below.
-                    allowed_scopes.add(INTEGRITY_DOUBLE_CHECK_SCOPE)
-                enrolled_node_id = getattr(request.state, "screener_node_id", None)
-                if (
-                    enrolled_node_id is not None
-                    and _is_enrolled_node_heartbeat_instance(
-                        node_id=enrolled_node_id,
-                        instance_id=payload.review_settings_instance_id,
-                    )
-                ):
-                    allowed_scopes.add(enrolled_node_id)
-                if (
-                    revision.scope != payload.review_settings_scope
-                    or revision.checksum != payload.review_settings_checksum
-                    or revision.scope not in allowed_scopes
-                ):
-                    raise AgentNotScreenableError(
-                        "verdict reviewer settings binding does not match "
-                        "platform state"
-                    )
-            else:
-                settings = ScreenerReviewSettings()
-            claimed_binding = (
-                attempt.review_settings_revision,
-                attempt.review_settings_instance_id,
-                attempt.review_settings_scope,
-                attempt.review_settings_checksum,
-            )
-            if all(value is not None for value in claimed_binding):
-                if binding != claimed_binding:
-                    raise AgentNotScreenableError(
-                        "verdict reviewer settings binding does not match the claim"
-                    )
-                effective_settings = settings
-            else:
-                # Compatibility for attempts claimed by a worker that predates
-                # claim-time settings binding. Once a claim is bound, later
-                # global revisions cannot rewrite its execution contract.
-                latest_rows = (
-                    await session.scalars(
-                        select(ScreenerReviewSettingsRevision)
-                        .where(
-                            ScreenerReviewSettingsRevision.scope.in_(
-                                ("*", payload.review_settings_instance_id or "")
-                            )
-                        )
-                        .order_by(ScreenerReviewSettingsRevision.revision.desc())
-                    )
-                ).all()
-                effective_settings = ScreenerReviewSettings()
-                effective = next(
-                    (
-                        row
-                        for row in latest_rows
-                        if row.scope == payload.review_settings_instance_id
-                    ),
-                    next((row for row in latest_rows if row.scope == "*"), None),
-                )
-                if effective is not None:
-                    effective_settings = ScreenerReviewSettings.model_validate(
-                        effective.settings
-                    )
-                    if effective_settings.mode == "inherit":
-                        effective = next(
-                            (row for row in latest_rows if row.scope == "*"), None
-                        )
-                        effective_settings = (
-                            ScreenerReviewSettings.model_validate(effective.settings)
-                            if effective is not None
-                            else ScreenerReviewSettings()
-                        )
-                    if (
-                        effective is not None
-                        and effective_settings.mode == "enforce"
-                        and (
-                            payload.review_settings_revision != effective.revision
-                            or payload.review_settings_checksum != effective.checksum
-                            or settings.mode != "enforce"
-                        )
-                    ):
-                        raise AgentNotScreenableError(
-                            "enforced reviewer verdict is missing the effective "
-                            "settings binding"
-                        )
+            settings = ScreenerReviewSettings.model_validate(revision.settings)
+            allowed_scopes = {"*", payload.review_settings_instance_id}
+            if attempt.review_settings_scope == INTEGRITY_DOUBLE_CHECK_SCOPE:
+                # Platform pinned this claim to the double-check posture;
+                # the exact claimed binding is still compared below.
+                allowed_scopes.add(INTEGRITY_DOUBLE_CHECK_SCOPE)
+            enrolled_node_id = getattr(request.state, "screener_node_id", None)
+            if enrolled_node_id is not None and _is_enrolled_node_heartbeat_instance(
+                node_id=enrolled_node_id,
+                instance_id=payload.review_settings_instance_id,
+            ):
+                allowed_scopes.add(enrolled_node_id)
             if (
-                payload.adjudication is not None
-                and payload.adjudication.decision == "reject"
-                and effective_settings.adjudicator_mode == "enforce"
-            ):
-                # The worker transports a reject as a quarantine because a
-                # policy module cannot ban a miner. Platform owns the final
-                # authority boundary: execute only after verifying the exact
-                # operator posture bound to the claim and signed verdict above.
-                target = AgentStatus.REJECTED
-                public_reason = payload.adjudication.reason
-                attempt_status = "rejected"
-            if attempt.reason_code == "exact-cross-miner-duplicate" and (
-                payload.reason_code != attempt.reason_code
+                revision.scope != payload.review_settings_scope
+                or revision.checksum != payload.review_settings_checksum
+                or revision.scope not in allowed_scopes
             ):
                 raise AgentNotScreenableError(
-                    "verdict does not match the platform precheck disposition"
+                    "verdict reviewer settings binding does not match platform state"
                 )
-            deadline = attempt.deadline
-            if deadline.tzinfo is None:
-                deadline = deadline.replace(tzinfo=UTC)
-            if attempt.status == attempt_status and (
-                agent.status == target
-                or (
-                    attempt_status == "passed"
-                    and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+        else:
+            settings = ScreenerReviewSettings()
+        claimed_binding = (
+            attempt.review_settings_revision,
+            attempt.review_settings_instance_id,
+            attempt.review_settings_scope,
+            attempt.review_settings_checksum,
+        )
+        if all(value is not None for value in claimed_binding):
+            if binding != claimed_binding:
+                raise AgentNotScreenableError(
+                    "verdict reviewer settings binding does not match the claim"
                 )
-            ):
-                # Idempotent re-report: nothing transitions, but a retry may
-                # carry review payloads that an earlier report (or an older
-                # platform build) did not persist. Backfill them before
-                # returning or they would be unrecoverable for this attempt.
-                if records_review_evidence:
-                    await _backfill_quarantine_payloads(
-                        session, attempt_id=attempt.attempt_id, payload=payload
+            effective_settings = settings
+        else:
+            # Compatibility for attempts claimed by a worker that predates
+            # claim-time settings binding. Once a claim is bound, later
+            # global revisions cannot rewrite its execution contract.
+            latest_rows = (
+                await session.scalars(
+                    select(ScreenerReviewSettingsRevision)
+                    .where(
+                        ScreenerReviewSettingsRevision.scope.in_(
+                            ("*", payload.review_settings_instance_id or "")
+                        )
                     )
-                _backfill_private_failure_feedback(
-                    attempt,
-                    payload=payload,
-                    provider=getattr(request.state, "screener_provider", "gcp"),
+                    .order_by(ScreenerReviewSettingsRevision.revision.desc())
                 )
-                result_status = agent.status
-                return ScreenResultResponse(
-                    agent_id=agent_id, status=result_status, accepted=True
+            ).all()
+            effective_settings = ScreenerReviewSettings()
+            effective = next(
+                (
+                    row
+                    for row in latest_rows
+                    if row.scope == payload.review_settings_instance_id
+                ),
+                next((row for row in latest_rows if row.scope == "*"), None),
+            )
+            if effective is not None:
+                effective_settings = ScreenerReviewSettings.model_validate(
+                    effective.settings
                 )
-            if attempt.status != "running" or datetime.now(UTC) > deadline:
-                raise AgentNotScreenableError(
-                    "screening attempt is expired or already completed"
+                if effective_settings.mode == "inherit":
+                    effective = next(
+                        (row for row in latest_rows if row.scope == "*"), None
+                    )
+                    effective_settings = (
+                        ScreenerReviewSettings.model_validate(effective.settings)
+                        if effective is not None
+                        else ScreenerReviewSettings()
+                    )
+                if (
+                    effective is not None
+                    and effective_settings.mode == "enforce"
+                    and (
+                        payload.review_settings_revision != effective.revision
+                        or payload.review_settings_checksum != effective.checksum
+                        or settings.mode != "enforce"
+                    )
+                ):
+                    raise AgentNotScreenableError(
+                        "enforced reviewer verdict is missing the effective "
+                        "settings binding"
+                    )
+        if (
+            payload.adjudication is not None
+            and payload.adjudication.decision == "reject"
+            and effective_settings.adjudicator_mode == "enforce"
+            and payload.policy_version < 13
+        ):
+            # The worker transports a reject as a quarantine because a
+            # policy module cannot ban a miner. Platform owns the final
+            # authority boundary: execute only after verifying the exact
+            # operator posture bound to the claim and signed verdict above.
+            target = AgentStatus.REJECTED
+            public_reason = payload.adjudication.reason
+            attempt_status = "rejected"
+        if attempt.reason_code == "exact-cross-miner-duplicate" and (
+            payload.reason_code != attempt.reason_code
+        ):
+            raise AgentNotScreenableError(
+                "verdict does not match the platform precheck disposition"
+            )
+        deadline = attempt.deadline
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if attempt.status == attempt_status and (
+            agent.status == target
+            or (
+                attempt_status == "passed"
+                and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+            )
+        ):
+            # Idempotent re-report: nothing transitions, but a retry may
+            # carry review payloads that an earlier report (or an older
+            # platform build) did not persist. Backfill them before
+            # returning or they would be unrecoverable for this attempt.
+            if records_review_evidence:
+                await _backfill_quarantine_payloads(
+                    session, attempt_id=attempt.attempt_id, payload=payload
                 )
+            _backfill_private_failure_feedback(
+                attempt,
+                payload=payload,
+                provider=getattr(request.state, "screener_provider", "gcp"),
+            )
+            result_status = agent.status
+            return ScreenResultResponse(
+                agent_id=agent_id, status=result_status, accepted=True
+            )
+        if attempt.status != "running" or datetime.now(UTC) > deadline:
+            raise AgentNotScreenableError(
+                "screening attempt is expired or already completed"
+            )
         deferred_review_active_now = False
         if deferred_attempt_lifecycle:
             deferred_review = await session.scalar(
@@ -6654,14 +6779,10 @@ async def submit_result(
         late_deferred_result = (
             deferred_attempt_lifecycle and not deferred_review_active_now
         )
-        scored_policy_release = (
-            await session.scalar(
-                select(ScoredPolicyRescreenRelease)
-                .where(ScoredPolicyRescreenRelease.attempt_id == attempt.attempt_id)
-                .with_for_update()
-            )
-            if attempt is not None
-            else None
+        scored_policy_release = await session.scalar(
+            select(ScoredPolicyRescreenRelease)
+            .where(ScoredPolicyRescreenRelease.attempt_id == attempt.attempt_id)
+            .with_for_update()
         )
         if requires_isolated_canary_authorization:
             activation = (
@@ -6723,7 +6844,6 @@ async def submit_result(
                 )
             )
         ) and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
-        idempotent = agent.status == target
         if late_deferred_result:
             # An operator resolution is authoritative. A screener response that
             # was already in flight may finish after clear/reject; retain its
@@ -6777,7 +6897,7 @@ async def submit_result(
         if late_deferred_result:
             pass
         elif payload.reason_code == "exact-cross-miner-duplicate":
-            if attempt is None or attempt.duplicate_of is None:
+            if attempt.duplicate_of is None:
                 raise AgentNotScreenableError(
                     "exact duplicate verdict requires a platform precheck"
                 )
@@ -6838,51 +6958,34 @@ async def submit_result(
                     created_at=cleared_at,
                 )
             )
-        if attempt is None and not idempotent:
-            now = datetime.now(UTC)
-            # Compatibility-only terminal receipt; no claim pinned this artifact.
-            attempt = ScreeningAttempt(
-                attempt_id=payload.attempt_id or UUID(int=secrets.randbits(128)),
-                agent_id=agent_id,
-                screener_hotkey=screener_hotkey,
-                policy_version=payload.policy_version,
-                status=attempt_status,
-                started_at=now,
-                deadline=now,
-                finished_at=now,
-                public_reason=public_reason,
-            )
-            session.add(attempt)
-        elif attempt is not None:
-            attempt.status = attempt_status
-            attempt.finished_at = datetime.now(UTC)
-            attempt.public_reason = public_reason
-            if attempt.reason_code != DEFERRED_MECHANICAL_REASON and (
-                attempt.reason_code != POLICY_ONLY_RESCREEN_REASON or not payload.passed
-            ):
-                # ``policy-only-rescreen`` identifies a *running* canary's
-                # execution mode. Once it fails, retain the signed worker
-                # cause instead, so the miner's owner-only feedback and the
-                # operator retry record say why it stopped. Successful
-                # canaries keep the marker as their compact audit label.
-                attempt.reason_code = stored_reason_code
-            attempt.review_settings_revision = payload.review_settings_revision
-            attempt.review_settings_instance_id = payload.review_settings_instance_id
-            attempt.review_settings_scope = payload.review_settings_scope
-            attempt.review_settings_checksum = payload.review_settings_checksum
-            _backfill_private_failure_feedback(
-                attempt,
-                payload=payload,
-                provider=getattr(request.state, "screener_provider", "gcp"),
-            )
-        if attempt is not None:
-            await _queue_fanout_shadow_review(
-                session,
-                agent=agent,
-                attempt=attempt,
-                payload=payload,
-                settings=effective_settings,
-            )
+        attempt.status = attempt_status
+        attempt.finished_at = datetime.now(UTC)
+        attempt.public_reason = public_reason
+        if attempt.reason_code != DEFERRED_MECHANICAL_REASON and (
+            attempt.reason_code != POLICY_ONLY_RESCREEN_REASON or not payload.passed
+        ):
+            # ``policy-only-rescreen`` identifies a *running* canary's
+            # execution mode. Once it fails, retain the signed worker
+            # cause instead, so the miner's owner-only feedback and the
+            # operator retry record say why it stopped. Successful
+            # canaries keep the marker as their compact audit label.
+            attempt.reason_code = stored_reason_code
+        attempt.review_settings_revision = payload.review_settings_revision
+        attempt.review_settings_instance_id = payload.review_settings_instance_id
+        attempt.review_settings_scope = payload.review_settings_scope
+        attempt.review_settings_checksum = payload.review_settings_checksum
+        _backfill_private_failure_feedback(
+            attempt,
+            payload=payload,
+            provider=getattr(request.state, "screener_provider", "gcp"),
+        )
+        await _queue_fanout_shadow_review(
+            session,
+            agent=agent,
+            attempt=attempt,
+            payload=payload,
+            settings=effective_settings,
+        )
         if scored_policy_release is not None:
             scored_policy_release.state = (
                 "terminal"
@@ -6890,10 +6993,6 @@ async def submit_result(
                 else "paused"
             )
         if target == AgentStatus.QUARANTINED or records_review_evidence:
-            if attempt is None:
-                raise AgentNotScreenableError(
-                    "source-review evidence requires a claimed screening attempt"
-                )
             if target == AgentStatus.QUARANTINED and (
                 payload.manifest_digest is None or payload.reason_code is None
             ):
@@ -7084,6 +7183,49 @@ async def submit_result(
                 agent.dataset_run_size = dataset_run_size
                 agent.dataset_seed_block = seed_block
                 agent.dataset_seed_block_hash = seed_block_hash
+        if attempt is not None and (
+            records_review_evidence
+            or (
+                deferred_deep_attempt and agent.status == AgentStatus.ATH_PENDING_REVIEW
+            )
+            or (
+                outcome_value == "pass"
+                and not attempt.build_only
+                and not payload.policy_only
+            )
+        ):
+            review_quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt.attempt_id
+                )
+            )
+            await append_automated_review_event(
+                session,
+                agent=agent,
+                attempt=attempt,
+                quarantine=review_quarantine,
+                payload=payload,
+                prior_agent_status=prior_review_agent_status,
+                next_agent_status=agent.status,
+                effective_decision=(
+                    "no_change"
+                    if late_deferred_result
+                    else "reject"
+                    if agent.status == AgentStatus.REJECTED
+                    else "hold"
+                    if agent.status
+                    in {
+                        AgentStatus.QUARANTINED,
+                        AgentStatus.ATH_PENDING_REVIEW,
+                        AgentStatus.SCREENING_FAILED,
+                    }
+                    else "provisional_admission"
+                    if outcome_value == "pass_inconclusive"
+                    else "pass"
+                ),
+                reason_code=stored_reason_code,
+                reason=public_reason,
+            )
         result_status = agent.status
 
     try:

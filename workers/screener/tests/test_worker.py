@@ -110,6 +110,7 @@ class _FakeGate:
         agent_id: UUID,
         deadline: float | None = None,
         publish_image: Any = None,
+        publish_held_image: Any = None,
         record_archive_verification: Any = None,
         build_only: bool = False,
         policy_only: bool = False,
@@ -143,6 +144,23 @@ class _FakeGate:
             await publish_image(
                 BuiltImageArtifact(
                     path="/tmp/fake-screened-image.tar",
+                    sha256="12" * 32,
+                    size_bytes=123,
+                    image_id="sha256:" + "34" * 32,
+                    image_ref=f"ditto-screen/{agent_id}:latest",
+                )
+            )
+        if (
+            self.result.outcome == ScreeningOutcome.QUARANTINE
+            and publish_held_image is not None
+            and any(
+                item.code == "adjudicated-source-review-escalate"
+                for item in self.result.evidence
+            )
+        ):
+            await publish_held_image(
+                BuiltImageArtifact(
+                    path="/tmp/fake-held-image.tar",
                     sha256="12" * 32,
                     size_bytes=123,
                     image_id="sha256:" + "34" * 32,
@@ -374,6 +392,35 @@ async def test_healthy_rootless_executor_can_claim(
     assert readiness.ready
 
 
+async def test_report_only_canary_emits_active_progress_and_clears_heartbeat(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ditto_screener import l2_report_canary
+
+    agent_id = uuid4()
+    platform = _FakePlatform([[]])
+    worker = _worker(
+        make_config(), platform, _FakeGate(_decision(ScreeningOutcome.PASS))
+    )
+
+    async def consume(**kwargs: Any) -> bool:
+        kwargs["on_claim"](type("Claim", (), {"agent_id": agent_id})())
+        kwargs["progress"]("source_review_0")
+        await asyncio.sleep(0)
+        return True
+
+    monkeypatch.setattr(l2_report_canary, "consume", consume)
+    assert await worker._sweep(asyncio.Event()) == 1
+    assert any(
+        beat.state == "screening"
+        and beat.active_agent_id == agent_id
+        and beat.progress is not None
+        for beat in platform.heartbeats
+    )
+    assert platform.heartbeats[-1].state == "polling"
+    assert platform.heartbeats[-1].active_agent_id is None
+
+
 async def test_screen_one_pass_posts_signed_pass_verdict(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -579,6 +626,38 @@ async def test_default_item_screens_full_pipeline(
     await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
     assert gate.build_only_calls == [False]
     assert platform.verdicts[0]["build_only"] is False
+
+
+async def test_v13_source_hold_uploads_image_evidence_without_passing(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent = uuid4()
+    platform = _FakePlatform([])
+    decision = ScreeningDecision(
+        outcome=ScreeningOutcome.QUARANTINE,
+        detail="source review incomplete",
+        manifest_digest="ab" * 32,
+        evidence=(
+            PolicyEvidence(
+                "adjudication", "adjudicated-source-review-escalate", "held"
+            ),
+        ),
+        policy_version=13,
+    )
+    worker = _worker(make_config(), platform, _FakeGate(decision))
+
+    await worker._screen_one(_item(agent), policy_version=13)
+
+    assert len(platform.image_uploads) == 1
+    assert [r["check_code"] for r in platform.verification_receipts] == [
+        "archive_sha",
+        "build_image_digest",
+    ]
+    verdict = platform.verdicts[0]
+    assert verdict["outcome"] == ScreenResultOutcome.QUARANTINE
+    assert verdict["passed"] is False
+    assert verdict["image_sha256"] is None
+    assert verdict["image_upload_id"] is None
 
 
 async def test_policy_only_item_reuses_image_without_upload(

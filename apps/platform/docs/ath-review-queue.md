@@ -75,6 +75,45 @@ eval -> top five -> integrity double-check -> clear or reject
   an enforcing posture rejects, and anything else stays a pending operator hold
   carrying `deep_review_result`.
 
+## A reopened hold's active reason is not its original reason
+
+`ath_reviews` keeps **one row per agent** for its whole life, and the reopen
+path cannot rewrite what it supersedes:
+
+- `original_reason` is immutable. `resolve_copy_review` compares it against
+  `agents.review_reason` and answers `409 agent hold reason no longer matches
+  review` when they disagree, so a reopen that edited it would break its own
+  exit.
+- `resolution` / `resolution_reason` must be NULLed on reopen to satisfy
+  `ath_reviews_lifecycle_check`, which forbids a resolution on a `pending` row.
+
+So after a guarded reopen the only durable record of the *current* reason, and
+of the decision that was withdrawn, is the append-only `ath_review_actions`
+ledger: the newest `reopen` action carries the reconsideration reason, and the
+`clear` / `reject` action before it carries the decision it withdrew.
+
+`ditto/api_server/ath_review_state.py` is the single projection rule. Both the
+public activity page and the operator queue / audit endpoints derive through
+it, so a pending appeal reads the same on every surface:
+
+| Field on `original` (`hold` in Backroom) | Meaning |
+|---|---|
+| `reason` | Why the submission is under review **now** |
+| `reason_source` | `original_hold`, or `reconsideration` after a reopen |
+| `superseded_reason` | The original hold reason, preserved |
+| `superseded_resolution` | `clear` / `reject` — the decision the reopen withdrew |
+| `superseded_resolution_reason` | That decision's own public reason |
+| `superseded_at` | When the reopen superseded it |
+
+A `pending` row never carries a live `resolution`, and the `superseded_*`
+fields are history. Quoting one back to a miner as a standing finding is a
+factual error: `get_screening_review_queue` published exactly that for
+lets_635 v1, whose I5 rejection had been withdrawn as unsupported.
+
+Nothing is deleted or rewritten to produce this. `original_reason`,
+`agents.review_reason`, and the full action history are unchanged, and the
+audit endpoint still returns the whole `action_history` chain.
+
 ## Precedents are the resolved holdings
 
 `GET /api/v1/admin/copy-reviews/precedents` is the court reporter, not the

@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID, uuid4
@@ -36,16 +37,22 @@ from ditto.api_models.admin_copy_review import (
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.anti_copy_comparison import compare_anti_copy_pair
 from ditto.api_server.artifact_audit import client_ip, request_detail
+from ditto.api_server.ath_review_state import (
+    derive_ath_review_lifecycle,
+    load_reopened_review_actions,
+)
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.source_diff import (
     build_source_diff_manifest,
     unified_diff_for_file,
+    without_omitted,
 )
 from ditto.api_server.source_inspect import (
     MAX_TARBALL_BYTES,
     SourceInspectError,
     TarSourceInspector,
+    TextSnapshot,
 )
 from ditto.api_server.storage import ObjectDownloadFailedError, S3StorageClient
 from ditto.db.models import (
@@ -127,6 +134,7 @@ def _item(
     *,
     miner_coldkey: str | None = None,
     duplicate_of_coldkey: str | None = None,
+    actions: list[AthReviewAction] | None = None,
 ) -> AdminCopyReviewItem:
     provenance = review.algorithm_provenance
     review_kind = provenance.get("review_kind")
@@ -137,6 +145,16 @@ def _item(
         AdminDeferredReviewEvidence.model_validate(deferred_raw)
         if isinstance(deferred_raw, dict)
         else None
+    )
+    # The operator queue reads the same durable ledger the public projection
+    # does, so a reopened hold stops presenting the decision it withdrew as its
+    # live reason. ``actions`` is loaded only for rows that carry a
+    # ``reopened_at``; without it a reopened row still reports the
+    # reconsideration reason, just not what it superseded.
+    lifecycle = derive_ath_review_lifecycle(
+        review,
+        latest_action=actions[-1] if actions else None,
+        actions=actions,
     )
     return AdminCopyReviewItem(
         review_id=review.review_id,
@@ -164,7 +182,16 @@ def _item(
                 review_kind,
             ),
             duplicate_of=review.original_duplicate_of,
-            reason=review.original_reason,
+            reason=(
+                lifecycle.reason
+                if lifecycle.reason_source == "reconsideration"
+                else review.original_reason
+            ),
+            reason_source=lifecycle.reason_source,
+            superseded_reason=lifecycle.superseded_reason,
+            superseded_resolution=lifecycle.superseded_resolution,
+            superseded_resolution_reason=lifecycle.superseded_resolution_reason,
+            superseded_at=lifecycle.superseded_at,
             policy_version=review.original_policy_version,
             fingerprint_versions=_fingerprint_versions(review.original_evidence),
             reference_provenance=str(
@@ -217,6 +244,7 @@ def _audit(
             matched,
             miner_coldkey=miner_coldkey,
             duplicate_of_coldkey=duplicate_of_coldkey,
+            actions=list(actions or []),
         ),
         agent_status=agent.status.value,
         held_artifact_sha256=held_artifact_sha256,
@@ -567,6 +595,12 @@ async def list_copy_reviews(
         session,
         agent_ids={agent.agent_id for _review, agent in row_pairs} | set(matched),
     )
+    # A reopened hold's active reason lives in the action ledger, not on the
+    # review row. Without this the queue keeps publishing the reason of a
+    # decision that has since been withdrawn.
+    reopen_actions = await load_reopened_review_actions(
+        session, [review for review, _agent in row_pairs]
+    )
     return AdminCopyReviewList(
         items=[
             _item(
@@ -580,6 +614,7 @@ async def list_copy_reviews(
                     if review.original_duplicate_of is not None
                     else None
                 ),
+                actions=reopen_actions.get(review.review_id),
             )
             for review, agent in row_pairs
         ],
@@ -686,6 +721,9 @@ async def get_copy_review(
         matched,
         miner_coldkey=candidate_coldkey,
         duplicate_of_coldkey=reference_coldkey,
+        actions=(await load_reopened_review_actions(session, [review])).get(
+            review.review_id
+        ),
     )
 
 
@@ -843,7 +881,11 @@ async def open_copy_review(
             )
             if same_hold:
                 return AdminCopyReviewOpenResponse(
-                    review=_item(existing, agent),
+                    review=_item(
+                        existing,
+                        agent,
+                        actions=await _review_actions(session, existing.review_id),
+                    ),
                     agent_status=agent.status.value,
                     idempotent=True,
                     reopened=latest_reopen is not None,
@@ -909,7 +951,11 @@ async def open_copy_review(
             )
             await session.flush()
             return AdminCopyReviewOpenResponse(
-                review=_item(existing, agent),
+                review=_item(
+                    existing,
+                    agent,
+                    actions=await _review_actions(session, existing.review_id),
+                ),
                 agent_status=agent.status.value,
                 idempotent=False,
                 reopened=True,
@@ -1129,13 +1175,40 @@ async def _open_inspector(agent: Agent, storage: S3StorageClient) -> TarSourceIn
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+@dataclass(frozen=True)
+class _DiffPair:
+    candidate: Agent
+    reference: Agent
+    candidate_inspector: TarSourceInspector
+    reference_inspector: TarSourceInspector
+    candidate_snapshot: TextSnapshot
+    reference_snapshot: TextSnapshot
+
+    @property
+    def omitted(self) -> set[str]:
+        """Paths the bounded read skipped in EITHER artifact: not compared."""
+        return {
+            *self.candidate_snapshot.omitted_paths,
+            *self.reference_snapshot.omitted_paths,
+        }
+
+
+async def _read_skipped(inspector: TarSourceInspector, path: str) -> str:
+    """Read one file the combined snapshot budget skipped, on its own."""
+    try:
+        return await asyncio.to_thread(inspector.read_full_text, path)
+    except SourceInspectError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 async def _diff_pair(
     agent_id: UUID, session: AsyncSession, storage: S3StorageClient
-) -> tuple[Agent, Agent, dict[str, str], dict[str, str]]:
-    """Load the held agent, its matched reference, and both text-file maps.
+) -> _DiffPair:
+    """Load the held agent, its matched reference, and both text snapshots.
 
     Both tarballs are fetched, digest-verified, and read in one pass each; the
-    per-file text maps feed either the manifest or a single-file unified diff.
+    per-file text maps feed either the manifest or a single-file unified diff,
+    and each snapshot names the files its bounded read skipped.
     """
     row = await _get_review(session, agent_id)
     if row is None:
@@ -1152,11 +1225,18 @@ async def _diff_pair(
         )
     candidate_inspector = await _open_inspector(candidate_agent, storage)
     reference_inspector = await _open_inspector(reference_agent, storage)
-    candidate_text, reference_text = await asyncio.gather(
-        asyncio.to_thread(candidate_inspector.read_all_text),
-        asyncio.to_thread(reference_inspector.read_all_text),
+    candidate_snapshot, reference_snapshot = await asyncio.gather(
+        asyncio.to_thread(candidate_inspector.read_text_snapshot),
+        asyncio.to_thread(reference_inspector.read_text_snapshot),
     )
-    return candidate_agent, reference_agent, candidate_text, reference_text
+    return _DiffPair(
+        candidate=candidate_agent,
+        reference=reference_agent,
+        candidate_inspector=candidate_inspector,
+        reference_inspector=reference_inspector,
+        candidate_snapshot=candidate_snapshot,
+        reference_snapshot=reference_snapshot,
+    )
 
 
 async def _audit_diff_pair(
@@ -1214,15 +1294,19 @@ async def get_copy_review_source_diff(
     Classifies every path as added / removed / modified / identical / renamed
     with change stats so an operator can see at a glance which files were copied
     verbatim, which were altered, and which were only moved. Unified-diff
-    bodies come from the per-file endpoint.
+    bodies come from the per-file endpoint. Readable files the bounded source
+    read skipped in either artifact are listed in ``omitted_paths``, never
+    classified as added or removed.
     """
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
-    candidate, reference, candidate_text, reference_text = await _diff_pair(
-        agent_id, session, storage
-    )
+    pair = await _diff_pair(agent_id, session, storage)
+    candidate, reference = pair.candidate, pair.reference
     manifest = await asyncio.to_thread(
-        build_source_diff_manifest, candidate_text, reference_text
+        build_source_diff_manifest,
+        pair.candidate_snapshot.texts,
+        pair.reference_snapshot.texts,
+        omitted=sorted(pair.omitted),
     )
     logger.info(
         "admin_actor=%s viewed copy-review source diff agent_id=%s reference_id=%s",
@@ -1267,9 +1351,24 @@ async def get_copy_review_source_diff_file(
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
     normalized = path.removeprefix("./")
-    candidate, reference, candidate_text, reference_text = await _diff_pair(
-        agent_id, session, storage
+    pair = await _diff_pair(agent_id, session, storage)
+    candidate, reference = pair.candidate, pair.reference
+    # Match the manifest: files skipped on either side are out of the pairing.
+    candidate_text, reference_text, _ = without_omitted(
+        pair.candidate_snapshot.texts, pair.reference_snapshot.texts, pair.omitted
     )
+    if normalized in pair.omitted:
+        # The requested file itself was skipped by the combined budget. Read it
+        # on its own from each side that has it, so the diff compares the real
+        # bodies instead of reporting a one-sided add or delete.
+        for inspector, snapshot, texts in (
+            (pair.candidate_inspector, pair.candidate_snapshot, candidate_text),
+            (pair.reference_inspector, pair.reference_snapshot, reference_text),
+        ):
+            if normalized in snapshot.texts:
+                texts[normalized] = snapshot.texts[normalized]
+            elif normalized in snapshot.omitted_paths:
+                texts[normalized] = await _read_skipped(inspector, normalized)
     try:
         detail = await asyncio.to_thread(
             unified_diff_for_file, normalized, candidate_text, reference_text

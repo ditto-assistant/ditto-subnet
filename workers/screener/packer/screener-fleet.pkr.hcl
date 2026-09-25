@@ -20,9 +20,12 @@
 
 packer {
   required_plugins {
+    # Exact pin: the plugin runs with the bake service account's credentials,
+    # so a new release must be reviewed, not pulled in by `packer init`.
+    # v1.2.7 is what the last successful scheduled bake installed.
     googlecompute = {
       source  = "github.com/hashicorp/googlecompute"
-      version = ">= 1.1.0"
+      version = "= 1.2.7"
     }
   }
 }

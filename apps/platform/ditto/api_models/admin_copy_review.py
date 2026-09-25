@@ -38,6 +38,41 @@ class AdminCopyReviewEvidence(BaseModel):
     ] = "copy"
     duplicate_of: UUID | None
     reason: str | None
+    """Why this submission is under review RIGHT NOW.
+
+    For an ordinary hold this is the reason the review was opened with. For a
+    hold that was reopened after its resolution was withdrawn, it is the
+    reconsideration reason from the newest ``reopen`` action instead, and the
+    superseded text moves to ``superseded_reason`` /
+    ``superseded_resolution_reason``. A pending reconsideration must not
+    advertise a withdrawn finding as the live reason, and the public activity
+    projection has always followed the same rule.
+    """
+
+    reason_source: Literal["original_hold", "reconsideration"] = "original_hold"
+    """Which lifecycle event ``reason`` came from. Read this before quoting it."""
+
+    superseded_reason: str | None = None
+    """The original hold reason, preserved verbatim, once superseded.
+
+    Null unless ``reason_source`` is ``reconsideration``. Nothing is rewritten
+    to produce this: ``ath_reviews.original_reason`` is immutable and the full
+    action ledger stays available from the audit endpoint.
+    """
+
+    superseded_resolution: Literal["clear", "reject"] | None = None
+    """The decision the reopen withdrew — historical, not an active finding."""
+
+    superseded_resolution_reason: str | None = None
+    """That withdrawn decision's own reason, recovered from the action ledger.
+
+    The reopen NULLs ``ath_reviews.resolution_reason`` to satisfy the row's
+    lifecycle constraint, so the append-only ledger is the durable copy.
+    """
+
+    superseded_at: datetime | None = None
+    """When the reopen superseded the prior decision."""
+
     policy_version: int
     fingerprint_versions: dict[str, int | str | None]
     reference_provenance: str
@@ -220,6 +255,12 @@ class AdminSourceDiffManifest(BaseModel):
     # True when more files exist than the manifest bound returns; file_count
     # still reflects the real total so the omission is never silent.
     truncated: bool
+    # Readable text files the bounded source read skipped in EITHER artifact
+    # (combined text budget or file cap). They were NOT compared, so they appear
+    # in no ``files`` row or count; ``file_count`` covers compared paths only.
+    omitted_file_count: int = 0
+    # The first MAX_OMITTED_PATHS omitted paths, sorted.
+    omitted_paths: list[str] = Field(default_factory=list)
 
 
 class AdminSourceDiffFileDetail(BaseModel):

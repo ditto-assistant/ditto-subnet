@@ -383,10 +383,13 @@ memory and never leak another user's facts.
 
 Old harnesses that ignore both fields keep working on the PRACTICE path
 (scored selection-only, capped on affected tool categories). On the scored
-path they do not: observed execution is mandatory there (an observable case
-that never routed through the endpoint scores 0), and a harness that never
-touches `tool_endpoint` cannot answer the reachability preflight below, so
-its scored runs fail and retry rather than complete.
+path they do not: observed execution is mandatory there, so every observable
+case that never routes through `tool_endpoint` scores 0. The scored run still
+completes; it is not failed or retried for this. Tool reachability is verified
+by the validator against its own listener (see the `preflight:` note above), so
+there is no harness-answered reachability turn whose absence a validator could
+treat as infrastructure. A harness that ignores the endpoint simply earns
+nothing on the observable cases.
 
 ## Score report
 

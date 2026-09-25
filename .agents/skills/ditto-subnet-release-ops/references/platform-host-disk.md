@@ -101,3 +101,114 @@ unavailable after restoring disk headroom. No log, database, or WAL file is dele
 protected Terraform plan after the live grow; never apply a plan that replaces
 the database VM. This workflow does not migrate the cluster to the attached data
 disk or change persistent IAM.
+
+## Collector log retention (prevention, not recovery)
+
+Growing the boot disk bought headroom; it did not stop the growth. PostgreSQL's
+`log_rotation_age` / `log_rotation_size` only open a new file — the cluster never
+deletes one. `roles/postgres` therefore installs a bounded reclaimer, the same
+shape as `screener_cache_gc_*` on the screener hosts:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `postgres_log_gc_enabled` | `true` | `false` stops and disables the timer |
+| `postgres_log_gc_retention_days` | `7` | age bound; matches the incident recovery |
+| `postgres_log_gc_max_total_mb` | `6144` | hard ceiling, oldest-first |
+| `postgres_log_gc_on_calendar` | `hourly` | `ditto-postgres-log-gc.timer` cadence |
+| `postgres_log_gc_dry_run` | `false` | `true` logs the full plan, deletes nothing |
+
+`ditto-postgres-log-gc` runs as `postgres`, writes only the collector directory,
+and never deletes the live file (`current_logfiles` plus the newest file by
+mtime). At the measured 635 MB/day, 7 days is ~4.4 GB; the ceiling is the hard
+bound a slow-query burst cannot outrun. `log_min_duration_statement` stays at
+500 ms deliberately — that log is the only evidence for the slow statements in
+#1745 that still need a fix.
+
+Role tasks fail closed rather than silently reclaim nothing: the policy must be
+1–30 days and 256–20480 MB, and `postgres_log_gc_dir` / `_glob` must describe the
+same files as `postgres_tuning.log_directory` / `log_filename`.
+
+Make it live (protected path, operator-run):
+
+```bash
+export DITTO_PG_PASSWORD=…   # only for a first provision; day two reuses the file
+GCP_OSLOGIN_USER=… ansible-playbook -i infra/ansible/inventory/gcp.yml \
+  infra/ansible/playbooks/gcp-platform-pg.yml --check --diff
+# then the same command without --check
+```
+
+Verify on the host: `systemctl list-timers ditto-postgres-log-gc.timer`,
+`systemd-analyze verify ditto-postgres-log-gc.service`,
+`journalctl -u ditto-postgres-log-gc -n 50`, `du -sh /opt/ditto/logs/postgresql`.
+First run on prod reclaims everything older than 7 days in one pass. To rehearse,
+converge with `-e postgres_log_gc_dry_run=true` first and read the plan in the
+journal.
+
+## The attached 50 GB data disk: decision and runbook (NOT executed)
+
+`ditto-pg-platform-data` (50 GB pd-balanced, `prevent_destroy`) has been attached
+since the stack was written, with **no filesystem and no mount**. PGDATA, WAL,
+and the collector logs all still live on the boot disk.
+
+**Decision: do not migrate now.** With the boot disk at 100 GB and collector logs
+bounded, the live working set (11 GB data + 2 GB WAL + ≤6 GB logs) is under 20%
+of the boot disk. A cluster relocation is an offline, non-atomic change to the
+one stateful component in SN118 whose loss is unrecoverable from the chain; the
+capacity argument for doing it under time pressure is gone. Revisit when the
+cluster approaches ~50 GB, when WAL and data need separate IOPS, or when a
+boot-disk replacement is needed for another reason — the data disk surviving
+instance replacement is its real value.
+
+What is already representable, default off: `roles/postgres/tasks/data_disk.yml`
+mounts the volume (only) behind two independent gates. Nothing runs until an
+operator sets both:
+
+```bash
+# 1. Mount an already-formatted disk:
+#    postgres_data_disk_enabled=true      (group_vars/role_platform_postgres.yml)
+# 2. First mount of the still-empty disk additionally needs, once:
+#    -e postgres_data_disk_allow_format=true
+GCP_OSLOGIN_USER=… ansible-playbook -i infra/ansible/inventory/gcp.yml \
+  infra/ansible/playbooks/gcp-platform-pg.yml --check --diff \
+  -e postgres_data_disk_enabled=true -e postgres_data_disk_allow_format=true
+```
+
+It asserts `/dev/disk/by-id/google-ditto-pg-platform-data` exists, refuses a disk
+carrying a foreign filesystem, never reformats one that already has ext4, mounts
+at `/opt/ditto/pgdata` with `nofail`, and stops there. It does **not** move
+PGDATA, WAL, or the logs, and flipping the flag back to `false` does not unmount
+(skipped tasks, not a teardown) — unmount by hand, deliberately.
+
+Migration runbook, if the decision above is ever reversed. Maintenance window,
+Platform API returns 500s throughout, never run it ad hoc:
+
+1. Announce the window. Stop the Platform API on both app VMs (`pm2 stop`), so
+   the cluster is not being written during the copy.
+2. `pg_dumpall` (or a GCE disk snapshot of the boot disk) to a location that is
+   not the boot disk, and verify the artifact before touching anything.
+3. `sudo systemctl stop postgresql` and confirm with `pg_lsclusters` that the
+   cluster is down. A copy from a running cluster is silently corrupt.
+4. Converge with the two gates above to format and mount the volume, or do it by
+   hand: `mkfs.ext4 /dev/disk/by-id/google-ditto-pg-platform-data`,
+   `mount /opt/ditto/pgdata`, fstab entry by `/dev/disk/by-id/...` with `nofail`
+   (never `/dev/sdb` — device order is not stable).
+5. `rsync -aHAX --numeric-ids /var/lib/postgresql/17/main/ /opt/ditto/pgdata/main/`
+   then compare sizes and file counts. Keep the original directory; do not delete
+   it in the same window.
+6. Point the cluster at the new location — `data_directory` in
+   `/etc/postgresql/17/main/postgresql.conf` — and ensure `postgres:postgres`
+   ownership and mode `0700`. The Ansible role does not own `data_directory`
+   today; adding it is part of this change, not a manual edit to be re-applied by
+   hand afterwards.
+7. Start PostgreSQL, then verify: `pg_isready`, `SHOW data_directory`,
+   `SELECT pg_is_in_recovery()`, row counts on `agents` and
+   `public_activity_scores`, and Platform `/health` plus the leaderboard.
+8. Restart the Platform API. Only after a clean day, and a fresh backup, reclaim
+   the old directory on the boot disk.
+
+Risks to weigh before choosing that path: an ENOSPC or ownership mistake mid-copy
+leaves a cluster that starts against a partial directory; a `/dev/sdX` fstab entry
+plus `nofail` can silently boot with the disk absent and PGDATA pointing at an
+empty mountpoint; the 50 GB volume becomes the new unmonitored bound (there is
+still no >80% disk alert — the remaining #1745 follow-up); and the migration must
+be represented in Ansible, or the next converge fights the hand-edited config.

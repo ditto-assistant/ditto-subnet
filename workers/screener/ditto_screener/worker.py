@@ -529,6 +529,45 @@ class ScreenerWorker:
                 f"{required_policy}, received {queue.required_policy_version}"
             )
         if not queue.items:
+            from ditto_screener.l2_report_canary import consume as consume_l2_canary
+
+            canary_claimed = False
+
+            def on_canary_claim(claim):  # type: ignore[no-untyped-def]
+                nonlocal canary_claimed
+                canary_claimed = True
+                self._active_agent_id = claim.agent_id
+                self._job_started_at = int(time.time())
+                self._set_progress("preparing")
+
+            canary_heartbeat_stop = asyncio.Event()
+            canary_heartbeat = asyncio.create_task(
+                self._heartbeat_while_active(canary_heartbeat_stop)
+            )
+            try:
+                if await consume_l2_canary(
+                    config=self._config,
+                    platform=self._platform,
+                    primary_gate=self._gate,
+                    settings=review_settings,
+                    instance_id=self._instance_id,
+                    on_claim=on_canary_claim,
+                    progress=self._set_progress,
+                ):
+                    return 1
+            finally:
+                canary_heartbeat_stop.set()
+                await canary_heartbeat
+                if canary_claimed:
+                    progress_tasks = tuple(self._progress_heartbeat_tasks)
+                    for task in progress_tasks:
+                        task.cancel()
+                    await asyncio.gather(*progress_tasks, return_exceptions=True)
+                    self._progress_heartbeat_tasks.clear()
+                    self._active_agent_id = None
+                    self._active_progress_stage = None
+                    self._job_started_at = None
+                    await self._report_heartbeat("polling", force=True)
             # Only an idle primary worker may consume the optional shadow lane;
             # the Platform serializes its global budget and active assessment.
             from ditto_screener.conversation_worker import consume
@@ -655,6 +694,23 @@ class ScreenerWorker:
                     image_ref=image.image_ref,
                 )
                 screened_image = image
+                await record_mechanical_verification(
+                    "build_image_digest", image_sha256=image.sha256.lower()
+                )
+
+            async def publish_held_image(image: BuiltImageArtifact) -> None:
+                # Keep the verified artifact available for exact-attempt private
+                # checks while the source decision remains quarantined. Never
+                # attach it to the agent or the non-passing verdict.
+                await self._platform.upload_screened_image(
+                    agent_id,
+                    attempt_id=attempt_id,
+                    path=image.path,
+                    sha256=image.sha256,
+                    size_bytes=image.size_bytes,
+                    image_id=image.image_id,
+                    image_ref=image.image_ref,
+                )
                 await record_mechanical_verification(
                     "build_image_digest", image_sha256=image.sha256.lower()
                 )
@@ -798,6 +854,7 @@ class ScreenerWorker:
                         progress=self._set_progress,
                         deadline=screen_deadline,
                         publish_image=publish_image,
+                        publish_held_image=publish_held_image,
                         record_archive_verification=record_archive_verification,
                         record_runtime_verification=record_runtime_verification,
                         remote_build=remote_build,
@@ -813,6 +870,7 @@ class ScreenerWorker:
                         policy_only=item.policy_only,
                         deferred_source_review=item.deferred_source_review,
                         policy_version=policy_version,
+                        scored_runtime_evidence=item.scored_runtime_evidence,
                     )
             if result.policy_version != policy_version:
                 raise PlatformError(

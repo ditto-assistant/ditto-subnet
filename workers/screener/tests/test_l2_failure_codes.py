@@ -60,6 +60,7 @@ def test_every_static_l2_valueerror_maps_to_a_named_code() -> None:
             ValueError("L2 model exceeded token or cost budget raw_input=1"),
             "l2-model-budget-exhausted",
         ),
+        (ValueError("L2 cached input exceeds raw input"), "l2-model-response-invalid"),
         (ValueError("brand new unmapped failure"), "l2-valueerror"),
         (OSError("docker missing"), "l2-oserror"),
     ],

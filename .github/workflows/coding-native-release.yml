@@ -38,19 +38,19 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - name: Public artifact and refusal regressions
         run: >-
-          uv run --frozen pytest -q ditto/tests/test_coding_native_release.py
+          uv run --locked pytest -q ditto/tests/test_coding_native_release.py
           ditto/tests/test_coding_native_host_preflight.py
           ditto/tests/test_coding_native_matrix.py ditto/tests/test_coding_qualification.py
           ditto/tests/test_coding_hosted_image_import.py
           ditto/tests/test_coding_hosted_runtime_bundle.py
       - name: Lint release-set tooling
         run: |
-          uv run --frozen ruff check infra/scripts/build-coding-native-release.py ditto/tests/test_coding_native_release.py
-          uv run --frozen ruff format --check infra/scripts/build-coding-native-release.py ditto/tests/test_coding_native_release.py
-          uv run --frozen ruff check infra/scripts/inspect-coding-native-host.py ditto/tests/test_coding_native_host_preflight.py
-          uv run --frozen ruff format --check infra/scripts/inspect-coding-native-host.py ditto/tests/test_coding_native_host_preflight.py
-          uv run --frozen ruff check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py
-          uv run --frozen ruff format --check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py
+          uv run --locked ruff check infra/scripts/build-coding-native-release.py ditto/tests/test_coding_native_release.py
+          uv run --locked ruff format --check infra/scripts/build-coding-native-release.py ditto/tests/test_coding_native_release.py
+          uv run --locked ruff check infra/scripts/inspect-coding-native-host.py ditto/tests/test_coding_native_host_preflight.py
+          uv run --locked ruff format --check infra/scripts/inspect-coding-native-host.py ditto/tests/test_coding_native_host_preflight.py
+          uv run --locked ruff check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py
+          uv run --locked ruff format --check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py
   public-build:
     if: github.event_name == 'workflow_dispatch'
     needs: verify

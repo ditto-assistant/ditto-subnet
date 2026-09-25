@@ -28,8 +28,10 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     assert "cheatcodes" in workflow["jobs"]
     assert "dashboard-bundle" in workflow["jobs"]
     assert "dashboard-publish" in workflow["jobs"]
-    assert "uv run pytest ditto/tests/preview -q" in text
-    assert "uv run python -m ditto.preview compose" in text
+    assert "uv run --locked pytest ditto/tests/preview -q" in text
+    assert "uv run --locked python -m ditto.preview compose" in text
+    # An unlocked `uv run` would silently resolve dependencies outside uv.lock.
+    assert "uv run " not in text.replace("uv run --locked ", "")
     assert "pull-requests: read" in text
     assert "gh api --paginate" in text
     assert "ref: ${{ needs.plan.outputs.sha }}" in text

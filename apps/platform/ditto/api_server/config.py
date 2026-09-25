@@ -47,6 +47,10 @@ from ditto.api_server.private_benchmark_preparation import (
     check_private_preparation_config,
     parse_private_preparation_config,
 )
+from ditto.api_server.source_review_queue_slo_config import (
+    SourceReviewQueueSloConfig,
+    parse_source_review_queue_slo_config_from_env,
+)
 from ditto.api_server.storage import StorageConfig, parse_storage_config_from_env
 from ditto.api_server.validator_names import (
     ValidatorNamesConfig,
@@ -517,6 +521,12 @@ class ApiServerConfig:
         default_factory=EfficiencyBonusConfig
     )
     """Relative token-efficiency bonus knobs (bench_version >= 7); default-off."""
+
+    source_review_queue_slo: SourceReviewQueueSloConfig = field(
+        default_factory=SourceReviewQueueSloConfig
+    )
+    """Observability-only overdue thresholds for the ordinary source-review
+    queue-age SLO (ditto-subnet#2042). Both thresholds default unset."""
 
     targon: TargonRentalConfig | None = None
     """In-process Targon rental loop. Disabled when the API key is absent."""
@@ -1033,6 +1043,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         top5_backoff_doubling_tempos=top5_backoff_doubling_tempos,
         top5_backoff_cap=top5_backoff_cap,
         efficiency_bonus=efficiency_bonus,
+        source_review_queue_slo=parse_source_review_queue_slo_config_from_env(),
     )
 
 

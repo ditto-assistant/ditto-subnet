@@ -30,7 +30,13 @@ def platform_contract(monkeypatch):
     "overrides",
     [
         {},
-        {"timeout_seconds": 1800, "max_steps": 48, "critic_reasoning_effort": "high"},
+        {
+            "timeout_seconds": 1800,
+            "max_steps": 256,
+            "max_output_tokens": 1_000_000,
+            "max_cost_usd": 25,
+            "critic_reasoning_effort": "high",
+        },
         {"timeout_seconds": 30, "max_steps": 1, "critic_reasoning_effort": "low"},
     ],
 )
@@ -49,6 +55,8 @@ def test_platform_revision_deserializes_and_applies(
     runtime = effective.apply_to(make_config())
     assert runtime.l2_timeout_seconds == settings.timeout_seconds
     assert runtime.l2_max_steps == settings.max_steps
+    assert runtime.l2_max_output_tokens == settings.max_output_tokens
+    assert runtime.l2_max_cost_usd == settings.max_cost_usd
     assert runtime.l2_critic_reasoning_effort == settings.critic_reasoning_effort
     # Applying a revision rebuilds the real layered reviewer. Its constructor
     # must accept the same values, not merely the transport schema.

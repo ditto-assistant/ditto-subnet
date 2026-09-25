@@ -69,6 +69,7 @@ from ditto_screening_protocol import (
     SubmissionSourceReviewRequest,
     SubmissionSourceReviewResponse,
 )
+from ditto_screening_protocol.v13_private_receipt import V13ReplayPrivateReceipt
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -77,6 +78,7 @@ logger = logging.getLogger(__name__)
 
 _PREFIX = "/api/v1/screener"
 _IMAGE_REQUEST_TIMEOUT = httpx.Timeout(300.0, connect=30.0, pool=30.0)
+_IMAGE_INIT_RETRY_DELAYS = (0.5, 1.0)
 _REMOTE_BUILD_POLL_SECONDS = 5.0
 _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS = 120.0
 
@@ -173,6 +175,70 @@ class PlatformClient:
                 f"conversation control returned HTTP {response.status_code}"
             )
         return response.json()
+
+    async def submit_replay_private_receipt(
+        self, receipt: V13ReplayPrivateReceipt
+    ) -> dict[str, Any]:
+        """One authenticated report-only dispatch; never retry uncertain writes."""
+        response = await self._client.post(
+            self._base
+            + _PREFIX
+            + f"/verification-replays/{receipt.binding.replay_id}/private-receipt",
+            json=receipt.model_dump(mode="json"),
+            headers=await self._auth_headers(),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise PlatformError(
+                f"replay private receipt returned HTTP {response.status_code}"
+            )
+        body = response.json()
+        if (
+            type(body) is not dict
+            or body.get("policy_verification_complete") is not False
+            or body.get("status") != "recorded_unverified"
+        ):
+            raise PlatformError("replay private receipt response invalid")
+        return body
+
+    async def replay_private_inputs(self, replay_id: UUID) -> dict[str, Any]:
+        """Fetch current short-lived image URLs and immutable role bindings."""
+        response = await self._client.get(
+            self._base + _PREFIX + f"/verification-replays/{replay_id}/private-inputs",
+            headers=await self._auth_headers(),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise PlatformError(
+                f"replay private inputs returned HTTP {response.status_code}"
+            )
+        body = response.json()
+        if (
+            type(body) is not dict
+            or body.get("replay_id") != str(replay_id)
+            or body.get("policy_verification_complete") is not False
+        ):
+            raise PlatformError("replay private inputs response invalid")
+        return body
+
+    async def renew_verification_replay(self, replay_id: UUID) -> dict[str, Any]:
+        response = await self._client.post(
+            self._base + _PREFIX + f"/verification-replays/{replay_id}/renew",
+            headers=await self._auth_headers(),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise PlatformError(
+                f"replay lease renewal returned HTTP {response.status_code}"
+            )
+        body = response.json()
+        if (
+            type(body) is not dict
+            or body.get("replay_id") != str(replay_id)
+            or body.get("status") != "running"
+        ):
+            raise PlatformError("replay lease renewal response invalid")
+        return body
 
     async def _refresh_auth_headers(self, path: Path) -> dict[str, str]:
         """Serialize credential rotation across every worker on one node."""
@@ -434,7 +500,9 @@ class PlatformClient:
             raise PlatformError(
                 f"screening claim rejected ({resp.status_code}): {resp.text[:200]}"
             )
-        return ScreenerQueueResponse.model_validate(resp.json())
+        # The nested signed V13 runtime lease keeps UUID fields strict. Parse
+        # the HTTP JSON bytes as JSON, where UUID strings are the wire form.
+        return ScreenerQueueResponse.model_validate_json(resp.content)
 
     async def get_artifact(
         self, agent_id: UUID, *, attempt_id: UUID | None = None
@@ -457,6 +525,82 @@ class PlatformClient:
                 f"artifact rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return ArtifactResponse.model_validate(resp.json())
+
+    async def claim_l2_report_canary(
+        self,
+        *,
+        instance_id: str,
+        settings_revision: int,
+        settings_checksum: str,
+    ) -> dict[str, Any] | None:
+        """Claim an isolated, non-authoritative L2 audit only when idle."""
+        url = f"{self._base}{_PREFIX}/l2-report-canaries/claim"
+        try:
+            resp = await self._client.post(
+                url,
+                json={
+                    "instance_id": instance_id,
+                    "settings_revision": settings_revision,
+                    "settings_checksum": settings_checksum,
+                },
+                headers=await self._auth_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"L2 canary claim failed: {error}") from error
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"L2 canary claim rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        value = resp.json()
+        if value is not None and not isinstance(value, dict):
+            raise PlatformError("L2 canary claim response is invalid")
+        return value
+
+    async def complete_l2_report_canary(
+        self,
+        canary_id: UUID,
+        *,
+        lease_token: str,
+        lease_expires_at: datetime,
+        status: str,
+        report: dict[str, Any],
+        error_code: str | None,
+    ) -> None:
+        """Commit one idempotent report within its lease; never post a verdict."""
+        url = f"{self._base}{_PREFIX}/l2-report-canaries/{canary_id}/complete"
+        body = {
+            "lease_token": lease_token,
+            "status": status,
+            "report": report,
+            "error_code": error_code,
+        }
+        last_error = "L2 canary completion did not run"
+        for retry_index in range(len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1):
+            try:
+                resp = await self._client.post(
+                    url, json=body, headers=await self._auth_headers()
+                )
+            except httpx.HTTPError as error:
+                last_error = f"L2 canary completion failed: {error}"
+                transient = True
+            else:
+                if resp.status_code == 200:
+                    return
+                last_error = (
+                    f"L2 canary completion rejected ({resp.status_code}): "
+                    f"{resp.text[:200]}"
+                )
+                transient = _is_transient_platform_status(resp.status_code)
+            if not transient or retry_index >= len(_TRANSIENT_PLATFORM_RETRY_DELAYS):
+                raise PlatformError(last_error)
+            delay = _TRANSIENT_PLATFORM_RETRY_DELAYS[retry_index]
+            if datetime.now(UTC) + timedelta(seconds=delay + 1) >= lease_expires_at:
+                raise PlatformError(f"{last_error}; no lease time remains for retry")
+            logger.warning(
+                "%s; retrying report-only completion in %.0fs", last_error, delay
+            )
+            await asyncio.sleep(delay)
+        raise PlatformError(last_error)  # pragma: no cover
 
     async def record_verification_receipt(
         self,
@@ -869,6 +1013,7 @@ class PlatformClient:
             raise PlatformError("screened image changed before multipart upload")
         request = ScreenedImageUploadRequest(
             attempt_id=attempt_id,
+            image_upload_id=uuid4(),
             sha256=sha256,
             size_bytes=size_bytes,
             image_id=image_id,
@@ -883,8 +1028,13 @@ class PlatformClient:
                 operation="image upload initiate",
                 json=request.model_dump(mode="json"),
                 headers=await self._auth_headers(),
+                transient_retry_delays=_IMAGE_INIT_RETRY_DELAYS,
             )
             upload = ScreenedImageUploadResponse.model_validate(response.json())
+            if upload.image_upload_id != request.image_upload_id:
+                raise PlatformError(
+                    "image upload initiate response did not honor the idempotency ID"
+                )
             completed: list[ScreenedImageCompletedPart] = []
             with archive.open("rb") as handle:
                 part_number = 1
@@ -908,6 +1058,7 @@ class PlatformClient:
                         operation=f"image part {part_number} mint",
                         json=part_request.model_dump(mode="json"),
                         headers=await self._auth_headers(),
+                        transient_retry_delays=_TRANSIENT_PLATFORM_RETRY_DELAYS,
                     )
                     part_upload = ScreenedImagePartUploadResponse.model_validate(
                         part_response.json()
@@ -919,6 +1070,7 @@ class PlatformClient:
                         content=part,
                         headers=part_upload.required_headers,
                         accepted=frozenset({200, 201, 204}),
+                        transient_retry_delays=_TRANSIENT_PLATFORM_RETRY_DELAYS,
                     )
                     etag = stored.headers.get("etag")
                     if not etag:
@@ -975,23 +1127,34 @@ class PlatformClient:
         *,
         operation: str,
         accepted: frozenset[int] = frozenset({200}),
+        transient_retry_delays: tuple[float, ...] = (),
         **kwargs: Any,
     ) -> httpx.Response:
-        """Issue exactly one image request; the operator retries parked work."""
-        try:
-            response = await self._client.request(
-                method,
-                url,
-                timeout=_IMAGE_REQUEST_TIMEOUT,
-                **kwargs,
+        """Retry only explicitly idempotent calls on transient failures."""
+        for attempt in range(len(transient_retry_delays) + 1):
+            try:
+                response = await self._client.request(
+                    method,
+                    url,
+                    timeout=_IMAGE_REQUEST_TIMEOUT,
+                    **kwargs,
+                )
+            except httpx.TransportError as error:
+                if attempt < len(transient_retry_delays):
+                    await asyncio.sleep(transient_retry_delays[attempt])
+                    continue
+                raise PlatformError(f"{operation} failed: {error}") from error
+            if response.status_code in accepted:
+                return response
+            if attempt < len(transient_retry_delays) and _is_transient_platform_status(
+                response.status_code
+            ):
+                await asyncio.sleep(transient_retry_delays[attempt])
+                continue
+            raise PlatformError(
+                f"{operation} rejected ({response.status_code}): {response.text[:200]}"
             )
-        except httpx.HTTPError as error:
-            raise PlatformError(f"{operation} failed: {error}") from error
-        if response.status_code in accepted:
-            return response
-        raise PlatformError(
-            f"{operation} rejected ({response.status_code}): {response.text[:200]}"
-        )
+        raise AssertionError("image request retry loop exhausted")
 
     async def _abort_screened_image_upload(
         self,

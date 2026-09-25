@@ -10,11 +10,12 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -24,14 +25,37 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_v13_private_generation import (
     generation_role_digest,
 )
+from ditto.api_server.endpoints.verification_replay import (
+    append_replay_private_receipt,
+    get_replay_private_inputs,
+    get_replay_private_statistics,
+)
 from ditto.db.models import (
     Agent,
     ScreenedImageUpload,
+    ScreenerNode,
     ScreeningAttempt,
     ScreeningPrivatePackageRegistration,
+    ScreeningQuarantine,
+    ScreeningVerificationReplay,
     V13PrivateGenerationGroup,
+    V13ReplayPrivateGenerationGroup,
 )
-from ditto_screening_protocol.v13_private_package import V13_PRIVATE_PROFILE_SHA256
+from ditto_screening_protocol.v13_private_clean_control import (
+    TrustedGenerationGroup,
+    V13MatchedCleanControlCommitment,
+    compute_v13_generation_role_digest,
+)
+from ditto_screening_protocol.v13_private_execute import (
+    PrivateExecutionResult,
+    PrivatePairCounts,
+)
+from ditto_screening_protocol.v13_private_package import (
+    V13_PRIVATE_PROFILE_SHA256,
+    V13PrivateRunSummary,
+)
+from ditto_screening_protocol.v13_private_receipt import V13ReplayPrivateReceipt
+from ditto_screening_protocol.v13_replay_observation import V13ReplayBinding
 
 pytestmark = pytest.mark.asyncio
 _BASE = "/api/v1/admin/v13-private-generation"
@@ -65,9 +89,11 @@ def _assertion(
             :32
         ],
     }
-    encoded = base64.urlsafe_b64encode(
-        json.dumps(claims, separators=(",", ":")).encode()
-    ).decode().rstrip("=")
+    encoded = (
+        base64.urlsafe_b64encode(json.dumps(claims, separators=(",", ":")).encode())
+        .decode()
+        .rstrip("=")
+    )
     signed = f"v1.{encoded}"
     digest = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
     return f"{signed}.{digest}"
@@ -139,6 +165,325 @@ async def _seed_image(
                 verified_at=now,
             )
         )
+
+
+async def test_replay_generation_uses_independent_verified_image(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    target_agent, target_attempt, clean_agent, clean_attempt = (
+        uuid4() for _ in range(4)
+    )
+    await _seed_image(
+        session_maker,
+        agent_id=target_agent,
+        attempt_id=target_attempt,
+        artifact_sha256="a" * 64,
+        image_sha256="b" * 64,
+        status=AgentStatus.QUARANTINED,
+    )
+    await _seed_image(
+        session_maker,
+        agent_id=clean_agent,
+        attempt_id=clean_attempt,
+        artifact_sha256="c" * 64,
+        image_sha256="d" * 64,
+        status=AgentStatus.SCORED,
+    )
+    replay_id, quarantine_id = uuid4(), uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningQuarantine(
+                quarantine_id=quarantine_id,
+                agent_id=target_agent,
+                attempt_id=target_attempt,
+                screener_hotkey=f"screener-{target_agent}",
+                policy_version=13,
+                manifest_digest="e" * 64,
+                reason_code="source-review-inconclusive",
+                status="active",
+                created_at=now,
+            )
+        )
+        await session.flush()
+        session.add(
+            ScreeningVerificationReplay(
+                replay_id=replay_id,
+                request_id=uuid4(),
+                agent_id=target_agent,
+                quarantine_id=quarantine_id,
+                source_attempt_id=target_attempt,
+                artifact_sha256="a" * 64,
+                policy_version=13,
+                image_upload_id=None,
+                image_sha256="f" * 64,
+                image_size_bytes=1024,
+                image_id="sha256:" + "1" * 64,
+                image_staging_id=uuid4(),
+                image_verified_at=now - timedelta(minutes=2),
+                image_verified_storage_key=f"verification-replays/{replay_id}/verified/image.tar",
+                status="running",
+                worker_hotkey="independent-worker",
+                lease_deadline=now + timedelta(minutes=20),
+                lease_started_at=now - timedelta(minutes=3),
+                actor="test:operator",
+                reason="Independent V13 source review",
+            )
+        )
+    approval = await client.post(
+        f"{_BASE}/known-benign-approvals",
+        json={
+            "agent_id": str(clean_agent),
+            "attempt_id": str(clean_attempt),
+            "artifact_sha256": "c" * 64,
+            "image_sha256": "d" * 64,
+            "profile_sha256": V13_PRIVATE_PROFILE_SHA256,
+            "review_evidence_sha256": "e" * 64,
+            "reason": "independent benign source and behavior review",
+        },
+        headers=_HEADERS,
+    )
+    assert approval.status_code == 200, approval.text
+    listed = await client.get(
+        f"{_BASE}/known-benign-approvals?limit=1", headers=_HEADERS
+    )
+    assert listed.status_code == 200
+    assert [row["approval_id"] for row in listed.json()] == [
+        approval.json()["approval_id"]
+    ]
+    later_page = await client.get(
+        f"{_BASE}/known-benign-approvals?limit=1&offset=1", headers=_HEADERS
+    )
+    assert later_page.status_code == 200
+    assert later_page.json() == []
+    fetched = await client.get(
+        f"{_BASE}/known-benign-approvals/{approval.json()['approval_id']}",
+        headers=_HEADERS,
+    )
+    assert fetched.status_code == 200
+    assert fetched.json() == approval.json()
+    payload = {
+        "target_agent_id": str(target_agent),
+        "target_attempt_id": str(target_attempt),
+        "target_artifact_sha256": "a" * 64,
+        "target_image_sha256": "f" * 64,
+        "approval_id": approval.json()["approval_id"],
+        "profile_sha256": V13_PRIVATE_PROFILE_SHA256,
+    }
+    wrong = await client.post(
+        f"{_BASE}/replays/{replay_id}/group",
+        json={**payload, "target_image_sha256": "b" * 64},
+        headers=_HEADERS,
+    )
+    assert wrong.status_code == 409
+    created = await client.post(
+        f"{_BASE}/replays/{replay_id}/group", json=payload, headers=_HEADERS
+    )
+    assert created.status_code == 200, created.text
+    group = created.json()
+    assert group["status"] == "recorded_unverified"
+    assert group["target_image_sha256"] == "f" * 64
+    assert group["target_receipt_sha256"] != group["control_receipt_sha256"]
+    async with session_maker() as session:
+        row = await session.get(
+            V13ReplayPrivateGenerationGroup, UUID(group["group_id"])
+        )
+        assert row is not None
+        assert row.replay_id == replay_id
+        protocol_group = TrustedGenerationGroup.model_validate(
+            row, from_attributes=True
+        )
+        assert group["target_receipt_sha256"] == compute_v13_generation_role_digest(
+            protocol_group, "target"
+        )
+    package = await client.post(
+        f"{_BASE}/replays/{replay_id}/packages/target",
+        json={
+            "generation_receipt_sha256": group["target_receipt_sha256"],
+            "manifest_sha256": "2" * 64,
+            "pair_inventory_sha256": "3" * 64,
+        },
+        headers=_HEADERS,
+    )
+    assert package.status_code == 200, package.text
+    assert package.json()["status"] == "recorded_unverified"
+    mismatched_control = await client.post(
+        f"{_BASE}/replays/{replay_id}/packages/known_benign",
+        json={
+            "generation_receipt_sha256": group["control_receipt_sha256"],
+            "manifest_sha256": "4" * 64,
+            "pair_inventory_sha256": "5" * 64,
+        },
+        headers=_HEADERS,
+    )
+    assert mismatched_control.status_code == 409
+    control_package = await client.post(
+        f"{_BASE}/replays/{replay_id}/packages/known_benign",
+        json={
+            "generation_receipt_sha256": group["control_receipt_sha256"],
+            "manifest_sha256": "4" * 64,
+            "pair_inventory_sha256": "3" * 64,
+        },
+        headers=_HEADERS,
+    )
+    assert control_package.status_code == 200, control_package.text
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id="private-replay-node",
+                provider="test",
+                provider_resource_id="private-replay-resource",
+                screener_hotkey="independent-worker",
+                token_hash="9" * 64,
+                token_expires_at=now + timedelta(hours=1),
+                status="active",
+                verification_replay_capacity=1,
+            )
+        )
+        clean_image = await session.scalar(
+            select(ScreenedImageUpload).where(
+                ScreenedImageUpload.agent_id == clean_agent,
+                ScreenedImageUpload.attempt_id == clean_attempt,
+            )
+        )
+        clean_agent_row = await session.get(Agent, clean_agent)
+        assert clean_image is not None and clean_agent_row is not None
+        clean_image.image_id = "sha256:" + "d" * 64
+        clean_agent_row.screened_image_upload_id = clean_image.image_upload_id
+        clean_agent_row.screened_image_sha256 = clean_image.sha256
+        clean_agent_row.screened_image_size_bytes = clean_image.size_bytes
+        clean_agent_row.screened_image_id = clean_image.image_id
+        clean_agent_row.screened_image_verified_at = clean_image.verified_at
+    storage = Mock()
+    storage.presigned_get_url = AsyncMock(side_effect=["target-url", "control-url"])
+    app.state.storage = storage
+    private_request = Request({"type": "http", "app": app})
+    private_request.state.screener_node_id = "private-replay-node"
+    private_request.state.screener_node_status = "active"
+    async with session_maker() as session:
+        inputs = await get_replay_private_inputs(
+            replay_id, private_request, "independent-worker", session
+        )
+        assert inputs.target_image.url == "target-url"
+        assert inputs.control_image.url == "control-url"
+        assert inputs.target_image.image_sha256 == "f" * 64
+        assert inputs.control_image.image_sha256 == "d" * 64
+        assert inputs.policy_verification_complete is False
+    aggregate = tuple(
+        PrivatePairCounts(
+            transformation_class=class_name,
+            seed_commitment=seed,
+            pairs=10,
+            control_correct=10,
+            variant_correct=9,
+            control_only_correct=1,
+            variant_only_correct=0,
+        )
+        for seed in ("1" * 64, "2" * 64)
+        for class_name in (
+            "field_entity_rename",
+            "request_paraphrase",
+            "record_reorder_decoy",
+        )
+    )
+
+    def _execution(clean: bool) -> PrivateExecutionResult:
+        return PrivateExecutionResult(
+            summary=V13PrivateRunSummary(
+                agent_id=clean_agent if clean else target_agent,
+                attempt_id=clean_attempt if clean else target_attempt,
+                artifact_sha256=("c" if clean else "a") * 64,
+                image_sha256=("d" if clean else "f") * 64,
+                profile_sha256=V13_PRIVATE_PROFILE_SHA256,
+                manifest_sha256=("4" if clean else "2") * 64,
+                runner_hotkey="independent-worker",
+                status="completed",
+                completed_pairs=60,
+                evidence_sha256="8" * 64,
+            ),
+            aggregates=aggregate,
+        )
+
+    receipt = V13ReplayPrivateReceipt(
+        binding=V13ReplayBinding(
+            replay_id=replay_id,
+            agent_id=target_agent,
+            attempt_id=target_attempt,
+            artifact_sha256="a" * 64,
+            image_sha256="f" * 64,
+            image_id="sha256:" + "1" * 64,
+        ),
+        matched=V13MatchedCleanControlCommitment(
+            group_id=UUID(group["group_id"]),
+            replay_id=replay_id,
+            target_agent_id=target_agent,
+            target_attempt_id=target_attempt,
+            target_artifact_sha256="a" * 64,
+            target_image_sha256="f" * 64,
+            target_manifest_sha256="2" * 64,
+            control_agent_id=clean_agent,
+            control_attempt_id=clean_attempt,
+            control_artifact_sha256="c" * 64,
+            control_image_sha256="d" * 64,
+            control_manifest_sha256="4" * 64,
+            control_approval_id=UUID(approval.json()["approval_id"]),
+            control_approval_receipt_sha256=approval.json()["approval_receipt_sha256"],
+            target_generation_receipt_sha256=group["target_receipt_sha256"],
+            control_generation_receipt_sha256=group["control_receipt_sha256"],
+            profile_sha256=V13_PRIVATE_PROFILE_SHA256,
+            pair_inventory_sha256="3" * 64,
+            pair_count=60,
+        ),
+        target=_execution(False),
+        known_benign=_execution(True),
+        runner_hotkey="independent-worker",
+        observed_at=datetime.now(UTC),
+        signature="f" * 128,
+    )
+    from ditto.api_server.endpoints import verification_replay
+
+    monkeypatch.setattr(verification_replay, "_verify_signature", lambda *_: True)
+    request = private_request
+    async with session_maker() as session:
+        accepted = await append_replay_private_receipt(
+            replay_id, receipt, request, "independent-worker", session
+        )
+        assert accepted.status == "recorded_unverified"
+        assert accepted.policy_verification_complete is False
+        again = await append_replay_private_receipt(
+            replay_id, receipt, request, "independent-worker", session
+        )
+        assert again.receipt_sha256 == accepted.receipt_sha256
+        statistics = await get_replay_private_statistics(replay_id, None, session)
+        assert statistics.report.status == "inconclusive"
+        assert statistics.source_binding_current is True
+        assert statistics.terminal_eligible is False
+        changed = receipt.model_copy(
+            update={
+                "matched": receipt.matched.model_copy(
+                    update={"pair_inventory_sha256": "5" * 64}
+                )
+            }
+        )
+        with pytest.raises(HTTPException) as mismatch:
+            await append_replay_private_receipt(
+                replay_id, changed, request, "independent-worker", session
+            )
+        assert mismatch.value.status_code == 409
+    with pytest.raises(DBAPIError):
+        async with session_maker() as session, session.begin():
+            await session.execute(
+                text(
+                    "UPDATE v13_replay_private_generation_groups SET actor = 'forged' "
+                    "WHERE group_id = :group_id"
+                ),
+                {"group_id": UUID(group["group_id"])},
+            )
 
 
 async def test_generation_start_requires_preapproved_exact_clean_image(
@@ -430,9 +775,7 @@ async def test_trusted_control_requires_two_reviewers_and_live_image(
         headers=_HEADERS,
     )
     assert reused.status_code == 401
-    first = _assertion(
-        approval_id, "e" * 64, sub="google:one", email="one@example.com"
-    )
+    first = _assertion(approval_id, "e" * 64, sub="google:one", email="one@example.com")
     forged = await client.post(
         f"{_BASE}/known-benign-approvals/{approval_id}/attest",
         json={"assertion": first[:-8] + "00000000", "reason": "forged signature"},

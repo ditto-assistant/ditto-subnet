@@ -60,8 +60,8 @@ function formatBytes(value: number | null) {
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`
 }
 
-function humanize(code: string) {
-  return code.replaceAll('_', ' ').replaceAll('-', ' ')
+function humanize(code: string | null | undefined) {
+  return code ? code.replaceAll('_', ' ').replaceAll('-', ' ') : 'not recorded'
 }
 
 type ExcerptRequest = { path: string; line: number | null }
@@ -510,12 +510,32 @@ export function QuarantineEvidencePanel({
       ) : null}
 
       <section aria-label="Screening evidence">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
           <p className="text-xs font-medium text-white">Why it was quarantined</p>
-          <span className="text-[10px] capitalize text-[var(--amber)]">
-            {humanize(record.reason_code)}
+          {/* The code names the screener's lead, never the operator's decision,
+              and the screener's own disposition for it is not in this panel at
+              all — `behavioral-oracle-passed` is a CLEAR-side code. A bare code
+              under this heading read as the reason for the resolution shown
+              beside the panel, which is the misreading the two codes were split
+              to stop, so it is labelled with the origin it actually has. Wording
+              is deliberately not the queue's `Held for`/`Ruled` pair: this panel
+              is the only place both codes appear together, and the focused test
+              asserts each of those strings exactly once. */}
+          <span
+            className="text-[10px] capitalize text-[var(--amber)]"
+            title="Why the screener held this submission. Not the operator's ruling."
+          >
+            Screening lead: {humanize(record.screening_reason_code)}
           </span>
         </div>
+        {record.resolution_reason_code ? (
+          <p
+            className="mt-1 text-[10px] capitalize text-[var(--muted)]"
+            title="The operator decision this quarantine was closed with."
+          >
+            Operator ruling: {humanize(record.resolution_reason_code)}
+          </p>
+        ) : null}
         {evidence.length === 0 ? (
           <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
             The screener reported only a reason code and digests for this quarantine.
@@ -941,7 +961,8 @@ export function QuarantineEvidencePanel({
                     <li key={item.quarantine_id} className="text-[10px]">
                       <div className="flex items-center justify-between gap-2">
                         <span className="truncate text-[var(--muted-strong)]">
-                          {item.agent_name} · {humanize(item.reason_code)}
+                          {item.agent_name} · held for{' '}
+                          {humanize(item.screening_reason_code)}
                         </span>
                         <span
                           className={`shrink-0 capitalize ${
@@ -955,6 +976,11 @@ export function QuarantineEvidencePanel({
                           {item.resolution ?? 'active'}
                         </span>
                       </div>
+                      {item.resolution_reason_code ? (
+                        <p className="mt-0.5 truncate text-[var(--muted)]">
+                          ruled {humanize(item.resolution_reason_code)}
+                        </p>
+                      ) : null}
                       {item.resolution_reason ? (
                         <p className="mt-0.5 truncate text-[var(--muted)]">
                           {item.resolution_reason}

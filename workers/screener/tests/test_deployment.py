@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -343,6 +344,14 @@ def test_rootless_executor_is_separate_from_worker_and_denies_private_egress() -
         '"${user_systemctl[@]}" enable --now "$SCREENER_ROOTLESS_UNIT"'
     )
     assert guard_start < user_daemon_start
+    group_grant = installer.index('usermod -aG "$EXECUTOR_GROUP" "$SCREENER_USER"')
+    consumer_probe = installer.index(
+        'runuser -u "$SCREENER_USER" -- env DOCKER_HOST="$docker_host"'
+    )
+    drop_rootful = installer.index('gpasswd -d "$SCREENER_USER" docker')
+    assert user_daemon_start < group_grant < consumer_probe < drop_rootful
+    assert 'stat -c %G "$runtime_dir/docker.sock"' in installer
+    assert "rootless screener docker did not become ready" in installer
     assert 'daemon_root="$EXECUTOR_HOME/docker"' in installer
     assert "SCREENER_EXECUTOR_HOME=/var/lib/ditto-screener-docker" in bootstrap
     assert 'executor_home="$(env_value SCREENER_EXECUTOR_HOME)"' in updater
@@ -458,6 +467,9 @@ def test_golden_image_bake_pipeline_exists() -> None:
 
     assert "image_family      = var.image_family" in packer
     assert "ditto-screener-fleet" in packer
+    # The builder plugin runs with the bake credentials; pin it exactly.
+    plugin_versions = re.findall(r'^\s*version\s*=\s*"([^"]+)"', packer, re.M)
+    assert plugin_versions == ["= 1.2.7"]
     # Bakes via the same bootstrap script in bake mode; stores no secret.
     assert "SCREENER_BAKE_ONLY=1" in packer
     assert "environment: prod" in workflow
@@ -474,6 +486,11 @@ def test_systemd_unit_runs_the_extracted_screener_entrypoint() -> None:
     assert "ditto.screener" not in unit
     assert "KillMode=mixed" in unit
     assert "TimeoutStopSec=15min" in unit
+    # The worker only execs the docker client against the rootless daemon
+    # socket and openssl; the daemon's setuid newuidmap/newgidmap needs live
+    # in its own user unit, so the worker must not be able to gain privileges.
+    assert "NoNewPrivileges=true" in unit
+    assert "NoNewPrivileges=false" not in unit
 
 
 def test_updater_installs_and_rolls_back_the_repository_owned_unit() -> None:

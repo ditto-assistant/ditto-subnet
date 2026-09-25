@@ -50,6 +50,7 @@ from ditto_screening_protocol import (
     SourceReviewAdjudication,
     SourceReviewObservationPayload,
 )
+from ditto_screening_protocol.models import source_review_notes_digest
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -478,11 +479,23 @@ async def maybe_finalize_targon_screen(
                 )
             except ValueError:
                 observation = None
+        if attempt.policy_version >= 13 and _actionable_adjudication(observation):
+            # A source-only L4 verdict cannot certify v13 runtime/private checks.
+            await _quarantine(
+                session,
+                attempt=attempt,
+                screener_hotkey=screener_hotkey,
+                observation=observation,
+                now=now,
+            )
+            return True
         coverage_admitted = _admitted_on_coverage(observation)
         if not _certified_low_risk(observation) and not coverage_admitted:
             adjudication = _actionable_adjudication(observation)
-            if adjudication is not None and (
-                await _effective_adjudicator_mode(session, attempt) == "enforce"
+            if (
+                attempt.policy_version < 13
+                and adjudication is not None
+                and (await _effective_adjudicator_mode(session, attempt) == "enforce")
             ):
                 if adjudication.decision == "reject":
                     await _reject_build(
@@ -756,6 +769,11 @@ async def _quarantine(
         reason_code = "agentic-source-review-tripwire"
         public_reason = "Submission held for anti-cheat review"
     review_audit = observation.review_audit if observation is not None else None
+    # Retain the typed notes ledger itself, exactly as the host screen-result
+    # path does (endpoints/screener.py), so the public review conclusion can
+    # apply the worker's concern-hold rule to it. ``notes`` is already bounded
+    # (``SourceReviewObservationPayload.notes`` max 48) and digest-bound here.
+    review_notes = list(observation.notes) if observation is not None else None
     # The reviewer's in-progress notes ledger is the operator's material for a
     # budget-terminated review: map it onto the bounded public-safe evidence
     # trail so Backroom shows WHAT the court determined before it ran out.
@@ -818,6 +836,16 @@ async def _quarantine(
             review_audit=(
                 review_audit.model_dump(mode="json")
                 if review_audit is not None
+                else None
+            ),
+            review_notes=(
+                [note.model_dump(mode="json") for note in review_notes]
+                if review_notes is not None
+                else None
+            ),
+            review_notes_digest=(
+                source_review_notes_digest(review_notes)
+                if review_notes is not None
                 else None
             ),
             reason_code=reason_code,

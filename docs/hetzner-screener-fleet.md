@@ -347,6 +347,18 @@ reports the intended release/policy, and isolated build and runtime lanes work
 before enabling any review lane. Apply one guarded Backroom channel revision
 at a time; do not change provider routing merely to run a verification replay.
 
+The first converge keeps `screener_fleet_replay_worker_enabled: false` while
+the host creates its own identity. On node 2, generate a raw 32-byte Ed25519
+seed at `screener_fleet_replay_process_key_file`, owned by `ditto-screener` with
+mode `0400` or `0600`; keep those bytes on that host. Register only its derived
+public key through Backroom. Set `screener_fleet_replay_worker_enabled: true`
+in the private inventory and converge again. The existing one-worker systemd
+unit then runs `ditto-screener-replay` with shadow receipts and the exact
+process key path, replacing the ordinary screening poller at that instance ID.
+Ansible checks node 2, X.509, one worker, regular file ownership, mode, and
+32-byte length before starting the replay process. The private key is never an
+Ansible variable or release artifact.
+
 The verification-replay API alone records evidence; it does not run the replay
 worker, complete private V13 checks, clear holds, or authorize emissions.
 The replay lane has a separate zero-default `verification_replay_capacity` on

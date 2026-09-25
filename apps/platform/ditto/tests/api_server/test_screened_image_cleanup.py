@@ -19,7 +19,12 @@ from ditto.api_server.screened_image_cleanup import (
     screened_image_key,
 )
 from ditto.api_server.storage import ListedObject, MultipartUpload
-from ditto.db.models import Agent
+from ditto.db.models import (
+    Agent,
+    ScreenedImageUpload,
+    ScreeningAttempt,
+    ScreeningQuarantine,
+)
 
 
 def _agent(*, status: AgentStatus, created_at: datetime) -> Agent:
@@ -110,3 +115,90 @@ async def test_cleanup_preserves_active_and_removes_superseded_and_abandoned(
             and kept_champion.screened_image_upload_id is not None
         )
         assert cleared is not None and cleared.screened_image_upload_id is None
+
+
+async def test_cleanup_retains_verified_image_for_active_source_hold(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(UTC)
+    old = now - timedelta(days=2)
+    held = _agent(status=AgentStatus.QUARANTINED, created_at=old)
+    held.screened_image_sha256 = None
+    held.screened_image_size_bytes = None
+    held.screened_image_id = None
+    held.screened_image_ref = None
+    held.screened_image_upload_id = None
+    held.screened_image_verified_at = None
+    attempt_id = uuid4()
+    upload_id = uuid4()
+    hotkey = "screener-held-image"
+    async with session_maker() as session, session.begin():
+        session.add(held)
+        await session.flush()
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=held.agent_id,
+                artifact_sha256=held.sha256,
+                screener_hotkey=hotkey,
+                policy_version=13,
+                status="quarantined",
+                started_at=old,
+                deadline=old + timedelta(minutes=15),
+                finished_at=old + timedelta(minutes=10),
+            )
+        )
+        await session.flush()
+        session.add(
+            ScreeningQuarantine(
+                quarantine_id=uuid4(),
+                agent_id=held.agent_id,
+                attempt_id=attempt_id,
+                screener_hotkey=hotkey,
+                policy_version=13,
+                manifest_digest="ab" * 32,
+                reason_code="adjudicated-source-review-escalate",
+                evidence=[],
+                status="active",
+                created_at=old,
+            )
+        )
+        session.add(
+            ScreenedImageUpload(
+                image_upload_id=upload_id,
+                agent_id=held.agent_id,
+                attempt_id=attempt_id,
+                screener_hotkey=hotkey,
+                storage_upload_id="verified-held-image",
+                sha256="22" * 32,
+                size_bytes=123,
+                image_id="sha256:" + "33" * 32,
+                image_ref=f"ditto-screen/{held.agent_id}:latest",
+                status="verified",
+                created_at=old,
+                expires_at=old + timedelta(minutes=15),
+                verified_at=old + timedelta(minutes=5),
+            )
+        )
+
+    monkeypatch.setattr(
+        "ditto.api_server.screened_image_cleanup.list_eligible_ledger",
+        AsyncMock(return_value=[]),
+    )
+    held_key = screened_image_key(held.agent_id, upload_id)
+    orphan_key = f"{uuid4()}/screened-images/{uuid4()}.tar"
+    storage = MagicMock()
+    storage.list_multipart_uploads = AsyncMock(return_value=[])
+    storage.list_objects = AsyncMock(
+        return_value=[
+            ListedObject(key=held_key, last_modified=old),
+            ListedObject(key=orphan_key, last_modified=old),
+        ]
+    )
+    storage.delete_object = AsyncMock()
+
+    result = await cleanup_screened_images(session_maker, storage, now=now)
+
+    assert result.deleted_orphans == 1
+    storage.delete_object.assert_awaited_once_with(key=orphan_key)

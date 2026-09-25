@@ -115,6 +115,7 @@ import {
   releaseValidatorScoreRetest,
   fetchScreenerReviewControl,
   fetchScreenerCapacity,
+  readScreeningInfraRetries,
   retryTrustedImageBuild as retryTrustedImageBuildService,
   updateScreenerProviderSettings as updateScreenerProviderSettingsService,
   updateScreenerNodeChannelSettings as updateScreenerNodeChannelSettingsService,
@@ -417,6 +418,14 @@ export const getScreenerCapacity = createServerFn({ method: 'GET' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return fetchScreenerCapacity()
+  })
+
+export const getScreeningInfraRetries = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(() => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return readScreeningInfraRetries()
   })
 
 export const retryTrustedImageBuild = createServerFn({ method: 'POST' })

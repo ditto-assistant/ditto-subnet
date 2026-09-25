@@ -820,8 +820,10 @@ export interface RolloutQuorum {
   prioritySize: number;
   /** Number(state.cohort_size) || 0. */
   cohortSize: number;
-  /** Members in the first-five priority cohort with a complete per-agent
-   * quorum (Number(position) <= prioritySize && Number(score_count) >= 3). */
+  /** Priority-cohort members that satisfy the barrier: Platform's
+   * `priority_cohort_ready_count` (permanently ineligible members count as
+   * satisfied, as the gate treats them), else the local derivation
+   * (Number(position) <= prioritySize && Number(score_count) >= 3). */
   priorityReady: number;
   /** state.cohort_ready_count || 0 (as read at 3769). */
   cohortReadyCount: number;
@@ -846,12 +848,21 @@ export interface RolloutQuorum {
 export function rolloutQuorum(state: RolloutState | null | undefined): RolloutQuorum {
   const prioritySize = Number(state && state.priority_cohort_size) || 5;
   const cohortSize = Number(state && state.cohort_size) || 0;
-  const priorityReady =
+  const derivedPriorityReady =
     state && Array.isArray(state.members)
       ? state.members.filter(
           (member) => Number(member.position) <= prioritySize && Number(member.score_count) >= 3,
         ).length
       : 0;
+  // Platform publishes the barrier's own count. The local derivation cannot
+  // see member status, so a banned leader (which the gate skips) left the strip
+  // reading "4 of 5" while the barrier had already closed. The presence test is
+  // on the raw value: `null` would coerce to a perfectly finite 0.
+  const published = state?.priority_cohort_ready_count;
+  const priorityReady =
+    published == null || !Number.isFinite(Number(published))
+      ? derivedPriorityReady
+      : Number(published);
   return {
     ready: state?.ranked_quorum_agents ?? null,
     needed: state?.min_ranked_quorum_agents ?? null,

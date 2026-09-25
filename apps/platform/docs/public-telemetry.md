@@ -290,6 +290,16 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   block fields exist; otherwise the response labels the unpredictable CSPRNG
   fallback. Unknown historical generator pins fail closed with no command rather
   than silently using `latest`.
+- `GET /api/v1/public/bench/rollout` → rollout state with promotion progress:
+  `{ active_version, desired_version, status, promotion_pending,
+  promotion_requirement, priority_cohort_size, priority_cohort_ready_count,
+  priority_complete, ranked_quorum_agents, min_ranked_quorum_agents, members,
+  ... }`. `active_version` is the leaderboard's `emission_bench_version`; while
+  `promotion_pending` is true the board's `scoring_bench_version` is ahead of it
+  by design, and `promotion_requirement` names the two gates still holding
+  emissions (the priority-cohort quorum, counted with permanently ineligible
+  members satisfied, and the ranked quorum over the emission set). See
+  `benchmark-v3-rollout.md` for the gate semantics.
 - `GET /api/v1/public/bench/transcript/{sha256}/telemetry` → an allowlisted
   metrics projection from the immutable transcript whose digest is already
   bound into an accepted validator score. The platform reads only the

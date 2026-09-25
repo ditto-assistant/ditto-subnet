@@ -57,8 +57,7 @@ Response body, `RunResponse`:
   "prompt_tokens": 1234,
   "output_tokens": 56,
   "latency_ms": 812,
-  "answer": "quantum error correction",
-  "abstain": false
+  "answer": "quantum error correction"
 }
 ```
 
@@ -68,10 +67,10 @@ Two optional response fields are worth wiring:
   comma-separated list). The deterministic grader matches the slot when
   present and falls back to prose containment, so populating it removes
   prose-phrasing risk from grading.
-- `abstain`: set `true` for a grounded decline ("that was never mentioned").
-  It is the primary decline signal; decline phrasing in `final_text` is the
-  fallback. Abstaining on an answerable case scores 0, so gate it on
-  retrieval actually coming up empty.
+- `abstain`: optional model-authored decline signal. The stock harness leaves
+  it absent and serves the model's decline in `final_text`; the scorer can use
+  decline phrasing as a fallback. Do not derive this field from prose after the
+  model's final decision. Abstaining on an answerable case scores 0.
 ### `POST /seed`
 Before asking memory questions the validator installs a fresh haystack.
 

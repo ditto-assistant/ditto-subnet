@@ -24,6 +24,7 @@ from ditto_screener.errors import PlatformError
 from ditto_screener.heartbeat import ScreenerHeartbeatRequest
 from ditto_screener.platform import (
     _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS,
+    _TRANSIENT_PLATFORM_RETRY_DELAYS,
     PlatformClient,
     RemoteSubmissionBuildRejected,
     _remote_source_review_poll_deadline,
@@ -52,6 +53,56 @@ def _make_client(
 ) -> tuple[PlatformClient, httpx.AsyncClient]:
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     return PlatformClient(cfg, http), http
+
+
+async def test_l2_canary_completion_retries_identical_body_after_502(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    canary_id = uuid4()
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        _assert_auth(request)
+        assert request.url.path.endswith(f"/l2-report-canaries/{canary_id}/complete")
+        bodies.append(json.loads(request.content))
+        return httpx.Response(502 if len(bodies) == 1 else 200)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        await client.complete_l2_report_canary(
+            canary_id,
+            lease_token="same-token",
+            lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+            status="incomplete",
+            report={"authority": "none"},
+            error_code="l2-model-tool-contract",
+        )
+    assert len(bodies) == 2
+    assert bodies[0] == bodies[1]
+
+
+async def test_l2_canary_completion_does_not_retry_expired_or_conflicting_lease(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(409)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformError, match=r"rejected \(409\)"):
+            await client.complete_l2_report_canary(
+                uuid4(),
+                lease_token="token",
+                lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+                status="incomplete",
+                report={"authority": "none"},
+                error_code="l2-model-tool-contract",
+            )
+    assert calls == 1
 
 
 async def test_mechanical_receipt_posts_only_digest_and_exact_binding(
@@ -138,6 +189,65 @@ async def test_claim_next_parses_leased_item(
     assert resp.items[0].agent_id == _AGENT
     assert resp.items[0].bench_version == 12
     assert resp.items[0].sha256 == "de" * 32
+
+
+async def test_claim_next_parses_strict_v13_runtime_lease_from_json_wire(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    review_settings = bootstrap_review_settings(make_config())
+    source_revision = "ab" * 20
+    injected_keys = ["OPENAI_API_KEY"]
+    env_sha = hashlib.sha256(
+        f"scored-runtime-env-v1\n13\n{source_revision}\nOPENAI_API_KEY".encode()
+    ).hexdigest()
+    attempt_id = uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/screener/claim"
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "agent_id": str(_AGENT),
+                        "bench_version": 13,
+                        "miner_hotkey": _MINER,
+                        "name": "v13-agent",
+                        "sha256": "de" * 32,
+                        "status": "screening",
+                        "created_at": "2026-09-25T01:52:23Z",
+                        "attempt_id": str(attempt_id),
+                        "lease_deadline": "2026-09-25T02:02:28Z",
+                        "policy_version": 13,
+                        "scored_runtime_evidence": {
+                            "attempt_id": str(attempt_id),
+                            "artifact_sha256": "de" * 32,
+                            "policy_version": 13,
+                            "bench_version": 13,
+                            "scorer_source_revision": source_revision,
+                            "release_descriptor_digest": "sha256:" + "cd" * 32,
+                            "scorer_image_digest": "sha256:" + "ef" * 32,
+                            "scorer_env_sha256": env_sha,
+                            "injected_keys": injected_keys,
+                            "validator_count": 3,
+                            "observed_at": 1_790_300_000,
+                        },
+                    }
+                ],
+                "count": 1,
+                "required_policy_version": 13,
+            },
+        )
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        response = await client.claim_next(
+            policy_version=13,
+            review_settings=review_settings,
+            instance_id="worker-1",
+        )
+    assert response.items[0].scored_runtime_evidence is not None
+    assert response.items[0].scored_runtime_evidence.attempt_id == attempt_id
 
 
 async def test_policy_preflight_is_read_only(
@@ -623,15 +733,15 @@ async def test_upload_screened_image_streams_exact_metadata_and_bytes(
     archive = tmp_path / "image.tar"
     archive.write_bytes(b"docker-image")
     seen: dict[str, object] = {}
-    upload_id = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.extensions["timeout"]["read"] == 300.0
         if request.url.path.endswith("/screened-image-upload"):
+            seen["image_upload_id"] = json.loads(request.content)["image_upload_id"]
             return httpx.Response(
                 200,
                 json={
-                    "image_upload_id": str(upload_id),
+                    "image_upload_id": seen["image_upload_id"],
                     "storage_upload_id": "storage-upload",
                     "part_size_bytes": 5 * 1024**2,
                     "expires_at": datetime.now(UTC).isoformat(),
@@ -654,8 +764,6 @@ async def test_upload_screened_image_streams_exact_metadata_and_bytes(
             seen["content_type"] = request.headers["Content-Type"]
             return httpx.Response(200, headers={"ETag": '"part-etag"'})
         if request.url.path.endswith("/complete"):
-            import json
-
             seen["complete"] = json.loads(request.content)
             return httpx.Response(200, json={"verified": True})
         raise AssertionError(request.url)
@@ -671,12 +779,106 @@ async def test_upload_screened_image_streams_exact_metadata_and_bytes(
             image_id="sha256:" + "34" * 32,
             image_ref=f"ditto-screen/{_AGENT}:latest",
         )
-    assert result == upload_id
+    assert result == UUID(str(seen["image_upload_id"]))
     assert seen["body"] == b"docker-image"
     assert seen["content_type"] == "application/x-tar"
     assert seen["complete"]["parts"] == [  # type: ignore[index]
         {"part_number": 1, "etag": '"part-etag"'}
     ]
+
+
+async def test_upload_initiation_retries_502_with_one_idempotency_id(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    archive = tmp_path / "image.tar"
+    archive.write_bytes(b"docker-image")
+    requested_ids: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/screened-image-upload"):
+            requested_id = json.loads(request.content)["image_upload_id"]
+            requested_ids.append(requested_id)
+            if len(requested_ids) == 1:
+                return httpx.Response(502, text="transient gateway failure")
+            return httpx.Response(
+                200,
+                json={
+                    "image_upload_id": requested_id,
+                    "storage_upload_id": "storage-upload",
+                    "part_size_bytes": 5 * 1024**2,
+                    "expires_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        if request.url.path.endswith("/part"):
+            return httpx.Response(
+                200,
+                json={
+                    "upload_url": "https://storage.test/image.part",
+                    "expires_at": datetime.now(UTC).isoformat(),
+                    "required_headers": {},
+                },
+            )
+        if request.method == "PUT":
+            return httpx.Response(200, headers={"ETag": '"part-etag"'})
+        if request.url.path.endswith("/complete"):
+            return httpx.Response(200, json={"verified": True})
+        raise AssertionError(request.url)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        result = await client.upload_screened_image(
+            _AGENT,
+            attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+            path=str(archive),
+            sha256="12" * 32,
+            size_bytes=archive.stat().st_size,
+            image_id="sha256:" + "34" * 32,
+            image_ref=f"ditto-screen/{_AGENT}:latest",
+        )
+    assert len(requested_ids) == 2
+    assert requested_ids[0] == requested_ids[1] == str(result)
+
+
+async def test_upload_initiation_rejects_platform_that_ignores_idempotency_id(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    archive = tmp_path / "image.tar"
+    archive.write_bytes(b"docker-image")
+    requested_id: str | None = None
+    aborted = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requested_id, aborted
+        if request.url.path.endswith("/screened-image-upload"):
+            requested_id = json.loads(request.content)["image_upload_id"]
+            return httpx.Response(
+                200,
+                json={
+                    "image_upload_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    "storage_upload_id": "storage-upload",
+                    "part_size_bytes": 5 * 1024**2,
+                    "expires_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        if request.url.path.endswith("/abort"):
+            aborted = True
+            return httpx.Response(200, json={"aborted": True})
+        raise AssertionError(request.url)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformError, match="did not honor the idempotency ID"):
+            await client.upload_screened_image(
+                _AGENT,
+                attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+                path=str(archive),
+                sha256="12" * 32,
+                size_bytes=archive.stat().st_size,
+                image_id="sha256:" + "34" * 32,
+                image_ref=f"ditto-screen/{_AGENT}:latest",
+            )
+    assert requested_id != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    assert aborted
 
 
 async def test_non_200_raises_platform_error(
@@ -698,12 +900,13 @@ async def test_non_200_raises_platform_error(
             )
 
 
-async def test_multipart_part_failure_is_single_shot_and_aborted(
-    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+async def test_multipart_part_failure_exhausts_retries_and_aborts(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     archive = tmp_path / "image.tar"
     archive.write_bytes(b"retry-me")
-    upload_id = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
     put_calls = 0
     aborted = False
 
@@ -713,7 +916,7 @@ async def test_multipart_part_failure_is_single_shot_and_aborted(
             return httpx.Response(
                 200,
                 json={
-                    "image_upload_id": str(upload_id),
+                    "image_upload_id": json.loads(request.content)["image_upload_id"],
                     "storage_upload_id": "storage-upload",
                     "part_size_bytes": 5 * 1024**2,
                     "expires_at": datetime.now(UTC).isoformat(),
@@ -739,6 +942,11 @@ async def test_multipart_part_failure_is_single_shot_and_aborted(
         raise AssertionError(request.url)
 
     client, http = _make_client(make_config(), handler)
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
     async with http:
         with pytest.raises(PlatformError, match="503"):
             await client.upload_screened_image(
@@ -750,8 +958,73 @@ async def test_multipart_part_failure_is_single_shot_and_aborted(
                 image_id="sha256:" + "34" * 32,
                 image_ref=f"ditto-screen/{_AGENT}:latest",
             )
-    assert put_calls == 1
+    assert put_calls == len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1
     assert aborted
+
+
+async def test_multipart_part_mint_retries_transient_502(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "image.tar"
+    archive.write_bytes(b"retry-mint")
+    upload_id: UUID | None = None
+    mint_calls = 0
+    put_calls = 0
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal mint_calls, put_calls, upload_id
+        if request.url.path.endswith("/screened-image-upload"):
+            upload_id = UUID(json.loads(request.content)["image_upload_id"])
+            return httpx.Response(
+                200,
+                json={
+                    "image_upload_id": str(upload_id),
+                    "storage_upload_id": "storage-upload",
+                    "part_size_bytes": 5 * 1024**2,
+                    "expires_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        if request.url.path.endswith("/part"):
+            mint_calls += 1
+            if mint_calls == 1:
+                return httpx.Response(502)
+            return httpx.Response(
+                200,
+                json={
+                    "upload_url": "https://storage.test/image.part",
+                    "expires_at": datetime.now(UTC).isoformat(),
+                    "required_headers": {},
+                },
+            )
+        if request.method == "PUT":
+            put_calls += 1
+            return httpx.Response(200, headers={"ETag": '"part-etag"'})
+        if request.url.path.endswith("/complete"):
+            return httpx.Response(200, json={"verified": True})
+        raise AssertionError(request.url)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        result = await client.upload_screened_image(
+            _AGENT,
+            attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+            path=str(archive),
+            sha256="12" * 32,
+            size_bytes=archive.stat().st_size,
+            image_id="sha256:" + "34" * 32,
+            image_ref=f"ditto-screen/{_AGENT}:latest",
+        )
+
+    assert result == upload_id
+    assert mint_calls == 2
+    assert put_calls == 1
 
 
 async def test_multipart_failure_aborts_upload(
@@ -759,7 +1032,6 @@ async def test_multipart_failure_aborts_upload(
 ) -> None:
     archive = tmp_path / "image.tar"
     archive.write_bytes(b"cannot-upload")
-    upload_id = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
     aborted = False
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -768,7 +1040,7 @@ async def test_multipart_failure_aborts_upload(
             return httpx.Response(
                 200,
                 json={
-                    "image_upload_id": str(upload_id),
+                    "image_upload_id": json.loads(request.content)["image_upload_id"],
                     "storage_upload_id": "storage-upload",
                     "part_size_bytes": 5 * 1024**2,
                     "expires_at": datetime.now(UTC).isoformat(),

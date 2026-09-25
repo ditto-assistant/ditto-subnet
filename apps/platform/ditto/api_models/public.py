@@ -2903,6 +2903,40 @@ class PublicConfirmationProgress(BaseModel):
     subjects: list[PublicConfirmationSubject] = Field(default_factory=list)
 
 
+PublicDeferredReviewTrigger = Literal["top_five", "anomaly"]
+"""Why an active hold entered deferred source review (coarse, public-safe)."""
+
+PublicReviewConclusion = Literal[
+    "pending", "not_completed", "no_finding", "budget_exhausted", "adverse_signal"
+]
+"""What the automated source review concluded for a held submission."""
+
+_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION = (
+    "Why an active deferred source review hold was opened: ``top_five`` when "
+    "the canonical score placed the submission in the top five, ``anomaly`` "
+    "when a robust score anomaly check fired. Empty when the submission is not "
+    "held for deferred source review. Ranks, thresholds, and evidence are not "
+    "exposed."
+)
+_REVIEW_CONCLUSION_DESCRIPTION = (
+    "What the automated source review concluded for a held (``under_review``) "
+    "submission. ``pending``: the automated deep review has not reported yet, "
+    "or it was interrupted and awaits a retry. ``not_completed``: no automated "
+    "review completed with a recorded conclusion (there is no recorded review "
+    "audit, or the review stopped before its model stage, for example because "
+    "a runtime lease was unavailable or review was disabled), and no finding "
+    "was recorded; an operator decision is pending. ``no_finding``: a recorded "
+    "audit shows a model review ran and ended without a decision or finding. "
+    "``budget_exhausted``: a recorded audit shows a model review ran and "
+    "exhausted its read, step, tool, or model budget without a finding, and "
+    "its recorded concerns did not reach the hold threshold. "
+    "``adverse_signal``: it reported a concern that an operator must "
+    "adjudicate, including a budget-terminated review held because of its "
+    "recorded concerns. Null when the hold has no automated review conclusion "
+    "(for example a copy review) or the submission is not held."
+)
+
+
 class PublicActivityEntry(BaseModel):
     """One submission's safe, public lifecycle state."""
 
@@ -3037,6 +3071,12 @@ class PublicActivityEntry(BaseModel):
             ),
         ),
     ] = None
+    deferred_review_triggers: list[PublicDeferredReviewTrigger] = Field(
+        default_factory=list, description=_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION
+    )
+    review_conclusion: PublicReviewConclusion | None = Field(
+        default=None, description=_REVIEW_CONCLUSION_DESCRIPTION
+    )
     review_opened_at: Annotated[
         datetime | None,
         Field(
@@ -3370,6 +3410,48 @@ class PublicAdmissionRetry(BaseModel):
     # infrastructure retry reports the earliest time it may start.
     next_retry_at: datetime | None = None
     last_failure_infrastructure: bool = False
+
+
+class PublicOrdinaryReview(BaseModel):
+    """Source-safe ordinary source-review clock (ditto-subnet#2042, slice 1).
+
+    Deliberately thin: a miner learns why their own submission is waiting and
+    roughly how long that kind of wait typically takes, never the operator
+    detail behind it (no quarantine evidence, no reason codes, no other
+    miner's data). ``typical_p50_seconds``/``typical_p95_seconds`` are
+    subnet-wide statistics, not a promise about this specific submission.
+    Null on the pipeline response whenever the submission is not currently in
+    ordinary review (covers both "never entered it" and "already resolved").
+    """
+
+    reason: Literal[
+        "active_work", "capacity_wait", "infrastructure_backoff", "escalation"
+    ]
+    age_seconds: Annotated[
+        float,
+        Field(
+            ge=0,
+            description=(
+                "Time since this submission entered ordinary review (its own "
+                "created_at). Stable across retries: a rescreen does not "
+                "reset it."
+            ),
+        ),
+    ]
+    current_attempt_age_seconds: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Time since the CURRENT screening attempt started, separate "
+                "from age_seconds above. Null when there is no attempt yet "
+                "(capacity_wait)."
+            ),
+        ),
+    ]
+    typical_p50_seconds: Annotated[float | None, Field(default=None, ge=0)]
+    typical_p95_seconds: Annotated[float | None, Field(default=None, ge=0)]
 
 
 class PublicScreeningDispute(BaseModel):
@@ -3745,6 +3827,12 @@ class PublicAgentSummary(BaseModel):
     review_event_at: datetime | None = None
     review_original_reason: str | None = None
     review_opened_at: datetime | None = None
+    deferred_review_triggers: list[PublicDeferredReviewTrigger] = Field(
+        default_factory=list, description=_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION
+    )
+    review_conclusion: PublicReviewConclusion | None = Field(
+        default=None, description=_REVIEW_CONCLUSION_DESCRIPTION
+    )
     preserved_composite: Annotated[
         float | None, Field(default=None, ge=0.0, le=1.0)
     ] = None
@@ -3763,6 +3851,14 @@ class PublicSubmissionPipeline(BaseModel):
         description=(
             "Live admission-retry state while the submission is still in "
             "build & admission; null once admission is terminal."
+        ),
+    )
+    ordinary_review: PublicOrdinaryReview | None = Field(
+        default=None,
+        description=(
+            "Ordinary source-review clock and reason while the submission is "
+            "in the pre-score screening pipeline; null once it leaves that "
+            "pipeline (whichever way)."
         ),
     )
     submission_family: PublicSubmissionFamily | None = Field(
@@ -4817,11 +4913,19 @@ class PublicBenchRolloutResponse(BaseModel):
     """Benchmark-version rollout state (``GET /public/bench/rollout``).
 
     Two versions matter here and they are not the same number:
-    ``active_version`` is the one that currently drives on-chain weights, and
-    ``desired_version`` is the one being rolled out. The whole ledger switches
-    at once, and only once ``ranked_quorum_agents`` reaches
-    ``min_ranked_quorum_agents``: that gate is what guarantees the emission set
-    (champion plus tail) is never short at the moment authority moves.
+    ``active_version`` is the one that currently drives on-chain weights (the
+    leaderboard's ``emission_bench_version``), and ``desired_version`` is the
+    one being rolled out and scored. ``desired_version`` leading
+    ``active_version`` is the normal mid-rollout state, not a stall.
+
+    The whole ledger switches at once, and only once BOTH gates close: every
+    position in the frozen priority cohort holds a complete per-agent quorum at
+    ``desired_version`` (``priority_cohort_ready_count`` of
+    ``priority_cohort_size``), and ``ranked_quorum_agents`` reaches
+    ``min_ranked_quorum_agents``, which guarantees the emission set (champion
+    plus tail) is never short at the moment authority moves.
+    ``promotion_pending`` / ``promotion_requirement`` state that in one flag
+    and one sentence.
 
     Extra keys are preserved rather than dropped: this model documents the shape
     without becoming a filter on it.
@@ -4837,6 +4941,24 @@ class PublicBenchRolloutResponse(BaseModel):
     )
     status: str = Field(
         description="inactive | collecting | superseded | activated | blocked."
+    )
+    promotion_pending: bool = Field(
+        default=False,
+        description=(
+            "True while desired_version is being collected and has not yet "
+            "taken emission authority. The normal mid-rollout state, not a "
+            "stall."
+        ),
+    )
+    promotion_requirement: str | None = Field(
+        default=None,
+        description=(
+            "The gates that must close before emission authority moves to "
+            "desired_version, in one sentence built from their live values: "
+            "the priority-cohort quorum over the frozen inherited prefix and "
+            "the ranked quorum over the emission set. Null when nothing is "
+            "pending."
+        ),
     )
     blocked_reason: str | None = None
     capability_bench_version: int
@@ -4876,6 +4998,14 @@ class PublicBenchRolloutResponse(BaseModel):
     priority_cohort_size: int = Field(
         default=5,
         description="Inherited leaders that must finish before later cohort work.",
+    )
+    priority_cohort_ready_count: int = Field(
+        default=0,
+        description=(
+            "Priority-cohort members that already satisfy the barrier, out of "
+            "priority_cohort_size: a complete desired-version quorum, or "
+            "permanently ineligible (skipped exactly as the gate skips them)."
+        ),
     )
     priority_complete: bool = Field(
         default=False,

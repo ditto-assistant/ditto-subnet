@@ -8,6 +8,15 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ditto.api_models.v13_private_generation import (
+    V13KnownBenignApprovalView,
+    V13ReplayGenerationGroupView,
+    V13ReplayGroupPackageView,
+)
+from ditto_screening_protocol.v13_private_statistics import (
+    V13PrivateStatisticalReport,
+)
+
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 PublicCheck = Literal[
     "archive_sha",
@@ -30,7 +39,7 @@ class VerificationReplayCreate(BaseModel):
     policy_version: Literal[13]
     image_upload_id: UUID | None = None
     image_sha256: Sha256 | None = None
-    expected_agent_status: Literal["quarantined"]
+    expected_agent_status: Literal["quarantined", "screening_failed"]
     actor: Annotated[str, Field(min_length=1, max_length=120)]
     reason: Annotated[str, Field(min_length=8)]
 
@@ -77,6 +86,11 @@ class VerificationReplayState(BaseModel):
 
 class VerificationReplayInputs(BaseModel):
     replay: VerificationReplayState
+    bench_version: int = Field(
+        ge=7,
+        description="Arrival-era benchmark version resolved when inputs are fetched",
+    )
+    miner_hotkey: str
     artifact_url: str
     image_url: str | None
     urls_expire_at: datetime
@@ -115,6 +129,65 @@ class VerificationReplayReceiptState(BaseModel):
     evidence_sha256: str
     worker_hotkey: str
     created_at: datetime
+
+
+class VerificationReplaySignedObservationState(BaseModel):
+    observation_id: UUID
+    replay_id: UUID
+    check_code: str
+    status: Literal["passed", "failed", "inconclusive"]
+    evidence_sha256: str
+    runner_hotkey: str
+    observed_at: datetime
+    created_at: datetime
+    policy_verification_complete: Literal[False] = False
+
+
+class VerificationReplayPrivateReceiptState(BaseModel):
+    replay_id: UUID
+    group_id: UUID
+    receipt_sha256: Sha256
+    runner_hotkey: str
+    observed_at: datetime
+    created_at: datetime
+    status: Literal["recorded_unverified"] = "recorded_unverified"
+    policy_verification_complete: Literal[False] = False
+
+
+class VerificationReplayPrivateStatisticsState(BaseModel):
+    replay_id: UUID
+    receipt_sha256: Sha256
+    source_binding_current: bool
+    report: V13PrivateStatisticalReport
+    policy_verification_complete: Literal[False] = False
+    terminal_eligible: Literal[False] = False
+
+
+class VerificationReplayPrivateImageInput(BaseModel):
+    role: Literal["target", "known_benign"]
+    agent_id: UUID
+    attempt_id: UUID
+    artifact_sha256: Sha256
+    image_sha256: Sha256
+    image_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    size_bytes: int = Field(gt=0, le=8 * 1024 * 1024 * 1024)
+    verified_at: datetime
+    committed_at: datetime
+    url: str
+
+
+class VerificationReplayPrivateInputs(BaseModel):
+    replay_id: UUID
+    lease_started_at: datetime
+    lease_deadline: datetime
+    group: V13ReplayGenerationGroupView
+    approval: V13KnownBenignApprovalView
+    target_package: V13ReplayGroupPackageView
+    control_package: V13ReplayGroupPackageView
+    target_image: VerificationReplayPrivateImageInput
+    control_image: VerificationReplayPrivateImageInput
+    urls_expire_at: datetime
+    policy_verification_complete: Literal[False] = False
 
 
 class VerificationReplayFinish(BaseModel):

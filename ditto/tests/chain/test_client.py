@@ -584,6 +584,17 @@ class TestSubnetHyperparams:
         assert kwargs["storage_function"] == "Tempo"
         assert kwargs["params"] == [118]
 
+    async def test_get_subnet_owner_hotkey_reads_chain_storage(
+        self, install_substrate_module: AsyncMock
+    ):
+        owner = "5CurrentOwner" + "x" * 35
+        install_substrate_module.query.return_value = MagicMock(value=owner)
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.get_subnet_owner_hotkey(118) == owner
+        kwargs = install_substrate_module.query.await_args.kwargs
+        assert kwargs["storage_function"] == "SubnetOwnerHotkey"
+        assert kwargs["params"] == [118]
+
     async def test_get_weights_rate_limit_unwraps_value(
         self, install_substrate_module: AsyncMock
     ):

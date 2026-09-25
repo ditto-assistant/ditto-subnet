@@ -988,6 +988,7 @@ class ScreeningVerificationReplay(Base):
     image_verified_storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     worker_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    process_key_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
     lease_deadline: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -1022,6 +1023,9 @@ class ScreeningVerificationReplay(Base):
             ["image_upload_id"],
             ["screened_image_uploads.image_upload_id"],
             ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["process_key_sha256"], ["screener_replay_process_keys.key_sha256"]
         ),
         CheckConstraint(
             "artifact_sha256 ~ '^[0-9a-f]{64}$'", name="svrp_artifact_sha_check"
@@ -1087,6 +1091,190 @@ class ScreeningVerificationReplayReceipt(Base):
             "length(check_code) BETWEEN 1 AND 64", name="svrr_check_code_check"
         ),
         Index("svrr_replay_code_idx", "replay_id", "check_code", unique=True),
+    )
+
+
+class ScreeningVerificationReplaySignedObservation(Base):
+    """Authenticated replay claim, still unverified and report-only."""
+
+    __tablename__ = "screening_verification_replay_signed_observations"
+
+    observation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    check_code: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    runner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replay_id"],
+            ["screening_verification_replays.replay_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("length(check_code) BETWEEN 1 AND 64", name="svrso_check_code"),
+        CheckConstraint(
+            "status IN ('passed', 'failed', 'inconclusive')", name="svrso_status"
+        ),
+        CheckConstraint("length(evidence_sha256) = 64", name="svrso_evidence_sha"),
+        CheckConstraint("length(runner_hotkey) BETWEEN 1 AND 120", name="svrso_runner"),
+        CheckConstraint("length(signature) = 128", name="svrso_signature"),
+        Index("svrso_replay_check_idx", "replay_id", "check_code", unique=True),
+    )
+
+
+class V13ReplayPrivateGenerationGroup(Base):
+    """Pre-randomness two-role commitment to a replay's verified image."""
+
+    __tablename__ = "v13_replay_private_generation_groups"
+
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    target_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    target_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    target_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    target_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    control_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    control_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    approval_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    target_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replay_id"],
+            ["screening_verification_replays.replay_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["target_agent_id"], ["agents.agent_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["target_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["control_agent_id"], ["agents.agent_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["control_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["approval_id"],
+            ["v13_known_benign_control_approvals.approval_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("replay_id", name="v13rpg_replay_key"),
+        CheckConstraint(
+            "target_agent_id <> control_agent_id", name="v13rpg_distinct_agents"
+        ),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13rpg_{name}_check")
+            for name in (
+                "target_artifact_sha256",
+                "target_image_sha256",
+                "control_artifact_sha256",
+                "control_image_sha256",
+                "approval_receipt_sha256",
+                "profile_sha256",
+                "target_receipt_sha256",
+                "control_receipt_sha256",
+            )
+        ),
+        CheckConstraint("length(actor) BETWEEN 1 AND 120", name="v13rpg_actor"),
+    )
+
+
+class V13ReplayGroupPackageRegistration(Base):
+    """Digest-only sealed package for one replay generation role."""
+
+    __tablename__ = "v13_replay_group_package_registrations"
+
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    role: Mapped[str] = mapped_column(Text, primary_key=True)
+    generation_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    pair_inventory_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    registrar_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["group_id"],
+            ["v13_replay_private_generation_groups.group_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("role IN ('target', 'known_benign')", name="v13rgp_role"),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13rgp_{name}")
+            for name in (
+                "generation_receipt_sha256",
+                "manifest_sha256",
+                "pair_inventory_sha256",
+            )
+        ),
+        CheckConstraint(
+            "length(registrar_actor) BETWEEN 1 AND 120", name="v13rgp_actor"
+        ),
+    )
+
+
+class ScreeningVerificationReplayPrivateReceipt(Base):
+    """Append-only authenticated report; policy verification remains separate."""
+
+    __tablename__ = "screening_verification_replay_private_receipts"
+
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    runner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    report: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replay_id"],
+            ["screening_verification_replays.replay_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["group_id"],
+            ["v13_replay_private_generation_groups.group_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("length(receipt_sha256) = 64", name="svrpr_receipt_sha"),
+        CheckConstraint("length(runner_hotkey) BETWEEN 1 AND 120", name="svrpr_runner"),
+        CheckConstraint("length(signature) = 128", name="svrpr_signature"),
     )
 
 
@@ -1464,7 +1652,9 @@ class ScreeningQuarantine(Base):
         ),
         CheckConstraint(
             "review_audit IS NULL OR reason_code IN "
-            "('source-review-inconclusive', 'agentic-source-review-tripwire')",
+            "('source-review-inconclusive', 'agentic-source-review-tripwire', "
+            "'l2-model-inconclusive', 'l2-model-total-budget', "
+            "'l2-model-tool-budget', 'l2-model-step-budget')",
             name="screening_quarantines_review_audit_reason_check",
         ),
         CheckConstraint(
@@ -1521,6 +1711,62 @@ class ScreeningQuarantineResolution(Base):
             "quarantine_id",
             "created_at",
         ),
+    )
+
+
+class ScreeningReviewEvent(Base):
+    """Immutable snapshot of an accepted automated review or operator ruling."""
+
+    __tablename__ = "screening_review_events"
+
+    event_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    quarantine_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    resolution_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    previous_event_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    event_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewer_model: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    effective_decision: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    prior_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
+    next_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["previous_event_id"],
+            ["screening_review_events.event_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("event_kind IN ('automated', 'manual')", name="sre_kind_check"),
+        CheckConstraint("length(artifact_sha256) = 64", name="sre_sha_check"),
+        CheckConstraint("policy_version > 0", name="sre_policy_check"),
+        CheckConstraint(
+            "effective_decision IN ('reject', 'hold', 'pass', "
+            "'provisional_admission', 'no_change', 'release', 'rescreen')",
+            name="sre_decision_check",
+        ),
+        CheckConstraint("length(trim(actor)) > 0", name="sre_actor_check"),
+        Index(
+            "sre_automated_attempt_key",
+            "attempt_id",
+            unique=True,
+            postgresql_where=text("event_kind = 'automated'"),
+            sqlite_where=text("event_kind = 'automated'"),
+        ),
+        UniqueConstraint("resolution_id", name="sre_resolution_key"),
+        Index("sre_agent_created_idx", "agent_id", "created_at", "event_id"),
+        Index("sre_created_idx", "created_at", "event_id"),
     )
 
 
@@ -5636,6 +5882,61 @@ class ScreenerNode(Base):
     )
 
 
+class ScreenerReplayProcessKey(Base):
+    """Operator-pinned public key for one independent node's replay worker."""
+
+    __tablename__ = "screener_replay_process_keys"
+
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    instance_id: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key_hex: Mapped[str] = mapped_column(Text, nullable=False)
+    key_sha256: Mapped[str] = mapped_column(Text, primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(public_key_hex) = 64", name="srpk_public_key_hex_length_check"
+        ),
+        CheckConstraint("length(key_sha256) = 64", name="srpk_key_sha256_length_check"),
+        CheckConstraint("revision > 0", name="srpk_revision_check"),
+        CheckConstraint("status IN ('active', 'revoked')", name="srpk_status_check"),
+        ForeignKeyConstraint(["node_id"], ["screener_nodes.node_id"]),
+        Index(
+            "srpk_one_active_instance_idx",
+            "node_id",
+            "instance_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+    )
+
+
+class ScreenerReplayProcessNonce(Base):
+    """Durable once-only process proof nonce, scoped to one registered key."""
+
+    __tablename__ = "screener_replay_process_nonces"
+
+    key_sha256: Mapped[str] = mapped_column(Text, primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text, primary_key=True)
+    consumed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(nonce) = 32", name="srpn_nonce_length_check"),
+        ForeignKeyConstraint(
+            ["key_sha256"], ["screener_replay_process_keys.key_sha256"]
+        ),
+        Index("srpn_consumed_at_idx", "consumed_at"),
+    )
+
+
 class ScreenerCapacitySnapshot(Base):
     """Latest fenced capacity-reconciler state for one environment."""
 
@@ -6734,6 +7035,144 @@ class ScreenerFanoutShadowReview(Base):
         ),
         Index("screener_fanout_shadow_reviews_created_idx", "created_at", "shadow_id"),
         Index("screener_fanout_shadow_reviews_reserved_idx", "reserved_at"),
+    )
+
+
+class ScreenerL2ReportCanary(Base):
+    """One exact-attempt, non-authoritative L2 replay on an enrolled screener."""
+
+    __tablename__ = "screener_l2_report_canaries"
+
+    canary_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    source_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    review_label: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
+    claimed_instance_id: Mapped[str | None] = mapped_column(Text)
+    settings_revision: Mapped[int | None] = mapped_column(Integer)
+    settings_checksum: Mapped[str | None] = mapped_column(Text)
+    runtime_evidence_sha256: Mapped[str | None] = mapped_column(Text)
+    lease_token_hash: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    report: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["source_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(["target_node_id"], ["screener_nodes.node_id"]),
+        UniqueConstraint("request_id", name="screener_l2_canary_request_key"),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'", name="screener_l2_canary_sha_check"
+        ),
+        CheckConstraint(
+            "policy_version = 13 AND bench_version = 13",
+            name="screener_l2_canary_v13_check",
+        ),
+        CheckConstraint(
+            "expected_score_count >= 0", name="screener_l2_canary_scores_check"
+        ),
+        CheckConstraint(
+            "review_label IN ('candidate_clear', 'known_reject')",
+            name="screener_l2_canary_label_check",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'succeeded', 'incomplete', 'expired')",
+            name="screener_l2_canary_status_check",
+        ),
+        CheckConstraint(
+            "lease_token_hash IS NULL OR lease_token_hash ~ '^[0-9a-f]{64}$'",
+            name="screener_l2_canary_token_check",
+        ),
+        CheckConstraint(
+            "runtime_evidence_sha256 IS NULL OR "
+            "runtime_evidence_sha256 ~ '^[0-9a-f]{64}$'",
+            name="screener_l2_canary_runtime_check",
+        ),
+        Index("screener_l2_canary_queue_idx", "target_node_id", "status", "created_at"),
+        Index(
+            "screener_l2_canary_one_active_source_idx",
+            "source_attempt_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'leased')"),
+        ),
+    )
+
+
+class V13ScorerCohortPin(Base):
+    """Immutable, operator-audited V13 scorer and runtime packet admission."""
+
+    __tablename__ = "v13_scorer_cohort_pins"
+
+    bench_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hotkeys: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    packet: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    slot_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("bench_version = 13", name="v13_scorer_pin_version_check"),
+        CheckConstraint(
+            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            name="v13_scorer_pin_three_hotkeys_check",
+        ),
+        CheckConstraint(
+            "length(slot_settings_checksum) = 64",
+            name="v13_scorer_pin_settings_checksum_check",
+        ),
+    )
+
+
+class V13ScorerCohortRotation(Base):
+    """Append-only successor to the original V13 scorer pin."""
+
+    __tablename__ = "v13_scorer_cohort_rotations"
+
+    rotation_id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkeys: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    packet: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    previous_packet: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    slot_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("bench_version = 13", name="v13_scorer_rotation_version_check"),
+        CheckConstraint(
+            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            name="v13_scorer_rotation_three_hotkeys_check",
+        ),
+        CheckConstraint(
+            "length(slot_settings_checksum) = 64",
+            name="v13_scorer_rotation_settings_checksum_check",
+        ),
     )
 
 
