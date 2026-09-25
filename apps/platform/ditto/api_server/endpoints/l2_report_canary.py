@@ -64,6 +64,7 @@ def _view(row: ScreenerL2ReportCanary) -> L2CanaryView:
         review_label=row.review_label,
         status=row.status,
         claimed_instance_id=row.claimed_instance_id,
+        lease_expires_at=row.lease_expires_at,
         report=row.report,
         error_code=row.error_code,
         created_at=row.created_at,

@@ -3715,11 +3715,13 @@ class TerraSolSourceReviewAgent:
         read_bytes_used = 0
         read_files: set[str] = set()
         pending_tool_corrections: set[str] = set()
+        no_call_corrections = 0
 
         def request_submit_correction(call: object) -> None:
             try:
                 call_id = _call_id_value(call)
             except ValueError as error:
+                logger.warning("L2 model-tool-contract: invalid submit call id")
                 raise failure("model-tool-contract") from error
             items.append(
                 {
@@ -3791,6 +3793,31 @@ class TerraSolSourceReviewAgent:
             items.extend(output)
             calls = [item for item in output if item.get("type") == "function_call"]
             if not calls:
+                if role == "analyst" and no_call_corrections < 2:
+                    no_call_corrections += 1
+                    logger.warning(
+                        "L2 model returned no tool call; correction %d/2",
+                        no_call_corrections,
+                    )
+                    items.append(
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_text",
+                                    "text": (
+                                        "No tool call was returned. Use a supplied "
+                                        "source tool or submit_l2_review when "
+                                        "evidence is complete. This correction "
+                                        "does not imply clearance."
+                                    ),
+                                }
+                            ],
+                        }
+                    )
+                    continue
+                logger.warning("L2 model-tool-contract: no tool call after corrections")
                 raise failure("model-tool-contract")
             submitted = [
                 item for item in calls if item.get("name") == "submit_l2_review"
@@ -3863,8 +3890,12 @@ class TerraSolSourceReviewAgent:
                 try:
                     call_id, name, arguments = _tool_call(call)
                 except json.JSONDecodeError as error:
+                    logger.warning(
+                        "L2 model-tool-contract: malformed tool arguments JSON"
+                    )
                     raise failure("model-tool-contract") from error
                 except ValueError as error:
+                    logger.warning("L2 model-tool-contract: invalid tool call shape")
                     raise failure("model-tool-contract") from error
                 analyzer_calls += 1
                 if analyzer_calls > 2 * (max_steps or self._max_steps):

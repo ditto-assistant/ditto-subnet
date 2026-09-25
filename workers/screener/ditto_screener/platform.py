@@ -561,29 +561,46 @@ class PlatformClient:
         canary_id: UUID,
         *,
         lease_token: str,
+        lease_expires_at: datetime,
         status: str,
         report: dict[str, Any],
         error_code: str | None,
     ) -> None:
-        """Commit report-only evidence; never post a screening verdict."""
+        """Commit one idempotent report within its lease; never post a verdict."""
         url = f"{self._base}{_PREFIX}/l2-report-canaries/{canary_id}/complete"
-        try:
-            resp = await self._client.post(
-                url,
-                json={
-                    "lease_token": lease_token,
-                    "status": status,
-                    "report": report,
-                    "error_code": error_code,
-                },
-                headers=await self._auth_headers(),
+        body = {
+            "lease_token": lease_token,
+            "status": status,
+            "report": report,
+            "error_code": error_code,
+        }
+        last_error = "L2 canary completion did not run"
+        for retry_index in range(len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1):
+            try:
+                resp = await self._client.post(
+                    url, json=body, headers=await self._auth_headers()
+                )
+            except httpx.HTTPError as error:
+                last_error = f"L2 canary completion failed: {error}"
+                transient = True
+            else:
+                if resp.status_code == 200:
+                    return
+                last_error = (
+                    f"L2 canary completion rejected ({resp.status_code}): "
+                    f"{resp.text[:200]}"
+                )
+                transient = _is_transient_platform_status(resp.status_code)
+            if not transient or retry_index >= len(_TRANSIENT_PLATFORM_RETRY_DELAYS):
+                raise PlatformError(last_error)
+            delay = _TRANSIENT_PLATFORM_RETRY_DELAYS[retry_index]
+            if datetime.now(UTC) + timedelta(seconds=delay + 1) >= lease_expires_at:
+                raise PlatformError(f"{last_error}; no lease time remains for retry")
+            logger.warning(
+                "%s; retrying report-only completion in %.0fs", last_error, delay
             )
-        except httpx.HTTPError as error:
-            raise PlatformError(f"L2 canary completion failed: {error}") from error
-        if resp.status_code != 200:
-            raise PlatformError(
-                f"L2 canary completion rejected ({resp.status_code}): {resp.text[:200]}"
-            )
+            await asyncio.sleep(delay)
+        raise PlatformError(last_error)  # pragma: no cover
 
     async def record_verification_receipt(
         self,

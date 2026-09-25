@@ -531,14 +531,43 @@ class ScreenerWorker:
         if not queue.items:
             from ditto_screener.l2_report_canary import consume as consume_l2_canary
 
-            if await consume_l2_canary(
-                config=self._config,
-                platform=self._platform,
-                primary_gate=self._gate,
-                settings=review_settings,
-                instance_id=self._instance_id,
-            ):
-                return 1
+            canary_claimed = False
+
+            def on_canary_claim(claim):  # type: ignore[no-untyped-def]
+                nonlocal canary_claimed
+                canary_claimed = True
+                self._active_agent_id = claim.agent_id
+                self._job_started_at = int(time.time())
+                self._set_progress("preparing")
+
+            canary_heartbeat_stop = asyncio.Event()
+            canary_heartbeat = asyncio.create_task(
+                self._heartbeat_while_active(canary_heartbeat_stop)
+            )
+            try:
+                if await consume_l2_canary(
+                    config=self._config,
+                    platform=self._platform,
+                    primary_gate=self._gate,
+                    settings=review_settings,
+                    instance_id=self._instance_id,
+                    on_claim=on_canary_claim,
+                    progress=self._set_progress,
+                ):
+                    return 1
+            finally:
+                canary_heartbeat_stop.set()
+                await canary_heartbeat
+                if canary_claimed:
+                    progress_tasks = tuple(self._progress_heartbeat_tasks)
+                    for task in progress_tasks:
+                        task.cancel()
+                    await asyncio.gather(*progress_tasks, return_exceptions=True)
+                    self._progress_heartbeat_tasks.clear()
+                    self._active_agent_id = None
+                    self._active_progress_stage = None
+                    self._job_started_at = None
+                    await self._report_heartbeat("polling", force=True)
             # Only an idle primary worker may consume the optional shadow lane;
             # the Platform serializes its global budget and active assessment.
             from ditto_screener.conversation_worker import consume

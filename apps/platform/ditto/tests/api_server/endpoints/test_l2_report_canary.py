@@ -160,6 +160,9 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
     assert claim.source_attempt_id == attempt_id
     assert claim.scored_runtime_evidence == packet
     async with session_maker() as session:
+        view = await endpoints.get_l2_report_canary(claim.canary_id, None, session)
+    assert view.lease_expires_at == claim.lease_expires_at
+    async with session_maker() as session:
         second = await endpoints.claim_l2_report_canary(
             L2CanaryClaimRequest(
                 instance_id=node_id + "-worker-2",

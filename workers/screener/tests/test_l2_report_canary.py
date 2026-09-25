@@ -59,6 +59,8 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
         "scored_runtime_evidence": packet.model_dump(mode="json"),
     }
     completions = []
+    claimed = []
+    progress_stages = []
 
     class Platform:
         async def claim_l2_report_canary(self, **kwargs):
@@ -87,6 +89,7 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
             assert kwargs.get("publish_image") is None
             assert kwargs.get("record_runtime_verification") is None
             assert kwargs["scored_runtime_evidence"] == packet
+            kwargs["progress"]("source_review_0")
             return core_decision(
                 ScreeningOutcome.INCONCLUSIVE,
                 code="source-review-inconclusive",
@@ -121,9 +124,13 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
         primary_gate=SimpleNamespace(_client=object(), _journal=object()),
         settings=settings,
         instance_id="subnet-screener-1-worker-1",
+        on_claim=claimed.append,
+        progress=progress_stages.append,
     )
     assert consumed
     assert len(completions) == 1
+    assert claimed[0].canary_id == canary_id
+    assert progress_stages == ["source_review_0"]
     assert completions[0][1]["status"] == "succeeded"
     report = completions[0][1]["report"]
     assert report["authority"] == "none"

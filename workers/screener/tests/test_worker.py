@@ -374,6 +374,35 @@ async def test_healthy_rootless_executor_can_claim(
     assert readiness.ready
 
 
+async def test_report_only_canary_emits_active_progress_and_clears_heartbeat(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ditto_screener import l2_report_canary
+
+    agent_id = uuid4()
+    platform = _FakePlatform([[]])
+    worker = _worker(
+        make_config(), platform, _FakeGate(_decision(ScreeningOutcome.PASS))
+    )
+
+    async def consume(**kwargs: Any) -> bool:
+        kwargs["on_claim"](type("Claim", (), {"agent_id": agent_id})())
+        kwargs["progress"]("source_review_0")
+        await asyncio.sleep(0)
+        return True
+
+    monkeypatch.setattr(l2_report_canary, "consume", consume)
+    assert await worker._sweep(asyncio.Event()) == 1
+    assert any(
+        beat.state == "screening"
+        and beat.active_agent_id == agent_id
+        and beat.progress is not None
+        for beat in platform.heartbeats
+    )
+    assert platform.heartbeats[-1].state == "polling"
+    assert platform.heartbeats[-1].active_agent_id is None
+
+
 async def test_screen_one_pass_posts_signed_pass_verdict(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

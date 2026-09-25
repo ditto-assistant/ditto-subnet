@@ -43,6 +43,7 @@ class L2CanaryView(BaseModel):
     review_label: str
     status: str
     claimed_instance_id: str | None
+    lease_expires_at: datetime | None
     report: dict | None
     error_code: str | None
     created_at: datetime

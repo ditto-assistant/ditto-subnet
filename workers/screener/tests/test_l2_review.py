@@ -3007,40 +3007,16 @@ fn run() -> Answer {
     assert result.adjudicator_disposition == "uphold_violation"
 
 
-async def test_reasoning_only_turn_is_single_shot_contract_failure(
+async def test_reasoning_only_turn_gets_two_bounded_corrections_then_fails(
     tmp_path: Path,
 ) -> None:
     archive, artifact_sha = _tar(tmp_path, "fn main() { serve(); }\nfn serve() {}")
-    source_digest = hashlib.sha256(b"fn main() { serve(); }\nfn serve() {}").hexdigest()
     requests: list[dict[str, object]] = []
-    submitted = {
-        "disposition": "safe",
-        "risk_level": "low",
-        "confidence": 0.93,
-        "resolution_basis": "authoritative_model_tool_path",
-        "categories": ["none"],
-        "analyzed_files": [{"path": "src/main.rs", "sha256": source_digest}],
-        "evidence": [],
-        "causal_path": [],
-        "summary": "discarded",
-    }
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         requests.append(body)
-        if len(requests) == 1:
-            return _response([], model="openai/gpt-5.6-terra-20260709")
-        if len(requests) == 4:
-            return _response([_tool_call("4", "read_file", {"path": "src/main.rs"})])
-        result = _clearance_certificate(submitted) if len(requests) == 5 else submitted
-        return _response(
-            [_tool_call(str(len(requests)), "submit_l2_review", result)],
-            model=(
-                "openai/gpt-5.6-terra-20260709"
-                if len(requests) == 2
-                else "openai/gpt-5.6-sol-20260709"
-            ),
-        )
+        return _response([], model="openai/gpt-5.6-terra-20260709")
 
     result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
         str(archive),
@@ -3052,7 +3028,8 @@ async def test_reasoning_only_turn_is_single_shot_contract_failure(
 
     assert not result.observation.ok
     assert result.observation.error_code == "l2-model-tool-contract"
-    assert len(requests) == 1
+    assert len(requests) == 3
+    assert all(request["tool_choice"] == "required" for request in requests)
 
 
 async def test_model_contract_failure_retains_usage_and_never_clears(
@@ -3074,9 +3051,41 @@ async def test_model_contract_failure_retains_usage_and_never_clears(
     assert not result.observation.ok
     assert result.observation.failure_disposition == "retryable_infra"
     assert result.observation.error_code == "l2-model-tool-contract"
-    assert result.usage.input_tokens == 1_000
-    assert result.usage.output_tokens == 200
-    assert result.response_models == ("openai/gpt-5.6-terra-20260709",)
+    assert result.usage.input_tokens == 3_000
+    assert result.usage.output_tokens == 600
+    assert result.response_models == ("openai/gpt-5.6-terra-20260709",) * 3
+
+
+async def test_malformed_analyst_tool_arguments_still_fail_closed(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return _response(
+            [
+                {
+                    "type": "function_call",
+                    "call_id": "bad-args",
+                    "name": "read_file",
+                    "arguments": "{",
+                }
+            ]
+        )
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+    assert result.observation.error_code == "l2-model-tool-contract"
+    assert result.observation.failure_disposition == "retryable_infra"
+    assert requests == 1
 
 
 async def test_parallel_model_tool_calls_cannot_exceed_trajectory_cap(

@@ -55,6 +55,56 @@ def _make_client(
     return PlatformClient(cfg, http), http
 
 
+async def test_l2_canary_completion_retries_identical_body_after_502(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    canary_id = uuid4()
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        _assert_auth(request)
+        assert request.url.path.endswith(f"/l2-report-canaries/{canary_id}/complete")
+        bodies.append(json.loads(request.content))
+        return httpx.Response(502 if len(bodies) == 1 else 200)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        await client.complete_l2_report_canary(
+            canary_id,
+            lease_token="same-token",
+            lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+            status="incomplete",
+            report={"authority": "none"},
+            error_code="l2-model-tool-contract",
+        )
+    assert len(bodies) == 2
+    assert bodies[0] == bodies[1]
+
+
+async def test_l2_canary_completion_does_not_retry_expired_or_conflicting_lease(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(409)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformError, match=r"rejected \(409\)"):
+            await client.complete_l2_report_canary(
+                uuid4(),
+                lease_token="token",
+                lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+                status="incomplete",
+                report={"authority": "none"},
+                error_code="l2-model-tool-contract",
+            )
+    assert calls == 1
+
+
 async def test_mechanical_receipt_posts_only_digest_and_exact_binding(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

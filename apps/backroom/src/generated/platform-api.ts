@@ -20447,6 +20447,8 @@ export interface components {
             expected_agent_status: string;
             /** Expected Score Count */
             expected_score_count: number;
+            /** Lease Expires At */
+            lease_expires_at: string | null;
             /** Report */
             report: {
                 [key: string]: unknown;

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.gate import BuildGate, LeaseDeadline
+from ditto_screener.heartbeat import ScreenerProgressStage
 from ditto_screener.platform import PlatformClient
 from ditto_screener.policy import ReviewJournal, load_policy_engine
 from ditto_screener.review_settings import EffectiveReviewSettings
@@ -104,6 +106,8 @@ async def consume(
     primary_gate: BuildGate,
     settings: EffectiveReviewSettings,
     instance_id: str,
+    on_claim: Callable[[L2CanaryClaim], None] | None = None,
+    progress: Callable[[ScreenerProgressStage], None] | None = None,
 ) -> bool:
     """Claim one independent job only after the primary queue is empty."""
     try:
@@ -120,6 +124,14 @@ async def consume(
     if payload is None:
         return False
     claim = L2CanaryClaim.model_validate_json(json.dumps(payload))
+    logger.info(
+        "report-only L2 canary claimed canary_id=%s agent_id=%s lease_expires_at=%s",
+        claim.canary_id,
+        claim.agent_id,
+        claim.lease_expires_at.isoformat(),
+    )
+    if on_claim is not None:
+        on_claim(claim)
     if claim.policy_version != 13 or claim.bench_version != 13:
         logger.error("report-only L2 claim is not v13: %s", claim.canary_id)
         await platform.complete_l2_report_canary(
@@ -200,6 +212,7 @@ async def consume(
             policy_only=True,
             policy_version=13,
             scored_runtime_evidence=claim.scored_runtime_evidence,
+            progress=progress,
         )
         shadow = gate.pop_shadow_review(claim.source_attempt_id)
         report = _report(
@@ -215,6 +228,7 @@ async def consume(
     await platform.complete_l2_report_canary(
         claim.canary_id,
         lease_token=claim.lease_token,
+        lease_expires_at=claim.lease_expires_at,
         status=status,
         report=report,
         error_code=error_code,
