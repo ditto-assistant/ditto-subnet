@@ -83,9 +83,7 @@ class ScreenerReviewSettings(BaseModel):
         "openai/gpt-5.6-sol",
     )
     l3_enabled: bool = True
-    l3_model: Literal["openai/gpt-5.6-sol", "openai/gpt-6-sol"] = (
-        "openai/gpt-5.6-sol"
-    )
+    l3_model: Literal["openai/gpt-5.6-sol", "openai/gpt-6-sol"] = "openai/gpt-5.6-sol"
     timeout_seconds: Annotated[int, Field(ge=30, le=1_800)] = 1_200
     max_steps: Annotated[int, Field(ge=1, le=256)] = 32
     # L1 Luna inspection depth. Distinct from ``max_steps``, which bounds L2.
