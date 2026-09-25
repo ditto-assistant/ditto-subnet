@@ -184,8 +184,9 @@ _SUBMISSION_VALIDATION_HINTS = {
         "and cite real artifact paths and lines."
     ),
     "invariant_sweep": (
-        "Submit each V13 invariant I1-I8 exactly once. A pass needs its compatible "
-        "pass_clause and no evidence indices; a breach needs source evidence."
+        "Submit each required policy invariant exactly once. A pass needs its "
+        "compatible pass_clause and no evidence indices; a breach needs "
+        "source evidence."
     ),
     "causal_link": (
         "Bind the trigger, authority decision, and effect to exact source "
@@ -3862,7 +3863,8 @@ class TerraSolSourceReviewAgent:
                             "message": (
                                 "The host rejected this final review: "
                                 + _SUBMISSION_VALIDATION_HINTS[subcode]
-                                + " Retry submit_l2_review as the only call."
+                                + " Keep the evidence-based disposition and retry "
+                                "submit_l2_review as the only call."
                                 if subcode is not None
                                 else "Retry submit_l2_review as the only call after "
                                 "resolving analyzer corrections."
