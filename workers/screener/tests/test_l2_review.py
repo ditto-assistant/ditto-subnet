@@ -4123,7 +4123,7 @@ async def test_adjudicator_retry_reuses_analyst_and_critic_stage_caches(
 
 @pytest.mark.parametrize(
     ("invalid_kind", "expected_subcode"),
-    [("contradictory", "basis_category"), ("digest", "artifact_citation")],
+    [("contradictory", "safe_basis"), ("digest", "artifact_citation")],
 )
 async def test_invalid_final_tool_result_is_correctable_in_same_trajectory(
     tmp_path: Path,
@@ -4271,7 +4271,7 @@ async def test_malformed_submit_arguments_are_correctable_in_same_trajectory(
         ("L2 result has unexpected fields", "schema"),
         ("L2 analyzed-file digest does not match artifact", "artifact_citation"),
         ("1 validation error for SourceReviewInvariantAssessment", "invariant_sweep"),
-        ("L2 violation lacks a causal trigger/effect path", "causal_link"),
+        ("L2 violation lacks a causal trigger/effect path", "causal_path"),
         ("L2 violation is missing category evidence", "basis_category"),
         ("L2 violation lacks multi-location evidence", "multi_location"),
     ],

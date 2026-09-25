@@ -178,80 +178,6 @@ _DOSSIER_ANALYZERS = (
     "integrity_surfaces",
     "scorer_field_flow",
 )
-_SUBMISSION_VALIDATION_HINTS = {
-    "schema": "Match every required submit_l2_review field, type, and enum value.",
-    "artifact_citation": (
-        "Re-read exact source. Match analyzed_files SHA-256 values to the archive "
-        "and cite real artifact paths and lines."
-    ),
-    "invariant_sweep": (
-        "Submit each required policy invariant exactly once. A pass needs its "
-        "compatible pass_clause and no evidence indices; a breach needs "
-        "source evidence."
-    ),
-    "causal_link": (
-        "Bind the trigger, authority decision, and effect to exact source "
-        "locations and include the required causal roles."
-    ),
-    "basis_category": (
-        "Align risk, categories, category evidence, and resolution basis with "
-        "the cited mechanism."
-    ),
-    "multi_location": "Cite two distinct source locations for each required category.",
-}
-
-
-def _submission_validation_subcode(error: ValueError) -> str:
-    """Map host failures to fixed, source-free model correction codes."""
-    message = str(error)
-    if "multi-location evidence" in message:
-        return "multi_location"
-    if any(
-        phrase in message
-        for phrase in (
-            "not artifact-bound",
-            "not evidence-bound",
-            "did not analyze every L1",
-            "analyzed-file digest does not match artifact",
-            "evidence line is invalid",
-        )
-    ):
-        return "artifact_citation"
-    if any(
-        phrase in message
-        for phrase in (
-            "SourceReviewInvariantAssessment",
-            "invariant pass clause",
-            "invariant decisions",
-            "invariant breach requires source evidence",
-            "invariant evidence indices",
-            "policy-v10 invariant",
-        )
-    ):
-        return "invariant_sweep"
-    if any(
-        phrase in message
-        for phrase in (
-            "causal",
-            "invariant breach",
-            "authority transition",
-            "trigger/effect",
-        )
-    ):
-        return "causal_link"
-    if any(
-        phrase in message
-        for phrase in (
-            "category evidence",
-            "resolution basis",
-            "categories",
-            "not elevated",
-            "prohibited risk",
-            "contradictory evidence",
-        )
-    ):
-        return "basis_category"
-    return "schema"
 _COMPACT_DOSSIER_SECTIONS = (
     *(f"deterministic.{name}" for name in _DOSSIER_ANALYZERS),
     "deterministic.main_call_graph",
@@ -4204,6 +4130,7 @@ class TerraSolSourceReviewAgent:
                         {
                             "error": "submission-contract",
                             "reason": reason,
+                            "validation_subcode": validation_subcode,
                             "message": guidance,
                         },
                         separators=(",", ":"),
