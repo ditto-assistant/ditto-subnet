@@ -7916,7 +7916,7 @@ async def _publish_finalized_run(
 async def _mirror_quorum_transcripts(
     storage: S3StorageClient, session: AsyncSession, scores: Sequence[Score]
 ) -> None:
-    """Copy already-stored transcript bytes after quorum, never during the PUT."""
+    """Copy transcripts already stored when a score reaches quorum."""
     if storage.public_bucket is None:
         return
     for score in scores:
@@ -7940,6 +7940,41 @@ async def _mirror_quorum_transcripts(
             )
         except Exception:  # noqa: BLE001 - additive mirror, never fail finalization
             logger.exception("public transcript mirror failed for %s", digest)
+
+
+async def _mirror_late_transcript(
+    storage: S3StorageClient,
+    session: AsyncSession,
+    score: Score,
+    digest: str,
+    body: bytes,
+) -> None:
+    """Mirror a verified late upload only after its own version reaches quorum."""
+    if storage.public_bucket is None or not await transcript_mirror_enabled(session):
+        return
+    if await _score_uses_private_dataset(session, score):
+        return
+    score_count = await session.scalar(
+        select(func.count())
+        .select_from(Score)
+        .where(
+            Score.agent_id == score.agent_id,
+            Score.bench_version == score.bench_version,
+        )
+    )
+    if (score_count or 0) < SCORING_QUORUM:
+        return
+    key = transcript_object_key(digest)
+    try:
+        if not await storage.object_exists(key=key, bucket=storage.public_bucket):
+            await storage.put_object(
+                key=key,
+                body=body,
+                content_type="application/json",
+                bucket=storage.public_bucket,
+            )
+    except Exception:  # noqa: BLE001 - primary transcript is already stored
+        logger.exception("public transcript mirror failed for %s", digest)
 
 
 async def _score_uses_private_dataset(session: AsyncSession, score: Score) -> bool:
@@ -8006,11 +8041,12 @@ async def submit_transcript(
     platform accepts the bytes only when their SHA-256 equals that declared
     digest, then stores them content-addressed in authoritative storage.
     The anonymous public mirror is a separate audited setting and, when
-    enabled, runs only from quorum finalization. Because the binding is *content*
-    equality against an already-signed digest, a
+    enabled, runs at quorum or on a later upload after quorum. Because the
+    binding is *content* equality against an already-signed digest, a
     caller spoofing another validator's hotkey can only ever upload the exact
     bytes that validator attested — so the header + permit check is sufficient
-    auth here. Idempotent: re-uploading an existing digest is a no-op.
+    auth here. A retry does not rewrite the primary object and can complete a
+    missing public mirror once quorum and the operator setting allow it.
     """
     response.headers["Cache-Control"] = "no-store"
     body = await request.body()
@@ -8066,6 +8102,7 @@ async def submit_transcript(
             digest,
             len(body),
         )
+    await _mirror_late_transcript(storage, session, score, digest, body)
     return SubmitTranscriptResponse(
         agent_id=agent_id, run_id=run_id, transcript_sha256=digest, stored=True
     )
