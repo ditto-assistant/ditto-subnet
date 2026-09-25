@@ -267,6 +267,15 @@ _SUBMISSION_VALIDATION_HINTS = {
         "Bind the trigger, authority decision, and observed effect to exact "
         "source locations and satisfy the required causal roles."
     ),
+    "slot_rewrite_invariant": (
+        "For a scorer_field_rewritten transition under policy V12 or later, "
+        "mark I4 derived-value authority as breach with a null pass_clause "
+        "and bind its evidence indices to the authority-bypass source line."
+    ),
+    "invariant_binding": (
+        "Mark the invariant required by the authority transition and resolution "
+        "basis as breach, with evidence indices bound to the authority line."
+    ),
     "causal_path": (
         "For a violation, causal_path needs at least two exact artifact "
         "path/line entries, including one trigger and one effect role."
@@ -296,6 +305,12 @@ _SUBMISSION_VALIDATION_HINTS = {
 def _submission_validation_subcode(error: ValueError) -> str:
     """Reduce fixed host validation failures to source-free correction codes."""
     message = str(error)
+    if "L2 scorer field rewrite requires I4 breach" in message:
+        return "slot_rewrite_invariant"
+    if "L2 causal mechanism lacks its required invariant breach" in message:
+        return "invariant_binding"
+    if "L2 invariant breach is not bound to authority evidence" in message:
+        return "invariant_binding"
     if "L2 violation lacks a causal trigger/effect path" in message:
         return "causal_path"
     if any(
@@ -603,6 +618,7 @@ class L2TrajectoryError(ValueError):
         steps_used: int,
         read_bytes_used: int,
         read_files_used: int,
+        failure_subcode: str | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
@@ -614,6 +630,7 @@ class L2TrajectoryError(ValueError):
         self.steps_used = steps_used
         self.read_bytes_used = read_bytes_used
         self.read_files_used = read_files_used
+        self.failure_subcode = failure_subcode
 
 
 def _bounded_tail_lines(path: Path, *, max_bytes: int) -> list[bytes]:
@@ -2108,6 +2125,7 @@ class L2RunResult:
     direct_clear_graph_complete: bool = True
     analyst_cache_hit: bool = False
     critic_cache_hit: bool = False
+    failure_subcode: str | None = None
 
 
 def _finalize_without_l3(
@@ -3650,6 +3668,7 @@ class TerraSolSourceReviewAgent:
                 dossier_complete=error.dossier_complete,
                 analyst_cache_hit=analyst_cache_hit,
                 critic_cache_hit=critic_cache_hit,
+                failure_subcode=error.failure_subcode,
             )
         except (L2InconclusiveError, OSError, ValueError, httpx.HTTPError) as error:
             inconclusive = isinstance(error, L2InconclusiveError)
@@ -4068,7 +4087,9 @@ class TerraSolSourceReviewAgent:
                 call_id = _call_id_value(call)
             except ValueError as error:
                 logger.warning("L2 model-tool-contract: invalid submit call id")
-                raise failure("model-tool-contract") from error
+                raise failure(
+                    "model-tool-contract", "invalid_submit_call_id"
+                ) from error
             proposed_disposition = "unknown"
             if isinstance(call, Mapping):
                 raw_arguments = call.get("arguments")
@@ -4142,7 +4163,7 @@ class TerraSolSourceReviewAgent:
                 }
             )
 
-        def failure(code: str) -> L2TrajectoryError:
+        def failure(code: str, subcode: str | None = None) -> L2TrajectoryError:
             return L2TrajectoryError(
                 code,
                 usage=usage,
@@ -4153,6 +4174,7 @@ class TerraSolSourceReviewAgent:
                 steps_used=steps_used,
                 read_bytes_used=read_bytes_used,
                 read_files_used=len(read_files),
+                failure_subcode=subcode,
             )
 
         for _step in range(max_steps or self._max_steps):
@@ -4336,7 +4358,7 @@ class TerraSolSourceReviewAgent:
                     )
                     continue
                 logger.warning("L2 model-tool-contract: no tool call after corrections")
-                raise failure("model-tool-contract")
+                raise failure("model-tool-contract", "no_tool_call_after_corrections")
             submitted = [
                 item for item in calls if item.get("name") == "submit_l2_review"
             ]
@@ -4462,10 +4484,14 @@ class TerraSolSourceReviewAgent:
                     logger.warning(
                         "L2 model-tool-contract: malformed tool arguments JSON"
                     )
-                    raise failure("model-tool-contract") from error
+                    raise failure(
+                        "model-tool-contract", "malformed_tool_arguments_json"
+                    ) from error
                 except ValueError as error:
                     logger.warning("L2 model-tool-contract: invalid tool call shape")
-                    raise failure("model-tool-contract") from error
+                    raise failure(
+                        "model-tool-contract", "invalid_tool_call_shape"
+                    ) from error
                 analyzer_calls += 1
                 if analyzer_calls > 2 * (max_steps or self._max_steps):
                     raise failure("model-tool-budget")
@@ -5705,6 +5731,7 @@ def _validate_violation_invariant_binding(
     resolution_basis: str,
     causal_evidence: SourceReviewCausalEvidence | None,
     evidence: list[SourceReviewEvidenceItem],
+    policy_version: int,
 ) -> None:
     """Bind a model-authored v10 breach to the host-validated causal mechanism."""
 
@@ -5713,8 +5740,17 @@ def _validate_violation_invariant_binding(
     transition_invariant = _INVARIANT_BY_AUTHORITY_TRANSITION[
         causal_evidence.authority_transition
     ]
+    scorer_slot_rewrite = (
+        policy_version >= 12
+        and causal_evidence.authority_transition
+        == SourceReviewAuthorityTransition.SCORER_FIELD_REWRITTEN
+    )
+    if scorer_slot_rewrite:
+        transition_invariant = SourceReviewInvariant.DERIVED_VALUE_AUTHORITY
     expected = {transition_invariant}
     basis_invariant = _INVARIANT_BY_RESOLUTION_BASIS.get(resolution_basis)
+    if scorer_slot_rewrite and resolution_basis == "scorer_field_manipulation":
+        basis_invariant = SourceReviewInvariant.DERIVED_VALUE_AUTHORITY
     if basis_invariant is not None:
         expected.add(basis_invariant)
     authority_locations = {
@@ -5732,6 +5768,8 @@ def _validate_violation_invariant_binding(
         decisions[invariant].disposition != SourceReviewInvariantDisposition.BREACH
         for invariant in expected
     ):
+        if scorer_slot_rewrite:
+            raise ValueError("L2 scorer field rewrite requires I4 breach")
         raise ValueError("L2 causal mechanism lacks its required invariant breach")
     transition_decision = decisions[transition_invariant]
     if authority_indices and not authority_indices.intersection(
@@ -6010,6 +6048,7 @@ def _parse_l2_review(
             resolution_basis=str(resolution_basis),
             causal_evidence=causal_evidence,
             evidence=public_evidence,
+            policy_version=policy_version,
         )
     summary = (
         "Level-2 review found no causally established policy violation."
@@ -6750,6 +6789,7 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 causal evidence is invalid": "inconsistent-verdict",
     "L2 causal evidence schema version is invalid": "inconsistent-verdict",
     "L2 causal mechanism lacks its required invariant breach": "inconsistent-verdict",
+    "L2 scorer field rewrite requires I4 breach": "inconsistent-verdict",
     "L2 causal path is invalid": "inconsistent-verdict",
     "L2 causal role binding is invalid": "inconsistent-verdict",
     "L2 causal role bindings are invalid": "inconsistent-verdict",

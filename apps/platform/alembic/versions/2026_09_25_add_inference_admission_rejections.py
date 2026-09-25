@@ -1,7 +1,7 @@
 """Persist sanitized inference admission rejections.
 
 Revision ID: c3a91e7b2d40
-Revises: 9e4c7a1b6d20
+Revises: b7e2a4d961c0
 Create Date: 2026-09-24
 
 Rows older than 14 days are pruned by the writer. The table never stores
@@ -16,7 +16,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "c3a91e7b2d40"
-down_revision: str | Sequence[str] | None = "9e4c7a1b6d20"
+down_revision: str | Sequence[str] | None = "b7e2a4d961c0"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
