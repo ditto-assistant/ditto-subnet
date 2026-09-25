@@ -190,14 +190,28 @@ class TestModerationAudit:
     async def test_concurrent_operators_keep_one_chain(
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
+        first_written = asyncio.Event()
+        release_first = asyncio.Event()
+
         async def append_one(index: int) -> None:
             async with session_maker() as session, session.begin():
                 await record_moderation_audit(
                     session,
                     **_kwargs(miner_hotkey=f"5Miner{index}", recorded_at=_T0),
                 )
+                if index == 0:
+                    first_written.set()
+                    await release_first.wait()
 
-        await asyncio.gather(append_one(0), append_one(1))
+        first = asyncio.create_task(append_one(0))
+        await asyncio.wait_for(first_written.wait(), timeout=5)
+        second = asyncio.create_task(append_one(1))
+        try:
+            completed, _ = await asyncio.wait({second}, timeout=0.2)
+            assert not completed, "a concurrent append bypassed the audit-chain lock"
+        finally:
+            release_first.set()
+        await asyncio.gather(first, second)
         async with session_maker() as session:
             entries = await list_audit_entries(session)
         assert len(entries) == 2
