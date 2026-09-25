@@ -4163,7 +4163,8 @@ class TerraSolSourceReviewAgent:
                         "role": role,
                         "step": steps_used,
                         "tool_names": [
-                            name if (name := call.get("name")) in allowed_tool_names
+                            name
+                            if (name := call.get("name")) in allowed_tool_names
                             else "unknown"
                             for call in calls
                         ],
