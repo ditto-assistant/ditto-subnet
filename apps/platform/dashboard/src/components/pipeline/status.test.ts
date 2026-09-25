@@ -89,16 +89,17 @@ describe("status vocabulary (row 10)", () => {
     expect(deferredReviewSummary(inconclusive)).toBe(
       "Score qualified (top 5) \u00b7 automated review inconclusive \u2014 no finding",
     );
-    // An auditless or preflight hold: nothing ran, so claim neither a review
-    // nor a budget; the chip stays neutral because nothing was found.
-    const notReviewed = { ...held, review_conclusion: "not_reviewed" as const };
-    expect(isSourceReviewIncomplete(notReviewed)).toBe(false);
-    expect(activityStage("under_review", notReviewed)).toEqual(["Deferred source review", ""]);
-    expect(deferredReviewSummary(notReviewed)).toBe(
-      "Score qualified (top 5) \u00b7 automated review did not run \u2014 awaiting operator review",
+    // An auditless or preflight hold: claim only that no review completed with
+    // a recorded conclusion, never a budget; the chip stays neutral because no
+    // finding was recorded.
+    const notCompleted = { ...held, review_conclusion: "not_completed" as const };
+    expect(isSourceReviewIncomplete(notCompleted)).toBe(false);
+    expect(activityStage("under_review", notCompleted)).toEqual(["Deferred source review", ""]);
+    expect(deferredReviewSummary(notCompleted)).toBe(
+      "Score qualified (top 5) \u00b7 automated review did not complete \u2014 no finding recorded",
     );
-    expect(deferredReviewSummary(notReviewed)).not.toContain("budget");
-    expect(deferredReviewSummary(notReviewed)).not.toContain("no finding");
+    expect(deferredReviewSummary(notCompleted)).not.toContain("budget");
+    expect(deferredReviewSummary(notCompleted)).not.toContain("did not run");
     const adverse = {
       status: "under_review",
       deferred_review_triggers: ["anomaly"] as const,
@@ -159,8 +160,9 @@ describe("status vocabulary (row 10)", () => {
     expect(detail("budget_exhausted")).toContain("its score placed it in the top five");
     expect(detail("no_finding")).toContain("without reaching a decision and made no finding");
     expect(detail("no_finding")).not.toContain("budget");
-    expect(detail("not_reviewed")).toContain("stopped before reviewing the source");
-    expect(detail("not_reviewed")).not.toContain("budget");
+    expect(detail("not_completed")).toContain("did not complete and recorded no finding");
+    expect(detail("not_completed")).not.toContain("before reviewing");
+    expect(detail("not_completed")).not.toContain("budget");
     expect(detail("adverse_signal")).not.toContain("ran out of budget");
     expect(detail("adverse_signal")).toContain("raised a concern");
     expect(detail("pending")).toContain("has not reported yet");

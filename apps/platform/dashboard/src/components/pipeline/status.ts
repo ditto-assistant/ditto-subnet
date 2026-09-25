@@ -106,7 +106,7 @@ export function activityStage(
     if (
       conclusion === "no_finding" ||
       conclusion === "budget_exhausted" ||
-      conclusion === "not_reviewed"
+      conclusion === "not_completed"
     ) {
       return ["Deferred source review", ""];
     }
@@ -131,9 +131,10 @@ export const DEFERRED_REVIEW_TRIGGER_LABELS: Record<DeferredReviewTrigger, strin
 /** What the automated source review concluded, as a short clause. */
 export const REVIEW_CONCLUSION_LABELS: Record<ReviewConclusion, string> = {
   pending: "automated review pending",
-  // The review stopped before any model review ran (no recorded audit, or a
-  // preflight hold): never claim it ran or ran out of budget.
-  not_reviewed: "automated review did not run \u2014 awaiting operator review",
+  // No review completed with a recorded conclusion (no recorded audit, or a
+  // preflight hold). Claim only that: not whether or how far review ran, and
+  // never a budget.
+  not_completed: "automated review did not complete \u2014 no finding recorded",
   no_finding: "automated review inconclusive \u2014 no finding",
   // Only for an exact recorded budget-exhaustion audit.
   budget_exhausted: "automated review ran out of budget \u2014 no finding",
@@ -435,11 +436,11 @@ export function validationDetail(e: ActivityStatusEntry): string {
         "The automated review finished without reaching a decision and made no finding; an operator decision is pending."
       );
     }
-    if (e.review_conclusion === "not_reviewed") {
+    if (e.review_conclusion === "not_completed") {
       return (
         held +
         why +
-        "The automated review stopped before reviewing the source, so it made no finding; an operator decision is pending."
+        "The automated review did not complete and recorded no finding; an operator decision is pending."
       );
     }
     if (e.review_conclusion === "pending") {

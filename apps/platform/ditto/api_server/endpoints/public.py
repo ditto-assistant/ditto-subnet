@@ -189,6 +189,7 @@ from ditto.api_models.screener_policy_activation import (
     PublicV13ReviewClockRevision,
     PublicV13ReviewClockSchedule,
 )
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import (
     SystemMetrics,
@@ -222,6 +223,7 @@ from ditto.api_server.continual_retest_settings import (
 from ditto.api_server.datapipeline import DataPipelineError
 from ditto.api_server.deferred_source_review import (
     DEFERRED_REVIEW_KIND,
+    deep_review_attempt_id,
     public_deferred_review_triggers,
     public_review_conclusion,
 )
@@ -292,6 +294,7 @@ from ditto.db.models import (
     Score,
     ScreenerCapacitySnapshot,
     ScreenerNode,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     ScreeningDispute,
     ScreeningQuarantine,
@@ -5558,7 +5561,7 @@ def _public_activity_response(
     duplicate_metadata: dict[UUID, _DuplicateSubmissionMetadata] | None = None,
     ath_reviews: dict[UUID, _PublicAthReviewSnapshot] | None = None,
     ath_review_composite: dict[UUID, float] | None = None,
-    quarantine_findings: dict[UUID, _QuarantineFinding] | None = None,
+    review_inputs: _ReviewProjectionInputs | None = None,
     retired_agent_ids: set[UUID] | None = None,
     ath_only: bool = False,
     terminal_history_limit: int | None = None,
@@ -5744,7 +5747,7 @@ def _public_activity_response(
             row_status=row_status,
             agent=row.agent,
             review=_review(row),
-            quarantine=(quarantine_findings or {}).get(row.agent.agent_id),
+            inputs=review_inputs,
         )
         for row, row_status in page_rows
     }
@@ -5979,17 +5982,112 @@ class _PublicAthReviewSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class _QuarantineFinding:
-    """Internal only: an active quarantine's finding, never serialized."""
+    """Internal only: an active quarantine's review record, never serialized."""
 
+    attempt_id: UUID
     finding_digest: str | None
     finding: dict[str, Any] | None
     review_audit: dict[str, Any] | None
+    review_notes: list[Any] | None
 
 
-async def _active_quarantine_findings(
-    session: AsyncSession, rows: list[Any]
-) -> dict[UUID, _QuarantineFinding]:
-    """Active quarantine findings for the quarantined rows on this page.
+@dataclass(frozen=True, slots=True)
+class _ReviewProjectionInputs:
+    """Internal only: per-page inputs for ``_public_review_projection``."""
+
+    quarantines: dict[UUID, _QuarantineFinding]
+    # attempt_id -> ``concern_hold_count`` from that attempt's pinned settings.
+    concern_hold_counts: dict[UUID, int]
+
+    def concern_hold_count(self, attempt_id: UUID | None) -> int:
+        if attempt_id is None:
+            return _DEFAULT_CONCERN_HOLD_COUNT
+        return self.concern_hold_counts.get(attempt_id, _DEFAULT_CONCERN_HOLD_COUNT)
+
+
+_DEFAULT_CONCERN_HOLD_COUNT = ScreenerReviewSettings().concern_hold_count
+
+
+async def _pinned_concern_hold_counts(
+    session: AsyncSession, attempt_ids: set[UUID]
+) -> dict[UUID, int]:
+    """``concern_hold_count`` from the review settings each attempt ran under.
+
+    Mirrors the worker's binding: an attempt pinned to a revision uses that
+    revision when its checksum and scope still match; a legacy unbound attempt
+    uses the latest global revision. Anything unresolvable falls back to the
+    settings default, which is also the worker's default.
+    """
+    if not attempt_ids:
+        return {}
+    attempts = (
+        (
+            await session.execute(
+                select(
+                    ScreeningAttempt.attempt_id,
+                    ScreeningAttempt.review_settings_revision,
+                    ScreeningAttempt.review_settings_checksum,
+                    ScreeningAttempt.review_settings_scope,
+                ).where(ScreeningAttempt.attempt_id.in_(attempt_ids))
+            )
+        )
+        .tuples()
+        .all()
+    )
+    pinned = {revision for _, revision, _, _ in attempts if revision is not None}
+    revisions = (
+        {
+            row.revision: row
+            for row in await session.scalars(
+                select(ScreenerReviewSettingsRevision).where(
+                    ScreenerReviewSettingsRevision.revision.in_(pinned)
+                )
+            )
+        }
+        if pinned
+        else {}
+    )
+    latest_global = (
+        await session.scalar(
+            select(ScreenerReviewSettingsRevision)
+            .where(ScreenerReviewSettingsRevision.scope == "*")
+            .order_by(ScreenerReviewSettingsRevision.revision.desc())
+            .limit(1)
+        )
+        if any(revision is None for _, revision, _, _ in attempts)
+        else None
+    )
+
+    def _hold_count(row: ScreenerReviewSettingsRevision | None) -> int:
+        if row is None:
+            return _DEFAULT_CONCERN_HOLD_COUNT
+        try:
+            return ScreenerReviewSettings.model_validate(
+                row.settings
+            ).concern_hold_count
+        except ValueError:
+            return _DEFAULT_CONCERN_HOLD_COUNT
+
+    counts: dict[UUID, int] = {}
+    for attempt_id, revision, checksum, scope in attempts:
+        if revision is None:
+            counts[attempt_id] = _hold_count(latest_global)
+            continue
+        row = revisions.get(revision)
+        counts[attempt_id] = _hold_count(
+            row
+            if row is not None and row.checksum == checksum and row.scope == scope
+            else None
+        )
+    return counts
+
+
+async def _public_review_inputs(
+    session: AsyncSession,
+    rows: list[Any],
+    ath_reviews: dict[UUID, _PublicAthReviewSnapshot],
+) -> _ReviewProjectionInputs:
+    """Active quarantine records and pinned hold thresholds for this page.
 
     At most one quarantine per agent is active
     (``screening_quarantines_one_active_agent_idx``), and the lookup is
@@ -6000,25 +6098,49 @@ async def _active_quarantine_findings(
         for row in rows
         if row.agent.status == AgentStatus.QUARANTINED
     }
-    if not agent_ids:
-        return {}
-    result = await session.execute(
-        select(
-            ScreeningQuarantine.agent_id,
-            ScreeningQuarantine.finding_digest,
-            ScreeningQuarantine.finding,
-            ScreeningQuarantine.review_audit,
-        ).where(
-            ScreeningQuarantine.agent_id.in_(agent_ids),
-            ScreeningQuarantine.status == "active",
+    quarantines: dict[UUID, _QuarantineFinding] = {}
+    if agent_ids:
+        result = await session.execute(
+            select(
+                ScreeningQuarantine.agent_id,
+                ScreeningQuarantine.attempt_id,
+                ScreeningQuarantine.finding_digest,
+                ScreeningQuarantine.finding,
+                ScreeningQuarantine.review_audit,
+                ScreeningQuarantine.review_notes,
+            ).where(
+                ScreeningQuarantine.agent_id.in_(agent_ids),
+                ScreeningQuarantine.status == "active",
+            )
         )
+        quarantines = {
+            agent_id: _QuarantineFinding(
+                attempt_id=attempt_id,
+                finding_digest=digest,
+                finding=finding,
+                review_audit=review_audit,
+                review_notes=review_notes,
+            )
+            for (
+                agent_id,
+                attempt_id,
+                digest,
+                finding,
+                review_audit,
+                review_notes,
+            ) in result.tuples()
+        }
+    attempt_ids = {quarantine.attempt_id for quarantine in quarantines.values()}
+    for row in rows:
+        review = ath_reviews.get(row.agent.agent_id)
+        if review is not None and review.deferred_evidence is not None:
+            deep_attempt = deep_review_attempt_id(review.deferred_evidence)
+            if deep_attempt is not None:
+                attempt_ids.add(deep_attempt)
+    return _ReviewProjectionInputs(
+        quarantines=quarantines,
+        concern_hold_counts=await _pinned_concern_hold_counts(session, attempt_ids),
     )
-    return {
-        agent_id: _QuarantineFinding(
-            finding_digest=digest, finding=finding, review_audit=review_audit
-        )
-        for agent_id, digest, finding, review_audit in result.tuples()
-    }
 
 
 def _public_review_projection(
@@ -6026,17 +6148,22 @@ def _public_review_projection(
     row_status: str,
     agent: Agent,
     review: _PublicAthReviewSnapshot | None,
-    quarantine: _QuarantineFinding | None,
+    inputs: _ReviewProjectionInputs | None,
 ) -> tuple[list[PublicDeferredReviewTrigger], PublicReviewConclusion | None]:
     """Public trigger kinds and automated-review conclusion for one row (#562)."""
     if row_status != "under_review":
         return [], None
     evidence = review.deferred_evidence if review is not None else None
+    inputs = inputs or _ReviewProjectionInputs(quarantines={}, concern_hold_counts={})
+    quarantine = inputs.quarantines.get(agent.agent_id)
     return (
         public_deferred_review_triggers(evidence),
         public_review_conclusion(
             deferred_review_active=evidence is not None,
             deferred_evidence=evidence,
+            deferred_concern_hold_count=inputs.concern_hold_count(
+                deep_review_attempt_id(evidence)
+            ),
             quarantined=agent.status == AgentStatus.QUARANTINED,
             screening_reason_code=agent.screening_reason_code,
             quarantine_finding_digest=(
@@ -6045,6 +6172,12 @@ def _public_review_projection(
             quarantine_finding=(quarantine.finding if quarantine is not None else None),
             quarantine_review_audit=(
                 quarantine.review_audit if quarantine is not None else None
+            ),
+            quarantine_review_notes=(
+                quarantine.review_notes if quarantine is not None else None
+            ),
+            quarantine_concern_hold_count=inputs.concern_hold_count(
+                quarantine.attempt_id if quarantine is not None else None
             ),
         ),
     )
@@ -6290,7 +6423,7 @@ async def activity(
         policy=release_policy,
     )
     ath_reviews, ath_composite = await _ath_review_public_snapshot(session, rows)
-    quarantine_findings = await _active_quarantine_findings(session, rows)
+    review_inputs = await _public_review_inputs(session, rows, ath_reviews)
     queue_preview = await queue_preview_for_rows(
         session,
         rows=rows,
@@ -6329,7 +6462,7 @@ async def activity(
         duplicate_metadata=await _duplicate_submission_metadata(session, rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
-        quarantine_findings=quarantine_findings,
+        review_inputs=review_inputs,
         precomputed_statuses=statuses,
         precomputed_status_counts=activity_page.status_counts,
         precomputed_downloadable_count=activity_page.downloadable_count,
@@ -6556,7 +6689,7 @@ async def operations(
     ath_reviews, ath_composite = await _ath_review_public_snapshot(
         session, activity_rows
     )
-    quarantine_findings = await _active_quarantine_findings(session, activity_rows)
+    review_inputs = await _public_review_inputs(session, activity_rows, ath_reviews)
     # Operations keeps stored agents.name; handle annotations still travel so
     # the operator board can mark a reserved or stricken stem.
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
@@ -6601,7 +6734,7 @@ async def operations(
         duplicate_metadata=await _duplicate_submission_metadata(session, activity_rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
-        quarantine_findings=quarantine_findings,
+        review_inputs=review_inputs,
         precomputed_statuses=activity_statuses,
         precomputed_status_counts=activity_page.status_counts,
         precomputed_downloadable_count=activity_page.downloadable_count,
@@ -6930,7 +7063,7 @@ async def agent_summary(
         row_status=status,
         agent=row.agent,
         review=review,
-        quarantine=(await _active_quarantine_findings(session, [row])).get(agent_id),
+        inputs=await _public_review_inputs(session, [row], ath_reviews),
     )
     show_similarity_evidence = not _supersedes_public_similarity_evidence(review)
     duplicate = (

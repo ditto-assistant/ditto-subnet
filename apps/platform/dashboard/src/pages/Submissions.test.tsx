@@ -1217,17 +1217,17 @@ describe("deferred source review chip (#562)", () => {
     );
   });
 
-  it("never claims a budget for a preflight or auditless hold", async () => {
+  it("claims neither a review nor a budget for a preflight or auditless hold", async () => {
     const cell = await renderHeld({
       screening_reason: "Deferred source review requires operator adjudication",
       deferred_review_triggers: ["top_five"],
-      review_conclusion: "not_reviewed",
+      review_conclusion: "not_completed",
     });
     const chip = cell.querySelector(".stage") as HTMLElement;
     expect(chip.classList.contains("warn")).toBe(false);
     const summary = cell.querySelector(".deferred-review-summary")?.textContent ?? "";
     expect(summary).toBe(
-      "Score qualified (top 5) \u00b7 automated review did not run \u2014 awaiting operator review",
+      "Score qualified (top 5) \u00b7 automated review did not complete \u2014 no finding recorded",
     );
     expect(cell.textContent).not.toContain("budget");
   });

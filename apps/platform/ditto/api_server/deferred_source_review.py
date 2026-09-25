@@ -16,6 +16,7 @@ from ditto.api_models.public import (
 )
 from ditto.api_models.queue_policy_settings import DeferredSourceReviewSettings
 from ditto_screening_protocol.models import ScreenReviewAudit
+from ditto_screening_protocol.review_ledger import concern_threshold_reached
 
 if TYPE_CHECKING:
     from ditto.db.queries.scores import LedgerRow
@@ -237,7 +238,7 @@ BUDGET_EXHAUSTED_REASON_CODES = frozenset(
 # (``l2-runtime-evidence-unavailable``: lease unavailable or review disabled),
 # which a strict V13 INCONCLUSIVE verdict can carry as its reason code. Only a
 # proving audit softens any of them, and a preflight audit never proves a
-# review ran, so the preflight code can reach ``not_reviewed`` at most.
+# review ran, so the preflight code can reach ``not_completed`` at most.
 L2_NO_VERDICT_REASON_CODES = frozenset(
     {
         "l2-runtime-evidence-unavailable",
@@ -293,26 +294,34 @@ def _carries_finding(finding_digest: object, finding: object) -> bool:
 
 def _recorded_review_outcome(
     raw_audit: object,
-) -> Literal["not_reviewed", "no_finding", "budget_exhausted"]:
+) -> Literal["not_completed", "no_finding", "budget_exhausted"]:
     """Classify a no-verdict hold by the review audit actually recorded with it.
 
     Only a well-formed ``ScreenReviewAudit`` whose counters show model steps
-    proves a model review ran. A missing audit (JSON ``null`` reads back as
-    ``None`` too), a malformed one, and the V13 signed-runtime preflight
-    (``final_stage == "preflight"`` / a ``cause_detail``: lease unavailable or
-    review disabled, zero steps) all mean the review never started, so nothing
-    may claim it ran or ran out of budget.
+    proves a model review ran to a budget or a bounded disposition. Anything
+    else is ``not_completed``, which claims only what the record shows -- that
+    no review completed with a recorded conclusion -- because the record cannot
+    say how far review got:
+
+    - no audit (a stored JSON ``null`` reads back as ``None`` too): legacy rows
+      from before the audit field, or the V13 L2 path that fails after L1 has
+      already read the source (scorer-capabilities fetch failure);
+    - a malformed audit;
+    - the V13 signed-runtime preflight audit (``final_stage == "preflight"`` /
+      a ``cause_detail``: lease unavailable or review disabled), which proves
+      only that the L2 model stage never started;
+    - a well-formed audit with zero model steps.
     """
     if not isinstance(raw_audit, dict):
-        return "not_reviewed"
+        return "not_completed"
     try:
         audit = ScreenReviewAudit.model_validate(raw_audit)
     except ValidationError:
-        return "not_reviewed"
+        return "not_completed"
     if audit.final_stage == "preflight" or audit.cause_detail is not None:
-        return "not_reviewed"
+        return "not_completed"
     if audit.steps_used == 0 and not audit.model_steps_observed:
-        return "not_reviewed"
+        return "not_completed"
     if (
         audit.reason_code in BUDGET_AUDIT_REASON_CODES
         or audit.budget_stop_reason in _BUDGET_STOP_REASONS
@@ -321,15 +330,39 @@ def _recorded_review_outcome(
     return "no_finding"
 
 
+def _no_verdict_conclusion(
+    raw_audit: object, raw_notes: object, *, concern_hold_count: int
+) -> PublicReviewConclusion:
+    """The recorded audit's outcome, unless the hold is concern-driven.
+
+    A budget-terminated review holds either on thin coverage or because its
+    recorded concerns reached ``concern_hold_count`` (the worker's
+    ``ledger_disposition``). The second hold is caused by the concerns, not the
+    budget, so it reads ``adverse_signal``. The threshold rule is the one the
+    worker applies, shared through ``ditto_screening_protocol.review_ledger``,
+    evaluated on the notes ledger recorded with the result against the review
+    settings pinned on that attempt.
+    """
+    outcome = _recorded_review_outcome(raw_audit)
+    if outcome == "budget_exhausted" and isinstance(raw_notes, list):
+        notes = [note for note in raw_notes if isinstance(note, dict)]
+        if concern_threshold_reached(notes, concern_hold_count=concern_hold_count):
+            return "adverse_signal"
+    return outcome
+
+
 def public_review_conclusion(
     *,
     deferred_review_active: bool,
     deferred_evidence: object,
+    deferred_concern_hold_count: int,
     quarantined: bool,
     screening_reason_code: str | None,
     quarantine_finding_digest: str | None,
     quarantine_finding: object,
     quarantine_review_audit: object,
+    quarantine_review_notes: object,
+    quarantine_concern_hold_count: int,
 ) -> PublicReviewConclusion | None:
     """What the automated review concluded for a held submission.
 
@@ -341,14 +374,16 @@ def public_review_conclusion(
        codes, is ``adverse_signal``;
     4. otherwise the recorded review audit decides: ``budget_exhausted`` or
        ``no_finding`` only when it proves a model review ran, and
-       ``not_reviewed`` when there is no such proof (auditless, malformed, or
-       the V13 preflight that stops before any model review).
+       ``not_completed`` when there is no such proof;
+    5. a ``budget_exhausted`` hold whose recorded substantiated concerns reach
+       the attempt's pinned ``concern_hold_count`` is ``adverse_signal``.
 
-    For an active deferred review the post-score deep attempt's result and its
-    ``review_audit`` decide, and the review is ``pending`` until one is
-    recorded. For a pre-score quarantine the agent's screening reason code and
-    the active quarantine's finding and ``review_audit`` decide. Every other
-    hold (copy review, operator hold) has no automated-review conclusion.
+    For an active deferred review the post-score deep attempt's result, its
+    ``review_audit`` and ``review_notes`` decide, and the review is ``pending``
+    until one is recorded. For a pre-score quarantine the agent's screening
+    reason code and the active quarantine's finding, ``review_audit`` and
+    ``review_notes`` decide. Every other hold (copy review, operator hold) has
+    no automated-review conclusion.
     """
     result = (
         deferred_evidence.get("deep_review_result")
@@ -364,12 +399,36 @@ def public_review_conclusion(
             return "pending"
         if not (isinstance(code, str) and is_no_finding_reason_code(code)):
             return "adverse_signal"
-        return _recorded_review_outcome(result.get("review_audit"))
+        return _no_verdict_conclusion(
+            result.get("review_audit"),
+            result.get("review_notes"),
+            concern_hold_count=deferred_concern_hold_count,
+        )
     if quarantined:
         if _carries_finding(quarantine_finding_digest, quarantine_finding):
             return "adverse_signal"
         if screening_reason_code is not None:
             if not is_no_finding_reason_code(screening_reason_code):
                 return "adverse_signal"
-            return _recorded_review_outcome(quarantine_review_audit)
+            return _no_verdict_conclusion(
+                quarantine_review_audit,
+                quarantine_review_notes,
+                concern_hold_count=quarantine_concern_hold_count,
+            )
     return "pending" if deferred_review_active else None
+
+
+def deep_review_attempt_id(deferred_evidence: object) -> UUID | None:
+    """The attempt behind an active deferred review's recorded deep result."""
+    result = (
+        deferred_evidence.get("deep_review_result")
+        if isinstance(deferred_evidence, dict)
+        else None
+    )
+    raw = result.get("attempt_id") if isinstance(result, dict) else None
+    if not isinstance(raw, str):
+        return None
+    try:
+        return UUID(raw)
+    except ValueError:
+        return None

@@ -52,6 +52,7 @@ from ditto.api_models.screener import (
     SourceReviewEvidenceItem,
     SourceReviewFinding,
 )
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_models.stack_health import (
     ComponentHealthState,
     ValidatorComponentHealth,
@@ -101,6 +102,7 @@ from ditto.db.models import (
     LedgerEpochSnapshot,
     OwnerAttestation,
     Score,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     ScreeningQuarantine,
     SubmissionImageBuild,
@@ -6998,6 +7000,34 @@ class TestPublicActivity:
             "review_audit": l1_budget_audit,
             "review_notes": [{"summary": private_note}],
         }
+        concern_site = "src/PRIVATE_CONCERN_SITE.rs"
+        concern_notes = [
+            {
+                "kind": "concern",
+                "category": "none",
+                "path": concern_site,
+                "line": line,
+                "summary": private_note,
+                "stage": "l1",
+            }
+            for line in (3, 17, 41)
+        ]
+        thin_notes = concern_notes[:1] + [
+            {"kind": "cleared", "category": "none", "summary": "ok", "stage": "l1"}
+        ]
+        pinned_attempt = uuid4()
+        concern_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "inconclusive",
+            "reason_code": "source-review-inconclusive",
+            "finding_digest": None,
+            "review_audit": l1_budget_audit,
+            "review_notes": concern_notes,
+        }
+        concern_pinned_result: dict[str, object] = {
+            **concern_result,
+            "attempt_id": str(pinned_attempt),
+        }
         preflight_result: dict[str, object] = {
             "attempt_id": str(uuid4()),
             "outcome": "pass_inconclusive",
@@ -7064,6 +7094,26 @@ class TestPublicActivity:
                 AgentStatus.ATH_PENDING_REVIEW,
                 None,
                 deferred_evidence(["top_five"], model_inconclusive_result),
+            ),
+            "concern-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], concern_result),
+            ),
+            "concern-pinned-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], concern_pinned_result),
+            ),
+            "quarantine-concern": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
+            ),
+            "quarantine-thin": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
             ),
             "quarantine-budget": (
                 AgentStatus.QUARANTINED,
@@ -7144,12 +7194,34 @@ class TestPublicActivity:
         # review audit). A finding is never softened; otherwise only a proving
         # audit may publish a no-finding state.
         quarantine_rows: dict[
-            str, tuple[str, str | None, dict[str, object] | None, dict | None]
+            str,
+            tuple[
+                str,
+                str | None,
+                dict[str, object] | None,
+                dict | None,
+                list[dict[str, object]] | None,
+            ],
         ] = {
+            "quarantine-concern": (
+                "source-review-inconclusive",
+                None,
+                None,
+                l1_budget_audit,
+                concern_notes,
+            ),
+            "quarantine-thin": (
+                "source-review-inconclusive",
+                None,
+                None,
+                l1_budget_audit,
+                thin_notes,
+            ),
             "quarantine-finding": (
                 "source-review-inconclusive",
                 quarantine_digest,
                 {"risk": "high", "summary": private_note},
+                None,
                 None,
             ),
             "quarantine-budget": (
@@ -7160,22 +7232,64 @@ class TestPublicActivity:
                     **l1_budget_audit,
                     "reason_code": "source-review-step-budget-exhausted",
                 },
+                None,
             ),
             "quarantine-preflight": (
                 "source-review-inconclusive",
                 None,
                 None,
                 preflight_audit,
+                None,
             ),
             "quarantine-inconclusive": (
                 "l2-model-inconclusive",
                 None,
                 None,
                 l2_inconclusive_audit,
+                None,
             ),
         }
         async with session_maker() as session, session.begin():
-            for name, (q_code, q_digest, q_finding, q_audit) in quarantine_rows.items():
+            # A settings revision pinned on one deferred deep attempt raises its
+            # hold threshold to 4, so the same three concerns stay a budget hold.
+            session.add(
+                ScreenerReviewSettingsRevision(
+                    revision=1,
+                    parent_revision=0,
+                    scope="pinned-test",
+                    settings=ScreenerReviewSettings(concern_hold_count=4).model_dump(
+                        mode="json"
+                    ),
+                    reason="pinned concern threshold for #562",
+                    actor="tests",
+                    checksum="9a" * 32,
+                )
+            )
+            await session.flush()
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=pinned_attempt,
+                    agent_id=ids["concern-pinned-deep"],
+                    screener_hotkey=_MINER_B,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="quarantined",
+                    review_settings_revision=1,
+                    review_settings_instance_id="test-screener",
+                    review_settings_scope="pinned-test",
+                    review_settings_checksum="9a" * 32,
+                    started_at=opened_at,
+                    deadline=opened_at + timedelta(minutes=30),
+                    finished_at=opened_at + timedelta(minutes=5),
+                    public_reason="Deferred source review held",
+                )
+            )
+            for name, (
+                q_code,
+                q_digest,
+                q_finding,
+                q_audit,
+                q_notes,
+            ) in quarantine_rows.items():
                 attempt_id = uuid4()
                 session.add(
                     ScreeningAttempt(
@@ -7207,6 +7321,10 @@ class TestPublicActivity:
                         reason_code=q_code,
                         evidence=[],
                         finding=q_finding,
+                        review_notes=q_notes,
+                        review_notes_digest=(
+                            "ef" * 32 if q_notes is not None else None
+                        ),
                         status="active",
                     )
                 )
@@ -7225,14 +7343,18 @@ class TestPublicActivity:
         }
         assert projected == {
             "budget-top5": (["top_five"], "budget_exhausted"),
-            "preflight-deep": (["top_five"], "not_reviewed"),
-            "auditless-deep": (["top_five"], "not_reviewed"),
+            "concern-deep": (["top_five"], "adverse_signal"),
+            "concern-pinned-deep": (["top_five"], "budget_exhausted"),
+            "quarantine-concern": ([], "adverse_signal"),
+            "quarantine-thin": ([], "budget_exhausted"),
+            "preflight-deep": (["top_five"], "not_completed"),
+            "auditless-deep": (["top_five"], "not_completed"),
             "inconclusive-deep": (["top_five"], "no_finding"),
             "pending-both": (["top_five", "anomaly"], "pending"),
             "adverse-anomaly": (["anomaly"], "adverse_signal"),
             "quarantine-budget": ([], "budget_exhausted"),
-            "quarantine-preflight": ([], "not_reviewed"),
-            "quarantine-auditless": ([], "not_reviewed"),
+            "quarantine-preflight": ([], "not_completed"),
+            "quarantine-auditless": ([], "not_completed"),
             "quarantine-inconclusive": ([], "no_finding"),
             "quarantine-tripwire": ([], "adverse_signal"),
             "interrupted-deep": (["top_five"], "pending"),
@@ -7240,17 +7362,26 @@ class TestPublicActivity:
             "copy-hold": ([], None),
         }
 
-        summary = await client.get(f"/api/v1/public/agent/{ids['budget-top5']}/summary")
-        assert summary.status_code == 200
-        assert summary.json()["deferred_review_triggers"] == ["top_five"]
-        assert summary.json()["review_conclusion"] == "budget_exhausted"
-        quarantine_summary = await client.get(
-            f"/api/v1/public/agent/{ids['quarantine-finding']}/summary"
-        )
-        assert quarantine_summary.status_code == 200
-        assert quarantine_summary.json()["review_conclusion"] == "adverse_signal"
+        # Every state is projected identically on the per-agent summary.
+        bodies = [response.text]
+        for name, expected in projected.items():
+            summary = await client.get(f"/api/v1/public/agent/{ids[name]}/summary")
+            assert summary.status_code == 200, name
+            assert (
+                summary.json()["deferred_review_triggers"],
+                summary.json()["review_conclusion"],
+            ) == expected, name
+            bodies.append(summary.text)
+        assert {conclusion for _, conclusion in projected.values()} == {
+            "pending",
+            "not_completed",
+            "no_finding",
+            "budget_exhausted",
+            "adverse_signal",
+            None,
+        }
 
-        for body in (response.text, summary.text, quarantine_summary.text):
+        for body in bodies:
             for private_value in (
                 "source-review-inconclusive",
                 "read-budget-exhausted",
@@ -7263,6 +7394,8 @@ class TestPublicActivity:
                 "l2-model-inconclusive",
                 "l2-runtime-evidence-unavailable",
                 "lease_unavailable",
+                concern_site,
+                "pinned-test",
                 "final_stage",
                 "cause_detail",
                 "steps_used",

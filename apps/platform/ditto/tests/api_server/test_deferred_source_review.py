@@ -11,6 +11,7 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.queue_policy_settings import DeferredSourceReviewSettings
 from ditto.api_server.deferred_source_review import (
     DeferredReviewDecision,
+    deep_review_attempt_id,
     evaluate_deferred_review,
     evaluate_integrity_double_check,
     is_no_finding_reason_code,
@@ -956,15 +957,20 @@ def _conclude(
     quarantine_digest: str | None = None,
     quarantine_finding: object = None,
     quarantine_audit: object = None,
+    quarantine_notes: object = None,
+    hold_count: int = 3,
 ) -> object:
     return public_review_conclusion(
         deferred_review_active=active,
         deferred_evidence=evidence,
+        deferred_concern_hold_count=hold_count,
         quarantined=quarantined,
         screening_reason_code=code,
         quarantine_finding_digest=quarantine_digest,
         quarantine_finding=quarantine_finding,
         quarantine_review_audit=quarantine_audit,
+        quarantine_review_notes=quarantine_notes,
+        quarantine_concern_hold_count=hold_count,
     )
 
 
@@ -1040,18 +1046,19 @@ def _preflight_audit(cause: str) -> dict[str, object]:
 # (audit, expected) for a no-verdict hold with no finding, shared by the
 # deferred and quarantine routes.
 _AUDIT_CASES = [
-    # No recorded audit: nothing proves a model review ran.
-    (None, "not_reviewed"),
-    # V13 signed-runtime preflight: stopped before any model review.
-    (_preflight_audit("lease_unavailable"), "not_reviewed"),
-    (_preflight_audit("review_disabled"), "not_reviewed"),
+    # No recorded audit: nothing proves any review completed (legacy rows, or
+    # the V13 L2 path that fails after L1 already read the source).
+    (None, "not_completed"),
+    # V13 signed-runtime preflight: the L2 model stage never started.
+    (_preflight_audit("lease_unavailable"), "not_completed"),
+    (_preflight_audit("review_disabled"), "not_completed"),
     # Malformed or empty audits prove nothing.
-    ({"stage": "l3", "reason_code": "x"}, "not_reviewed"),
-    ({}, "not_reviewed"),
+    ({"stage": "l3", "reason_code": "x"}, "not_completed"),
+    ({}, "not_completed"),
     # A well-formed audit with no model steps is not a review either.
     (
         {**L2_INCONCLUSIVE_AUDIT, "steps_used": 0, "model_steps_observed": 0},
-        "not_reviewed",
+        "not_completed",
     ),
     # A recorded budget audit: the review ran and ran out of budget.
     (L1_READ_BUDGET_AUDIT, "budget_exhausted"),
@@ -1239,3 +1246,91 @@ def test_unknown_budget_code_on_quarantine_is_adverse() -> None:
         )
         == "adverse_signal"
     )
+
+
+# ── Concern-driven budget holds (#562 review) ────────────────────────────────
+
+
+def _concern(path: str, line: int, category: str = "none") -> dict[str, object]:
+    return {
+        "kind": "concern",
+        "category": category,
+        "path": path,
+        "line": line,
+        "summary": "lead",
+        "stage": "l1",
+    }
+
+
+# Three distinct cited sites reach the default hold count of 3; a single-site
+# multi-location claim and cleared notes do not count.
+CONCERN_NOTES = [_concern("a.rs", 1), _concern("a.rs", 9), _concern("b.rs", 4)]
+THIN_NOTES = [
+    _concern("a.rs", 1),
+    _concern("c.rs", 2, "benchmark_emulation"),
+    {"kind": "cleared", "category": "none", "summary": "ok", "stage": "l1"},
+]
+
+
+@pytest.mark.parametrize(
+    ("notes", "hold_count", "expected"),
+    [
+        (CONCERN_NOTES, 3, "adverse_signal"),
+        (CONCERN_NOTES, 4, "budget_exhausted"),
+        (THIN_NOTES, 3, "budget_exhausted"),
+        (THIN_NOTES, 1, "adverse_signal"),
+        ([], 3, "budget_exhausted"),
+        (None, 3, "budget_exhausted"),
+    ],
+)
+def test_concern_threshold_decides_a_budget_hold_on_both_paths(
+    notes: object, hold_count: int, expected: str
+) -> None:
+    deferred = _deep(
+        outcome="inconclusive",
+        reason_code="source-review-inconclusive",
+        review_audit=L1_READ_BUDGET_AUDIT,
+        review_notes=notes,
+    )
+    assert _conclude(active=True, evidence=deferred, hold_count=hold_count) == (
+        expected
+    )
+    assert (
+        _conclude(
+            active=False,
+            evidence=None,
+            quarantined=True,
+            code="source-review-inconclusive",
+            quarantine_audit=L1_READ_BUDGET_AUDIT,
+            quarantine_notes=notes,
+            hold_count=hold_count,
+        )
+        == expected
+    )
+
+
+def test_concern_threshold_only_reclassifies_budget_holds() -> None:
+    # Concern notes on a non-budget or not-completed hold keep their state: the
+    # worker's ledger rule applies only to budget-terminated reviews.
+    for audit, expected in (
+        (L2_INCONCLUSIVE_AUDIT, "no_finding"),
+        (None, "not_completed"),
+        (_preflight_audit("lease_unavailable"), "not_completed"),
+    ):
+        evidence = _deep(
+            outcome="inconclusive",
+            reason_code="source-review-inconclusive",
+            review_audit=audit,
+            review_notes=CONCERN_NOTES,
+        )
+        assert _conclude(active=True, evidence=evidence) == expected
+
+
+def test_deep_review_attempt_id() -> None:
+    attempt = uuid4()
+    assert (
+        deep_review_attempt_id(_deep(attempt_id=str(attempt), outcome="x")) == attempt
+    )
+    assert deep_review_attempt_id(_deep(attempt_id="not-a-uuid")) is None
+    assert deep_review_attempt_id({"deep_review_result": None}) is None
+    assert deep_review_attempt_id(None) is None
