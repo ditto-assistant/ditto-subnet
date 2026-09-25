@@ -36,6 +36,7 @@ from ditto.api_models.validator import (
     ScoreReport,
 )
 from ditto.api_models.validator_capabilities import (
+    ScoredRuntimeEnvEvidence,
     ScorerBenchmarkCapability,
     ScorerLivenessProbe,
     ScorerProbeOutcome,
@@ -1058,6 +1059,18 @@ class DittobenchClient:
             origin=payload.get("source_revision_origin"),
         )
         self.full_run_capacity = full_run_capacity
+        scored_runtime_env = None
+        if 13 in observed_versions and payload.get("scored_runtime_env") is not None:
+            try:
+                candidate = ScoredRuntimeEnvEvidence.model_validate(
+                    payload["scored_runtime_env"]
+                )
+                if candidate.source_revision == source_revision:
+                    scored_runtime_env = candidate
+            except ValueError:
+                # An invalid optional packet cannot upgrade the verified
+                # scorer identity or authorize a source review clearance.
+                pass
         try:
             return ScorerBenchmarkCapability(
                 status="fresh_verified",
@@ -1075,6 +1088,7 @@ class DittobenchClient:
                 observed_at=observed_at,
                 software_version=software_version,
                 source_revision=source_revision,
+                scored_runtime_env=scored_runtime_env,
                 probe=self._record_scorer_probe(
                     "served",
                     observed_at=observed_at,

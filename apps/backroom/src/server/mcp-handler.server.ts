@@ -4,6 +4,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { accessLevelForEmail } from '../lib/auth.policy'
 import {
+  BACKROOM_CHALLENGE_SCOPE,
   BACKROOM_READ_SCOPE,
   createBackroomMcpServer,
   type BackroomEnv,
@@ -36,7 +37,7 @@ export function expiredSessionResponse(request: Request) {
       status: 401,
       headers: {
         'Cache-Control': 'no-store',
-        'WWW-Authenticate': `Bearer error="invalid_token", error_description="The Backroom staff session expired", scope="${BACKROOM_READ_SCOPE}", resource_metadata="${resourceMetadata}"`,
+        'WWW-Authenticate': `Bearer error="invalid_token", error_description="The Backroom staff session expired", scope="${BACKROOM_CHALLENGE_SCOPE}", resource_metadata="${resourceMetadata}"`,
       },
     },
   )

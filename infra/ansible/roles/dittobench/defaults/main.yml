@@ -149,3 +149,11 @@ dittobench_egress_allow: "{{ '' if validator_platform_inference_enforced | defau
 dittobench_egress_allow_ports: "443"
 dittobench_egress_proxy_image: "ditto-egress-proxy:local"
 dittobench_egress_proxy_container: ditto-egress-proxy
+
+# Docker's apt signing key (https://download.docker.com/linux/debian/gpg),
+# pinned so a tampered or substituted key file fails closed instead of becoming
+# an apt trust root. Fingerprint 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88
+# ("Docker Release (CE deb)"). To rotate, verify the new key's fingerprint out of
+# band, then update every copy; infra/ansible/tests/test_docker_apt_key_pin.py
+# keeps them identical.
+docker_apt_key_sha256: "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"

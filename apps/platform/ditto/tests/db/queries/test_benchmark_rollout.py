@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -20,7 +21,9 @@ from ditto.api_models.benchmark_contract import (
     benchmark_contract,
     latest_benchmark_contract,
 )
+from ditto.api_models.public import PublicBenchRolloutResponse
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.benchmark_rollout import (
     ensure_rolling_qualification,
@@ -47,6 +50,7 @@ from ditto.api_server.inference_routing import (
     aggregate_profile_revision,
     benchmark_model,
 )
+from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.db.models import (
     Agent,
     BenchmarkDataset,
@@ -58,8 +62,10 @@ from ditto.db.models import (
     InferenceRoutingPolicy,
     OwnerAttestation,
     Score,
+    V13ScorerCohortPin,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
+    ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import (
@@ -70,12 +76,15 @@ from ditto.db.queries.benchmark_rollout import (
     LEGACY_BENCH_VERSION,
     MIN_DESIRED_AUTHORITY_AGENTS,
     MIN_SCOREABLE_BENCH_VERSION,
+    PRIORITY_COHORT_SIZE,
+    SCORING_QUORUM,
     DatasetPin,
     InferenceActivationRequirements,
     RolloutConflictError,
     RolloutSnapshotMember,
     active_bench_version,
     append_rollout_member,
+    bench_promotion_requirement,
     bind_inference_activation_requirements,
     capable_validator_counts,
     create_rollout_snapshot,
@@ -95,6 +104,7 @@ from ditto.db.queries.benchmark_rollout import (
     rollout_state,
     select_active_bench_version,
     supersede_open_rollout,
+    verified_scorer_for_version,
 )
 from ditto.db.queries.queue_policy_settings import (
     insert_queue_policy_settings_revision,
@@ -218,7 +228,10 @@ async def test_admin_status_read_does_not_start_rollout(
             "max_rescore_cohort_size": 25,
             "priority_cohort_size": 5,
             "priority_cohort_target": None,
+            "priority_cohort_ready_count": 0,
             "priority_complete": False,
+            "promotion_pending": False,
+            "promotion_requirement": None,
             "members": [],
         }
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))
@@ -536,6 +549,138 @@ async def _inherited_era_session(
     ):
         agent_ids, rollout = await _seed_rollout(session, now)
         yield session, agent_ids, rollout
+
+
+def _desired_quorum(
+    agent_id: UUID, *, desired_version: int, now: datetime, tag: str
+) -> list[Score]:
+    """One complete, rankable desired-version quorum for ``agent_id``."""
+    return [
+        Score(
+            agent_id=agent_id,
+            bench_version=desired_version,
+            validator_hotkey=f"validator-{validator}",
+            run_id=f"progress-{tag}-{validator}",
+            signature="bb",
+            seed=1,
+            composite=0.8,
+            tool_mean=0.8,
+            memory_mean=0.8,
+            median_ms=1,
+            n=114,
+            details={
+                "bench_version": desired_version,
+                "v9_base": {"semantic_gate_factor_bps": 10_000},
+            },
+            generated_at=now,
+        )
+        for validator in range(SCORING_QUORUM)
+    ]
+
+
+async def test_rollout_state_publishes_promotion_progress_through_activation(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """#2079: rollout status says what emission authority is waiting for.
+
+    During the Bench 13 rollout v13 scoring beside v12 emissions read as a
+    stall, because the rollout status published only ``priority_complete``.
+    This walks one rollout through every stage of the first flip and checks
+    the published progress at each: the priority barrier counted exactly as
+    the gate counts it (a permanently ineligible leader is satisfied), the
+    ranked-quorum gate still holding promotion after the barrier closes, the
+    hybrid flip clearing ``promotion_pending`` while the row is still open, and
+    durable activation.
+    """
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_rollout_session(session_maker, now) as (
+        session,
+        agent_ids,
+        rollout,
+    ):
+        desired = rollout.desired_version
+        source = await active_bench_version(session)
+        assert desired > source
+
+        # Two leaders finish; a third is banned, which the barrier skips.
+        for index in (0, 1):
+            session.add_all(
+                _desired_quorum(
+                    agent_ids[index], desired_version=desired, now=now, tag=str(index)
+                )
+            )
+        banned = await session.get(Agent, agent_ids[2])
+        assert banned is not None
+        banned.status = AgentStatus.BANNED
+        await session.flush()
+
+        state = await rollout_state(session, now=now)
+        assert state["status"] == "collecting"
+        assert state["active_version"] == source
+        assert state["priority_cohort_size"] == PRIORITY_COHORT_SIZE
+        assert state["priority_cohort_ready_count"] == 3
+        assert state["priority_complete"] is False
+        assert state["promotion_pending"] is True
+        requirement = state["promotion_requirement"]
+        assert requirement == bench_promotion_requirement(
+            emission_version=source,
+            rollout_version=desired,
+            priority_cohort_size=PRIORITY_COHORT_SIZE,
+        )
+        assert f"Bench v{desired} scoring is in progress" in requirement
+        assert f"Bench v{source} still controls emissions" in requirement
+        assert (
+            f"first {PRIORITY_COHORT_SIZE} inherited priority-cohort positions"
+            in requirement
+        )
+        assert f"complete {SCORING_QUORUM}-score v{desired} quorum" in requirement
+        assert f"at least {MIN_DESIRED_AUTHORITY_AGENTS} agents" in requirement
+        # The public wire model carries every new key unchanged.
+        public = PublicBenchRolloutResponse.model_validate(state)
+        assert public.promotion_pending is True
+        assert public.priority_cohort_ready_count == 3
+        assert public.promotion_requirement == requirement
+
+        # The barrier closes, but the banned leader leaves four ranked families
+        # at the desired version: the ranked-quorum gate still holds emissions.
+        for index in (3, 4):
+            session.add_all(
+                _desired_quorum(
+                    agent_ids[index], desired_version=desired, now=now, tag=str(index)
+                )
+            )
+        await session.flush()
+        state = await rollout_state(session, now=now)
+        assert state["priority_cohort_ready_count"] == PRIORITY_COHORT_SIZE
+        assert state["priority_complete"] is True
+        assert state["ranked_quorum_agents"] == MIN_DESIRED_AUTHORITY_AGENTS - 1
+        assert state["active_version"] == source
+        assert state["promotion_pending"] is True
+        assert state["promotion_requirement"] is not None
+
+        # A fifth ranked family completes the emission set. Authority moves to
+        # the desired version while the row is still collecting, and nothing is
+        # reported as pending any more.
+        await _seed_non_member_ranked_agent(session, now=now, desired_version=desired)
+        state = await rollout_state(session, now=now)
+        assert state["status"] == "collecting"
+        assert state["active_version"] == desired
+        assert state["promotion_pending"] is False
+        assert state["promotion_requirement"] is None
+
+        # Durable activation: the completed transition.
+        assert await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+        state = await rollout_state(session, now=now)
+        assert state["status"] == "activated"
+        assert state["active_version"] == desired
+        assert state["desired_version"] == desired
+        assert state["promotion_pending"] is False
+        assert state["promotion_requirement"] is None
 
 
 async def test_historical_rescore_cohort_fills_from_exactly_two_prior_eras(
@@ -2732,6 +2877,186 @@ def _heartbeat(
         signature="ab" * 64,
         capabilities=capabilities,
         stack=stack,
+    )
+
+
+async def test_scored_runtime_lease_requires_same_signed_fleet_packet(
+    session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    revision = "a" * 40
+    keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
+    material = "scored-runtime-env-v1\n13\n" + revision + "\n" + "\n".join(keys)
+    digest = hashlib.sha256(material.encode()).hexdigest()
+    attempt_id = uuid4()
+    artifact_sha256 = "f" * 64
+
+    def managed(hotkey: str, packet_digest: str = digest) -> ValidatorHeartbeat:
+        row = _heartbeat(hotkey, now, versions=[7, 13], protocol_version=18)
+        row.benchmark_capacity = {
+            "configured_slots": 1,
+            "healthy_slots": ["slot-0"],
+            "admission": "accepting",
+            "active": [],
+        }
+        assert row.stack is not None and row.capabilities is not None
+        row.stack["mode"] = "managed"
+        row.stack["release_descriptor_digest"] = "sha256:" + "d" * 64
+        for component in row.stack["components"].values():
+            component["provenance"] = "signed_descriptor"
+            component["image_digest"] = "sha256:" + "e" * 64
+        row.capabilities["scorer_benchmarks"]["scored_runtime_env"] = {
+            "bench_version": 13,
+            "scope": "scorer-injected-env-only",
+            "source_revision": revision,
+            "injected_keys": keys,
+            "sha256": packet_digest,
+        }
+        return row
+
+    first = managed("first")
+    second = managed("second")
+    third = managed("third")
+    assert verified_scorer_for_version(first, version=13) is not None
+    assert heartbeat_supports_version(first, now=now, version=13)
+    session.add_all((first, second, third))
+    session.add(
+        ValidatorSlotSettingsRevision(
+            parent_revision=0,
+            scope="*",
+            settings=ValidatorSlotSettings().model_dump(mode="json"),
+            checksum="f" * 64,
+            reason="test routable settings",
+            actor="test",
+        )
+    )
+    await session.flush()
+    # No signed L2 lease exists until the three exact scorer identities have
+    # been operator-pinned, regardless of any number of capable heartbeats.
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        is None
+    )
+    session.add(
+        V13ScorerCohortPin(
+            bench_version=13,
+            hotkeys=["first", "second", "third"],
+            packet={
+                "source_revision": revision,
+                "release_descriptor_digest": "sha256:" + "d" * 64,
+                "scorer_image_digest": "sha256:" + "e" * 64,
+                "scorer_env_sha256": digest,
+                "injected_keys": keys,
+            },
+            slot_settings_revision=1,
+            slot_settings_checksum="f" * 64,
+            reason="test signed cohort",
+            actor="test",
+        )
+    )
+    await session.flush()
+    lease = await scored_runtime_evidence_for_lease(
+        session,
+        attempt_id=attempt_id,
+        artifact_sha256=artifact_sha256,
+        policy_version=13,
+        bench_version=13,
+        now=now,
+    )
+    assert lease is not None
+    assert lease.attempt_id == attempt_id
+    assert lease.artifact_sha256 == artifact_sha256
+    assert lease.validator_count == 3
+    assert lease.scorer_env_sha256 == digest
+    assert lease.release_descriptor_digest == "sha256:" + "d" * 64
+    assert lease.scorer_image_digest == "sha256:" + "e" * 64
+    external = _heartbeat("external", now, versions=[7, 13], protocol_version=18)
+    session.add(external)
+    await session.flush()
+    assert heartbeat_supports_version(external, now=now, version=13)
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        == lease
+    )
+
+    first_capabilities = first.capabilities
+    second_capabilities = second.capabilities
+    second_stack = second.stack
+    assert first_capabilities is not None
+    assert second_capabilities is not None
+    assert second_stack is not None
+    second_capabilities["scorer_benchmarks"]["scored_runtime_env"] = None
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        is None
+    )
+    second_capabilities["scorer_benchmarks"]["scored_runtime_env"] = first_capabilities[
+        "scorer_benchmarks"
+    ]["scored_runtime_env"]
+    second_stack["components"]["dittobench_api"]["image_digest"] = "sha256:" + "c" * 64
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        is None
+    )
+
+    second_stack["components"]["dittobench_api"]["image_digest"] = "sha256:" + "e" * 64
+    second_stack["mode"] = "source"
+    second_stack["release_descriptor_digest"] = None
+    for component in second_stack["components"].values():
+        component["provenance"] = "committed_pin"
+        component["image_digest"] = None
+    assert heartbeat_supports_version(second, now=now, version=13)
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        is None
+    )
+    first.seen_at = now - timedelta(minutes=6)
+    second.seen_at = now - timedelta(minutes=6)
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        is None
     )
 
 

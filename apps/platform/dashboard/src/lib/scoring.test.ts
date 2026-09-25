@@ -480,6 +480,26 @@ describe("rolloutQuorum", () => {
     expect(rolloutQuorum({ priority_cohort_size: 0 }).prioritySize).toBe(5);
     expect(rolloutQuorum(null).cohortSize).toBe(0);
   });
+
+  it("prefers Platform's barrier count, which satisfies an ineligible leader", () => {
+    // Four finished leaders plus one banned leader: the gate is closed, but
+    // `members` carries no status, so the local derivation can only see four.
+    const members = [
+      { position: 1, score_count: 3 },
+      { position: 2, score_count: 3 },
+      { position: 3, score_count: 0 }, // banned; the barrier skips it
+      { position: 4, score_count: 3 },
+      { position: 5, score_count: 3 },
+    ];
+    expect(rolloutQuorum({ priority_cohort_size: 5, members }).priorityReady).toBe(4);
+    expect(
+      rolloutQuorum({ priority_cohort_size: 5, priority_cohort_ready_count: 5, members })
+        .priorityReady,
+    ).toBe(5);
+    // A served zero is a real zero, while null falls back to the derivation.
+    expect(rolloutQuorum({ priority_cohort_ready_count: 0, members }).priorityReady).toBe(0);
+    expect(rolloutQuorum({ priority_cohort_ready_count: null, members }).priorityReady).toBe(4);
+  });
 });
 
 describe("cohortMedian", () => {

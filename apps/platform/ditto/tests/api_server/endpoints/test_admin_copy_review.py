@@ -1552,6 +1552,74 @@ async def test_source_diff_manifest_classifies_files(
     assert by_path["src/gone.rs"]["status"] == "removed"
 
 
+async def test_source_diff_reports_budget_skipped_files_as_omitted(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A file the bounded read skipped is not compared, so it is never removed.
+
+    The candidate's text exceeds the combined snapshot budget, so its largest
+    file is skipped there while the reference loads it. Before issue #480 was
+    fixed that one-sided load was classified as a whole-file removal.
+    """
+    shared_big = "x" * 1_200_000 + "\n"
+    candidate_id, _reference_id, objects = await _seed_diff_pair(
+        maker,
+        candidate_files={
+            "assets/big.txt": shared_big,
+            "assets/medium.txt": "m" * 1_000_000 + "\n",
+            "src/main.rs": "fn main() {}\n",
+        },
+        reference_files={
+            "assets/big.txt": shared_big,
+            "src/main.rs": "fn main() {}\n",
+        },
+    )
+    _install(app, maker)
+    _install_storage(app, objects)
+    response = await client.get(
+        f"/api/v1/admin/copy-reviews/{candidate_id}/source-diff", headers=_HEADERS
+    )
+    assert response.status_code == 200
+    body = response.json()
+    by_path = {entry["path"]: entry for entry in body["files"]}
+    assert "assets/big.txt" not in by_path
+    assert body["removed_count"] == 0
+    assert body["omitted_file_count"] == 1
+    assert body["omitted_paths"] == ["assets/big.txt"]
+    assert by_path["assets/medium.txt"]["status"] == "added"
+    assert by_path["src/main.rs"]["status"] == "identical"
+
+    detail = await client.get(
+        f"/api/v1/admin/copy-reviews/{candidate_id}/source-diff/file",
+        params={"path": "assets/big.txt"},
+        headers=_HEADERS,
+    )
+    assert detail.status_code == 200
+    detail_body = detail.json()
+    assert detail_body["candidate_present"] is True
+    assert detail_body["reference_present"] is True
+    assert detail_body["identical"] is True
+
+
+async def test_source_diff_small_pair_omits_nothing(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    candidate_id, _reference_id, objects = await _seed_diff_pair(
+        maker,
+        candidate_files={"src/main.rs": "fn main() {}\n"},
+        reference_files={"src/main.rs": "fn main() {}\n"},
+    )
+    _install(app, maker)
+    _install_storage(app, objects)
+    response = await client.get(
+        f"/api/v1/admin/copy-reviews/{candidate_id}/source-diff", headers=_HEADERS
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["omitted_file_count"] == 0
+    assert body["omitted_paths"] == []
+
+
 async def test_source_diff_audits_both_agents_whose_source_was_read(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:

@@ -893,9 +893,19 @@ def test_completion_receipt_is_text_free_and_does_not_change_signed_verdict() ->
         completion_receipt=receipt,
     )
     assert refused.completion_receipt == receipt
-    assert refused.canonical_digest() == refused.model_copy(
-        update={"completion_receipt": None}
-    ).canonical_digest()
+    assert (
+        refused.canonical_digest()
+        == refused.model_copy(update={"completion_receipt": None}).canonical_digest()
+    )
+    operator_requested = refused.model_copy(
+        update={"escalation_code": "adjudicator-operator-requested"}
+    )
+    assert (
+        SourceReviewAdjudication.model_validate(
+            operator_requested.model_dump()
+        ).completion_receipt
+        == receipt
+    )
     with pytest.raises(ValidationError, match="requires a completed model call"):
         SourceReviewAdjudication(
             decision="escalate",

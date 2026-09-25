@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import copy
+import hashlib
 import json
 import logging
 import re
@@ -270,7 +271,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
     if policy_version == 13:
-        return "adjudicator-v7-policy-v13"
+        return "adjudicator-v11-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 
 
@@ -285,18 +286,17 @@ _MAX_COMPLETION_TOKENS = 6_000
 # The court can resume its compacted ledger on one transient retry; after that,
 # the published no-proven-breach rule settles the review rather than stranding
 # the miner behind an unresponsive model endpoint.
-# The decision-only court emits one tool call over preloaded evidence.  Keep a
-# healthy completion responsive and reserve one equal slice for a new
-# connection; an unresponsive provider must settle from retained notes, not
-# spend 150 seconds of a miner's lease.
+# A court completion can inspect one bounded source window or settle a verdict.
+# Keep each completion responsive; a stalled provider must settle as a hold
+# instead of consuming an entire miner lease.
 # Reasoning plus a verdict can exceed 90s with a 16k completion budget.
 # The outer request/lease deadline still bounds both attempts together.
 _MAX_COMPLETION_REQUEST_SECONDS = 180.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 _MAX_COMPLETION_IDLE_SECONDS = 75.0
 # A court turn has no useful free-form output: if a healthy SSE
-# connection has not started any tool call after two minutes, stop that request
-# while the lease still has room for the existing single retry. This is below
+# connection has not started any tool call after two minutes, stop that request.
+# This is below
 # the 180-second request wall but deliberately leaves ample time for reasoning.
 # It never turns partial text into a verdict. Successful first-tool timings are
 # not yet exposed by Backroom, so keep this conservative until calibrated.
@@ -307,6 +307,9 @@ _MAX_COMPLETION_RESPONSE_BYTES = 512_000
 # streaming transport ceiling, not a license to retain more model arguments:
 # the separate 512 KB tool-data bound still applies.
 _MAX_COMPLETION_STREAM_BYTES = 8_000_000
+# Bound the evidence-bearing, decision-only request before asking a model to
+# reason over it. Never silently truncate source or a retained ledger to fit.
+_MAX_DECISION_PACKET_BYTES = 64_000
 
 
 class CompletionWireTooLarge(ValueError):
@@ -333,14 +336,18 @@ class NoToolProgressError(TimeoutError):
     """An active SSE response made no tool-call progress within its budget."""
 
 
+class NoToolCallError(ValueError):
+    """A completed model turn omitted the required tool call."""
+
+
 # Bounded by the repository tools themselves; this only caps how many of
 # the served locations are remembered for citation checking.
 _MAX_RECORDED_READS = 2_048
 _MAX_NOTES_IN_PROMPT = 48
 _MAX_CITATIONS = 8
 # L4 is the court, not a second source-review pass. Whenever an upstream layer
-# retained exact source leads, preload those leads and require the court's
-# decision in one bounded model turn. The only exception is a failure before
+# retained exact source leads, preload those leads and allow a few targeted
+# source reads before a final decision. The exception is a failure before
 # any note was recorded: L4 may inspect the archive then, because there is no
 # ledger for it to decide.
 _MAX_PRELOADED_LEDGER_LOCATIONS = 16
@@ -556,6 +563,17 @@ authority. I7 includes unjustified removal of an applicable, authorized and
 available capability, including quoted-title, compound-request, negation-scope,
 setting-and-remember, and duplicate-call failures.
 
+For I6, a synthetic tool result in a branch reached only when
+`tool_endpoint` is absent is a lead, not a violation by itself. A request
+schema permitting omission does not prove that a valid scored request omits
+the endpoint. Before rejecting, establish both that the endpoint-absent branch
+is reached on a valid scored request and that its fabricated result or reported
+call affects the scorer-visible observed trajectory. Cite the scored request
+contract or trusted observation establishing those facts. Conversely, an
+endpoint-present scored path that skips the required POST and reports success
+is an I6 breach when the false execution is scorer-visible. If reachability or
+effect remains unverified, call request_operator_review.
+
 I8 is evaluation independence. Reject a complete source-proven branch where
 case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
 markers, or `bench_version` alter substantive retrieval, capability ordering,
@@ -585,6 +603,18 @@ CLEAR/REJECT decision.
 def _policy_v13_base_prompt() -> str:
     """Remove legacy directives that contradict v13's incomplete-review hold."""
     replacements = (
+        (
+            "- local_practice_harness_stub: a stub that only fires when no "
+            "tool_endpoint is\n  supplied is unreachable on the scored path.",
+            "- local_practice_harness_stub: an endpoint-absent stub is a safe "
+            "harbor for the artifact only when the applicable scored-request "
+            "contract guarantees endpoint presence and the stub has no "
+            "scorer-visible effect. A trusted endpoint-present observation "
+            "establishes this only for that exact attempt; do not infer "
+            "artifact-wide unreachability from one run. An optional field in "
+            "the request schema proves neither absence nor presence on scored "
+            "requests.",
+        ),
         (
             "Your output is FINAL: a clear admits this\n"
             "submission to scoring, a reject is terminal for it.",
@@ -727,8 +757,55 @@ _TOOLS: list[dict[str, object]] = [
     },
 ]
 
-# Keep the selected verdict schema rather than retyping a second contract.
-_DECISION_ONLY_TOOLS = [_TOOLS[-1]]
+# The retained ledger supplies paths and line numbers, so the bounded court
+# needs only exact source windows in addition to its terminal tools.
+_DECISION_ONLY_TOOLS = [_TOOLS[1], _TOOLS[-1]]
+_DECISION_ONLY_MAX_STEPS = 4
+_DECISION_ONLY_MAX_READS = 6
+
+
+def _bounded_verdict_tool(
+    name: str, basis: str, basis_values: list[str]
+) -> dict[str, object]:
+    """Keep mutually exclusive verdict bases out of the model's schema."""
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": "Record a final decision with cited source.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "maxLength": 8000},
+                    basis: {"type": "string", "enum": basis_values},
+                    "citations": {
+                        "type": "array",
+                        "maxItems": _MAX_CITATIONS,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "line": {"type": "integer", "minimum": 1},
+                            },
+                            "required": ["path", "line"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["reason", basis, "citations"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _advertised_tool_name(tool: Mapping[str, object]) -> str | None:
+    function = tool.get("function")
+    if not isinstance(function, Mapping):
+        return None
+    name = function.get("name")
+    return name if isinstance(name, str) else None
+
 
 _OPERATOR_REVIEW_TOOL: dict[str, object] = {
     "type": "function",
@@ -752,9 +829,29 @@ def _adjudicator_tools_for_policy(
 ) -> list[dict[str, object]]:
     """Return a court schema restricted to the exact policy generation."""
 
-    tools = copy.deepcopy(_DECISION_ONLY_TOOLS if decision_only else _TOOLS)
+    if decision_only and policy_version >= 13:
+        tools = [
+            copy.deepcopy(_TOOLS[1]),
+            _bounded_verdict_tool(
+                "submit_clear",
+                "clear_clause",
+                [item.value for item in AdjudicationClearClause],
+            ),
+            _bounded_verdict_tool(
+                "submit_reject",
+                "reject_invariant",
+                [
+                    item.value
+                    for item in source_review_invariants_for_policy(policy_version)
+                ],
+            ),
+        ]
+    else:
+        tools = copy.deepcopy(_DECISION_ONLY_TOOLS if decision_only else _TOOLS)
     if policy_version >= 13:
         tools.append(copy.deepcopy(_OPERATOR_REVIEW_TOOL))
+    if decision_only and policy_version >= 13:
+        return tools
     submit = None
     for tool in tools:
         function = tool.get("function")
@@ -857,12 +954,18 @@ def _failure_code(error: BaseException) -> str:
         if message.startswith("adjudicator exceeded step budget"):
             return "step-budget"
         if message.startswith("adjudicator decision ") or message.startswith(
-            "adjudicator reason "
+            ("adjudicator reason ", "adjudicator split verdict ")
         ):
             return "verdict-invalid"
         if message.startswith("adjudicator arguments ") or message.startswith(
             ("adjudicator tool call ", "adjudicator function call ")
         ):
+            return "tool-call-invalid"
+        if message == "adjudicator terminal decision must be the sole call in its turn":
+            return "tool-call-invalid"
+        if message == "bounded adjudicator requested unadvertised discovery":
+            return "tool-call-invalid"
+        if message == "adjudicator requested unadvertised verdict tool":
             return "tool-call-invalid"
     return "response-invalid"
 
@@ -1032,7 +1135,7 @@ def _preload_ledger_evidence(
         if read_locations:
             outputs.append(output)
             # A cited branch is not evidence that it runs. Include nearby
-            # defaults for simple config.FLAG gates in the one-turn court;
+            # defaults for simple config.FLAG gates in the bounded court;
             # otherwise the court sees the branch but cannot refute its
             # reachability without discovery tools.
             if note in leads:
@@ -1073,8 +1176,8 @@ def _preload_ledger_evidence(
                 break
         if repository.has_member("Dockerfile"):
             # A later ENV, ARG, CMD, or ENTRYPOINT can enable a branch whose
-            # default is off. Do not let a one-turn court decide from a
-            # truncated image definition; its tools cannot fetch the tail.
+            # default is off. Keep this case held before the model call when
+            # the bounded preload cannot include the full image definition.
             dockerfile_lines = repository.line_count("Dockerfile")
             incomplete_image_context = dockerfile_lines is None or dockerfile_lines > 40
             output = _execute_tool(
@@ -1145,6 +1248,70 @@ def _compacted_adjudicator_messages(
     ]
 
 
+def _decision_packet(
+    archive_path: str,
+    *,
+    notes: Sequence[Mapping[str, object]],
+    finding: Mapping[str, object] | None,
+    error_code: str | None,
+    policy_version: int,
+    preloaded_evidence: str,
+) -> list[dict[str, object]]:
+    """Build one complete packet from the verified archive and retained leads.
+
+    The full inventory is useful for discovery, but the bounded court already
+    has exact ledger paths. Repeating thousands of unrelated filenames consumes
+    context without giving it any source it can cite. Every retained note and
+    exact preloaded source line stays in the packet. Its digest binds the case
+    to the artifact bytes rather than a reusable miner name or path.
+    """
+    verdict_tools = (
+        "submit_clear, submit_reject, or request_operator_review"
+        if policy_version >= 13
+        else "submit_adjudication"
+    )
+    with open(archive_path, "rb") as archive:
+        artifact_sha256 = hashlib.file_digest(archive, "sha256").hexdigest()
+    return [
+        {
+            "role": "system",
+            "content": _system_prompt(policy_version)
+            + (
+                "\n\nFor this bounded court, settle with submit_clear or "
+                "submit_reject. Each tool requires only its own basis. "
+                "Use request_operator_review when mandatory verification "
+                "is incomplete. Do not call the legacy submit_adjudication tool."
+                if policy_version >= 13
+                else ""
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Adjudicate this held submission.\n"
+                f"Artifact SHA-256: {artifact_sha256}\n"
+                f"Why the review stopped: {error_code or 'bounded review'}\n"
+                f"Upstream finding (a lead): {_finding_brief(finding)}\n"
+                f"Notes ledger (leads): {_ledger_brief(notes)}\n"
+                "Preloaded source evidence:\n"
+                f"{preloaded_evidence}\n"
+                "The host preloaded exact source excerpts for retained leads and "
+                "bounded configuration evidence for simple feature gates. "
+                "A disabled default does not establish whether an external "
+                "runtime override exists. You may read at most "
+                f"{_DECISION_ONLY_MAX_READS} additional "
+                "exact source windows with read_file. The final turn permits "
+                f"only {verdict_tools}. Cite "
+                "only lines actually served by the host."
+            ),
+        },
+    ]
+
+
+def _packet_bytes(messages: Sequence[Mapping[str, object]]) -> int:
+    return len(json.dumps(messages, ensure_ascii=False).encode("utf-8"))
+
+
 class SourceReviewAdjudicator:
     """Small tool-using court with no shell, edit, execution, or web tools."""
 
@@ -1205,6 +1372,7 @@ class SourceReviewAdjudicator:
         preloaded_evidence = ""
         preloaded_reads: set[tuple[str, int]] = set()
         unreviewed_concerns = False
+        decision_packet: list[dict[str, object]] | None = None
         if not notes and error_code in _BUDGET_TERMINATED_REVIEW_CODES:
             # An upstream review consumed its discovery budget without
             # recording evidence. There is nothing for the court to decide;
@@ -1233,10 +1401,9 @@ class SourceReviewAdjudicator:
                     notes=note_count,
                     policy_version=policy_version,
                 )
-            # The ledger can retain 48 notes but the one-turn court preloads
-            # only 16 distinct locations. A later concern must not disappear
-            # behind that bound while an earlier excerpt supports a CLEAR.
-            unreviewed_concerns = _has_unreviewed_lead(notes, finding, preloaded_reads)
+            # The ledger can retain 48 notes but the court preloads only 16
+            # distinct locations. Later reads may cover more leads; recheck
+            # the final served set before certifying any CLEAR.
             if not preloaded_evidence:
                 # The upstream layers retained a ledger but no usable source
                 # evidence. There is nothing for a court to decide; do not
@@ -1246,6 +1413,33 @@ class SourceReviewAdjudicator:
                     "adjudicator-no-evidence",
                     "Automated adjudication received no retained source evidence; "
                     "held for operator review",
+                    model=self._model,
+                    notes=note_count,
+                    policy_version=policy_version,
+                )
+            try:
+                decision_packet = _decision_packet(
+                    archive_path,
+                    notes=notes,
+                    finding=finding,
+                    error_code=error_code,
+                    policy_version=policy_version,
+                    preloaded_evidence=preloaded_evidence,
+                )
+            except OSError:
+                return _escalate(
+                    "adjudicator-unavailable",
+                    "Automated adjudication could not read the source artifact; "
+                    "held for operator review",
+                    model=self._model,
+                    notes=note_count,
+                    policy_version=policy_version,
+                )
+            if _packet_bytes(decision_packet) > _MAX_DECISION_PACKET_BYTES:
+                return _escalate(
+                    "adjudicator-packet-too-large",
+                    "Automated adjudication could not fit all retained source "
+                    "evidence in one bounded review; held for operator review",
                     model=self._model,
                     notes=note_count,
                     policy_version=policy_version,
@@ -1265,6 +1459,7 @@ class SourceReviewAdjudicator:
                     decision_only=decision_only,
                     preloaded_evidence=preloaded_evidence,
                     preloaded_reads=preloaded_reads,
+                    decision_packet=decision_packet,
                 )
             except (
                 OSError,
@@ -1298,6 +1493,10 @@ class SourceReviewAdjudicator:
                         error,
                         escalation_code="adjudicator-failed",
                     ),
+                )
+            if decision_only:
+                unreviewed_concerns = _has_unreviewed_lead(
+                    notes, finding, read_locations
                 )
             result = self._certify(
                 verdict,
@@ -1434,15 +1633,17 @@ class SourceReviewAdjudicator:
     ) -> SourceReviewAdjudication:
         """Refuse any decision the host cannot verify against the archive.
 
-        This is the whole safety argument for using a small model here. The
-        decision itself is cheap to check: the citations have to exist, have to
-        be code, and have to be locations this adjudicator actually opened.
+        Citation certification checks only archive membership, served lines,
+        code admissibility, and verdict vocabulary. It cannot prove scored
+        request reachability or scorer-visible effect from source citations.
+        The v13 policy fence must therefore retain source-only I6 rulings until
+        trusted exact-attempt runtime and private receipts can be checked.
         """
         if verdict.decision == "escalate":
             return _escalate(
-                "adjudicator-evidence-incomplete",
-                "Automated adjudication could not complete mandatory verification; "
-                "held for operator review",
+                "adjudicator-operator-requested",
+                "Automated adjudication requested operator review because it "
+                "could not settle the retained evidence; held for review",
                 model=self._model,
                 notes=notes,
                 policy_version=policy_version,
@@ -1573,19 +1774,25 @@ class SourceReviewAdjudicator:
         decision_only: bool = False,
         preloaded_evidence: str = "",
         preloaded_reads: set[tuple[str, int]] | None = None,
+        decision_packet: list[dict[str, object]] | None = None,
     ) -> tuple[_Verdict, set[tuple[str, int]]]:
+        verdict_tools = (
+            "submit_clear, submit_reject, or request_operator_review"
+            if policy_version >= 13
+            else "submit_adjudication"
+        )
         decision_only_instruction = (
             "\nThe host preloaded the exact source excerpts for the retained "
             "ledger, plus bounded configuration evidence for simple feature "
             "gates. A disabled default does not establish whether an external "
-            "runtime override exists. Decide from those excerpts now. "
-            "Discovery tools are disabled; "
-            "call submit_adjudication for a complete decision, or "
-            "request_operator_review if evidence remains incomplete."
+            "runtime override exists. You may read at most "
+            f"{_DECISION_ONLY_MAX_READS} exact source "
+            "windows with read_file before settling. Call "
+            f"{verdict_tools}. Cite only served lines."
             if decision_only
             else ""
         )
-        messages: list[dict[str, object]] = [
+        messages: list[dict[str, object]] = decision_packet or [
             {"role": "system", "content": _system_prompt(policy_version)},
             {
                 "role": "user",
@@ -1609,11 +1816,41 @@ class SourceReviewAdjudicator:
         tools = _adjudicator_tools_for_policy(
             policy_version, decision_only=decision_only
         )
-        max_steps = 1 if decision_only else self._max_steps
+        max_steps = (
+            min(self._max_steps, _DECISION_ONLY_MAX_STEPS)
+            if decision_only
+            else self._max_steps
+        )
+        tool_correction_used = False
+        decision_reads = 0
         async with httpx.AsyncClient(
             transport=self._transport, timeout=self._timeout_seconds
         ) as client:
             for _step in range(max_steps):
+                final_turn = decision_only and (
+                    _step + 1 == max_steps or decision_reads >= _DECISION_ONLY_MAX_READS
+                )
+                if final_turn:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "This is the final allowed court turn. Call "
+                                f"{verdict_tools} with cited source for a "
+                                "complete decision, or request operator review "
+                                "if evidence is missing. No further reads are allowed."
+                            ),
+                        }
+                    )
+                turn_tools = (
+                    [
+                        tool
+                        for tool in tools
+                        if _advertised_tool_name(tool) != "read_file"
+                    ]
+                    if final_turn
+                    else tools
+                )
                 request_timeout = self._timeout_seconds
                 if deadline is not None:
                     remaining = deadline - asyncio.get_running_loop().time()
@@ -1624,21 +1861,51 @@ class SourceReviewAdjudicator:
                 # enclosing timeout keeps both requests inside the remaining
                 # court window rather than letting the retry report after the
                 # Platform lease is already gone.
-                async with asyncio.timeout(request_timeout):
-                    message = await self._completion_message(
-                        client,
-                        api_key,
-                        _compacted_adjudicator_messages(messages),
-                        timeout=request_timeout,
-                        tools=tools,
+                try:
+                    async with asyncio.timeout(request_timeout):
+                        message = await self._completion_message(
+                            client,
+                            api_key,
+                            _compacted_adjudicator_messages(messages),
+                            timeout=request_timeout,
+                            tools=turn_tools,
+                        )
+                except NoToolCallError:
+                    if not decision_only or tool_correction_used or final_turn:
+                        raise
+                    tool_correction_used = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your completed turn omitted the required tool "
+                                "call. Continue this same review by calling "
+                                "read_file for a missing source window, or "
+                                f"settle with {verdict_tools}."
+                            ),
+                        }
                     )
+                    continue
                 messages.append(message)
                 tool_calls = message.get("tool_calls")
                 if not isinstance(tool_calls, list) or not tool_calls:
                     if decision_only:
-                        raise ValueError(
-                            "decision-only adjudicator response omitted final tool call"
+                        if tool_correction_used or final_turn:
+                            raise NoToolCallError(
+                                "decision-only adjudicator omitted a tool call"
+                            )
+                        tool_correction_used = True
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Your completed turn omitted the required "
+                                    "tool call. Read exact source or settle with "
+                                    f"{verdict_tools}."
+                                ),
+                            }
                         )
+                        continue
                     messages.append(
                         {
                             "role": "user",
@@ -1654,22 +1921,54 @@ class SourceReviewAdjudicator:
                 # not gain credit for a sibling read_file/search result that
                 # the model had not seen when it made the decision. Nor may a
                 # duplicate verdict silently settle by whichever came first.
-                if len(tool_calls) != 1 and (
-                    decision_only
-                    or any(
-                        isinstance(call, dict)
-                        and isinstance(call.get("function"), dict)
-                        and call["function"].get("name")
-                        in {"submit_adjudication", "request_operator_review"}
-                        for call in tool_calls
-                    )
+                if len(tool_calls) != 1 and any(
+                    isinstance(call, dict)
+                    and isinstance(call.get("function"), dict)
+                    and call["function"].get("name")
+                    in {
+                        "submit_adjudication",
+                        "submit_clear",
+                        "submit_reject",
+                        "request_operator_review",
+                    }
+                    for call in tool_calls
                 ):
                     raise ValueError(
                         "adjudicator terminal decision must be the sole call "
                         "in its turn"
                     )
+                if (
+                    decision_only
+                    and any(
+                        isinstance(call, dict)
+                        and _advertised_tool_name(call) == "read_file"
+                        for call in tool_calls
+                    )
+                    and len(tool_calls) > _DECISION_ONLY_MAX_READS - decision_reads
+                ):
+                    raise ValueError("bounded adjudicator exceeded source read budget")
+                batch_ids: set[str] = set()
                 for call in tool_calls:
                     call_id, name, arguments = _tool_call(call)
+                    if call_id in batch_ids:
+                        raise ValueError("adjudicator duplicate tool call ID")
+                    batch_ids.add(call_id)
+                    if name in {"submit_clear", "submit_reject"}:
+                        if not decision_only or policy_version < 13:
+                            raise ValueError(
+                                "adjudicator requested unadvertised verdict tool"
+                            )
+                        if "decision" in arguments or (
+                            "reject_invariant" in arguments
+                            if name == "submit_clear"
+                            else "clear_clause" in arguments
+                        ):
+                            raise ValueError(
+                                "adjudicator split verdict was self-inconsistent"
+                            )
+                        return _verdict_from(
+                            {**arguments, "decision": name.removeprefix("submit_")}
+                        ), read_locations
                     if name == "submit_adjudication":
                         return _verdict_from(arguments), read_locations
                     if name == "request_operator_review" and policy_version >= 13:
@@ -1682,10 +1981,12 @@ class SourceReviewAdjudicator:
                             _Verdict("escalate", reason.strip(), None, None, ()),
                             read_locations,
                         )
-                    if decision_only:
+                    if decision_only and (name != "read_file" or final_turn):
                         raise ValueError(
-                            "decision-only adjudicator requested source discovery"
+                            "bounded adjudicator requested unadvertised discovery"
                         )
+                    if decision_only:
+                        decision_reads += 1
                     try:
                         output = _execute_tool(repository, name, arguments)
                     except ValueError as error:
@@ -1822,8 +2123,26 @@ class SourceReviewAdjudicator:
                 IncompleteStreamError,
                 ProviderStreamError,
                 ProviderBodyError,
-            ):
-                if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
+            ) as error:
+                # A streamed response may have spent its entire wall budget
+                # reasoning without producing a tool call. Replaying that same
+                # packet cannot resume its state and doubles miner wait/cost.
+                # Retry only a connection that failed before any response data,
+                # or an explicit provider fault rather than a model turn.
+                saw_response = bool(
+                    request_trace is not None
+                    and (request_trace.wire_bytes or request_trace.event_count)
+                )
+                early_provider_fault = isinstance(error, ProviderBodyError) or (
+                    isinstance(error, ProviderStreamError)
+                    and request_trace is not None
+                    and request_trace.event_count <= 1
+                )
+                if (
+                    attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS
+                    or isinstance(error, NoToolProgressError)
+                    or (saw_response and not early_provider_fault)
+                ):
                     raise
                 logger.warning(
                     "adjudicator completion transport failed; retrying once model=%s",
@@ -2019,7 +2338,7 @@ async def _completion_stream_payload(
                 and completion_tokens >= requested_max_tokens
             ):
                 trace.completion_ceiling_reached = True
-        raise ValueError("adjudicator stream ended without a tool call")
+        raise NoToolCallError("adjudicator stream ended without a tool call")
     return {
         "model": model,
         "usage": usage,

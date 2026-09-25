@@ -144,6 +144,8 @@ describe('Backroom MCP tools', () => {
 
     expect(response.tools.map((tool) => tool.name).sort()).toEqual(
       [
+        'activate_v13_scorer_cohort',
+        'rotate_v13_scorer_cohort',
         'advance_scored_policy_rescreen',
         'execute_screening_quarantine_batch',
         'expand_benchmark_rollout_cohort',
@@ -180,9 +182,13 @@ describe('Backroom MCP tools', () => {
         'set_screener_provider_settings',
         'set_screener_node_channel_settings',
         'set_screener_node_replay_capacity',
+        'get_screener_replay_process_readiness',
+        'register_screener_replay_process_key',
+        'revoke_screener_replay_process_key',
         'create_screener_bootstrap_grant',
         'get_screener_review_settings',
         'get_screener_fanout_shadow',
+        'get_l2_report_canary',
         'get_conversation_assessments',
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
@@ -203,6 +209,7 @@ describe('Backroom MCP tools', () => {
         'set_efficiency_bonus_settings',
         'set_queue_policy_settings',
         'set_validator_slot_settings',
+        'set_validator_issuance_pause',
         'set_confirmation_bundle_settings',
         'authorize_confirmation_bundle_retest',
         'read_copy_review_source_diff_file',
@@ -216,6 +223,14 @@ describe('Backroom MCP tools', () => {
         'list_screening_adjudication_attempts',
         'get_screening_verification_readiness',
         'get_v13_private_generation_group',
+        'get_v13_benign_approval',
+        'get_v13_replay_private_group',
+        'get_v13_replay_private_receipt',
+        'get_v13_replay_private_statistics',
+        'get_v13_scorer_cohort',
+        'get_v13_scorer_cohort_history',
+        'get_v13_scorer_cohort_preflight',
+        'get_v13_report_only_current_packet',
         'get_screening_submission',
         'get_source_release_policy',
         'get_owner_attestations',
@@ -245,14 +260,18 @@ describe('Backroom MCP tools', () => {
         'get_screened_image_rebuild',
         'get_validator_score_replacement',
         'list_v9_contract_retests',
+        'list_v13_benign_approvals',
         'open_ath_review',
         'preview_screening_quarantine_batch',
         'list_screening_quarantines',
+        'list_screening_review_events',
         'list_screening_disputes',
         'list_screening_source_files',
         'list_screening_submissions',
         'summarize_screening_failures',
         'read_screening_source_file',
+        'record_v13_benign_approval',
+        'record_v13_replay_private_group',
         'search_screening_source',
         'rebuild_screened_image',
         'get_screening_artifact',
@@ -275,6 +294,7 @@ describe('Backroom MCP tools', () => {
         'execute_ath_rulings_batch',
         'rescreen_rejected_submission',
         'retry_failed_screening_now',
+        'schedule_l2_report_canary',
         'retry_trusted_image_build',
         'expire_running_screening',
         'reject_screening_submission',
@@ -290,6 +310,7 @@ describe('Backroom MCP tools', () => {
         'unban_hotkey',
         'register_coding_catalog_release',
         'register_coding_private_v2_release',
+        'register_v13_replay_private_package',
         'supersede_coding_catalog_release',
         'retire_coding_catalog_release',
         'quarantine_coding_private_v2_release',
@@ -361,7 +382,12 @@ describe('Backroom MCP tools', () => {
     // get_ath_review: which of `hold.reason` / `superseded_*` is the CURRENT
     // reason and which is withdrawn history. That is a correctness rule for
     // anything that quotes a reason back to a miner, not a tutorial.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(147_000)
+    // Eight digest-only V13 provenance/analysis tools and three process-key
+    // tools add bounded entries. Detailed procedures remain in tool help.
+    // The scorer-pin rotation/history/current-packet controls add bounded entries.
+    // The two validator-retry inputs gain acknowledgeProviderOutage (#2087);
+    // measured 163,528 bytes together.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(164_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -382,10 +408,11 @@ describe('Backroom MCP tools', () => {
     // L4 cohort diagnostic adds one catalog line without another tutorial.
     // The infra-retry read summary lands at 25,990, so the bound moves to 26_200.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      // Includes the V13 clock, independent replay, infra-retry, and ordinary
-      // source-review queue-age SLO, failure taxonomy route_basis, and
-      // reopened-hold reason summaries.
-      28_000,
+      // Includes the V13 clock, independent replay, infra-retry, ordinary
+      // source-review queue-age SLO, failure taxonomy route_basis,
+      // reopened-hold reason, three process-key summaries, and current V13
+      // provenance reads plus scorer pin rotation and history; measured at 29,121.
+      29_250,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -473,6 +500,12 @@ describe('Backroom MCP tools', () => {
     )
     expect(validatorSlotWrite?.annotations?.readOnlyHint).toBe(false)
     expect(validatorSlotWrite?.annotations?.destructiveHint).toBe(true)
+    const issuancePauseWrite = response.tools.find(
+      (tool) => tool.name === 'set_validator_issuance_pause',
+    )
+    expect(issuancePauseWrite?.annotations?.readOnlyHint).toBe(false)
+    expect(issuancePauseWrite?.annotations?.destructiveHint).toBe(true)
+    expect(issuancePauseWrite?.description).toContain('Existing tickets continue')
     // Operators read these descriptions before ramping a live fleet, so the
     // properties that make the confirmation meaningful must stay documented.
     expect(validatorSlotWrite?.description).toContain('APPLY VALIDATOR SLOT CAP <n>')
@@ -1148,6 +1181,7 @@ describe('Backroom MCP tools', () => {
     > = {
       get_screening_review_queue: { maxLimit: 200, maxDefault: 50 },
       list_screening_quarantines: { maxLimit: 200, maxDefault: 50 },
+      list_screening_review_events: { maxLimit: 20, maxDefault: 10 },
       list_screening_disputes: { maxLimit: 200, maxDefault: 50 },
       list_screening_source_files: { maxLimit: 512, maxDefault: 512 },
       list_screening_submissions: { maxLimit: 200, maxDefault: 50 },
@@ -2573,6 +2607,100 @@ describe('Backroom MCP tools', () => {
       expected_hotkey: hotkey, expected_status: 'active', expected_capacity: 0,
       capacity: 1, reason: 'Start one independent report-only replay canary',
     })
+    await client.close()
+    await server.close()
+  })
+
+  it('reads exact signed-worker readiness and keeps process-key writes scoped', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const key = 'a'.repeat(64)
+    const readiness = {
+      node_id: 'subnet-screener-2', node_status: 'active', provider: 'hetzner',
+      provider_resource_id: 'host-2', screener_hotkey: '5Independent',
+      replay_capacity: 0, instance_id: 'subnet-screener-2-worker-1',
+      active_key_sha256: key, active_key_revision: 1,
+      key_registered_at: '2026-09-23T00:00:00Z', heartbeat_seen_at: null,
+      heartbeat_key_sha256: null, heartbeat_policy_version: null,
+      heartbeat_release: null, minimum_runner_release: null,
+      signed_heartbeat_fresh: false, release_qualified: false,
+      ready_for_capacity_one: false, missing: ['signed_worker_heartbeat_current'],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(readiness))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const read = await client.callTool({ name: 'get_screener_replay_process_readiness' })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toMatchObject({ ready_for_capacity_one: false, active_key_sha256: key })
+    const args = {
+      expectedHotkey: '5Independent', publicKeyHex: 'b'.repeat(64),
+      reason: 'Register one isolated canary process',
+      confirmation: `REGISTER V13 REPLAY PROCESS subnet-screener-2/subnet-screener-2-worker-1/${key}`,
+    }
+    for (const [name, input] of [
+      ['register_screener_replay_process_key', args],
+      ['revoke_screener_replay_process_key', {
+        expectedHotkey: '5Independent', expectedKeySha256: key,
+        reason: 'Emergency revoke isolated process',
+        confirmation: `REVOKE V13 REPLAY PROCESS subnet-screener-2/${key}`,
+      }],
+    ] as const) {
+      const denied = await client.callTool({ name, arguments: input })
+      expect(denied.isError).toBe(true)
+      expect(readTextResult(denied)).toContain('read-only')
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await client.close()
+    await server.close()
+  })
+
+  it('forwards guarded process-key registration and revocation with the operator identity', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const key = '4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6'
+    const readiness = {
+      node_id: 'subnet-screener-2', node_status: 'active', provider: 'hetzner',
+      provider_resource_id: 'host-2', screener_hotkey: '5Independent',
+      replay_capacity: 0, instance_id: 'subnet-screener-2-worker-1',
+      active_key_sha256: key, active_key_revision: 1,
+      key_registered_at: '2026-09-23T00:00:00Z', heartbeat_seen_at: null,
+      heartbeat_key_sha256: null, heartbeat_policy_version: null,
+      heartbeat_release: null, minimum_runner_release: null,
+      signed_heartbeat_fresh: false, release_qualified: false,
+      ready_for_capacity_one: false, missing: ['signed_worker_heartbeat_current'],
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json(readiness))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json({ ...readiness, active_key_sha256: null, active_key_revision: null, key_registered_at: null }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const register = await client.callTool({
+      name: 'register_screener_replay_process_key', arguments: {
+        expectedHotkey: '5Independent', publicKeyHex: 'b'.repeat(64),
+        reason: 'Register one isolated canary process',
+        confirmation: `REGISTER V13 REPLAY PROCESS subnet-screener-2/subnet-screener-2-worker-1/${key}`,
+      },
+    })
+    expect(register.isError).not.toBe(true)
+    const [registerUrl, registerInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(registerUrl).toBe('https://platform-api.heyditto.ai/api/v1/admin/screening-verification-replays/process-keys/subnet-screener-2')
+    expect(registerInit.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+    expect(JSON.parse(String(registerInit.body))).toMatchObject({
+      expected_hotkey: '5Independent', instance_id: 'subnet-screener-2-worker-1',
+      public_key_hex: 'b'.repeat(64),
+    })
+    const revoke = await client.callTool({
+      name: 'revoke_screener_replay_process_key', arguments: {
+        expectedHotkey: '5Independent', expectedKeySha256: key,
+        reason: 'Emergency revoke isolated process',
+        confirmation: `REVOKE V13 REPLAY PROCESS subnet-screener-2/${key}`,
+      },
+    })
+    expect(revoke.isError).not.toBe(true)
+    const [revokeUrl, revokeInit] = fetchMock.mock.calls[2] as [string, RequestInit]
+    expect(revokeUrl).toBe(`${registerUrl}/revoke`)
+    expect(revokeInit.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+    expect(JSON.parse(String(revokeInit.body))).toMatchObject({ expected_key_sha256: key })
     await client.close()
     await server.close()
   })
@@ -5594,7 +5722,7 @@ describe('Backroom MCP tools', () => {
       artifact_sha256: 'ab'.repeat(32),
       agent_status: 'screening_failed',
       attempt_id: attemptId,
-      policy_version: 11,
+      policy_version: 13,
       attempt_status: 'failed',
       started_at: '2026-09-02T16:53:47Z',
       deadline: '2026-09-02T17:07:22Z',
@@ -5603,6 +5731,17 @@ describe('Backroom MCP tools', () => {
       reason_code: 'worker-result-processing-failed',
       private_failure_detail: 'screener error: ValidationError: malformed finding',
       private_failure_log_tail: 'source_review: ValidationError: malformed finding',
+      l2_review_diagnostic: {
+        stage: 'l2', reason_code: 'l2-runtime-evidence-unavailable',
+        prompt_revision: 'l2-v13', max_steps: 256, steps_used: 0,
+        max_input_tokens: 5_000_000, input_tokens_used: 0,
+        max_output_tokens: 1_000_000, output_tokens_used: 0,
+        max_cost_usd: 25, cost_usd_used: 0,
+        requested_model: 'openai/gpt-6-sol', response_provider: null,
+        final_stage: 'preflight', cause_detail: 'lease_unavailable',
+        max_elapsed_ms: 1_800_000, elapsed_ms: 0,
+        source_text: 'private source must never reach the MCP result',
+      },
     }
     const fetchMock = vi.fn().mockResolvedValue(Response.json(diagnostic))
     vi.stubGlobal('fetch', fetchMock)
@@ -5628,11 +5767,19 @@ describe('Backroom MCP tools', () => {
       arguments: { agentId, attemptId },
     })
     expect(allowed.isError).not.toBe(true)
-    expect(readJsonResult(allowed)).toEqual({
-      ...diagnostic,
+    const observed = readJsonResult(allowed)
+    expect(observed).toMatchObject({
+      l2_review_diagnostic: {
+        reason_code: 'l2-runtime-evidence-unavailable',
+        requested_model: 'openai/gpt-6-sol',
+        final_stage: 'preflight', cause_detail: 'lease_unavailable',
+        max_steps: 256, steps_used: 0,
+        max_elapsed_ms: 1_800_000, elapsed_ms: 0,
+      },
       court_diagnostic: null,
       court_completion_receipt: null,
     })
+    expect(JSON.stringify(observed)).not.toContain('private source must never reach')
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/attempts/${attemptId}/failure-diagnostic`,
       expect.objectContaining({
@@ -5989,7 +6136,7 @@ describe('Backroom MCP tools', () => {
       policy_version: 7,
       manifest_digest: 'manifest',
       finding_digest: 'finding',
-      reason_code: 'source_review_suspicious',
+      screening_reason_code: 'source_review_suspicious',
       status: 'resolved',
       created_at: '2026-07-14T12:00:00Z',
       resolved_at: '2026-07-14T12:30:00Z',
@@ -6372,7 +6519,7 @@ describe('Backroom MCP tools', () => {
       policy_version: 7,
       manifest_digest: 'cd'.repeat(32),
       finding_digest: 'ef'.repeat(32),
-      reason_code: 'agentic-source-review-tripwire',
+      screening_reason_code: 'agentic-source-review-tripwire',
       evidence: [
         {
           module_id: 'luna-source-review',
@@ -6826,6 +6973,15 @@ describe('Backroom MCP tools', () => {
       arguments: { agentId },
     })
     expect(allowed.isError).not.toBe(true)
+    // This payload has an older Platform's shape: no omission fields, so the
+    // tool reports none it can name and leaves completeness unknown (null)
+    // rather than claiming the total is complete.
+    expect(readJsonResult(allowed)).toMatchObject({
+      custom_added_lines: 3,
+      omitted_file_count: 0,
+      omitted_paths: [],
+      custom_added_lines_complete: null,
+    })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/baseline-diff`,
       expect.objectContaining({
@@ -7416,6 +7572,8 @@ describe('Backroom MCP tools', () => {
         blocking_reason: null,
         recommended_action: null,
         dominant_failure_code: null,
+        provider_outage: null,
+        provider_outage_blocks_retry: null,
         earliest_retry_after: null,
         attempts_used: 3,
         exhausted_validator_count: 3,
@@ -7687,6 +7845,7 @@ describe('Backroom MCP tools', () => {
               expected_snapshot: snapshotB,
             },
           ],
+          acknowledge_provider_outage: false,
         }),
       }),
     )

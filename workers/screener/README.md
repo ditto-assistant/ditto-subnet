@@ -148,7 +148,7 @@ Required values are supplied through the production host's protected
   module names this environment variable.
 - `SCREENER_SOURCE_REVIEW_API_KEY_FILE`: required mode-0400 OpenRouter key file
   for the private read-only source reviewer. The default model is
-  `openai/gpt-5.6-luna`.
+  `openai/gpt-6-luna`.
 - `SCREENER_SEED_PROBE_MODE`: `shadow` (default), `enforce`, or `off`. After
   the health gate, one bounded `POST /seed` wave with a single coined pair
   proves the image can ingest state, not just answer `/health`. `shadow`
@@ -174,21 +174,35 @@ Required values are supplied through the production host's protected
   remain off until its overhead and evidence profile have been calibrated.
   Targon-only smoke and pre-build source holds leave these checks `not_recorded`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
-- `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-5.6-terra`; legacy
+- `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; legacy
   `moonshotai/kimi-k3` remains accepted only for a deliberate rollback.
   `SCREENER_L2_FALLBACK_MODELS` is the ordered OpenRouter model-failover chain
-  (`z-ai/glm-5.2`, then `openai/gpt-5.6-sol`). A fallback is used only after a
+  (`z-ai/glm-5.2` by default). A fallback is used only after a
   model/routing error, never after a valid analyst response.
 - `SCREENER_L3_REVIEW_ENABLED`: `true` (default) runs the independent SOL
-  critic/adjudicator after L2. `false` keeps L1 routing and the Terra L2 analyst
+  critic/adjudicator after L2. `false` keeps L1 routing and the L2 analyst
   active while making the L2 result authoritative. Platform review-settings
   revisions can change this between leases without a worker restart.
-- `SCREENER_L3_REVIEW_MODEL`: locked to `openai/gpt-5.6-sol`; both layers use
+- `SCREENER_L3_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; both layers use
   OpenRouter ZDR routing and deny data collection.
 - `SCREENER_L2_ANALYZER_IMAGE`: locked to the updater-built
   `ditto-screener-l2-analyzer:active` image.
 - `SCREENER_L2_CACHE_DIR` and `SCREENER_L2_AUDIT_JOURNAL_FILE`: protected
   sanitized cache/audit locations. Raw source and transcripts are never stored.
+- `SCREENER_SCORER_CAPABILITIES_URL` and `SCREENER_EXPECTED_SCORER_REVISION`:
+  optional paired V13 L2 evidence gate. Point the URL at a trusted HTTPS
+  scorer's exact `/v1/capabilities` endpoint and pin the compiled 40-character
+  scorer release revision. L2 fetches a fresh, digest-bound list of variables
+  injected into its V13 sandbox before using a cached review or calling a
+  model. A missing, stale, env-asserted, or mismatched packet holds the review
+  as inconclusive. The packet does not cover image ENV, source defaults, or
+  other validator deployments; those need independent source and runtime
+  checks before any CLEAR or emissions decision.
+- `SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE=true`: V13 canary gate that holds L2
+  inconclusive before any model call unless Platform supplied a fresh signed
+  cohort lease for the exact attempt and artifact. Set on the Platform process
+  (which forwards it to Targon source-review rentals) and on local screeners.
+  Leave it off for legacy screening; never treat an absent lease as CLEAR.
 - `SCREENER_STATIC_PREFLIGHT_V2_MODE`: `off` (default), `shadow`, or `enforce`.
   `off` and `shadow` preserve the v1 decisive result; `shadow` additionally
   computes the reachability-and-causality v2 candidate for comparison.

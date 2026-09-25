@@ -462,6 +462,14 @@ caller-supplied harness URLs, so it guards against abuse:
   is bounded separately so those limits cannot overcommit the validator host
   alongside Docker, Pylon, and the worker. A request-body cap rejects oversized
   payloads.
+- `DITTOBENCH_TRUSTED_PROXY_HOPS` (default `1`, range `0`–`8`): how many
+  right-most `X-Forwarded-For` entries come from proxies this service trusts.
+  The per-IP key is the entry that many positions from the right, never the
+  left-most one, because callers can write the start of the header themselves.
+  Use `1` behind the Google front end of a `*.run.app` URL, `2` behind an
+  external Application Load Balancer (which appends client then its own
+  address), and `0` when the service is exposed directly. A missing, short, or
+  non-IP header falls back to the connection's peer address.
 - `DITTOBENCH_ALLOW_PRIVATE_HARNESS`: set truthy for local dev or the Docker
   sandbox (loopback containers) to relax the SSRF guard. Leave it unset in
   production; the guard is on by default.

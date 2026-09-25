@@ -22,8 +22,8 @@ import { constantTimeEqual, randomToken, sealToken, unsealToken } from './crypto
 import { readSessionFromRequest } from './session.server'
 
 const PENDING_AUTH_MAX_AGE_MS = 10 * 60 * 1_000
-/** The access-token ceiling; `server.ts` configures the same value. */
-export const MAX_ACCESS_TOKEN_TTL_SECONDS = 50 * 60
+/** Interactive MCP access-token ceiling; `server.ts` configures the same value. */
+export const MAX_ACCESS_TOKEN_TTL_SECONDS = 24 * 60 * 60
 /** Workers KV rejects an `expirationTtl` below 60 seconds. */
 export const MIN_ACCESS_TOKEN_TTL_SECONDS = 60
 const SUPPORTED_SCOPES = new Set([
@@ -323,16 +323,18 @@ export function mcpTokenExchange(
       ),
     ),
   ]
+  const accessTokenTTL = Math.min(MAX_ACCESS_TOKEN_TTL_SECONDS, remainingSeconds)
   const accessTokenProps: McpGrantProps = {
     session: props.session,
     scopes,
     clientName: props.clientName,
     grant: { id: options.grantId, clientId: options.clientId },
+    accessExpiresAt: new Date(now + accessTokenTTL * 1000).toISOString(),
   }
   return {
     accessTokenProps,
     accessTokenScope: scopes,
-    accessTokenTTL: Math.min(MAX_ACCESS_TOKEN_TTL_SECONDS, remainingSeconds),
+    accessTokenTTL,
   }
 }
 

@@ -13,6 +13,12 @@
       - screener_fleet_debian_cloud_image_sha256 | length == 64
       - screener_fleet_worker_processes | int >= 1
       - screener_fleet_worker_processes | int <= 16
+      - >-
+        not screener_fleet_replay_worker_enabled or
+        (screener_fleet_runtime_enabled and
+         screener_fleet_node_id == 'subnet-screener-2' and
+         screener_fleet_worker_processes | int == 1 and
+         screener_fleet_x509_enabled)
       - screener_fleet_vm_memory_mib | int >= 8192
       - screener_fleet_vm_memory_mib | int <= 12288
     fail_msg: >-
@@ -884,8 +890,29 @@
     - { src: ditto-screener-enroll.service.j2, dest: ditto-screener-enroll.service }
     - { src: ditto-screener-fleet-agent.service.j2, dest: ditto-screener-fleet-agent.service }
     - { src: ditto-screener-worker@.service.j2, dest: ditto-screener-worker@.service }
-  notify: Reload systemd for screener fleet
+  notify:
+    - Reload systemd for screener fleet
+    - Restart screener fleet workers
   when: screener_fleet_runtime_enabled
+
+- name: Inspect the host-generated replay process key
+  ansible.builtin.stat:
+    path: "{{ screener_fleet_replay_process_key_file }}"
+    follow: false
+  register: screener_fleet_replay_process_key_stat
+  when: screener_fleet_replay_worker_enabled
+
+- name: Require an owner-only replay process key before starting node 2
+  ansible.builtin.assert:
+    that:
+      - screener_fleet_replay_process_key_stat.stat.isreg | default(false)
+      - screener_fleet_replay_process_key_stat.stat.pw_name | default('') == screener_fleet_user
+      - screener_fleet_replay_process_key_stat.stat.mode | default('') in ['0400', '0600']
+      - screener_fleet_replay_process_key_stat.stat.size | default(0) == 32
+    fail_msg: >-
+      Generate the 32-byte Ed25519 seed on node 2 as the screener user with
+      mode 0400 or 0600; Ansible must never copy a replay private key.
+  when: screener_fleet_replay_worker_enabled
 
 - name: Enable and run one-time node enrollment
   ansible.builtin.systemd:

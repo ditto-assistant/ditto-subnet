@@ -77,6 +77,56 @@ func TestCapabilitiesReportBoundReleaseIdentity(t *testing.T) {
 	}
 }
 
+func TestScoredRuntimeEnvEvidenceUsesRunningScorerContract(t *testing.T) {
+	s := &server{
+		softwareVersion: "0.308.0", sourceRevision: testSourceRevision,
+		sourceRevisionOrigin: release.OriginBinary,
+		allowScreenedImages:  true,
+	}
+	evidence := s.scoredRuntimeEnvEvidence()
+	if evidence == nil || evidence.BenchVersion != 13 || evidence.SourceRevision != testSourceRevision {
+		t.Fatalf("missing bound environment evidence: %+v", evidence)
+	}
+	want := harnessSandboxEnv(map[string]string{"DITTOBENCH_COMPLETION_LOG": "/tmp/leak"}, protocol.BenchVersionV13)
+	if _, present := want["DITTOBENCH_COMPLETION_LOG"]; present {
+		t.Fatal("V13 allowed caller environment into scored sandbox")
+	}
+	if len(evidence.InjectedKeys) != len(want) {
+		t.Fatalf("injected key count = %d, want %d", len(evidence.InjectedKeys), len(want))
+	}
+	for _, key := range evidence.InjectedKeys {
+		if _, present := want[key]; !present {
+			t.Fatalf("reported key %q absent from scored sandbox", key)
+		}
+	}
+	if evidence.SHA256 == "" {
+		t.Fatal("environment evidence digest missing")
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"/tmp/dittobench.db", brokerPlaceholderKey, "sk-"} {
+		if strings.Contains(string(encoded), value) {
+			t.Fatalf("runtime evidence disclosed a sandbox value: %q", value)
+		}
+	}
+	s.sourceRevisionMismatch = true
+	if s.scoredRuntimeEnvEvidence() != nil {
+		t.Fatal("mismatched binary/environment must not issue evidence")
+	}
+	s.sourceRevisionMismatch = false
+	s.sourceRevisionOrigin = release.OriginEnv
+	if s.scoredRuntimeEnvEvidence() != nil {
+		t.Fatal("environment-asserted revision must not issue evidence")
+	}
+	s.sourceRevisionOrigin = release.OriginBinary
+	s.allowScreenedImages = false
+	if s.scoredRuntimeEnvEvidence() != nil {
+		t.Fatal("practice-only scorer must not attest to a scored sandbox")
+	}
+}
+
 func TestV8CapabilityIsQualityOnlyAndFailClosed(t *testing.T) {
 	if efficiency.ReadyForV8QualityOnly(efficiency.QualityOnlyContract{}) {
 		t.Fatal("missing v8 contract was accepted")

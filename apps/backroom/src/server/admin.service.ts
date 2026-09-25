@@ -1,6 +1,20 @@
 import '@tanstack/react-start/server-only'
 
 import {
+  listV13BenignApprovalsInputSchema,
+  v13BenignApprovalLookupInputSchema,
+  v13BenignApprovalSchema,
+  v13BenignApprovalWriteInputSchema,
+  v13PrivateStatisticsSchema,
+  v13ReplayGroupSchema,
+  v13ReplayGroupWriteInputSchema,
+  v13ReplayPackageSchema,
+  v13ReplayPackageWriteInputSchema,
+  v13ReplayPrivateLookupInputSchema,
+  v13ReplayPrivateReceiptSchema,
+} from '../lib/v13-private.schemas'
+
+import {
   scheduleV13ReviewClockInputSchema,
   v13ReviewClockScheduleSchema,
 } from '../lib/review-clock.schemas'
@@ -109,6 +123,7 @@ import {
   screeningQuarantineBatchPreviewResponseSchema,
   screeningQuarantineContextSchema,
   screeningQuarantineListSchema,
+  screeningReviewEventListSchema,
   screeningArtifactInputSchema,
   screeningArtifactSchema,
   screeningFailureDiagnosticInputSchema,
@@ -261,6 +276,9 @@ import {
   screenerReviewRevisionSchema,
   screenerFanoutShadowInputSchema,
   screenerFanoutShadowResponseSchema,
+  l2ReportCanaryLookupInputSchema,
+  scheduleL2ReportCanaryInputSchema,
+  l2ReportCanaryViewSchema,
   screenerPolicyManifestControlSchema,
   copyCourtControlSchema,
   applyCopyCourtSettingsInputSchema,
@@ -278,6 +296,9 @@ import {
   setScreenerProviderSettingsInputSchema,
   setScreenerNodeChannelSettingsInputSchema,
   setScreenerNodeReplayCapacityInputSchema,
+  replayProcessReadinessSchema,
+  registerReplayProcessKeyInputSchema,
+  revokeReplayProcessKeyInputSchema,
   screenerNodeChannelSettingsControlSchema,
   retryTrustedImageBuildInputSchema,
   trustedImageBuildSchema,
@@ -295,6 +316,7 @@ import {
   ownerFootprintSchema,
   ownerFootprintDetailSchema,
   publicAgentScoresSchema,
+  leaderboardRolloutPromotionSchema,
   publicLeaderboardSchema,
   publicSubmissionPipelineSchema,
   scoreLeaderboardInputSchema,
@@ -572,6 +594,35 @@ export async function fetchScreenerFanoutShadow(rawInput: unknown = {}) {
   return screenerFanoutShadowResponseSchema.parse(payload)
 }
 
+export async function fetchL2ReportCanary(rawInput: unknown) {
+  const input = l2ReportCanaryLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/${input.canaryId}`,
+  )
+  return l2ReportCanaryViewSchema.parse(payload)
+}
+
+export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
+  const input = scheduleL2ReportCanaryInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/screener-l2-report-canaries', {
+    method: 'POST',
+    actor,
+    body: {
+      request_id: input.requestId,
+      agent_id: input.agentId,
+      source_attempt_id: input.sourceAttemptId,
+      artifact_sha256: input.artifactSha256,
+      policy_version: 13,
+      expected_agent_status: input.expectedAgentStatus,
+      expected_score_count: input.expectedScoreCount,
+      target_node_id: input.targetNodeId,
+      review_label: input.reviewLabel,
+      confirm_report_only: true,
+    },
+  })
+  return l2ReportCanaryViewSchema.parse(payload)
+}
+
 export async function fetchCopyCourtControl() {
   const payload = await platformAdminRequest('/api/v1/admin/copy-court/settings')
   return copyCourtControlSchema.parse(payload)
@@ -746,6 +797,42 @@ export async function updateScreenerNodeReplayCapacity(actor: string, rawInput: 
     },
   )
   return fetchScreenerCapacity()
+}
+
+const REPLAY_PROCESS_PATH =
+  '/api/v1/admin/screening-verification-replays/process-keys/subnet-screener-2'
+
+export async function fetchReplayProcessReadiness() {
+  return replayProcessReadinessSchema.parse(await platformAdminRequest(REPLAY_PROCESS_PATH))
+}
+
+export async function registerReplayProcessKey(actor: string, rawInput: unknown) {
+  const input = registerReplayProcessKeyInputSchema.parse(rawInput)
+  await platformAdminRequest(REPLAY_PROCESS_PATH, {
+    method: 'POST', actor,
+    body: {
+      expected_hotkey: input.expectedHotkey,
+      instance_id: 'subnet-screener-2-worker-1',
+      public_key_hex: input.publicKeyHex,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    },
+  })
+  return fetchReplayProcessReadiness()
+}
+
+export async function revokeReplayProcessKey(actor: string, rawInput: unknown) {
+  const input = revokeReplayProcessKeyInputSchema.parse(rawInput)
+  await platformAdminRequest(`${REPLAY_PROCESS_PATH}/revoke`, {
+    method: 'POST', actor,
+    body: {
+      expected_hotkey: input.expectedHotkey,
+      expected_key_sha256: input.expectedKeySha256,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    },
+  })
+  return fetchReplayProcessReadiness()
 }
 
 export async function fetchArtifactReleaseControl() {
@@ -1485,6 +1572,90 @@ export async function setInferenceConcurrencySettings(rawInput: unknown, actor: 
 
 const VALIDATOR_SLOT_SETTINGS_PATH = '/api/v1/admin/validator-slot-settings'
 
+const V13_SCORER_COHORT_PATH = '/api/v1/admin/v13-scorer-cohort'
+
+export async function fetchV13ScorerCohort() {
+  return platformAdminRequest(V13_SCORER_COHORT_PATH)
+}
+
+export async function fetchV13ScorerCohortPreflight() {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/preflight`)
+}
+
+export async function fetchV13ScorerCohortHistory() {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/history`)
+}
+
+export async function fetchV13ReportOnlyCurrentPacket() {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/report-only-current-packet`)
+}
+
+export async function activateV13ScorerCohort(input: {
+  hotkeys: [string, string, string]
+  packet: {
+    source_revision: string
+    release_descriptor_digest: string
+    scorer_image_digest: string
+    scorer_env_sha256: string
+    injected_keys: string[]
+  }
+  expectedSlotSettingsRevision: number
+  expectedSlotSettingsChecksum: string
+  reason: string
+  confirmation: string
+}, actor: string) {
+  return platformAdminRequest(V13_SCORER_COHORT_PATH, {
+    method: 'POST', actor,
+    body: {
+      hotkeys: input.hotkeys,
+      packet: input.packet,
+      expected_slot_settings_revision: input.expectedSlotSettingsRevision,
+      expected_slot_settings_checksum: input.expectedSlotSettingsChecksum,
+      reason: input.reason,
+      confirmation: input.confirmation,
+      actor,
+    },
+  })
+}
+
+export async function rotateV13ScorerCohort(input: {
+  hotkeys: [string, string, string]
+  packet: {
+    source_revision: string
+    release_descriptor_digest: string
+    scorer_image_digest: string
+    scorer_env_sha256: string
+    injected_keys: string[]
+  }
+  expectedCurrentPacket: {
+    source_revision: string
+    release_descriptor_digest: string
+    scorer_image_digest: string
+    scorer_env_sha256: string
+    injected_keys: string[]
+  }
+  expectedCurrentRotationId?: number
+  expectedSlotSettingsRevision: number
+  expectedSlotSettingsChecksum: string
+  reason: string
+  confirmation: string
+}, actor: string) {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/rotate`, {
+    method: 'POST', actor,
+    body: {
+      hotkeys: input.hotkeys,
+      packet: input.packet,
+      expected_current_packet: input.expectedCurrentPacket,
+      expected_current_rotation_id: input.expectedCurrentRotationId ?? null,
+      expected_slot_settings_revision: input.expectedSlotSettingsRevision,
+      expected_slot_settings_checksum: input.expectedSlotSettingsChecksum,
+      reason: input.reason,
+      confirmation: input.confirmation,
+      actor,
+    },
+  })
+}
+
 export async function fetchValidatorSlotSettings() {
   const payload = await platformAdminRequest(VALIDATOR_SLOT_SETTINGS_PATH)
   return validatorSlotSettingsControlSchema.parse(payload)
@@ -1644,6 +1815,18 @@ export async function fetchScreeningQuarantines(
     `/api/v1/admin/screening-quarantines?${query.toString()}`,
   )
   return screeningQuarantineListSchema.parse(payload)
+}
+
+export async function fetchScreeningReviewEvents(
+  agentId: string | undefined,
+  limit = 50,
+  offset = 0,
+) {
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (agentId) query.set('agent_id', agentId)
+  return screeningReviewEventListSchema.parse(
+    await platformAdminRequest(`/api/v1/admin/screening-review-events?${query.toString()}`),
+  )
 }
 
 export async function resolveScreeningQuarantine(
@@ -2035,6 +2218,107 @@ export async function fetchV13GenerationGroup(rawInput: unknown) {
     : v13GenerationGroupSchema.parse(payload)
 }
 
+export async function listV13BenignApprovals(rawInput: unknown) {
+  const input = listV13BenignApprovalsInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/known-benign-approvals?limit=${input.limit}&offset=${input.offset}`,
+  )
+  return v13BenignApprovalSchema.array().parse(payload)
+}
+
+export async function fetchV13BenignApproval(rawInput: unknown) {
+  const input = v13BenignApprovalLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/known-benign-approvals/${encodeURIComponent(input.approvalId)}`,
+  )
+  return v13BenignApprovalSchema.parse(payload)
+}
+
+export async function recordV13BenignApproval(actor: string, rawInput: unknown) {
+  const input = v13BenignApprovalWriteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    '/api/v1/admin/v13-private-generation/known-benign-approvals',
+    {
+      method: 'POST',
+      actor,
+      body: {
+        agent_id: input.agentId,
+        attempt_id: input.attemptId,
+        artifact_sha256: input.artifactSha256,
+        image_sha256: input.imageSha256,
+        profile_sha256: input.profileSha256,
+        review_evidence_sha256: input.reviewEvidenceSha256,
+        reason: input.reason,
+      },
+    },
+  )
+  return v13BenignApprovalSchema.parse(payload)
+}
+
+export async function fetchV13ReplayPrivateGroup(rawInput: unknown) {
+  const input = v13ReplayPrivateLookupInputSchema.parse(rawInput)
+  const base = `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}`
+  const payload = await platformAdminRequest(
+    input.role ? `${base}/packages/${encodeURIComponent(input.role)}` : `${base}/group`,
+  )
+  return input.role
+    ? v13ReplayPackageSchema.parse(payload)
+    : v13ReplayGroupSchema.parse(payload)
+}
+
+export async function recordV13ReplayPrivateGroup(actor: string, rawInput: unknown) {
+  const input = v13ReplayGroupWriteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}/group`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        target_agent_id: input.targetAgentId,
+        target_attempt_id: input.targetAttemptId,
+        target_artifact_sha256: input.targetArtifactSha256,
+        target_image_sha256: input.targetImageSha256,
+        approval_id: input.approvalId,
+        profile_sha256: input.profileSha256,
+      },
+    },
+  )
+  return v13ReplayGroupSchema.parse(payload)
+}
+
+export async function registerV13ReplayPrivatePackage(actor: string, rawInput: unknown) {
+  const input = v13ReplayPackageWriteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}/packages/${encodeURIComponent(input.role)}`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        generation_receipt_sha256: input.generationReceiptSha256,
+        manifest_sha256: input.manifestSha256,
+        pair_inventory_sha256: input.pairInventorySha256,
+      },
+    },
+  )
+  return v13ReplayPackageSchema.parse(payload)
+}
+
+export async function fetchV13ReplayPrivateReceipt(rawInput: unknown) {
+  const input = v13ReplayPrivateLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-verification-replays/${encodeURIComponent(input.replayId)}/private-receipt`,
+  )
+  return v13ReplayPrivateReceiptSchema.parse(payload)
+}
+
+export async function fetchV13ReplayPrivateStatistics(rawInput: unknown) {
+  const input = v13ReplayPrivateLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-verification-replays/${encodeURIComponent(input.replayId)}/private-statistics`,
+  )
+  return v13PrivateStatisticsSchema.parse(payload)
+}
+
 export async function fetchScreeningReviewDeadline(rawInput: unknown) {
   const input = screeningSubmissionLookupInputSchema.parse(rawInput)
   const payload = await platformAdminRequest(
@@ -2225,6 +2509,7 @@ export async function retryValidation(rawInput: unknown, actor: string) {
         request_id: requestId,
         expected_snapshot: input.expectedSnapshot,
         reason: input.reason,
+        acknowledge_provider_outage: input.acknowledgeProviderOutage,
       } satisfies RetryRequest,
     },
   )
@@ -2371,7 +2656,11 @@ export async function batchRetryValidation(rawInput: unknown, actor: string) {
     {
       method: 'POST',
       actor,
-      body: { reason: input.reason, items },
+      body: {
+        reason: input.reason,
+        items,
+        acknowledge_provider_outage: input.acknowledgeProviderOutage,
+      },
     },
   )
   return batchRetryValidationResponseSchema.parse(payload)
@@ -3016,17 +3305,42 @@ async function fetchPublicSubmissionPipeline(agentId: string) {
   }
 }
 
+/**
+ * The rollout's promotion progress for the authoritative board, or null.
+ *
+ * Best-effort by design: this explains the board, it is not the board. A
+ * rollout read that fails or returns an unrecognizable shape degrades to null
+ * instead of failing the leaderboard an operator asked for.
+ */
+async function fetchRolloutPromotion() {
+  try {
+    const payload = await platformPublicRequest('/api/v1/public/bench/rollout')
+    const parsed = leaderboardRolloutPromotionSchema.safeParse(payload)
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
 export async function fetchScoreLeaderboard(rawInput: unknown) {
   const input = scoreLeaderboardInputSchema.parse(rawInput)
-  const board = await fetchLeaderboardSnapshot(input.benchVersion)
+  // A historical board is a pinned past version: the live rollout's gates say
+  // nothing about it, so only the authoritative board carries them.
+  const [board, rolloutPromotion] = await Promise.all([
+    fetchLeaderboardSnapshot(input.benchVersion),
+    input.benchVersion === undefined ? fetchRolloutPromotion() : Promise.resolve(null),
+  ])
   const filtered = board.entries.filter((entry) =>
     input.status === 'all' ? true : input.status === 'finalized' ? entry.finalized : !entry.finalized,
   )
   return scoreLeaderboardPageSchema.parse({
     generated_at: board.generated_at,
     current_bench_version: board.current_bench_version,
+    scoring_bench_version: board.scoring_bench_version,
+    emission_bench_version: board.emission_bench_version,
     active_bench_version: board.active_bench_version,
     desired_bench_version: board.desired_bench_version,
+    rollout_promotion: rolloutPromotion,
     available_bench_versions: board.available_bench_versions,
     selection_mode: board.selection_mode,
     status: input.status,

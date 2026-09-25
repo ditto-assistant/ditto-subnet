@@ -171,7 +171,7 @@ describe('screening list summaries', () => {
           policy_version: 9,
           manifest_digest: 'ef'.repeat(32),
           finding_digest: '12'.repeat(32),
-          reason_code: 'unsafe_source',
+          screening_reason_code: 'unsafe_source',
           evidence: Array.from({ length: 8 }, (_, index) => ({
             module_id: `module-${index}`,
             code: `CODE_${index}`,

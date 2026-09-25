@@ -62,18 +62,16 @@ async def record_inference_admission_rejection(
 async def admission_rejection_summary(
     session: AsyncSession, *, grant_id: UUID, limit: int = 50
 ) -> tuple[dict[str, int], list[InferenceAdmissionRejection]]:
-    counts = dict(
-        (
-            await session.execute(
-                select(
-                    InferenceAdmissionRejection.admission_code,
-                    func.count(),
-                )
-                .where(InferenceAdmissionRejection.grant_id == grant_id)
-                .group_by(InferenceAdmissionRejection.admission_code)
+    counts = (
+        await session.execute(
+            select(
+                InferenceAdmissionRejection.admission_code,
+                func.count(),
             )
-        ).all()
-    )
+            .where(InferenceAdmissionRejection.grant_id == grant_id)
+            .group_by(InferenceAdmissionRejection.admission_code)
+        )
+    ).all()
     rows = list(
         await session.scalars(
             select(InferenceAdmissionRejection)
@@ -82,4 +80,4 @@ async def admission_rejection_summary(
             .limit(limit)
         )
     )
-    return {str(code): int(count) for code, count in counts.items()}, rows
+    return {str(row[0]): int(row[1]) for row in counts}, rows

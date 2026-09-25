@@ -498,6 +498,13 @@ async def issue_ticket(
         return None
     if bench_version is None:
         raise ValueError("benchmark version is required for ticket issuance")
+    if bench_version == 13:
+        from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
+
+        if not await pinned_validator_allowed(
+            session, hotkey=validator_hotkey, now=now
+        ):
+            return None
     activated_rollout = await activated_rollout_for_version(
         session, bench_version=bench_version
     )
@@ -1022,6 +1029,16 @@ async def issue_confirmation_ticket(
         session, validator_hotkey=validator_hotkey, slot_id=slot_id
     )
     await expire_overdue_tickets(session, now=now)
+    # Maintenance leases must obey the same immutable V13 packet pin as
+    # canonical leases. Otherwise a validator can start a costly retest that
+    # score submission must later reject during a mixed-version rollout.
+    if bench_version == 13:
+        from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
+
+        if not await pinned_validator_allowed(
+            session, hotkey=validator_hotkey, now=now
+        ):
+            return None
     if (
         await live_v9_confirmation_slot_ticket(
             session,

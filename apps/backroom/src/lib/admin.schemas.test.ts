@@ -5,6 +5,8 @@ import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   auditReasonSchema,
+  baselineDiffManifestSchema,
+  sourceDiffManifestSchema,
   CEILING_DISABLED,
   platformSupportsRetestCohortSize,
   parseContinualRetestSettingsControl,
@@ -30,6 +32,8 @@ import {
   screeningDisputeListSchema,
   screeningDisputeSchema,
   screeningQuarantineListSchema,
+  screeningReviewEventListSchema,
+  minerQuarantineSummarySchema,
   screeningQuarantineBatchExecuteInputSchema,
   screeningQuarantineBatchPreviewInputSchema,
   screeningArtifactSchema,
@@ -38,6 +42,9 @@ import {
   validatorAssignmentListSchema,
   screenerReviewControlSchema,
   screenerReviewSettingsSchema,
+  l2ReportCanaryViewSchema,
+  screenReviewAuditSchema,
+  screeningFailureDiagnosticSchema,
   applyScreenerReviewSettingsInputSchema,
   efficiencyBonusConfirmation,
   efficiencyBonusSettingsControlSchema,
@@ -540,7 +547,7 @@ describe('admin API schemas', () => {
           policy_version: 7,
           manifest_digest: 'manifest',
           finding_digest: 'finding',
-          reason_code: 'source_review_suspicious',
+          screening_reason_code: 'source_review_suspicious',
           status: 'active',
           created_at: '2026-07-14T12:00:00Z',
           resolved_at: null,
@@ -552,6 +559,95 @@ describe('admin API schemas', () => {
     })
     expect(result.items[0].policy_version).toBe(7)
     expect(result.items[0].agent_version).toBeNull()
+  })
+
+  it('coalesces the deprecated reason_code alias across a rolling deploy', () => {
+    // Platform and Backroom deploy in parallel from one release, so for one
+    // release the screening-origin code has two possible names on the wire:
+    // Platform-first sends only the old one, Backroom-first sees both. The
+    // console must read the code either way and must never see the alias as a
+    // second field it could mistake for the operator's ruling.
+    const quarantineItem = {
+      quarantine_id: 'e3bb1518-530f-42d7-a50b-b21ac9853798',
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      attempt_id: '20236f60-c143-43b0-b03e-2cbe51f281d8',
+      miner_hotkey: '5Miner',
+      agent_name: 'memory-agent',
+      artifact_sha256: 'artifact',
+      policy_version: 7,
+      manifest_digest: 'manifest',
+      finding_digest: 'finding',
+      status: 'active',
+      created_at: '2026-07-14T12:00:00Z',
+      resolved_at: null,
+      resolved_by: null,
+      resolution: null,
+      resolution_reason: null,
+    }
+    const platformFirst = screeningQuarantineListSchema.parse({
+      count: 1,
+      items: [{ ...quarantineItem, reason_code: 'behavioral-oracle-passed' }],
+    }).items[0]
+    const backroomFirst = screeningQuarantineListSchema.parse({
+      count: 1,
+      items: [
+        {
+          ...quarantineItem,
+          screening_reason_code: 'behavioral-oracle-passed',
+          reason_code: 'stale-alias',
+        },
+      ],
+    }).items[0]
+
+    expect(platformFirst.screening_reason_code).toBe('behavioral-oracle-passed')
+    expect(backroomFirst.screening_reason_code).toBe('behavioral-oracle-passed')
+    expect('reason_code' in platformFirst).toBe(false)
+
+    expect(
+      screeningReviewEventListSchema.parse({
+        items: [
+          {
+            event_id: '5b1a5f6c-4a2f-4b4f-9d2c-1f0b2c3d4e5f',
+            agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+            attempt_id: '20236f60-c143-43b0-b03e-2cbe51f281d8',
+            quarantine_id: null,
+            resolution_id: null,
+            previous_event_id: null,
+            event_kind: 'automated',
+            artifact_sha256: 'a'.repeat(64),
+            policy_version: 7,
+            actor: 'screener',
+            reviewer_model: null,
+            outcome: 'reject',
+            effective_decision: 'reject',
+            reason_code: 'behavioral-oracle-passed',
+            reason: null,
+            prior_agent_status: 'screening',
+            next_agent_status: 'screening_failed',
+            evidence: {},
+            created_at: '2026-07-14T12:00:00Z',
+          },
+        ],
+        count: 1,
+        limit: 50,
+        offset: 0,
+      }).items[0].screening_reason_code,
+    ).toBe('behavioral-oracle-passed')
+
+    expect(
+      minerQuarantineSummarySchema.parse({
+        quarantine_id: 'e3bb1518-530f-42d7-a50b-b21ac9853798',
+        agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+        agent_name: 'memory-agent',
+        reason_code: 'behavioral-oracle-passed',
+        status: 'resolved',
+        resolution: 'reject',
+        resolution_reason: 'Static answer table confirmed',
+        resolution_reason_code: 'operator-rejected-quarantine',
+        created_at: '2026-07-14T12:00:00Z',
+        resolved_at: '2026-07-15T09:00:00Z',
+      }).screening_reason_code,
+    ).toBe('behavioral-oracle-passed')
   })
 
   it('requires an auditable quarantine resolution reason', () => {
@@ -1932,6 +2028,33 @@ describe('source review causal evidence schema', () => {
   })
 })
 
+describe('L2 report canary read schema', () => {
+  const view = {
+    canary_id: '797a187d-61ae-46c5-9cc1-7bc310ad0c22',
+    request_id: 'f79ff91e-8132-4bcf-88e9-8c6ca4fa1a12',
+    agent_id: '68129524-aeea-4383-98cd-f74753b61b55',
+    source_attempt_id: '03a15469-3200-46ed-8eb5-3baf234e7918',
+    artifact_sha256: 'a'.repeat(64),
+    target_node_id: 'subnet-screener-1',
+    expected_agent_status: 'rejected',
+    expected_score_count: 0,
+    review_label: 'known_reject',
+    status: 'leased',
+    claimed_instance_id: 'subnet-screener-1-worker-1',
+    report: null,
+    error_code: null,
+    created_at: '2026-09-25T15:15:44Z',
+    completed_at: null,
+  }
+
+  it('preserves the live lease deadline and accepts older responses without it', () => {
+    const lease_expires_at = '2026-09-25T16:00:44Z'
+    expect(l2ReportCanaryViewSchema.parse({ ...view, lease_expires_at }).lease_expires_at)
+      .toBe(lease_expires_at)
+    expect(l2ReportCanaryViewSchema.parse(view).lease_expires_at).toBeUndefined()
+  })
+})
+
 describe('screener review settings schemas', () => {
   const settings = {
     mode: 'shadow',
@@ -1954,6 +2077,18 @@ describe('screener review settings schemas', () => {
     cache_ttl_seconds: 604_800,
     audit_retention_days: 30,
   }
+
+  it('accepts opt-in GPT-6 review stages', () => {
+    const parsed = screenerReviewSettingsSchema.parse({
+      ...settings,
+      l2_model: 'openai/gpt-6-sol',
+      source_review_model: 'openai/gpt-6-luna',
+      l3_model: 'openai/gpt-6-sol',
+    })
+    expect(parsed.l2_model).toBe('openai/gpt-6-sol')
+    expect(parsed.source_review_model).toBe('openai/gpt-6-luna')
+    expect(parsed.l3_model).toBe('openai/gpt-6-sol')
+  })
 
   it('parses current, history, and signed worker application status', () => {
     const parsed = screenerReviewControlSchema.parse({
@@ -2024,19 +2159,33 @@ describe('screener review settings schemas', () => {
   })
 
   it('accepts Platform L2 budgets and preserves the upper bounds', () => {
-    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 48]]) {
+    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 128], [1800, 256]]) {
       const parsed = screenerReviewSettingsSchema.parse({
-        ...settings, timeout_seconds, max_steps, critic_reasoning_effort: 'high',
+        ...settings, timeout_seconds, max_steps, max_input_tokens: 5_000_000,
+        max_output_tokens: 1_000_000,
+        max_cost_usd: 25, critic_reasoning_effort: 'high',
       })
       expect(parsed.timeout_seconds).toBe(timeout_seconds)
       expect(parsed.max_steps).toBe(max_steps)
       expect(parsed.critic_reasoning_effort).toBe('high')
+      expect(parsed.max_input_tokens).toBe(5_000_000)
+      expect(parsed.max_output_tokens).toBe(1_000_000)
+      expect(parsed.max_cost_usd).toBe(25)
     }
     expect(() => screenerReviewSettingsSchema.parse({
       ...settings, timeout_seconds: 1801,
     })).toThrow()
     expect(() => screenerReviewSettingsSchema.parse({
-      ...settings, max_steps: 49,
+      ...settings, max_steps: 257,
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, max_output_tokens: 1_000_001,
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, max_input_tokens: 5_000_001,
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, max_cost_usd: 25.01,
     })).toThrow()
   })
 
@@ -2069,6 +2218,51 @@ describe('screener review settings schemas', () => {
       settings: { ...settings, l2_fallback_models: ['openai/gpt-5.6-terra'] },
       reason: 'short', confirmation: 'APPLY SCREENER REVIEW * SHADOW',
     })).toThrow()
+  })
+})
+
+describe('screen review audit schema', () => {
+  it('accepts the configured L2 step and output ceilings', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l2-model-inconclusive', prompt_revision: 'l2-v13',
+      max_steps: 256, steps_used: 256,
+      max_output_tokens: 1_000_000, output_tokens_used: 1_000_000,
+      max_cost_usd: 25, cost_usd_used: 20,
+    }
+    expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
+    expect(() => screenReviewAuditSchema.parse({ ...audit, max_steps: 257 })).toThrow()
+    expect(() => screenReviewAuditSchema.parse({ ...audit, output_tokens_used: 1_000_001 })).toThrow()
+  })
+
+  it('preserves exact V13 preflight cause and budgets in Backroom diagnostics', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l2-runtime-evidence-unavailable', prompt_revision: 'l2-v13',
+      max_steps: 256, steps_used: 0,
+      max_input_tokens: 5_000_000, input_tokens_used: 0,
+      max_output_tokens: 1_000_000, output_tokens_used: 0,
+      max_cost_usd: 25, cost_usd_used: 0,
+      requested_model: 'openai/gpt-6-sol', response_provider: null,
+      final_stage: 'preflight', cause_detail: 'lease_unavailable',
+      max_elapsed_ms: 1_800_000, elapsed_ms: 0,
+    }
+    const diagnostic = screeningFailureDiagnosticSchema.parse({
+      agent_id: '4e35f415-2c3c-4a47-a32f-b62754537174',
+      artifact_sha256: 'a'.repeat(64),
+      agent_status: 'screening_failed',
+      attempt_id: '2e4a13f9-ff60-49c8-9a06-07b0684ba717',
+      policy_version: 13,
+      attempt_status: 'expired',
+      started_at: '2026-09-25T09:36:28Z',
+      deadline: '2026-09-25T09:53:54Z',
+      finished_at: '2026-09-25T09:45:19Z',
+      reason: 'Screening was inconclusive; manual retry required',
+      reason_code: 'behavioral-oracle-passed',
+      private_failure_detail: 'private policy audit inconclusive',
+      private_failure_log_tail: 'private policy audit inconclusive',
+      l2_review_diagnostic: audit,
+    })
+    expect(diagnostic.l2_review_diagnostic).toMatchObject(audit)
+    expect(JSON.stringify(diagnostic)).not.toContain('source_text')
   })
 })
 
@@ -4564,5 +4758,93 @@ describe('batched ATH rulings schemas', () => {
         summary: { ...view.summary, by_state: { ...view.summary.by_state, exploded: 1 } },
       }),
     ).toThrow()
+  })
+})
+
+describe('diff manifest omission fields (issue #480)', () => {
+  const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+  const baselineManifest = {
+    agent_id: agentId,
+    artifact_sha256: 'a'.repeat(64),
+    baseline: {
+      source: 'https://github.com/ditto-assistant/dittobench-starter-kit',
+      revision: 'b'.repeat(40),
+      commit_set_sha256: 'c'.repeat(64),
+      commit_count: 24,
+    },
+    files: [],
+    file_count: 35,
+    identical_count: 30,
+    modified_count: 5,
+    added_count: 0,
+    removed_count: 0,
+    stock_kit_count: 30,
+    custom_file_count: 5,
+    custom_added_lines: 9952,
+    path_aligned: false,
+    truncated: false,
+  }
+  const sourceManifest = {
+    agent_id: agentId,
+    reference_agent_id: agentId,
+    candidate_sha256: 'a'.repeat(64),
+    reference_sha256: 'b'.repeat(64),
+    files: [],
+    file_count: 0,
+    identical_count: 0,
+    modified_count: 0,
+    added_count: 0,
+    removed_count: 0,
+    truncated: false,
+  }
+
+  it('matches the generated Platform contract', () => {
+    type Baseline = PlatformComponents['schemas']['AdminBaselineDiffManifest']
+    expectTypeOf<Baseline['omitted_file_count']>().toEqualTypeOf<number>()
+    expectTypeOf<Baseline['omitted_paths']>().toEqualTypeOf<string[]>()
+    expectTypeOf<Baseline['custom_added_lines_complete']>().toEqualTypeOf<boolean>()
+  })
+
+  it('carries a lower-bound baseline total from a current Platform', () => {
+    const parsed = baselineDiffManifestSchema.parse({
+      ...baselineManifest,
+      omitted_file_count: 1,
+      omitted_paths: ['fixtures/seed-user/pairs.json'],
+      custom_added_lines_complete: false,
+    })
+    expect(parsed.custom_added_lines_complete).toBe(false)
+    expect(parsed.omitted_file_count).toBe(1)
+    expect(parsed.omitted_paths).toEqual(['fixtures/seed-user/pairs.json'])
+  })
+
+  it('treats an older Platform as omitting nothing it can name, completeness unknown', () => {
+    for (const legacy of [
+      baselineManifest,
+      {
+        ...baselineManifest,
+        omitted_file_count: null,
+        omitted_paths: null,
+        custom_added_lines_complete: null,
+      },
+    ]) {
+      const parsed = baselineDiffManifestSchema.parse(legacy)
+      expect(parsed.omitted_file_count).toBe(0)
+      expect(parsed.omitted_paths).toEqual([])
+      expect(parsed.custom_added_lines_complete).toBeNull()
+    }
+  })
+
+  it('accepts copy-review omissions and defaults them for an older Platform', () => {
+    expect(
+      sourceDiffManifestSchema.parse({
+        ...sourceManifest,
+        omitted_file_count: 2,
+        omitted_paths: ['assets/big.txt', 'assets/huge.txt'],
+      }),
+    ).toMatchObject({ omitted_file_count: 2, omitted_paths: ['assets/big.txt', 'assets/huge.txt'] })
+    expect(sourceDiffManifestSchema.parse(sourceManifest)).toMatchObject({
+      omitted_file_count: 0,
+      omitted_paths: [],
+    })
   })
 })

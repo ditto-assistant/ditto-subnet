@@ -49,6 +49,7 @@
     url: https://download.docker.com/linux/debian/gpg
     dest: /usr/share/keyrings/docker.asc
     mode: "0644"
+    checksum: "sha256:{{ docker_apt_key_sha256 }}"
 
 # apt_repository is deprecated (removed in ansible-core 2.25). The
 # deb822_repository migration is deferred — see roles/README.md

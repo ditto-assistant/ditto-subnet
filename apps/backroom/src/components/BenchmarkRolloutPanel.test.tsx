@@ -55,7 +55,10 @@ const ready: BenchmarkRolloutControl = {
   cohort_size: 5,
   cohort_ready_count: 5,
   priority_cohort_size: 5,
+  priority_cohort_ready_count: 5,
   priority_complete: true,
+  promotion_pending: false,
+  promotion_requirement: null,
   members: [],
   qualification_blockers: [],
   retry_diagnostics: [],
@@ -155,6 +158,8 @@ const v9CollectingWithStableMembership: BenchmarkRolloutControl = {
   status: 'collecting',
   qualification_converged: true,
   priority_cohort_size: 5,
+  // A Platform that predates the served count: the panel derives it.
+  priority_cohort_ready_count: null,
   priority_complete: false,
   members: [2, 3, 2, 2, 3].map((score_count, index) => ({
     agent_id: `00000000-0000-4000-8000-00000000000${index + 1}`,
@@ -225,6 +230,30 @@ describe('BenchmarkRolloutPanel', () => {
     expect(screen.getByText('Priority scoring gate')).toBeTruthy()
     expect(screen.getByText('2/5 at 3/3')).toBeTruthy()
     expect(screen.getByText('· pending')).toBeTruthy()
+    expect(screen.queryByTestId('rollout-promotion-requirement')).toBeNull()
+  })
+
+  it('shows the served barrier count and the gates still holding emissions', () => {
+    // Two finished leaders plus one banned leader: the barrier counts three,
+    // which `members` (no status) could only ever show as two.
+    const requirement =
+      'Bench v9 scoring is in progress; Bench v8 still controls emissions. ' +
+      'Emission authority moves to v9 only once the first 5 inherited ' +
+      'priority-cohort positions each hold a complete 3-score v9 quorum.'
+    render(
+      <BenchmarkRolloutPanel
+        initialState={{
+          ...v9CollectingWithStableMembership,
+          priority_cohort_ready_count: 3,
+          promotion_pending: true,
+          promotion_requirement: requirement,
+        }}
+        readOnly={false}
+      />,
+    )
+
+    expect(screen.getByText('3/5 at 3/3')).toBeTruthy()
+    expect(screen.getByTestId('rollout-promotion-requirement').textContent).toBe(requirement)
   })
 
   it('starts v9 only after the existing guarded confirmation', async () => {
