@@ -11027,3 +11027,81 @@ class AdminActivityOutcome(Base):
             name="admin_activity_outcome_status",
         ),
     )
+
+
+class TreasuryPublicEvent(Base):
+    """Public, append-only projection of independently verified treasury receipts.
+
+    A payment can have a finalized and a reconciled event. No credentials,
+    GM account identifiers, private billing rows, or free-form payloads belong
+    in this table. Producers must verify the chain receipt before insertion.
+    """
+
+    __tablename__ = "treasury_public_events"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    payment_id: Mapped[str] = mapped_column(Text, nullable=False)
+    event_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    event_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    burn_revision: Mapped[str] = mapped_column(Text, nullable=False)
+    denominator: Mapped[str] = mapped_column(Text, nullable=False)
+    allocation_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocated_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    route: Mapped[str] = mapped_column(Text, nullable=False)
+    asset: Mapped[str] = mapped_column(Text, nullable=False)
+    gross_amount_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    realized_amount_atomic: Mapped[int | None] = mapped_column(BigInteger)
+    public_sender: Mapped[str] = mapped_column(Text, nullable=False)
+    public_recipient: Mapped[str] = mapped_column(Text, nullable=False)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor_provenance: Mapped[str] = mapped_column(Text, nullable=False)
+    verification_source: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("payment_id", "state", name="treasury_public_payment_state"),
+        UniqueConstraint(
+            "block_hash",
+            "extrinsic_index",
+            "event_index",
+            "state",
+            name="treasury_public_chain_event_state",
+        ),
+        CheckConstraint(
+            "event_kind IN ('gm_credit_purchase', 'maintenance_bounty')",
+            name="treasury_public_kind",
+        ),
+        CheckConstraint(
+            "state IN ('chain_finalized', 'reconciled')", name="treasury_public_state"
+        ),
+        CheckConstraint(
+            "denominator IN ('miner_emission', 'released_miner_emission')",
+            name="treasury_public_denominator",
+        ),
+        CheckConstraint(
+            "allocation_bps BETWEEN 0 AND 10000 AND allocated_alpha_rao >= 0",
+            name="treasury_public_allocation",
+        ),
+        CheckConstraint(
+            "gross_amount_atomic >= 0 AND "
+            "(realized_amount_atomic IS NULL OR realized_amount_atomic >= 0)",
+            name="treasury_public_amounts",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0 AND event_index >= 0", name="treasury_public_indexes"
+        ),
+        CheckConstraint(
+            "actor_provenance IN ('authenticated_operator', 'automated_planner')",
+            name="treasury_public_actor_provenance",
+        ),
+        CheckConstraint(
+            "verification_source IN "
+            "('finalized_chain_rpc', 'chain_and_provider_reconciliation')",
+            name="treasury_public_verification_source",
+        ),
+        Index("treasury_public_event_at_idx", "event_at", "id"),
+    )

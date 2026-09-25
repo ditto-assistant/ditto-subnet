@@ -17,6 +17,33 @@ interface ActivityPageData {
   items: Activity[];
   next_before: number | null;
 }
+interface TreasuryEvent {
+  id: number;
+  payment_id: string;
+  event_kind: "gm_credit_purchase" | "maintenance_bounty";
+  state: "chain_finalized" | "reconciled";
+  event_at: string;
+  policy_revision: number;
+  burn_revision: string;
+  denominator: "miner_emission" | "released_miner_emission";
+  allocation_bps: number;
+  allocated_alpha_rao: number;
+  route: string;
+  asset: string;
+  gross_amount_atomic: number;
+  realized_amount_atomic: number | null;
+  public_sender: string;
+  public_recipient: string;
+  block_hash: string;
+  extrinsic_index: number;
+  event_index: number;
+  actor_provenance: string;
+  verification_source: string;
+}
+interface TreasuryPageData {
+  items: TreasuryEvent[];
+  next_before: number | null;
+}
 const outcomes = ["succeeded", "failed", "recorded", "unknown"];
 const labels: Record<string, string> = {
   succeeded: "Succeeded",
@@ -40,6 +67,13 @@ function detailRows(details: Record<string, unknown>, prefix = ""): [string, str
   });
 }
 export function ActivityPage(): JSX.Element {
+  const [treasuryCursors, setTreasuryCursors] = createSignal<number[]>([]);
+  const treasuryPath = createMemo(() => {
+    const before = treasuryCursors().at(-1);
+    return "/public/treasury-activity?limit=20" + (before ? `&before=${before}` : "");
+  });
+  const treasury = useEndpoint<TreasuryPageData>(treasuryPath);
+  const treasuryData = () => (treasury.error() ? undefined : treasury.data());
   const initial = () => new URLSearchParams(location.search);
   const [query, setQuery] = createSignal(initial().get("activity_q") ?? "");
   const [draft, setDraft] = createSignal(query());
@@ -83,6 +117,136 @@ export function ActivityPage(): JSX.Element {
   onCleanup(() => window.removeEventListener("popstate", restore));
   return (
     <section class="page active admin-activity" data-page="activity" aria-label="Admin activity">
+      <section aria-label="Treasury spending" class="treasury-activity">
+        <h2>Treasury spending</h2>
+        <p>
+          Finalized public chain receipts for GM credit purchases and maintenance bounties. A
+          reconciled event confirms the payment outcome; entries with the same payment ID describe
+          one payment.
+        </p>
+        <Show when={treasury.error()}>
+          <div role="alert" class="activity-state">
+            Treasury receipts could not be loaded.{" "}
+            <button class="btn" onClick={() => treasury.refresh()}>
+              Try again
+            </button>
+          </div>
+        </Show>
+        <Show when={treasury.loading()}>
+          <p role="status">Loading treasury receipts…</p>
+        </Show>
+        <Show when={!treasury.loading() && !treasury.error()}>
+          <Show
+            when={treasuryData()?.items.length}
+            fallback={<p>No verified treasury spending is recorded yet.</p>}
+          >
+            <div class="activity-list" aria-label="Treasury receipts">
+              <For each={treasuryData()?.items}>
+                {(item) => (
+                  <details class="activity-record">
+                    <summary>
+                      <time datetime={item.event_at}>
+                        {new Date(item.event_at).toLocaleString()}
+                      </time>
+                      <span class="activity-action">
+                        {item.event_kind === "gm_credit_purchase"
+                          ? "GM credit purchase"
+                          : "Maintenance bounty"}
+                        <small>
+                          Payment {item.payment_id} ·{" "}
+                          {item.state === "reconciled" ? "Reconciled" : "Chain finalized"}
+                        </small>
+                      </span>
+                    </summary>
+                    <div class="activity-details">
+                      <dl>
+                        <div>
+                          <dt>Policy revision</dt>
+                          <dd>{item.policy_revision}</dd>
+                        </div>
+                        <div>
+                          <dt>Burn revision</dt>
+                          <dd>{item.burn_revision}</dd>
+                        </div>
+                        <div>
+                          <dt>Allocation</dt>
+                          <dd>
+                            {item.allocation_bps} bps of {item.denominator.replaceAll("_", " ")} ·{" "}
+                            {item.allocated_alpha_rao} alpha rao
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Route</dt>
+                          <dd>{item.route}</dd>
+                        </div>
+                        <div>
+                          <dt>Gross amount</dt>
+                          <dd>
+                            {item.gross_amount_atomic} atomic {item.asset}
+                          </dd>
+                        </div>
+                        <Show when={item.realized_amount_atomic !== null}>
+                          <div>
+                            <dt>Realized amount</dt>
+                            <dd>
+                              {item.realized_amount_atomic} atomic {item.asset}
+                            </dd>
+                          </div>
+                        </Show>
+                        <div>
+                          <dt>Public sender</dt>
+                          <dd>{item.public_sender}</dd>
+                        </div>
+                        <div>
+                          <dt>Public recipient</dt>
+                          <dd>{item.public_recipient}</dd>
+                        </div>
+                        <div>
+                          <dt>Chain reference</dt>
+                          <dd>
+                            {item.block_hash} / extrinsic {item.extrinsic_index} / event{" "}
+                            {item.event_index}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Actor provenance</dt>
+                          <dd>{item.actor_provenance}</dd>
+                        </div>
+                        <div>
+                          <dt>Verification source</dt>
+                          <dd>{item.verification_source}</dd>
+                        </div>
+                      </dl>
+                    </div>
+                  </details>
+                )}
+              </For>
+            </div>
+          </Show>
+        </Show>
+        <nav class="activity-pagination" aria-label="Treasury pagination">
+          <button
+            class="btn"
+            disabled={!treasuryCursors().length || treasury.loading()}
+            onClick={() => setTreasuryCursors((values) => values.slice(0, -1))}
+          >
+            Newer
+          </button>
+          <span>Page {treasuryCursors().length + 1}</span>
+          <button
+            class="btn"
+            disabled={
+              !treasuryData()?.next_before || treasury.loading() || Boolean(treasury.error())
+            }
+            onClick={() => {
+              const next = treasuryData()?.next_before;
+              if (next) setTreasuryCursors((values) => [...values, next]);
+            }}
+          >
+            Older
+          </button>
+        </nav>
+      </section>
       <p class="activity-intro">
         Backroom actions, settings changes, and canary requests. Open a record to inspect its public
         details.

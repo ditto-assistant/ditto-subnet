@@ -5052,6 +5052,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/treasury-activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Treasury Activity */
+        get: operations["list_treasury_activity_api_v1_public_treasury_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/v13-review-clock": {
         parameters: {
             query?: never;
@@ -26494,6 +26511,75 @@ export interface components {
             /** Usage Unavailable */
             usage_unavailable: number;
         };
+        /** PublicTreasuryEvent */
+        PublicTreasuryEvent: {
+            /** Actor Provenance */
+            actor_provenance: string;
+            /** Allocated Alpha Rao */
+            allocated_alpha_rao: number;
+            /** Allocation Bps */
+            allocation_bps: number;
+            /** Asset */
+            asset: string;
+            /** Block Hash */
+            block_hash: string;
+            /** Burn Revision */
+            burn_revision: string;
+            /**
+             * Denominator
+             * @enum {string}
+             */
+            denominator: "miner_emission" | "released_miner_emission";
+            /**
+             * Event At
+             * Format: date-time
+             */
+            event_at: string;
+            /** Event Index */
+            event_index: number;
+            /**
+             * Event Kind
+             * @enum {string}
+             */
+            event_kind: "gm_credit_purchase" | "maintenance_bounty";
+            /** Extrinsic Index */
+            extrinsic_index: number;
+            /** Gross Amount Atomic */
+            gross_amount_atomic: number;
+            /** Id */
+            id: number;
+            /** Payment Id */
+            payment_id: string;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Public Recipient */
+            public_recipient: string;
+            /** Public Sender */
+            public_sender: string;
+            /** Realized Amount Atomic */
+            realized_amount_atomic: number | null;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Route */
+            route: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "chain_finalized" | "reconciled";
+            /** Verification Source */
+            verification_source: string;
+        };
+        /** PublicTreasuryEventPage */
+        PublicTreasuryEventPage: {
+            /** Items */
+            items: components["schemas"]["PublicTreasuryEvent"][];
+            /** Next Before */
+            next_before: number | null;
+        };
         /**
          * PublicV13ReviewClockRevision
          * @description One public notice, without private operator identity or reason text.
@@ -43315,6 +43401,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicSubmissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_treasury_activity_api_v1_public_treasury_activity_get: {
+        parameters: {
+            query?: {
+                before?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicTreasuryEventPage"];
                 };
             };
             /** @description Validation Error */
