@@ -38,6 +38,7 @@ from ditto.db.models import (
     ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
+from ditto.db.queries.tickets import issue_confirmation_ticket
 from ditto.tests.api_server.endpoints.test_screener import _seed_agent
 from ditto.tests.db.queries.test_benchmark_rollout import _heartbeat
 
@@ -180,10 +181,34 @@ async def test_v13_pin_requires_outsider_pause_then_routes_only_exact_members(
         )
     assert response.status_code == 200, response.text
     assert response.json()["hotkeys"] == list(_HOTKEYS)
+    maintenance_agent_id = await _seed_agent(
+        session_maker, status=AgentStatus.SCORED, sha256="1" * 64
+    )
     async with session_maker() as session:
         assert (await get_pin(None, session)) is not None
         assert await pinned_validator_allowed(session, hotkey=_HOTKEYS[0], now=now)
         assert not await pinned_validator_allowed(session, hotkey=_OUTSIDER, now=now)
+        assert (
+            await issue_confirmation_ticket(
+                session,
+                agent_id=maintenance_agent_id,
+                validator_hotkey=_OUTSIDER,
+                now=now,
+                ttl=timedelta(minutes=30),
+                bench_version=13,
+            )
+            is None
+        )
+        allowed_maintenance = await issue_confirmation_ticket(
+            session,
+            agent_id=maintenance_agent_id,
+            validator_hotkey=_HOTKEYS[0],
+            now=now,
+            ttl=timedelta(minutes=30),
+            bench_version=13,
+        )
+        assert allowed_maintenance is not None
+        await session.rollback()
         lease = await scored_runtime_evidence_for_lease(
             session,
             attempt_id=uuid4(),
@@ -214,6 +239,17 @@ async def test_v13_pin_requires_outsider_pause_then_routes_only_exact_members(
             heartbeat.capabilities = replacement.capabilities
     async with session_maker() as session:
         assert not await pinned_validator_allowed(session, hotkey=_HOTKEYS[0], now=now)
+        assert (
+            await issue_confirmation_ticket(
+                session,
+                agent_id=maintenance_agent_id,
+                validator_hotkey=_HOTKEYS[0],
+                now=now,
+                ttl=timedelta(minutes=30),
+                bench_version=13,
+            )
+            is None
+        )
         assert (
             await scored_runtime_evidence_for_lease(
                 session,
