@@ -2837,14 +2837,20 @@ class TarSourceRepository:
         )
         reachability = analyze_reachability(reachability_inputs)
         if not unreadable_source:
+
+            def proven_inert_legacy_match(match: Mapping[str, object]) -> bool:
+                locations = match["locations"]
+                assert isinstance(locations, list)
+                return all(
+                    reachability[str(location["path"])].state
+                    == ReachabilityState.PROVEN_INERT
+                    for location in locations
+                )
+
             legacy_matches = [
                 match
                 for match in legacy_matches
-                if not all(
-                    reachability[str(location["path"])].state
-                    == ReachabilityState.PROVEN_INERT
-                    for location in match["locations"]
-                )
+                if not proven_inert_legacy_match(match)
             ]
         matches = legacy_matches
         detector_revision = "static-malicious-preflight-v1"
