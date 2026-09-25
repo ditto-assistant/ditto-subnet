@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import bittensor as bt
 import pytest
 
 from ditto.treasury import execution
+from ditto.treasury.store import TreasuryStore
 
 HASH = "0x" + "a" * 64
 
@@ -143,6 +145,7 @@ def test_tao_deposit_keeps_a_free_fee_reserve(monkeypatch: pytest.MonkeyPatch) -
 
 def test_live_runner_rejects_self_attested_authorization_before_key_load(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     def no_wallet(_project: str) -> None:
         raise AssertionError("signing key must not be loaded")
@@ -150,7 +153,7 @@ def test_live_runner_rejects_self_attested_authorization_before_key_load(
     monkeypatch.setattr(execution, "_load_wallet", no_wallet)
     with pytest.raises(RuntimeError, match="live treasury dispatch is blocked"):
         execution.execute_one_leg(
-            store=None,  # type: ignore[arg-type] -- gate precedes all store access
+            store=TreasuryStore(tmp_path / "treasury.db"),
             key="payment-0001",
             project="example-project",
             instructions=b"{}",
