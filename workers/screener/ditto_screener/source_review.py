@@ -43,7 +43,7 @@ from ditto_screener.review_provider import (
     review_gateway_headers,
 )
 from ditto_screener.source_causality import analyze_static_candidates_v2
-from ditto_screener.source_reachability import analyze_reachability
+from ditto_screener.source_reachability import ReachabilityState, analyze_reachability
 from ditto_screener.source_signals import (
     find_benchmark_emulation_fingerprints,
     find_decisive_malicious_source,
@@ -2819,10 +2819,36 @@ class TarSourceRepository:
         legacy_matches = find_decisive_malicious_source(
             readable, explicitly_executable_paths=runtime_paths
         )
+        if not legacy_matches and mode == "off":
+            return None
+        # The legacy path is still the production default. Its broad source
+        # inventory includes local scripts that a precise Docker build never
+        # copies. Clear only matches whose every cited file is PROVEN inert;
+        # ambiguous build inputs and genuinely reachable files retain the
+        # existing serial-review floor. Include unreadable archive members in
+        # the COPY inventory so an opaque fixture does not make a concrete
+        # directory COPY appear dynamic.
+        reachability_inputs = {
+            name: all_readable.get(name, "") for name in self._members
+        }
+        unreadable_source = any(
+            name not in all_readable and is_executable_source_path(name)
+            for name in self._members
+        )
+        reachability = analyze_reachability(reachability_inputs)
+        if not unreadable_source:
+            legacy_matches = [
+                match
+                for match in legacy_matches
+                if not all(
+                    reachability[str(location["path"])].state
+                    == ReachabilityState.PROVEN_INERT
+                    for location in match["locations"]
+                )
+            ]
         matches = legacy_matches
         detector_revision = "static-malicious-preflight-v1"
         if mode != "off":
-            reachability = analyze_reachability(all_readable)
             v2 = analyze_static_candidates_v2(
                 (
                     (path, text)

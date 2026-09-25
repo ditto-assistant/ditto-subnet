@@ -1151,6 +1151,7 @@ async def test_static_malicious_preflight_quarantines_before_docker(
 ) -> None:
     tarball = _valid_tar(
         **{
+            "Dockerfile": b"FROM scratch\nCOPY src/main.rs /src/main.rs\n",
             "src/main.rs": (
                 b'let endpoint = "/var/run/docker.sock";\n'
                 b"connect_control_socket(endpoint);\n"
@@ -1291,7 +1292,7 @@ async def test_static_preflight_v2_enforce_reviews_helper_before_build(
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
 
 
-async def test_static_preflight_v2_shadow_preserves_v1_and_journals_delta(
+async def test_static_preflight_v2_shadow_clears_excluded_helper_and_journals_delta(
     make_config: Callable[..., ScreenerConfig], tmp_path: Path
 ) -> None:
     tarball = _valid_tar(
@@ -1321,13 +1322,11 @@ async def test_static_preflight_v2_shadow_preserves_v1_and_journals_delta(
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
-    assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert result.finding is not None
-    assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert result.outcome == ScreeningOutcome.PASS
+    assert any(call[0] == "build" for call in calls)
     record = json.loads(audit_path.read_text())
     assert record["mode"] == "shadow"
-    assert record["legacy_decisive"] is True
+    assert record["legacy_decisive"] is False
     assert record["candidate_decisive"] is False
     assert record["artifact_sha256"] == hashlib.sha256(tarball).hexdigest()
     assert "collector.invalid" not in audit_path.read_text()
