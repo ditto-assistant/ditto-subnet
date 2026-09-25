@@ -16,11 +16,17 @@ The block hash, extrinsic index, and event index identify the exact public
 transfer. Policy and burn revisions, effective burn share in millionths, both
 purpose allocations, selected denominator, allocated alpha budget, actual
 source alpha, route, chain deposit asset and amount, optional GM credited USD
-micros, public sender and recipient, authenticated public actor ID and role,
+nanos, public sender and recipient, authenticated public actor ID and role,
 and verification source are explicit columns. Atomic amounts are decimal
 strings in public JSON so JavaScript cannot round 64-bit values. The response
 has no arbitrary JSON field. PostgreSQL rejects updates and deletes and
 enforces unique payment-state and chain-event-state pairs.
+
+A bounty row additionally requires a public award ID and accepted-work
+reference. The publisher must verify both against the approved bounty record;
+a chain transfer by itself does not prove the bounty purpose. GM credit rows
+must repeat every immutable economic and route field from the finalized token
+deposit, while adding the reconciled credit amount and actor.
 
 There is deliberately no operator-write HTTP endpoint or automatic importer.
 The signer currently accepts self-attested allocation and reviewer data, and

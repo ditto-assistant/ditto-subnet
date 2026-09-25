@@ -26513,6 +26513,8 @@ export interface components {
         };
         /** PublicTreasuryEvent */
         PublicTreasuryEvent: {
+            /** Accepted Work Ref */
+            accepted_work_ref: string | null;
             /** Actor Provenance */
             actor_provenance: string;
             /** Actor Public Id */
@@ -26523,12 +26525,14 @@ export interface components {
             allocation_bps: number;
             /** Block Hash */
             block_hash: string;
+            /** Bounty Award Id */
+            bounty_award_id: string | null;
             /** Burn Revision */
             burn_revision: number;
             /** Burn Share Micros */
             burn_share_micros: number;
-            /** Credited Usd Micros */
-            credited_usd_micros: string | null;
+            /** Credited Usd Nano */
+            credited_usd_nano: string | null;
             /**
              * Denominator
              * @enum {string}

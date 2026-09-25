@@ -36,7 +36,9 @@ interface TreasuryEvent {
   route: string;
   deposit_asset: string;
   deposit_amount_atomic: string;
-  credited_usd_micros: string | null;
+  credited_usd_nano: string | null;
+  bounty_award_id: string | null;
+  accepted_work_ref: string | null;
   public_sender: string;
   public_recipient: string;
   block_hash: string;
@@ -204,10 +206,20 @@ export function ActivityPage(): JSX.Element {
                             {item.deposit_amount_atomic} atomic {item.deposit_asset}
                           </dd>
                         </div>
-                        <Show when={item.credited_usd_micros !== null}>
+                        <Show when={item.credited_usd_nano !== null}>
                           <div>
                             <dt>GM credits confirmed</dt>
-                            <dd>{item.credited_usd_micros} USD micros</dd>
+                            <dd>{item.credited_usd_nano} USD nanos</dd>
+                          </div>
+                        </Show>
+                        <Show when={item.bounty_award_id !== null}>
+                          <div>
+                            <dt>Bounty award</dt>
+                            <dd>{item.bounty_award_id}</dd>
+                          </div>
+                          <div>
+                            <dt>Accepted work</dt>
+                            <dd>{item.accepted_work_ref}</dd>
                           </div>
                         </Show>
                         <div>

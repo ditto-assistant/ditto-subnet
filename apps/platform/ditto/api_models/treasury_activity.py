@@ -27,7 +27,9 @@ class PublicTreasuryEvent(BaseModel):
     route: str
     deposit_asset: Literal["TAO", "SN28_ALPHA", "SN118_ALPHA"]
     deposit_amount_atomic: str
-    credited_usd_micros: str | None
+    credited_usd_nano: str | None
+    bounty_award_id: str | None
+    accepted_work_ref: str | None
     public_sender: str
     public_recipient: str
     block_hash: str

@@ -57,11 +57,13 @@ async def list_treasury_activity(
                 "route": row.route,
                 "deposit_asset": row.deposit_asset,
                 "deposit_amount_atomic": str(row.deposit_amount_atomic),
-                "credited_usd_micros": (
-                    str(row.credited_usd_micros)
-                    if row.credited_usd_micros is not None
+                "credited_usd_nano": (
+                    str(row.credited_usd_nano)
+                    if row.credited_usd_nano is not None
                     else None
                 ),
+                "bounty_award_id": row.bounty_award_id,
+                "accepted_work_ref": row.accepted_work_ref,
                 "public_sender": row.public_sender,
                 "public_recipient": row.public_recipient,
                 "block_hash": row.block_hash,

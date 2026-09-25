@@ -43,7 +43,9 @@ def upgrade() -> None:
         sa.Column("route", sa.Text(), nullable=False),
         sa.Column("deposit_asset", sa.Text(), nullable=False),
         sa.Column("deposit_amount_atomic", sa.BigInteger(), nullable=False),
-        sa.Column("credited_usd_micros", sa.BigInteger(), nullable=True),
+        sa.Column("credited_usd_nano", sa.BigInteger(), nullable=True),
+        sa.Column("bounty_award_id", sa.Text(), nullable=True),
+        sa.Column("accepted_work_ref", sa.Text(), nullable=True),
         sa.Column("public_sender", sa.Text(), nullable=False),
         sa.Column("public_recipient", sa.Text(), nullable=False),
         sa.Column("block_hash", sa.Text(), nullable=False),
@@ -65,12 +67,17 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "(event_kind = 'gm_token_deposit' AND state = 'chain_finalized' "
-            "AND finalized_event_id IS NULL AND credited_usd_micros IS NULL) OR "
+            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NULL AND accepted_work_ref IS NULL) OR "
             "(event_kind = 'gm_credit_purchase' AND state = 'reconciled' "
-            "AND finalized_event_id IS NOT NULL AND credited_usd_micros IS NOT NULL "
-            "AND credited_usd_micros > 0) OR "
+            "AND finalized_event_id IS NOT NULL AND credited_usd_nano IS NOT NULL "
+            "AND credited_usd_nano > 0 AND bounty_award_id IS NULL "
+            "AND accepted_work_ref IS NULL) OR "
             "(event_kind = 'maintenance_bounty' AND state = 'chain_finalized' "
-            "AND finalized_event_id IS NULL AND credited_usd_micros IS NULL)",
+            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NOT NULL AND accepted_work_ref IS NOT NULL "
+            "AND length(bounty_award_id) BETWEEN 8 AND 120 "
+            "AND length(accepted_work_ref) BETWEEN 8 AND 240)",
             name="treasury_public_kind",
         ),
         sa.CheckConstraint(
@@ -138,8 +145,14 @@ def upgrade() -> None:
               AND finalized.event_index = NEW.event_index
               AND finalized.policy_revision = NEW.policy_revision
               AND finalized.burn_revision = NEW.burn_revision
+              AND finalized.burn_share_micros = NEW.burn_share_micros
+              AND finalized.denominator = NEW.denominator
+              AND finalized.maintenance_bps = NEW.maintenance_bps
+              AND finalized.gm_bps = NEW.gm_bps
               AND finalized.allocation_bps = NEW.allocation_bps
+              AND finalized.allocated_alpha_rao = NEW.allocated_alpha_rao
               AND finalized.source_alpha_rao = NEW.source_alpha_rao
+              AND finalized.route = NEW.route
               AND finalized.deposit_asset = NEW.deposit_asset
               AND finalized.deposit_amount_atomic = NEW.deposit_amount_atomic
               AND finalized.public_sender = NEW.public_sender

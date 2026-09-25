@@ -11059,7 +11059,9 @@ class TreasuryPublicEvent(Base):
     route: Mapped[str] = mapped_column(Text, nullable=False)
     deposit_asset: Mapped[str] = mapped_column(Text, nullable=False)
     deposit_amount_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    credited_usd_micros: Mapped[int | None] = mapped_column(BigInteger)
+    credited_usd_nano: Mapped[int | None] = mapped_column(BigInteger)
+    bounty_award_id: Mapped[str | None] = mapped_column(Text)
+    accepted_work_ref: Mapped[str | None] = mapped_column(Text)
     public_sender: Mapped[str] = mapped_column(Text, nullable=False)
     public_recipient: Mapped[str] = mapped_column(Text, nullable=False)
     block_hash: Mapped[str] = mapped_column(Text, nullable=False)
@@ -11080,12 +11082,17 @@ class TreasuryPublicEvent(Base):
         ),
         CheckConstraint(
             "(event_kind = 'gm_token_deposit' AND state = 'chain_finalized' "
-            "AND finalized_event_id IS NULL AND credited_usd_micros IS NULL) OR "
+            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NULL AND accepted_work_ref IS NULL) OR "
             "(event_kind = 'gm_credit_purchase' AND state = 'reconciled' "
-            "AND finalized_event_id IS NOT NULL AND credited_usd_micros IS NOT NULL "
-            "AND credited_usd_micros > 0) OR "
+            "AND finalized_event_id IS NOT NULL AND credited_usd_nano IS NOT NULL "
+            "AND credited_usd_nano > 0 AND bounty_award_id IS NULL "
+            "AND accepted_work_ref IS NULL) OR "
             "(event_kind = 'maintenance_bounty' AND state = 'chain_finalized' "
-            "AND finalized_event_id IS NULL AND credited_usd_micros IS NULL)",
+            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NOT NULL AND accepted_work_ref IS NOT NULL "
+            "AND length(bounty_award_id) BETWEEN 8 AND 120 "
+            "AND length(accepted_work_ref) BETWEEN 8 AND 240)",
             name="treasury_public_kind",
         ),
         CheckConstraint(

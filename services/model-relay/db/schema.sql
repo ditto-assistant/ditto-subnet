@@ -1052,8 +1052,14 @@ CREATE FUNCTION public.verify_treasury_public_reconciliation() RETURNS trigger
               AND finalized.event_index = NEW.event_index
               AND finalized.policy_revision = NEW.policy_revision
               AND finalized.burn_revision = NEW.burn_revision
+              AND finalized.burn_share_micros = NEW.burn_share_micros
+              AND finalized.denominator = NEW.denominator
+              AND finalized.maintenance_bps = NEW.maintenance_bps
+              AND finalized.gm_bps = NEW.gm_bps
               AND finalized.allocation_bps = NEW.allocation_bps
+              AND finalized.allocated_alpha_rao = NEW.allocated_alpha_rao
               AND finalized.source_alpha_rao = NEW.source_alpha_rao
+              AND finalized.route = NEW.route
               AND finalized.deposit_asset = NEW.deposit_asset
               AND finalized.deposit_amount_atomic = NEW.deposit_amount_atomic
               AND finalized.public_sender = NEW.public_sender
@@ -5047,7 +5053,9 @@ CREATE TABLE public.treasury_public_events (
     route text NOT NULL,
     deposit_asset text NOT NULL,
     deposit_amount_atomic bigint NOT NULL,
-    credited_usd_micros bigint,
+    credited_usd_nano bigint,
+    bounty_award_id text,
+    accepted_work_ref text,
     public_sender text NOT NULL,
     public_recipient text NOT NULL,
     block_hash text NOT NULL,
@@ -5062,7 +5070,7 @@ CREATE TABLE public.treasury_public_events (
     CONSTRAINT ck_treasury_public_events_treasury_public_amounts CHECK (((deposit_amount_atomic > 0) AND (deposit_asset = ANY (ARRAY['TAO'::text, 'SN28_ALPHA'::text, 'SN118_ALPHA'::text])))),
     CONSTRAINT ck_treasury_public_events_treasury_public_denominator CHECK ((denominator = ANY (ARRAY['miner_emission'::text, 'released_miner_emission'::text]))),
     CONSTRAINT ck_treasury_public_events_treasury_public_indexes CHECK (((extrinsic_index >= 0) AND (event_index >= 0))),
-    CONSTRAINT ck_treasury_public_events_treasury_public_kind CHECK ((((event_kind = 'gm_token_deposit'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_micros IS NULL)) OR ((event_kind = 'gm_credit_purchase'::text) AND (state = 'reconciled'::text) AND (finalized_event_id IS NOT NULL) AND (credited_usd_micros IS NOT NULL) AND (credited_usd_micros > 0)) OR ((event_kind = 'maintenance_bounty'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_micros IS NULL)))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_kind CHECK ((((event_kind = 'gm_token_deposit'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'gm_credit_purchase'::text) AND (state = 'reconciled'::text) AND (finalized_event_id IS NOT NULL) AND (credited_usd_nano IS NOT NULL) AND (credited_usd_nano > 0) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'maintenance_bounty'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NOT NULL) AND (accepted_work_ref IS NOT NULL) AND ((length(bounty_award_id) >= 8) AND (length(bounty_award_id) <= 120)) AND ((length(accepted_work_ref) >= 8) AND (length(accepted_work_ref) <= 240))))),
     CONSTRAINT ck_treasury_public_events_treasury_public_purpose_allocation CHECK ((((event_kind = 'maintenance_bounty'::text) AND (allocation_bps = maintenance_bps)) OR ((event_kind <> 'maintenance_bounty'::text) AND (allocation_bps = gm_bps)))),
     CONSTRAINT ck_treasury_public_events_treasury_public_route CHECK ((route = ANY (ARRAY['alpha_to_tao'::text, 'alpha_to_gm_alpha'::text, 'alpha_transfer'::text, 'alpha_to_tao_bounty'::text]))),
     CONSTRAINT ck_treasury_public_events_treasury_public_state CHECK ((state = ANY (ARRAY['chain_finalized'::text, 'reconciled'::text]))),
