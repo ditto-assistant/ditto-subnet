@@ -2583,7 +2583,7 @@ class TerraSolSourceReviewAgent:
                 audit = ScreenReviewAudit(
                     stage="l2",
                     reason_code="l2-model-inconclusive",
-                    prompt_revision=l2_prompt_revision(policy_version),
+                    prompt_revision=self._analyst_prompt_revision(policy_version),
                     harness_revision=L2_HARNESS_REVISION,
                     max_steps=self._max_steps,
                     steps_used=min(len(result.response_models), self._max_steps),
@@ -2664,7 +2664,7 @@ class TerraSolSourceReviewAgent:
                 ScreenReviewAudit(
                     stage="l2",
                     reason_code=f"l2-{error.code}",
-                    prompt_revision=l2_prompt_revision(policy_version),
+                    prompt_revision=self._analyst_prompt_revision(policy_version),
                     harness_revision=L2_HARNESS_REVISION,
                     max_steps=self._max_steps,
                     steps_used=min(error.steps_used, self._max_steps),
@@ -4015,7 +4015,7 @@ class TerraSolSourceReviewAgent:
                                     )
                                 ),
                                 prompt_revision=(
-                                    l2_prompt_revision(policy_version)
+                                    self._analyst_prompt_revision(policy_version)
                                     if role == "analyst"
                                     else l2_cause_tiebreaker_prompt_revision(
                                         policy_version
@@ -4163,7 +4163,11 @@ class TerraSolSourceReviewAgent:
             "tool_choice": "required",
             "max_output_tokens": self._max_completion_tokens,
             "store": False,
-            "prompt_cache_key": l2_prompt_cache_key(policy_version),
+            "prompt_cache_key": (
+                self._analyst_prompt_revision(policy_version)
+                if self._terminal_verdict_required
+                else l2_prompt_cache_key(policy_version)
+            ),
         }
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -4250,6 +4254,13 @@ class TerraSolSourceReviewAgent:
             raise ValueError("L2 review exceeded lease budget")
         return min(self._timeout_seconds, remaining)
 
+    def _analyst_prompt_revision(self, policy_version: int) -> str:
+        revision = l2_prompt_revision(policy_version)
+        if not self._terminal_verdict_required:
+            return revision
+        input_mode = "independent" if self._independent_analyst else "l1-guided"
+        return f"{revision}-report-gpt6sol-{input_mode}-terminal-v1"
+
     def _client_transport(self) -> httpx.AsyncBaseTransport | None:
         if self._transport is not None:
             return self._transport
@@ -4335,7 +4346,7 @@ class TerraSolSourceReviewAgent:
             "fallback_models": list(self._fallback_models),
             "critic_model": self._critic_model,
             "critic_provider": self._critic_provider,
-            "prompt_revision": l2_prompt_revision(policy_version),
+            "prompt_revision": self._analyst_prompt_revision(policy_version),
             "critic_prompt_revision": l2_critic_prompt_revision(policy_version),
             "safety_prompt_revision": l2_safety_prompt_revision(policy_version),
             "static_hold_revision": L2_STATIC_HOLD_REVISION,
@@ -4519,7 +4530,12 @@ class TerraSolSourceReviewAgent:
                 "analyst_fallback_models": list(self._fallback_models),
                 "critic_model": self._critic_model,
                 "critic_provider": self._critic_provider,
-                "prompt_revision": l2_prompt_revision(policy_version),
+                "prompt_revision": self._analyst_prompt_revision(policy_version),
+                "review_mode": (
+                    "report_only_single_layer_sol"
+                    if self._terminal_verdict_required
+                    else "production_multilayer"
+                ),
                 "critic_prompt_revision": l2_critic_prompt_revision(policy_version),
                 "cause_prompt_revision": l2_cause_prompt_revision(policy_version),
                 "cause_tiebreaker_prompt_revision": (

@@ -31,7 +31,6 @@ from ditto_screener.l2_review import (
     l2_cause_prompt_revision,
     l2_cause_tiebreaker_prompt_revision,
     l2_critic_prompt_revision,
-    l2_prompt_revision,
     l2_safety_prompt_revision,
 )
 from ditto_screener.policy import SourceReviewObservation
@@ -250,7 +249,7 @@ async def _main() -> None:
         ),
         "terminal_verdict_required": args.single_layer_sol,
         "revisions": {
-            "analyst_prompt": l2_prompt_revision(SCREENING_POLICY_VERSION),
+            "analyst_prompt": agent._analyst_prompt_revision(SCREENING_POLICY_VERSION),
             "critic_prompt": l2_critic_prompt_revision(SCREENING_POLICY_VERSION),
             "cause_prompt": l2_cause_prompt_revision(SCREENING_POLICY_VERSION),
             "cause_tiebreaker_prompt": l2_cause_tiebreaker_prompt_revision(

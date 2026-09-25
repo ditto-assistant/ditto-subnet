@@ -4463,6 +4463,9 @@ async def test_report_only_terminal_schema_is_local_to_single_layer(
     final = tools[-1]["parameters"]["properties"]
     assert final["disposition"]["enum"] == ["safe", "violation"]
     assert "insufficient_static_evidence" not in final["resolution_basis"]["enum"]
+    assert "report-gpt6sol-l1-guided-terminal-v1" in agent._analyst_prompt_revision(
+        SCREENING_POLICY_VERSION
+    )
     ordinary = l2_review._l2_tools_for_policy(SCREENING_POLICY_VERSION)
     assert ordinary[-1]["parameters"]["properties"]["disposition"]["enum"] == [
         "safe",
