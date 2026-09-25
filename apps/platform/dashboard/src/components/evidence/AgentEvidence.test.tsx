@@ -25,8 +25,8 @@ const AGENT_ID = "6d0aa2f5-492b-4510-9bcb-129ff4e1e353";
 
 /** The eight degraded samples the miner reported, plus the seven sound ones. */
 const REPORTED_SAMPLES = [
-  0.143, 0.137, 0.141, 0.143, 0.294, 0.007, 0.014, 0.0, 0.793, 0.849, 0.815, 0.812, 0.81,
-  0.813, 0.811,
+  0.143, 0.137, 0.141, 0.143, 0.294, 0.007, 0.014, 0.0, 0.793, 0.849, 0.815, 0.812, 0.81, 0.813,
+  0.811,
 ];
 
 function pipeline(samples: number[]): PipelineDetailPayload {
