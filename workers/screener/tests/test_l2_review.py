@@ -392,7 +392,12 @@ def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     assert "blocks the call before endpoint dispatch" in v13
     assert l2_prompt_revision(13) == "l2-terra-source-review-v42-policy-v13"
     assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v22-policy-v13"
-    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v25-policy-v13"
+    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v26-policy-v13"
+    assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
+    assert "Use at most four targeted analyzer" not in (
+        l2_review._V13_SAFETY_ADJUDICATOR_TASK
+    )
+    assert "adjacent served-path files" in l2_review._V13_SAFETY_ADJUDICATOR_TASK
 
 
 def test_l2_policy_v10_prompt_keeps_the_original_i7_text() -> None:
