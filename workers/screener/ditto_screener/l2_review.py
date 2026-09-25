@@ -5912,6 +5912,7 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 tool call is invalid": "model-tool-call-invalid",
     "L2 tool call is missing a call ID": "model-tool-call-invalid",
     "L2 response cost is invalid": "model-response-invalid",
+    "L2 cached input exceeds raw input": "model-response-invalid",
     "L2 response is not an object": "model-response-invalid",
     "L2 response lacks output or usage": "model-response-invalid",
     "L2 response output item is not an object": "model-response-invalid",
