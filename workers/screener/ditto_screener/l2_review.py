@@ -618,6 +618,7 @@ class L2TrajectoryError(ValueError):
         steps_used: int,
         read_bytes_used: int,
         read_files_used: int,
+        failure_subcode: str | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
@@ -629,6 +630,7 @@ class L2TrajectoryError(ValueError):
         self.steps_used = steps_used
         self.read_bytes_used = read_bytes_used
         self.read_files_used = read_files_used
+        self.failure_subcode = failure_subcode
 
 
 def _bounded_tail_lines(path: Path, *, max_bytes: int) -> list[bytes]:
@@ -2123,6 +2125,7 @@ class L2RunResult:
     direct_clear_graph_complete: bool = True
     analyst_cache_hit: bool = False
     critic_cache_hit: bool = False
+    failure_subcode: str | None = None
 
 
 def _finalize_without_l3(
@@ -3665,6 +3668,7 @@ class TerraSolSourceReviewAgent:
                 dossier_complete=error.dossier_complete,
                 analyst_cache_hit=analyst_cache_hit,
                 critic_cache_hit=critic_cache_hit,
+                failure_subcode=error.failure_subcode,
             )
         except (L2InconclusiveError, OSError, ValueError, httpx.HTTPError) as error:
             inconclusive = isinstance(error, L2InconclusiveError)
@@ -4083,7 +4087,9 @@ class TerraSolSourceReviewAgent:
                 call_id = _call_id_value(call)
             except ValueError as error:
                 logger.warning("L2 model-tool-contract: invalid submit call id")
-                raise failure("model-tool-contract") from error
+                raise failure(
+                    "model-tool-contract", "invalid_submit_call_id"
+                ) from error
             proposed_disposition = "unknown"
             if isinstance(call, Mapping):
                 raw_arguments = call.get("arguments")
@@ -4157,7 +4163,7 @@ class TerraSolSourceReviewAgent:
                 }
             )
 
-        def failure(code: str) -> L2TrajectoryError:
+        def failure(code: str, subcode: str | None = None) -> L2TrajectoryError:
             return L2TrajectoryError(
                 code,
                 usage=usage,
@@ -4168,6 +4174,7 @@ class TerraSolSourceReviewAgent:
                 steps_used=steps_used,
                 read_bytes_used=read_bytes_used,
                 read_files_used=len(read_files),
+                failure_subcode=subcode,
             )
 
         for _step in range(max_steps or self._max_steps):
@@ -4351,7 +4358,7 @@ class TerraSolSourceReviewAgent:
                     )
                     continue
                 logger.warning("L2 model-tool-contract: no tool call after corrections")
-                raise failure("model-tool-contract")
+                raise failure("model-tool-contract", "no_tool_call_after_corrections")
             submitted = [
                 item for item in calls if item.get("name") == "submit_l2_review"
             ]
@@ -4477,10 +4484,14 @@ class TerraSolSourceReviewAgent:
                     logger.warning(
                         "L2 model-tool-contract: malformed tool arguments JSON"
                     )
-                    raise failure("model-tool-contract") from error
+                    raise failure(
+                        "model-tool-contract", "malformed_tool_arguments_json"
+                    ) from error
                 except ValueError as error:
                     logger.warning("L2 model-tool-contract: invalid tool call shape")
-                    raise failure("model-tool-contract") from error
+                    raise failure(
+                        "model-tool-contract", "invalid_tool_call_shape"
+                    ) from error
                 analyzer_calls += 1
                 if analyzer_calls > 2 * (max_steps or self._max_steps):
                     raise failure("model-tool-budget")
