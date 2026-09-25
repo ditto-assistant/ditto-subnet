@@ -28,6 +28,12 @@ _MAX_NOTE_BYTES = 64_000
 _MAX_READ_LINES = 160
 _MAX_HITS = 80
 _MAX_FILE_BYTES = 2 * 1024 * 1024
+# Upper tier of OpenRouter's GPT-6 Sol catalog on 2026-09-25, including the
+# higher cache-write price for uncached input. A zero/missing cost response is
+# never interpreted as free usage. The separate key has a $50 total limit.
+_UNCACHED_INPUT_USD_PER_TOKEN = 0.000005
+_CACHED_INPUT_USD_PER_TOKEN = 0.0000004
+_OUTPUT_USD_PER_TOKEN = 0.000015
 _POLICY_PROMPT = _SYSTEM_PROMPT_HEAD + _POLICY_TAILS[13]
 _POLICY_PROMPT_SHA256 = hashlib.sha256(_POLICY_PROMPT.encode()).hexdigest()
 
@@ -289,7 +295,14 @@ async def _phase(
             ),
         }
     ]
-    usage = {"input_tokens": 0, "output_tokens": 0, "reported_cost_usd": 0.0}
+    usage = {
+        "input_tokens": 0,
+        "cached_input_tokens": 0,
+        "output_tokens": 0,
+        "reported_cost_usd": 0.0,
+        "estimated_cost_usd": 0.0,
+        "accounted_cost_usd": 0.0,
+    }
     notes: list[dict[str, Any]] = []
     final: dict[str, Any] | None = None
     model_names: list[str] = []
@@ -350,13 +363,40 @@ async def _phase(
                 raise ValueError(f"{phase} usage invalid")
             usage[key_name] += amount
             total_usage[key_name] += amount
-        cost = bill.get("cost")
-        if not isinstance(cost, (int, float)) or isinstance(cost, bool) or cost < 0:
-            raise ValueError(f"{phase} metered cost missing")
-        usage["reported_cost_usd"] += float(cost)
-        total_usage["reported_cost_usd"] += float(cost)
+        details = bill.get("input_tokens_details", {})
+        if not isinstance(details, dict):
+            raise ValueError(f"{phase} cached usage invalid")
+        cached = details.get("cached_tokens", 0)
         if (
-            total_usage["reported_cost_usd"] > 25
+            not isinstance(cached, int)
+            or isinstance(cached, bool)
+            or not 0 <= cached <= bill["input_tokens"]
+        ):
+            raise ValueError(f"{phase} cached usage invalid")
+        usage["cached_input_tokens"] += cached
+        total_usage["cached_input_tokens"] += cached
+        estimated = (
+            (bill["input_tokens"] - cached) * _UNCACHED_INPUT_USD_PER_TOKEN
+            + cached * _CACHED_INPUT_USD_PER_TOKEN
+            + bill["output_tokens"] * _OUTPUT_USD_PER_TOKEN
+        )
+        cost = bill.get("cost")
+        if cost is not None and (
+            not isinstance(cost, (int, float)) or isinstance(cost, bool) or cost < 0
+        ):
+            raise ValueError(f"{phase} metered cost invalid")
+        reported = float(cost or 0)
+        if reported == 0 and body.get("model") != MODEL:
+            raise ValueError(f"{phase} unmetered response model is unknown")
+        usage["reported_cost_usd"] += reported
+        usage["estimated_cost_usd"] += estimated
+        accounted = reported if reported > 0 else estimated
+        usage["accounted_cost_usd"] += accounted
+        total_usage["reported_cost_usd"] += reported
+        total_usage["estimated_cost_usd"] += estimated
+        total_usage["accounted_cost_usd"] += accounted
+        if (
+            total_usage["accounted_cost_usd"] > 25
             or total_usage["output_tokens"] > 1_000_000
         ):
             raise ValueError(f"{phase} cost or output cap reached")
@@ -565,8 +605,11 @@ async def run_report_candidate(
         deadline = time.monotonic() + timeout_seconds
         total_usage = {
             "input_tokens": 0.0,
+            "cached_input_tokens": 0.0,
             "output_tokens": 0.0,
             "reported_cost_usd": 0.0,
+            "estimated_cost_usd": 0.0,
+            "accounted_cost_usd": 0.0,
         }
         async with httpx.AsyncClient(
             base_url="https://openrouter.ai/api/v1", transport=transport, timeout=180

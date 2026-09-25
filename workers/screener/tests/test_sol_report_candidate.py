@@ -166,19 +166,21 @@ async def test_cross_phase_cost_cap_is_shared(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_metered_cost_fails_closed(tmp_path: Path) -> None:
+@pytest.mark.parametrize("reported_cost", [None, 0.0])
+async def test_unmetered_cost_uses_conservative_estimate(
+    tmp_path: Path, reported_cost: float | None
+) -> None:
     archive = tmp_path / "source.tar.gz"
     sha = _archive(archive)
-    with pytest.raises(ValueError, match="metered cost missing"):
+    response = _response("a", "list_files", {"prefix": ""}, cost=reported_cost)
+    response["usage"]["input_tokens"] = 6_000_000
+    with pytest.raises(ValueError, match="cost or output cap"):
         await run_report_candidate(
             archive,
             identity=Identity(sha, 13, "agent-1", "attempt-1"),
             api_key="test-only",
             transport=httpx.MockTransport(
-                lambda _request: httpx.Response(
-                    200,
-                    json=_response("a", "list_files", {"prefix": ""}, cost=None),
-                )
+                lambda _request: httpx.Response(200, json=response)
             ),
         )
 
