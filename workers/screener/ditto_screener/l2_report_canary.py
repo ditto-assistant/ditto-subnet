@@ -137,6 +137,7 @@ async def consume(
         await platform.complete_l2_report_canary(
             claim.canary_id,
             lease_token=claim.lease_token,
+            lease_expires_at=claim.lease_expires_at,
             status="incomplete",
             report=_identity_report(claim, settings),
             error_code="unsupported-policy-version",
@@ -152,6 +153,7 @@ async def consume(
         await platform.complete_l2_report_canary(
             claim.canary_id,
             lease_token=claim.lease_token,
+            lease_expires_at=claim.lease_expires_at,
             status="incomplete",
             report=_identity_report(claim, settings),
             error_code="runtime-packet-mismatch",
@@ -162,6 +164,7 @@ async def consume(
         await platform.complete_l2_report_canary(
             claim.canary_id,
             lease_token=claim.lease_token,
+            lease_expires_at=claim.lease_expires_at,
             status="incomplete",
             report=_identity_report(claim, settings),
             error_code="lease-budget-exhausted",
