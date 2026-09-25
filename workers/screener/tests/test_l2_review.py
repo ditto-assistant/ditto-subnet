@@ -2076,10 +2076,62 @@ def test_l2_audit_accepts_aggregate_input_usage_across_roles() -> None:
     assert ScreenReviewAudit.model_validate(audit.model_dump()).input_tokens_used == (
         2_615_742
     )
+    assert (
+        ScreenReviewAudit.model_validate(
+            {**audit.model_dump(), "max_input_tokens": 5_000_000}
+        ).max_input_tokens
+        == 5_000_000
+    )
     with pytest.raises(ValueError):
         ScreenReviewAudit.model_validate(
-            {**audit.model_dump(), "input_tokens_used": 20_000_001}
+            {**audit.model_dump(), "input_tokens_used": 100_000_001}
         )
+
+
+def test_l2_budget_allows_cached_artemis_canary_with_5m_effective_cap(
+    tmp_path: Path,
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    agent._max_input_tokens = 5_000_000
+    agent._max_output_tokens = 1_000_000
+    agent._max_cost_usd = 25
+    # Exact aggregate usage from report-only Artemis canary 982bcdb4.
+    usage = L2Usage(
+        input_tokens=8_563_435,
+        cached_input_tokens=8_402_630,
+        output_tokens=128_601,
+        estimated_cost_usd=8.86337,
+    )
+    assert agent._require_budget(usage) is None
+    assert (
+        usage.input_tokens
+        - usage.cached_input_tokens
+        + round(usage.cached_input_tokens * 0.1)
+        == 1_001_068
+    )
+
+
+def test_l2_budget_still_rejects_effective_raw_and_cost_overruns(
+    tmp_path: Path,
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    agent._max_input_tokens = 5_000_000
+    agent._max_output_tokens = 1_000_000
+    agent._max_cost_usd = 25
+    with pytest.raises(ValueError, match="effective_input=5000001"):
+        agent._require_budget(L2Usage(input_tokens=5_000_001, estimated_cost_usd=1))
+    with pytest.raises(ValueError, match="raw_limit=50000000"):
+        agent._require_budget(
+            L2Usage(
+                input_tokens=50_000_001,
+                cached_input_tokens=50_000_001,
+                estimated_cost_usd=1,
+            )
+        )
+    with pytest.raises(ValueError, match="reported_cost=25.010000"):
+        agent._require_budget(L2Usage(input_tokens=10, reported_cost_usd=25.01))
+    with pytest.raises(ValueError, match="cached input exceeds raw input"):
+        agent._require_budget(L2Usage(input_tokens=10, cached_input_tokens=11))
 
 
 async def test_configured_runtime_evidence_mismatch_holds_before_model(

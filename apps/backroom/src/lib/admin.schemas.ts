@@ -321,7 +321,7 @@ export const screenerReviewSettingsSchema = z
     fanout_shadow_daily_cost_usd: z.number().positive().max(100).default(20),
     fanout_shadow_global_concurrency: z.literal(1).default(1),
     fanout_shadow_reserved_targon_slots: z.number().int().min(1).max(4).default(1),
-    max_input_tokens: z.number().int().min(1).max(1_000_000),
+    max_input_tokens: z.number().int().min(1).max(5_000_000),
     max_output_tokens: z.number().int().min(1).max(1_000_000),
     max_completion_tokens: z.number().int().min(1).max(128_000),
     max_cost_usd: z.number().positive().max(25),

@@ -655,9 +655,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_MAX_COMPLETION_TOKENS must be within the output budget"
         )
-    if not 1 <= config.l2_max_input_tokens <= 1_000_000:
+    if not 1 <= config.l2_max_input_tokens <= 5_000_000:
         raise ScreenerConfigError(
-            "SCREENER_L2_MAX_INPUT_TOKENS must be between 1 and 1000000"
+            "SCREENER_L2_MAX_INPUT_TOKENS must be between 1 and 5000000"
         )
     if not 0 < config.l2_max_cost_usd <= 25:
         raise ScreenerConfigError("SCREENER_L2_MAX_COST_USD must be in (0, 25]")

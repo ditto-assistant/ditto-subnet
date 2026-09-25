@@ -713,7 +713,7 @@ export function ScreenerReviewControlPanel({
                   <option value="high">High</option>
                 </select>
               </label>
-              <NumericField label="Max input tokens" value={settings.max_input_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_input_tokens: value }))} />
+              <NumericField label="Max effective input tokens (cached counts 10%)" value={settings.max_input_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_input_tokens: value }))} />
               <NumericField label="Max output tokens" value={settings.max_output_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_output_tokens: value }))} />
               <NumericField label="Completion cap" value={settings.max_completion_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_completion_tokens: value }))} />
               <NumericField label="Max cost (USD)" value={settings.max_cost_usd} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, max_cost_usd: value }))} />

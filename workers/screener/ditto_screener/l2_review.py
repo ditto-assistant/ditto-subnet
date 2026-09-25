@@ -149,6 +149,7 @@ L2_STARTER_MANIFESTS = tuple(
 )
 _MAX_ARCHIVE_FILES = 512
 _MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+_MAX_AGGREGATE_RAW_INPUT_TOKENS = 50_000_000
 _MAX_TOOL_BYTES = 256_000
 _MAX_AUDIT_TAIL_BYTES = 64 * 1024 * 1024
 _ROLES = frozenset({"trigger", "decision", "effect", "sink", "context"})
@@ -3897,6 +3898,12 @@ class TerraSolSourceReviewAgent:
         raise failure("model-step-budget")
 
     def _require_budget(self, usage: L2Usage) -> None:
+        if usage.cached_input_tokens > usage.input_tokens:
+            raise ValueError("L2 cached input exceeds raw input")
+        # max_input_tokens limits billable-equivalent aggregate input. Cached
+        # input is discounted by 90%; the separate raw ceiling bounds wire
+        # traffic even when nearly every prompt prefix is cached. Spending is
+        # independently bounded by max_cost_usd.
         effective_input = (
             usage.input_tokens
             - usage.cached_input_tokens
@@ -3908,13 +3915,16 @@ class TerraSolSourceReviewAgent:
             else usage.estimated_cost_usd
         )
         if (
-            effective_input > self._max_input_tokens
+            usage.input_tokens > _MAX_AGGREGATE_RAW_INPUT_TOKENS
+            or effective_input > self._max_input_tokens
             or usage.output_tokens > self._max_output_tokens
             or billable_cost > self._max_cost_usd
         ):
             raise ValueError(
                 "L2 model exceeded token or cost budget "
-                f"raw_input={usage.input_tokens} effective_input={effective_input} "
+                f"raw_input={usage.input_tokens} "
+                f"raw_limit={_MAX_AGGREGATE_RAW_INPUT_TOKENS} "
+                f"effective_input={effective_input} "
                 f"cached_input={usage.cached_input_tokens} "
                 f"output={usage.output_tokens} "
                 f"estimated_cost={usage.estimated_cost_usd:.6f} "

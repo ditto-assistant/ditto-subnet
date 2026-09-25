@@ -104,7 +104,8 @@ class ScreenerReviewSettings(BaseModel):
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
     source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 3_600
-    max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)] = 425_000
+    # Worker counts uncached input plus 10% of cached input against this cap.
+    max_input_tokens: Annotated[int, Field(ge=1, le=5_000_000)] = 425_000
     max_output_tokens: Annotated[int, Field(ge=1, le=1_000_000)] = 20_000
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)] = 2_400
     max_cost_usd: Annotated[float, Field(gt=0, le=25)] = 6.0

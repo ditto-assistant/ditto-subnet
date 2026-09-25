@@ -130,7 +130,8 @@ class ReviewSettings(BaseModel):
     fanout_shadow_daily_cost_usd: Annotated[float, Field(gt=0, le=100)] = 20.0
     fanout_shadow_global_concurrency: Literal[1] = 1
     fanout_shadow_reserved_targon_slots: Annotated[int, Field(ge=1, le=4)] = 1
-    max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
+    # Aggregate effective input: uncached tokens plus 10% of cached tokens.
+    max_input_tokens: Annotated[int, Field(ge=1, le=5_000_000)]
     max_output_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)]
     max_cost_usd: Annotated[float, Field(gt=0, le=25)]

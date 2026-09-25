@@ -147,7 +147,7 @@ def test_remote_build_timeout_is_independent_and_configurable(
             "ditto",
             "must match SCREENER_REVIEW_INFERENCE_PROVIDER",
         ),
-        ("SCREENER_L2_MAX_INPUT_TOKENS", "1000001", "1000000"),
+        ("SCREENER_L2_MAX_INPUT_TOKENS", "5000001", "5000000"),
         ("SCREENER_L2_MAX_COST_USD", "25.01", r"in \(0, 25\]"),
         ("SCREENER_L2_ANALYST_REASONING_EFFORT", "high", "model_default"),
         ("SCREENER_L2_CRITIC_REASONING_EFFORT", "none", "low, medium, or high"),

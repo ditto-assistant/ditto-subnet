@@ -2027,12 +2027,14 @@ describe('screener review settings schemas', () => {
   it('accepts Platform L2 budgets and preserves the upper bounds', () => {
     for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 128], [1800, 256]]) {
       const parsed = screenerReviewSettingsSchema.parse({
-        ...settings, timeout_seconds, max_steps, max_output_tokens: 1_000_000,
+        ...settings, timeout_seconds, max_steps, max_input_tokens: 5_000_000,
+        max_output_tokens: 1_000_000,
         max_cost_usd: 25, critic_reasoning_effort: 'high',
       })
       expect(parsed.timeout_seconds).toBe(timeout_seconds)
       expect(parsed.max_steps).toBe(max_steps)
       expect(parsed.critic_reasoning_effort).toBe('high')
+      expect(parsed.max_input_tokens).toBe(5_000_000)
       expect(parsed.max_output_tokens).toBe(1_000_000)
       expect(parsed.max_cost_usd).toBe(25)
     }
@@ -2044,6 +2046,9 @@ describe('screener review settings schemas', () => {
     })).toThrow()
     expect(() => screenerReviewSettingsSchema.parse({
       ...settings, max_output_tokens: 1_000_001,
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, max_input_tokens: 5_000_001,
     })).toThrow()
     expect(() => screenerReviewSettingsSchema.parse({
       ...settings, max_cost_usd: 25.01,

@@ -1137,10 +1137,11 @@ class ScreenReviewAudit(BaseModel):
     steps_used: Annotated[int, Field(ge=0, le=256)]
     max_read_bytes: Annotated[int | None, Field(ge=1, le=256 * 1024**2)] = None
     read_bytes_used: Annotated[int | None, Field(ge=0, le=256 * 1024**2)] = None
-    max_input_tokens: Annotated[int | None, Field(ge=1, le=2_000_000)] = None
+    # Configured billable-equivalent input ceiling; raw input is reported below.
+    max_input_tokens: Annotated[int | None, Field(ge=1, le=5_000_000)] = None
     # Aggregate usage can exceed the configured per-trajectory input budget
     # across L2 reviewer roles; the old 2M wire cap rejected a 2.6M audit.
-    input_tokens_used: Annotated[int | None, Field(ge=0, le=20_000_000)] = None
+    input_tokens_used: Annotated[int | None, Field(ge=0, le=100_000_000)] = None
     max_output_tokens: Annotated[int | None, Field(ge=1, le=1_000_000)] = None
     output_tokens_used: Annotated[int | None, Field(ge=0, le=1_000_000)] = None
     max_cost_usd: Annotated[float | None, Field(gt=0, le=100)] = None
