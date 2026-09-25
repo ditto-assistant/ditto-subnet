@@ -139,3 +139,19 @@ def test_tao_deposit_keeps_a_free_fee_reserve(monkeypatch: pytest.MonkeyPatch) -
     with pytest.raises(ValueError, match="fee reserve"):
         execution.dispatch_chain_leg("deposit_tao", 9_500_000, _plan("tao"), wallet)
     assert not chain.calls
+
+
+def test_live_runner_rejects_self_attested_authorization_before_key_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def no_wallet(_project: str) -> None:
+        raise AssertionError("signing key must not be loaded")
+
+    monkeypatch.setattr(execution, "_load_wallet", no_wallet)
+    with pytest.raises(RuntimeError, match="live treasury dispatch is blocked"):
+        execution.execute_one_leg(
+            store=None,  # type: ignore[arg-type] -- gate precedes all store access
+            key="payment-0001",
+            project="example-project",
+            instructions=b"{}",
+        )

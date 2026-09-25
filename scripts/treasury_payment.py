@@ -1,8 +1,9 @@
 """Operator CLI for the isolated SN118 treasury signer journal.
 
 All payment inputs arrive through reviewed JSON files. ``execute`` is the
-only command that can load a key or submit a transaction, and it requires the
-isolated host, exact confirmation, an unpaused journal, and independent review.
+only command that could load a key or submit a transaction. Live dispatch is
+blocked until finalized allocations, authenticated review, and fresh quotes
+are verified independently of these operator-supplied files.
 """
 
 from __future__ import annotations
