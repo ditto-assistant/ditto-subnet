@@ -715,7 +715,7 @@ type submitRequest struct {
 	BenchVersion int    `json:"bench_version,omitempty"`
 	HarnessURL   string `json:"harness_url,omitempty"`
 	GitURL       string `json:"git_url,omitempty"`
-	GitRef       string `json:"git_ref,omitempty"`
+	GitRef       string `json:"git_ref,omitempty"` // required full commit SHA for git_url
 	// GitSubdir selects a repository-relative Docker context after cloning a
 	// monorepo. It is valid only with GitURL and is resolved without allowing
 	// absolute paths, parent traversal, or symlink escape.
@@ -847,6 +847,12 @@ func sourceFromReq(req submitRequest) sandbox.Source {
 func validateGitSourceOptions(req submitRequest) string {
 	if req.GitSubdir != "" && req.GitURL == "" {
 		return "git_subdir requires git_url"
+	}
+	if req.GitRef != "" && req.GitURL == "" {
+		return "git_ref requires git_url"
+	}
+	if req.GitURL != "" && !sandbox.ValidGitCommitSHA(req.GitRef) {
+		return "git_ref must be a full 40-character lowercase commit SHA"
 	}
 	return ""
 }
