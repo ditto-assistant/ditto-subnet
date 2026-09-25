@@ -738,7 +738,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_lease_revocations:
     'Page ended leases with operator_evicted and exact verdicts. Evidence is WHOLE AND UNTYPED validator_lease_audit context. AN EMPTY RESULT IS A FINDING, NOT AN UNWIRED FEATURE.',
   list_stuck_submissions:
-    'Page the current-benchmark triage order (not newest-first) for stuck submissions. Pass generation=all only for a cross-benchmark audit. Returns ticket-state counts and silent_expiry_count; null recommended_action with provider_outage_active means wait for the provider. Use get_validation_retry for full ticket history and infra_retry_grants.',
+    'Page current-benchmark stuck-submission triage order. generation=all spans benchmarks. Includes ticket counts and silent_expiry_count; provider_outage_active with null recommended_action means wait. get_validation_retry has ticket history and infra_retry_grants.',
   summarize_screening_failures:
     'Group active-benchmark screening / screening_failed agents by reason_code. Pass generation=all only for a cross-benchmark audit. Use get_screening_submission for one row.',
   get_screening_failure_diagnostic:
