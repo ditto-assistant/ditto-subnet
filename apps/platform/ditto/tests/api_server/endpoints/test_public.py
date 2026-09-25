@@ -7012,8 +7012,16 @@ class TestPublicActivity:
             }
             for line in (3, 17, 41)
         ]
-        thin_notes = concern_notes[:1] + [
-            {"kind": "cleared", "category": "none", "summary": "ok", "stage": "l1"}
+        # Thin coverage: an uncited concern is not substantiated, so even the
+        # fail-safe floor of 1 that an unbound attempt gets is not reached.
+        thin_notes: list[dict[str, object]] = [
+            {
+                "kind": "concern",
+                "category": "none",
+                "summary": private_note,
+                "stage": "l1",
+            },
+            {"kind": "cleared", "category": "none", "summary": "ok", "stage": "l1"},
         ]
         pinned_attempt = uuid4()
         concern_result: dict[str, object] = {
@@ -7023,6 +7031,13 @@ class TestPublicActivity:
             "finding_digest": None,
             "review_audit": l1_budget_audit,
             "review_notes": concern_notes,
+        }
+        unbound_attempt = uuid4()
+        concern_unbound_result: dict[str, object] = {
+            **concern_result,
+            "attempt_id": str(unbound_attempt),
+            # One substantiated concern: below every configured threshold.
+            "review_notes": concern_notes[:1],
         }
         concern_pinned_result: dict[str, object] = {
             **concern_result,
@@ -7104,6 +7119,16 @@ class TestPublicActivity:
                 AgentStatus.ATH_PENDING_REVIEW,
                 None,
                 deferred_evidence(["top_five"], concern_pinned_result),
+            ),
+            "concern-unbound-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], concern_unbound_result),
+            ),
+            "quarantine-budget-no-notes": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
             ),
             "quarantine-concern": (
                 AgentStatus.QUARANTINED,
@@ -7232,6 +7257,14 @@ class TestPublicActivity:
                     **l1_budget_audit,
                     "reason_code": "source-review-step-budget-exhausted",
                 },
+                [],
+            ),
+            # A legacy quarantine with a budget audit but no retained ledger.
+            "quarantine-budget-no-notes": (
+                "source-review-inconclusive",
+                None,
+                None,
+                l1_budget_audit,
                 None,
             ),
             "quarantine-preflight": (
@@ -7265,7 +7298,35 @@ class TestPublicActivity:
                     checksum="9a" * 32,
                 )
             )
+            # The latest GLOBAL revision raises the count to 4. An unbound
+            # attempt did not run under it, so it must not soften that row.
+            session.add(
+                ScreenerReviewSettingsRevision(
+                    revision=2,
+                    parent_revision=0,
+                    scope="*",
+                    settings=ScreenerReviewSettings(concern_hold_count=4).model_dump(
+                        mode="json"
+                    ),
+                    reason="later global raise of the concern threshold",
+                    actor="tests",
+                    checksum="8b" * 32,
+                )
+            )
             await session.flush()
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=unbound_attempt,
+                    agent_id=ids["concern-unbound-deep"],
+                    screener_hotkey=_MINER_B,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="quarantined",
+                    started_at=opened_at,
+                    deadline=opened_at + timedelta(minutes=30),
+                    finished_at=opened_at + timedelta(minutes=5),
+                    public_reason="Deferred source review held",
+                )
+            )
             session.add(
                 ScreeningAttempt(
                     attempt_id=pinned_attempt,
@@ -7345,6 +7406,8 @@ class TestPublicActivity:
             "budget-top5": (["top_five"], "budget_exhausted"),
             "concern-deep": (["top_five"], "adverse_signal"),
             "concern-pinned-deep": (["top_five"], "budget_exhausted"),
+            "concern-unbound-deep": (["top_five"], "adverse_signal"),
+            "quarantine-budget-no-notes": ([], "adverse_signal"),
             "quarantine-concern": ([], "adverse_signal"),
             "quarantine-thin": ([], "budget_exhausted"),
             "preflight-deep": (["top_five"], "not_completed"),

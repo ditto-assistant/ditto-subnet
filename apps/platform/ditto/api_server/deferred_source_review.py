@@ -341,13 +341,22 @@ def _no_verdict_conclusion(
     budget, so it reads ``adverse_signal``. The threshold rule is the one the
     worker applies, shared through ``ditto_screening_protocol.review_ledger``,
     evaluated on the notes ledger recorded with the result against the review
-    settings pinned on that attempt.
+    settings pinned on that attempt. A budget hold without a recorded notes
+    ledger is ``adverse_signal``: nothing on record shows it was thin coverage.
     """
     outcome = _recorded_review_outcome(raw_audit)
-    if outcome == "budget_exhausted" and isinstance(raw_notes, list):
-        notes = [note for note in raw_notes if isinstance(note, dict)]
-        if concern_threshold_reached(notes, concern_hold_count=concern_hold_count):
-            return "adverse_signal"
+    if outcome != "budget_exhausted":
+        return outcome
+    if not isinstance(raw_notes, list):
+        # Fail closed: without the recorded ledger nothing shows the hold was
+        # thin coverage rather than concern-driven (legacy quarantines, or any
+        # path that did not retain ``review_notes``). The operator-facing
+        # ``evidence`` trail is never parsed back into notes: it is a lossy,
+        # reshaped copy and could only soften the conclusion.
+        return "adverse_signal"
+    notes = [note for note in raw_notes if isinstance(note, dict)]
+    if concern_threshold_reached(notes, concern_hold_count=concern_hold_count):
+        return "adverse_signal"
     return outcome
 
 
@@ -376,7 +385,8 @@ def public_review_conclusion(
        ``no_finding`` only when it proves a model review ran, and
        ``not_completed`` when there is no such proof;
     5. a ``budget_exhausted`` hold whose recorded substantiated concerns reach
-       the attempt's pinned ``concern_hold_count`` is ``adverse_signal``.
+       the attempt's ``concern_hold_count`` -- or that has no recorded notes
+       ledger at all -- is ``adverse_signal``.
 
     For an active deferred review the post-score deep attempt's result, its
     ``review_audit`` and ``review_notes`` decide, and the review is ``pending``

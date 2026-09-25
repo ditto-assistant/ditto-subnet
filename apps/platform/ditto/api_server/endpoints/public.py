@@ -6000,12 +6000,14 @@ class _ReviewProjectionInputs:
     concern_hold_counts: dict[UUID, int]
 
     def concern_hold_count(self, attempt_id: UUID | None) -> int:
+        """The pinned threshold, else the fail-safe floor of 1."""
         if attempt_id is None:
-            return _DEFAULT_CONCERN_HOLD_COUNT
-        return self.concern_hold_counts.get(attempt_id, _DEFAULT_CONCERN_HOLD_COUNT)
+            return _FAIL_SAFE_CONCERN_HOLD_COUNT
+        return self.concern_hold_counts.get(attempt_id, _FAIL_SAFE_CONCERN_HOLD_COUNT)
 
 
-_DEFAULT_CONCERN_HOLD_COUNT = ScreenerReviewSettings().concern_hold_count
+# Unknown threshold: any substantiated concern on a held budget row is adverse.
+_FAIL_SAFE_CONCERN_HOLD_COUNT = 1
 
 
 async def _pinned_concern_hold_counts(
@@ -6013,10 +6015,13 @@ async def _pinned_concern_hold_counts(
 ) -> dict[UUID, int]:
     """``concern_hold_count`` from the review settings each attempt ran under.
 
-    Mirrors the worker's binding: an attempt pinned to a revision uses that
-    revision when its checksum and scope still match; a legacy unbound attempt
-    uses the latest global revision. Anything unresolvable falls back to the
-    settings default, which is also the worker's default.
+    Only an attempt pinned to a settings revision whose checksum and scope
+    still match has a knowable threshold. An unbound attempt ran on the
+    worker's local bootstrap settings or predates binding, and no stored row
+    says which count it used; "the latest revision now" is not it, and an
+    operator raising the count later would soften old concern-held rows. Those
+    attempts, and any unresolvable binding, use the fail-safe floor of 1: any
+    substantiated concern on a held budget row reads ``adverse_signal``.
     """
     if not attempt_ids:
         return {}
@@ -6047,38 +6052,17 @@ async def _pinned_concern_hold_counts(
         if pinned
         else {}
     )
-    latest_global = (
-        await session.scalar(
-            select(ScreenerReviewSettingsRevision)
-            .where(ScreenerReviewSettingsRevision.scope == "*")
-            .order_by(ScreenerReviewSettingsRevision.revision.desc())
-            .limit(1)
-        )
-        if any(revision is None for _, revision, _, _ in attempts)
-        else None
-    )
-
-    def _hold_count(row: ScreenerReviewSettingsRevision | None) -> int:
-        if row is None:
-            return _DEFAULT_CONCERN_HOLD_COUNT
+    counts: dict[UUID, int] = {}
+    for attempt_id, revision, checksum, scope in attempts:
+        row = revisions.get(revision) if revision is not None else None
+        if row is None or row.checksum != checksum or row.scope != scope:
+            continue
         try:
-            return ScreenerReviewSettings.model_validate(
+            counts[attempt_id] = ScreenerReviewSettings.model_validate(
                 row.settings
             ).concern_hold_count
         except ValueError:
-            return _DEFAULT_CONCERN_HOLD_COUNT
-
-    counts: dict[UUID, int] = {}
-    for attempt_id, revision, checksum, scope in attempts:
-        if revision is None:
-            counts[attempt_id] = _hold_count(latest_global)
             continue
-        row = revisions.get(revision)
-        counts[attempt_id] = _hold_count(
-            row
-            if row is not None and row.checksum == checksum and row.scope == scope
-            else None
-        )
     return counts
 
 

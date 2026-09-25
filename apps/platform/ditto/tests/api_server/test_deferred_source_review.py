@@ -1083,7 +1083,10 @@ _AUDIT_CASES = [
 def test_deferred_no_verdict_requires_a_recorded_review_audit(
     outcome: str, code: str, audit: object, expected: str
 ) -> None:
-    evidence = _deep(outcome=outcome, reason_code=code, review_audit=audit)
+    # A recorded, concern-free ledger: the audit alone decides the state.
+    evidence = _deep(
+        outcome=outcome, reason_code=code, review_audit=audit, review_notes=[]
+    )
     assert _conclude(active=True, evidence=evidence) == expected
 
 
@@ -1108,6 +1111,7 @@ def test_quarantine_no_verdict_requires_a_recorded_review_audit(
             quarantined=True,
             code=code,
             quarantine_audit=audit,
+            quarantine_notes=[],
         )
         == expected
     )
@@ -1201,6 +1205,7 @@ def test_public_review_conclusion_without_a_deep_result() -> None:
             quarantined=True,
             code="source-review-read-budget-exhausted",
             quarantine_audit=L1_READ_BUDGET_AUDIT,
+            quarantine_notes=[],
         )
         == "budget_exhausted"
     )
@@ -1280,7 +1285,10 @@ THIN_NOTES = [
         (THIN_NOTES, 3, "budget_exhausted"),
         (THIN_NOTES, 1, "adverse_signal"),
         ([], 3, "budget_exhausted"),
-        (None, 3, "budget_exhausted"),
+        # No recorded ledger (legacy row, or a path that kept no notes):
+        # nothing shows thin coverage, so fail closed.
+        (None, 3, "adverse_signal"),
+        ("not-a-list", 3, "adverse_signal"),
     ],
 )
 def test_concern_threshold_decides_a_budget_hold_on_both_paths(
@@ -1334,3 +1342,23 @@ def test_deep_review_attempt_id() -> None:
     assert deep_review_attempt_id(_deep(attempt_id="not-a-uuid")) is None
     assert deep_review_attempt_id({"deep_review_result": None}) is None
     assert deep_review_attempt_id(None) is None
+
+
+def test_unknown_threshold_floor_makes_any_concern_adverse() -> None:
+    # The public projection passes the fail-safe floor of 1 for an attempt
+    # whose threshold it cannot know; a single substantiated concern is then
+    # enough, and an empty ledger is still thin coverage.
+    one = _deep(
+        outcome="inconclusive",
+        reason_code="source-review-inconclusive",
+        review_audit=L1_READ_BUDGET_AUDIT,
+        review_notes=[_concern("a.rs", 1)],
+    )
+    assert _conclude(active=True, evidence=one, hold_count=1) == "adverse_signal"
+    empty = _deep(
+        outcome="inconclusive",
+        reason_code="source-review-inconclusive",
+        review_audit=L1_READ_BUDGET_AUDIT,
+        review_notes=[],
+    )
+    assert _conclude(active=True, evidence=empty, hold_count=1) == "budget_exhausted"
