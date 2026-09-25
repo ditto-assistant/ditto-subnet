@@ -340,6 +340,21 @@ _SUBMISSION_VALIDATION_HINTS = {
         "Bind the trigger, authority decision, and observed effect to exact "
         "source locations and satisfy the required causal roles."
     ),
+    "causal_path": (
+        "For a violation, causal_path needs at least two exact artifact "
+        "path/line entries, including one trigger and one effect role."
+    ),
+    "causal_roles": (
+        "For benchmark_emulation or scorer_contract_manipulation, use a v2 "
+        "causal_evidence object with served_trigger, authority_bypass, "
+        "scorer_visible_effect, and reachability_link role bindings. Each "
+        "binding must match a digest-bound violation evidence location."
+    ),
+    "safe_basis": (
+        "A safe result needs low risk and a safe resolution basis: "
+        "authoritative_model_tool_path or unreachable_nonruntime_code. "
+        "Use categories=[none] and evidence=[] when no finding remains."
+    ),
     "basis_category": (
         "Align the risk level, categories, category evidence, and resolution "
         "basis with the host-verified mechanism."
@@ -354,6 +369,28 @@ _SUBMISSION_VALIDATION_HINTS = {
 def _submission_validation_subcode(error: ValueError) -> str:
     """Reduce fixed host validation failures to source-free correction codes."""
     message = str(error)
+    if "L2 violation lacks a causal trigger/effect path" in message:
+        return "causal_path"
+    if any(
+        phrase in message
+        for phrase in (
+            "L2 causal evidence is invalid",
+            "L2 causal evidence schema version is invalid",
+            "L2 causal role bindings are invalid",
+            "L2 causal role binding is invalid",
+            "L2 causal role binding is not evidence-bound",
+        )
+    ):
+        return "causal_roles"
+    if any(
+        phrase in message
+        for phrase in (
+            "L2 safe result has a non-safe resolution basis",
+            "L2 safe result contains prohibited risk",
+            "L2 safe result contains contradictory evidence",
+        )
+    ):
+        return "safe_basis"
     if "multi-location evidence" in message:
         return "multi_location"
     if any(
@@ -4086,6 +4123,7 @@ class TerraSolSourceReviewAgent:
         fetched_sections: set[str] = set()
         pending_tool_corrections: set[str] = set()
         no_call_corrections = 0
+        rejected_violation_certificate = False
 
         def request_submit_correction(
             call: object,
@@ -4441,6 +4479,28 @@ class TerraSolSourceReviewAgent:
                             needs_source_read=not read_files,
                         )
                         continue
+                    if (
+                        self._terminal_verdict_required
+                        and rejected_violation_certificate
+                        and observation.ok
+                        and observation.risk_level == "low"
+                    ):
+                        # A rejected violation certificate remains an unresolved
+                        # lead. A single-layer comparator cannot clear it by
+                        # switching labels later in the same trajectory.
+                        self._audit.record(
+                            {
+                                "recorded_at": time.time(),
+                                "event_type": "report_only_unresolved_violation",
+                                "artifact_sha256": artifact_sha256,
+                                "role": role,
+                                "step": steps_used,
+                            }
+                        )
+                        observation = _failure(
+                            "l2-unresolved-violation", "inconclusive"
+                        )
+                        resolution_basis = "insufficient_static_evidence"
                     return L2RunResult(
                         observation=observation,
                         analyzed_files=analyzed,

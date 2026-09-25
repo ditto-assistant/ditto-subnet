@@ -62,8 +62,8 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--turn-timeout-seconds", type=float)
     parser.add_argument(
         "--sol-provider",
-        choices=("azure", "azure/us", "azure/eu"),
-        help="pin report-only Sol to an eligible OpenRouter Azure endpoint",
+        choices=("azure", "azure/us", "azure/eu", "openai"),
+        help="pin report-only Sol to an eligible OpenRouter provider",
     )
     parser.add_argument(
         "--compact-review-packet",
@@ -164,8 +164,8 @@ async def _main() -> None:
         raise SystemExit("--analyzer-timeout-seconds must be between 30 and 300")
     if not 0.5 <= args.analyzer_cpus <= 2.0:
         raise SystemExit("--analyzer-cpus must be between 0.5 and 2.0")
-    if not 30 <= args.timeout_seconds <= 1_800:
-        raise SystemExit("--timeout-seconds must be between 30 and 1800")
+    if not 30 <= args.timeout_seconds <= 3_600:
+        raise SystemExit("--timeout-seconds must be between 30 and 3600")
     if not 1 <= args.max_steps <= 256:
         raise SystemExit("--max-steps must be between 1 and 256")
     if not 1 <= args.max_input_tokens <= 5_000_000:
@@ -190,8 +190,8 @@ async def _main() -> None:
         raise SystemExit("--sol-provider is report-only Sol mode")
     if args.compact_review_packet and not args.single_layer_sol:
         raise SystemExit("--compact-review-packet is report-only Sol mode")
-    if not 30 <= args.l1_timeout_seconds <= 600:
-        raise SystemExit("--l1-timeout-seconds must be between 30 and 600")
+    if not 30 <= args.l1_timeout_seconds <= 3_600:
+        raise SystemExit("--l1-timeout-seconds must be between 30 and 3600")
     if not 1 <= args.l1_max_steps <= 160:
         raise SystemExit("--l1-max-steps must be between 1 and 160")
     if not 1 <= args.l1_max_read_bytes <= 8_000_000:
@@ -223,6 +223,11 @@ async def _main() -> None:
         items = [item for item in items if item.get("artifact_sha256") in selected]
         if not items:
             raise SystemExit("no manifest item matched --artifact-sha256")
+    for item in items:
+        try:
+            UUID(str(item["attempt_id"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise SystemExit("each selected item needs an exact attempt_id") from error
     cache_dir = args.cache_dir or args.results_file.parent / "cache"
     audit_file = args.audit_file or args.results_file.parent / "audit.jsonl"
     run_started_at = time.time()
@@ -353,18 +358,34 @@ async def _main() -> None:
             started = time.monotonic()
             deadline = asyncio.get_running_loop().time() + args.timeout_seconds
             if l1_agent:
+                l1_steps = 0
+
+                def record_l1_progress(steps: int, _maximum: int) -> None:
+                    nonlocal l1_steps
+                    l1_steps = steps
+
                 l1_observation = await l1_agent.review(
                     str(archive),
                     artifact_sha256=artifact_sha,
+                    progress=record_l1_progress,
                     deadline=min(
                         deadline,
                         asyncio.get_running_loop().time() + args.l1_timeout_seconds,
                     ),
                 )
                 if not l1_observation.ok:
+                    concern_notes = sum(
+                        note.get("kind") == "concern" for note in l1_observation.notes
+                    )
+                    cleared_notes = sum(
+                        note.get("kind") == "cleared" for note in l1_observation.notes
+                    )
                     raise ValueError(
                         "local L1 did not produce a complete observation: "
-                        f"{l1_observation.error_code}"
+                        f"{l1_observation.error_code}; steps={l1_steps}; "
+                        f"notes={len(l1_observation.notes)}; "
+                        f"concerns={concern_notes}; cleared={cleared_notes}; "
+                        f"ledger_disposition={l1_observation.failure_disposition}"
                     )
                 _write_private_json(
                     args.results_file.parent
@@ -435,7 +456,7 @@ async def _main() -> None:
                 "agent_id": item["agent_id"],
                 "artifact_sha256": artifact_sha,
                 "expected_disposition": item["expected_disposition"],
-                "expected_resolution_basis": item["expected_resolution_basis"],
+                "expected_resolution_basis": item.get("expected_resolution_basis"),
                 "actual_disposition": disposition,
                 "actual_resolution_basis": result.resolution_basis,
                 "actual_categories": list(observation.categories),
@@ -460,8 +481,11 @@ async def _main() -> None:
                 "review_audit": observation.review_audit,
                 **causal_audit_fields(observation.finding),
                 "disposition_match": disposition == item["expected_disposition"],
-                "basis_match": result.resolution_basis
-                == item["expected_resolution_basis"],
+                "basis_match": (
+                    result.resolution_basis == item["expected_resolution_basis"]
+                    if item.get("expected_resolution_basis") is not None
+                    else None
+                ),
             }
             async with output_lock:
                 results.append(record)
@@ -490,6 +514,9 @@ async def _main() -> None:
     await asyncio.gather(*(run(item) for item in items))
     disposition_matches = sum(bool(item["disposition_match"]) for item in results)
     basis_matches = sum(bool(item["basis_match"]) for item in results)
+    basis_expected = sum(
+        item["expected_resolution_basis"] is not None for item in results
+    )
     uncached = [item for item in results if not item["cache_hit"]]
     cost = 0.0
     for item in uncached:
@@ -513,6 +540,7 @@ async def _main() -> None:
             "total": len(items),
             "classification": classification_metrics(results),
             "reported_cost_usd": round(cost, 6),
+            "basis_expected": basis_expected,
             "terminal_decisions": terminal_decisions,
             "no_decision_cases": len(results) - terminal_decisions,
             "items": sorted(results, key=lambda row: str(row["agent_id"])),
@@ -524,6 +552,7 @@ async def _main() -> None:
                 "completed": len(results),
                 "disposition_matches": disposition_matches,
                 "basis_matches": basis_matches,
+                "basis_expected": basis_expected,
                 "classification": classification_metrics(results),
                 "uncached_runs": len(uncached),
                 "reported_cost_usd": round(cost, 6),
@@ -535,7 +564,7 @@ async def _main() -> None:
         )
     )
     if args.require_label_match and (
-        disposition_matches != len(results) or basis_matches != len(results)
+        disposition_matches != len(results) or basis_matches != basis_expected
     ):
         raise SystemExit("calibration did not match all expected labels")
 

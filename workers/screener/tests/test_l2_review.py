@@ -3693,6 +3693,7 @@ async def test_partial_exploratory_tool_requires_correction_before_submission(
     assert any(
         item.get("type") == "function_call_output"
         and json.loads(item.get("output", "{}")).get("error") == "submission-contract"
+        and "search" in json.loads(item.get("output", "{}")).get("message", "")
         for item in corrected_items
     )
 
@@ -4554,7 +4555,9 @@ def test_compact_history_replaces_consumed_source_with_reloadable_digest() -> No
             "1 validation error for SourceReviewInvariantAssessment",
             "invariant_sweep",
         ),
-        ("L2 violation lacks a causal trigger/effect path", "causal_link"),
+        ("L2 violation lacks a causal trigger/effect path", "causal_path"),
+        ("L2 causal role binding is not evidence-bound", "causal_roles"),
+        ("L2 safe result has a non-safe resolution basis", "safe_basis"),
         ("L2 violation is missing category evidence", "basis_category"),
         ("L2 violation lacks multi-location evidence", "multi_location"),
     ],
@@ -4563,6 +4566,7 @@ def test_submission_validation_subcode_is_fixed_and_source_free(
     message: str, expected: str
 ) -> None:
     assert l2_review._submission_validation_subcode(ValueError(message)) == expected
+    assert message not in l2_review._SUBMISSION_VALIDATION_HINTS[expected]
 
 
 def _logan_v13_certificate(
@@ -5102,6 +5106,89 @@ async def test_report_only_citation_correction_is_fixed_and_keeps_gate(
     assert event["validation_subcode"] == "artifact_citation"
     assert event["proposed_disposition"] == "violation"
     assert "private-source-marker" not in audit_path.read_text()
+
+
+async def test_report_only_rejected_violation_cannot_become_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit_path = tmp_path / "rejected-violation-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit_path), retention_days=30),
+        timeout_seconds=30,
+        max_steps=4,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+    )
+    parses = 0
+
+    def parse(*_args: object, **_kwargs: object) -> tuple[object, tuple, tuple, str]:
+        nonlocal parses
+        parses += 1
+        if parses == 1:
+            raise ValueError("L2 violation lacks a causal trigger/effect path")
+        return (
+            SourceReviewObservation(
+                ok=True,
+                risk_level="low",
+                finding_digest="a" * 64,
+                categories=("none",),
+            ),
+            (),
+            (),
+            "unreachable_nonruntime_code",
+        )
+
+    monkeypatch.setattr(l2_review, "_parse_l2_review", parse)
+    requests = 0
+
+    async def post(
+        _client: object, _key: object, _items: object, **_kwargs: object
+    ) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return _response(
+            [
+                _tool_call(
+                    str(requests),
+                    "submit_l2_review",
+                    {"disposition": "violation" if requests == 1 else "safe"},
+                )
+            ],
+            model="openai/gpt-6-sol",
+        )
+
+    monkeypatch.setattr(agent, "_post", post)
+    async with httpx.AsyncClient() as client:
+        result = await agent._run_trajectory(
+            client,
+            "test-key",
+            tmp_path,
+            None,  # type: ignore[arg-type]
+            artifact_sha256="d" * 64,
+            dossier={},
+            role="analyst",
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=(),
+            provider="azure",
+            usage_before=l2_review.L2Usage(),
+            deadline=None,
+            dossier_complete=True,
+        )
+    assert parses == requests == 2
+    assert result.observation.ok is False
+    assert result.observation.error_code == "l2-unresolved-violation"
+    assert result.resolution_basis == "insufficient_static_evidence"
+    assert "report_only_unresolved_violation" in audit_path.read_text()
 
 
 async def test_report_only_provider_body_fault_retries_exact_turn_once(
