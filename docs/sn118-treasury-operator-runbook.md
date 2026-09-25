@@ -1,6 +1,6 @@
 # SN118 treasury activation and GM top-up runbook
 
-This is a proposed operator sequence for the four draft PRs. **None of these
+This is a proposed operator sequence for the five draft PRs. **None of these
 activation steps has been performed.** The Platform policy is shadow-only, the
 Terraform signer and planner hosts are disabled in `prod.auto.tfvars`, and the daily timer is
 only a template. A review of this runbook does not authorize a chain transfer.
@@ -14,6 +14,14 @@ ceiling and, at the usual 41% miner share, about **0.205% of total SN118 alpha
 emission**. Publish this proposal before any policy write or weight routing.
 It gives miners 99.5% of the released miner vector, subject to any separate
 burn setting and eligibility rules.
+
+The *released-share* denominator in this proposal means treasury weight would
+be `(1 - burn_share) * 50 / 10_000` of the full miner vector. The older proposed
+`docs/maintenance-treasury.md` instead treats burn and treasury as additive
+shares: `1 - burn_share - treasury_share` for miners. At 50% burn, these models
+would send 0.25% or 0.5% of the full miner vector to treasury, respectively.
+**Neither is implemented.** Peyton must choose the denominator and burn
+priority before a validator fold or nonzero policy revision is authorized.
 
 Backroom burn revision **8** (read 2026-09-25) currently has `burn_share=1` and
 `miner_emission_share=0`. Under that live setting, both proposed budgets accrue
@@ -167,6 +175,12 @@ reviewed plan, not approval to spend.
    The signer recomputes daily spending from its journal and enforces the hard
    10 DITTO alpha source ceiling. A distinct reviewer checks all three files,
    the current Backroom revision, GM account, route, and allocation evidence.
+
+The current prototype accepts allocation amounts, bounds, and reviewer names
+from operator-supplied files/arguments. It does not authenticate finalized
+treasury receipts, Backroom policy, or a second person's identity. These
+commands are review examples only; **do not unpause or fund the signer** until
+that evidence and independent approval are enforced in a later change.
 
 The signer journal starts paused. Its operator CLI takes files rather than
 inline transaction bodies. The sequence, with paths substituted only after

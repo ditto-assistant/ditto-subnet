@@ -7,6 +7,12 @@ or approve a bounty. The two allocation fields default to zero and the API
 rejects `mode=active`. The isolated signer runner has not been installed or run
 on a production host.
 
+The Platform shadow-policy `actor` field is caller supplied; Backroom normally
+populates it from its session, but a direct admin-token caller can supply a
+different name. It is an operator claim, not independently authenticated audit
+attribution. Identity-bound authorship must be added before this revision log
+is used as an authoritative governance record.
+
 ## Why this exists
 
 In the September 25 SN118 Discord discussion, const proposed using **some**
