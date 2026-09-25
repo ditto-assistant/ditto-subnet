@@ -45,6 +45,8 @@ export function fixtureNameFor(path: string): string | null {
       return "bench-timeline";
     case "/public/ledger-epochs":
       return "ledger-epochs";
+    case "/public/submission-fee":
+      return "submission-fee";
     case "/public/leaderboard": {
       const version = params.get("bench_version");
       return version === null || version === "7" ? "leaderboard" : "leaderboard-v6";

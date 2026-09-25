@@ -1162,28 +1162,101 @@ export type ArtifactReleaseControl = z.infer<typeof artifactReleaseControlSchema
 
 export const SUBMISSION_COOLDOWN_MIN_SECONDS = 60
 export const SUBMISSION_COOLDOWN_MAX_SECONDS = 86_400
-export const SUBMISSION_FEE_MIN_RAO = 1
-export const SUBMISSION_FEE_MAX_RAO = 1_000_000_000_000
+// Operator-safe bounds for a NEW fee (Platform MIN/MAX_SUBMISSION_FEE_RAO).
+// Stored history keeps the wider database range so older revisions still parse.
+export const SUBMISSION_FEE_MIN_RAO = 1_000_000
+export const SUBMISSION_FEE_MAX_RAO = 10_000_000_000
+const SUBMISSION_FEE_HISTORICAL_MIN_RAO = 1
+const SUBMISSION_FEE_HISTORICAL_MAX_RAO = 1_000_000_000_000
 export const RAO_PER_TAO = 1_000_000_000
+const RAO_PER_TAO_BIGINT = 1_000_000_000n
+const TAO_DECIMAL_PATTERN = /^(\d{1,4})(?:\.(\d{1,9}))?$/
+
+/**
+ * Parse an operator-typed TAO amount into integer rao without floating point.
+ * Accepts at most nine decimals (rao precision); anything finer, negative,
+ * exponential, or non-numeric is refused rather than rounded.
+ */
+export function parseTaoToRao(value: string): number | null {
+  const match = TAO_DECIMAL_PATTERN.exec(value.trim())
+  if (!match) return null
+  const whole = BigInt(match[1])
+  const fraction = BigInt((match[2] ?? '').padEnd(9, '0'))
+  const rao = whole * RAO_PER_TAO_BIGINT + fraction
+  return rao > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(rao)
+}
+
+/** Exact TAO rendering of integer rao with trailing zeros trimmed (0.04, 1). */
+export function formatRaoAsTao(rao: number): string {
+  if (!Number.isSafeInteger(rao)) return `${rao} rao`
+  const value = BigInt(rao)
+  const sign = value < 0n ? '-' : ''
+  const magnitude = value < 0n ? -value : value
+  const whole = magnitude / RAO_PER_TAO_BIGINT
+  const fraction = (magnitude % RAO_PER_TAO_BIGINT).toString().padStart(9, '0').replace(/0+$/, '')
+  return `${sign}${whole}${fraction ? `.${fraction}` : ''}`
+}
+
+type GeneratedSubmissionSettingsRevision =
+  PlatformComponents['schemas']['SubmissionSettingsRevision']
+type GeneratedAdminSubmissionSettingsResponse =
+  PlatformComponents['schemas']['AdminSubmissionSettingsResponse']
+type GeneratedSubmissionFeeBounds = PlatformComponents['schemas']['SubmissionFeeBounds']
+type GeneratedSubmissionSettingsProposal =
+  PlatformComponents['schemas']['SubmissionSettingsProposal']
+type GeneratedAdminSubmissionSettingsPreview =
+  PlatformComponents['schemas']['AdminSubmissionSettingsPreview']
+
+const submissionFeeRaoSchema = z
+  .number()
+  .int()
+  .min(SUBMISSION_FEE_HISTORICAL_MIN_RAO)
+  .max(SUBMISSION_FEE_HISTORICAL_MAX_RAO)
+const submissionCooldownSecondsSchema = z
+  .number()
+  .int()
+  .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
+  .max(SUBMISSION_COOLDOWN_MAX_SECONDS)
+// fixed_tao is the only reviewed denomination. A Platform that predates the
+// explicit field priced in fixed TAO, so absence means fixed_tao; any other
+// value fails the parse instead of being displayed as a TAO fee.
+const submissionFeeDenominationSchema = z.literal('fixed_tao').default('fixed_tao')
+const exactTaoSchema = z.string().regex(/^\d+\.\d{9}$/)
 
 export const submissionSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
   parent_revision: z.number().int().nonnegative(),
-  cooldown_seconds: z
-    .number()
-    .int()
-    .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
-    .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
-  fee_amount_rao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  cooldown_seconds: submissionCooldownSecondsSchema,
+  fee_amount_rao: submissionFeeRaoSchema,
+  fee_amount_tao: exactTaoSchema.nullable().optional(),
+  fee_denomination: submissionFeeDenominationSchema,
+  previous_fee_amount_rao: submissionFeeRaoSchema.nullable().optional(),
+  previous_cooldown_seconds: submissionCooldownSecondsSchema.nullable().optional(),
   reason: z.string(),
   actor: z.string(),
   created_at: z.string().nullable(),
-})
+} satisfies PlatformResponseShape<GeneratedSubmissionSettingsRevision>)
+
+export const submissionFeeBoundsSchema = z.object({
+  min_fee_amount_rao: z.number().int().positive(),
+  max_fee_amount_rao: z.number().int().positive(),
+  min_cooldown_seconds: z.number().int().positive(),
+  max_cooldown_seconds: z.number().int().positive(),
+} satisfies PlatformResponseShape<GeneratedSubmissionFeeBounds>)
+
+const DEFAULT_SUBMISSION_FEE_BOUNDS = {
+  min_fee_amount_rao: SUBMISSION_FEE_MIN_RAO,
+  max_fee_amount_rao: SUBMISSION_FEE_MAX_RAO,
+  min_cooldown_seconds: SUBMISSION_COOLDOWN_MIN_SECONDS,
+  max_cooldown_seconds: SUBMISSION_COOLDOWN_MAX_SECONDS,
+}
 
 export const submissionSettingsControlSchema = z.object({
   current: submissionSettingsRevisionSchema,
   history: z.array(submissionSettingsRevisionSchema).max(100),
-})
+  bounds: submissionFeeBoundsSchema.default(DEFAULT_SUBMISSION_FEE_BOUNDS),
+  quote_lifetime_seconds: z.number().int().positive().nullable().optional(),
+} satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsResponse>)
 
 export const updateSubmissionSettingsInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
@@ -1193,15 +1266,49 @@ export const updateSubmissionSettingsInputSchema = z.object({
     .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
     .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
   feeAmountRao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  feeDenomination: z.literal('fixed_tao').default('fixed_tao'),
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
+
+export const previewSubmissionSettingsInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  cooldownSeconds: z
+    .number()
+    .int()
+    .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
+    .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
+  feeAmountRao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+})
+
+export const submissionSettingsPreviewSchema = z.object({
+  current: submissionSettingsRevisionSchema,
+  proposed: z.object({
+    cooldown_seconds: submissionCooldownSecondsSchema,
+    fee_amount_rao: submissionFeeRaoSchema,
+    fee_amount_tao: exactTaoSchema,
+    fee_denomination: submissionFeeDenominationSchema,
+  } satisfies PlatformResponseShape<GeneratedSubmissionSettingsProposal>),
+  expected_revision: z.number().int().nonnegative(),
+  stale: z.boolean(),
+  fee_changed: z.boolean(),
+  cooldown_changed: z.boolean(),
+  fee_change_ratio: z.string().nullable(),
+  applicable: z.boolean(),
+  required_confirmation: z.string(),
+  bounds: submissionFeeBoundsSchema,
+  quote_lifetime_seconds: z.number().int().positive(),
+  in_flight_quotes: z.number().int().nonnegative(),
+  in_flight_quotes_at_other_fees: z.number().int().nonnegative(),
+  in_flight_quotes_expire_by: z.string().nullable(),
+} satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsPreview>)
 
 export function submissionSettingsConfirmation(seconds: number, feeAmountRao: number) {
   return `SET SUBMISSION COOLDOWN ${seconds} SECONDS FEE ${feeAmountRao} RAO`
 }
 
 export type SubmissionSettingsControl = z.infer<typeof submissionSettingsControlSchema>
+export type SubmissionSettingsPreview = z.infer<typeof submissionSettingsPreviewSchema>
 
 export const activeHotkeyBanSchema = z.object({
   hotkey: z.string().min(1),

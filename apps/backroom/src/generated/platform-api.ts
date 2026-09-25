@@ -2966,6 +2966,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/submission-settings/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Settings Revision
+         * @description Dry-run one revision: the diff, the exact confirmation, and quotes in flight.
+         *
+         *     Read-only (a GET, so it is not an audited mutation). Out-of-bounds values
+         *     are rejected with 422 exactly as the apply endpoint would reject them.
+         */
+        get: operations["preview_settings_revision_api_v1_admin_submission_settings_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/traces": {
         parameters: {
             query?: never;
@@ -4983,6 +5006,23 @@ export interface paths {
          * @description Authenticated screener fleet reports with a strict public allowlist.
          */
         get: operations["screeners_api_v1_public_screeners_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/submission-fee": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Submission Fee */
+        get: operations["public_submission_fee_api_v1_public_submission_fee_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -12406,6 +12446,37 @@ export interface components {
             /** Superseded By Version */
             superseded_by_version: number;
         };
+        /**
+         * AdminSubmissionSettingsPreview
+         * @description Read-only dry run of one proposed revision. Previewing changes nothing.
+         */
+        AdminSubmissionSettingsPreview: {
+            /** Applicable */
+            applicable: boolean;
+            bounds: components["schemas"]["SubmissionFeeBounds"];
+            /** Cooldown Changed */
+            cooldown_changed: boolean;
+            current: components["schemas"]["SubmissionSettingsRevision"];
+            /** Expected Revision */
+            expected_revision: number;
+            /** Fee Change Ratio */
+            fee_change_ratio: string | null;
+            /** Fee Changed */
+            fee_changed: boolean;
+            /** In Flight Quotes */
+            in_flight_quotes: number;
+            /** In Flight Quotes At Other Fees */
+            in_flight_quotes_at_other_fees: number;
+            /** In Flight Quotes Expire By */
+            in_flight_quotes_expire_by: string | null;
+            proposed: components["schemas"]["SubmissionSettingsProposal"];
+            /** Quote Lifetime Seconds */
+            quote_lifetime_seconds: number;
+            /** Required Confirmation */
+            required_confirmation: string;
+            /** Stale */
+            stale: boolean;
+        };
         /** AdminSubmissionSettingsRequest */
         AdminSubmissionSettingsRequest: {
             /**
@@ -12421,14 +12492,31 @@ export interface components {
             expected_revision: number;
             /** Fee Amount Rao */
             fee_amount_rao?: number | null;
+            /**
+             * Fee Denomination
+             * @default fixed_tao
+             * @constant
+             */
+            fee_denomination: "fixed_tao";
             /** Reason */
             reason: string;
         };
         /** AdminSubmissionSettingsResponse */
         AdminSubmissionSettingsResponse: {
+            /**
+             * @default {
+             *       "max_cooldown_seconds": 86400,
+             *       "max_fee_amount_rao": 10000000000,
+             *       "min_cooldown_seconds": 60,
+             *       "min_fee_amount_rao": 1000000
+             *     }
+             */
+            bounds: components["schemas"]["SubmissionFeeBounds"];
             current: components["schemas"]["SubmissionSettingsRevision"];
             /** History */
             history: components["schemas"]["SubmissionSettingsRevision"][];
+            /** Quote Lifetime Seconds */
+            quote_lifetime_seconds?: number | null;
         };
         /**
          * AdminSupersedeCodingCatalogRequest
@@ -26027,6 +26115,56 @@ export interface components {
              */
             submitted_at: string;
         };
+        /** PublicSubmissionFee */
+        PublicSubmissionFee: {
+            /** Fee Amount Rao */
+            fee_amount_rao: number;
+            /** Fee Amount Tao */
+            fee_amount_tao: string;
+            /**
+             * Fee Denomination
+             * @constant
+             */
+            fee_denomination: "fixed_tao";
+            /** Fee Effective At */
+            fee_effective_at: string | null;
+            /** Fee Revision */
+            fee_revision: number;
+            /** History */
+            history: components["schemas"]["PublicSubmissionFeeRevision"][];
+            /**
+             * History Truncated
+             * @default false
+             */
+            history_truncated: boolean;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Quote Lifetime Seconds */
+            quote_lifetime_seconds: number;
+        };
+        /**
+         * PublicSubmissionFeeRevision
+         * @description One source-safe fee revision. Operator identity and reasons stay private.
+         */
+        PublicSubmissionFeeRevision: {
+            /** Effective At */
+            effective_at: string | null;
+            /** Fee Amount Rao */
+            fee_amount_rao: number;
+            /** Fee Amount Tao */
+            fee_amount_tao: string;
+            /**
+             * Fee Denomination
+             * @constant
+             */
+            fee_denomination: "fixed_tao";
+            /** Previous Fee Amount Rao */
+            previous_fee_amount_rao: number | null;
+            /** Previous Fee Amount Tao */
+            previous_fee_amount_tao: string | null;
+            /** Revision */
+            revision: number;
+        };
         /**
          * PublicSubmissionImageBuild
          * @description Public-safe provenance for one attempt-bound miner image build.
@@ -30518,6 +30656,29 @@ export interface components {
             /** Revision */
             revision: number;
         };
+        /** SubmissionFeeBounds */
+        SubmissionFeeBounds: {
+            /**
+             * Max Cooldown Seconds
+             * @default 86400
+             */
+            max_cooldown_seconds: number;
+            /**
+             * Max Fee Amount Rao
+             * @default 10000000000
+             */
+            max_fee_amount_rao: number;
+            /**
+             * Min Cooldown Seconds
+             * @default 60
+             */
+            min_cooldown_seconds: number;
+            /**
+             * Min Fee Amount Rao
+             * @default 1000000
+             */
+            min_fee_amount_rao: number;
+        };
         /** SubmissionImageBuildClaimResponse */
         SubmissionImageBuildClaimResponse: {
             build: components["schemas"]["SubmissionImageBuildClaimView"] | null;
@@ -30700,6 +30861,20 @@ export interface components {
              */
             status: "running" | "succeeded" | "fallback_required";
         };
+        /** SubmissionSettingsProposal */
+        SubmissionSettingsProposal: {
+            /** Cooldown Seconds */
+            cooldown_seconds: number;
+            /** Fee Amount Rao */
+            fee_amount_rao: number;
+            /** Fee Amount Tao */
+            fee_amount_tao: string;
+            /**
+             * Fee Denomination
+             * @constant
+             */
+            fee_denomination: "fixed_tao";
+        };
         /** SubmissionSettingsRevision */
         SubmissionSettingsRevision: {
             /** Actor */
@@ -30710,8 +30885,20 @@ export interface components {
             created_at: string | null;
             /** Fee Amount Rao */
             fee_amount_rao: number;
+            /** Fee Amount Tao */
+            fee_amount_tao?: string | null;
+            /**
+             * Fee Denomination
+             * @default fixed_tao
+             * @constant
+             */
+            fee_denomination: "fixed_tao";
             /** Parent Revision */
             parent_revision: number;
+            /** Previous Cooldown Seconds */
+            previous_cooldown_seconds?: number | null;
+            /** Previous Fee Amount Rao */
+            previous_fee_amount_rao?: number | null;
             /** Reason */
             reason: string;
             /** Revision */
@@ -39800,6 +39987,41 @@ export interface operations {
             };
         };
     };
+    preview_settings_revision_api_v1_admin_submission_settings_preview_get: {
+        parameters: {
+            query: {
+                expected_revision: number;
+                cooldown_seconds: number;
+                fee_amount_rao: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSubmissionSettingsPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_trace_objects_api_v1_admin_traces_get: {
         parameters: {
             query?: {
@@ -43064,6 +43286,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicScreenerHeartbeatsResponse"];
+                };
+            };
+        };
+    };
+    public_submission_fee_api_v1_public_submission_fee_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicSubmissionFee"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

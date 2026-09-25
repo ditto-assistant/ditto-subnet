@@ -66,8 +66,6 @@ def make_api_server_config(**overrides: Any) -> ApiServerConfig:
             open_access_token="test-token",
         ),
         pricing=PricingConfig(
-            fee_usd=Decimal("5"),
-            fee_buffer=Decimal("1.4"),
             cache_ttl_seconds=3600,
             max_stale_seconds=86400,
             coingecko_timeout_seconds=5.0,

@@ -330,16 +330,10 @@ class TestParseApiServerConfigFromEnv:
 
     def test_pricing_sub_config_picked_up(self, monkeypatch: pytest.MonkeyPatch):
         _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_UPLOAD_FEE_USD", "7.50")
-        monkeypatch.setenv("DITTO_UPLOAD_FEE_BUFFER", "1.2")
         monkeypatch.setenv("PRICING_CACHE_TTL_SECONDS", "60")
 
         config = parse_api_server_config_from_env(commit_hash="abc")
 
-        from decimal import Decimal
-
-        assert config.pricing.fee_usd == Decimal("7.50")
-        assert config.pricing.fee_buffer == Decimal("1.2")
         assert config.pricing.cache_ttl_seconds == 60
 
     def test_storage_sub_config_picked_up(self, monkeypatch: pytest.MonkeyPatch):

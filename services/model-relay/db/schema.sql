@@ -4902,9 +4902,11 @@ CREATE TABLE public.submission_settings_revisions (
     actor text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     fee_amount_rao bigint NOT NULL,
+    fee_denomination text NOT NULL,
     CONSTRAINT ck_submission_settings_revisions_submission_settings_ac_6db4 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_co_109c CHECK (((cooldown_seconds >= 60) AND (cooldown_seconds <= 86400))),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_fe_4fea CHECK (((fee_amount_rao >= 1) AND (fee_amount_rao <= '1000000000000'::bigint))),
+    CONSTRAINT ck_submission_settings_revisions_submission_settings_fe_e84e CHECK ((fee_denomination = 'fixed_tao'::text)),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_pa_46f1 CHECK ((parent_revision >= 0)),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_re_fa8a CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
 );

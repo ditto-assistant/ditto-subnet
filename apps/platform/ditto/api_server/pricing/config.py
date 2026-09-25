@@ -13,16 +13,12 @@ from ditto.api_server.pricing.errors import PricingError
 class PricingConfig:
     """Resolved configuration for :class:`CoinGeckoOracle`.
 
-    Decimal fields use :class:`decimal.Decimal` end-to-end so a
-    ``× buffer × 1e9`` arithmetic chain never picks up float drift.
+    The oracle supplies TAO/USD for revenue reporting only. The submission fee
+    itself is the revisioned, operator-audited ``fixed_tao`` policy in
+    ``submission_settings_revisions``; no deploy-time variable prices uploads.
+    The retired ``DITTO_UPLOAD_FEE_USD`` / ``DITTO_UPLOAD_FEE_BUFFER`` variables
+    are intentionally not read.
     """
-
-    fee_usd: Decimal
-    """Upload fee denominated in USD (``DITTO_UPLOAD_FEE_USD``)."""
-
-    fee_buffer: Decimal
-    """Multiplier covering TAO/USD drift between fee quote and on-chain
-    payment (``DITTO_UPLOAD_FEE_BUFFER``)."""
 
     cache_ttl_seconds: int
     """Fresh-cache TTL (``PRICING_CACHE_TTL_SECONDS``)."""
@@ -82,7 +78,7 @@ def _parse_override(name: str, raw: str | None) -> Decimal | None:
 
 
 def parse_pricing_config_from_env() -> PricingConfig:
-    """Build :class:`PricingConfig` from ``DITTO_UPLOAD_*`` + ``PRICING_*`` env vars.
+    """Build :class:`PricingConfig` from ``PRICING_*`` + override env vars.
 
     Every numeric field is validated positive + finite at boot so a typo
     (``PRICING_CACHE_TTL_SECONDS=-100``, ``PRICING_COINGECKO_TIMEOUT_SECONDS=NaN``)
@@ -94,20 +90,6 @@ def parse_pricing_config_from_env() -> PricingConfig:
     """
     try:
         return PricingConfig(
-            fee_usd=_require_positive_finite_decimal(
-                "DITTO_UPLOAD_FEE_USD",
-                _parse_decimal(
-                    "DITTO_UPLOAD_FEE_USD",
-                    os.environ.get("DITTO_UPLOAD_FEE_USD", "5"),
-                ),
-            ),
-            fee_buffer=_require_positive_finite_decimal(
-                "DITTO_UPLOAD_FEE_BUFFER",
-                _parse_decimal(
-                    "DITTO_UPLOAD_FEE_BUFFER",
-                    os.environ.get("DITTO_UPLOAD_FEE_BUFFER", "1.4"),
-                ),
-            ),
             cache_ttl_seconds=_require_positive_int(
                 "PRICING_CACHE_TTL_SECONDS",
                 int(os.environ.get("PRICING_CACHE_TTL_SECONDS", "3600")),

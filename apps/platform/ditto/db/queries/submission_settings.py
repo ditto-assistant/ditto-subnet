@@ -6,9 +6,15 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
+from ditto.api_models.submission_settings import (
+    SUBMISSION_FEE_DENOMINATION_FIXED_TAO,
+    SubmissionFeeDenomination,
+)
+from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
 from ditto.db.models import SubmissionSettingsRevision, UploadAdmissionReservation
 from ditto.db.queries.agents import SubmissionCooldownError, get_submission_retry_at
 from ditto.db.queries.submission_deposit_address import (
@@ -32,6 +38,9 @@ class EffectiveSubmissionSettings:
     cooldown_seconds: int
     payment_address: str
     fee_amount_rao: int = DEFAULT_SUBMISSION_FEE_RAO
+    quotable: bool = True
+    """False only when read with ``require_quotable=False`` from a revision in an
+    unreviewed denomination; ``fee_amount_rao`` must then never be quoted."""
 
 
 @dataclass(frozen=True)
@@ -54,12 +63,46 @@ async def latest_submission_settings(
     )
 
 
+def require_supported_fee_denomination(
+    row: SubmissionSettingsRevision,
+) -> SubmissionFeeDenomination:
+    """Refuse to quote from a revision whose denomination this build cannot price.
+
+    ``fixed_tao`` is the only reviewed mode: ``fee_amount_rao`` is the exact
+    quote. Any other value (for example a USD target) must never be read as a
+    fixed TAO fee, so admission fails closed instead of issuing a wrong quote.
+    """
+    if row.fee_denomination != SUBMISSION_FEE_DENOMINATION_FIXED_TAO:
+        raise UnsupportedFeeDenominationError(
+            f"submission settings revision {row.revision} uses fee denomination "
+            f"{row.fee_denomination!r}; only "
+            f"{SUBMISSION_FEE_DENOMINATION_FIXED_TAO!r} can be quoted"
+        )
+    return SUBMISSION_FEE_DENOMINATION_FIXED_TAO
+
+
 async def effective_submission_settings(
     session: AsyncSession,
     *,
     default_payment_address: str,
+    require_quotable: bool = True,
 ) -> EffectiveSubmissionSettings:
+    """The latest submission settings.
+
+    Quoting a fee (the default) fails closed on an unreviewed denomination.
+    ``require_quotable=False`` is for reads that only need the cooldown or that
+    honour an already-issued quote; the result then carries ``quotable`` so a
+    caller can never mistake that amount for a fee.
+    """
     latest = await latest_submission_settings(session)
+    quotable = True
+    if latest is not None:
+        try:
+            require_supported_fee_denomination(latest)
+        except UnsupportedFeeDenominationError:
+            if require_quotable:
+                raise
+            quotable = False
     payment_address = await effective_submission_deposit_address(
         session, default_address=default_payment_address
     )
@@ -75,6 +118,7 @@ async def effective_submission_settings(
         cooldown_seconds=latest.cooldown_seconds,
         fee_amount_rao=latest.fee_amount_rao,
         payment_address=payment_address,
+        quotable=quotable,
     )
 
 
@@ -94,6 +138,21 @@ def _reservation_expiry(row: UploadAdmissionReservation) -> datetime:
     return _utc(row.expires_at)
 
 
+def _reservation_live(
+    row: UploadAdmissionReservation, *, now: datetime, paid_at: datetime | None
+) -> bool:
+    """Whether a reservation still grants its terms.
+
+    Unexpired now, or -- for a finalized payment -- paid strictly before the
+    reservation expired. The payment instant is what fixes the miner's
+    obligation, so a late upload of an in-time payment keeps its quote.
+    """
+    expiry = _reservation_expiry(row)
+    if expiry > now:
+        return True
+    return paid_at is not None and _utc(paid_at) < expiry
+
+
 def _reservation_block_until(row: UploadAdmissionReservation) -> datetime:
     return min(
         _reservation_expiry(row),
@@ -109,15 +168,33 @@ async def reserve_upload_admission(
     sha256: str,
     settings: EffectiveSubmissionSettings,
     replace_existing: bool = False,
+    paid_at: datetime | None = None,
     now: datetime | None = None,
 ) -> UploadAdmission:
-    """Reserve one eligible coldkey slot so payment cannot lose a later race."""
+    """Reserve one eligible coldkey slot so payment cannot lose a later race.
+
+    ``paid_at`` is the block time of a verified, unconsumed payment being
+    recovered (``replace_existing``). A reservation that has since expired but
+    was still live when that payment finalized is kept, with its fee and its
+    original expiry, so recovery never re-prices an in-time payment.
+    """
     current = _utc(now or datetime.now(UTC))
     await _lock_coldkey(session, miner_coldkey)
     existing = await session.get(
         UploadAdmissionReservation, miner_coldkey, with_for_update=True
     )
-    if existing is not None and _reservation_expiry(existing) <= current:
+    kept_for_payment = (
+        existing is not None
+        and replace_existing
+        and existing.miner_hotkey == miner_hotkey
+        and _reservation_expiry(existing) <= current
+        and _reservation_live(existing, now=current, paid_at=paid_at)
+    )
+    if (
+        existing is not None
+        and not kept_for_payment
+        and _reservation_expiry(existing) <= current
+    ):
         await session.delete(existing)
         await session.flush()
         existing = None
@@ -140,7 +217,10 @@ async def reserve_upload_admission(
             # after reassignment.
             existing.token = uuid.uuid4()
             existing.sha256 = sha256
-            if existing.legacy_payment_cutoff_at is None:
+            # A reservation kept alive only by an in-time payment keeps its
+            # original expiry: extending it would let a new payment made now
+            # claim the old fee.
+            if existing.legacy_payment_cutoff_at is None and not kept_for_payment:
                 existing.created_at = current
                 existing.expires_at = current + UPLOAD_ADMISSION_TTL
             await session.flush()
@@ -237,15 +317,35 @@ async def consume_or_enforce_upload_admission(
     sha256: str,
     admission_token: uuid.UUID | None,
     settings: EffectiveSubmissionSettings,
+    paid_at: datetime | None = None,
     now: datetime | None = None,
 ) -> None:
-    """Consume a matching reservation, or enforce cooldown for a legacy client."""
+    """Consume a matching reservation, or enforce cooldown for a legacy client.
+
+    ``paid_at`` is the block time of the payment funding this upload. The
+    reservation named by ``admission_token`` is honoured if that payment
+    finalized before the reservation expired, even when the upload arrives
+    later (within the payment's own recovery window).
+    """
     current = _utc(now or datetime.now(UTC))
     await _lock_coldkey(session, miner_coldkey)
     existing = await session.get(
         UploadAdmissionReservation, miner_coldkey, with_for_update=True
     )
-    if existing is not None and _reservation_expiry(existing) <= current:
+    token_matches = (
+        existing is not None
+        and admission_token is not None
+        and existing.token == admission_token
+        and existing.miner_hotkey == miner_hotkey
+        and existing.sha256 == sha256
+    )
+    if (
+        existing is not None
+        and not (
+            token_matches and _reservation_live(existing, now=current, paid_at=paid_at)
+        )
+        and _reservation_expiry(existing) <= current
+    ):
         await session.delete(existing)
         await session.flush()
         existing = None
@@ -284,3 +384,61 @@ async def consume_or_enforce_upload_admission(
     )
     if submission_retry_at is not None:
         raise SubmissionCooldownError(submission_retry_at)
+
+
+async def submission_settings_history(
+    session: AsyncSession, *, limit: int
+) -> list[tuple[SubmissionSettingsRevision, SubmissionSettingsRevision | None]]:
+    """Newest-first revisions, each paired with the parent it replaced.
+
+    The parent is the revision the operator previewed and confirmed against
+    (``parent_revision``), which is not necessarily ``revision - 1``: a failed
+    insert still consumes a sequence value.
+    """
+    parent = aliased(SubmissionSettingsRevision)
+    rows = (
+        await session.execute(
+            select(SubmissionSettingsRevision, parent)
+            .outerjoin(
+                parent,
+                parent.revision == SubmissionSettingsRevision.parent_revision,
+            )
+            .order_by(SubmissionSettingsRevision.revision.desc())
+            .limit(limit)
+        )
+    ).all()
+    return [(row, previous) for row, previous in rows]
+
+
+@dataclass(frozen=True)
+class InFlightQuotes:
+    count: int
+    at_other_fees: int
+    expire_by: datetime | None
+
+
+async def in_flight_quotes(
+    session: AsyncSession,
+    *,
+    proposed_fee_amount_rao: int,
+    now: datetime | None = None,
+) -> InFlightQuotes:
+    """Summarize unexpired reservations, which keep their issued fee."""
+    current = _utc(now or datetime.now(UTC))
+    live = UploadAdmissionReservation.expires_at > current
+    count, at_other_fees, expire_by = (
+        await session.execute(
+            select(
+                func.count(),
+                func.count().filter(
+                    UploadAdmissionReservation.fee_amount_rao != proposed_fee_amount_rao
+                ),
+                func.max(UploadAdmissionReservation.expires_at),
+            ).where(live)
+        )
+    ).one()
+    return InFlightQuotes(
+        count=int(count),
+        at_other_fees=int(at_other_fees),
+        expire_by=_utc(expire_by) if expire_by is not None else None,
+    )

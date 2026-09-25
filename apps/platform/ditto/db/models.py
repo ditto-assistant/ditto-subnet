@@ -6535,6 +6535,10 @@ class SubmissionSettingsRevision(Base):
     parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     fee_amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Explicit pricing denomination. ``fixed_tao`` is the only reviewed mode: the
+    # operator's exact rao amount is both the quote and the verified payment.
+    # There is deliberately no server default, so a writer must name it.
+    fee_denomination: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -6549,6 +6553,10 @@ class SubmissionSettingsRevision(Base):
         CheckConstraint(
             "fee_amount_rao BETWEEN 1 AND 1000000000000",
             name="submission_settings_fee_amount_rao_check",
+        ),
+        CheckConstraint(
+            "fee_denomination = 'fixed_tao'",
+            name="submission_settings_fee_denomination_check",
         ),
         CheckConstraint(
             "parent_revision >= 0",

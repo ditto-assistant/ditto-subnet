@@ -194,11 +194,11 @@ platform_coding_hippius_evidence_spool_root: /var/lib/ditto-platform/coding-evid
 secret_coding_hippius_evidence_access_key: platform-coding-hippius-evidence-access-key
 secret_coding_hippius_evidence_secret_key: platform-coding-hippius-evidence-secret-key
 
-# Subnet / pricing config (mirrors .env.example defaults).
+# Subnet config (mirrors .env.example defaults). The miner submission fee is
+# not deploy configuration: it is the revisioned fixed-TAO policy operators set
+# through Backroom (Platform /admin/submission-settings).
 platform_netuid: 118
 platform_subtensor_network: finney
-platform_upload_fee_usd: 5
-platform_upload_fee_buffer: 1.4
 
 # --- Code-embedding (anti-copy semantic tier) ---
 # The embedder runs as a scale-to-zero Cloud Run service (see infra/terraform/stacks/gcp-platform/

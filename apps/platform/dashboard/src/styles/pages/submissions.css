@@ -1390,3 +1390,106 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Submission fee (#472): current operator-set fee + compact history ── */
+.submission-fee {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+}
+.submission-fee-status {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.submission-fee-current {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.submission-fee-label {
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.submission-fee-amount {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.submission-fee-meta,
+.submission-fee-note {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.submission-fee-note {
+  color: var(--text-faint);
+}
+.submission-fee-history {
+  min-width: min(100%, 320px);
+  font-size: 12.5px;
+}
+.submission-fee-history > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.submission-fee-history > summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.submission-fee-count {
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.submission-fee-history ol {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.submission-fee-history li {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.submission-fee-history time,
+.submission-fee-direction,
+.submission-fee-revision {
+  color: var(--text-faint);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.submission-fee-change {
+  color: var(--text);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 560px) {
+  .submission-fee-history li {
+    grid-template-columns: 1fr auto;
+  }
+}

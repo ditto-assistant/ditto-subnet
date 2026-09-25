@@ -44,6 +44,7 @@ import {
   fetchArtifactReleaseControl,
   updateArtifactReleaseSettings,
   fetchSubmissionSettingsControl,
+  previewSubmissionSettings,
   updateSubmissionSettings,
   fetchHotkeyBan,
   fetchHotkeyBans,
@@ -1552,7 +1553,18 @@ describe('submission cooldown administration', () => {
       )
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(fetchSubmissionSettingsControl()).resolves.toEqual(control)
+    // An older Platform without the explicit fields reads as fixed TAO with the
+    // default safe bounds.
+    await expect(fetchSubmissionSettingsControl()).resolves.toEqual({
+      ...control,
+      current: { ...control.current, fee_denomination: 'fixed_tao' },
+      bounds: {
+        min_fee_amount_rao: 1_000_000,
+        max_fee_amount_rao: 10_000_000_000,
+        min_cooldown_seconds: 60,
+        max_cooldown_seconds: 86_400,
+      },
+    })
     await updateSubmissionSettings('operator@omniaura.ai', {
       expectedRevision: 1,
       cooldownSeconds: 1800,
@@ -1570,12 +1582,125 @@ describe('submission cooldown administration', () => {
           expected_revision: 1,
           cooldown_seconds: 1800,
           fee_amount_rao: 40_000_000,
+          fee_denomination: 'fixed_tao',
           reason: 'reduce cadence for the current capacity window',
           actor: 'operator@omniaura.ai',
           confirmation: 'SET SUBMISSION COOLDOWN 1800 SECONDS FEE 40000000 RAO',
         }),
       }),
     )
+  })
+})
+
+describe('submission fee preview', () => {
+  const current = {
+    revision: 4,
+    parent_revision: 3,
+    cooldown_seconds: 3600,
+    fee_amount_rao: 40_000_000,
+    fee_amount_tao: '0.040000000',
+    fee_denomination: 'fixed_tao',
+    previous_fee_amount_rao: 100_000_000,
+    previous_cooldown_seconds: 3600,
+    reason: 'measured platform cost',
+    actor: 'operator@example.com',
+    created_at: '2026-09-24T12:00:00Z',
+  }
+  const preview = {
+    current,
+    proposed: {
+      cooldown_seconds: 3600,
+      fee_amount_rao: 37_271_710,
+      fee_amount_tao: '0.037271710',
+      fee_denomination: 'fixed_tao',
+    },
+    expected_revision: 4,
+    stale: false,
+    fee_changed: true,
+    cooldown_changed: false,
+    fee_change_ratio: '0.9318',
+    applicable: true,
+    required_confirmation: 'SET SUBMISSION COOLDOWN 3600 SECONDS FEE 37271710 RAO',
+    bounds: {
+      min_fee_amount_rao: 1_000_000,
+      max_fee_amount_rao: 10_000_000_000,
+      min_cooldown_seconds: 60,
+      max_cooldown_seconds: 86_400,
+    },
+    quote_lifetime_seconds: 86_400,
+    in_flight_quotes: 2,
+    in_flight_quotes_at_other_fees: 2,
+    in_flight_quotes_expire_by: '2026-09-25T12:00:00Z',
+  }
+
+  it('reads a dry run with a GET and never posts', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(preview))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      previewSubmissionSettings({
+        expectedRevision: 4,
+        cooldownSeconds: 3600,
+        feeAmountRao: 37_271_710,
+      }),
+    ).resolves.toEqual(preview)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/submission-settings/preview?expected_revision=4&cooldown_seconds=3600&fee_amount_rao=37271710',
+    )
+    expect(init.method ?? 'GET').toBe('GET')
+  })
+
+  it('refuses out-of-bounds or fractional fees before calling Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    for (const feeAmountRao of [999_999, 10_000_000_001, 40_000_000.5]) {
+      await expect(
+        previewSubmissionSettings({ expectedRevision: 4, cooldownSeconds: 3600, feeAmountRao }),
+      ).rejects.toThrow()
+      await expect(
+        updateSubmissionSettings('operator@example.com', {
+          expectedRevision: 4,
+          cooldownSeconds: 3600,
+          feeAmountRao,
+          reason: 'measured platform cost',
+          confirmation: `SET SUBMISSION COOLDOWN 3600 SECONDS FEE ${feeAmountRao} RAO`,
+        }),
+      ).rejects.toThrow()
+    }
+    await expect(
+      updateSubmissionSettings('operator@example.com', {
+        expectedRevision: 4,
+        cooldownSeconds: 3600,
+        feeAmountRao: 5_000_000,
+        feeDenomination: 'usd_indexed',
+        reason: 'five dollar target',
+        confirmation: 'SET SUBMISSION COOLDOWN 3600 SECONDS FEE 5000000 RAO',
+      }),
+    ).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a Platform response in an unreviewed denomination', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValueOnce(
+        Response.json({ ...preview, current: { ...current, fee_denomination: 'usd_indexed' } }),
+      ),
+    )
+    await expect(
+      previewSubmissionSettings({
+        expectedRevision: 4,
+        cooldownSeconds: 3600,
+        feeAmountRao: 37_271_710,
+      }),
+    ).rejects.toThrow()
   })
 })
 
