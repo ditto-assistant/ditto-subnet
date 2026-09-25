@@ -2319,9 +2319,24 @@ async def proxy_embeddings(
             byte_limit=None,
         )
         raise HTTPException(status_code=400, detail="invalid JSON request") from error
-    inputs = _validated_embedding_payload(
-        payload, model=config.embedding_model, dimensions=config.embedding_dimensions
-    )
+    try:
+        inputs = _validated_embedding_payload(
+            payload,
+            model=config.embedding_model,
+            dimensions=config.embedding_dimensions,
+        )
+    except HTTPException as error:
+        if error.status_code == 400:
+            await _remember_admission_rejection(
+                request,
+                lane="embedding",
+                http_status=400,
+                admission_code="invalid_schema",
+                grant_id=x_ditto_grant,
+                request_bytes=len(body),
+                byte_limit=None,
+            )
+        raise
 
     session_maker = request.app.state.session_maker
     # Resolve the operator's concurrency board BEFORE opening the admission

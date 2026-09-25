@@ -20,6 +20,7 @@ down_revision: str | Sequence[str] | None = "9e4c7a1b6d20"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# Keep grant_not_servable reserved for a future pre-reservation refusal.
 _CODES = (
     "'invalid_json', 'invalid_schema', 'request_too_large', "
     "'stale_session', 'model_not_allowed', 'grant_not_servable'"

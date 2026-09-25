@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -116,3 +117,61 @@ async def test_size_schema_and_stale_refusals_are_stored_without_the_prompt(
     body = listed.json()
     assert body["counts"]["request_too_large"] == 1
     assert _SECRET not in listed.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_field", ["model", "dimensions", "input"])
+async def test_embedding_schema_refusal_is_stored_without_input(
+    bad_field: str,
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _enable(app, session_maker, limit=1 << 20)
+    grant_id = uuid4()
+    config = app.state.config.inference_proxy
+    payload = {
+        "model": config.embedding_model,
+        "input": [_SECRET],
+        "dimensions": config.embedding_dimensions,
+        "encoding_format": "float",
+    }
+    payload[bad_field] = {
+        "model": "wrong-model",
+        "dimensions": config.embedding_dimensions + 1,
+        "input": [_SECRET, ""],
+    }[bad_field]
+    body = json.dumps(payload).encode()
+    rejected = await client.post(
+        "/api/v1/inference/embeddings",
+        content=body,
+        headers=_headers(grant_id, when=datetime.now(UTC)),
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["message"] == "invalid embedding request"
+
+    async with session_maker() as session:
+        rows = list(
+            await session.scalars(
+                select(InferenceAdmissionRejection).where(
+                    InferenceAdmissionRejection.grant_id == grant_id
+                )
+            )
+        )
+        requests = await session.scalar(
+            select(func.count()).select_from(InferenceRequest)
+        )
+    assert requests == 0
+    assert len(rows) == 1
+    row = rows[0]
+    assert (row.lane, row.http_status, row.admission_code) == (
+        "embedding",
+        400,
+        "invalid_schema",
+    )
+    assert row.request_bytes == len(body)
+    assert row.byte_limit is None
+    assert row.validator_hotkey is None
+    stored = " ".join(str(value) for value in row.__dict__.values())
+    assert _SECRET not in stored
+    assert "wrong-model" not in stored

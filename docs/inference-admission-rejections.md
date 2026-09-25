@@ -6,8 +6,11 @@ the grant id when the caller sent one, the request size, and the configured
 byte limit for size rejections. It does not store the body, prompt, headers,
 bearer, or provider payload.
 
-Codes: `invalid_json`, `invalid_schema`, `request_too_large`, `stale_session`,
-`model_not_allowed`, `grant_not_servable`.
+Emitted codes: `invalid_json`, `invalid_schema`, `request_too_large`,
+`stale_session`, `model_not_allowed`. The schema also reserves
+`grant_not_servable` for a future pre-reservation refusal; current handlers do
+not write it. A valid JSON embedding request with an invalid model, dimensions,
+or input shape records `invalid_schema` without storing its input.
 
 Rows older than 14 days are deleted in small batches on the next write.
 `inference_admission_rejections_grant_idx` is `(grant_id, created_at)`.

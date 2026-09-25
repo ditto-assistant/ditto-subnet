@@ -7926,6 +7926,14 @@ class InferenceAdmissionRejection(Base):
             "byte_limit IS NULL OR byte_limit >= 0",
             name="inference_admission_rejections_limit_check",
         ),
+        CheckConstraint(
+            "length(platform_revision) BETWEEN 1 AND 64",
+            name="inference_admission_rejections_revision_check",
+        ),
+        CheckConstraint(
+            "validator_hotkey IS NULL OR length(validator_hotkey) BETWEEN 1 AND 120",
+            name="inference_admission_rejections_hotkey_check",
+        ),
         Index(
             "inference_admission_rejections_grant_idx",
             "grant_id",
