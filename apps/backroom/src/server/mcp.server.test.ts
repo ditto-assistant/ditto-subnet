@@ -236,6 +236,9 @@ describe('Backroom MCP tools', () => {
         'get_source_release_policy',
         'get_owner_attestations',
         'get_submission_cooldown',
+        'get_treasury_settings',
+        'quote_treasury_topup',
+        'preview_treasury_topup',
         'get_validation_retry',
         'list_stuck_submissions',
         'list_lease_revocations',
@@ -272,6 +275,7 @@ describe('Backroom MCP tools', () => {
         'summarize_screening_failures',
         'read_screening_source_file',
         'record_v13_benign_approval',
+        'record_treasury_settings',
         'record_v13_replay_private_group',
         'search_screening_source',
         'rebuild_screened_image',
@@ -390,8 +394,9 @@ describe('Backroom MCP tools', () => {
     // measured 163,528 bytes together.
     // The no-input outlier-escalation read adds about 360 bytes; its bounds
     // live on the Platform endpoint. With later main tools the catalog measured
-    // 164,066 bytes, so the bound keeps the same ~0.5 KB headroom as before.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(164_500)
+    // 164,066 bytes. Four treasury policy, quote and preview tools bring the
+    // measured catalog to 167,798 bytes; retain about 0.5 KB headroom.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(168_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -417,8 +422,9 @@ describe('Backroom MCP tools', () => {
       // reopened-hold reason, three process-key summaries, and current V13
       // provenance reads plus scorer pin rotation and history; measured at 29,121.
       // The one-line outlier-escalation read (79 chars; detail in tool help)
-      // plus later main summaries measured 29,329.
-      29_450,
+      // plus later main summaries measured 29,329. Two short treasury
+      // shadow-policy descriptions bring the measured total to 29,850.
+      30_750,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
