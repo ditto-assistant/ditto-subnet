@@ -4442,6 +4442,7 @@ async def test_report_only_terminal_schema_is_local_to_single_layer(
         cache_ttl_seconds=86_400,
         l3_enabled=False,
         terminal_verdict_required=True,
+        analyst_provider="azure",
         transport=httpx.MockTransport(handler),
     )
     async with httpx.AsyncClient(transport=agent._transport) as client:
@@ -4454,13 +4455,21 @@ async def test_report_only_terminal_schema_is_local_to_single_layer(
                 reasoning_effort="model_default",
                 model="openai/gpt-6-sol",
                 fallback_models=(),
-                provider=None,
+                provider=agent._analyst_provider,
                 deadline=asyncio.get_running_loop().time() + 1,
             )
 
     tools = captured["tools"]
     assert isinstance(tools, list)
     assert len(captured["prompt_cache_key"]) <= 64
+    assert captured["provider"] == {
+        "allow_fallbacks": True,
+        "sort": "throughput",
+        "require_parameters": True,
+        "data_collection": "deny",
+        "only": ["azure"],
+        "zdr": True,
+    }
     final = tools[-1]["parameters"]["properties"]
     assert final["disposition"]["enum"] == ["safe", "violation"]
     assert "insufficient_static_evidence" not in final["resolution_basis"]["enum"]
@@ -4475,6 +4484,64 @@ async def test_report_only_terminal_schema_is_local_to_single_layer(
     ]
 
 
+def test_compact_packet_preserves_every_dossier_section_by_digest() -> None:
+    deterministic = {
+        name.removeprefix("deterministic."): {"marker": name}
+        for name in l2_review._COMPACT_DOSSIER_SECTIONS
+        if name.startswith("deterministic.")
+    }
+    dossier = {
+        "artifact_sha256": "a" * 64,
+        "benchmark_contract": {"version": 13},
+        "l1": {"finding_digest": None},
+        "deterministic": deterministic,
+        "bounded_source_inventory": {"paths": ["src/main.rs"]},
+    }
+    packet = l2_review._compact_dossier_packet(dossier)
+    assert "deterministic" not in packet
+    assert "bounded_source_inventory" not in packet
+    reconstructed = {
+        key: value
+        for key, value in packet.items()
+        if key not in {"full_dossier_sha256", "on_demand_sections", "section_contract"}
+    }
+    reconstructed["deterministic"] = {}
+    for descriptor in packet["on_demand_sections"]:
+        section = descriptor["name"]
+        result = json.loads(l2_review._dossier_section_output(dossier, section))
+        assert result["sha256"] == descriptor["sha256"]
+        if section == "bounded_source_inventory":
+            reconstructed[section] = result["content"]
+        else:
+            reconstructed["deterministic"][section.removeprefix("deterministic.")] = (
+                result["content"]
+            )
+    assert reconstructed == dossier
+    assert not l2_review._compact_safe_has_coverage(set(), {"src/main.rs"})
+    assert not l2_review._compact_safe_has_coverage(
+        set(l2_review._COMPACT_DOSSIER_SECTIONS), set()
+    )
+    assert l2_review._compact_safe_has_coverage(
+        set(l2_review._COMPACT_DOSSIER_SECTIONS), {"src/main.rs"}
+    )
+
+
+def test_compact_history_replaces_consumed_source_with_reloadable_digest() -> None:
+    source = "private-source-marker-" * 300
+    items: list[dict[str, object]] = [
+        {"type": "function_call_output", "call_id": "large", "output": source},
+        {"type": "function_call_output", "call_id": "small", "output": "{}"},
+    ]
+    l2_review._compact_consumed_tool_outputs(items)
+    receipt = json.loads(items[0]["output"])
+    assert (
+        receipt["archived_output_sha256"] == hashlib.sha256(source.encode()).hexdigest()
+    )
+    assert receipt["bytes"] == len(source.encode())
+    assert "private-source-marker" not in json.dumps(items)
+    assert items[1]["output"] == "{}"
+
+
 async def test_report_only_provider_body_fault_retries_exact_turn_once(
     tmp_path: Path,
 ) -> None:
@@ -4485,10 +4552,18 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
         if len(requests) == 1:
             return httpx.Response(
                 200,
+                headers={"Retry-After": "12", "X-RateLimit-Remaining": "0"},
                 json={
                     "status": "failed",
-                    "error_type": "provider_unavailable",
-                    "error": {"code": "server_error"},
+                    "error_type": "rate_limit_exceeded",
+                    "error": {"code": "rate_limit_exceeded"},
+                    "openrouter_metadata": {
+                        "region": "YUL",
+                        "attempt": 1,
+                        "endpoints": {
+                            "available": [{"provider": "Azure", "selected": True}]
+                        },
+                    },
                 },
             )
         return httpx.Response(200, json={"status": "completed", "output": []})
@@ -4498,7 +4573,7 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
         base_url="https://openrouter.test/api/v1",
         harness=_FakeHarness(),  # type: ignore[arg-type]
         cache_dir=str(tmp_path / "cache"),
-        audit_journal=L2AuditJournal(None, retention_days=30),
+        audit_journal=L2AuditJournal(str(tmp_path / "fault.jsonl"), retention_days=30),
         timeout_seconds=30,
         max_steps=12,
         max_input_tokens=80_000,
@@ -4525,6 +4600,15 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
         )
     assert response.json()["status"] == "completed"
     assert len(requests) == 2
+    fault = json.loads((tmp_path / "fault.jsonl").read_text())
+    assert fault["event_type"] == "report_only_provider_fault"
+    assert fault["response_status"] == "failed"
+    assert fault["error_type"] == fault["error_code"] == "rate_limit_exceeded"
+    assert fault["route_provider"] == "Azure"
+    assert fault["rate_limit_headers"] == {
+        "retry-after": "12",
+        "x-ratelimit-remaining": "0",
+    }
     assert requests[0] == requests[1]
 
 

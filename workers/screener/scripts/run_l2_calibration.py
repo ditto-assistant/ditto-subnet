@@ -61,6 +61,16 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--max-cost-usd", type=float, default=2.0)
     parser.add_argument("--turn-timeout-seconds", type=float)
     parser.add_argument(
+        "--sol-provider",
+        choices=("azure", "azure/us", "azure/eu"),
+        help="pin report-only Sol to an eligible OpenRouter Azure endpoint",
+    )
+    parser.add_argument(
+        "--compact-review-packet",
+        action="store_true",
+        help="report-only SHA-bound on-demand dossier instead of full prompt dossier",
+    )
+    parser.add_argument(
         "--retry-provider-body-once",
         action="store_true",
         help="retry one relayed provider fault in the same model turn",
@@ -157,6 +167,10 @@ async def _main() -> None:
         raise SystemExit("--omit-l1 requires --single-layer-sol and excludes --run-l1")
     if args.retry_provider_body_once and not args.single_layer_sol:
         raise SystemExit("--retry-provider-body-once is report-only Sol mode")
+    if args.sol_provider and not args.single_layer_sol:
+        raise SystemExit("--sol-provider is report-only Sol mode")
+    if args.compact_review_packet and not args.single_layer_sol:
+        raise SystemExit("--compact-review-packet is report-only Sol mode")
     if not 30 <= args.l1_timeout_seconds <= 600:
         raise SystemExit("--l1-timeout-seconds must be between 30 and 600")
     if not 1 <= args.l1_max_steps <= 160:
@@ -215,6 +229,8 @@ async def _main() -> None:
         independent_analyst=args.omit_l1,
         terminal_verdict_required=args.single_layer_sol,
         retry_provider_body_fault_once=args.retry_provider_body_once,
+        analyst_provider=args.sol_provider,
+        compact_review_packet=args.compact_review_packet,
         model=analyst_model,
         fallback_models=() if args.single_layer_sol else L2_FALLBACK_MODELS,
         l3_enabled=not args.single_layer_sol,
@@ -257,6 +273,8 @@ async def _main() -> None:
         ),
         "terminal_verdict_required": args.single_layer_sol,
         "retry_provider_body_fault_once": args.retry_provider_body_once,
+        "sol_provider": args.sol_provider,
+        "compact_review_packet": args.compact_review_packet,
         "revisions": {
             "analyst_prompt": agent._analyst_prompt_revision(SCREENING_POLICY_VERSION),
             "critic_prompt": l2_critic_prompt_revision(SCREENING_POLICY_VERSION),
@@ -358,6 +376,8 @@ async def _main() -> None:
             if cohort:
                 packet = cohort["packet"]
                 assert isinstance(packet, dict)
+                hotkeys = cohort["hotkeys"]
+                assert isinstance(hotkeys, list)
                 local_lease = ScoredRuntimeEvidenceLease.model_validate(
                     {
                         "attempt_id": UUID(str(item["attempt_id"])),
@@ -371,7 +391,7 @@ async def _main() -> None:
                         "scorer_image_digest": packet["scorer_image_digest"],
                         "scorer_env_sha256": packet["scorer_env_sha256"],
                         "injected_keys": packet["injected_keys"],
-                        "validator_count": len(cohort["hotkeys"]),
+                        "validator_count": len(hotkeys),
                         "observed_at": int(time.time()),
                     }
                 )

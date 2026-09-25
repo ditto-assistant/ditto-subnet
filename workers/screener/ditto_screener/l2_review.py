@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tarfile
@@ -251,6 +252,94 @@ def _submission_validation_subcode(error: ValueError) -> str:
     ):
         return "basis_category"
     return "schema"
+_COMPACT_DOSSIER_SECTIONS = (
+    *(f"deterministic.{name}" for name in _DOSSIER_ANALYZERS),
+    "deterministic.main_call_graph",
+    "bounded_source_inventory",
+)
+
+
+def _dossier_section(dossier: Mapping[str, object], name: str) -> object:
+    if name == "bounded_source_inventory":
+        return dossier[name]
+    prefix, _, section = name.partition(".")
+    if prefix != "deterministic" or not section:
+        raise ValueError("unknown compact dossier section")
+    deterministic = dossier.get("deterministic")
+    if not isinstance(deterministic, Mapping) or section not in deterministic:
+        raise ValueError("missing compact dossier section")
+    return deterministic[section]
+
+
+def _compact_dossier_packet(dossier: Mapping[str, object]) -> dict[str, object]:
+    """Bind every omitted analyzer byte to an on-demand exact section."""
+    sections = []
+    for name in _COMPACT_DOSSIER_SECTIONS:
+        value = _dossier_section(dossier, name)
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        sections.append(
+            {
+                "name": name,
+                "sha256": hashlib.sha256(encoded).hexdigest(),
+                "bytes": len(encoded),
+            }
+        )
+    packet = {
+        key: value
+        for key, value in dossier.items()
+        if key not in {"deterministic", "bounded_source_inventory"}
+    }
+    packet["full_dossier_sha256"] = hashlib.sha256(
+        json.dumps(dossier, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    packet["on_demand_sections"] = sections
+    packet["section_contract"] = (
+        "Every omitted section remains available through dossier_section. "
+        "Use read_file and search against the full SHA-bound archive."
+    )
+    return packet
+
+
+def _dossier_section_output(dossier: Mapping[str, object], name: str) -> str:
+    if name not in _COMPACT_DOSSIER_SECTIONS:
+        raise ValueError("unknown compact dossier section")
+    value = _dossier_section(dossier, name)
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return json.dumps(
+        {
+            "section": name,
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+            "content": value,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _compact_safe_has_coverage(
+    fetched_sections: set[str], read_files: set[str]
+) -> bool:
+    return set(_COMPACT_DOSSIER_SECTIONS) <= fetched_sections and bool(read_files)
+
+
+def _compact_consumed_tool_outputs(items: list[dict[str, object]]) -> None:
+    """Retain a reloadable digest after the model has consumed exact tool bytes."""
+    for item in items:
+        if item.get("type") != "function_call_output":
+            continue
+        output = item.get("output")
+        if not isinstance(output, str) or len(output) <= 4_096:
+            continue
+        item["output"] = json.dumps(
+            {
+                "archived_output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+                "bytes": len(output.encode()),
+                "reload": (
+                    "Repeat the original tool call against the immutable archive."
+                ),
+            },
+            separators=(",", ":"),
+        )
 
 
 _BENCHMARK_CONTRACT_CAPSULE = {
@@ -1915,6 +2004,29 @@ def _l2_tools_for_policy(policy_version: int) -> list[dict[str, object]]:
     return tools
 
 
+def _compact_dossier_tool() -> dict[str, object]:
+    return {
+        "type": "function",
+        "name": "dossier_section",
+        "description": (
+            "Fetch one exact SHA-bound analyzer or source-inventory section "
+            "from the retained dossier."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "section": {
+                    "type": "string",
+                    "enum": list(_COMPACT_DOSSIER_SECTIONS),
+                }
+            },
+            "required": ["section"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    }
+
+
 @dataclass(frozen=True)
 class L2Usage:
     input_tokens: int = 0
@@ -2309,6 +2421,8 @@ class TerraSolSourceReviewAgent:
         independent_analyst: bool = False,
         terminal_verdict_required: bool = False,
         retry_provider_body_fault_once: bool = False,
+        analyst_provider: str | None = None,
+        compact_review_packet: bool = False,
         analyst_reasoning_effort: str = "model_default",
         critic_reasoning_effort: str = "medium",
         model: str = L2_MODEL,
@@ -2350,6 +2464,10 @@ class TerraSolSourceReviewAgent:
             raise ValueError("terminal-only comparator cannot enable L3")
         self._terminal_verdict_required = terminal_verdict_required
         self._retry_provider_body_fault_once = retry_provider_body_fault_once
+        self._analyst_provider = analyst_provider
+        if compact_review_packet and not terminal_verdict_required:
+            raise ValueError("compact review packet is report-only terminal mode")
+        self._compact_review_packet = compact_review_packet
         if analyst_reasoning_effort != "model_default":
             raise ValueError("L2 analyst reasoning effort must be model_default")
         if critic_reasoning_effort not in {"low", "medium", "high"}:
@@ -2793,7 +2911,7 @@ class TerraSolSourceReviewAgent:
                     reasoning_effort=self._analyst_reasoning_effort,
                     model=self._model,
                     fallback_models=self._fallback_models,
-                    provider=None,
+                    provider=self._analyst_provider,
                     usage_before=L2Usage(),
                     deadline=deadline,
                     policy_version=policy_version,
@@ -3785,6 +3903,18 @@ class TerraSolSourceReviewAgent:
                     "only with grounded causal evidence. Never invent a finding "
                     "to satisfy the terminal requirement."
                 )
+            if self._compact_review_packet:
+                task += (
+                    " The initial packet omits large analyzer and inventory "
+                    "sections by SHA-256; fetch any needed section with "
+                    "dossier_section. First search/index the full isolated "
+                    "archive and fetch only sections that answer a concrete "
+                    "question. Prior large tool results may become digest "
+                    "receipts; repeat that tool call to reload exact bytes. "
+                    "For safe, inspect every listed "
+                    "section and at least one exact source file. Cite only "
+                    "host-checkable source locations in the final verdict."
+                )
         elif role == "critic":
             task = (
                 "Adversarially falsify the provisional safe result, then try to "
@@ -3819,11 +3949,16 @@ class TerraSolSourceReviewAgent:
                 if mixed_scorer
                 else _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK
             )
+        model_dossier = (
+            _compact_dossier_packet(dossier)
+            if self._compact_review_packet and role == "analyst"
+            else dossier
+        )
         content: list[dict[str, object]] = [
             {
                 "type": "input_text",
                 "text": json.dumps(
-                    {"compressed_l1_dossier": dossier},
+                    {"compressed_l1_dossier": model_dossier},
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
@@ -3866,6 +4001,7 @@ class TerraSolSourceReviewAgent:
         steps_used = 0
         read_bytes_used = 0
         read_files: set[str] = set()
+        fetched_sections: set[str] = set()
         pending_tool_corrections: set[str] = set()
         no_call_corrections = 0
 
@@ -3946,6 +4082,27 @@ class TerraSolSourceReviewAgent:
                 )
                 raise failure("model-response-contract") from error
             usage = _add_usage(usage, turn_usage)
+            if self._terminal_verdict_required:
+                self._audit.record(
+                    {
+                        "recorded_at": time.time(),
+                        "event_type": "report_only_turn_usage",
+                        "artifact_sha256": artifact_sha256,
+                        "role": role,
+                        "step": steps_used,
+                        "request_items": len(items),
+                        "request_bytes": len(
+                            json.dumps(items, separators=(",", ":")).encode()
+                        ),
+                        "model": response_model,
+                        "provider": response_provider,
+                        "input_tokens": turn_usage.input_tokens,
+                        "cached_input_tokens": turn_usage.cached_input_tokens,
+                        "cache_write_input_tokens": turn_usage.cache_write_input_tokens,
+                        "output_tokens": turn_usage.output_tokens,
+                        "reported_cost_usd": turn_usage.reported_cost_usd,
+                    }
+                )
             combined = _add_usage(usage_before, usage)
             try:
                 self._require_budget(combined)
@@ -3955,6 +4112,8 @@ class TerraSolSourceReviewAgent:
                 response_models.append(response_model)
             if response_provider:
                 response_providers.append(response_provider)
+            if self._compact_review_packet:
+                _compact_consumed_tool_outputs(items)
             items.extend(output)
             calls = [item for item in output if item.get("type") == "function_call"]
             if not calls:
@@ -4035,6 +4194,15 @@ class TerraSolSourceReviewAgent:
                     except (json.JSONDecodeError, ValueError) as error:
                         request_submit_correction(submitted[0], validation_error=error)
                         continue
+                    if (
+                        self._compact_review_packet
+                        and role == "analyst"
+                        and observation.ok
+                        and observation.risk_level == "low"
+                        and not _compact_safe_has_coverage(fetched_sections, read_files)
+                    ):
+                        request_submit_correction(submitted[0])
+                        continue
                     return L2RunResult(
                         observation=observation,
                         analyzed_files=analyzed,
@@ -4067,9 +4235,16 @@ class TerraSolSourceReviewAgent:
                     raise failure("model-tool-budget")
                 tool_names.append(name)
                 try:
-                    tool_output = await self._harness.run(
-                        workspace, name, arguments, deadline=deadline
-                    )
+                    if self._compact_review_packet and name == "dossier_section":
+                        section = arguments.get("section")
+                        if not isinstance(section, str):
+                            raise ValueError("missing compact dossier section")
+                        tool_output = _dossier_section_output(dossier, section)
+                        fetched_sections.add(section)
+                    else:
+                        tool_output = await self._harness.run(
+                            workspace, name, arguments, deadline=deadline
+                        )
                 except ValueError as error:
                     raise failure("analyzer-contract") from error
                 read_bytes_used += len(tool_output.encode("utf-8"))
@@ -4142,6 +4317,8 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> httpx.Response:
         tools = _l2_tools_for_policy(policy_version)
+        if self._compact_review_packet:
+            tools.insert(-1, _compact_dossier_tool())
         if self._terminal_verdict_required:
             parameters = tools[-1]["parameters"]
             assert isinstance(parameters, dict)
@@ -4198,6 +4375,8 @@ class TerraSolSourceReviewAgent:
                 request["models"] = [model, *fallback_models]
             if provider is not None:
                 request["provider"]["only"] = [provider]  # type: ignore[index]
+                if self._terminal_verdict_required and provider.startswith("azure"):
+                    request["provider"]["zdr"] = True  # type: ignore[index]
             # OpenRouter returns the metered cost only when asked for metadata.
             headers["X-OpenRouter-Metadata"] = "enabled"
         # Ditto Inference resolves the requested model id through the endpoint's
@@ -4226,6 +4405,79 @@ class TerraSolSourceReviewAgent:
                 with contextlib.suppress(ValueError, TypeError):
                     payload = response.json()
                 model_error = _retryable_model_error_type(payload)
+                if self._terminal_verdict_required and model_error is not None:
+                    error = payload.get("error") if isinstance(payload, dict) else None
+                    metadata = (
+                        payload.get("openrouter_metadata")
+                        if isinstance(payload, dict)
+                        else None
+                    )
+                    selected_provider = None
+                    if isinstance(metadata, dict):
+                        endpoints = metadata.get("endpoints")
+                        if isinstance(endpoints, dict):
+                            available = endpoints.get("available")
+                            if isinstance(available, list):
+                                for endpoint in available:
+                                    if (
+                                        isinstance(endpoint, dict)
+                                        and endpoint.get("selected") is True
+                                    ):
+                                        selected_provider = endpoint.get("provider")
+                                        break
+
+                    def safe_code(value: object) -> str | None:
+                        if not isinstance(value, str):
+                            return None
+                        return (
+                            value
+                            if re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", value)
+                            else None
+                        )
+
+                    rate_headers = {
+                        name: value
+                        for name in (
+                            "retry-after",
+                            "x-ratelimit-limit",
+                            "x-ratelimit-remaining",
+                            "x-ratelimit-reset",
+                            "x-openrouter-ratelimit-limit",
+                            "x-openrouter-ratelimit-remaining",
+                            "x-openrouter-ratelimit-reset",
+                        )
+                        if (value := response.headers.get(name)) is not None
+                        and re.fullmatch(r"[a-zA-Z0-9, .:-]{1,80}", value)
+                    }
+                    self._audit.record(
+                        {
+                            "recorded_at": time.time(),
+                            "event_type": "report_only_provider_fault",
+                            "artifact_sha256": artifact_sha256,
+                            "model": model,
+                            "requested_provider": provider,
+                            "http_status": response.status_code,
+                            "response_status": safe_code(payload.get("status"))
+                            if isinstance(payload, dict)
+                            else None,
+                            "error_type": safe_code(payload.get("error_type"))
+                            if isinstance(payload, dict)
+                            else None,
+                            "error_code": safe_code(error.get("code"))
+                            if isinstance(error, dict)
+                            else None,
+                            "route_provider": safe_code(selected_provider),
+                            "route_region": safe_code(metadata.get("region"))
+                            if isinstance(metadata, dict)
+                            else None,
+                            "route_attempt": metadata.get("attempt")
+                            if isinstance(metadata, dict)
+                            and isinstance(metadata.get("attempt"), int)
+                            else None,
+                            "rate_limit_headers": rate_headers,
+                            "turn_attempt": attempt + 1,
+                        }
+                    )
                 if (
                     self._retry_provider_body_fault_once
                     and model_error is not None
@@ -4275,6 +4527,8 @@ class TerraSolSourceReviewAgent:
         if not self._terminal_verdict_required:
             return revision
         input_mode = "independent" if self._independent_analyst else "l1-guided"
+        if self._compact_review_packet:
+            return f"{revision}-sol-{input_mode}-compact-v1"
         return f"{revision}-report-gpt6sol-{input_mode}-terminal-v1"
 
     def _client_transport(self) -> httpx.AsyncBaseTransport | None:
@@ -4360,6 +4614,8 @@ class TerraSolSourceReviewAgent:
             "independent_analyst": self._independent_analyst,
             "terminal_verdict_required": self._terminal_verdict_required,
             "retry_provider_body_fault_once": self._retry_provider_body_fault_once,
+            "analyst_provider": self._analyst_provider,
+            "compact_review_packet": self._compact_review_packet,
             "fallback_models": list(self._fallback_models),
             "critic_model": self._critic_model,
             "critic_provider": self._critic_provider,
@@ -6240,6 +6496,9 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 critic reasoning effort must be low, medium, or high": "config-invalid",
     "L2 completion request timeout must be 30-600 seconds": "config-invalid",
     "terminal-only comparator cannot enable L3": "config-invalid",
+    "compact review packet is report-only terminal mode": "config-invalid",
+    "missing compact dossier section": "dossier-section-missing",
+    "unknown compact dossier section": "dossier-section-invalid",
     "at least one starter provenance manifest is required": "config-invalid",
     "invalid L2 mode": "config-invalid",
     "L2 review exceeded lease budget": "lease-budget-exhausted",

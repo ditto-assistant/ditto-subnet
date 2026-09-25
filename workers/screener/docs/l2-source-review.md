@@ -303,6 +303,22 @@ Responses API turns at 45 seconds even when its whole review lease is longer.
 `--retry-provider-body-once` optionally repeats one exact model turn after a
 transport-class fault relayed in an HTTP 200 response; the overall lease and
 local key cap still bound that report-only experiment.
+`--sol-provider azure` pins only the report-only comparator to an eligible
+OpenRouter Azure route with zero-retention routing. Provider faults are recorded
+as private fixed-label audit events with allowlisted rate-limit headers; no
+response body, prompt, or credential is persisted.
+
+`--compact-review-packet` is a report-only experiment for the terminal Sol
+comparator. It sends a SHA-bound index instead of the full analyzer dossier,
+keeps all eight omitted sections available through `dossier_section`, and
+retains the complete immutable source archive for `search` and `read_file`.
+Once the model has consumed a large tool result, later turns carry its digest
+and a reload instruction; repeating the same read returns exact bytes. Safe
+submissions require all sections and at least one exact source read before the
+terminal tool can be accepted. Violation citations still undergo host-side
+path and line validation. The private audit records only per-turn byte/token
+counts, selected model/provider, and cost for comparing this path with the
+full-dossier baseline. No local comparator result authorizes a live decision.
 
 `scripts/run_l2_calibration.py` accepts a protected SHA-bound manifest plus a
 directory of already verified artifacts. It rechecks every tarball digest,
