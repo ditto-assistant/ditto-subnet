@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"sync"
 
+	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/internal/humandata"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -970,7 +972,11 @@ func BuildPlanForVersion(seed int64, opts Opts, benchVersion int) (*Plan, error)
 		roll := r.Float64()
 		switch {
 		case roll < pSometimesSelf:
-			v := pick(r, s.pool)
+			pool := s.pool
+			if benchVersion >= answerPoolFixBenchVersion {
+				pool = answerPoolForVersion(s.attr, pool, benchVersion)
+			}
+			v := pick(r, pool)
 			p.Facts = append(p.Facts, Fact{
 				ID:        "f-" + s.attr,
 				Kind:      KindScalar,
@@ -987,7 +993,11 @@ func BuildPlanForVersion(seed int64, opts Opts, benchVersion int) (*Plan, error)
 		case roll < pSometimesDecoy:
 			who := pick(r, firstNames)
 			rel := relations[d%len(relations)]
-			v := pick(r, s.pool)
+			pool := s.pool
+			if benchVersion >= answerPoolFixBenchVersion {
+				pool = answerPoolForVersion(s.attr, pool, benchVersion)
+			}
+			v := pick(r, pool)
 			p.Facts = append(p.Facts, Fact{
 				ID:        "f-fp-" + s.attr,
 				Kind:      KindDistractor,
@@ -1267,6 +1277,19 @@ func answerPoolForVersion(attr string, pool []string, benchVersion int) []string
 	if benchVersion < protocol.BenchVersionV8 {
 		return pool
 	}
+	// V8 through V13 are published generation contracts. Stage the correction
+	// for the next contract; protocol must explicitly support that version
+	// across the stack before these pools can be generated in a scored run.
+	if benchVersion >= answerPoolFixBenchVersion {
+		switch attr {
+		case "eye_color":
+			return v14EyeColors
+		case "star_sign":
+			return v14StarSigns
+		case "middle_name":
+			return v14MiddleNames()
+		}
+	}
 	switch attr {
 	case "favorite_color":
 		return v8Colors
@@ -1277,6 +1300,34 @@ func answerPoolForVersion(attr string, pool []string, benchVersion int) []string
 	default:
 		return pool
 	}
+}
+
+const answerPoolFixBenchVersion = 14
+
+var (
+	v14MiddleNamesOnce sync.Once
+	v14MiddleNamesList []string
+)
+
+func v14MiddleNames() []string {
+	v14MiddleNamesOnce.Do(func() {
+		for _, name := range v8HumanGivenNames {
+			if nameHitsIncidentalProse(name) {
+				continue
+			}
+			v14MiddleNamesList = append(v14MiddleNamesList, name)
+		}
+	})
+	return v14MiddleNamesList
+}
+
+func nameHitsIncidentalProse(name string) bool {
+	for _, sentence := range incidentalProse {
+		if grade.Hit(name, sentence) {
+			return true
+		}
+	}
+	return false
 }
 
 // nextSeqFor returns a Seq after every existing fact's Seq (the negated

@@ -112,6 +112,7 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
                 tools=(),
                 usage=L2Usage(estimated_cost_usd=0.05),
                 cache_hit=False,
+                failure_subcode="no_tool_call_after_corrections",
             )
 
     monkeypatch.setattr(l2_report_canary, "BuildGate", Gate)
@@ -137,3 +138,4 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
     assert report["review_mode"] == "shadow"
     assert report["source_attempt_id"] == str(attempt_id)
     assert report["l2"]["risk_level"] == "low"
+    assert report["l2"]["failure_subcode"] == "no_tool_call_after_corrections"

@@ -411,7 +411,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         ),
         review_inference_provider=review_inference_provider,
         source_review_model=os.environ.get(
-            "SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-5.6-luna"
+            "SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-6-luna"
         ),
         source_review_base_url=os.environ.get("SCREENER_SOURCE_REVIEW_BASE_URL")
         or default_review_base_url(review_inference_provider),
@@ -445,19 +445,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             os.environ.get("SCREENER_STATIC_PREFLIGHT_AUDIT_FILE") or None
         ),
         l2_review_mode=os.environ.get("SCREENER_L2_REVIEW_MODE", "off"),
-        l2_review_model=os.environ.get(
-            "SCREENER_L2_REVIEW_MODEL", "openai/gpt-5.6-terra"
-        ),
+        l2_review_model=os.environ.get("SCREENER_L2_REVIEW_MODEL", "openai/gpt-6-sol"),
         l2_review_provider=os.environ.get(
             "SCREENER_L2_REVIEW_PROVIDER", review_inference_provider
         ),
-        l2_fallback_models=_parse_csv(
-            "SCREENER_L2_FALLBACK_MODELS", "z-ai/glm-5.2,openai/gpt-5.6-sol"
-        ),
+        l2_fallback_models=_parse_csv("SCREENER_L2_FALLBACK_MODELS", "z-ai/glm-5.2"),
         l3_review_enabled=_parse_bool("SCREENER_L3_REVIEW_ENABLED", True),
-        l3_review_model=os.environ.get(
-            "SCREENER_L3_REVIEW_MODEL", "openai/gpt-5.6-sol"
-        ),
+        l3_review_model=os.environ.get("SCREENER_L3_REVIEW_MODEL", "openai/gpt-6-sol"),
         l3_review_provider=os.environ.get(
             "SCREENER_L3_REVIEW_PROVIDER", review_inference_provider
         ),
@@ -472,14 +466,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_L2_AUDIT_JOURNAL_FILE",
             "/opt/ditto/screener/state/l2-audit.jsonl",
         ),
-        l2_timeout_seconds=_parse_float("SCREENER_L2_TIMEOUT_SECONDS", "900"),
-        l2_max_steps=_parse_int("SCREENER_L2_MAX_STEPS", "18"),
-        l2_max_input_tokens=_parse_int("SCREENER_L2_MAX_INPUT_TOKENS", "425000"),
-        l2_max_output_tokens=_parse_int("SCREENER_L2_MAX_OUTPUT_TOKENS", "20000"),
+        l2_timeout_seconds=_parse_float("SCREENER_L2_TIMEOUT_SECONDS", "1800"),
+        l2_max_steps=_parse_int("SCREENER_L2_MAX_STEPS", "256"),
+        l2_max_input_tokens=_parse_int("SCREENER_L2_MAX_INPUT_TOKENS", "5000000"),
+        l2_max_output_tokens=_parse_int("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000000"),
         l2_max_completion_tokens=_parse_int(
-            "SCREENER_L2_MAX_COMPLETION_TOKENS", "2400"
+            "SCREENER_L2_MAX_COMPLETION_TOKENS", "16000"
         ),
-        l2_max_cost_usd=_parse_float("SCREENER_L2_MAX_COST_USD", "2.00"),
+        l2_max_cost_usd=_parse_float("SCREENER_L2_MAX_COST_USD", "25.00"),
         l2_analyst_reasoning_effort=os.environ.get(
             "SCREENER_L2_ANALYST_REASONING_EFFORT", "model_default"
         ),
@@ -618,9 +612,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_REVIEW_PROVIDER must match SCREENER_REVIEW_INFERENCE_PROVIDER"
         )
-    if config.l2_fallback_models != ("z-ai/glm-5.2", "openai/gpt-5.6-sol"):
+    if config.l2_fallback_models not in {
+        ("z-ai/glm-5.2",),
+        ("z-ai/glm-5.2", "openai/gpt-5.6-sol"),
+    }:
         raise ScreenerConfigError(
-            "SCREENER_L2_FALLBACK_MODELS must be z-ai/glm-5.2,openai/gpt-5.6-sol"
+            "SCREENER_L2_FALLBACK_MODELS must be z-ai/glm-5.2, optionally "
+            "followed by openai/gpt-5.6-sol for legacy revisions"
         )
     if config.l3_review_model not in {"openai/gpt-5.6-sol", "openai/gpt-6-sol"}:
         raise ScreenerConfigError(

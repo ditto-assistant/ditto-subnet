@@ -352,10 +352,11 @@ def _result_payload(
         and policy_version == SCREENING_POLICY_VERSION
         and "outcome" not in overrides
     ):
-        # Legacy no-attempt fixtures exercise the pre-policy-9 compatibility
-        # path. Policy 9 and later require an attempt-bound typed outcome, so a
-        # v10 bump must not accidentally turn the fixture into an invalid v9
-        # verdict.
+        # No-attempt fixtures build a well-formed pre-policy-9 body so tests can
+        # assert Platform refuses it (every verdict must name the caller's
+        # claimed attempt). Policy 9 and later require an attempt-bound typed
+        # outcome, so a v10 bump must not turn the fixture into an invalid v9
+        # verdict that fails model validation instead.
         policy_version = 8
     if passed and isinstance(attempt_id, UUID):
         overrides.setdefault("outcome", ScreenResultOutcome.PASS)
@@ -452,6 +453,31 @@ def _result_payload(
     if isinstance(body.get("image_upload_id"), UUID):
         body["image_upload_id"] = str(body["image_upload_id"])
     return body
+
+
+async def _seed_running_attempt(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    agent_id: UUID,
+    screener_hotkey: str = _SCREENER_HOTKEY,
+    policy_version: int = SCREENING_POLICY_VERSION,
+) -> UUID:
+    """Persist a live screening lease, as a claim by ``screener_hotkey`` would."""
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=screener_hotkey,
+                policy_version=policy_version,
+                status="running",
+                started_at=now,
+                deadline=now + timedelta(minutes=30),
+            )
+        )
+    return attempt_id
 
 
 async def _seed_verified_image_upload(
@@ -10722,11 +10748,16 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
         _install_chain(app)
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=8
+        )
 
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
             json=_result_payload(
                 agent_id,
+                attempt_id=attempt_id,
+                policy_version=8,
                 passed=False,
                 detail="build failed: cargo error SECRET_FROM_BUILD",
             ),
@@ -10740,10 +10771,16 @@ class TestSubmitResult:
             assert agent.screening_reason == "Docker image build failed"
             assert agent.screening_policy_version == 0
             assert "SECRET_FROM_BUILD" not in agent.screening_reason
-            synthetic = await s.scalar(
-                select(ScreeningAttempt).where(ScreeningAttempt.agent_id == agent_id)
-            )
-            assert synthetic is not None and synthetic.artifact_sha256 is None
+            attempts = (
+                await s.scalars(
+                    select(ScreeningAttempt).where(
+                        ScreeningAttempt.agent_id == agent_id
+                    )
+                )
+            ).all()
+            assert [(row.attempt_id, row.status) for row in attempts] == [
+                (attempt_id, "rejected")
+            ]
 
     async def test_rust_contract_rejection_persists_actionable_reason(
         self,
@@ -11052,11 +11089,16 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
         _install_chain(app)
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=8
+        )
 
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
             json=_result_payload(
                 agent_id,
+                attempt_id=attempt_id,
+                policy_version=8,
                 passed=False,
                 detail="screener error: Docker daemon unavailable SECRET",
             ),
@@ -11077,10 +11119,15 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
         _install_chain(app)
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=8
+        )
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
             json=_result_payload(
                 agent_id,
+                attempt_id=attempt_id,
+                policy_version=8,
                 passed=False,
                 detail="model canary observed no model call",
             ),
@@ -11510,12 +11557,23 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
         _install_db(app, session_maker)
         _install_chain(app)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
-            json=_result_payload(agent_id, passed=False),
+            json=_result_payload(
+                agent_id,
+                attempt_id=attempt_id,
+                passed=False,
+                outcome="deterministic_reject",
+            ),
         )
         assert response.status_code == 409
         assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert agent is not None and agent.status == AgentStatus.EVALUATING
+            assert attempt is not None and attempt.status == "running"
 
     async def test_verdict_on_scored_agent_returns_409(
         self,
@@ -11526,9 +11584,13 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.SCORED)
         _install_db(app, session_maker)
         _install_chain(app)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
+        await _seed_verified_image_upload(
+            session_maker, agent_id=agent_id, attempt_id=attempt_id
+        )
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
-            json=_result_payload(agent_id, passed=True),
+            json=_result_payload(agent_id, passed=True, attempt_id=attempt_id),
         )
         assert response.status_code == 409
         assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
@@ -11542,7 +11604,14 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
         _install_chain(app)
-        payload = _result_payload(agent_id)
+        claim = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claim.json()["items"][0]["attempt_id"])
+        payload = _result_payload(
+            agent_id,
+            attempt_id=attempt_id,
+            passed=False,
+            outcome="deterministic_reject",
+        )
         payload["signature"] = "ab" * 64  # well-formed but wrong
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result", json=payload
@@ -11556,18 +11625,29 @@ class TestSubmitResult:
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        # A pass signed by the screener must not be replayable as a fail: the
-        # signature binds the ``passed`` flag, so flipping it 401s.
+        # A parked-infrastructure verdict signed by the screener must not be
+        # replayable as a rejection: the signature binds the typed outcome, so
+        # flipping it 401s.
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
         _install_chain(app)
-        payload = _result_payload(agent_id, passed=True)
-        payload["passed"] = False  # grief attempt: replay the pass sig as a fail
+        claim = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claim.json()["items"][0]["attempt_id"])
+        payload = _result_payload(
+            agent_id,
+            attempt_id=attempt_id,
+            passed=False,
+            outcome="retryable_infra",
+        )
+        payload["outcome"] = "deterministic_reject"  # grief attempt
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result", json=payload
         )
         assert response.status_code == 401
         assert response.json()["error_code"] == ERROR_CODE_SCREENER_AUTH
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None and agent.status == AgentStatus.SCREENING
 
     async def test_payload_hotkey_must_match_authenticated_hotkey(
         self,
@@ -11597,10 +11677,462 @@ class TestSubmitResult:
         aid = uuid4()
         response = await client.post(
             f"/api/v1/screener/agent/{aid}/result",
-            json=_result_payload(aid, passed=False),
+            json=_result_payload(
+                aid,
+                attempt_id=uuid4(),
+                passed=False,
+                outcome="deterministic_reject",
+            ),
         )
         assert response.status_code == 404
         assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_FOUND
+
+
+_OTHER_NODE_KEYPAIR = bittensor.Keypair.create_from_uri("//Bob")
+_OTHER_NODE_HOTKEY = _OTHER_NODE_KEYPAIR.ss58_address
+_OTHER_NODE_TOKEN = "lease-ownership-node-token-at-least-32-characters"
+_OTHER_NODE_HEADERS = {
+    "Authorization": f"Bearer {_OTHER_NODE_TOKEN}",
+    "X-Screener-Hotkey": _OTHER_NODE_HOTKEY,
+}
+
+
+def _signed_failure(
+    keypair: bittensor.Keypair,
+    *,
+    agent_id: UUID,
+    attempt_id: UUID | None,
+    outcome: str | None,
+    policy_version: int = SCREENING_POLICY_VERSION,
+) -> dict[str, object]:
+    """A correctly signed failure verdict from ``keypair``'s own hotkey."""
+    hotkey = keypair.ss58_address
+    if outcome is not None and attempt_id is None:
+        # The typed v5 signing payload cannot be built without an attempt.
+        signature = "ab" * 64
+    else:
+        message = verdict_signing_message(
+            screener_hotkey=hotkey,
+            agent_id=agent_id,
+            attempt_id=attempt_id,
+            passed=False,
+            policy_version=policy_version,
+            outcome=ScreenResultOutcome(outcome) if outcome is not None else None,
+        )
+        signature = keypair.sign(message).hex()
+    body: dict[str, object] = {
+        "screener_hotkey": hotkey,
+        "signature": signature,
+        "passed": False,
+        "policy_version": policy_version,
+        "detail": "",
+    }
+    if outcome is not None:
+        body["outcome"] = outcome
+    if attempt_id is not None:
+        body["attempt_id"] = str(attempt_id)
+    return body
+
+
+async def _verdict_state(
+    maker: async_sessionmaker[AsyncSession], agent_id: UUID
+) -> tuple[AgentStatus, str | None, list[tuple[UUID, str]]]:
+    async with maker() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        attempts = (
+            await session.scalars(
+                select(ScreeningAttempt)
+                .where(ScreeningAttempt.agent_id == agent_id)
+                .order_by(ScreeningAttempt.started_at)
+            )
+        ).all()
+        return (
+            agent.status,
+            agent.screening_reason,
+            [(row.attempt_id, row.status) for row in attempts],
+        )
+
+
+class TestVerdictLeaseOwnership:
+    """Every verdict must settle the caller's own claimed screening attempt."""
+
+    @pytest.mark.parametrize("leased_to_other_node", [False, True])
+    @pytest.mark.parametrize(
+        ("outcome", "policy_version"),
+        [
+            ("deterministic_reject", SCREENING_POLICY_VERSION),
+            ("retryable_infra", SCREENING_POLICY_VERSION),
+            (None, 8),
+        ],
+    )
+    async def test_verdict_without_attempt_is_refused_without_state_change(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        outcome: str | None,
+        policy_version: int,
+        leased_to_other_node: bool,
+    ) -> None:
+        agent_id = await _seed_agent(
+            session_maker,
+            status=(
+                AgentStatus.SCREENING if leased_to_other_node else AgentStatus.UPLOADED
+            ),
+        )
+        if leased_to_other_node:
+            await _seed_running_attempt(
+                session_maker, agent_id=agent_id, screener_hotkey=_OTHER_NODE_HOTKEY
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        before = await _verdict_state(session_maker, agent_id)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=None,
+                outcome=outcome,
+                policy_version=policy_version,
+            ),
+        )
+
+        assert response.status_code == 409, response.text
+        assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
+        # No agent transition and no minted attempt.
+        assert await _verdict_state(session_maker, agent_id) == before
+
+    @pytest.mark.parametrize("outcome", ["deterministic_reject", "retryable_infra"])
+    async def test_fleet_principal_cannot_settle_another_nodes_attempt(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        outcome: str,
+    ) -> None:
+        await _seed_screener_node(
+            session_maker,
+            node_id="lease-ownership-owner-node",
+            hotkey=_OTHER_NODE_HOTKEY,
+            token=_OTHER_NODE_TOKEN,
+            screening_concurrency=1,
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        other_attempt = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, screener_hotkey=_OTHER_NODE_HOTKEY
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        before = await _verdict_state(session_maker, agent_id)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR, agent_id=agent_id, attempt_id=other_attempt, outcome=outcome
+            ),
+        )
+
+        assert response.status_code == 409, response.text
+        assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
+        assert await _verdict_state(session_maker, agent_id) == before
+
+        owner = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            headers=_OTHER_NODE_HEADERS,
+            json=_signed_failure(
+                _OTHER_NODE_KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=other_attempt,
+                outcome=outcome,
+            ),
+        )
+        assert owner.status_code == 200, owner.text
+
+    async def test_enrolled_node_cannot_settle_the_fleet_principals_attempt(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_screener_node(
+            session_maker,
+            node_id="lease-ownership-node",
+            hotkey=_OTHER_NODE_HOTKEY,
+            token=_OTHER_NODE_TOKEN,
+            screening_concurrency=1,
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claim = await client.post(_CLAIM_URL)
+        fleet_attempt = UUID(claim.json()["items"][0]["attempt_id"])
+        before = await _verdict_state(session_maker, agent_id)
+        assert before[2] == [(fleet_attempt, "running")]
+
+        for attempt_id in (fleet_attempt, None):
+            response = await client.post(
+                f"/api/v1/screener/agent/{agent_id}/result",
+                headers=_OTHER_NODE_HEADERS,
+                json=_signed_failure(
+                    _OTHER_NODE_KEYPAIR,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    outcome="deterministic_reject",
+                ),
+            )
+            assert response.status_code == 409, response.text
+            assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
+
+        assert await _verdict_state(session_maker, agent_id) == before
+        owner = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=fleet_attempt,
+                outcome="deterministic_reject",
+            ),
+        )
+        assert owner.status_code == 200, owner.text
+
+    async def test_attempt_for_a_different_agent_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        owned_agent = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        owned_attempt = await _seed_running_attempt(session_maker, agent_id=owned_agent)
+        target_agent = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            miner_hotkey="5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+            sha256="cd" * 32,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        owned_before = await _verdict_state(session_maker, owned_agent)
+        target_before = await _verdict_state(session_maker, target_agent)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{target_agent}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=target_agent,
+                attempt_id=owned_attempt,
+                outcome="deterministic_reject",
+            ),
+        )
+
+        assert response.status_code == 409, response.text
+        assert await _verdict_state(session_maker, owned_agent) == owned_before
+        assert await _verdict_state(session_maker, target_agent) == target_before
+        owner = await client.post(
+            f"/api/v1/screener/agent/{owned_agent}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=owned_agent,
+                attempt_id=owned_attempt,
+                outcome="deterministic_reject",
+            ),
+        )
+        assert owner.status_code == 200, owner.text
+
+    async def test_policy_version_mismatch_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        before = await _verdict_state(session_maker, agent_id)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                outcome="deterministic_reject",
+                policy_version=SCREENING_POLICY_VERSION + 1,
+            ),
+        )
+
+        assert response.status_code == 409, response.text
+        assert await _verdict_state(session_maker, agent_id) == before
+        matching = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                outcome="deterministic_reject",
+            ),
+        )
+        assert matching.status_code == 200, matching.text
+
+    async def test_expired_attempt_re_leased_to_another_node_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        stale_attempt = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=stale_attempt,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="expired",
+                    started_at=now - timedelta(hours=2),
+                    deadline=now - timedelta(hours=1),
+                    finished_at=now - timedelta(hours=1),
+                )
+            )
+        await _seed_running_attempt(
+            session_maker, agent_id=agent_id, screener_hotkey=_OTHER_NODE_HOTKEY
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        before = await _verdict_state(session_maker, agent_id)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=stale_attempt,
+                outcome="deterministic_reject",
+            ),
+        )
+
+        assert response.status_code == 409, response.text
+        assert await _verdict_state(session_maker, agent_id) == before
+
+    @pytest.mark.parametrize(
+        ("outcome", "agent_status", "attempt_status"),
+        [
+            ("deterministic_reject", AgentStatus.REJECTED, "rejected"),
+            ("retryable_infra", AgentStatus.SCREENING_FAILED, "failed"),
+            ("pass", AgentStatus.EVALUATING, "passed"),
+        ],
+    )
+    async def test_owner_settles_its_claimed_attempt(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        outcome: str,
+        agent_status: AgentStatus,
+        attempt_status: str,
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claim = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claim.json()["items"][0]["attempt_id"])
+        if outcome == "pass":
+            await _seed_verified_image_upload(
+                session_maker, agent_id=agent_id, attempt_id=attempt_id
+            )
+            payload = _result_payload(agent_id, passed=True, attempt_id=attempt_id)
+        else:
+            payload = _signed_failure(
+                _KEYPAIR, agent_id=agent_id, attempt_id=attempt_id, outcome=outcome
+            )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == agent_status
+        status, _reason, attempts = await _verdict_state(session_maker, agent_id)
+        assert status == agent_status
+        assert attempts == [(attempt_id, attempt_status)]
+
+    async def test_owner_replay_is_idempotent_and_not_open_to_other_principals(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_screener_node(
+            session_maker,
+            node_id="lease-ownership-replay-node",
+            hotkey=_OTHER_NODE_HOTKEY,
+            token=_OTHER_NODE_TOKEN,
+            screening_concurrency=1,
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claim = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claim.json()["items"][0]["attempt_id"])
+        payload = _signed_failure(
+            _KEYPAIR,
+            agent_id=agent_id,
+            attempt_id=attempt_id,
+            outcome="deterministic_reject",
+        )
+        url = f"/api/v1/screener/agent/{agent_id}/result"
+
+        first = await client.post(url, json=payload)
+        assert first.status_code == 200, first.text
+        async with session_maker() as session:
+            recorded = await session.get(ScreeningAttempt, attempt_id)
+            assert recorded is not None
+            finished_at = recorded.finished_at
+        settled = await _verdict_state(session_maker, agent_id)
+        assert settled[0] == AgentStatus.REJECTED
+        assert settled[2] == [(attempt_id, "rejected")]
+
+        replay = await client.post(url, json=payload)
+        assert replay.status_code == 200, replay.text
+        assert replay.json() == {
+            "agent_id": str(agent_id),
+            "status": AgentStatus.REJECTED,
+            "accepted": True,
+        }
+        assert await _verdict_state(session_maker, agent_id) == settled
+        async with session_maker() as session:
+            replayed = await session.get(ScreeningAttempt, attempt_id)
+            assert replayed is not None and replayed.finished_at == finished_at
+
+        # The idempotent branch is reachable only by the attempt's owner.
+        foreign = await client.post(
+            url,
+            headers=_OTHER_NODE_HEADERS,
+            json=_signed_failure(
+                _OTHER_NODE_KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                outcome="deterministic_reject",
+            ),
+        )
+        assert foreign.status_code == 409, foreign.text
+        # A different verdict for the settled attempt is a conflict, not a replay.
+        conflicting = await client.post(
+            url,
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                outcome="retryable_infra",
+            ),
+        )
+        assert conflicting.status_code == 409, conflicting.text
+        assert await _verdict_state(session_maker, agent_id) == settled
 
 
 _ADMIN_HEADERS = {
@@ -12718,10 +13250,32 @@ def test_shadow_review_accepts_a_full_length_provider_trajectory() -> None:
 class TestQuarantineBaselineDiff:
     """The starter-kit subtraction an operator relies on to find real code."""
 
+    AUTHORED_LINES = 9952
+
+    @staticmethod
+    def _full_kit_with_large_authored_baseline(root: str = "") -> dict[str, bytes]:
+        """Issue #480's shape: the whole kit, fixtures first, big authored source.
+
+        The kit alone carries ~2.4 MB of text, most of it fixture JSON that tar
+        stores before ``src/``; the authored ``src/baseline.rs`` is ~10k lines.
+        """
+        from ditto.api_server.starter_kit import starter_kit_head_text
+
+        files = {path: text.encode() for path, text in starter_kit_head_text().items()}
+        files["src/baseline.rs"] = "".join(
+            f"pub fn authored_step_{i:05d}(x: u64) -> u64 {{ x ^ {i} }}\n"
+            for i in range(TestQuarantineBaselineDiff.AUTHORED_LINES)
+        ).encode()
+        ordered = sorted(
+            files, key=lambda path: (not path.startswith("fixtures/"), path)
+        )
+        return {f"{root}{path}": files[path] for path in ordered}
+
     async def _seed_kit_derived_agent(
         self,
         app: FastAPI,
         session_maker: async_sessionmaker[AsyncSession],
+        files: dict[str, bytes] | None = None,
     ) -> tuple[UUID, MagicMock]:
 
         from ditto.api_server.starter_kit import starter_kit_head_text
@@ -12732,11 +13286,12 @@ class TestQuarantineBaselineDiff:
         )
         head = starter_kit_head_text()
         # A realistic submission: verbatim kit files plus the miner's own code.
-        files = {
-            "Cargo.toml": head["Cargo.toml"].encode(),
-            "src/baseline.rs": head["src/baseline.rs"].encode(),
-            "src/solver.rs": b"fn solve_as_of() -> u64 {\n    42\n}\n",
-        }
+        if files is None:
+            files = {
+                "Cargo.toml": head["Cargo.toml"].encode(),
+                "src/baseline.rs": head["src/baseline.rs"].encode(),
+                "src/solver.rs": b"fn solve_as_of() -> u64 {\n    42\n}\n",
+            }
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
             for name, raw in files.items():
@@ -12787,6 +13342,86 @@ class TestQuarantineBaselineDiff:
         assert body["baseline"]["revision"]
         assert body["baseline"]["source"].endswith("dittobench-starter-kit")
         assert body["path_aligned"] is False
+        # A small archive fits the text budget: nothing omitted, total exact.
+        assert body["omitted_file_count"] == 0
+        assert body["omitted_paths"] == []
+        assert body["custom_added_lines_complete"] is True
+
+    async def test_large_authored_file_is_counted_and_skipped_file_is_omitted(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # Issue #480: this archive used to return src/baseline.rs as
+        # {status: removed, candidate_lines: 0} and a custom total near zero.
+        agent_id, _storage = await self._seed_kit_derived_agent(
+            app, session_maker, self._full_kit_with_large_authored_baseline()
+        )
+        response = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/baseline-diff",
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200
+        body = response.json()
+        by_path = {entry["path"]: entry for entry in body["files"]}
+
+        authored = by_path["src/baseline.rs"]
+        assert authored["status"] == "modified"
+        assert authored["candidate_lines"] == self.AUTHORED_LINES
+        assert authored["stock_kit"] is False
+        assert body["custom_added_lines"] >= self.AUTHORED_LINES
+        # The kit's largest fixture no longer fits the combined text budget. It
+        # is named as not compared, never reported as a deleted file.
+        assert body["omitted_paths"] == ["fixtures/seed-user/pairs.json"]
+        assert body["omitted_file_count"] == 1
+        assert body["custom_added_lines_complete"] is False
+        assert "fixtures/seed-user/pairs.json" not in by_path
+        assert body["removed_count"] == 0
+        assert body["path_aligned"] is False
+
+        # The single-file diff reads the skipped file on its own.
+        detail = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/baseline-diff/file",
+            params={"path": "fixtures/seed-user/pairs.json"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert detail.status_code == 200
+        detail_body = detail.json()
+        assert detail_body["candidate_present"] is True
+        assert detail_body["reference_present"] is True
+        assert detail_body["identical"] is True
+        assert detail_body["stock_kit"] is True
+
+    async def test_wrapped_archive_aligns_skipped_paths_too(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id, _storage = await self._seed_kit_derived_agent(
+            app,
+            session_maker,
+            self._full_kit_with_large_authored_baseline(root="agent/"),
+        )
+        response = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/baseline-diff",
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["path_aligned"] is True
+        assert body["omitted_paths"] == ["fixtures/seed-user/pairs.json"]
+        assert body["removed_count"] == 0
+        assert body["custom_added_lines"] >= self.AUTHORED_LINES
+
+        detail = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/baseline-diff/file",
+            params={"path": "fixtures/seed-user/pairs.json"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert detail.status_code == 200
+        assert detail.json()["identical"] is True
 
     async def test_file_diff_returns_bounded_body_and_stock_flag(
         self,

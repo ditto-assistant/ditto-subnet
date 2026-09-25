@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import fcntl
 import hashlib
 import io
@@ -76,6 +77,7 @@ from ditto_screening_protocol import (
     ScreenReviewAudit,
     SourceReviewAdjudication,
     SourceReviewCitation,
+    SourceReviewFinding,
 )
 from scripts.generate_starter_provenance import _tracked_files
 
@@ -2666,6 +2668,45 @@ async def test_partial_dossier_safe_consensus_cannot_clear(tmp_path: Path) -> No
     assert not result.dossier_complete
 
 
+async def test_l3_no_tool_failure_reports_bounded_subcode(tmp_path: Path) -> None:
+    source = "fn main() { serve(); }\nfn serve() {}"
+    archive, artifact_sha = _tar(tmp_path, source)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    safe = _clearance_certificate(
+        {
+            "disposition": "safe",
+            "risk_level": "low",
+            "confidence": 1.0,
+            "resolution_basis": "authoritative_model_tool_path",
+            "categories": ["none"],
+            "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+            "evidence": [],
+            "summary": "sanitized",
+        }
+    )
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests >= 3:
+            return _response([])
+        return _response([_tool_call(str(requests), "submit_l2_review", safe)])
+
+    result = await _sol_agent(tmp_path, _PartialHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert requests == 3
+    assert result.observation.error_code == "l3-adjudicator-model-tool-contract"
+    assert result.observation.failure_disposition == "retryable_infra"
+    assert result.failure_subcode == "no_tool_call_after_corrections"
+
+
 async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     tmp_path: Path,
 ) -> None:
@@ -3691,6 +3732,7 @@ async def test_partial_exploratory_tool_requires_correction_before_submission(
     assert any(
         item.get("type") == "function_call_output"
         and json.loads(item.get("output", "{}")).get("error") == "submission-contract"
+        and "search" in json.loads(item.get("output", "{}")).get("message", "")
         for item in corrected_items
     )
 
@@ -4120,7 +4162,7 @@ async def test_adjudicator_retry_reuses_analyst_and_critic_stage_caches(
 
 @pytest.mark.parametrize(
     ("invalid_kind", "expected_subcode"),
-    [("contradictory", "basis_category"), ("digest", "artifact_citation")],
+    [("contradictory", "safe_basis"), ("digest", "artifact_citation")],
 )
 async def test_invalid_final_tool_result_is_correctable_in_same_trajectory(
     tmp_path: Path,
@@ -4268,7 +4310,7 @@ async def test_malformed_submit_arguments_are_correctable_in_same_trajectory(
         ("L2 result has unexpected fields", "schema"),
         ("L2 analyzed-file digest does not match artifact", "artifact_citation"),
         ("1 validation error for SourceReviewInvariantAssessment", "invariant_sweep"),
-        ("L2 violation lacks a causal trigger/effect path", "causal_link"),
+        ("L2 violation lacks a causal trigger/effect path", "causal_path"),
         ("L2 violation is missing category evidence", "basis_category"),
         ("L2 violation lacks multi-location evidence", "multi_location"),
     ],
@@ -4416,6 +4458,945 @@ async def test_http_failure_is_single_shot_before_deadline(
             )
 
     assert requests == 1
+
+
+async def test_report_only_terminal_schema_is_local_to_single_layer(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(500)
+
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(None, retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+        analyst_provider="azure",
+        transport=httpx.MockTransport(handler),
+    )
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        with pytest.raises(httpx.HTTPStatusError, match="500"):
+            await agent._post(
+                client,
+                "test-key",
+                [],
+                artifact_sha256="d" * 64,
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider=agent._analyst_provider,
+                deadline=asyncio.get_running_loop().time() + 1,
+            )
+
+    tools = captured["tools"]
+    assert isinstance(tools, list)
+    assert len(captured["prompt_cache_key"]) <= 64
+    assert captured["provider"] == {
+        "allow_fallbacks": True,
+        "sort": "throughput",
+        "require_parameters": True,
+        "data_collection": "deny",
+        "only": ["azure"],
+        "zdr": True,
+    }
+    final = tools[-1]["parameters"]["properties"]
+    assert final["disposition"]["enum"] == ["safe", "violation"]
+    assert "insufficient_static_evidence" not in final["resolution_basis"]["enum"]
+    assert "report-gpt6sol-l1-guided-terminal-v1" in agent._analyst_prompt_revision(
+        SCREENING_POLICY_VERSION
+    )
+    ordinary = l2_review._l2_tools_for_policy(SCREENING_POLICY_VERSION)
+    assert ordinary[-1]["parameters"]["properties"]["disposition"]["enum"] == [
+        "safe",
+        "violation",
+        "inconclusive",
+    ]
+
+
+def test_compact_packet_preserves_every_dossier_section_by_digest() -> None:
+    deterministic = {
+        name.removeprefix("deterministic."): {"marker": name}
+        for name in l2_review._COMPACT_DOSSIER_SECTIONS
+        if name.startswith("deterministic.")
+    }
+    dossier = {
+        "artifact_sha256": "a" * 64,
+        "benchmark_contract": {"version": 13},
+        "l1": {"finding_digest": None},
+        "deterministic": deterministic,
+        "bounded_source_inventory": {"paths": ["src/main.rs"]},
+    }
+    packet = l2_review._compact_dossier_packet(dossier)
+    assert "deterministic" not in packet
+    assert "bounded_source_inventory" not in packet
+    reconstructed = {
+        key: value
+        for key, value in packet.items()
+        if key not in {"full_dossier_sha256", "on_demand_sections", "section_contract"}
+    }
+    reconstructed["deterministic"] = {}
+    for descriptor in packet["on_demand_sections"]:
+        section = descriptor["name"]
+        result = json.loads(l2_review._dossier_section_output(dossier, section))
+        assert result["sha256"] == descriptor["sha256"]
+        if section == "bounded_source_inventory":
+            reconstructed[section] = result["content"]
+        else:
+            reconstructed["deterministic"][section.removeprefix("deterministic.")] = (
+                result["content"]
+            )
+    assert reconstructed == dossier
+    assert not l2_review._compact_safe_has_coverage(set(), {"src/main.rs"})
+    assert not l2_review._compact_safe_has_coverage(
+        set(l2_review._COMPACT_DOSSIER_SECTIONS), set()
+    )
+    assert l2_review._compact_safe_has_coverage(
+        set(l2_review._COMPACT_DOSSIER_SECTIONS), {"src/main.rs"}
+    )
+
+
+def test_compact_history_replaces_consumed_source_with_reloadable_digest() -> None:
+    source = "private-source-marker-" * 300
+    items: list[dict[str, object]] = [
+        {"type": "function_call_output", "call_id": "large", "output": source},
+        {"type": "function_call_output", "call_id": "small", "output": "{}"},
+    ]
+    l2_review._compact_consumed_tool_outputs(items)
+    receipt = json.loads(items[0]["output"])
+    assert (
+        receipt["archived_output_sha256"] == hashlib.sha256(source.encode()).hexdigest()
+    )
+    assert receipt["bytes"] == len(source.encode())
+    assert "private-source-marker" not in json.dumps(items)
+    assert items[1]["output"] == "{}"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("L2 result has unexpected fields", "schema"),
+        ("L2 evidence is not artifact-bound", "artifact_citation"),
+        ("L2 analyzed-file digest does not match artifact", "artifact_citation"),
+        ("L2 did not analyze every L1 evidence file", "artifact_citation"),
+        (
+            "1 validation error for SourceReviewInvariantAssessment",
+            "invariant_sweep",
+        ),
+        ("L2 violation lacks a causal trigger/effect path", "causal_path"),
+        ("L2 causal role binding is not evidence-bound", "causal_roles"),
+        ("L2 safe result has a non-safe resolution basis", "safe_basis"),
+        ("L2 violation is missing category evidence", "basis_category"),
+        ("L2 violation lacks multi-location evidence", "multi_location"),
+    ],
+)
+def test_submission_validation_subcode_is_fixed_and_source_free(
+    message: str, expected: str
+) -> None:
+    assert l2_review._submission_validation_subcode(ValueError(message)) == expected
+    assert message not in l2_review._SUBMISSION_VALIDATION_HINTS[expected]
+
+
+def test_l2_coverage_guidance_overrides_soft_analyzed_file_target() -> None:
+    prompt = l2_review._l2_review_system_prompt(SCREENING_POLICY_VERSION)
+    correction = l2_review._SUBMISSION_VALIDATION_HINTS["artifact_citation"]
+    assert "Every distinct L1 evidence file is\nmandatory" in prompt
+    assert "even when that exceeds 12" in prompt
+    assert "every distinct L1 evidence file" in correction
+    assert "even when that exceeds the usual 12-file suggestion" in correction
+
+
+def _logan_v13_certificate(
+    repository: TarSourceRepository, *, path: str
+) -> dict[str, object]:
+    digest = repository.member_sha256(path)
+    assert digest is not None
+    category = "scorer_contract_manipulation"
+    locations = [
+        (90, "context"),
+        (2468, "trigger"),
+        (2475, "decision"),
+        (2476, "effect"),
+    ]
+    evidence = [
+        {
+            "path": path,
+            "line": line,
+            "file_sha256": digest,
+            "category": category,
+            "role": role,
+        }
+        for line, role in locations
+    ]
+    breached = {"i3_model_dissent", "i4_derived_value_authority"}
+    invariants = [
+        {
+            "invariant": invariant,
+            "disposition": "breach" if invariant in breached else "pass",
+            "pass_clause": None if invariant in breached else clause,
+            "summary": (
+                "The served response rewrites scorer-visible abstention."
+                if invariant in breached
+                else "The reviewed path satisfies the published pass clause."
+            ),
+            "evidence_indices": [3] if invariant in breached else [],
+        }
+        for invariant, clause in _PASS_CLAUSES.items()
+    ]
+    bindings = [
+        {
+            "path": path,
+            "line": line,
+            "file_sha256": digest,
+            "category": category,
+            "role": role,
+        }
+        for line, role in (
+            (2468, "served_trigger"),
+            (2476, "authority_bypass"),
+            (2476, "scorer_visible_effect"),
+            (2475, "reachability_link"),
+        )
+    ]
+    return {
+        "disposition": "violation",
+        "risk_level": "high",
+        "confidence": 0.99,
+        "resolution_basis": "scorer_field_manipulation",
+        "categories": [category],
+        "analyzed_files": [{"path": path, "sha256": digest}],
+        "evidence": evidence,
+        "causal_path": [
+            {"path": path, "line": 2468, "role": "trigger"},
+            {"path": path, "line": 2476, "role": "effect"},
+        ],
+        "generator_components": [],
+        "causal_evidence": {
+            "schema_version": 2,
+            "authority_transition": "derived_value_authoritative",
+            "scorer_visible_effect": "abstain",
+            "role_bindings": bindings,
+        },
+        "invariants": invariants,
+        "summary": "Served response derives scorer-visible abstain from final prose.",
+    }
+
+
+def _assert_logan_certificate_contract(
+    repository: TarSourceRepository, artifact_sha256: str, path: str
+) -> None:
+    certificate = _logan_v13_certificate(repository, path=path)
+    observation, analyzed, causal, basis = l2_review._parse_l2_review(
+        certificate,
+        artifact_sha256=artifact_sha256,
+        repository=repository,
+        prompt_revision="l2-terra-source-review-v41-policy-v13-sol-independent-compact-v1",
+        policy_version=13,
+    )
+    assert observation.ok and observation.risk_level == "high"
+    assert basis == "scorer_field_manipulation"
+    assert observation.finding is not None
+    assert (
+        observation.finding_digest
+        == SourceReviewFinding.model_validate(observation.finding).canonical_digest()
+    )
+    assert len(analyzed) == 1 and len(causal) == 2
+    for mutation, expected in (
+        (
+            lambda item: item["analyzed_files"][0].update(sha256="0" * 64),
+            "artifact_citation",
+        ),
+        (
+            lambda item: item["invariants"][0].update(pass_clause="no_derived_value"),
+            "invariant_sweep",
+        ),
+        (lambda item: item.pop("summary"), "schema"),
+    ):
+        bad = copy.deepcopy(certificate)
+        mutation(bad)
+        with pytest.raises(ValueError) as raised:
+            l2_review._parse_l2_review(
+                bad,
+                artifact_sha256=artifact_sha256,
+                repository=repository,
+                policy_version=13,
+            )
+        assert l2_review._submission_validation_subcode(raised.value) == expected
+
+
+def test_logan_certificate_contract_with_synthetic_archive(tmp_path: Path) -> None:
+    lines = ["// fixture" for _ in range(2476)]
+    lines[89] = "fn inferred_abstain(final_text: &str) -> Option<bool> { None }"
+    lines[2467] = "let abstain = inferred_abstain(&final_text);"
+    lines[2474] = "Ok(RunResponse {"
+    lines[2475] = "abstain: inferred_abstain(&final_text),"
+    archive, artifact_sha256 = _tar(tmp_path, "\n".join(lines) + "\n")
+    _assert_logan_certificate_contract(
+        TarSourceRepository(str(archive)), artifact_sha256, "src/main.rs"
+    )
+
+
+def test_scorer_slot_rewrite_requires_i4_without_spurious_i3_breach(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha256 = _tar(tmp_path, "// fixture\n" * 2476)
+    repository = TarSourceRepository(str(archive))
+    certificate = _logan_v13_certificate(repository, path="src/main.rs")
+    certificate["causal_evidence"]["authority_transition"] = "scorer_field_rewritten"
+    for decision in certificate["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="pass",
+                pass_clause="model_dissent_preserved",
+                evidence_indices=[],
+            )
+    observation, _, _, basis = _parse_l2_review(
+        certificate,
+        artifact_sha256=artifact_sha256,
+        repository=repository,
+        policy_version=13,
+    )
+    assert observation.ok and basis == "scorer_field_manipulation"
+
+    invalid = copy.deepcopy(certificate)
+    for decision in invalid["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="breach", pass_clause=None, evidence_indices=[3]
+            )
+        elif decision["invariant"] == "i4_derived_value_authority":
+            decision.update(
+                disposition="pass", pass_clause="no_derived_value", evidence_indices=[]
+            )
+    with pytest.raises(
+        ValueError, match="scorer field rewrite requires I4 breach"
+    ) as raised:
+        _parse_l2_review(
+            invalid,
+            artifact_sha256=artifact_sha256,
+            repository=repository,
+            policy_version=13,
+        )
+    assert l2_review._submission_validation_subcode(raised.value) == (
+        "slot_rewrite_invariant"
+    )
+
+
+def test_pre_v12_scorer_slot_rewrite_keeps_i3_binding(tmp_path: Path) -> None:
+    archive, artifact_sha256 = _tar(tmp_path, "// fixture\n" * 2476)
+    repository = TarSourceRepository(str(archive))
+    certificate = _logan_v13_certificate(repository, path="src/main.rs")
+    certificate["causal_evidence"]["authority_transition"] = "scorer_field_rewritten"
+    certificate["invariants"] = [
+        item
+        for item in certificate["invariants"]
+        if item["invariant"] != "i8_evaluation_independence"
+    ]
+    for decision in certificate["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="pass",
+                pass_clause="model_dissent_preserved",
+                evidence_indices=[],
+            )
+    with pytest.raises(ValueError, match="required invariant breach"):
+        _parse_l2_review(
+            certificate,
+            artifact_sha256=artifact_sha256,
+            repository=repository,
+            policy_version=11,
+        )
+
+    for decision in certificate["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="breach", pass_clause=None, evidence_indices=[3]
+            )
+        elif decision["invariant"] == "i4_derived_value_authority":
+            decision.update(
+                disposition="pass", pass_clause="no_derived_value", evidence_indices=[]
+            )
+    observation, _, _, _ = _parse_l2_review(
+        certificate,
+        artifact_sha256=artifact_sha256,
+        repository=repository,
+        policy_version=11,
+    )
+    assert observation.ok and observation.risk_level == "high"
+
+
+def test_submit_tool_schema_has_host_only_artifact_and_invariant_checks() -> None:
+    submit = next(tool for tool in _TOOLS if tool["name"] == "submit_l2_review")
+    properties = submit["parameters"]["properties"]
+    analyzed_digest = properties["analyzed_files"]["items"]["properties"]["sha256"]
+    assert analyzed_digest == {"type": "string"}
+    invariant = properties["invariants"]["items"]["properties"]
+    clauses = invariant["pass_clause"]["anyOf"][1]["enum"]
+    assert "no_derived_value" in clauses
+    assert "i1_model_invocation" in invariant["invariant"]["enum"]
+    # The host checks archive digest equality and per-invariant pass clauses.
+    # The tool schema cannot express either check for these candidate values.
+
+
+def test_logan_certificate_contract_with_exact_private_archive() -> None:
+    value = os.environ.get("DITTO_PRIVATE_LOGAN_ARCHIVE")
+    if not value:
+        pytest.skip("set DITTO_PRIVATE_LOGAN_ARCHIVE for the exact local artifact")
+    archive = Path(value)
+    artifact_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert (
+        artifact_sha256
+        == "d07f953dc18a3e6ee198fc2bd61fa38e025661ce86fe4fd8642a989a6a9dd74b"
+    )
+    _assert_logan_certificate_contract(
+        TarSourceRepository(str(archive)), artifact_sha256, "src/baseline.rs"
+    )
+
+
+async def test_exact_logan_local_tool_trajectory_reaches_terminal_violation(
+    tmp_path: Path,
+) -> None:
+    archive_value = os.environ.get("DITTO_PRIVATE_LOGAN_ARCHIVE")
+    cohort_value = os.environ.get("DITTO_PRIVATE_LOGAN_COHORT_PACKET")
+    image = os.environ.get("DITTO_PRIVATE_L2_ANALYZER_IMAGE")
+    if not (archive_value and cohort_value and image):
+        pytest.skip("set exact Logan archive, cohort packet, and analyzer image")
+    archive = Path(archive_value)
+    artifact_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert (
+        artifact_sha256
+        == "d07f953dc18a3e6ee198fc2bd61fa38e025661ce86fe4fd8642a989a6a9dd74b"
+    )
+    repository = TarSourceRepository(str(archive))
+    certificate = _logan_v13_certificate(repository, path="src/baseline.rs")
+    cohort = json.loads(Path(cohort_value).read_text())
+    packet = cohort["packet"]
+    attempt = UUID("43adb1ce-7fa4-4d53-941e-41efda150402")
+    lease = ScoredRuntimeEvidenceLease.model_validate(
+        {
+            "attempt_id": attempt,
+            "artifact_sha256": artifact_sha256,
+            "policy_version": 13,
+            "bench_version": cohort["bench_version"],
+            "scorer_source_revision": packet["source_revision"],
+            "release_descriptor_digest": packet["release_descriptor_digest"],
+            "scorer_image_digest": packet["scorer_image_digest"],
+            "scorer_env_sha256": packet["scorer_env_sha256"],
+            "injected_keys": packet["injected_keys"],
+            "validator_count": len(cohort["hotkeys"]),
+            "observed_at": int(time.time()),
+        }
+    )
+    calls = [
+        _tool_call("index", "workspace_index", {}),
+        _tool_call(
+            "source",
+            "read_file",
+            {"path": "src/baseline.rs", "start_line": 2460, "end_line": 2480},
+        ),
+        _tool_call("terminal", "submit_l2_review", certificate),
+    ]
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        assert len(requests) <= len(calls)
+        return _response([calls[len(requests) - 1]], model="openai/gpt-6-sol")
+
+    key = tmp_path / "test.key"
+    key.write_text("sk-test-" + "x" * 40)
+    key.chmod(0o600)
+    audit = tmp_path / "local-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=str(key),
+        base_url="https://openrouter.test/api/v1",
+        harness=IsolatedCodingHarness(docker_bin="docker", image=image),
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit), retention_days=30),
+        timeout_seconds=180,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=20,
+        cache_ttl_seconds=86_400,
+        independent_analyst=True,
+        terminal_verdict_required=True,
+        compact_review_packet=True,
+        l3_enabled=False,
+        model="openai/gpt-6-sol",
+        fallback_models=(),
+        transport=httpx.MockTransport(handler),
+    )
+    result = await agent.review(
+        str(archive),
+        artifact_sha256=artifact_sha256,
+        attempt_id=attempt,
+        l1_observation=SourceReviewObservation(
+            ok=True, risk_level=None, finding_digest=None, categories=()
+        ),
+        deadline=None,
+        policy_version=13,
+        scored_runtime_evidence=lease,
+    )
+    assert len(requests) == 3
+    assert result.observation.ok
+    assert result.observation.risk_level == "high"
+    assert result.resolution_basis == "scorer_field_manipulation"
+    assert result.observation.finding_digest is not None
+    assert "workspace_index" in result.tools
+    assert "read_file" in result.tools
+    audit_text = audit.read_text()
+    assert "inferred_abstain" not in audit_text
+    assert "sk-test-" not in audit_text
+
+
+async def test_report_only_audit_records_turn_timeout_and_tool_names_without_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit_path = tmp_path / "turn-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit_path), retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+    )
+    calls = 0
+
+    async def post(*_args: object, **_kwargs: object) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _response(
+                [_tool_call("1", "workspace_index", {})], model="openai/gpt-6-sol"
+            )
+        raise TimeoutError
+
+    monkeypatch.setattr(agent, "_post", post)
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(TimeoutError):
+            await agent._run_trajectory(
+                client,
+                "test-key",
+                tmp_path,
+                None,  # type: ignore[arg-type]
+                artifact_sha256="d" * 64,
+                dossier={"source": "private-source-marker"},
+                role="analyst",
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider="azure",
+                usage_before=l2_review.L2Usage(),
+                deadline=None,
+                dossier_complete=True,
+            )
+    events = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    assert [event["event_type"] for event in events] == [
+        "report_only_turn_start",
+        "report_only_turn_usage",
+        "report_only_turn_tools",
+        "report_only_turn_start",
+        "report_only_turn_timeout",
+    ]
+    assert events[2]["tool_names"] == ["workspace_index"]
+    assert events[-1]["step"] == 2
+    assert "private-source-marker" not in audit_path.read_text()
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [("content_filter", "content_filter"), ("private-source-marker", "other")],
+)
+async def test_report_only_audit_records_fixed_incomplete_reason_without_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str, expected: str
+) -> None:
+    audit_path = tmp_path / "contract-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit_path), retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+    )
+
+    async def post(*_args: object, **_kwargs: object) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "incomplete",
+                "incomplete_details": {"reason": reason},
+                "output": [{"private": "private-source-marker"}],
+                "usage": {"cost": 0.2},
+            },
+        )
+
+    monkeypatch.setattr(agent, "_post", post)
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(
+            l2_review.L2TrajectoryError, match="model-response-contract"
+        ):
+            await agent._run_trajectory(
+                client,
+                "test-key",
+                tmp_path,
+                None,  # type: ignore[arg-type]
+                artifact_sha256="d" * 64,
+                dossier={"source": "private-source-marker"},
+                role="analyst",
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider="azure",
+                usage_before=l2_review.L2Usage(),
+                deadline=None,
+                dossier_complete=True,
+            )
+    events = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    assert events[-1]["event_type"] == "report_only_turn_contract_fault"
+    assert events[-1]["response_status"] == "incomplete"
+    assert events[-1]["incomplete_reason"] == expected
+    assert events[-1]["reported_cost_usd"] == 0.2
+    assert "private-source-marker" not in audit_path.read_text()
+
+
+async def test_compact_safe_correction_names_missing_sections_without_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit_path = tmp_path / "correction-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit_path), retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+        compact_review_packet=True,
+    )
+    deterministic = {
+        name.removeprefix("deterministic."): {}
+        for name in l2_review._COMPACT_DOSSIER_SECTIONS
+        if name.startswith("deterministic.")
+    }
+    dossier = {
+        "artifact_sha256": "d" * 64,
+        "deterministic": deterministic,
+        "bounded_source_inventory": {},
+        "source": "private-source-marker",
+    }
+    monkeypatch.setattr(
+        l2_review,
+        "_parse_l2_review",
+        lambda *_args, **_kwargs: (_safe(), [], [], "safe_clearance"),
+    )
+    requests: list[list[dict[str, object]]] = []
+
+    async def post(
+        _client: object, _key: object, items: list[dict[str, object]], **_kwargs: object
+    ) -> httpx.Response:
+        requests.append(list(items))
+        if len(requests) == 1:
+            return _response(
+                [_tool_call("1", "submit_l2_review", {"disposition": "safe"})],
+                model="openai/gpt-6-sol",
+            )
+        raise TimeoutError
+
+    monkeypatch.setattr(agent, "_post", post)
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(TimeoutError):
+            await agent._run_trajectory(
+                client,
+                "test-key",
+                tmp_path,
+                None,  # type: ignore[arg-type]
+                artifact_sha256="d" * 64,
+                dossier=dossier,
+                role="analyst",
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider="azure",
+                usage_before=l2_review.L2Usage(),
+                deadline=None,
+                dossier_complete=True,
+            )
+    correction = json.loads(requests[1][-1]["output"])
+    assert correction["reason"] == "safe_coverage"
+    assert "bounded_source_inventory" in correction["message"]
+    assert "read at least one exact source file" in correction["message"]
+    events = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    event = next(
+        event
+        for event in events
+        if event["event_type"] == "report_only_submit_correction"
+    )
+    assert event["proposed_disposition"] == "safe"
+    assert event["missing_sections"] == list(l2_review._COMPACT_DOSSIER_SECTIONS)
+    assert event["needs_source_read"] is True
+    assert "private-source-marker" not in audit_path.read_text()
+
+
+async def test_report_only_citation_correction_is_fixed_and_keeps_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit_path = tmp_path / "citation-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit_path), retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+    )
+
+    def reject(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("L2 evidence is not artifact-bound")
+
+    monkeypatch.setattr(l2_review, "_parse_l2_review", reject)
+    requests: list[list[dict[str, object]]] = []
+
+    async def post(
+        _client: object, _key: object, items: list[dict[str, object]], **_kwargs: object
+    ) -> httpx.Response:
+        requests.append(list(items))
+        if len(requests) == 1:
+            return _response(
+                [_tool_call("1", "submit_l2_review", {"disposition": "violation"})],
+                model="openai/gpt-6-sol",
+            )
+        raise TimeoutError
+
+    monkeypatch.setattr(agent, "_post", post)
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(TimeoutError):
+            await agent._run_trajectory(
+                client,
+                "test-key",
+                tmp_path,
+                None,  # type: ignore[arg-type]
+                artifact_sha256="d" * 64,
+                dossier={"source": "private-source-marker"},
+                role="analyst",
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider="azure",
+                usage_before=l2_review.L2Usage(),
+                deadline=None,
+                dossier_complete=True,
+            )
+    correction = json.loads(requests[1][-1]["output"])
+    assert correction["reason"] == "validation"
+    assert "SHA-256" in correction["message"]
+    event = next(
+        json.loads(line)
+        for line in audit_path.read_text().splitlines()
+        if json.loads(line).get("event_type") == "report_only_submit_correction"
+    )
+    assert event["validation_subcode"] == "artifact_citation"
+    assert event["proposed_disposition"] == "violation"
+    assert "private-source-marker" not in audit_path.read_text()
+
+
+async def test_report_only_rejected_violation_cannot_become_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit_path = tmp_path / "rejected-violation-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit_path), retention_days=30),
+        timeout_seconds=30,
+        max_steps=4,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+    )
+    parses = 0
+
+    def parse(*_args: object, **_kwargs: object) -> tuple[object, tuple, tuple, str]:
+        nonlocal parses
+        parses += 1
+        if parses == 1:
+            raise ValueError("L2 violation lacks a causal trigger/effect path")
+        return (
+            SourceReviewObservation(
+                ok=True,
+                risk_level="low",
+                finding_digest="a" * 64,
+                categories=("none",),
+            ),
+            (),
+            (),
+            "unreachable_nonruntime_code",
+        )
+
+    monkeypatch.setattr(l2_review, "_parse_l2_review", parse)
+    requests = 0
+
+    async def post(
+        _client: object, _key: object, _items: object, **_kwargs: object
+    ) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return _response(
+            [
+                _tool_call(
+                    str(requests),
+                    "submit_l2_review",
+                    {"disposition": "violation" if requests == 1 else "safe"},
+                )
+            ],
+            model="openai/gpt-6-sol",
+        )
+
+    monkeypatch.setattr(agent, "_post", post)
+    async with httpx.AsyncClient() as client:
+        result = await agent._run_trajectory(
+            client,
+            "test-key",
+            tmp_path,
+            None,  # type: ignore[arg-type]
+            artifact_sha256="d" * 64,
+            dossier={},
+            role="analyst",
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=(),
+            provider="azure",
+            usage_before=l2_review.L2Usage(),
+            deadline=None,
+            dossier_complete=True,
+        )
+    assert parses == requests == 2
+    assert result.observation.ok is False
+    assert result.observation.error_code == "l2-unresolved-violation"
+    assert result.resolution_basis == "insufficient_static_evidence"
+    assert "report_only_unresolved_violation" in audit_path.read_text()
+
+
+async def test_report_only_provider_body_fault_retries_exact_turn_once(
+    tmp_path: Path,
+) -> None:
+    requests: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.content)
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                headers={"Retry-After": "12", "X-RateLimit-Remaining": "0"},
+                json={
+                    "status": "failed",
+                    "error_type": "rate_limit_exceeded",
+                    "error": {"code": "rate_limit_exceeded"},
+                    "openrouter_metadata": {
+                        "region": "YUL",
+                        "attempt": 1,
+                        "endpoints": {
+                            "available": [{"provider": "Azure", "selected": True}]
+                        },
+                    },
+                },
+            )
+        return httpx.Response(200, json={"status": "completed", "output": []})
+
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(tmp_path / "fault.jsonl"), retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+        retry_provider_body_fault_once=True,
+        transport=httpx.MockTransport(handler),
+    )
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        response = await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=(),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 1,
+        )
+    assert response.json()["status"] == "completed"
+    assert len(requests) == 2
+    fault = json.loads((tmp_path / "fault.jsonl").read_text())
+    assert fault["event_type"] == "report_only_provider_fault"
+    assert fault["response_status"] == "failed"
+    assert fault["error_type"] == fault["error_code"] == "rate_limit_exceeded"
+    assert fault["route_provider"] == "Azure"
+    assert fault["rate_limit_headers"] == {
+        "retry-after": "12",
+        "x-ratelimit-remaining": "0",
+    }
+    assert requests[0] == requests[1]
 
 
 async def test_model_turn_has_an_aggregate_wall_clock_deadline(

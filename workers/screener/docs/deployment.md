@@ -79,11 +79,11 @@ the VM:
   `shadow`; the service creates and repairs the journal and its parent to
   mode 0600 and 0700 respectively, and rejects symlink targets.
 - `SCREENER_REVIEW_INFERENCE_PROVIDER`: `openrouter` (default) or `ditto`. Every
-  private review layer (L1 Luna, L2 Terra, L3 Sol, L4 GLM) calls the same
+  private review layer (L1 Luna, L2 Sol, L3 Sol, L4 GLM) calls the same
   OpenAI-compatible gateway: `/chat/completions` for L1 and L4, `/responses`
   for L2 and L3. `ditto` is Ditto Inference
   (https://developer.heyditto.ai/endpoints): create one endpoint, add model
-  routes for `openai/gpt-5.6-luna`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-sol`,
+  routes for `openai/gpt-6-luna`, `openai/gpt-6-sol`,
   `z-ai/glm-5.2`, and `z-ai/glm-5.3-flash` (requested ids stay as the signed
   review evidence records them), and store its `ditto_inf_` key in the key
   file below. `SCREENER_SOURCE_REVIEW_BASE_URL` overrides the provider default
@@ -100,10 +100,9 @@ the VM:
   `screener_fleet_source_review_secret_id` at
   `screener-review-ditto-inference-key` (Terraform `screener.tf`) instead, so
   the validators' shared OpenRouter secret is never rotated for the screener. The default reviewer model is
-  `openai/gpt-5.6-luna`; every request enforces ZDR and denies data collection.
-  Optional escalation uses `openai/gpt-5.6-terra` for L2, followed by exact
-  `openai/gpt-5.6-sol` for the independent L3 clearance critic. L2 retains an
-  ordered GLM/SOL model-failover chain for upstream routing failures and all
+  `openai/gpt-6-luna`; every request enforces ZDR and denies data collection.
+  Optional escalation uses `openai/gpt-6-sol` for L2 and the independent L3
+  clearance critic. L2 retains a GLM model fallback for upstream routing failures and all
   layers allow OpenRouter provider failover, sorted for throughput. They reuse
   the same protected key file.
 

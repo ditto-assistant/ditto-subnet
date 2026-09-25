@@ -148,7 +148,7 @@ Required values are supplied through the production host's protected
   module names this environment variable.
 - `SCREENER_SOURCE_REVIEW_API_KEY_FILE`: required mode-0400 OpenRouter key file
   for the private read-only source reviewer. The default model is
-  `openai/gpt-5.6-luna`.
+  `openai/gpt-6-luna`.
 - `SCREENER_SEED_PROBE_MODE`: `shadow` (default), `enforce`, or `off`. After
   the health gate, one bounded `POST /seed` wave with a single coined pair
   proves the image can ingest state, not just answer `/health`. `shadow`
@@ -174,16 +174,16 @@ Required values are supplied through the production host's protected
   remain off until its overhead and evidence profile have been calibrated.
   Targon-only smoke and pre-build source holds leave these checks `not_recorded`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
-- `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-5.6-terra`; legacy
+- `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; legacy
   `moonshotai/kimi-k3` remains accepted only for a deliberate rollback.
   `SCREENER_L2_FALLBACK_MODELS` is the ordered OpenRouter model-failover chain
-  (`z-ai/glm-5.2`, then `openai/gpt-5.6-sol`). A fallback is used only after a
+  (`z-ai/glm-5.2` by default). A fallback is used only after a
   model/routing error, never after a valid analyst response.
 - `SCREENER_L3_REVIEW_ENABLED`: `true` (default) runs the independent SOL
-  critic/adjudicator after L2. `false` keeps L1 routing and the Terra L2 analyst
+  critic/adjudicator after L2. `false` keeps L1 routing and the L2 analyst
   active while making the L2 result authoritative. Platform review-settings
   revisions can change this between leases without a worker restart.
-- `SCREENER_L3_REVIEW_MODEL`: locked to `openai/gpt-5.6-sol`; both layers use
+- `SCREENER_L3_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; both layers use
   OpenRouter ZDR routing and deny data collection.
 - `SCREENER_L2_ANALYZER_IMAGE`: locked to the updater-built
   `ditto-screener-l2-analyzer:active` image.

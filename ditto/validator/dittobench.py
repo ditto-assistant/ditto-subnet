@@ -1479,12 +1479,21 @@ class DittobenchClient:
         try:
             while time.monotonic() - started <= budget:
                 resp = await self._client.get(url)
+                # A poll that cannot be read says nothing about the run itself,
+                # which is still live in the sandbox. Cancel it like every other
+                # non-terminal exit so it cannot keep the sandbox after the
+                # ticket has been handed back.
                 if resp.status_code != 200:
+                    await self._cancel(run_id)
                     raise DittobenchError(
                         f"poll rejected ({resp.status_code}): {resp.text[:200]}"
                     )
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError:
+                    data = None
                 if not isinstance(data, dict):
+                    await self._cancel(run_id)
                     raise DittobenchError("poll response was not a JSON object")
                 snapshot = safe_progress_snapshot(data)
                 if snapshot is not None:
@@ -1668,6 +1677,7 @@ class DittobenchClient:
                     min(self._config.dittobench_poll_seconds, remaining)
                 )
         except httpx.HTTPError as e:
+            await self._cancel(run_id)
             raise DittobenchError(f"poll failed: {e}") from e
         except asyncio.CancelledError:
             await self._cancel(run_id)

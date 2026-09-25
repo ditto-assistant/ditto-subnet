@@ -506,6 +506,7 @@ export const l2ReportCanaryViewSchema = z.object({
   review_label: z.string(),
   status: z.string(),
   claimed_instance_id: z.string().nullable(),
+  lease_expires_at: z.string().nullable().optional(),
   report: z.record(z.string(), z.unknown()).nullable(),
   error_code: z.string().nullable(),
   created_at: z.string(),
@@ -5533,6 +5534,34 @@ export const validationQueueReinstatementSchema = z.object({
   created_at: z.string(),
 })
 
+// The relay-owned, provider-WIDE outage circuit. Attached to a retry row while
+// it is open (then it is why the grant is refused, whatever the slot failed on),
+// and while closed if a remaining slot carries `provider_outage_parked`.
+// `closed_at` is the last time a provider request succeeded and closed it — a
+// current-state observation, not proof the route is healthy now.
+export const validationProviderOutageSchema = z.object({
+  provider: z.string(),
+  state: z.enum(['open', 'closed']),
+  epoch: z.string(),
+  opened_at: z.string(),
+  retry_at: z.string(),
+  last_failure_at: z.string(),
+  closed_at: z.string().nullable(),
+  failure_count: z.number().int(),
+  last_status: z.number().int().nullable(),
+  last_error_code: z.string(),
+  probe_kind: z.string().nullable(),
+  probe_key: z.string().nullable(),
+  probe_expires_at: z.string().nullable(),
+})
+
+// Nullish-tolerant for the same split-deploy reason as the eviction fields:
+// an older platform omits both, which means "cannot tell you".
+const providerOutageRetryFields = {
+  provider_outage: validationProviderOutageSchema.nullish().default(null),
+  provider_outage_blocks_retry: z.boolean().nullish().default(null),
+}
+
 export const validationRetryDetailSchema = z.object({
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
@@ -5547,6 +5576,7 @@ export const validationRetryDetailSchema = z.object({
   blocking_reason: z.string().nullable(),
   recommended_action: z.enum(['retry', 'withdraw']).nullish().default(null),
   dominant_failure_code: z.string().nullish().default(null),
+  ...providerOutageRetryFields,
   withdrawal_allowed: z.boolean(),
   withdrawal_blocking_reason: z.string().nullable(),
   // Eviction reporting is nullish-tolerant because Backroom and the platform
@@ -5578,6 +5608,9 @@ export const retryValidationInputSchema = z.object({
   agentId: z.string().uuid(),
   expectedSnapshot: z.string().regex(/^[0-9a-f]{64}$/),
   reason: auditReasonSchema(3),
+  // Required to grant while provider_outage_blocks_retry is true: the
+  // provider-wide circuit is open, so every restored lease is parked again.
+  acknowledgeProviderOutage: z.boolean().default(false),
 })
 
 export const retryValidationResponseSchema = z.object({
@@ -5707,6 +5740,7 @@ export const stuckSubmissionSchema = z.object({
   blocking_reason: z.string().nullable(),
   recommended_action: z.enum(['retry', 'withdraw']).nullish().default(null),
   dominant_failure_code: z.string().nullish().default(null),
+  ...providerOutageRetryFields,
   earliest_retry_after: z.string().nullable(),
   attempts_used: z.number().int().nonnegative(),
   exhausted_validator_count: z.number().int().nonnegative(),
@@ -5795,6 +5829,8 @@ export const batchRetryValidationItemSchema = z.object({
 
 export const batchRetryValidationInputSchema = z.object({
   reason: auditReasonSchema(3),
+  // Applies to every item; see retryValidationInputSchema.
+  acknowledgeProviderOutage: z.boolean().default(false),
   items: z
     .array(batchRetryValidationItemSchema)
     .min(1)
@@ -7578,6 +7614,11 @@ export const sourceDiffManifestSchema = z.object({
   removed_count: z.number().int().nonnegative(),
   renamed_count: z.number().int().nonnegative().default(0),
   truncated: z.boolean(),
+  // Files the Platform's bounded source read skipped in either artifact: not
+  // compared, so absent from `files` and every count. Older Platforms omit
+  // these fields.
+  omitted_file_count: z.number().int().nonnegative().nullish().transform((value) => value ?? 0),
+  omitted_paths: z.array(z.string()).nullish().transform((value) => value ?? []),
 })
 
 export const sourceDiffFileInputSchema = z.object({
@@ -7642,6 +7683,13 @@ export const baselineDiffManifestSchema = z.object({
   custom_added_lines: z.number().int().nonnegative(),
   path_aligned: z.boolean(),
   truncated: z.boolean(),
+  // Files the Platform's bounded source read skipped: not compared, so absent
+  // from `files` and every count. When any exist custom_added_lines is a lower
+  // bound and custom_added_lines_complete is false. An older Platform omits all
+  // three, and its completeness is unknown (null), not assumed.
+  omitted_file_count: z.number().int().nonnegative().nullish().transform((value) => value ?? 0),
+  omitted_paths: z.array(z.string()).nullish().transform((value) => value ?? []),
+  custom_added_lines_complete: z.boolean().nullish().transform((value) => value ?? null),
 })
 
 export const baselineDiffFileInputSchema = z.object({
@@ -8897,3 +8945,102 @@ export const sourceReviewQueueSloSchema = z.object({
 })
 
 export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
+
+// Anomalous-score outlier escalation (issue #476): the env-only posture that
+// can open ATH holds, each value's source, and its audit-chain activity.
+// Read-only. Distinct from /admin/score-outliers (validator disagreement).
+type GeneratedOutlierEscalationSettings =
+  PlatformComponents['schemas']['OutlierEscalationSettingsView']
+type GeneratedOutlierEscalationSources =
+  PlatformComponents['schemas']['OutlierEscalationSettingSourcesView']
+type GeneratedOutlierEscalationEvidence =
+  PlatformComponents['schemas']['OutlierEscalationEvidence']
+type GeneratedOutlierEscalationEntry =
+  PlatformComponents['schemas']['OutlierEscalationEntryView']
+type GeneratedOutlierEscalationActivity =
+  PlatformComponents['schemas']['OutlierEscalationActivityView']
+type GeneratedOutlierEscalationResponse =
+  PlatformComponents['schemas']['AdminOutlierEscalationResponse']
+
+const outlierSettingFieldSchema = z.enum([
+  'mode',
+  'min_bench_version',
+  'min_cohort_size',
+  'modified_z_threshold',
+  'min_composite_floor',
+])
+const outlierSettingSourceSchema = z.enum(['env', 'default', 'default_invalid_env'])
+
+const outlierEscalationSettingsSchema = z.object({
+  mode: z.enum(['off', 'observe', 'enforce']),
+  min_bench_version: z.number().int(),
+  min_cohort_size: z.number().int(),
+  // Null only for a non-finite env value (nan/inf) that scoring IS using.
+  modified_z_threshold: z.number().nullable(),
+  min_composite_floor: z.number().nullable(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationSettings>)
+
+const outlierEscalationSourcesSchema = z.object({
+  mode: outlierSettingSourceSchema,
+  min_bench_version: outlierSettingSourceSchema,
+  min_cohort_size: outlierSettingSourceSchema,
+  modified_z_threshold: outlierSettingSourceSchema,
+  min_composite_floor: outlierSettingSourceSchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationSources>)
+
+const outlierEscalationEvidenceSchema = z.object({
+  composite: z.number().nullish(),
+  cohort_size: z.number().int().nullish(),
+  cohort_median: z.number().nullish(),
+  cohort_mad: z.number().nullish(),
+  modified_z: z.number().nullish(),
+  min_cohort_size: z.number().int().nullish(),
+  modified_z_threshold: z.number().nullish(),
+  min_composite_floor: z.number().nullish(),
+  upward: z.boolean().nullish(),
+  above_floor: z.boolean().nullish(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationEvidence>)
+
+const outlierEscalationEntrySchema = z.object({
+  seq: z.number().int().positive(),
+  agent_id: z.string().uuid(),
+  recorded_at: z.string(),
+  enforced: z.boolean(),
+  bench_version: z.number().int().nullish(),
+  algorithm_version: z.string().nullish(),
+  evidence: outlierEscalationEvidenceSchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationEntry>)
+
+const outlierEscalationActivitySchema = z.object({
+  window_hours: z.number().int().positive(),
+  window_started_at: z.string(),
+  observed_total: z.number().int().nonnegative(),
+  enforced_total: z.number().int().nonnegative(),
+  observed_in_window: z.number().int().nonnegative(),
+  enforced_in_window: z.number().int().nonnegative(),
+  latest_recorded_at: z.string().nullish(),
+  recent_limit: z.number().int().positive(),
+  recent: z.array(outlierEscalationEntrySchema).max(100),
+  recent_truncated: z.boolean(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationActivity>)
+
+export const outlierEscalationSchema = z.object({
+  generated_at: z.string(),
+  settings_loaded_at: z.string(),
+  settings: outlierEscalationSettingsSchema,
+  defaults: outlierEscalationSettingsSchema,
+  sources: outlierEscalationSourcesSchema,
+  env_vars: z.record(z.string(), z.string()),
+  invalid_env_fields: z.array(outlierSettingFieldSchema).max(5),
+  review_kind: z.string(),
+  algorithm_version: z.string(),
+  pending_review_count: z.number().int().nonnegative(),
+  activity: outlierEscalationActivitySchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationResponse>)
+
+export const outlierEscalationInputSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(20),
+  windowHours: z.number().int().min(1).max(720).default(168),
+})
+
+export type OutlierEscalation = z.infer<typeof outlierEscalationSchema>

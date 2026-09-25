@@ -75,7 +75,7 @@ def _with_policy_v10_invariants(value: dict[str, object]) -> dict[str, object]:
         "tool_execution_bypassed": "i6_tool_execution_fidelity",
         "tool_trajectory_fabricated": "i6_tool_execution_fidelity",
         "selective_model_disablement": "i1_model_invocation",
-        "scorer_field_rewritten": "i3_model_dissent",
+        "scorer_field_rewritten": "i4_derived_value_authority",
         "derived_value_authoritative": "i4_derived_value_authority",
         "family_compiler_authoritative": "i5_production_engine",
         "tool_selection_predetermined": "i7_model_tool_planning",
@@ -87,7 +87,11 @@ def _with_policy_v10_invariants(value: dict[str, object]) -> dict[str, object]:
         else set()
     )
     category_breach = (
-        "i3_model_dissent"
+        (
+            "i4_derived_value_authority"
+            if transition == "scorer_field_rewritten"
+            else "i3_model_dissent"
+        )
         if "scorer_contract_manipulation" in categories
         else "i6_tool_execution_fidelity"
         if "fabricated_tool_trajectory" in categories

@@ -9,6 +9,7 @@ import json
 import logging
 import secrets
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -139,10 +140,11 @@ from ditto.api_server.source_inspect import (
     TarSourceInspector,
 )
 from ditto.api_server.starter_kit import (
-    align_candidate_paths,
     is_stock_kit_text,
     starter_kit_head_text,
     starter_kit_provenance,
+    strip_wrapping_root,
+    wrapping_root,
 )
 from ditto.api_server.storage import ObjectDownloadFailedError, S3StorageClient
 from ditto.db.models import (
@@ -4700,14 +4702,43 @@ async def search_screening_source(
     )
 
 
+@dataclass(frozen=True)
+class _BaselinePair:
+    agent: Agent
+    inspector: TarSourceInspector
+    candidate: dict[str, str]
+    baseline: dict[str, str]
+    path_aligned: bool
+    # Aligned path -> inspector path for every readable text file the bounded
+    # snapshot skipped. Those files were not compared; they are reported as
+    # omitted, never diffed as if the submission did not have them.
+    omitted: dict[str, str]
+
+
 async def _baseline_pair(
     agent_id: UUID, session: AsyncSession, storage: S3StorageClient
-) -> tuple[Agent, dict[str, str], dict[str, str], bool]:
+) -> _BaselinePair:
     """Load one submission's text map aligned against the starter-kit baseline."""
     agent, inspector = await _load_inspector(agent_id, session, storage)
-    raw_text = await asyncio.to_thread(inspector.read_all_text)
-    candidate = await asyncio.to_thread(align_candidate_paths, raw_text)
-    return agent, candidate, starter_kit_head_text(), candidate is not raw_text
+    snapshot = await asyncio.to_thread(inspector.read_text_snapshot)
+    # Align on EVERY readable path, skipped ones included, so a skipped file is
+    # named by the same path its loaded siblings are.
+    root = await asyncio.to_thread(
+        wrapping_root, [*snapshot.texts, *snapshot.omitted_paths]
+    )
+    return _BaselinePair(
+        agent=agent,
+        inspector=inspector,
+        candidate={
+            strip_wrapping_root(path, root): text
+            for path, text in snapshot.texts.items()
+        },
+        baseline=starter_kit_head_text(),
+        path_aligned=root is not None,
+        omitted={
+            strip_wrapping_root(path, root): path for path in snapshot.omitted_paths
+        },
+    )
 
 
 @router.get(
@@ -4729,34 +4760,42 @@ async def get_screening_baseline_diff(
     marks stock kit code — including files that match an older kit revision
     rather than the tip — so the operator can go straight to the custom surface.
 
+    Totals cover every compared file. Readable files the bounded source read
+    skipped are listed in ``omitted_paths`` rather than diffed; when any exist,
+    ``custom_added_lines_complete`` is false and the total is a lower bound.
+
     Unified-diff bodies come from the per-file endpoint.
     """
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
-    agent, candidate, baseline, aligned = await _baseline_pair(
-        agent_id, session, storage
-    )
+    pair = await _baseline_pair(agent_id, session, storage)
     manifest = await asyncio.to_thread(
-        build_baseline_diff_manifest, candidate, baseline, is_stock_kit_text
+        build_baseline_diff_manifest,
+        pair.candidate,
+        pair.baseline,
+        is_stock_kit_text,
+        omitted=list(pair.omitted),
     )
     provenance = starter_kit_provenance()
     logger.info(
-        "admin_actor=%s viewed baseline diff agent_id=%s custom_lines=%s revision=%s",
+        "admin_actor=%s viewed baseline diff agent_id=%s custom_lines=%s "
+        "omitted_files=%s revision=%s",
         x_admin_actor,
         agent_id,
         manifest["custom_added_lines"],
+        manifest["omitted_file_count"],
         provenance["revision"],
     )
     return AdminBaselineDiffManifest(
         agent_id=agent_id,
-        artifact_sha256=agent.sha256,
+        artifact_sha256=pair.agent.sha256,
         baseline=AdminStarterKitProvenance(
             source=provenance["source"],
             revision=provenance["revision"],
             commit_set_sha256=provenance["commit_set_sha256"],
             commit_count=int(provenance["commit_count"]),
         ),
-        path_aligned=aligned,
+        path_aligned=pair.path_aligned,
         **manifest,  # type: ignore[arg-type]
     )
 
@@ -4777,15 +4816,26 @@ async def read_screening_baseline_diff_file(
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
     normalized = path.removeprefix("./")
-    _agent, candidate, baseline, _aligned = await _baseline_pair(
-        agent_id, session, storage
-    )
+    pair = await _baseline_pair(agent_id, session, storage)
+    candidate = pair.candidate
+    skipped_source = pair.omitted.get(normalized)
+    if skipped_source is not None:
+        # The combined snapshot budget skipped this file; one file on its own is
+        # within the per-file text bound, so read it rather than diff it as if
+        # the submission did not contain it.
+        try:
+            skipped_text = await asyncio.to_thread(
+                pair.inspector.read_full_text, skipped_source
+            )
+        except SourceInspectError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        candidate = {**candidate, normalized: skipped_text}
     try:
         detail = await asyncio.to_thread(
             unified_diff_for_file,
             normalized,
             candidate,
-            baseline,
+            pair.baseline,
             pair_renames=False,
         )
     except KeyError as error:

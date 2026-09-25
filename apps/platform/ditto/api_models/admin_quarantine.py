@@ -1207,12 +1207,22 @@ class AdminBaselineDiffManifest(BaseModel):
     stock_kit_count: int
     custom_file_count: int
     # Lines that are neither baseline code nor kit code at any revision: the
-    # size of the surface a reviewer actually has to read.
+    # size of the surface a reviewer actually has to read. Summed over every
+    # compared file, not only the rows ``files`` returns.
     custom_added_lines: int
     # True when the submission's paths were realigned by stripping one wrapping
     # directory so they line up with the kit layout.
     path_aligned: bool
     truncated: bool
+    # Readable text files the bounded source read skipped (combined text budget
+    # or file cap). They were NOT compared: they appear in no ``files`` row and
+    # no count above, and ``file_count`` covers compared paths only.
+    omitted_file_count: int
+    # The first MAX_OMITTED_PATHS omitted paths, sorted.
+    omitted_paths: list[str]
+    # False whenever anything was omitted: ``custom_added_lines`` is then a
+    # lower bound, never the whole custom surface.
+    custom_added_lines_complete: bool
 
 
 class AdminBaselineDiffFileDetail(BaseModel):

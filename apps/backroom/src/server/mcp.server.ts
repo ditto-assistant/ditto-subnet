@@ -11,6 +11,8 @@ import {
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
+import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
+import { fetchTreasuryQuote, fetchTreasurySettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
   cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema } from '../lib/benchmark-canary.schemas'
@@ -244,6 +246,7 @@ import {
   fetchInferenceConcurrencySettings,
   fetchInferenceRuntimeMetrics,
   fetchSourceReviewQueueSlo,
+  fetchOutlierEscalation,
   fetchInferenceFailureTaxonomy,
   fetchInferenceTraceObjects,
   createInferenceTraceDownloadUrl,
@@ -307,6 +310,18 @@ import {
 export const BACKROOM_READ_SCOPE = 'backroom:read'
 export const BACKROOM_ARTIFACT_SCOPE = 'backroom:artifact:read'
 export const BACKROOM_WRITE_SCOPE = 'backroom:write'
+/**
+ * The scope an unauthenticated /mcp challenge advertises. MCP clients request
+ * exactly the challenged scope, so pinning backroom:read here meant every
+ * client connected read-only and consent could never offer the other levels.
+ * Advertising the full set lets the operator pick the level on consent, which
+ * still caps the grant to the account's live entitlement.
+ */
+export const BACKROOM_CHALLENGE_SCOPE = [
+  BACKROOM_READ_SCOPE,
+  BACKROOM_ARTIFACT_SCOPE,
+  BACKROOM_WRITE_SCOPE,
+].join(' ')
 export type McpGrantProps = {
   session: BackroomSession
   scopes: Array<string>
@@ -713,7 +728,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_validation_retry:
     'Read parked tickets plus snapshot fields: failure_reason, silently_expired, infra_retry_grants, live_ticket_count, eviction_allowed, eviction_blocking_reason, evicted_validator_hotkeys, reinstatement_allowed, and reinstated_at. Use before retry or queue action.',
   retry_validator_evaluation:
-    'Manually restore exhausted slots for one verified infrastructure failure using a fresh snapshot; preserves scores and history.',
+    'Manually restore exhausted slots for one verified infra failure with a fresh snapshot; keeps scores/history. Open provider outage: acknowledgeProviderOutage.',
   set_validator_slot_settings:
     'Apply the complete two-field validator-slot policy with expectedRevision and "APPLY VALIDATOR SLOT CAP <n>". It is deliberately not derived from settings, a partial write is rejected, and a lower cap never revokes tickets a validator already holds. This is subnet dispatch policy; Ditto app entitlement flags are not served by this server.',
   reinstate_evicted_submission_to_queue:
@@ -724,6 +739,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read inference load and relay health.',
   get_source_review_queue_slo:
     'Read ordinary source-review queue age, throughput, and reconciliation ghosts.',
+  get_outlier_escalation:
+    'Read outlier escalation mode, each setting\'s env source, and audit-chain holds.',
   get_inference_failure_taxonomy:
     'Group recent chat and embedding outcomes by model, lane, gateway, upstream route, and error code. route_basis says how much of a route is known; an unknown route never names one.',
   start_runtime_profile:
@@ -790,7 +807,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   retry_failed_screening_now:
     'Manually retry the latest terminal screening attempt with fresh artifact/score-count/attempt guards; preserves history.',
   get_screening_baseline_diff:
-    'Compare miner-authored residual source against the platform starter-kit baseline. Stock detection is platform-owned; use the file reader for full sanitized bodies. Requires artifact scope.',
+    'Compare miner-authored residual source against the platform starter-kit baseline. Stock detection is platform-owned; use the file reader for full sanitized bodies. If custom_added_lines_complete is false, the total is a lower bound (omitted_paths not compared). Requires artifact scope.',
   list_screening_source_files:
     'Read the readable file manifest for one quarantined submission tarball in archive order. The default limit is the platform listing cap, so a default call returns the WHOLE manifest and pages only when you pass a smaller limit. count is the pageable total and returned is this response; has_more is the only field reporting MCP paging, while truncated reports paths the platform dropped before paging, which no offset recovers. NEVER treat a manifest with has_more or truncated set as the complete inventory of a submission. Requires artifact scope.',
   get_efficiency_bonus_settings:
@@ -1236,7 +1253,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get starter-kit baseline diff',
       description:
-        "Return a per-file diff manifest between one submission and the official starter kit every miner begins from. Each path is classified added, removed, modified, or identical, and carries a stock_kit flag that is true when the content is kit code at ANY revision in the pinned lineage — not merely identical to the tip — so a miner who forked an older commit is not credited with authoring it. The headline custom_added_lines counts only lines that are neither baseline nor kit code, i.e. the surface the miner actually wrote. Start a quarantine review here: it turns reading a whole crate into reading a small delta, and it distinguishes a real custom harness from a kit variant with a few lines changed. Pair with read_screening_baseline_diff_file for line-level changes. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.",
+        "Return a per-file diff manifest between one submission and the official starter kit every miner begins from. Each path is classified added, removed, modified, or identical, and carries a stock_kit flag that is true when the content is kit code at ANY revision in the pinned lineage — not merely identical to the tip — so a miner who forked an older commit is not credited with authoring it. The headline custom_added_lines counts only lines that are neither baseline nor kit code, i.e. the surface the miner actually wrote, summed over every compared file. When custom_added_lines_complete is false that total is a lower bound: the files in omitted_paths (omitted_file_count in all) were past the platform's bounded source read and were NOT compared, so they appear in no row or count; read them with read_screening_source_file. Start a quarantine review here: it turns reading a whole crate into reading a small delta, and it distinguishes a real custom harness from a kit variant with a few lines changed. Pair with read_screening_baseline_diff_file for line-level changes. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.",
       inputSchema: { agentId: z.string().uuid() },
       annotations: toolAnnotations('read'),
     },
@@ -1567,7 +1584,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         'Also reports what each operator remedy would do right now: withdrawal_allowed/withdrawal_blocking_reason for remove_failed_submission_from_queue, and eviction_allowed/eviction_blocking_reason plus live_ticket_count — the leases evict_live_validator_leases would revoke, i.e. the validator slots it would return to the pool immediately. A past removal reports evicted_validator_hotkeys under withdrawal, which is null for an ordinary withdrawal, [] for an eviction that found nothing live left to take, and the revoked validators for one that did. ' +
         'All four eviction fields read null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "eviction is blocked". ' +
         'Queue removal is reversible: reinstatement_allowed/reinstatement_blocking_reason say whether reinstate_evicted_submission_to_queue would work right now for either an ordinary withdrawal or a live-lease eviction. A reversed removal reports reinstated_at under withdrawal plus the reversal itself under reinstatement. Read reinstated_at before concluding a submission is out of the queue — a non-null withdrawal means a removal was recorded, not that it is still in force. Both reinstatement fields read null on a platform that predates the reinstate route, with the same meaning as above. ' +
-        'Each ticket also carries why it ended: silently_expired (the lease ran out with nothing reported about that attempt), failure_reason and failed_at (history, not current state — a manual reissue preserves the last report), slot_id, purpose (canonical_quorum or continual_retest), first_reported_at (null means the validator never advertised the slot as active), and infra_retry_grants. infra_retry_grants is historical evidence from deployments that minted automatic infrastructure grants; it no longer authorizes a lease. Every current failure parks after one attempt until retry_validator_evaluation or retry_validator_evaluations is issued manually. silently_expired reads null against a platform that predates #515. If a lease was ended by the platform rather than by a validator report, list_lease_revocations carries the verdict and its evidence. Requires backroom:read and exposes no miner source.',
+        'Each ticket also carries why it ended: silently_expired (the lease ran out with nothing reported about that attempt), failure_reason and failed_at (history, not current state — a manual reissue preserves the last report), slot_id, purpose (canonical_quorum or continual_retest), first_reported_at (null means the validator never advertised the slot as active), and infra_retry_grants. infra_retry_grants is historical evidence from deployments that minted automatic infrastructure grants; it no longer authorizes a lease. provider_outage is the provider-wide relay circuit (state, last_failure_at, last_error_code, closed_at = last recovery, a current-state observation only); provider_outage_blocks_retry means it is open, so EVERY restored lease is parked again whatever the slot failed on, recommended_action is not retry, and a grant needs acknowledgeProviderOutage. Every current failure parks after one attempt until retry_validator_evaluation or retry_validator_evaluations is issued manually. silently_expired reads null against a platform that predates #515. If a lease was ended by the platform rather than by a validator report, list_lease_revocations carries the verdict and its evidence. Requires backroom:read and exposes no miner source.',
       inputSchema: validationRetryLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1600,7 +1617,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Retry validation after validator infrastructure failure',
       description:
-        'Restore only the exhausted validation slots needed for quorum after an operator verifies validator-owned infrastructure failure. Preserves scores, screening verdicts, artifacts, payments, ownership, and all ticket history. This is not rescreening and acts on one agent only. Requires backroom:write.',
+        'Restore only the exhausted validation slots needed for quorum after an operator verifies validator-owned infrastructure failure. Preserves scores, screening verdicts, artifacts, payments, ownership, and all ticket history. This is not rescreening and acts on one agent only. Refused (409) while provider_outage_blocks_retry is true unless acknowledgeProviderOutage=true: the provider-wide circuit is open and parks every restored lease. Requires backroom:write.',
       inputSchema: retryValidationInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -1664,7 +1681,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List stuck SN118 submissions',
       description:
-        'Paginated fleet triage view of SN118 submissions whose validator tickets may be stuck: which submissions need an operator right now. generation=active (default) shows the active benchmark era plus newer in-progress rollout work, while hiding closed historical eras; generation=all is the explicit cross-benchmark audit. Returns count (the full selected-generation total), returned (rows in this response), limit, offset, has_more, per-state counts before any state filter, and one compact page with accepted-score count, retry state, recommended_action, cooldown/budget flags, blocking reason, exhausted-validator count, per-state ticket counts, and the opaque concurrency snapshot a retry needs. Complete ticket history is deliberately excluded; use get_validation_retry for one agent. Optionally filter by one or more retry states (running, retry_available, cooling_down, exhausted, queued); omit to page through every submission. ' +
+        'Paginated fleet triage view of SN118 submissions whose validator tickets may be stuck: which submissions need an operator right now. generation=active (default) shows the active benchmark era plus newer in-progress rollout work, while hiding closed historical eras; generation=all is the explicit cross-benchmark audit. Returns count (the full selected-generation total), returned (rows in this response), limit, offset, has_more, per-state counts before any state filter, and one compact page with accepted-score count, retry state, recommended_action, provider_outage and provider_outage_blocks_retry, cooldown/budget flags, blocking reason, exhausted-validator count, per-state ticket counts, and the opaque concurrency snapshot a retry needs. Complete ticket history is deliberately excluded; use get_validation_retry for one agent. Optionally filter by one or more retry states (running, retry_available, cooling_down, exhausted, queued); omit to page through every submission. ' +
         'Rows stay in platform triage priority order (retry state, earliest retry time, then agent ID), not newest-first. Each row is scoped by the platform to its resolved ticket/score work era, and the default removes only closed historical generations. ' +
         'Read silent_expiry_count first: it counts tickets that ran their whole lease and reported nothing about that attempt. A submission whose silent_expiry_count climbs while score_count stays at zero is hanging, not merely slow — and because a reported failure and a silent expiry both land as an expired ticket with a rewritten deadline, that count is the only thing in this feed that tells them apart. Use get_validation_retry(agentId) for complete per-validator ticket history, including silently_expired, failure_reason, failure_detail, failed_at, slot_id, and infra_retry_grants. ' +
         'silent_expiry_count reads null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "zero". Requires backroom:read and exposes no miner source.',
@@ -1701,7 +1718,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Batch retry validation after validator infrastructure failure',
       description:
-        'Restore exhausted validation slots for up to 100 submissions in one atomic operation after an operator verifies validator-owned infrastructure failure. Each item is gated and snapshot-checked exactly like retry_validator_evaluation: a submission whose snapshot has moved is skipped, never force-granted, and all grants commit together. Fetch the current snapshot for each submission fresh via list_stuck_submissions or get_validation_retry immediately before calling. agent_id must be unique across the batch; the idempotency key is derived from the action and is not an argument. Preserves scores, screening verdicts, artifacts, payments, ownership, and ticket history. Requires backroom:write. Answers with per-status counts and one row per agent carrying only what differs; the reason, actor, timestamp, and any validator hotkeys common to the whole batch appear once in the shared block for that status group.',
+        'Restore exhausted validation slots for up to 100 submissions in one atomic operation after an operator verifies validator-owned infrastructure failure. Each item is gated and snapshot-checked exactly like retry_validator_evaluation: a submission whose snapshot has moved is skipped, never force-granted, and all grants commit together. Fetch the current snapshot for each submission fresh via list_stuck_submissions or get_validation_retry immediately before calling. Items with provider_outage_blocks_retry are skipped unless acknowledgeProviderOutage=true. agent_id must be unique across the batch; the idempotency key is derived from the action and is not an argument. Preserves scores, screening verdicts, artifacts, payments, ownership, and ticket history. Requires backroom:write. Answers with per-status counts and one row per agent carrying only what differs; the reason, actor, timestamp, and any validator hotkeys common to the whole batch appear once in the shared block for that status group.',
       inputSchema: batchRetryValidationInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -3000,6 +3017,20 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_outlier_escalation',
+    {
+      title: 'Get outlier escalation posture',
+      description:
+        'Read the anomalous-score outlier escalation (issue #476), which can open ATH holds (review_kind anomalous_score) on an out-of-band high composite. It is configured ONLY by environment variables read once per Platform API process at startup (env_vars lists the names; settings_loaded_at is when this process read them), so this is the one place to see what scoring is actually using. ' +
+        'settings is the effective policy: mode off (never computed), observe (would-be holds recorded, nobody held) or enforce (holds opened), plus min_bench_version, min_cohort_size, modified_z_threshold and min_composite_floor; defaults is the shipped policy. sources gives each field\'s origin: env (set and parsed), default (unset) or default_invalid_env (SET BUT REJECTED, so the shipped default is silently in force -- e.g. a mistyped mode leaves the gate off). invalid_env_fields lists those fields; the rejected text is never echoed. A null threshold means the env set nan/inf, which scoring is using. ' +
+        'activity reads the append-only score audit chain: observed_total / enforced_total over all time, the same counts inside window_hours (168), and the recent_limit (20) newest entries with agent_id, recorded_at, enforced, bench_version and the recorded cohort evidence (composite, cohort median/MAD, modified_z, thresholds). recent_truncated means older entries exist beyond the page; the counts are exact. pending_review_count is pending ATH reviews of kind anomalous_score; open them with get_ath_review. ' +
+        'Not /admin/score-outliers (validator disagreement inside one quorum). Changing a value needs an env change and a Platform restart; this tool changes nothing. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchOutlierEscalation()),
+  )
+
+  registerTool(
     'get_inference_failure_taxonomy',
     {
       title: 'Get hosted inference failure taxonomy',
@@ -3107,6 +3138,49 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           REVISION_LISTS,
         ),
       ),
+  )
+
+  registerTool(
+    'get_treasury_settings',
+    {
+      title: 'Get SN118 treasury shadow policy',
+      description: 'Read separate maintenance-bounty and GM inference-credit allocation proposals, destinations, bounds, revision history, and the explicit none weight effect. This is shadow-only and changes neither weights nor funds. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchTreasurySettings()),
+  )
+
+  registerTool(
+    'record_treasury_settings',
+    {
+      title: 'Record SN118 treasury shadow policy',
+      description: 'Append a reviewed shadow allocation revision with expectedRevision, reason, and exact confirmation RECORD TREASURY SHADOW POLICY. Combined proposed share is at most 500 basis points. This records policy only; it cannot change validator weights or send funds. Requires backroom:write.',
+      inputSchema: recordTreasurySettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => recordTreasurySettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'quote_treasury_topup',
+    {
+      title: 'Quote both GM credit funding routes',
+      description: 'Read the finalized Finney SN118 and SN28 pools at one block and quote DITTO alpha to TAO versus DITTO alpha to TAO to GM alpha. Reports pool price impact but no USD credit estimate; GM sets credits when its deposit confirms. Does not sign, trade, or move funds. Requires backroom:read.',
+      inputSchema: treasuryQuoteInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchTreasuryQuote(input)),
+  )
+
+  registerTool(
+    'preview_treasury_topup',
+    {
+      title: 'Dry run one GM top-up route',
+      description: 'Read a fresh finalized two-pool quote and the current shadow treasury policy, then check proposed GM share, single top-up limit and price impact for TAO or SN28 alpha. Wallet linking, current GM instructions and daily spending remain unverified, so execution_enabled is always false. Requires backroom:read.',
+      inputSchema: treasuryPreviewInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await previewTreasuryTopup(input)),
   )
 
   registerTool(

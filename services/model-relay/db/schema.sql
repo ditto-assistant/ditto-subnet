@@ -931,6 +931,17 @@ CREATE FUNCTION public.reject_screening_review_event_mutation() RETURNS trigger
 
 
 --
+-- Name: reject_treasury_settings_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_treasury_settings_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+          RAISE EXCEPTION 'treasury policy history is append only';
+        END $$;
+
+
+--
 -- Name: reject_v13_private_generation_mutation(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -5005,6 +5016,44 @@ ALTER SEQUENCE public.transcript_mirror_settings_revisions_revision_seq OWNED BY
 
 
 --
+-- Name: treasury_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_treasury_settings_revisions_treasury_settings_checksum_check CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_treasury_settings_revisions_treasury_settings_parent_check CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_treasury_settings_revisions_treasury_settings_reason_check CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: treasury_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.treasury_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: treasury_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.treasury_settings_revisions_revision_seq OWNED BY public.treasury_settings_revisions.revision;
+
+
+--
 -- Name: trusted_image_builds; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5729,6 +5778,13 @@ ALTER TABLE ONLY public.submission_settings_revisions ALTER COLUMN revision SET 
 --
 
 ALTER TABLE ONLY public.transcript_mirror_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.transcript_mirror_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: treasury_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.treasury_settings_revisions_revision_seq'::regclass);
 
 
 --
@@ -7514,6 +7570,14 @@ ALTER TABLE ONLY public.transcript_mirror_settings_revisions
 
 
 --
+-- Name: treasury_settings_revisions pk_treasury_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_settings_revisions
+    ADD CONSTRAINT pk_treasury_settings_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: trusted_image_builds pk_trusted_image_builds; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7935,6 +7999,14 @@ ALTER TABLE ONLY public.screening_verification_replays
 
 ALTER TABLE ONLY public.transcript_mirror_settings_revisions
     ADD CONSTRAINT transcript_mirror_settings_parent_revision_key UNIQUE (parent_revision);
+
+
+--
+-- Name: treasury_settings_revisions treasury_settings_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_settings_revisions
+    ADD CONSTRAINT treasury_settings_parent_key UNIQUE (parent_revision);
 
 
 --
@@ -9618,6 +9690,13 @@ CREATE TRIGGER screening_review_events_immutable BEFORE DELETE OR UPDATE ON publ
 --
 
 CREATE TRIGGER screening_verification_replay_private_receipts_immutable BEFORE DELETE OR UPDATE ON public.screening_verification_replay_private_receipts FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: treasury_settings_revisions treasury_settings_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_settings_immutable BEFORE DELETE OR UPDATE ON public.treasury_settings_revisions FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_settings_mutation();
 
 
 --

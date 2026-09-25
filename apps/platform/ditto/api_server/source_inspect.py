@@ -62,6 +62,38 @@ class _Member:
     archive_name: str
     size: int
     is_text: bool
+    # Zero-based position of this entry among ALL archive members, in stream
+    # order. A tar may repeat a path (or spell it ``./x`` and ``x``); only the
+    # last entry survives extraction, and every reader binds to this exact
+    # position so the manifest, search, excerpt and extracted bytes agree.
+    index: int
+
+
+# Why :meth:`TarSourceInspector.read_text_snapshot` left a text member out.
+OMIT_REASON_FILE_LIMIT = "file_limit"
+OMIT_REASON_BYTE_BUDGET = "byte_budget"
+OMIT_REASON_UNREADABLE = "unreadable"
+
+
+@dataclass(frozen=True)
+class OmittedTextFile:
+    """A readable text member the bounded snapshot did not load."""
+
+    path: str
+    size: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class TextSnapshot:
+    """Loaded ``path -> text`` plus every text member left out, and why."""
+
+    texts: dict[str, str]
+    omitted: tuple[OmittedTextFile, ...]
+
+    @property
+    def omitted_paths(self) -> list[str]:
+        return [item.path for item in self.omitted]
 
 
 def _safe_name(member: tarfile.TarInfo) -> str | None:
@@ -77,6 +109,13 @@ def _safe_name(member: tarfile.TarInfo) -> str | None:
     ):
         return None
     return normalized
+
+
+def _is_inventoried_entry(member: tarfile.TarInfo, info: _Member) -> bool:
+    """Whether the entry at ``info.index`` is still the one that was inventoried."""
+    return (
+        member.isreg() and member.name == info.archive_name and member.size == info.size
+    )
 
 
 def _compile_search(pattern: str, mode: str, ignore_case: bool) -> re.Pattern[str]:
@@ -152,6 +191,7 @@ class TarSourceInspector:
                             member.name,
                             member.size,
                             self._member_is_text(archive, member),
+                            count - 1,
                         )
                     )
         except SourceInspectError:
@@ -160,6 +200,8 @@ class TarSourceInspector:
             raise SourceInspectError(
                 "artifact-unreadable", f"artifact is not a readable tarball: {error}"
             ) from error
+        # Last entry wins per normalized path, matching extraction: a later
+        # member with the same path overwrites the earlier one on disk.
         self._members = {member.name: member for member in members}
 
     @staticmethod
@@ -175,6 +217,16 @@ class TarSourceInspector:
         except UnicodeDecodeError:
             return False
         return True
+
+    @staticmethod
+    def _decode_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> str | None:
+        extracted = archive.extractfile(member)
+        if extracted is None:
+            return None
+        try:
+            return extracted.read(TEXT_SIZE_LIMIT + 1).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
 
     def listing(self) -> dict[str, object]:
         """Bounded inventory with explicit totals for every truncation."""
@@ -201,48 +253,120 @@ class TarSourceInspector:
             "truncated": len(ordered) > len(rows),
         }
 
-    def read_all_text(
+    def read_text_snapshot(
         self, *, max_files: int = MAX_LISTING_FILES, max_total_bytes: int | None = None
-    ) -> dict[str, str]:
-        """Extract every UTF-8 text member's full content in ONE pass.
+    ) -> TextSnapshot:
+        """Extract UTF-8 text members' full content in ONE pass, reporting skips.
 
         Feeds pair diffing, which needs whole-file bodies for both artifacts at
         once; doing that with per-file :meth:`read` calls would reopen the gzip
         stream once per file. The result is bounded: at most ``max_files``
-        members (smallest first, so a hostile archive of many tiny files can't
-        crowd out the real sources) and, when set, ``max_total_bytes`` of
-        cumulative decoded text. Members past either bound are simply omitted —
-        the diff manifest reports the archive's true ``file_count`` separately
-        so the omission is visible, never silent.
+        members and ``max_total_bytes`` (default :data:`TEXT_SIZE_LIMIT`) of
+        cumulative text, measured by tar-header size.
+
+        The members to load are chosen UP FRONT, smallest first with the path as
+        a stable tie-break, against both bounds together. Choosing in archive
+        order instead let whatever the archive stored first spend the budget: a
+        starter-kit crate alone carries ~2.4 MB of fixture JSON under
+        ``fixtures/``, which ``tar`` stores before ``src/``, so a large authored
+        ``src/baseline.rs`` was silently dropped and a diff then reported it as
+        a deleted file (issue #480). Smallest-first keeps the most files, and
+        every member left out is returned in :attr:`TextSnapshot.omitted` with
+        the bound that excluded it, so a caller can say what it did not compare.
+
+        Opaque members (non-UTF-8, or past :data:`TEXT_SIZE_LIMIT` on their
+        own) are never text candidates; :meth:`listing` reports them.
         """
         budget = TEXT_SIZE_LIMIT if max_total_bytes is None else max_total_bytes
-        wanted = {
-            member.archive_name: member
-            for member in sorted(
-                (m for m in self._members.values() if m.is_text),
-                key=lambda item: (item.size, item.name),
-            )[:max_files]
-        }
-        out: dict[str, str] = {}
-        if not wanted:
-            return out
+        wanted: dict[int, _Member] = {}
+        omitted: list[OmittedTextFile] = []
         total = 0
-        with tarfile.open(fileobj=io.BytesIO(self._tar_bytes), mode="r|gz") as archive:
-            for member in archive:
-                info = wanted.get(member.name)
-                if info is None:
-                    continue
-                extracted = archive.extractfile(member)
-                if extracted is None:
-                    continue
-                text = extracted.read(TEXT_SIZE_LIMIT + 1).decode("utf-8")
-                if total + len(text) > budget:
-                    continue
-                total += len(text)
-                out[info.name] = text
-                if len(out) == len(wanted):
-                    break
-        return out
+        for candidate in sorted(
+            (m for m in self._members.values() if m.is_text),
+            key=lambda item: (item.size, item.name),
+        ):
+            if len(wanted) >= max_files:
+                reason = OMIT_REASON_FILE_LIMIT
+            elif total + candidate.size > budget:
+                reason = OMIT_REASON_BYTE_BUDGET
+            else:
+                total += candidate.size
+                wanted[candidate.index] = candidate
+                continue
+            omitted.append(OmittedTextFile(candidate.name, candidate.size, reason))
+        out: dict[str, str] = {}
+        if wanted:
+            with tarfile.open(
+                fileobj=io.BytesIO(self._tar_bytes), mode="r|gz"
+            ) as archive:
+                for position, member in enumerate(archive):
+                    # Bind to the exact inventoried entry by position. Matching
+                    # on name (even name + size) would load an EARLIER entry
+                    # that a later same-named one overwrites on extraction.
+                    info = wanted.pop(position, None)
+                    if info is None:
+                        continue
+                    if not _is_inventoried_entry(member, info):
+                        omitted.append(
+                            OmittedTextFile(
+                                info.name, info.size, OMIT_REASON_UNREADABLE
+                            )
+                        )
+                        if not wanted:
+                            break
+                        continue
+                    text = self._decode_member(archive, member)
+                    if text is None:
+                        omitted.append(
+                            OmittedTextFile(
+                                info.name, info.size, OMIT_REASON_UNREADABLE
+                            )
+                        )
+                    else:
+                        out[info.name] = text
+                    if not wanted:
+                        break
+        omitted.extend(
+            OmittedTextFile(info.name, info.size, OMIT_REASON_UNREADABLE)
+            for info in wanted.values()
+        )
+        omitted.sort(key=lambda item: item.path)
+        return TextSnapshot(texts=out, omitted=tuple(omitted))
+
+    def read_all_text(
+        self, *, max_files: int = MAX_LISTING_FILES, max_total_bytes: int | None = None
+    ) -> dict[str, str]:
+        """``path -> text`` from :meth:`read_text_snapshot`, without the skips.
+
+        Only for callers that genuinely do not need to know what was left out;
+        a diff must use :meth:`read_text_snapshot` so an omitted file is never
+        mistaken for one that is absent.
+        """
+        return self.read_text_snapshot(
+            max_files=max_files, max_total_bytes=max_total_bytes
+        ).texts
+
+    def read_full_text(self, path: str) -> str:
+        """The whole body of one UTF-8 text member (bounded by TEXT_SIZE_LIMIT).
+
+        Lets a single-file diff read a member the combined snapshot budget left
+        out, instead of diffing it as if the file did not exist.
+        """
+        return self._read_text(self._text_member(path))
+
+    def _text_member(self, path: str) -> _Member:
+        """The UTF-8 text member at ``path``, or a typed inspect error."""
+        normalized = path.removeprefix("./")
+        member = self._members.get(normalized)
+        if member is None:
+            raise SourceInspectError("file-not-found", f"no file at {normalized!r}")
+        if not member.is_text:
+            raise SourceInspectError(
+                "file-is-not-utf8-text",
+                f"{normalized!r} is binary or exceeds the {TEXT_SIZE_LIMIT} byte "
+                "text bound",
+            )
+        return member
 
     def search(
         self,
@@ -274,7 +398,7 @@ class TarSourceInspector:
         """
         matcher = _compile_search(pattern, mode, ignore_case)
         wanted = {
-            member.archive_name: member
+            member.index: member
             for member in self._members.values()
             if member.is_text and _path_selected(member.name, path_glob)
         }
@@ -289,9 +413,11 @@ class TarSourceInspector:
             with tarfile.open(
                 fileobj=io.BytesIO(self._tar_bytes), mode="r|gz"
             ) as archive:
-                for member in archive:
-                    info = wanted.get(member.name)
-                    if info is None:
+                for position, member in enumerate(archive):
+                    # Search only the entry extraction keeps, by position, so
+                    # a shadowed earlier copy can never contribute hits.
+                    info = wanted.get(position)
+                    if info is None or not _is_inventoried_entry(member, info):
                         continue
                     extracted = archive.extractfile(member)
                     if extracted is None:
@@ -355,16 +481,7 @@ class TarSourceInspector:
     def read(self, path: str, start_line: int, end_line: int) -> dict[str, object]:
         """Read a bounded line range from one UTF-8 text member."""
         normalized = path.removeprefix("./")
-        member = self._members.get(normalized)
-        if member is None:
-            raise SourceInspectError("file-not-found", f"no file at {normalized!r}")
-        if not member.is_text:
-            raise SourceInspectError(
-                "file-is-not-utf8-text",
-                f"{normalized!r} is binary or exceeds the {TEXT_SIZE_LIMIT} byte "
-                "text bound",
-            )
-        text = self._read_text(member)
+        text = self._read_text(self._text_member(normalized))
         lines = text.splitlines()
         start = max(1, start_line)
         end = max(start, min(end_line, start + MAX_READ_LINES - 1, len(lines)))
@@ -383,7 +500,17 @@ class TarSourceInspector:
         # One targeted decompression per excerpt request; the constructor
         # already proved the member is bounded UTF-8 text.
         with tarfile.open(fileobj=io.BytesIO(self._tar_bytes), mode="r:gz") as archive:
-            member = archive.getmember(member_info.archive_name)
+            # getmember(name) returns the LAST entry with that exact spelling,
+            # which can differ from the inventoried one when a path is also
+            # stored as ``./name``; resolve the same position every reader uses.
+            members = archive.getmembers()
+            member = (
+                members[member_info.index] if member_info.index < len(members) else None
+            )
+            if member is None or not _is_inventoried_entry(member, member_info):
+                raise SourceInspectError(
+                    "file-not-found", f"no file at {member_info.name!r}"
+                )
             extracted = archive.extractfile(member)
             if extracted is None:
                 raise SourceInspectError(
@@ -402,7 +529,12 @@ __all__ = [
     "MAX_SEARCH_SCAN",
     "MAX_TARBALL_BYTES",
     "MAX_UNPACKED_BYTES",
+    "OMIT_REASON_BYTE_BUDGET",
+    "OMIT_REASON_FILE_LIMIT",
+    "OMIT_REASON_UNREADABLE",
     "SEARCH_LINE_CHARS",
+    "OmittedTextFile",
     "SourceInspectError",
     "TarSourceInspector",
+    "TextSnapshot",
 ]

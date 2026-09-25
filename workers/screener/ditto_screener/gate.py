@@ -213,6 +213,14 @@ _DOCKER_INFRASTRUCTURE_MARKERS = (
     # so it is reported as infrastructure rather than rejecting the artifact.
     "context canceled",
     "context cancelled",
+    # The build client's session to BuildKit (which streams the stdin context)
+    # was lost, or the daemon's gRPC stream dropped mid-solve. BuildKit reports
+    # these without its own name, and the same archive builds on a retry.
+    "no http response from session",
+    "no active session for",
+    "failed to receive status",
+    "error reading from server",
+    "rpc error: code = unavailable",
     "buildkit",
     "snapshotter",
     "failed to mount",
@@ -231,6 +239,10 @@ _DOCKER_INFRASTRUCTURE_MARKERS = (
     "bad gateway",
     "gateway timeout",
 )
+# An optional BuildKit step prefix (``#12 43.02``) or quoted-log timestamp
+# (``43.02``), then a gutter (``88  |``, ``   |``) or Dockerfile excerpt
+# (``  14 | >>> RUN``).
+_QUOTED_SOURCE_LINE = re.compile(r"^(?:#\d+\s+)?(?:\d+\.\d+\s+)?\s*\d*\s*\|")
 
 
 @dataclass(frozen=True)
@@ -928,7 +940,16 @@ def _detail_tail(text: str) -> str:
 
 
 def _docker_infrastructure_failure(text: str) -> bool:
-    normalized = text.casefold()
+    # Compiler diagnostics and BuildKit's Dockerfile excerpt quote submitted
+    # source as ``NN | code`` lines. That text is the miner's, so a string such
+    # as ``Err("service unavailable")`` on the failing line must not turn a
+    # compile error into an infrastructure park. Daemon and transport errors
+    # never use this layout.
+    normalized = "\n".join(
+        line
+        for line in text.casefold().splitlines()
+        if not _QUOTED_SOURCE_LINE.match(line)
+    )
     return any(marker in normalized for marker in _DOCKER_INFRASTRUCTURE_MARKERS)
 
 

@@ -60,24 +60,26 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.static_preflight_v2_mode == "off"
     assert cfg.static_preflight_audit_file is None
     assert cfg.l2_review_mode == "off"
-    assert cfg.l2_review_model == "openai/gpt-5.6-terra"
+    assert cfg.source_review_model == "openai/gpt-6-luna"
+    assert cfg.l2_review_model == "openai/gpt-6-sol"
     assert cfg.l2_review_provider == "openrouter"
-    assert cfg.l2_fallback_models == ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
+    assert cfg.l2_fallback_models == ("z-ai/glm-5.2",)
     assert cfg.l3_review_enabled is True
-    assert cfg.l3_review_model == "openai/gpt-5.6-sol"
+    assert cfg.l3_review_model == "openai/gpt-6-sol"
     assert cfg.l3_review_provider == "openrouter"
     assert cfg.l2_workspace_root is None
-    assert cfg.l2_max_steps == 18
-    assert cfg.l2_timeout_seconds == 900
-    assert cfg.l2_max_input_tokens == 425_000
-    assert cfg.l2_max_output_tokens == 20_000
-    assert cfg.l2_max_cost_usd == 2.0
+    assert cfg.l2_max_steps == 256
+    assert cfg.l2_timeout_seconds == 1800
+    assert cfg.l2_max_input_tokens == 5_000_000
+    assert cfg.l2_max_output_tokens == 1_000_000
+    assert cfg.l2_max_completion_tokens == 16_000
+    assert cfg.l2_max_cost_usd == 25.0
     assert cfg.l2_analyst_reasoning_effort == "model_default"
     assert cfg.l2_critic_reasoning_effort == "medium"
     assert cfg.require_signed_runtime_lease is False
 
 
-def test_gpt6_sol_l2_model_is_valid_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gpt6_models_are_valid_when_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
     _base_env(monkeypatch)
     monkeypatch.setenv("SCREENER_L2_REVIEW_MODEL", "openai/gpt-6-sol")
     monkeypatch.setenv("SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-6-luna")
@@ -150,7 +152,7 @@ def test_remote_build_timeout_is_independent_and_configurable(
         (
             "SCREENER_L2_FALLBACK_MODELS",
             "openai/gpt-5.6-luna",
-            "z-ai/glm-5.2,openai/gpt-5.6-sol",
+            "must be z-ai/glm-5.2",
         ),
         ("SCREENER_L3_REVIEW_MODEL", "openai/gpt-5.6-terra", "gpt-5.6-sol"),
         (
