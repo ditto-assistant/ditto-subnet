@@ -24,7 +24,6 @@ from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     ledger_disposition,
-    substantiated_concern_count,
 )
 from ditto_screener.source_signals import (
     find_decisive_malicious_source,
@@ -36,6 +35,7 @@ from ditto_screening_protocol import (
     SourceReviewInvariant,
     SourceReviewInvariantDisposition,
 )
+from ditto_screening_protocol.review_ledger import substantiated_concern_count
 
 _SHA = "ab" * 32
 
