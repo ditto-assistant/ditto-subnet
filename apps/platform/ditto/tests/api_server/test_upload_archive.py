@@ -14,7 +14,7 @@ from ditto.api_server.source_inspect import (
 )
 
 
-def _archive(members: list[tuple[str, bytes, int]]) -> bytes:
+def _archive(members: list[tuple[str, bytes, bytes]]) -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for name, data, typ in members:
