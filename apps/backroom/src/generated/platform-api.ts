@@ -1527,6 +1527,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/outlier-escalation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Outlier Escalation
+         * @description Effective escalation settings with sources, plus recent activity.
+         */
+        get: operations["get_outlier_escalation_api_v1_admin_outlier_escalation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/owner-attestations/{attestation_id}/revoke": {
         parameters: {
             query?: never;
@@ -10347,6 +10367,45 @@ export interface components {
              * @enum {string}
              */
             reason: "oversized" | "non_utf8";
+        };
+        /**
+         * AdminOutlierEscalationResponse
+         * @description Effective posture, per-field sources, and audit-chain activity.
+         */
+        AdminOutlierEscalationResponse: {
+            activity: components["schemas"]["OutlierEscalationActivityView"];
+            /** Algorithm Version */
+            algorithm_version: string;
+            defaults: components["schemas"]["OutlierEscalationSettingsView"];
+            /**
+             * Env Vars
+             * @description Environment variable name per setting (names only).
+             */
+            env_vars: {
+                [key: string]: string;
+            };
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Invalid Env Fields */
+            invalid_env_fields: ("mode" | "min_bench_version" | "min_cohort_size" | "modified_z_threshold" | "min_composite_floor")[];
+            /**
+             * Pending Review Count
+             * @description Pending ATH reviews opened as anomalous_score.
+             */
+            pending_review_count: number;
+            /** Review Kind */
+            review_kind: string;
+            settings: components["schemas"]["OutlierEscalationSettingsView"];
+            /**
+             * Settings Loaded At
+             * Format: date-time
+             * @description When this API process read the environment. Settings change only on a process restart.
+             */
+            settings_loaded_at: string;
+            sources: components["schemas"]["OutlierEscalationSettingSourcesView"];
         };
         /**
          * AdminOwnerAgent
@@ -21928,6 +21987,143 @@ export interface components {
              * @default
              */
             schema_sha256: string;
+        };
+        /** OutlierEscalationActivityView */
+        OutlierEscalationActivityView: {
+            /** Enforced In Window */
+            enforced_in_window: number;
+            /** Enforced Total */
+            enforced_total: number;
+            /** Latest Recorded At */
+            latest_recorded_at?: string | null;
+            /** Observed In Window */
+            observed_in_window: number;
+            /** Observed Total */
+            observed_total: number;
+            /** Recent */
+            recent: components["schemas"]["OutlierEscalationEntryView"][];
+            /** Recent Limit */
+            recent_limit: number;
+            /**
+             * Recent Truncated
+             * @description More matching entries exist beyond recent_limit.
+             */
+            recent_truncated: boolean;
+            /** Window Hours */
+            window_hours: number;
+            /**
+             * Window Started At
+             * Format: date-time
+             */
+            window_started_at: string;
+        };
+        /** OutlierEscalationEntryView */
+        OutlierEscalationEntryView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Algorithm Version */
+            algorithm_version?: string | null;
+            /** Bench Version */
+            bench_version?: number | null;
+            /**
+             * Enforced
+             * @description true: an ATH hold was opened (enforce). false: a would-be hold was only recorded (observe).
+             */
+            enforced: boolean;
+            evidence: components["schemas"]["OutlierEscalationEvidence"];
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /**
+             * Seq
+             * @description score_audit_log append order.
+             */
+            seq: number;
+        };
+        /**
+         * OutlierEscalationEvidence
+         * @description Scalar evidence the escalation recorded; null when absent or mistyped.
+         */
+        OutlierEscalationEvidence: {
+            /** Above Floor */
+            above_floor?: boolean | null;
+            /** Cohort Mad */
+            cohort_mad?: number | null;
+            /** Cohort Median */
+            cohort_median?: number | null;
+            /** Cohort Size */
+            cohort_size?: number | null;
+            /** Composite */
+            composite?: number | null;
+            /** Min Cohort Size */
+            min_cohort_size?: number | null;
+            /** Min Composite Floor */
+            min_composite_floor?: number | null;
+            /**
+             * Modified Z
+             * @description Null for a zero-MAD cohort (no spread to divide by).
+             */
+            modified_z?: number | null;
+            /** Modified Z Threshold */
+            modified_z_threshold?: number | null;
+            /** Upward */
+            upward?: boolean | null;
+        };
+        /** OutlierEscalationSettingSourcesView */
+        OutlierEscalationSettingSourcesView: {
+            /**
+             * Min Bench Version
+             * @enum {string}
+             */
+            min_bench_version: "env" | "default" | "default_invalid_env";
+            /**
+             * Min Cohort Size
+             * @enum {string}
+             */
+            min_cohort_size: "env" | "default" | "default_invalid_env";
+            /**
+             * Min Composite Floor
+             * @enum {string}
+             */
+            min_composite_floor: "env" | "default" | "default_invalid_env";
+            /**
+             * Mode
+             * @description env: the variable was set and parsed. default: unset, shipped default. default_invalid_env: set but rejected, so the shipped default is in force.
+             * @enum {string}
+             */
+            mode: "env" | "default" | "default_invalid_env";
+            /**
+             * Modified Z Threshold
+             * @enum {string}
+             */
+            modified_z_threshold: "env" | "default" | "default_invalid_env";
+        };
+        /** OutlierEscalationSettingsView */
+        OutlierEscalationSettingsView: {
+            /** Min Bench Version */
+            min_bench_version: number;
+            /** Min Cohort Size */
+            min_cohort_size: number;
+            /**
+             * Min Composite Floor
+             * @description Null only when the environment set a non-finite value (nan/inf), which the loader accepts and JSON cannot carry. Scoring is using that value.
+             */
+            min_composite_floor: number | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "observe" | "enforce";
+            /**
+             * Modified Z Threshold
+             * @description Null only when the environment set a non-finite value (nan/inf), which the loader accepts and JSON cannot carry. Scoring is using that value.
+             */
+            modified_z_threshold: number | null;
         };
         /**
          * OwnerLinkProof
@@ -36956,6 +37152,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminOwnerFootprint"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_outlier_escalation_api_v1_admin_outlier_escalation_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                window_hours?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOutlierEscalationResponse"];
                 };
             };
             /** @description Validation Error */

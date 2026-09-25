@@ -248,6 +248,7 @@ import {
   fetchInferenceConcurrencySettings,
   fetchInferenceRuntimeMetrics,
   fetchSourceReviewQueueSlo,
+  fetchOutlierEscalation,
   fetchInferenceFailureTaxonomy,
   fetchInferenceTraceObjects,
   createInferenceTraceDownloadUrl,
@@ -741,6 +742,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read inference load and relay health.',
   get_source_review_queue_slo:
     'Read ordinary source-review queue age, throughput, and reconciliation ghosts.',
+  get_outlier_escalation:
+    'Read outlier escalation mode, each setting\'s env source, and audit-chain holds.',
   get_inference_failure_taxonomy:
     'Group recent chat and embedding outcomes by model, lane, gateway, upstream route, and error code. route_basis says how much of a route is known; an unknown route never names one.',
   start_runtime_profile:
@@ -3040,6 +3043,20 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchSourceReviewQueueSlo()),
+  )
+
+  registerTool(
+    'get_outlier_escalation',
+    {
+      title: 'Get outlier escalation posture',
+      description:
+        'Read the anomalous-score outlier escalation (issue #476), which can open ATH holds (review_kind anomalous_score) on an out-of-band high composite. It is configured ONLY by environment variables read once per Platform API process at startup (env_vars lists the names; settings_loaded_at is when this process read them), so this is the one place to see what scoring is actually using. ' +
+        'settings is the effective policy: mode off (never computed), observe (would-be holds recorded, nobody held) or enforce (holds opened), plus min_bench_version, min_cohort_size, modified_z_threshold and min_composite_floor; defaults is the shipped policy. sources gives each field\'s origin: env (set and parsed), default (unset) or default_invalid_env (SET BUT REJECTED, so the shipped default is silently in force -- e.g. a mistyped mode leaves the gate off). invalid_env_fields lists those fields; the rejected text is never echoed. A null threshold means the env set nan/inf, which scoring is using. ' +
+        'activity reads the append-only score audit chain: observed_total / enforced_total over all time, the same counts inside window_hours (168), and the recent_limit (20) newest entries with agent_id, recorded_at, enforced, bench_version and the recorded cohort evidence (composite, cohort median/MAD, modified_z, thresholds). recent_truncated means older entries exist beyond the page; the counts are exact. pending_review_count is pending ATH reviews of kind anomalous_score; open them with get_ath_review. ' +
+        'Not /admin/score-outliers (validator disagreement inside one quorum). Changing a value needs an env change and a Platform restart; this tool changes nothing. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchOutlierEscalation()),
   )
 
   registerTool(

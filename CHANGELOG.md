@@ -2,6 +2,73 @@
 
 <!-- version list -->
 
+## v0.315.0 (2026-09-25)
+
+### Features
+
+- **screener**: Add report-only v14 generator template leads
+  ([#2310](https://github.com/ditto-assistant/ditto-subnet/pull/2310),
+  [`19dd961`](https://github.com/ditto-assistant/ditto-subnet/commit/19dd961a557067f855bc88df0e51aff4afc40441))
+
+
+## v0.314.1 (2026-09-25)
+
+### Bug Fixes
+
+- **screener**: Bind scorer slot rewrites to I4
+  ([#2306](https://github.com/ditto-assistant/ditto-subnet/pull/2306),
+  [`571caf4`](https://github.com/ditto-assistant/ditto-subnet/commit/571caf4c83e13117cb63186000939bb96344509b))
+
+
+## v0.314.0 (2026-09-25)
+
+### Features
+
+- **platform**: Expose the outlier escalation posture and activity to Backroom
+  ([#2303](https://github.com/ditto-assistant/ditto-subnet/pull/2303),
+  [`b70b5df`](https://github.com/ditto-assistant/ditto-subnet/commit/b70b5df011f050f1bb245f66045c85ccf4e55999))
+
+
+## v0.313.4 (2026-09-25)
+
+### Bug Fixes
+
+- **validator**: Cancel the scorer run when a poll fails
+  ([#2302](https://github.com/ditto-assistant/ditto-subnet/pull/2302),
+  [`cecf680`](https://github.com/ditto-assistant/ditto-subnet/commit/cecf680c2c941c1575b28b1e14c41a90b809b326))
+
+### Documentation
+
+- Clarify local dev quickstart scope
+  ([#2091](https://github.com/ditto-assistant/ditto-subnet/pull/2091),
+  [`5e4d9c4`](https://github.com/ditto-assistant/ditto-subnet/commit/5e4d9c4e5e0ac57d47af04cf857b113f30e5dbd8))
+
+
+## v0.313.3 (2026-09-25)
+
+### Bug Fixes
+
+- **backroom**: Expose L2 canary lease expiry
+  ([#2296](https://github.com/ditto-assistant/ditto-subnet/pull/2296),
+  [`fc9b687`](https://github.com/ditto-assistant/ditto-subnet/commit/fc9b687384bd98967d83170bbdd2ed2bf9063749))
+
+- **datagen**: Keep ordinary English out of v8 answer pools
+  ([#2222](https://github.com/ditto-assistant/ditto-subnet/pull/2222),
+  [`4629325`](https://github.com/ditto-assistant/ditto-subnet/commit/4629325612a250c2519dc16624ee980956f2f786))
+
+- **platform**: Count every compared file in the baseline diff and report what was omitted
+  ([#2253](https://github.com/ditto-assistant/ditto-subnet/pull/2253),
+  [`0eb6a74`](https://github.com/ditto-assistant/ditto-subnet/commit/0eb6a74d30dd09b71c36d2ee242115180586156c))
+
+- **screener**: Align bootstrap defaults with GPT-6 review
+  ([#2299](https://github.com/ditto-assistant/ditto-subnet/pull/2299),
+  [`e78b631`](https://github.com/ditto-assistant/ditto-subnet/commit/e78b631112aaba345271fb8547c8ecd8355fd66f))
+
+- **screener**: Ignore quoted source when classifying build infrastructure failures
+  ([#2298](https://github.com/ditto-assistant/ditto-subnet/pull/2298),
+  [`f462b85`](https://github.com/ditto-assistant/ditto-subnet/commit/f462b85aa99319f7fd41b1070398917e6389e9a2))
+
+
 ## v0.313.2 (2026-09-25)
 
 ### Bug Fixes

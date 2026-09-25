@@ -249,6 +249,8 @@ import {
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
   sourceReviewQueueSloSchema,
+  outlierEscalationInputSchema,
+  outlierEscalationSchema,
   queuePolicySettingsControlSchema,
   setInferenceConcurrencySettingsInputSchema,
   runtimeProfileArtifactSchema,
@@ -1413,6 +1415,19 @@ const SOURCE_REVIEW_QUEUE_SLO_PATH = '/api/v1/admin/source-review-queue-slo'
 export async function fetchSourceReviewQueueSlo() {
   const payload = await platformAdminRequest(SOURCE_REVIEW_QUEUE_SLO_PATH)
   return sourceReviewQueueSloSchema.parse(payload)
+}
+
+export async function fetchOutlierEscalation(rawInput: unknown = {}) {
+  const input = outlierEscalationInputSchema.parse(rawInput)
+  const params = new URLSearchParams({
+    limit: String(input.limit),
+    window_hours: String(input.windowHours),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/outlier-escalation?${params.toString()}`,
+    { retries: 1 },
+  )
+  return outlierEscalationSchema.parse(payload)
 }
 
 export async function fetchInferenceFailureTaxonomy() {

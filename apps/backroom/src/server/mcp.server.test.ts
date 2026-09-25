@@ -171,6 +171,7 @@ describe('Backroom MCP tools', () => {
         'get_inference_concurrency_settings',
         'get_inference_runtime_metrics',
         'get_source_review_queue_slo',
+        'get_outlier_escalation',
         'get_inference_failure_taxonomy',
         'list_inference_traces',
         'download_inference_trace',
@@ -388,8 +389,12 @@ describe('Backroom MCP tools', () => {
     // tools add bounded entries. Detailed procedures remain in tool help.
     // The scorer-pin rotation/history/current-packet controls add bounded entries.
     // The two validator-retry inputs gain acknowledgeProviderOutage (#2087);
-    // the guarded ATH withdrawal adds two more bounded operations.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(168_000)
+    // measured 163,528 bytes together.
+    // The no-input outlier-escalation read adds about 360 bytes; its bounds
+    // live on the Platform endpoint. With later main tools the catalog measured
+    // 164,066 bytes. The guarded ATH withdrawal adds two bounded operations;
+    // the merged catalog measures 166,765 bytes with under 0.5 KB headroom.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(167_250)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -413,7 +418,10 @@ describe('Backroom MCP tools', () => {
       // Includes the V13 clock, independent replay, infra-retry, ordinary
       // source-review queue-age SLO, failure taxonomy route_basis,
       // reopened-hold reason, three process-key summaries, and current V13
-      // provenance reads plus scorer pin rotation, history, and ATH withdrawal.
+      // provenance reads plus scorer pin rotation and history; measured at 29,121.
+      // The one-line outlier-escalation read (79 chars; detail in tool help)
+      // plus later main summaries measured 29,329. ATH withdrawal adds two
+      // bounded summaries; the merged descriptions measure 29,604 chars.
       30_000,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
@@ -3469,6 +3477,146 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  const outlierEscalationPayload = () => ({
+    generated_at: '2026-09-25T12:00:00Z',
+    settings_loaded_at: '2026-09-25T08:00:00Z',
+    settings: {
+      mode: 'off',
+      min_bench_version: 12,
+      min_cohort_size: 10,
+      modified_z_threshold: 6.0,
+      min_composite_floor: 0.9,
+    },
+    defaults: {
+      mode: 'off',
+      min_bench_version: 12,
+      min_cohort_size: 8,
+      modified_z_threshold: 6.0,
+      min_composite_floor: 0.9,
+    },
+    sources: {
+      mode: 'default_invalid_env',
+      min_bench_version: 'default',
+      min_cohort_size: 'env',
+      modified_z_threshold: 'default',
+      min_composite_floor: 'default',
+    },
+    env_vars: { mode: 'DITTO_OUTLIER_ESCALATION_MODE' },
+    invalid_env_fields: ['mode'],
+    review_kind: 'anomalous_score',
+    algorithm_version: 'outlier-escalation-v1',
+    pending_review_count: 1,
+    activity: {
+      window_hours: 168,
+      window_started_at: '2026-09-18T12:00:00Z',
+      observed_total: 4,
+      enforced_total: 1,
+      observed_in_window: 2,
+      enforced_in_window: 1,
+      latest_recorded_at: '2026-09-25T11:00:00Z',
+      recent_limit: 20,
+      recent: [
+        {
+          seq: 912,
+          agent_id: '11111111-1111-4111-8111-111111111111',
+          recorded_at: '2026-09-25T11:00:00Z',
+          enforced: true,
+          bench_version: 12,
+          algorithm_version: 'outlier-escalation-v1',
+          evidence: {
+            composite: 0.99,
+            cohort_size: 12,
+            cohort_median: 0.6,
+            cohort_mad: 0.01,
+            modified_z: 26.3,
+            min_cohort_size: 8,
+            modified_z_threshold: 6.0,
+            min_composite_floor: 0.9,
+            upward: true,
+            above_floor: true,
+            raw_cohort: [0.6, 0.61],
+          },
+          internal_note: 'must-not-escape',
+        },
+      ],
+      recent_truncated: true,
+    },
+  })
+
+  it('reads the outlier escalation posture, sources, and bounded activity', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(outlierEscalationPayload()))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_outlier_escalation', arguments: {} })
+
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as ReturnType<typeof outlierEscalationPayload>
+      expect(body).toMatchObject({
+        settings: { mode: 'off', min_cohort_size: 10 },
+        sources: { mode: 'default_invalid_env', min_cohort_size: 'env' },
+        invalid_env_fields: ['mode'],
+        pending_review_count: 1,
+        activity: { observed_total: 4, enforced_total: 1, recent_truncated: true },
+      })
+      expect(body.activity.recent[0]).toMatchObject({ enforced: true, bench_version: 12 })
+      expect(body.activity.recent[0].evidence.modified_z).toBe(26.3)
+      // Unknown fields, nested ones included, are stripped by the schema.
+      expect(JSON.stringify(body)).not.toContain('must-not-escape')
+      expect(JSON.stringify(body)).not.toContain('raw_cohort')
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/outlier-escalation?limit=20&window_hours=168',
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+
+      // The catalog line stays terse; the detail lives in tool help.
+      const help = await client.callTool({
+        name: 'get_backroom_tool_help',
+        arguments: { tool: 'get_outlier_escalation' },
+      })
+      const guidance = (readJsonResult(help) as { guidance: string }).guidance
+      expect(guidance).toContain('default_invalid_env')
+      expect(guidance).toContain('/admin/score-outliers')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('keeps a non-finite outlier threshold visible and rejects an unknown source', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const nonFinite = outlierEscalationPayload()
+    nonFinite.settings.modified_z_threshold = null as unknown as number
+    nonFinite.sources.modified_z_threshold = 'env'
+    nonFinite.activity.latest_recorded_at = null as unknown as string
+    const drifted = outlierEscalationPayload()
+    drifted.sources.mode = 'guessed'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(nonFinite))
+      .mockResolvedValueOnce(Response.json(drifted))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const ok = await client.callTool({ name: 'get_outlier_escalation', arguments: {} })
+      expect(ok.isError).not.toBe(true)
+      expect(readJsonResult(ok)).toMatchObject({
+        settings: { modified_z_threshold: null },
+        sources: { modified_z_threshold: 'env' },
+        activity: { latest_recorded_at: null },
+      })
+
+      const bad = await client.callTool({ name: 'get_outlier_escalation', arguments: {} })
+      expect(bad.isError).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('reads the failure taxonomy and keeps an unknown route unknown', async () => {
