@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from ditto.treasury import execution
-from ditto.treasury.preflight import TopUpBounds, TopUpIntent
+from ditto.treasury.preflight import Route, TopUpBounds, TopUpIntent
 from ditto.treasury.store import PaymentPlan, TreasuryStore
 
 NOW = datetime(2026, 9, 25, 20, 0, tzinfo=UTC)
@@ -32,7 +32,7 @@ def _instructions(route: str) -> bytes:
 INSTRUCTIONS = hashlib.sha256(_instructions("tao")).hexdigest()
 
 
-def _plan(key: str = "payment-0001", *, route: str = "tao") -> PaymentPlan:
+def _plan(key: str = "payment-0001", *, route: Route = "tao") -> PaymentPlan:
     return PaymentPlan(
         intent=TopUpIntent(
             route=route,
