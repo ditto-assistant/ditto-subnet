@@ -22,6 +22,7 @@ from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.db.models import TreasurySettingsRevision as RevisionRow
 
 router = APIRouter(prefix="/admin/treasury-settings", tags=["admin"])
+AUTHENTICATED_PRINCIPAL = "platform_admin_token"
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 
@@ -85,7 +86,10 @@ async def record_treasury_settings(
         settings=payload.settings.model_dump(mode="json"),
         checksum=hashlib.sha256(canonical.encode()).hexdigest(),
         reason=payload.reason.strip(),
-        actor=payload.actor.strip(),
+        # The shared bearer token proves only this principal. An actor in the
+        # request body or X-Admin-Actor header is caller-controlled and cannot
+        # be treated as an authenticated human identity.
+        actor=AUTHENTICATED_PRINCIPAL,
     )
     session.add(row)
     try:

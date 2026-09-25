@@ -12763,11 +12763,6 @@ export interface components {
         /** AdminTreasurySettingsRequest */
         AdminTreasurySettingsRequest: {
             /**
-             * Actor
-             * @default admin_api
-             */
-            actor: string;
-            /**
              * Confirmation
              * @constant
              */

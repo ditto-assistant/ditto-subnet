@@ -41,7 +41,6 @@ def _payload(revision: int = 0) -> dict:
             "max_slippage_bps": 50,
         },
         "reason": "review both proposed allocations",
-        "actor": "operator@example.com",
         "confirmation": "RECORD TREASURY SHADOW POLICY",
     }
 
@@ -66,11 +65,21 @@ async def test_defaults_and_revision(
     assert current["revision"] == 1
     assert current["miner_bps"] == 9850
     assert current["weight_effect"] == "none"
-    assert current["history"][0]["actor"] == "operator@example.com"
+    assert current["history"][0]["actor"] == "platform_admin_token"
+
+    spoofed = _payload(1)
+    spoofed["actor"] = "other-human@example.com"
+    spoofed_response = await client.post(
+        _URL,
+        headers={**_HEADERS, "X-Admin-Actor": "claimed-human@example.com"},
+        json=spoofed,
+    )
+    assert spoofed_response.status_code == 200, spoofed_response.text
+    assert spoofed_response.json()["actor"] == "platform_admin_token"
 
     stale = await client.post(_URL, headers=_HEADERS, json=_payload())
     assert stale.status_code == 409
-    assert len((await client.get(_URL, headers=_HEADERS)).json()["history"]) == 1
+    assert len((await client.get(_URL, headers=_HEADERS)).json()["history"]) == 2
 
 
 @pytest.mark.parametrize(
