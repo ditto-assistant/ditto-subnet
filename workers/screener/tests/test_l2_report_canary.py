@@ -139,3 +139,44 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
     assert report["source_attempt_id"] == str(attempt_id)
     assert report["l2"]["risk_level"] == "low"
     assert report["l2"]["failure_subcode"] == "no_tool_call_after_corrections"
+
+
+def test_inconclusive_model_audit_is_report_only() -> None:
+    audit = {
+        "artifact_sha256": "b" * 64,
+        "disposition": "inconclusive",
+        "invariants": [{"invariant": "i7_model_tool_planning", "disposition": "pass"}],
+    }
+    claim = SimpleNamespace(
+        canary_id=uuid4(),
+        agent_id=uuid4(),
+        source_attempt_id=uuid4(),
+        artifact_sha256="b" * 64,
+        policy_version=13,
+        scored_runtime_evidence=SimpleNamespace(model_dump=lambda **_: {}),
+    )
+    settings = SimpleNamespace(revision=134, checksum="c" * 64)
+    shadow = L2RunResult(
+        observation=SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l2-model-inconclusive",
+            failure_disposition="inconclusive",
+            inconclusive_model_audit=audit,
+        ),
+        analyzed_files=(),
+        causal_path=(),
+        tools=(),
+        usage=L2Usage(),
+        cache_hit=False,
+    )
+    report = l2_report_canary._report(
+        claim=claim,
+        decision=SimpleNamespace(outcome="inconclusive", evidence=()),
+        shadow=shadow,
+        settings=settings,
+    )
+    assert report["authority"] == "none"
+    assert report["l2"]["inconclusive_model_audit"] == audit

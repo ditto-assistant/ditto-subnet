@@ -249,6 +249,9 @@ class SourceReviewObservation:
     failure_disposition: str = "retryable_infra"
     clearance_certified: bool = False
     review_audit: Mapping[str, object] | None = None
+    # Structured model submission exposed only by the non-authoritative L2
+    # canary report. It contains no source text or model-authored prose.
+    inconclusive_model_audit: Mapping[str, object] | None = None
     adjudication: Mapping[str, object] | None = None
     """Automated clear/reject on an outcome that would otherwise hold
     (SourceReviewAdjudication shape). ``None`` when the adjudicator is off,
