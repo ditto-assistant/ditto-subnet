@@ -223,7 +223,7 @@ from ditto.db.queries.heartbeats import (
 )
 from ditto.db.queries.moderation_audit import (
     ACTION_ARTIFACT_SUPERSESSION,
-    record_moderation_audit,
+    record_moderation_audit_if_enabled,
 )
 from ditto.db.queries.provider_outages import (
     lock_provider_work_gate,
@@ -6925,7 +6925,7 @@ async def submit_result(
                 and payload.image_sha256
                 and prior_image_sha256 != payload.image_sha256
             ):
-                await record_moderation_audit(
+                await record_moderation_audit_if_enabled(
                     session,
                     action_type=ACTION_ARTIFACT_SUPERSESSION,
                     agent_id=agent.agent_id,

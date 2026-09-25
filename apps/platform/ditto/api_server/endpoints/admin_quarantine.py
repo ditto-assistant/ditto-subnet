@@ -204,7 +204,7 @@ from ditto.db.queries.moderation_audit import (
     ModerationAuditUnavailable,
     preview_moderation_record,
     public_status,
-    record_moderation_audit,
+    record_moderation_audit_if_enabled,
 )
 from ditto.db.queries.payments import (
     get_miner_coldkey_for_agent,
@@ -257,7 +257,7 @@ async def _publish_moderation(
         else screened_image_sha256
     )
     try:
-        await record_moderation_audit(
+        await record_moderation_audit_if_enabled(
             session,
             action_type=action_type,
             agent_id=agent.agent_id,

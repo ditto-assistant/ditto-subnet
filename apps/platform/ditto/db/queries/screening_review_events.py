@@ -20,7 +20,7 @@ from ditto.db.queries.moderation_audit import (
     ACTION_TYPES,
     latest_moderation_action_id,
     public_status,
-    record_moderation_audit,
+    record_moderation_audit_if_enabled,
 )
 from ditto_screening_protocol import AgentStatus, ScreenResultRequest
 
@@ -133,7 +133,7 @@ async def append_automated_review_event(
         _status(prior_agent_status) != AgentStatus.QUARANTINED
         and _status(next_agent_status) == AgentStatus.QUARANTINED
     ):
-        await record_moderation_audit(
+        await record_moderation_audit_if_enabled(
             session,
             action_type=ACTION_QUARANTINE,
             agent_id=agent.agent_id,
@@ -185,10 +185,11 @@ async def append_platform_hold_event(
         created_at=created_at,
     )
     session.add(event)
-    if _status(prior_agent_status) != AgentStatus.QUARANTINED and _status(
-        agent.status
-    ) == AgentStatus.QUARANTINED:
-        await record_moderation_audit(
+    if (
+        _status(prior_agent_status) != AgentStatus.QUARANTINED
+        and _status(agent.status) == AgentStatus.QUARANTINED
+    ):
+        await record_moderation_audit_if_enabled(
             session,
             action_type=ACTION_QUARANTINE,
             agent_id=agent.agent_id,
@@ -260,7 +261,7 @@ async def append_manual_review_event(
             related = await latest_moderation_action_id(
                 session, agent_id=agent.agent_id, action_type="reject"
             )
-        await record_moderation_audit(
+        await record_moderation_audit_if_enabled(
             session,
             action_type=resolution,
             agent_id=agent.agent_id,

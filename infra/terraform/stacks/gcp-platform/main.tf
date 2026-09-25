@@ -47,6 +47,7 @@ locals {
       "ADMIN_API_PASSWORD",
       google_secret_manager_secret.db_password.secret_id,
       google_secret_manager_secret.hmac_secret.secret_id,
+      google_secret_manager_secret.moderation_audit_signing_key.secret_id,
       google_secret_manager_secret.github_deploy_key.secret_id,
       google_secret_manager_secret.taostats_api_key.secret_id,
       google_secret_manager_secret.hippius_access_key_id.secret_id,
@@ -279,6 +280,16 @@ resource "google_secret_manager_secret_version" "db_password" {
 resource "google_secret_manager_secret" "hmac_secret" {
   project   = var.project
   secret_id = "platform-storage-hmac-secret"
+  replication {
+    auto {}
+  }
+}
+
+# Empty container only: an operator adds the Ed25519 seed version outside
+# Terraform state before enabling signed moderation audit on the app hosts.
+resource "google_secret_manager_secret" "moderation_audit_signing_key" {
+  project   = var.project
+  secret_id = "platform-moderation-audit-signing-key"
   replication {
     auto {}
   }

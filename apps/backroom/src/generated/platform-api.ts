@@ -10579,6 +10579,10 @@ export interface components {
             disposition: "ready" | "already_applied" | "conflict" | "not_found";
             /** Message */
             message: string;
+            /** Public Reason Code */
+            public_reason_code?: string | null;
+            /** Public Record Hash */
+            public_record_hash?: string | null;
             /**
              * Quarantine Id
              * Format: uuid
@@ -10593,10 +10597,6 @@ export interface components {
             resolution: "release" | "rescreen" | "reject";
             /** Resulting Agent Status */
             resulting_agent_status?: string | null;
-            /** Public Reason Code */
-            public_reason_code?: string | null;
-            /** Public Record Hash */
-            public_record_hash?: string | null;
         };
         /** AdminQuarantineBatchPreviewRequest */
         AdminQuarantineBatchPreviewRequest: {

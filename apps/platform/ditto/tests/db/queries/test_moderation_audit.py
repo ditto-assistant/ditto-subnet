@@ -26,6 +26,7 @@ from ditto.db.queries.moderation_audit import (
     preview_moderation_record,
     published_signer_public_keys,
     record_moderation_audit,
+    record_moderation_audit_if_enabled,
     redact_moderation_payload,
     reset_moderation_signer,
     verify_moderation_payload,
@@ -65,6 +66,45 @@ def _signer() -> None:
 
 
 class TestModerationAudit:
+    async def test_default_rollout_keeps_moderation_operational_without_key(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("DITTO_MODERATION_AUDIT_ENABLED", raising=False)
+        monkeypatch.delenv("DITTO_MODERATION_AUDIT_SIGNING_KEY", raising=False)
+        _install(None)
+
+        async with session.begin():
+            assert (
+                await record_moderation_audit_if_enabled(session, **_kwargs()) is None
+            )
+        assert not [
+            row
+            for row in await list_audit_entries(session)
+            if row.event == "moderation"
+        ]
+
+    async def test_active_rollout_requires_signed_record(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DITTO_MODERATION_AUDIT_ENABLED", "true")
+        monkeypatch.delenv("DITTO_MODERATION_AUDIT_SIGNING_KEY", raising=False)
+        _install(None)
+        with pytest.raises(ModerationAuditUnavailable):
+            async with session.begin():
+                await record_moderation_audit_if_enabled(session, **_kwargs())
+        assert not [
+            row
+            for row in await list_audit_entries(session)
+            if row.event == "moderation"
+        ]
+
+        await session.rollback()
+        _install(Ed25519PrivateKey.generate())
+        async with session.begin():
+            entry = await record_moderation_audit_if_enabled(session, **_kwargs())
+        assert entry is not None
+        assert verify_moderation_payload(entry.payload)
+
     async def test_record_is_signed_and_linked_into_the_public_chain(
         self, session: AsyncSession
     ) -> None:
@@ -205,9 +245,7 @@ class TestModerationAudit:
         assert verify_moderation_payload(older.payload, trusted_public_keys=trusted)
         assert verify_moderation_payload(newer.payload, trusted_public_keys=trusted)
         assert (
-            verify_moderation_payload(
-                older.payload, trusted_public_keys=[trusted[0]]
-            )
+            verify_moderation_payload(older.payload, trusted_public_keys=[trusted[0]])
             is False
         )
 

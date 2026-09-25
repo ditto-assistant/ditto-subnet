@@ -33,6 +33,7 @@ EVENT_MODERATION = "moderation"
 SCHEMA_VERSION = 1
 _SIGNING_KEY_ENV = "DITTO_MODERATION_AUDIT_SIGNING_KEY"
 _PREVIOUS_KEYS_ENV = "DITTO_MODERATION_AUDIT_PREVIOUS_PUBLIC_KEYS"
+_ENABLED_ENV = "DITTO_MODERATION_AUDIT_ENABLED"
 
 ACTION_RELEASE = "release"
 ACTION_REJECT = "reject"
@@ -130,6 +131,16 @@ def reset_moderation_signer() -> None:
     """Drop the cached role key so the next call re-reads the environment."""
     global _state
     _state = _SignerState(private=None, previous=(), loaded=False)
+
+
+def moderation_audit_enabled() -> bool:
+    """Stage publication until the role key is installed on every API host."""
+    value = os.environ.get(_ENABLED_ENV, "false").strip().lower()
+    if value in {"", "false", "0"}:
+        return False
+    if value in {"true", "1"}:
+        return True
+    raise ModerationAuditUnavailable("moderation audit enable flag is invalid")
 
 
 def configure_moderation_signer(
@@ -363,6 +374,20 @@ async def record_moderation_audit(
     return entry
 
 
+async def record_moderation_audit_if_enabled(
+    session: AsyncSession, **kwargs: Any
+) -> ScoreAuditEntry | None:
+    """Leave existing moderation flows operational before signer activation.
+
+    Once enabled, the signed append remains in the state-change transaction;
+    a missing or malformed key aborts the transition instead of writing an
+    unsigned moderation record.
+    """
+    if not moderation_audit_enabled():
+        return None
+    return await record_moderation_audit(session, **kwargs)
+
+
 __all__ = [
     "ACTION_ARTIFACT_SUPERSESSION",
     "ACTION_PROVENANCE_REVOCATION",
@@ -375,10 +400,12 @@ __all__ = [
     "ModerationAuditUnavailable",
     "configure_moderation_signer",
     "latest_moderation_action_id",
+    "moderation_audit_enabled",
     "preview_moderation_record",
     "public_status",
     "published_signer_public_keys",
     "record_moderation_audit",
+    "record_moderation_audit_if_enabled",
     "redact_moderation_payload",
     "reset_moderation_signer",
     "verify_moderation_payload",
