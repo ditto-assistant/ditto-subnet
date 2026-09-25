@@ -16,7 +16,7 @@
       [Service]
       KillMode=mixed
       SendSIGKILL=no
-      TimeoutStopSec=infinity
+      TimeoutStopSec=70min
   loop: "{{ ['ditto-screener-fleet-agent.service'] + screener_partition_worker_units }}"
 - name: Let the updater wait for graceful job completion without a separate deadline
   ansible.builtin.copy:
@@ -24,7 +24,7 @@
     mode: '0644'
     content: |
       [Service]
-      TimeoutStartSec=infinity
+      TimeoutStartSec=120min
 - name: Load drain policy without restarting any primary process
   ansible.builtin.systemd:
     daemon_reload: true
@@ -90,7 +90,7 @@
     content: |
       [Service]
       Slice={{ 'user-1005.slice' if item == 'user@1005.service' else 'dittoscreener.slice' }}
-      TimeoutStopSec=infinity
+      TimeoutStopSec=70min
       SendSIGKILL=no
       {{ 'KillMode=mixed' if item != 'user@1005.service' else '' }}
   loop: "{{ ['user@1005.service'] + screener_partition_worker_units }}"
@@ -119,7 +119,7 @@
     content: |
       [Service]
       Slice=dittoscreener.slice
-      TimeoutStopSec=infinity
+      TimeoutStopSec=70min
       SendSIGKILL=no
       KillMode=mixed
       ExecStart=

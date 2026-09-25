@@ -236,7 +236,9 @@ def test_self_updater_reconciles_stale_workers_when_canary_shrinks() -> None:
     workers on the activated release.
     """
     updater = UPDATER.read_text()
-    stop_fleet = updater[updater.index("stop_fleet()") : updater.index("start_fleet()")]
+    stop_fleet = updater[
+        updater.index("worker_indexes()") : updater.index("ensure_worker_state()")
+    ]
     awk_programs = [
         program.split("'", 1)[0] for program in stop_fleet.split("awk '")[1:]
     ]
@@ -263,6 +265,12 @@ def test_self_updater_reconciles_stale_workers_when_canary_shrinks() -> None:
         assert result.returncode == 0, result.stderr
         assert result.stdout.splitlines() == ["1", "12"]
     assert '"$SYSTEMCTL" disable "ditto-screener-worker@$index.service"' in updater
+    assert "systemctl stop" not in updater[updater.index("stop_fleet()") :].split(
+        "ditto-screener-worker@"
+    )[0]
+    assert "kill -s SIGKILL" not in updater
+    assert "drain-status.env" in updater
+    assert "leaving it running" in updater
     assert '"$SYSTEMCTL" enable --now "ditto-screener-worker@$index.service"' in updater
     stop = updater.index("stop_fleet()")
     start = updater.index("start_fleet()")

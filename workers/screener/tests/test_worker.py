@@ -1381,6 +1381,25 @@ async def test_run_forever_drains_queue_then_stops(
     assert {v["agent_id"] for v in platform.verdicts} == {a1, a2}
 
 
+async def test_stop_during_review_finishes_the_signed_verdict(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    first, second = uuid4(), uuid4()
+    platform = _FakePlatform([[_item(first), _item(second)]])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    stop = asyncio.Event()
+    original = gate.screen
+
+    async def screen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        stop.set()
+        return await original(*args, **kwargs)
+
+    gate.screen = screen  # type: ignore[method-assign]
+    worker = _worker(make_config(), platform, gate)
+    await asyncio.wait_for(worker.run_forever(stop), timeout=2.0)
+    assert [verdict["agent_id"] for verdict in platform.verdicts] == [first]
+
+
 async def test_run_forever_exits_immediately_when_stopped(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

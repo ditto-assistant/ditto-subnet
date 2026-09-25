@@ -26,6 +26,10 @@ LOCK_FILE="$STATE_DIR/lock"
 SELF_PATH="${SCREENER_FLEET_SELF_PATH:-$STATE_DIR/ditto-screener-fleet-auto-update}"
 ROOTLESS_DOCKER_HOST="${SCREENER_FLEET_ROOTLESS_DOCKER_HOST:-unix:///run/ditto-screener-docker/docker.sock}"
 L2_ANALYZER_ACTIVE="ditto-screener-l2-analyzer:active"
+DRAIN_BOUND_SECONDS="${SCREENER_FLEET_DRAIN_BOUND_SECONDS:-4200}"
+DRAIN_STATUS="$STATE_DIR/drain-status.env"
+DRAIN_PY="${SCREENER_FLEET_DRAIN_PY:-$(dirname "$0")/screener-fleet-drain.py}"
+HELD_WORKERS="$STATE_DIR/held-workers"
 
 log() { printf 'screener-fleet-auto-update: %s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
@@ -170,29 +174,74 @@ write_release_env() {
   mv "$temporary" "$output"
 }
 
-stop_fleet() {
-  local pids=() index
-  "$SYSTEMCTL" stop ditto-screener-fleet-agent.service & pids+=("$!")
+write_drain_status() {
+  local phase="$1" detail="${2:-}"
+  umask 077
+  printf 'PHASE=%s\nTARGET_REVISION=%s\nSTARTED_AT=%s\nDETAIL=%s\nUPDATED_AT=%s\n' \
+    "$phase" "${TARGET_REVISION:-}" "${DRAIN_STARTED_AT:-}" "$detail" "$(date +%s)" \
+    >"$DRAIN_STATUS"
+}
 
-  # Do not derive the drain set from the *new* worker count. During a canary
-  # that count intentionally shrinks, so an older worker above the new bound
-  # can otherwise stay alive on the old release, keep polling, and claim work
-  # alongside the canary. ``list-units --all`` includes both running workers
-  # and stopped-but-enabled instances; only accept the fixed numeric unit
-  # shape before interpolating it into a systemd unit name.
-  for index in $(
-    "$SYSTEMCTL" list-units --all --type=service --plain --no-legend \
-      'ditto-screener-worker@*.service' \
-      | awk '$1 ~ /^ditto-screener-worker@[1-9][0-9]*\.service$/ {
-          worker = $1
-          sub(/^ditto-screener-worker@/, "", worker)
-          sub(/\.service$/, "", worker)
-          print worker
-        }'
-  ); do
-    "$SYSTEMCTL" stop "ditto-screener-worker@$index.service" & pids+=("$!")
+worker_indexes() {
+  "$SYSTEMCTL" list-units --all --type=service --plain --no-legend \
+    'ditto-screener-worker@*.service' \
+    | awk '$1 ~ /^ditto-screener-worker@[1-9][0-9]*\.service$/ {
+        worker = $1
+        sub(/^ditto-screener-worker@/, "", worker)
+        sub(/\.service$/, "", worker)
+        print worker
+      }'
+}
+
+lease_decision() {
+  local index="$1"
+  python3 "$DRAIN_PY" --lease "$STATE_DIR/workers/$index/active-lease.json" --now "$(date +%s)"
+}
+
+stop_fleet() {
+  local pids=() index decision bound
+  : >"$HELD_WORKERS"
+  DRAIN_STARTED_AT="$(date +%s)"
+  write_drain_status draining
+  "$SYSTEMCTL" kill -s SIGTERM ditto-screener-fleet-agent.service >/dev/null 2>&1 || true
+  timeout 60 "$SYSTEMCTL" stop ditto-screener-fleet-agent.service || true
+
+  for index in $(worker_indexes); do
+    "$SYSTEMCTL" kill -s SIGTERM "ditto-screener-worker@$index.service" >/dev/null 2>&1 || true
   done
-  for index in "${pids[@]}"; do wait "$index"; done
+  bound=$((DRAIN_STARTED_AT + DRAIN_BOUND_SECONDS))
+  while [ "$(date +%s)" -lt "$bound" ]; do
+    local waiting=0
+    for index in $(worker_indexes); do
+      "$SYSTEMCTL" is-active --quiet "ditto-screener-worker@$index.service" || continue
+      decision="$(lease_decision "$index")"
+      if [ "$decision" = "wait" ]; then
+        waiting=1
+        write_drain_status draining "worker $index lease still open"
+      fi
+    done
+    [ "$waiting" -eq 0 ] && break
+    sleep "${SCREENER_FLEET_DRAIN_POLL_SECONDS:-5}"
+  done
+  for index in $(worker_indexes); do
+    "$SYSTEMCTL" is-active --quiet "ditto-screener-worker@$index.service" || continue
+    decision="$(lease_decision "$index")"
+    if [ "$decision" = "wait" ] || [ "$decision" = "held" ]; then
+      printf '%s\n' "$index" >>"$HELD_WORKERS"
+      write_drain_status held "worker $index kept without escalation"
+      log "worker $index still holds a signed review; leaving it running"
+      continue
+    fi
+    timeout 30 "$SYSTEMCTL" stop "ditto-screener-worker@$index.service" || \
+      printf '%s\n' "$index" >>"$HELD_WORKERS"
+  done
+  if [ -s "$HELD_WORKERS" ]; then
+    write_drain_status held "active reviews kept"
+  else
+    write_drain_status drained
+  fi
+
+  "$SYSTEMCTL" stop ditto-screener-fleet-agent.service >/dev/null 2>&1 || true
 
   # Ansible normally reconciles this at converge time. The self-updater must
   # enforce the same bound too: release delivery is deliberately pull-based,
@@ -233,6 +282,10 @@ start_fleet() {
   ensure_worker_state
   "$SYSTEMCTL" start ditto-screener-fleet-agent.service
   for index in $(seq 1 "$WORKER_PROCESSES"); do
+    if "$SYSTEMCTL" is-active --quiet "ditto-screener-worker@$index.service"; then
+      log "worker $index is finishing a signed review; not starting a second copy"
+      continue
+    fi
     # Re-enable the declared set too, so a previous smaller canary cannot
     # leave a later intentional scale-up stopped until an Ansible converge.
     "$SYSTEMCTL" enable --now "ditto-screener-worker@$index.service"
@@ -242,6 +295,7 @@ start_fleet() {
   for index in $(seq 1 "$WORKER_PROCESSES"); do
     "$SYSTEMCTL" is-active --quiet "ditto-screener-worker@$index.service"
   done
+  write_drain_status active
 }
 
 activate_release() {
@@ -259,6 +313,7 @@ activate_release() {
     "$release_dir/src/scripts/screener-fleet-auto-update.sh" \
     "$SELF_PATH"
   ln -s "releases/$revision" "$new_link"
+  TARGET_REVISION="$revision"
   stop_fleet
   run_rootless_as_service docker tag "$l2_candidate" "$L2_ANALYZER_ACTIVE"
   mv -Tf "$new_link" "$CURRENT_LINK"

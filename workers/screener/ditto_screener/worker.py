@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
 import re
 import socket
 import time
@@ -292,6 +294,8 @@ class ScreenerWorker:
         self._active_agent_id: UUID | None = None
         self._active_progress_stage: ScreenerProgressStage | None = None
         self._active_lease_deadline: LeaseDeadline | None = None
+        self._active_lease_wall: datetime | None = None
+        self._active_attempt_id: Any = None
         self._job_started_at: int | None = None
         self._last_heartbeat_timestamp = 0
         self._last_heartbeat_monotonic = float("-inf")
@@ -319,11 +323,48 @@ class ScreenerWorker:
             policy_manifest_digest=bootstrap_manifest.digest,
         )
 
+    def _active_lease_path(self) -> Path | None:
+        journal = self._config.review_journal_file
+        if not journal:
+            return None
+        return Path(journal).with_name("active-lease.json")
+
+    def _publish_active_lease(self, *, agent_id: object, attempt_id: object) -> None:
+        """Local lease the release updater reads. It is not a verdict."""
+        path = self._active_lease_path()
+        if path is None:
+            return
+        deadline = self._active_lease_wall
+        # An open lease has no platform deadline. The updater must not invent one.
+        if deadline is None:
+            return
+        expires = int(deadline.timestamp())
+        body = {
+            "agent_id": str(agent_id),
+            "attempt_id": str(attempt_id),
+            "lease_deadline": expires,
+            "progress_at": int(time.time()),
+            "revision": self._fleet_release.revision,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(body, sort_keys=True), encoding="utf-8")
+        os.replace(temporary, path)
+
+    def _clear_active_lease(self) -> None:
+        path = self._active_lease_path()
+        if path is not None:
+            path.unlink(missing_ok=True)
+
     def _set_progress(self, stage: ScreenerProgressStage) -> None:
         """Advance public-safe progress without waiting on telemetry I/O."""
         if self._active_agent_id is None or self._job_started_at is None:
             return
         self._active_progress_stage = stage
+        if self._active_attempt_id is not None:
+            self._publish_active_lease(
+                agent_id=self._active_agent_id, attempt_id=self._active_attempt_id
+            )
         progress = ScreenerProgress(stage=stage, started_at=self._job_started_at)
         task = asyncio.create_task(
             self._report_heartbeat("screening", force=True, progress_override=progress)
@@ -619,7 +660,10 @@ class ScreenerWorker:
         attempt_id = item.attempt_id
         self._active_agent_id = agent_id
         self._active_lease_deadline = self._screen_deadline(item.lease_deadline)
+        self._active_lease_wall = item.lease_deadline
+        self._active_attempt_id = attempt_id
         self._job_started_at = int(time.time())
+        self._publish_active_lease(agent_id=agent_id, attempt_id=attempt_id)
         self._set_progress("preparing")
         heartbeat_stop = asyncio.Event()
         heartbeat_task = asyncio.create_task(
@@ -1198,7 +1242,10 @@ class ScreenerWorker:
                 task.cancel()
             await asyncio.gather(*progress_tasks, return_exceptions=True)
             self._progress_heartbeat_tasks.clear()
+            self._clear_active_lease()
             self._active_agent_id = None
+            self._active_attempt_id = None
+            self._active_lease_wall = None
             self._active_progress_stage = None
             self._active_lease_deadline = None
             self._job_started_at = None
