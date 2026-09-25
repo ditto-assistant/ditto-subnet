@@ -2080,8 +2080,7 @@ def test_static_preflight_clears_inference_url_and_read_timeout(
                 b'ENTRYPOINT ["python", "/app/app/main.py"]\n'
             ),
             "app/main.py": (
-                b"from app.config import Settings\n"
-                b"print(Settings.from_env())\n"
+                b"from app.config import Settings\nprint(Settings.from_env())\n"
             ),
             "app/config.py": (
                 b"import os\nclass Settings:\n"
@@ -2094,9 +2093,12 @@ def test_static_preflight_clears_inference_url_and_read_timeout(
             ),
         },
     )
-    assert TarSourceRepository(str(archive)).malicious_preflight(
-        artifact_sha256="a" * 64, mode=mode
-    ) is None
+    assert (
+        TarSourceRepository(str(archive)).malicious_preflight(
+            artifact_sha256="a" * 64, mode=mode
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(

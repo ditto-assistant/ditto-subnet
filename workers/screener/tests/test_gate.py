@@ -1155,7 +1155,7 @@ async def test_static_malicious_preflight_quarantines_before_docker(
             "src/main.rs": (
                 b'let endpoint = "/var/run/docker.sock";\n'
                 b"connect_control_socket(endpoint);\n"
-            )
+            ),
         }
     )
     calls: list[list[str]] = []
