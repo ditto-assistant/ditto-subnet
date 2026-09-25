@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "status": "complete_independently_audited_both_builtin_judge_arms",
+  "source_sha": "1b5755609b3ea95660fdba289e6a747adb8c5dae",
+  "binary_sha256": "695b6c3a0338b902949deb55456a87b17e1ba97e2b92dca63054e187ef75fa21",
+  "audit_script_sha256": "c01dcf1896f61b4d6f453321b8d3b1f5cbfc0261b75a8458d86cfbc865916c86",
+  "snapshot_script_sha256": "6ee0492a2269cc875f0e01a3ead1822542a0b187b81a1477eaff29f6b4d4cd4c",
+  "prepared_manifest_sha256": "a232c2b7ee77f06597535416682c00187f9c44bb2a324de7ccd5dce3fa13ccef",
+  "snapshot": {
+    "algorithm_sha256": "01c6a7070cba4e1455894c6da07132dcbba1b5cbc37c2c58c9f26db4adb3d055",
+    "independent_artifact_sha256": "ae406120c33d27d01ab21e6262e09e49372d6173ee6a82f2d57766d02c2f12c6",
+    "capture_count": 3,
+    "captures": [
+      "before_off",
+      "after_off",
+      "after_on"
+    ],
+    "all_independent_objects_exactly_equal": true,
+    "all_backend_pre_snapshot_objects_and_post_hashes_match_reference": true,
+    "after_on_captured_at": "2026-09-13T07:24:54Z"
+  },
+  "invocations": [
+    {
+      "condition": "off_initial_incomplete",
+      "run_id": "20260913-052153-1b5755609b3ea95660fdba289e6a747adb8c5dae",
+      "started_at": "2026-09-13T05:21:53.086755Z",
+      "finished_at": "2026-09-13T05:46:42.086389Z",
+      "wall_seconds": 1488.999634,
+      "report_sha256": "745eb4d0f3e68c7557a5b52dc77279a4616402201952ab97f03ab8c1070e6f5f",
+      "judged": 497,
+      "unjudged": 3,
+      "exit_code": 1
+    },
+    {
+      "condition": "off_completed_resume",
+      "run_id": "20260913-054910-1b5755609b3ea95660fdba289e6a747adb8c5dae",
+      "started_at": "2026-09-13T05:49:10.865647Z",
+      "finished_at": "2026-09-13T05:52:59.097506Z",
+      "wall_seconds": 228.231859,
+      "report_sha256": "5d91be369a14a40c4a4fc6bde7cbc139d874695c7cec9772bb804651a0cc26c1",
+      "judged": 500,
+      "new_reader_judge_pairs": 3,
+      "original_497_full_per_case_objects_exactly_preserved": true,
+      "exit_code": 0
+    },
+    {
+      "condition": "on_completed_no_resume",
+      "run_id": "20260913-055526-1b5755609b3ea95660fdba289e6a747adb8c5dae",
+      "started_at": "2026-09-13T05:55:26.872729Z",
+      "finished_at": "2026-09-13T07:23:50.602083Z",
+      "wall_seconds": 5303.729354,
+      "report_sha256": "859a118af975b219de3b73809efd648832291dadae590fbaf129e0f172028c18",
+      "judged": 500,
+      "new_reader_judge_pairs": 500,
+      "exit_code": 0
+    }
+  ],
+  "off_invocation_wall_seconds_sum": 1717.231493,
+  "off_first_start_to_final_finish_seconds": 1866.010751,
+  "private_artifacts_sha256": {
+    "qa-final-off-1b575560.log": "410541442745b7471d17458d8a018002d21ab3465f01f936ec8d4f1758f0382a",
+    "qa-final-off-resume-1b575560.log": "8d64f9dad6da719682a09c6a420406c8bf9374d6050c3860ce7e87c4aa875c47",
+    "qa-final-off-resume-corrected-1b575560.log": "c7c9d9d35cb7ae29b26c2d23dc4abe06f8be1d0ebb485f73b0219f7125f207f7",
+    "qa-final-on-1b575560.log": "cb5cc88554dc19014b575cdb313bae36c550c6a87faad0e4f28b12a252e30fb4",
+    "evidence/qa-final-off-1b575560.jsonl": "a6e0c073a16d32314953ce90ae1db666e27d41bb3e927ecdf81b7f39a7643d68",
+    "evidence/qa-final-on-1b575560.jsonl": "8b42b8a759cbd5bd9d9a657be95714b783c6abe3d5784e35a4b8ccd18733cdd9"
+  },
+  "representative_graph_plan": {
+    "artifact": "graph-on-readonly-plan-20260913-0609.json",
+    "sha256": "e81012b349b76195db4519b778da64ad9a096c87076264e80043f397d3bdbeee",
+    "observed_at": "2026-09-13T06:09:53.804728Z",
+    "protocol": "Read-only metadata and nonexecuting EXPLAIN FORMAT JSON, COSTS TRUE; no EXPLAIN ANALYZE, maintenance, or tuning.",
+    "estimated_scoped_rows": {
+      "subjects": 1,
+      "memory_pairs": 1,
+      "subject_memory_pair_links": 1
+    },
+    "observed_scoped_rows": {
+      "subjects": 319,
+      "memory_pairs": 242,
+      "subject_memory_pair_links": 556
+    },
+    "interpretation": "Correlated user/KG selectivity underestimation is consistent with this representative plan; no causal root cause or missing-index claim proven.",
+    "limitations": "Literal scope and scalar embedding subqueries, not the actual in-flight embedding/prepared generic plan. No actual timing, loop, buffer, or executed-row metrics. Recent autoanalyze existed."
+  },
+  "official_posthoc_evaluator": {
+    "status": "not_run",
+    "builtin_judge": "google/gemini-3.1-flash-lite",
+    "no_official_score_claim": true
+  },
+  "limitations": [
+    "Graph-ON has 98.93% discovery failure/fallback; it is not a high-coverage graph-potential measurement.",
+    "Only one provider-sampling pair; no repeated-run variance. Cases share source sessions, so descriptive statistical tests do not prove independence, generalization, or causal graph benefit.",
+    "Learned retriever repository training data includes 474 of 500 evaluation IDs; not unqualified held-out evidence.",
+    "Earlier 89.6% Gemini condition used flawed/unblinded fixture and different reader/preparation; not a clean comparison.",
+    "Preparation retained mixed source phases and the documented failed attempts; final readers share the frozen 1b binary and exact snapshot.",
+    "Luna price missing; no monetary spend quoted. Per-case reader timing excludes seed preparation; wall intervals exclude pre-run bootstrap and upload.",
+    "Raw full reports retain the documented inherited Hippius upload behavior; this committed aggregate contains no raw memories, provider IDs, credentials or local absolute paths."
+  ]
+}
