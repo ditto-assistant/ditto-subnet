@@ -343,9 +343,7 @@ def test_rootless_executor_is_separate_from_worker_and_denies_private_egress() -
         '"${user_systemctl[@]}" enable --now "$SCREENER_ROOTLESS_UNIT"'
     )
     assert guard_start < user_daemon_start
-    group_grant = installer.index(
-        'usermod -aG "$EXECUTOR_GROUP" "$SCREENER_USER"'
-    )
+    group_grant = installer.index('usermod -aG "$EXECUTOR_GROUP" "$SCREENER_USER"')
     consumer_probe = installer.index(
         'runuser -u "$SCREENER_USER" -- env DOCKER_HOST="$docker_host"'
     )
