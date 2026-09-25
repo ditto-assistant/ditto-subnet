@@ -319,6 +319,11 @@ terminal tool can be accepted. Violation citations still undergo host-side
 path and line validation. The private audit records only per-turn byte/token
 counts, selected model/provider, and cost for comparing this path with the
 full-dossier baseline. No local comparator result authorizes a live decision.
+Rejected report-only final submissions receive a fixed correction category.
+For missing safe coverage, the correction lists exact section IDs and whether
+an exact source read is still needed; schema, citation, and causal-evidence
+rejections remain fail-closed. The private audit records only the fixed cause,
+proposed disposition, and missing section IDs, never submitted source text.
 The final report separately counts `terminal_decisions` and
 `no_decision_cases`. Its reported cost includes successful model turns from
 the private audit even when a later provider timeout prevents a final verdict;

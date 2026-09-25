@@ -4006,18 +4006,76 @@ class TerraSolSourceReviewAgent:
         no_call_corrections = 0
 
         def request_submit_correction(
-            call: object, *, validation_error: ValueError | None = None
+            call: object,
+            *,
+            reason: str,
+            validation_subcode: str | None = None,
+            missing_sections: tuple[str, ...] = (),
+            needs_source_read: bool = False,
         ) -> None:
+            nonlocal rejected_violation_certificate
             try:
                 call_id = _call_id_value(call)
             except ValueError as error:
                 logger.warning("L2 model-tool-contract: invalid submit call id")
                 raise failure("model-tool-contract") from error
-            subcode = (
-                _submission_validation_subcode(validation_error)
-                if validation_error is not None
-                else None
-            )
+            proposed_disposition = "unknown"
+            if isinstance(call, Mapping):
+                raw_arguments = call.get("arguments")
+                if isinstance(raw_arguments, str):
+                    with contextlib.suppress(json.JSONDecodeError):
+                        proposed = json.loads(raw_arguments)
+                        if (
+                            isinstance(proposed, dict)
+                            and isinstance(proposed.get("disposition"), str)
+                            and proposed.get("disposition")
+                            in {"safe", "violation", "inconclusive"}
+                        ):
+                            proposed_disposition = proposed["disposition"]
+            if self._terminal_verdict_required:
+                if proposed_disposition == "violation":
+                    rejected_violation_certificate = True
+                self._audit.record(
+                    {
+                        "recorded_at": time.time(),
+                        "event_type": "report_only_submit_correction",
+                        "artifact_sha256": artifact_sha256,
+                        "role": role,
+                        "step": steps_used,
+                        "reason": reason,
+                        "validation_subcode": validation_subcode,
+                        "proposed_disposition": proposed_disposition,
+                        "missing_sections": list(missing_sections),
+                        "needs_source_read": needs_source_read,
+                        "pending_analyzer_tools": sorted(pending_tool_corrections),
+                    }
+                )
+            guidance = {
+                "validation": (
+                    "The host rejected this final review: "
+                    + _SUBMISSION_VALIDATION_HINTS[validation_subcode or "schema"]
+                    + " Do not change the verdict to bypass checks."
+                ),
+                "safe_coverage": (
+                    "Before submitting safe, fetch these exact dossier sections: "
+                    + (", ".join(missing_sections) or "none")
+                    + (
+                        "; read at least one exact source file"
+                        if needs_source_read
+                        else ""
+                    )
+                    + ". Then resubmit as the only call."
+                ),
+                "pending_analyzer": (
+                    "These analyzer outputs remain incomplete: "
+                    + ", ".join(sorted(pending_tool_corrections))
+                    + ". Re-run each named tool until it returns without an "
+                    "error or truncation, then submit the final review alone."
+                ),
+                "submit_not_only_call": (
+                    "Submit the final review as the only call in the response."
+                ),
+            }[reason]
             items.append(
                 {
                     "type": "function_call_output",
@@ -4025,16 +4083,8 @@ class TerraSolSourceReviewAgent:
                     "output": json.dumps(
                         {
                             "error": "submission-contract",
-                            "validation_subcode": subcode,
-                            "message": (
-                                "The host rejected this final review: "
-                                + _SUBMISSION_VALIDATION_HINTS[subcode]
-                                + " Keep the evidence-based disposition and retry "
-                                "submit_l2_review as the only call."
-                                if subcode is not None
-                                else "Retry submit_l2_review as the only call after "
-                                "resolving analyzer corrections."
-                            ),
+                            "reason": reason,
+                            "message": guidance,
                         },
                         separators=(",", ":"),
                     ),
@@ -4285,7 +4335,12 @@ class TerraSolSourceReviewAgent:
                             )
                         )
                     except (json.JSONDecodeError, ValueError) as error:
-                        request_submit_correction(submitted[0], validation_error=error)
+                        request_submit_correction(
+                            submitted[0],
+                            reason="validation",
+                            validation_subcode=_submission_validation_subcode(error),
+                        )
+                        continue
                         continue
                     if (
                         self._compact_review_packet
@@ -4294,7 +4349,16 @@ class TerraSolSourceReviewAgent:
                         and observation.risk_level == "low"
                         and not _compact_safe_has_coverage(fetched_sections, read_files)
                     ):
-                        request_submit_correction(submitted[0])
+                        request_submit_correction(
+                            submitted[0],
+                            reason="safe_coverage",
+                            missing_sections=tuple(
+                                name
+                                for name in _COMPACT_DOSSIER_SECTIONS
+                                if name not in fetched_sections
+                            ),
+                            needs_source_read=not read_files,
+                        )
                         continue
                     return L2RunResult(
                         observation=observation,
@@ -4309,7 +4373,14 @@ class TerraSolSourceReviewAgent:
                         dossier_complete=trajectory_complete,
                     )
                 for call in submitted:
-                    request_submit_correction(call)
+                    request_submit_correction(
+                        call,
+                        reason=(
+                            "pending_analyzer"
+                            if pending_tool_corrections
+                            else "submit_not_only_call"
+                        ),
+                    )
             for call in (
                 call for call in calls if call.get("name") != "submit_l2_review"
             ):

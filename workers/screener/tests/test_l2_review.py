@@ -4670,6 +4670,91 @@ async def test_report_only_audit_records_fixed_incomplete_reason_without_body(
     assert "private-source-marker" not in audit_path.read_text()
 
 
+async def test_compact_safe_correction_names_missing_sections_without_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit_path = tmp_path / "correction-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit_path), retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+        compact_review_packet=True,
+    )
+    deterministic = {
+        name.removeprefix("deterministic."): {}
+        for name in l2_review._COMPACT_DOSSIER_SECTIONS
+        if name.startswith("deterministic.")
+    }
+    dossier = {
+        "artifact_sha256": "d" * 64,
+        "deterministic": deterministic,
+        "bounded_source_inventory": {},
+        "source": "private-source-marker",
+    }
+    monkeypatch.setattr(
+        l2_review,
+        "_parse_l2_review",
+        lambda *_args, **_kwargs: (_safe(), [], [], "safe_clearance"),
+    )
+    requests: list[list[dict[str, object]]] = []
+
+    async def post(
+        _client: object, _key: object, items: list[dict[str, object]], **_kwargs: object
+    ) -> httpx.Response:
+        requests.append(list(items))
+        if len(requests) == 1:
+            return _response(
+                [_tool_call("1", "submit_l2_review", {"disposition": "safe"})],
+                model="openai/gpt-6-sol",
+            )
+        raise TimeoutError
+
+    monkeypatch.setattr(agent, "_post", post)
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(TimeoutError):
+            await agent._run_trajectory(
+                client,
+                "test-key",
+                tmp_path,
+                None,  # type: ignore[arg-type]
+                artifact_sha256="d" * 64,
+                dossier=dossier,
+                role="analyst",
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider="azure",
+                usage_before=l2_review.L2Usage(),
+                deadline=None,
+                dossier_complete=True,
+            )
+    correction = json.loads(requests[1][-1]["output"])
+    assert correction["reason"] == "safe_coverage"
+    assert "bounded_source_inventory" in correction["message"]
+    assert "read at least one exact source file" in correction["message"]
+    events = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    event = next(
+        event
+        for event in events
+        if event["event_type"] == "report_only_submit_correction"
+    )
+    assert event["proposed_disposition"] == "safe"
+    assert event["missing_sections"] == list(l2_review._COMPACT_DOSSIER_SECTIONS)
+    assert event["needs_source_read"] is True
+    assert "private-source-marker" not in audit_path.read_text()
+
+
 async def test_report_only_provider_body_fault_retries_exact_turn_once(
     tmp_path: Path,
 ) -> None:
