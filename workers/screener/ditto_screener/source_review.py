@@ -3442,6 +3442,7 @@ class OpenRouterSourceReviewAgent:
             result, clearance_certified = await self._run(
                 repository,
                 api_key,
+                artifact_sha256=artifact_sha256,
                 progress=progress,
                 deadline=deadline,
                 notes=notes,
@@ -3530,6 +3531,8 @@ class OpenRouterSourceReviewAgent:
         repository: TarSourceRepository,
         api_key: str,
         *,
+        artifact_sha256: str,
+        validate_submission: bool = True,
         progress: Callable[[int, int], None] | None = None,
         deadline: float | None = None,
         notes: list[dict[str, object]] | None = None,
@@ -3556,6 +3559,7 @@ class OpenRouterSourceReviewAgent:
         tool_correction_used = False
         read_files: set[str] = set()
         runtime_source_read = False
+        last_submission_error: ValueError | None = None
         if progress is not None:
             progress(0, self._max_steps)
         async with httpx.AsyncClient(
@@ -3662,6 +3666,36 @@ class OpenRouterSourceReviewAgent:
                             )
                         continue
                     if name == "submit_review":
+                        if validate_submission:
+                            try:
+                                _parse_review(
+                                    arguments,
+                                    artifact_sha256=artifact_sha256,
+                                    repository=repository,
+                                    policy_version=policy_version,
+                                )
+                            except ValueError as error:
+                                last_submission_error = error
+                                subcode, guidance = _source_review_submission_feedback(
+                                    error
+                                )
+                                messages.append(
+                                    {
+                                        "role": "tool",
+                                        "tool_call_id": call_id,
+                                        "content": json.dumps(
+                                            {
+                                                "error": "submit-review-contract",
+                                                "subcode": subcode,
+                                                "guidance": guidance,
+                                                "correctable": True,
+                                            }
+                                        ),
+                                    }
+                                )
+                                if final_turn:
+                                    raise error
+                                continue
                         if progress is not None:
                             progress(_step + 1, self._max_steps)
                         return arguments, (
@@ -3726,6 +3760,8 @@ class OpenRouterSourceReviewAgent:
                     )
                 if progress is not None:
                     progress(_step + 1, self._max_steps)
+        if last_submission_error is not None:
+            raise last_submission_error
         raise SourceReviewBudgetExhausted(
             "source-review-step-budget-exhausted",
             max_steps=self._max_steps,
@@ -3878,6 +3914,54 @@ class OpenRouterSourceReviewAgent:
             )
         response.raise_for_status()
         return response
+
+
+def _source_review_submission_feedback(error: ValueError) -> tuple[str, str]:
+    """Return fixed, source-free guidance for a rejected final tool call."""
+    message = str(error)
+    if message.startswith("source review category ") and message.endswith(
+        " requires two source locations"
+    ):
+        return (
+            "category_locations",
+            "Cite two distinct reachable artifact path:line locations for each "
+            "benchmark or scorer manipulation category, covering trigger and effect.",
+        )
+    if message in {
+        "elevated source review is missing category evidence",
+        "elevated source review cannot use none",
+    }:
+        return (
+            "category_evidence",
+            "Every medium/high category needs its own real artifact path:line "
+            "citation. Do not use none with elevated risk.",
+        )
+    if message in {
+        "source review none category must be exclusive",
+        "low-risk source review contains a prohibited category",
+    }:
+        return (
+            "risk_categories",
+            "Use none alone, or only advisory categories for low risk. "
+            "Use medium/high only with supported prohibited categories.",
+        )
+    if "invariant" in message.lower():
+        return (
+            "invariant_sweep",
+            "Submit every required invariant exactly once. Pass clauses must "
+            "match the invariant; breaches need valid evidence indices.",
+        )
+    if "evidence" in message.lower():
+        return (
+            "citation_schema",
+            "Each evidence item needs an exact artifact path, positive line, "
+            "and allowed category. Keep citations in the submitted evidence list.",
+        )
+    return (
+        "schema",
+        "Match the submit_review schema exactly, including required fields, "
+        "types, categories, and bounded summary.",
+    )
 
 
 def _source_review_failure_code(error: BaseException) -> str:
