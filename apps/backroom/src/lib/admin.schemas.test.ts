@@ -2225,6 +2225,18 @@ describe('screener review settings schemas', () => {
 })
 
 describe('screen review audit schema', () => {
+  it('keeps the fixed L3 no-tool subtype in the operator diagnostic', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l3-adjudicator-model-tool-contract',
+      prompt_revision: 'l2-safety-v13', max_steps: 256, steps_used: 3,
+      final_stage: 'adjudicator', model_tool_failure_subcode: 'no_tool_call_after_corrections',
+    }
+    expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_tool_failure_subcode: 'model response text',
+    })).toThrow()
+  })
+
   it('accepts the configured L2 step and output ceilings', () => {
     const audit = {
       stage: 'l2', reason_code: 'l2-model-inconclusive', prompt_revision: 'l2-v13',

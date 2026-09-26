@@ -7158,6 +7158,12 @@ export const screenReviewAuditSchema = z.object({
   response_provider: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$/).nullish().default(null),
   final_stage: z.enum(['preflight', 'analyst', 'critic', 'adjudicator']).nullish().default(null),
   cause_detail: z.enum(['lease_unavailable', 'review_disabled']).nullish().default(null),
+  model_tool_failure_subcode: z.enum([
+    'invalid_submit_call_id',
+    'no_tool_call_after_corrections',
+    'malformed_tool_arguments_json',
+    'invalid_tool_call_shape',
+  ]).nullish().default(null),
   max_elapsed_ms: z.number().int().min(1).max(3_600_000).nullish().default(null),
   elapsed_ms: z.number().int().min(0).max(3_600_000).nullish().default(null),
 })

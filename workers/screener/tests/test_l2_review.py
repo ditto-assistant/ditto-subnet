@@ -2764,6 +2764,16 @@ async def test_l3_no_tool_failure_reports_bounded_subcode(
     assert result.observation.error_code == "l3-adjudicator-model-tool-contract"
     assert result.observation.failure_disposition == "retryable_infra"
     assert result.failure_subcode == "no_tool_call_after_corrections"
+    audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+    assert audit.reason_code == result.observation.error_code
+    assert audit.final_stage == "adjudicator"
+    assert audit.model_tool_failure_subcode == "no_tool_call_after_corrections"
+    assert (
+        audit.canonical_digest()
+        != audit.model_copy(
+            update={"model_tool_failure_subcode": None}
+        ).canonical_digest()
+    )
 
 
 async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(

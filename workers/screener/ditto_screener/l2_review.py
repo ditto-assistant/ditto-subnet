@@ -2795,6 +2795,37 @@ class TerraSolSourceReviewAgent:
                 or result.observation.failure_disposition == "inconclusive"
             ):
                 self._store_cache(cache_key, result)
+            if (
+                result.observation.error_code == "l3-adjudicator-model-tool-contract"
+                and result.failure_subcode
+                in {
+                    "invalid_submit_call_id",
+                    "no_tool_call_after_corrections",
+                    "malformed_tool_arguments_json",
+                    "invalid_tool_call_shape",
+                }
+            ):
+                # Preserve only the host's fixed contract-failure label in the
+                # existing signed audit. The private model response stays local.
+                audit = ScreenReviewAudit(
+                    stage="l2",
+                    reason_code=result.observation.error_code,
+                    prompt_revision=l2_safety_prompt_revision(policy_version),
+                    harness_revision=L2_HARNESS_REVISION,
+                    max_steps=self._max_steps,
+                    steps_used=min(len(result.response_models), self._max_steps),
+                    model_steps_observed=len(result.response_models),
+                    tool_calls_observed=len(result.tools),
+                    final_stage="adjudicator",
+                    model_tool_failure_subcode=result.failure_subcode,
+                )
+                result = replace(
+                    result,
+                    observation=replace(
+                        result.observation,
+                        review_audit=audit.model_dump(mode="json"),
+                    ),
+                )
             if result.observation.error_code == "l2-model-inconclusive":
                 # The model's bounded disposition is operational evidence, not
                 # a policy verdict. Carry only fixed labels and observed counts
