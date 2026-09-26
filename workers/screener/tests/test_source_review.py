@@ -327,6 +327,63 @@ async def test_last_source_review_turn_requires_the_final_verdict_tool(
     assert [tool["function"]["name"] for tool in seen[0]["tools"]] == ["submit_review"]
 
 
+async def test_invalid_final_pass_clause_is_corrected_in_same_review(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    valid = _with_policy_v10_invariants(_BENIGN_REVIEW)
+    invalid = json.loads(json.dumps(valid))
+    invalid["invariants"][0]["pass_clause"] = "no_tool_planning"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        if len(seen) == 1:
+            calls = [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 20},
+                ),
+                _tool("search-1", "search", {"query": "call_model"}),
+            ]
+        else:
+            calls = [
+                _tool(
+                    f"submit-{len(seen)}",
+                    "submit_review",
+                    invalid if len(seen) == 2 else valid,
+                )
+            ]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "tool_calls": calls}}]},
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=2,
+        transport=httpx.MockTransport(handler),
+    )
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok and observation.risk_level == "low"
+    assert len(seen) == 3  # One schema repair is available after the final turn.
+    feedback = json.loads(seen[2]["messages"][-2]["content"])
+    assert feedback["field"] == "invariants[0].pass_clause"
+    assert feedback["invariant"] == "i1_model_invocation"
+    assert feedback["correctable"] is True
+    assert "no_tool_planning" not in json.dumps(feedback)
+
+
 def _archive_with(tmp_path: Path, extra: dict[str, bytes]) -> Path:
     path = tmp_path / "agent.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
