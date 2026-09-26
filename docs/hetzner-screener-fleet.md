@@ -333,6 +333,13 @@ separate offline CA for node 2 and supply only its public certificate as
 CSR with that CA. Never copy node 1's CA private key, host private key,
 mnemonic, bearer token, or credential file.
 
+Put only node 2's public CA certificate in the Actions variable
+`SCREENER_FLEET_X509_NODE2_CA_CERTIFICATE_PEM`, then run the protected plan
+with `root=gcp-platform`, `screener_fleet_x509_identity_enabled=true`, and
+`screener_fleet_x509_node2_identity_enabled=true`. Review and apply that exact
+sealed plan before using its three non-secret node-2 outputs. The input defaults
+to false, and the plan rejects a missing node-2 certificate.
+
 Set `screener_fleet_node_id: subnet-screener-2` explicitly in the private
 Ansible inventory, alongside its own Hetzner Robot resource ID and the
 node-2 Terraform provider/email outputs. Keep the node at one worker and all
@@ -368,8 +375,8 @@ its current hotkey, status, capacity, and exact confirmation. A value of one
 requires a live, active node-2 enrollment on a distinct Hetzner resource and
 hotkey from node 1. Enabling also requires a fresh signed heartbeat from the
 exact node-2 worker identity with V13 policy and an activated replay-runner
-release. The minimum replay-runner release is deliberately unset in Platform
-until that runner ships, so capacity one currently fails closed. Verify worker
+release. Platform requires at least v0.309.0 for the replay runner, and the
+fresh signed node-2 process identity remains mandatory. Verify worker
 adoption through `get_screener_capacity.nodes[].workers` (seen-at, policy and
 release) before enabling. The ordinary five channel limits do not control
 replay claims. Returning capacity to zero remains available when a worker or
