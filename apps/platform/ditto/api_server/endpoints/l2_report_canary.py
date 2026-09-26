@@ -249,29 +249,29 @@ async def _historical_ruling_matches(
     except (KeyError, TypeError, ValueError):
         return False
     if attestation.get("kind") == "ath_clear" and row.review_label == "candidate_clear":
-        ruling = await session.get(AthReview, ruling_id)
+        ath_review = await session.get(AthReview, ruling_id)
         return bool(
-            ruling is not None
-            and ruling.agent_id == row.agent_id
-            and ruling.original_policy_version == row.policy_version
-            and ruling.status == "resolved"
-            and ruling.resolution == "clear"
-            and ruling.original_evidence.get("sha256") == row.artifact_sha256
+            ath_review is not None
+            and ath_review.agent_id == row.agent_id
+            and ath_review.original_policy_version == row.policy_version
+            and ath_review.status == "resolved"
+            and ath_review.resolution == "clear"
+            and ath_review.original_evidence.get("sha256") == row.artifact_sha256
         )
     if (
         attestation.get("kind") == "screening_reject"
         and row.review_label == "known_reject"
     ):
-        ruling = await session.get(ScreeningReviewEvent, ruling_id)
+        event = await session.get(ScreeningReviewEvent, ruling_id)
         return bool(
-            ruling is not None
-            and ruling.agent_id == row.agent_id
-            and ruling.attempt_id == row.source_attempt_id
-            and ruling.policy_version == row.policy_version
-            and ruling.event_kind == "manual"
-            and ruling.outcome == "reject"
-            and ruling.effective_decision == "reject"
-            and ruling.artifact_sha256 == row.artifact_sha256
+            event is not None
+            and event.agent_id == row.agent_id
+            and event.attempt_id == row.source_attempt_id
+            and event.policy_version == row.policy_version
+            and event.event_kind == "manual"
+            and event.outcome == "reject"
+            and event.effective_decision == "reject"
+            and event.artifact_sha256 == row.artifact_sha256
         )
     return False
 

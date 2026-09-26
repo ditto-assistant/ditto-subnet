@@ -126,6 +126,7 @@ async def test_historical_ruling_matches_exact_source() -> None:
     assert not await endpoints._historical_ruling_matches(session, row)
 
     row.review_label = "known_reject"
+    assert row.source_attestation is not None
     row.source_attestation["kind"] = "screening_reject"
     event = SimpleNamespace(
         agent_id=agent_id,
@@ -148,7 +149,7 @@ async def test_historical_ruling_matches_exact_source() -> None:
 @pytest.mark.asyncio
 async def test_current_object_attestation_rejects_replacement() -> None:
     agent_id = uuid4()
-    agent = SimpleNamespace(agent_id=agent_id, size_bytes=123)
+    agent = cast(Agent, SimpleNamespace(agent_id=agent_id, size_bytes=123))
     storage = cast(
         S3StorageClient,
         SimpleNamespace(
