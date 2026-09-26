@@ -1348,3 +1348,72 @@ def test_keep_preference_findings_never_leak_matched_source_text() -> None:
         assert finding["category"] == "benchmark_emulation"
         for location in finding["locations"]:
             assert set(location) == {"path", "line", "role"}
+
+
+def _medium_typo_compare_file(index: int) -> tuple[str, str]:
+    # Four well-separated typo-tolerant compares: exactly the per-rule-file cap
+    # of medium-severity typo-tolerant-token-compare leads in one Go file.
+    body = "\n".join(
+        f"    d{line} := levenshtein(question, target)" + "\n" * 29 for line in range(4)
+    )
+    return (f"src/a{index:02d}_matcher.go", f"package agent\n\nfunc m() {{\n{body}}}\n")
+
+
+def _capped_archive() -> list[tuple[str, str]]:
+    medium = [_medium_typo_compare_file(index) for index in range(14)]
+    # Sorts after every medium file by path, so the scan reaches it last.
+    high = ("src/zz_prompting.rs", _RUST_HABITUAL_LIST_NOTHING_REQUESTED)
+    return [*medium, high]
+
+
+def test_fingerprint_cap_keeps_late_high_severity_lead() -> None:
+    from ditto_screener import source_signals
+
+    archive = _capped_archive()
+    uncapped_medium = 14 * source_signals._MAX_FINGERPRINT_PER_RULE_FILE
+    assert uncapped_medium > source_signals._MAX_FINGERPRINT_FINDINGS
+
+    findings = find_benchmark_emulation_fingerprints(archive)
+
+    assert len(findings) == source_signals._MAX_FINGERPRINT_FINDINGS
+    assert findings[0]["kind"] == "declarative-preference-turn-directive"
+    assert findings[0]["severity"] == "high"
+    severities = [str(finding["severity"]) for finding in findings]
+    first_medium = severities.index("medium")
+    assert set(severities[:first_medium]) == {"high"}
+    assert set(severities[first_medium:]) == {"medium"}
+    # Within a severity the scan order survives: path priority, then line.
+    medium_order = [
+        (str(finding["locations"][0]["path"]), int(finding["locations"][0]["line"]))
+        for finding in findings[first_medium:]
+    ]
+    assert medium_order == sorted(medium_order)
+
+
+def test_fingerprint_ordering_is_deterministic_across_input_order() -> None:
+    archive = _capped_archive()
+    forward = find_benchmark_emulation_fingerprints(archive)
+    backward = find_benchmark_emulation_fingerprints(list(reversed(archive)))
+    assert json.dumps(forward) == json.dumps(backward)
+
+
+def test_fingerprint_cap_filled_with_high_leads_stays_high() -> None:
+    from ditto_screener import source_signals
+
+    high_files = [
+        (f"src/p{index:02d}_prompting.rs", _RUST_HABITUAL_LIST_NOTHING_REQUESTED)
+        for index in range(30)
+    ]
+    findings = find_benchmark_emulation_fingerprints(
+        [*high_files, _medium_typo_compare_file(99)]
+    )
+    assert len(findings) == source_signals._MAX_FINGERPRINT_FINDINGS
+    assert {str(finding["severity"]) for finding in findings} == {"high"}
+
+
+def test_capped_fingerprints_fit_the_inventory_tool_budget() -> None:
+    from ditto_screener import source_review
+
+    findings = find_benchmark_emulation_fingerprints(_capped_archive())
+    encoded = json.dumps(findings, sort_keys=True, separators=(",", ":"))
+    assert len(encoded) < source_review._MAX_TOOL_OUTPUT_CHARS // 2
