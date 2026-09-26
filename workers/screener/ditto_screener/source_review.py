@@ -83,7 +83,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v26-policy-v13"
+        return "source-review-v27-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -1924,6 +1924,8 @@ def _source_review_system_prompt(policy_version: int) -> str:
     prompt = _SYSTEM_PROMPT_HEAD + tail + batch_guidance
     if policy_version >= 13:
         prompt = prompt.replace(
+            "all seven invariants below", "all eight invariants below"
+        ).replace(
             "one decision for each I1 through I7.",
             "one decision for each I1 through I8.",
         )

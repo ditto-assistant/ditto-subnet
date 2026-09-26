@@ -390,7 +390,7 @@ def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     assert "local memory tool may check ownership of its own" in v13
     assert "host-wide check that treats that argument as a local" in v13
     assert "blocks the call before endpoint dispatch" in v13
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v42-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v43-policy-v13"
     assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v22-policy-v13"
     assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v26-policy-v13"
     assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
@@ -464,6 +464,10 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
 
     assert _L2_POLICY_TAILS[13].startswith(_L2_POLICY_TAILS[12])
     assert "decide I1 through I8 independently" in v13
+    assert "every I1-I7 invariant" not in v13
+    assert "replaces I1-I7" not in v13
+    assert "one decision for I1 through I7" not in v13
+    assert "every I1-I7 invariant" in _l2_review_system_prompt(12)
     assert "always-on\nbenchmark recipe is activated on every request" in v13
     assert "reject unjustified removal" in v13
     assert "evaluation_identity_authoritative" in v13
@@ -473,7 +477,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "validator mints `inference_base_url`" in v13
     assert "A URL derived from user text" in v13
     assert "validator mints `inference_base_url`" not in _l2_review_system_prompt(12)
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v42-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v43-policy-v13"
     assert "v13" not in _benchmark_contract_capsule(12)
     assert _benchmark_contract_capsule(12)["supported_versions"] == [3, 4, 5, 6]
     assert (
@@ -4749,7 +4753,7 @@ def _assert_logan_certificate_contract(
         certificate,
         artifact_sha256=artifact_sha256,
         repository=repository,
-        prompt_revision="l2-terra-source-review-v42-policy-v13-sol-independent-compact-v1",
+        prompt_revision="l2-terra-source-review-v43-policy-v13-sol-independent-compact-v1",
         policy_version=13,
     )
     assert observation.ok and observation.risk_level == "high"

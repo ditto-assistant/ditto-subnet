@@ -91,7 +91,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v42-policy-v13"
+        return "l2-terra-source-review-v43-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -1318,9 +1318,13 @@ def _l2_review_system_prompt(policy_version: int) -> str:
         ) from None
     prompt = _L2_SYSTEM_PROMPT_HEAD + tail + _L2_SYSTEM_PROMPT_TAIL
     if policy_version >= 13:
-        prompt = prompt.replace(
-            "exactly one decision for I1 through I7.",
-            "exactly one decision for I1 through I8.",
+        prompt = (
+            prompt.replace("every I1-I7 invariant", "every I1-I8 invariant")
+            .replace("replaces I1-I7.", "replaces I1-I8.")
+            .replace(
+                "exactly one decision for I1 through I7.",
+                "exactly one decision for I1 through I8.",
+            )
         )
     return prompt
 
@@ -2660,7 +2664,8 @@ class TerraSolSourceReviewAgent:
                     "This describes the eligible scorer cohort at the signed "
                     "heartbeat observation time, not a selected future scorer. "
                     "Only scorer-injected variables are covered. Check image ENV, "
-                    "source defaults, runtime writes, and I1-I7 independently."
+                    "source defaults, runtime writes, and "
+                    f"I1-I{'8' if policy_version >= 13 else '7'} independently."
                 ),
             }
         elif policy_version == 13 and (
@@ -3983,7 +3988,8 @@ class TerraSolSourceReviewAgent:
         if role == "analyst":
             task = (
                 "No L1 finding is supplied. Independently review the entire served "
-                "artifact against I1-I7 using the dossier and targeted tools. "
+                f"artifact against I1-I{'8' if policy_version >= 13 else '7'} "
+                "using the dossier and targeted tools. "
                 "Reach a grounded terminal safe or violation verdict when the "
                 "evidence permits; return inconclusive only for a specific "
                 "unresolved causal link."
