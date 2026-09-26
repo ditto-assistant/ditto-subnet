@@ -73,7 +73,10 @@ def _packet(attempt_id, sha: str) -> ScoredRuntimeEvidenceLease:
 
 @pytest.mark.asyncio
 async def test_full_runtime_claim_requires_exact_adopted_worker() -> None:
-    node = SimpleNamespace(node_id="subnet-screener-1", screener_hotkey="hotkey")
+    node = cast(
+        ScreenerNode,
+        SimpleNamespace(node_id="subnet-screener-1", screener_hotkey="hotkey"),
+    )
     current = datetime.now(UTC)
     release = {
         "builtin_policy_version": 13,
@@ -85,7 +88,9 @@ async def test_full_runtime_claim_requires_exact_adopted_worker() -> None:
         instance_id="subnet-screener-1-worker-1",
         system_metrics={"release": release},
     )
-    session = SimpleNamespace(scalars=AsyncMock(return_value=[heartbeat]))
+    session = cast(
+        AsyncSession, SimpleNamespace(scalars=AsyncMock(return_value=[heartbeat]))
+    )
     assert await endpoints._full_runtime_worker_ready(
         session, node=node, now=current, instance_id=heartbeat.instance_id
     )

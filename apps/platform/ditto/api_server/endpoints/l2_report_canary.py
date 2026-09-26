@@ -7,7 +7,7 @@ import json
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -66,7 +66,7 @@ def _view(row: ScreenerL2ReportCanary) -> L2CanaryView:
         expected_agent_status=row.expected_agent_status,
         expected_score_count=row.expected_score_count,
         review_label=row.review_label,
-        run_mode=row.run_mode,
+        run_mode=cast(Literal["source_only", "full_runtime"], row.run_mode),
         status=row.status,
         claimed_instance_id=row.claimed_instance_id,
         lease_expires_at=row.lease_expires_at,
@@ -394,7 +394,7 @@ async def claim_l2_report_canary(
             artifact_sha256=row.artifact_sha256,
             bench_version=row.bench_version,
             policy_version=row.policy_version,
-            run_mode=row.run_mode,
+            run_mode=cast(Literal["source_only", "full_runtime"], row.run_mode),
             miner_hotkey=agent.miner_hotkey,
             lease_token=token,
             lease_expires_at=row.lease_expires_at,
