@@ -6249,9 +6249,10 @@ async def test_scorer_flow_keeps_cross_file_score_controlled_clear(
     assert not result["truncated"]
     assert result["flow_count"] == 0
     assert len(result["interprocedural_candidates"]) == 1
-    assert result["interprocedural_candidates"][0]["field_assignments"][0][
-        "path"
-    ] == "response.rs"
+    assert (
+        result["interprocedural_candidates"][0]["field_assignments"][0]["path"]
+        == "response.rs"
+    )
     assert _dossier_has_scorer_attention(
         {"deterministic": {"scorer_field_flow": result}}
     )
