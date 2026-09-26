@@ -1,9 +1,10 @@
 # SN118 treasury activation and GM top-up runbook
 
-This is a proposed operator sequence for the five draft PRs. **None of these
-activation steps has been performed.** The Platform policy is shadow-only, the
-Terraform signer and planner hosts are disabled in `prod.auto.tfvars`, and the daily timer is
-only a template. A review of this runbook does not authorize a chain transfer.
+This is a proposed operator sequence after the five code-only PRs merged.
+**None of these activation steps has been performed.** The Platform policy is
+shadow-only. A separate activation draft proposes both Terraform hosts and the
+named operator, but no infrastructure apply has run. The daily timer is only
+a template. A review of this runbook does not authorize a chain transfer.
 
 ## Initial allocation proposal for economic review
 
