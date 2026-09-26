@@ -354,11 +354,14 @@ async def test_null_sha_historical_clear_replay_rehashes_at_claim(
         attempt = await session.get(ScreeningAttempt, attempt_id)
     assert row is not None
     assert row.status == ("leased" if change == "none" else "incomplete")
-    assert row.error_code == {
-        "none": None,
-        "object_drift": "source-object-drift",
-        "ruling_replaced": "exact-source-changed",
-    }[change]
+    assert (
+        row.error_code
+        == {
+            "none": None,
+            "object_drift": "source-object-drift",
+            "ruling_replaced": "exact-source-changed",
+        }[change]
+    )
     assert row.report is None
     assert agent is not None and agent.status == AgentStatus.SCORED
     assert attempt is not None and attempt.artifact_sha256 is None

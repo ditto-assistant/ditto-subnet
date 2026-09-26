@@ -439,9 +439,7 @@ async def schedule_l2_report_canary(
         if row.source_attestation is not None:
             if payload.historical_ruling_kind == "ath_clear":
                 assert payload.historical_ruling_id is not None
-                action = await _latest_ath_action(
-                    session, payload.historical_ruling_id
-                )
+                action = await _latest_ath_action(session, payload.historical_ruling_id)
                 if action is None or action.action != "clear":
                     raise HTTPException(
                         status_code=409, detail="ATH clear action missing"
