@@ -1535,6 +1535,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/outlier-escalation/dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Outlier Escalation Dry Run
+         * @description Which current ledger rows the escalation would hold, whatever the mode.
+         *
+         *     Replays :func:`evaluate_score_outlier` -- the exact decision scoring calls
+         *     -- over the ledger scoring reads at finalization
+         *     (``list_eligible_ledger(bench_version=...)``, one ``scored`` row per owner,
+         *     median-row composite). Each row is judged against the other rows, as the
+         *     finalizing candidate is judged against a ledger it is not yet in. Agents
+         *     already held are outside that ledger and are not replayed.
+         *
+         *     Where it differs from each row's own finalization: the cohort is today's
+         *     ledger, not the ledger at that time; only an owner's representative row is
+         *     replayed, and its cohort omits that owner, whose earlier best was a peer at
+         *     finalization; and the candidate composite is the median score row, equal
+         *     to the finalization ``statistics.median`` for an odd score count such as
+         *     the three-validator quorum.
+         */
+        get: operations["get_outlier_escalation_dry_run_api_v1_admin_outlier_escalation_dry_run_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/owner-attestations/{attestation_id}/revoke": {
         parameters: {
             query?: never;
@@ -10332,6 +10366,67 @@ export interface components {
              * @enum {string}
              */
             reason: "oversized" | "non_utf8";
+        };
+        /**
+         * AdminOutlierEscalationDryRunResponse
+         * @description Would-trigger replay of the escalation over the current scored ledger.
+         *
+         *     Mode-independent and read-only: it opens no hold, writes no audit entry,
+         *     and changes no setting.
+         */
+        AdminOutlierEscalationDryRunResponse: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Bench Version In Scope
+             * @description bench_version >= settings.min_bench_version. When false the live gate never runs at this version; counts are still replayed.
+             */
+            bench_version_in_scope: boolean;
+            /**
+             * Cohort Size
+             * @description Peers per candidate: the ledger without the candidate.
+             */
+            cohort_size: number;
+            /**
+             * Cohort Too Small
+             * @description cohort_size < min_cohort_size, so nothing can trigger.
+             */
+            cohort_too_small: boolean;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Ledger Mad */
+            ledger_mad?: number | null;
+            /**
+             * Ledger Median
+             * @description Median of all ledger composites (null when empty). Each entry's evidence carries its own leave-one-out median/MAD.
+             */
+            ledger_median?: number | null;
+            /**
+             * Ledger Size
+             * @description Candidates replayed: one per ledger owner.
+             */
+            ledger_size: number;
+            /** Limit */
+            limit: number;
+            /** Overridden Fields */
+            overridden_fields: ("mode" | "min_bench_version" | "min_cohort_size" | "modified_z_threshold" | "min_composite_floor")[];
+            /** @description The policy replayed: the effective settings with any override applied. mode is reported, not applied. */
+            settings: components["schemas"]["OutlierEscalationSettingsView"];
+            /**
+             * Truncated
+             * @description would_trigger_count exceeds the returned rows.
+             */
+            truncated: boolean;
+            /**
+             * Would Trigger
+             * @description Highest composite first, at most limit rows.
+             */
+            would_trigger: components["schemas"]["OutlierEscalationDryRunEntryView"][];
+            /** Would Trigger Count */
+            would_trigger_count: number;
         };
         /**
          * AdminOutlierEscalationResponse
@@ -22161,6 +22256,17 @@ export interface components {
              * Format: date-time
              */
             window_started_at: string;
+        };
+        /** OutlierEscalationDryRunEntryView */
+        OutlierEscalationDryRunEntryView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            evidence: components["schemas"]["OutlierEscalationEvidence"];
+            /** Miner Hotkey */
+            miner_hotkey: string;
         };
         /** OutlierEscalationEntryView */
         OutlierEscalationEntryView: {
@@ -37461,6 +37567,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminOutlierEscalationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_outlier_escalation_dry_run_api_v1_admin_outlier_escalation_dry_run_get: {
+        parameters: {
+            query?: {
+                bench_version?: number | null;
+                min_cohort_size?: number | null;
+                modified_z_threshold?: number | null;
+                min_composite_floor?: number | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOutlierEscalationDryRunResponse"];
                 };
             };
             /** @description Validation Error */

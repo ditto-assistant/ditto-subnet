@@ -122,6 +122,7 @@ import {
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
   confirmationSeedAnchorsInputSchema,
+  outlierEscalationDryRunInputSchema,
   rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
   scheduleScreenerPolicyActivationInputSchema,
@@ -251,6 +252,7 @@ import {
   fetchInferenceRuntimeMetrics,
   fetchSourceReviewQueueSlo,
   fetchOutlierEscalation,
+  fetchOutlierEscalationDryRun,
   fetchInferenceFailureTaxonomy,
   fetchInferenceTraceObjects,
   createInferenceTraceDownloadUrl,
@@ -748,6 +750,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read ordinary source-review queue age, throughput, and reconciliation ghosts.',
   get_outlier_escalation:
     'Read outlier escalation mode, each setting\'s env source, and audit-chain holds.',
+  get_outlier_escalation_dry_run:
+    'Replay outlier escalation on the scored ledger: would-trigger count and agents.',
   get_inference_failure_taxonomy:
     'Group recent chat and embedding outcomes by model, lane, gateway, upstream route, and error code. route_basis says how much of a route is known; an unknown route never names one. rate_limit_bursts is a report-only 5-minute 429 signal with affected tickets.',
   start_runtime_profile:
@@ -3084,6 +3088,21 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchOutlierEscalation()),
+  )
+
+  registerTool(
+    'get_outlier_escalation_dry_run',
+    {
+      title: 'Dry-run outlier escalation',
+      description:
+        'Replay the anomalous-score outlier escalation over the CURRENT scored ledger for one benchmark version (default: active) and report which rows it would hold, whatever the mode -- the false-positive check before switching observe to enforce or retuning a threshold. It calls the same decision function scoring calls at finalization, over the same ledger scoring reads there (one scored row per owner, median-row composite). Each row is judged against every other row; held and banned agents are outside that ledger and are not replayed. ' +
+        'settings is the policy replayed: the effective settings (get_outlier_escalation) with any override applied -- minCohortSize, modifiedZThreshold, minCompositeFloor -- and overridden_fields names them. mode is reported but not applied. bench_version_in_scope false means the live gate never runs at that version (below min_bench_version). ' +
+        'Returns ledger_size, cohort_size (peers per candidate), cohort_too_small (then nothing can trigger), ledger_median / ledger_mad over all composites, would_trigger_count (exact), and up to limit (20, max 100) would_trigger rows, highest composite first, each with agent_id, miner_hotkey and the same evidence the gate records (composite, leave-one-out cohort median/MAD, modified_z, thresholds). truncated means more rows would trigger. ' +
+        'It is a replay of today\'s ledger, not history: a row\'s cohort at its own finalization was the ledger then, and included its owner\'s earlier best. Past observe/enforce triggers are in get_outlier_escalation activity. Opens no hold, writes nothing, and changes no setting. Requires backroom:read.',
+      inputSchema: outlierEscalationDryRunInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchOutlierEscalationDryRun(input)),
   )
 
   registerTool(

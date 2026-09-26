@@ -300,6 +300,8 @@ import {
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
   sourceReviewQueueSloSchema,
+  outlierEscalationDryRunInputSchema,
+  outlierEscalationDryRunSchema,
   outlierEscalationInputSchema,
   outlierEscalationSchema,
   queuePolicySettingsControlSchema,
@@ -1490,6 +1492,28 @@ export async function fetchOutlierEscalation(rawInput: unknown = {}) {
     { retries: 1 },
   )
   return outlierEscalationSchema.parse(payload)
+}
+
+export async function fetchOutlierEscalationDryRun(rawInput: unknown = {}) {
+  const input = outlierEscalationDryRunInputSchema.parse(rawInput)
+  const params = new URLSearchParams({ limit: String(input.limit) })
+  if (input.benchVersion !== undefined) {
+    params.set('bench_version', String(input.benchVersion))
+  }
+  if (input.minCohortSize !== undefined) {
+    params.set('min_cohort_size', String(input.minCohortSize))
+  }
+  if (input.modifiedZThreshold !== undefined) {
+    params.set('modified_z_threshold', String(input.modifiedZThreshold))
+  }
+  if (input.minCompositeFloor !== undefined) {
+    params.set('min_composite_floor', String(input.minCompositeFloor))
+  }
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/outlier-escalation/dry-run?${params.toString()}`,
+    { retries: 1 },
+  )
+  return outlierEscalationDryRunSchema.parse(payload)
 }
 
 export async function fetchInferenceFailureTaxonomy() {
