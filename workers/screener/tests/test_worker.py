@@ -90,7 +90,6 @@ class _FakeGate:
         self.build_only_calls: list[bool] = []
         self.policy_only_calls: list[bool] = []
         self.deferred_source_review_calls: list[bool] = []
-        self.remote_source_reviews: list[Any] = []
         self.policy_versions: list[int] = []
         self.bench_versions: list[int] = []
         self.shadow_result: Any = None
@@ -117,7 +116,6 @@ class _FakeGate:
         deferred_source_review: bool = False,
         policy_version: int | None = None,
         bench_version: int | None = None,
-        remote_source_review: Any = None,
         **_: Any,
     ) -> ScreeningDecision:
         self.calls.append(agent_id)
@@ -125,7 +123,6 @@ class _FakeGate:
         self.build_only_calls.append(build_only)
         self.policy_only_calls.append(policy_only)
         self.deferred_source_review_calls.append(deferred_source_review)
-        self.remote_source_reviews.append(remote_source_review)
         if policy_version is not None:
             self.policy_versions.append(policy_version)
         if bench_version is not None:
@@ -678,61 +675,6 @@ async def test_policy_only_item_reuses_image_without_upload(
     assert verdict["policy_only"] is True
     assert verdict["image_sha256"] is None
     assert verdict["image_upload_id"] is None
-
-
-async def test_remote_build_gets_full_timeout_despite_stale_local_override(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    """A legacy 20-minute local cap must not reduce Targon to one minute."""
-    agent = uuid4()
-    platform = _FakePlatform([])
-    observed_timeouts: list[float] = []
-
-    async def build_submission_image(  # type: ignore[no-untyped-def]
-        _agent_id,
-        *,
-        attempt_id: UUID,
-        timeout,
-    ):
-        assert attempt_id is not None
-        observed_timeouts.append(timeout)
-        return None
-
-    platform.build_submission_image = build_submission_image  # type: ignore[attr-defined]
-    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
-    original_screen = gate.screen
-
-    async def invoke_remote_build(*, remote_build, **kwargs):  # type: ignore[no-untyped-def]
-        await remote_build()
-        return await original_screen(**kwargs)
-
-    gate.screen = invoke_remote_build  # type: ignore[method-assign]
-    worker = _worker(
-        make_config(
-            build_timeout_seconds=1200,
-            remote_build_mode="prefer",
-            remote_build_timeout_seconds=1500,
-        ),
-        platform,
-        gate,
-    )
-
-    await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
-
-    assert observed_timeouts == [1500]
-
-
-async def test_local_build_mode_keeps_source_review_in_the_worker(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    """A local image cannot satisfy the fleet review job's build prerequisite."""
-    platform = _FakePlatform([])
-    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
-    worker = _worker(make_config(remote_build_mode="off"), platform, gate)
-
-    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
-
-    assert gate.remote_source_reviews == [None]
 
 
 async def test_build_only_quarantine_is_rejected_as_retryable_worker_failure(

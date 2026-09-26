@@ -2,19 +2,16 @@
 
 This process is the sole normal writer of GCE screener capacity. It reads
 runnable demand from Platform, acquires a fenced controller lease, and applies
-the audited Backroom revision: Targon-first decomposed lanes keep the GCE MIG
-at zero, and a GCE-only cutover scales residual demand onto the fleet. A stored
-`['gcp', 'targon']` list is not a working hybrid; first-provider wins, so that
-list disables Targon for the lane. Nested-Docker Targon screener slots are
-retired: leftover `ditto-screener-*-slot-*` rentals are drained and deleted,
-never created.
+the audited Backroom revision. The normal fleet runs full screening locally on
+the Hetzner node; the GCE MIG supplies bounded backlog and outage capacity.
+Nested-Docker Targon screener slots are retired: leftover
+`ditto-screener-*-slot-*` rentals are drained and deleted, never created.
 
-Targon Rentals have three independently controlled one-shot jobs owned by
-Platform: credential-minimal Kaniko builds, direct-image runtime health checks,
-and L1/L2/L3 source review in the same screener rental (in-process analyzer,
-no nested Docker). Provider failure parks that exact job. GCE is used only when
-the Backroom revision selected the GCE lane before dispatch; it is never an
-automatic capacity fallback or a post-failure L2/L3 path.
+The Targon one-shot build, runtime, and source-review contracts below are
+retained for compatibility and operator rollback. The enrolled production
+workers no longer call those jobs; they build, probe, review, and sign locally.
+An old `['gcp', 'targon']` provider list is not a working hybrid: first-provider
+wins for the retained one-shot lanes.
 
 Provider credentials are accepted only through mode-0600 files. The operator
 smoke wrapper streams `TARGON_API_KEY` directly from GCP Secret Manager to the

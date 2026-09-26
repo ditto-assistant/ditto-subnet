@@ -241,7 +241,6 @@ async def consume(
             claim.lease_expires_at.timestamp()
             - claim.scored_runtime_evidence.observed_at
         ),
-        remote_build_mode="off",
         l2_cache_dir=str(canary_root / "cache"),
         l2_audit_journal_file=str(canary_root / "l2-audit.jsonl"),
         static_preflight_audit_file=str(canary_root / "preflight-audit.jsonl"),

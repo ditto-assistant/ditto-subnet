@@ -62,7 +62,11 @@ retry/deadline, transition, opaque-component verification, and exact-artifact
 emission rules in `workers/screener/docs/policy-v13.md` are satisfied for the
 next version.
 
-## Provider-routed screening jobs
+## Retained provider-routed screening jobs
+
+The normal Hetzner and GCE workers run the complete build, smoke, and review
+path locally. The following Targon one-shot contract remains for compatibility
+and controlled rollback; production workers no longer call it.
 
 Build, runtime smoke, and source review have independent revisioned provider
 lists. Targon is enabled for a lane only when that list starts with `targon`.

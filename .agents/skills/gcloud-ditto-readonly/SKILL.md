@@ -94,7 +94,7 @@ or read environment/credential files from this skill.
 
 ## Cloud Run screening job logs
 
-Cloud Run screening lanes (GCP fallback of the Targon-first stack) log only
+Cloud Run jobs in the retained one-shot screening stack log only
 to Cloud Logging, and Platform's `replica_logs` stub returns `""` for Cloud
 Run, so the DB replica-trace columns are empty for gcp rows — Cloud Logging
 is the only artifact. The rental loop deletes failed jobs after capture, so
