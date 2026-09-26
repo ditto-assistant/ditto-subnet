@@ -541,7 +541,15 @@ async def test_unready_worker_skips_an_older_full_runtime_row(
     monkeypatch.setattr(
         endpoints,
         "_resolve_effective_review_settings",
-        AsyncMock(return_value=SimpleNamespace(revision=124, checksum="d" * 64)),
+        AsyncMock(
+            return_value=SimpleNamespace(
+                revision=124,
+                checksum="d" * 64,
+                settings=SimpleNamespace(
+                    source_review_timeout_seconds=3600, timeout_seconds=1800
+                ),
+            )
+        ),
     )
     request = cast(
         Request, SimpleNamespace(state=SimpleNamespace(screener_node_id=node_id))
