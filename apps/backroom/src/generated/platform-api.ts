@@ -20635,6 +20635,12 @@ export interface components {
             miner_hotkey: string;
             /** Policy Version */
             policy_version: number;
+            /**
+             * Run Mode
+             * @default source_only
+             * @enum {string}
+             */
+            run_mode: "source_only" | "full_runtime";
             scored_runtime_evidence: components["schemas"]["ScoredRuntimeEvidenceLease"];
             /**
              * Source Attempt Id
@@ -20697,6 +20703,12 @@ export interface components {
              */
             review_label: "candidate_clear" | "known_reject";
             /**
+             * Run Mode
+             * @default source_only
+             * @enum {string}
+             */
+            run_mode: "source_only" | "full_runtime";
+            /**
              * Source Attempt Id
              * Format: uuid
              */
@@ -20746,6 +20758,11 @@ export interface components {
             request_id: string;
             /** Review Label */
             review_label: string;
+            /**
+             * Run Mode
+             * @enum {string}
+             */
+            run_mode: "source_only" | "full_runtime";
             /**
              * Source Attempt Id
              * Format: uuid
