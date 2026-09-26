@@ -58,6 +58,7 @@ from ditto_screening_protocol import (
     SourceReviewFinding,
     SourceReviewInvariant,
     SourceReviewInvariantAssessment,
+    SourceReviewInvariantDecision,
     SourceReviewInvariantDisposition,
     SourceReviewPassClause,
     SourceReviewScorerVisibleEffect,
@@ -168,7 +169,7 @@ def l2_prompt_cache_key(policy_version: int) -> str:
     )
 
 
-L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v3"
+L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v4"
 L2_DOSSIER_REVISION = "l1-compressed-dossier-v12"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
@@ -7000,6 +7001,30 @@ def _served_generator_hold(
     deduplicated_evidence = list(
         {(item.path, item.line, item.category): item for item in evidence}.values()
     )[:16]
+    # The constellation selects a hold, but does not prove that a generated
+    # answer reached a scorer field. Keep its locations as an unresolved I5
+    # lead instead of recording a policy breach from static co-occurrence.
+    assessment = policy_v10_static_assessment(
+        breaches={}, policy_version=policy_version
+    )
+    assessment = SourceReviewInvariantAssessment(
+        schema_version=assessment.schema_version,
+        decisions=[
+            SourceReviewInvariantDecision(
+                invariant=decision.invariant,
+                disposition=SourceReviewInvariantDisposition.INCONCLUSIVE,
+                summary="Static generator lead: I5 breach unproven; review causality.",
+                evidence_indices=[
+                    index
+                    for index, item in enumerate(deduplicated_evidence)
+                    if item.category == "benchmark_emulation"
+                ],
+            )
+            if decision.invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+            else decision
+            for decision in assessment.decisions
+        ],
+    )
     finding = SourceReviewFinding(
         artifact_sha256=artifact_sha256,
         prompt_revision=L2_STATIC_HOLD_REVISION,
@@ -7008,19 +7033,10 @@ def _served_generator_hold(
         categories=sorted(categories),
         evidence=deduplicated_evidence,
         summary=(
-            "served generator-shaped request, retrieval, and answer-authority "
-            "signals require quarantine; model agreement cannot self-clear"
+            "served generator-shaped request, retrieval, and answer-path "
+            "signals require review; static evidence does not prove I5"
         ),
-        invariant_assessment=policy_v10_static_assessment(
-            breaches={
-                SourceReviewInvariant.PRODUCTION_ENGINE: [
-                    index
-                    for index, item in enumerate(deduplicated_evidence)
-                    if item.category == "benchmark_emulation"
-                ]
-            },
-            policy_version=policy_version,
-        ),
+        invariant_assessment=assessment,
     ).require_policy_v10_invariants()
     detector_files = tuple(
         {
@@ -7062,8 +7078,6 @@ def _served_generator_hold(
     )
     if l1_categories == {"scorer_contract_manipulation"} and positive_scorer_flow:
         resolution_basis = "scorer_field_manipulation"
-    elif l1_categories == {"benchmark_emulation"}:
-        resolution_basis = "benchmark_answer_replacement"
     else:
         resolution_basis = "insufficient_static_evidence"
     return L2RunResult(

@@ -81,6 +81,8 @@ from ditto_screening_protocol import (
     SourceReviewAdjudication,
     SourceReviewCitation,
     SourceReviewFinding,
+    SourceReviewInvariant,
+    SourceReviewInvariantDisposition,
 )
 from scripts.generate_starter_provenance import _tracked_files
 
@@ -1645,7 +1647,16 @@ def test_served_generator_constellation_cannot_auto_clear(
     assert "benchmark_emulation" in held.observation.categories
     assert held.clearance_path == "deterministic_served_generator_hold"
     assert held.critic_disposition == "not_required_static_hold"
-    assert held.resolution_basis == "benchmark_answer_replacement"
+    assert held.resolution_basis == "insufficient_static_evidence"
+    finding = SourceReviewFinding.model_validate(held.observation.finding)
+    assert finding.invariant_assessment is not None
+    i5 = next(
+        decision
+        for decision in finding.invariant_assessment.decisions
+        if decision.invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+    )
+    assert i5.disposition == SourceReviewInvariantDisposition.INCONCLUSIVE
+    assert i5.evidence_indices
     assert (
         _finalize_without_l3(
             analyst,
@@ -1722,6 +1733,23 @@ def test_served_generator_constellation_cannot_auto_clear(
     )
     assert scorer_hold is not None
     assert scorer_hold.resolution_basis == "scorer_field_manipulation"
+
+
+def test_static_hold_revision_does_not_reuse_prior_breach_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert L2_STATIC_HOLD_REVISION == "l2-integrity-static-hold-v4"
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    (tmp_path / "cache").mkdir()
+    observation = _l1()
+    monkeypatch.setattr(
+        l2_review, "L2_STATIC_HOLD_REVISION", "l2-integrity-static-hold-v3"
+    )
+    old_key = agent._cache_key("ab" * 32, observation)
+    agent._store_cache(old_key, _clearance_candidate())
+    assert agent._load_cache(old_key) is not None
+    monkeypatch.setattr(l2_review, "L2_STATIC_HOLD_REVISION", L2_STATIC_HOLD_REVISION)
+    assert agent._load_cache(agent._cache_key("ab" * 32, observation)) is None
 
 
 def test_review_adaptive_model_routing_cannot_auto_clear(tmp_path: Path) -> None:
