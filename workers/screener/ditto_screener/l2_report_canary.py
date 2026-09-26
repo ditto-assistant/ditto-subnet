@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -224,9 +225,13 @@ async def consume(
         l2_review_mode=("enforce" if claim.run_mode == "full_runtime" else "shadow"),
         l2_always_escalate=True,
         require_signed_runtime_lease=True,
-        # L1 preparation may outlast the ordinary five-minute packet window.
-        # The job's 45-minute lease still bounds this exact signed packet.
-        signed_runtime_lease_max_age_seconds=45 * 60,
+        # This report-only packet was fresh when Platform issued the lease.
+        # Its observed timestamp may precede the claim by a few minutes; keep
+        # it valid only through this canary's bounded completion deadline.
+        signed_runtime_lease_max_age_seconds=math.ceil(
+            claim.lease_expires_at.timestamp()
+            - claim.scored_runtime_evidence.observed_at
+        ),
         remote_build_mode="off",
         l2_cache_dir=str(canary_root / "cache"),
         l2_audit_journal_file=str(canary_root / "l2-audit.jsonl"),

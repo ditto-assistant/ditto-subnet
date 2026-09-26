@@ -71,6 +71,22 @@ def _packet(attempt_id, sha: str) -> ScoredRuntimeEvidenceLease:
     )
 
 
+@pytest.mark.parametrize(
+    ("timeout", "run_mode", "expected_seconds"),
+    [
+        (600, "source_only", 45 * 60),
+        (3600, "source_only", 70 * 60),
+        (3600, "full_runtime", 120 * 60),
+    ],
+)
+def test_report_only_lease_covers_review_and_bounded_preparation(
+    timeout: int, run_mode: str, expected_seconds: int
+) -> None:
+    assert endpoints._canary_lease(
+        source_review_timeout_seconds=timeout, run_mode=run_mode
+    ) == timedelta(seconds=expected_seconds)
+
+
 @pytest.mark.asyncio
 async def test_full_runtime_claim_requires_exact_adopted_worker() -> None:
     node = cast(
@@ -225,7 +241,13 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
     monkeypatch.setattr(
         endpoints,
         "_resolve_effective_review_settings",
-        AsyncMock(return_value=SimpleNamespace(revision=124, checksum="d" * 64)),
+        AsyncMock(
+            return_value=SimpleNamespace(
+                revision=124,
+                checksum="d" * 64,
+                settings=SimpleNamespace(source_review_timeout_seconds=3600),
+            )
+        ),
     )
     request = cast(
         Request, SimpleNamespace(state=SimpleNamespace(screener_node_id=node_id))
@@ -255,6 +277,10 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
     assert claim.source_attempt_id == attempt_id
     assert claim.run_mode == run_mode
     assert claim.scored_runtime_evidence == packet
+    expected_lease = timedelta(
+        minutes=120 if run_mode == "full_runtime" else 70
+    )
+    assert abs((claim.lease_expires_at - now - expected_lease).total_seconds()) < 30
     async with session_maker() as session:
         view = await endpoints.get_l2_report_canary(claim.canary_id, None, session)
     assert view.lease_expires_at == claim.lease_expires_at
