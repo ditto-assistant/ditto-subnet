@@ -1191,8 +1191,7 @@ class BuildGate:
         if build_only and policy_only:
             raise ValueError("build-only and policy-only modes are mutually exclusive")
         if execution_namespace is not None and (
-            publish_image is not None
-            or publish_held_image is not None
+            publish_image is not None or publish_held_image is not None
         ):
             raise ValueError("isolated execution cannot publish or import an image")
         if replay_runtime_probes and (not build_only or policy_version != 13):
