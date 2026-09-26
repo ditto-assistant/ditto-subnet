@@ -38,6 +38,7 @@ import {
   compactScreeningQuarantines,
   compactScreeningSubmissions,
   compactStuckSubmissions,
+  SCREENING_SUBMISSION_DETAILS,
   compactValidatorAssignments,
   compactValidatorFleet,
 } from '../lib/mcp-payloads'
@@ -123,6 +124,7 @@ import {
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
   confirmationSeedAnchorsInputSchema,
+  outlierEscalationDryRunInputSchema,
   rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
   scheduleScreenerPolicyActivationInputSchema,
@@ -148,6 +150,8 @@ import {
   setConfirmationBundleSettingsInputSchema,
   authorizeConfirmationBundleRetestInputSchema,
   retryTrustedImageBuildInputSchema,
+  hasScreeningSubmissionFilters,
+  screeningSubmissionFiltersSchema,
 } from '../lib/admin.schemas'
 import {
   fetchCopyReviewSourceDiff,
@@ -252,6 +256,7 @@ import {
   fetchInferenceRuntimeMetrics,
   fetchSourceReviewQueueSlo,
   fetchOutlierEscalation,
+  fetchOutlierEscalationDryRun,
   fetchInferenceFailureTaxonomy,
   fetchInferenceTraceObjects,
   createInferenceTraceDownloadUrl,
@@ -750,6 +755,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read ordinary source-review queue age, throughput, and reconciliation ghosts.',
   get_outlier_escalation:
     'Read outlier escalation mode, each setting\'s env source, and audit-chain holds.',
+  get_outlier_escalation_dry_run:
+    'Replay outlier escalation on the scored ledger: would-trigger count and agents.',
   get_inference_failure_taxonomy:
     'Group recent chat and embedding outcomes by model, lane, gateway, upstream route, and error code. route_basis says how much of a route is known; an unknown route never names one. rate_limit_bursts is a report-only 5-minute 429 signal with affected tickets.',
   start_runtime_profile:
@@ -765,6 +772,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Page ended leases with operator_evicted and exact verdicts. Evidence is WHOLE AND UNTYPED validator_lease_audit context. AN EMPTY RESULT IS A FINDING, NOT AN UNWIRED FEATURE.',
   list_stuck_submissions:
     'Page stuck-submission urgency order with ticket counts and silent_expiry_count. generation=all spans benchmarks; get_validation_retry includes infra_retry_grants.',
+  list_screening_submissions:
+    'Page submissions newest first; summary shows the latest attempt. To find a named agent, hotkey, coldkey, SHA-256, status, or reason code use search_submissions, never page and grep.',
+  search_submissions:
+    'Find submissions by exact/prefix name, hotkey, coldkey, SHA-256, status, reason code, or submitted window. Filtered count; identity rows by default; all generations.',
   summarize_screening_failures:
     'Group active-benchmark screening / screening_failed agents by reason_code. Pass generation=all only for a cross-benchmark audit. Use get_screening_submission for one row.',
   get_screening_failure_diagnostic:
@@ -1550,7 +1561,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List screening submissions',
       description:
-        'Page current-benchmark SN118 submissions newest first by submitted_at then agent_id. generation=active (default) uses the Platform benchmark-admission boundary, including current-era arrivals and explicitly adopted carryovers while excluding historical submissions; generation=all is the explicit cross-benchmark audit view. detail=summary (default) returns attempt_count and the latest attempt; detail=full returns complete attempt history. get_screening_submission is the exact one-row detail path.',
+        'Page current-benchmark SN118 submissions newest first by submitted_at then agent_id. generation=active (default) uses the Platform benchmark-admission boundary, including current-era arrivals and explicitly adopted carryovers while excluding historical submissions; generation=all is the explicit cross-benchmark audit view. detail=summary (default) returns attempt_count and the latest attempt; detail=full returns complete attempt history. get_screening_submission is the exact one-row detail path. To locate a submission by name, name prefix, miner hotkey or payment coldkey, artifact SHA-256, status, reason code, or submitted window, call search_submissions: Platform filters server-side and returns the filtered count, so never page this list and grep client-side.',
       inputSchema: {
         generation: z.enum(['active', 'all']).default('active'),
         detail: z.enum(['summary', 'full']).default('summary'),
@@ -1569,6 +1580,40 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           detail,
         ),
       ),
+  )
+
+  registerTool(
+    'search_submissions',
+    {
+      title: 'Search screening submissions',
+      description:
+        'Resolve what an operator knows (a name, a miner, an artifact, a status, a failure class) to exact SN118 submissions in one call. Filters are optional and AND-combined server-side on Platform: agentName exact; agentNamePrefix a literal prefix (% and _ match themselves), e.g. moonlight for every version and family; minerHotkey exact; minerColdkey the payment-time owner; artifactSha256 exact (any case); agentStatus and screeningReasonCode any-of lists; submittedAfter inclusive and submittedBefore exclusive, ISO-8601 with an offset. At least one filter is required; unfiltered paging is list_screening_submissions. Rows are newest first by submitted_at then agent_id and count is the filtered total, so offset pages the match set. generation defaults to all because the submission you are looking for may predate the active benchmark; pass active to scope to the current admission boundary. detail=identity (default) returns agent_id, agent_name, agent_version, agent_status, submitted_at, artifact_sha256; summary adds miner keys, reasons, and the latest attempt; full adds attempt history. Hand an agent_id to get_screening_submission for one row. Requires backroom:read; exposes no source or artifact URL.',
+      inputSchema: {
+        ...screeningSubmissionFiltersSchema.shape,
+        generation: z.enum(['active', 'all']).default('all'),
+        detail: z.enum(SCREENING_SUBMISSION_DETAILS).default('identity'),
+        limit: z.number().int().min(1).max(200).default(20),
+        offset: z.number().int().min(0).default(0),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ generation, detail, limit, offset, ...filters }) => {
+      if (!hasScreeningSubmissionFilters(filters)) {
+        return errorResult(
+          'search_submissions needs at least one filter. Use list_screening_submissions to page every submission.',
+        )
+      }
+      return result(
+        compactScreeningSubmissions(
+          withPagination(
+            await fetchScreeningSubmissions(limit, offset, generation, filters),
+            limit,
+            offset,
+          ),
+          detail,
+        ),
+      )
+    },
   )
 
   registerTool(
@@ -1619,7 +1664,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         'Also reports what each operator remedy would do right now: withdrawal_allowed/withdrawal_blocking_reason for remove_failed_submission_from_queue, and eviction_allowed/eviction_blocking_reason plus live_ticket_count — the leases evict_live_validator_leases would revoke, i.e. the validator slots it would return to the pool immediately. A past removal reports evicted_validator_hotkeys under withdrawal, which is null for an ordinary withdrawal, [] for an eviction that found nothing live left to take, and the revoked validators for one that did. ' +
         'All four eviction fields read null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "eviction is blocked". ' +
         'Queue removal is reversible: reinstatement_allowed/reinstatement_blocking_reason say whether reinstate_evicted_submission_to_queue would work right now for either an ordinary withdrawal or a live-lease eviction. A reversed removal reports reinstated_at under withdrawal plus the reversal itself under reinstatement. Read reinstated_at before concluding a submission is out of the queue — a non-null withdrawal means a removal was recorded, not that it is still in force. Both reinstatement fields read null on a platform that predates the reinstate route, with the same meaning as above. ' +
-        'Each ticket also carries why it ended: silently_expired (the lease ran out with nothing reported about that attempt), failure_reason and failed_at (history, not current state — a manual reissue preserves the last report), slot_id, purpose (canonical_quorum or continual_retest), first_reported_at (null means the validator never advertised the slot as active), and infra_retry_grants. infra_retry_grants is historical evidence from deployments that minted automatic infrastructure grants; it no longer authorizes a lease. provider_outage is the provider-wide relay circuit (state, last_failure_at, last_error_code, closed_at = last recovery, a current-state observation only); provider_outage_blocks_retry means it is open, so EVERY restored lease is parked again whatever the slot failed on, recommended_action is not retry, and a grant needs acknowledgeProviderOutage. Every current failure parks after one attempt until retry_validator_evaluation or retry_validator_evaluations is issued manually. silently_expired reads null against a platform that predates #515. If a lease was ended by the platform rather than by a validator report, list_lease_revocations carries the verdict and its evidence. Requires backroom:read and exposes no miner source.',
+        'Each ticket also carries why it ended: silently_expired (the lease ran out with nothing reported about that attempt), failure_reason and failed_at (history, not current state — a manual reissue preserves the last report), slot_id, purpose (canonical_quorum or continual_retest), first_reported_at (null means the validator never advertised the slot as active), and infra_retry_grants. infra_retry_grants is historical evidence from deployments that minted automatic infrastructure grants; it no longer authorizes a lease. provider_outage is the provider-wide relay circuit (state, last_failure_at, last_error_code, closed_at = last recovery, a current-state observation only); provider_outage_blocks_retry means the circuit is open, or a provider-parked slot remains inside the 30-minute quiet window; recommended_action is not retry and a grant needs acknowledgeProviderOutage. Every current failure parks after one attempt until retry_validator_evaluation or retry_validator_evaluations is issued manually. silently_expired reads null against a platform that predates #515. If a lease was ended by the platform rather than by a validator report, list_lease_revocations carries the verdict and its evidence. Requires backroom:read and exposes no miner source.',
       inputSchema: validationRetryLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1652,7 +1697,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Retry validation after validator infrastructure failure',
       description:
-        'Restore only the exhausted validation slots needed for quorum after an operator verifies validator-owned infrastructure failure. Preserves scores, screening verdicts, artifacts, payments, ownership, and all ticket history. This is not rescreening and acts on one agent only. Refused (409) while provider_outage_blocks_retry is true unless acknowledgeProviderOutage=true: the provider-wide circuit is open and parks every restored lease. Requires backroom:write.',
+        'Restore only the exhausted validation slots needed for quorum after an operator verifies validator-owned infrastructure failure. Preserves scores, screening verdicts, artifacts, payments, ownership, and all ticket history. This is not rescreening and acts on one agent only. Refused (409) while provider_outage_blocks_retry is true unless acknowledgeProviderOutage=true: the provider-wide circuit is open or a provider-parked slot remains inside the recovery quiet window. Requires backroom:write.',
       inputSchema: retryValidationInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -3074,6 +3119,21 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchOutlierEscalation()),
+  )
+
+  registerTool(
+    'get_outlier_escalation_dry_run',
+    {
+      title: 'Dry-run outlier escalation',
+      description:
+        'Replay the anomalous-score outlier escalation over the CURRENT scored ledger for one benchmark version (default: active) and report which rows it would hold, whatever the mode -- the false-positive check before switching observe to enforce or retuning a threshold. It calls the same decision function scoring calls at finalization, over the same ledger scoring reads there (one scored row per owner, median-row composite). Each row is judged against every other row; held and banned agents are outside that ledger and are not replayed. ' +
+        'settings is the policy replayed: the effective settings (get_outlier_escalation) with any override applied -- minCohortSize, modifiedZThreshold, minCompositeFloor -- and overridden_fields names them. mode is reported but not applied. bench_version_in_scope false means the live gate never runs at that version (below min_bench_version). ' +
+        'Returns ledger_size, cohort_size (peers per candidate), cohort_too_small (then nothing can trigger), ledger_median / ledger_mad over all composites, would_trigger_count (exact), and up to limit (20, max 100) would_trigger rows, highest composite first, each with agent_id, miner_hotkey and the same evidence the gate records (composite, leave-one-out cohort median/MAD, modified_z, thresholds). truncated means more rows would trigger. ' +
+        'It is a replay of today\'s ledger, not history: a row\'s cohort at its own finalization was the ledger then, and included its owner\'s earlier best. Past observe/enforce triggers are in get_outlier_escalation activity. Opens no hold, writes nothing, and changes no setting. Requires backroom:read.',
+      inputSchema: outlierEscalationDryRunInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchOutlierEscalationDryRun(input)),
   )
 
   registerTool(

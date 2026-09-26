@@ -194,17 +194,16 @@ class AdminValidationRetryDetail(BaseModel):
     Reported while the circuit is open (it is then why a grant is refused), and
     also while it is closed if a remaining exhausted slot was parked by it
     (``failure_detail == "provider_outage_parked"``), because ``closed_at`` --
-    the last time a provider request succeeded and closed the circuit -- is the
-    evidence for granting now. ``last_failure_at``/``last_error_code`` are the
+    last time a provider request succeeded and closed the circuit -- is
+    recovery evidence. ``last_failure_at``/``last_error_code`` are the
     newest outage evidence. ``None`` when the circuit is unrelated.
     """
     provider_outage_blocks_retry: bool = False
-    """The circuit is open, so any restored slot would be parked again.
+    """An open circuit or a recently provider-parked slot blocks plain retry.
 
-    Scoped to the circuit, not to what the slots last failed on:
     ``park_scoring_leases`` parks every issued lease while the circuit is open,
-    exempting only the single half-open probe, and the park charges a ticket
-    that already spent its no-fault resume (ditto-subnet#2087). While true,
+    exempting only the single half-open probe. After it closes, a slot parked
+    by that outage waits for 30 minutes without another failure. While true,
     ``recovery_allowed`` is false, ``recommended_action`` is not ``retry``, and
     the retry routes require ``acknowledge_provider_outage=true``. A closed
     circuit is a current-state observation, not proof of a healthy route.

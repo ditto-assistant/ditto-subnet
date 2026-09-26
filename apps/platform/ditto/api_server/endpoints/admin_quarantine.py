@@ -15,7 +15,7 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import ValidationError
+from pydantic import AwareDatetime, StringConstraints, ValidationError
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -197,6 +197,15 @@ from ditto.db.queries.benchmark_rollout import (
     maybe_activate_rollout,
     open_rollout,
 )
+from ditto.db.queries.moderation_audit import (
+    ACTION_PROVENANCE_REVOCATION,
+    ACTION_REJECT,
+    ACTION_RESCREEN,
+    ModerationAuditUnavailable,
+    preview_moderation_record,
+    public_status,
+    record_moderation_audit_if_enabled,
+)
 from ditto.db.queries.payments import (
     get_miner_coldkey_for_agent,
     get_miner_coldkeys_for_agents,
@@ -226,6 +235,45 @@ GeneratorDep = Annotated[DatasetGenerator, Depends(get_dataset_generator)]
 StorageDep = Annotated[S3StorageClient, Depends(get_storage_client)]
 DatasetPin = tuple[int, int, str, str, int | None, str | None]
 BATCH_PREVIEW_TTL = timedelta(minutes=10)
+_USE_AGENT_IMAGE = object()
+
+
+async def _publish_moderation(
+    session: AsyncSession,
+    *,
+    action_type: str,
+    agent: Agent,
+    previous_status: object,
+    resulting_status: object,
+    recorded_at: datetime,
+    artifact_sha256: str | None = None,
+    screened_image_sha256: str | None | object = _USE_AGENT_IMAGE,
+    related_action_id: str | None = None,
+) -> None:
+    """Append the public moderation record in the caller's transaction."""
+    image_sha = (
+        agent.screened_image_sha256
+        if screened_image_sha256 is _USE_AGENT_IMAGE
+        else screened_image_sha256
+    )
+    try:
+        await record_moderation_audit_if_enabled(
+            session,
+            action_type=action_type,
+            agent_id=agent.agent_id,
+            miner_hotkey=agent.miner_hotkey,
+            artifact_sha256=artifact_sha256 or agent.sha256,
+            screened_image_sha256=image_sha if isinstance(image_sha, str) else None,
+            previous_status=public_status(previous_status),
+            resulting_status=public_status(resulting_status),
+            recorded_at=recorded_at,
+            related_action_id=related_action_id,
+        )
+    except ModerationAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="public audit record could not be published",
+        ) from exc
 
 
 async def require_admin(
@@ -931,6 +979,13 @@ async def _preview_batch_decision(
         "rescreen": AgentStatus.SCREENING_FAILED,
         "reject": AgentStatus.REJECTED,
     }[decision.resolution]
+    public_reason_code, public_record_hash = preview_moderation_record(
+        action_type=decision.resolution,
+        artifact_sha256=agent.sha256,
+        screened_image_sha256=agent.screened_image_sha256,
+        previous_status=public_status(agent.status),
+        resulting_status=public_status(target),
+    )
     if (
         quarantine.status == "resolved"
         and quarantine.resolution == decision.resolution
@@ -942,6 +997,8 @@ async def _preview_batch_decision(
             **base,
             disposition="already_applied",
             resulting_agent_status=target,
+            public_reason_code=public_reason_code,
+            public_record_hash=public_record_hash,
             message="this exact operator decision is already recorded",
         )
     is_initial = (
@@ -963,6 +1020,8 @@ async def _preview_batch_decision(
         **base,
         disposition="ready",
         resulting_agent_status=target,
+        public_reason_code=public_reason_code,
+        public_record_hash=public_record_hash,
         message=f"will set submission status to {target}",
     )
 
@@ -1936,6 +1995,31 @@ def _screening_submission(
     )
 
 
+# Operator search bounds for ``GET /screening-submissions``. Upload caps agent
+# names at 64 characters and SS58 keys are 48 alphanumerics, so these reject
+# only input that could never match; the repeatable filters are capped so a
+# query string cannot expand into an unbounded ``IN`` list.
+_SubmissionAgentName = Annotated[str, StringConstraints(min_length=1, max_length=64)]
+_SubmissionSs58Key = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9]{1,64}$")]
+_SubmissionSha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{64}$")]
+_SubmissionReasonCode = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+]
+_MAX_SUBMISSION_REASON_CODES = 20
+
+
+def _like_prefix(value: str) -> str:
+    """Escape LIKE metacharacters so a name prefix matches literally.
+
+    Postgres treats backslash as the default LIKE escape, so escaping it first
+    and then ``%``/``_`` keeps ``moon_v1`` from matching ``moonXv1``; the
+    constant prefix before the trailing ``%`` still lets the planner use the
+    ``text_pattern_ops`` index on ``agents.name``.
+    """
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}%"
+
+
 @router.get("/screening-submissions", response_model=AdminScreeningSubmissionList)
 async def list_screening_submissions(
     _admin: AdminDep,
@@ -1943,10 +2027,67 @@ async def list_screening_submissions(
     generation: Annotated[Literal["active", "all"], Query()] = "active",
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
+    agent_name: Annotated[_SubmissionAgentName | None, Query()] = None,
+    agent_name_prefix: Annotated[_SubmissionAgentName | None, Query()] = None,
+    miner_hotkey: Annotated[_SubmissionSs58Key | None, Query()] = None,
+    miner_coldkey: Annotated[_SubmissionSs58Key | None, Query()] = None,
+    artifact_sha256: Annotated[_SubmissionSha256 | None, Query()] = None,
+    agent_status: Annotated[
+        list[AgentStatus] | None, Query(max_length=len(AgentStatus))
+    ] = None,
+    screening_reason_code: Annotated[
+        list[_SubmissionReasonCode] | None,
+        Query(max_length=_MAX_SUBMISSION_REASON_CODES),
+    ] = None,
+    submitted_after: Annotated[AwareDatetime | None, Query()] = None,
+    submitted_before: Annotated[AwareDatetime | None, Query()] = None,
 ) -> AdminScreeningSubmissionList:
-    """Return current-benchmark screening rows unless history is requested."""
+    """Return current-benchmark screening rows unless history is requested.
+
+    Every filter is optional and AND-combined with the generation boundary, and
+    ``count`` is the filtered total so offsets page the match set. ``agent_name``
+    is exact, ``agent_name_prefix`` is a literal prefix, ``miner_coldkey`` is the
+    immutable payment-time owner, ``agent_status`` and ``screening_reason_code``
+    are repeatable any-of lists, and ``submitted_after`` (inclusive) /
+    ``submitted_before`` (exclusive) bound ``created_at``, the sort key.
+    """
+    if (
+        submitted_after is not None
+        and submitted_before is not None
+        and submitted_after >= submitted_before
+    ):
+        raise HTTPException(
+            status_code=422, detail="submitted_after must be before submitted_before"
+        )
     active_version = await active_bench_version(session)
     where: list[ColumnElement[bool]] = []
+    if agent_name is not None:
+        where.append(Agent.name == agent_name)
+    if agent_name_prefix is not None:
+        where.append(Agent.name.like(_like_prefix(agent_name_prefix), escape="\\"))
+    if miner_hotkey is not None:
+        where.append(Agent.miner_hotkey == miner_hotkey)
+    if miner_coldkey is not None:
+        where.append(
+            Agent.agent_id.in_(
+                select(EvaluationPayment.agent_id).where(
+                    EvaluationPayment.miner_coldkey == miner_coldkey,
+                    EvaluationPayment.agent_id.is_not(None),
+                )
+            )
+        )
+    if artifact_sha256 is not None:
+        where.append(Agent.sha256 == artifact_sha256.lower())
+    if agent_status:
+        where.append(Agent.status.in_(sorted(set(agent_status))))
+    if screening_reason_code:
+        where.append(
+            Agent.screening_reason_code.in_(sorted(set(screening_reason_code)))
+        )
+    if submitted_after is not None:
+        where.append(Agent.created_at >= submitted_after)
+    if submitted_before is not None:
+        where.append(Agent.created_at < submitted_before)
     if generation == "active":
         rollout = await admission_rollout_for_active_version(
             session, bench_version=active_version
@@ -2928,6 +3069,8 @@ async def rescreen_rejected_submission(
         )
         if latest_attempt_id is None:
             raise HTTPException(status_code=409, detail="screening attempt is missing")
+        prior_status = agent.status
+        rescreen_at = datetime.now(UTC)
         agent.status = AgentStatus.SCREENING_FAILED
         agent.screening_reason = "Operator requested a screening retry"
         # The submission is going back to the screener, so no verdict describes
@@ -2936,6 +3079,14 @@ async def rescreen_rejected_submission(
         # the conflation #2260 is about. The code is repopulated when the new
         # attempt concludes, and the attempt row keeps the old lead verbatim.
         agent.screening_reason_code = None
+        await _publish_moderation(
+            session,
+            action_type=ACTION_RESCREEN,
+            agent=agent,
+            previous_status=prior_status,
+            resulting_status=agent.status,
+            recorded_at=rescreen_at,
+        )
         await _authorize_screening_retry(
             session,
             agent=agent,
@@ -3399,7 +3550,16 @@ async def reject_screening_submission(
             attempt.finished_at = now
             attempt.public_reason = payload.reason
             attempt.reason_code = _OPERATOR_REJECT_REASON_CODE
+        prior_status = agent.status
         agent.status = AgentStatus.REJECTED
+        await _publish_moderation(
+            session,
+            action_type=ACTION_REJECT,
+            agent=agent,
+            previous_status=prior_status,
+            resulting_status=agent.status,
+            recorded_at=now,
+        )
         agent.screening_reason = payload.reason
         agent.screening_reason_code = _OPERATOR_REJECT_REASON_CODE
         agent.screening_policy_version = effective_screening_policy_version()
@@ -3569,6 +3729,15 @@ async def rebuild_screened_image(
         agent.screened_image_verified_at = None
         agent.screening_reason = "Operator requested screened image rebuild"
         agent.screening_reason_code = None
+        await _publish_moderation(
+            session,
+            action_type=ACTION_PROVENANCE_REVOCATION,
+            agent=agent,
+            previous_status=agent.status,
+            resulting_status=agent.status,
+            recorded_at=now,
+            screened_image_sha256=old_image_sha256,
+        )
         await append_audit_entry(
             session,
             agent_id=agent_id,

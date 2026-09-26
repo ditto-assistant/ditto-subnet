@@ -20,7 +20,7 @@ from ditto.api_models.benchmark_progress import BenchmarkProgressStage
 from ditto.api_models.confirmation_progress import ConfirmationProgressStage
 from ditto.api_models.gate_evidence import PublicGateEvidence
 from ditto.api_models.name_claim import PublicNameHandle
-from ditto.api_models.retry_state import RetryState
+from ditto.api_models.retry_state import RetryDisposition, RetryState
 from ditto.api_models.screener import ScreenerProgressStage, ScreenerRuntimeState
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.ticket_status import TicketPurpose
@@ -3235,6 +3235,50 @@ class PublicActivityEntry(BaseModel):
             ),
         ),
     ] = None
+    retry_disposition: Annotated[
+        RetryDisposition | None,
+        Field(
+            default=None,
+            description=(
+                "How to read a parked submission. 'operator_hold' means the "
+                "platform will not attribute this row to the submission and an "
+                "operator has to act before it can advance; it is not by itself "
+                "a claim that the fleet failed. 'terminal_artifact_failure' "
+                "means every remaining slot died on one named agent-attributable "
+                "code, so no further lease of this artifact can finish scoring. "
+                "Null while the submission is still advancing. Fail-closed: a "
+                "mixed, unnamed, stale or unnameable cause reads as "
+                "'operator_hold'. Read 'hold_failure_code' before describing a "
+                "hold as anyone's fault."
+            ),
+        ),
+    ] = None
+    terminal_failure_code: Annotated[
+        PublicValidationFailureCode | None,
+        Field(
+            default=None,
+            description=(
+                "The agreed machine cause behind a 'terminal_artifact_failure', "
+                "drawn from the same allowlist as a validation attempt's "
+                "failure_code. Null for every other disposition. Raw validator "
+                "diagnostics are never published here."
+            ),
+        ),
+    ] = None
+    hold_failure_code: Annotated[
+        PublicValidationFailureCode | None,
+        Field(
+            default=None,
+            description=(
+                "The agreed machine cause behind an 'operator_hold', when every "
+                "remaining slot reports the same one, drawn from the same "
+                "allowlist as a validation attempt's failure_code. Null is the "
+                "ordinary case and means the cause is mixed, unnamed or stale: "
+                "the row is unattributed rather than proven to be a fleet "
+                "failure, and must not be described as one."
+            ),
+        ),
+    ] = None
     screening_policy_version: Annotated[
         int, Field(ge=0, description="Latest completed screening policy version.")
     ]
@@ -3534,6 +3578,7 @@ PublicValidationFailureCode = Literal[
     "provider_recovery_exhausted",
     "grant_decline_evidence_mismatch",
     "budget_evidence_absent",
+    "provider_outage_parked",
 ]
 
 _PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
@@ -3549,6 +3594,12 @@ _PUBLIC_INFRA_RELAY_CAUSES: frozenset[str] = frozenset(
         "provider_recovery_exhausted",
         "grant_decline_evidence_mismatch",
         "budget_evidence_absent",
+        # Written by the lease parker, not the relay, when an open provider
+        # circuit expires every non-probe scoring lease. It names the fleet's
+        # own outage and carries nothing about the submission, so a miner
+        # reading it learns why a run stopped without learning anything the
+        # platform keeps private.
+        "provider_outage_parked",
     }
 )
 
@@ -3865,6 +3916,70 @@ class PublicAgentSummary(BaseModel):
     active_benchmarks: list[PublicBenchmarkProgress] = Field(default_factory=list)
 
 
+class PublicValidatorRetry(BaseModel):
+    """Why a below-quorum submission is or is not advancing through scoring.
+
+    The validator-side counterpart to :class:`PublicAdmissionRetry`. Admission
+    already tells a miner when a screening failure was Ditto's; without this a
+    submission loses that distinction the moment it reaches the validator queue,
+    where the platform's confidence in the classification is higher rather than
+    lower.
+    """
+
+    state: Annotated[
+        RetryState,
+        Field(
+            description=(
+                "running, retry_available, cooling_down, exhausted, or queued. "
+                "Read ``disposition`` before showing an exhausted row to a "
+                "miner: the state alone does not say whose failure it was."
+            )
+        ),
+    ]
+    disposition: Annotated[
+        RetryDisposition | None,
+        Field(
+            default=None,
+            description=(
+                "'operator_hold' when the platform will not attribute this row "
+                "to the submission and an operator has to act, "
+                "'terminal_artifact_failure' when no further lease of this "
+                "artifact can finish scoring. Null while it is advancing. "
+                "Fail-closed: a mixed, unnamed, stale or unnameable cause reads "
+                "as 'operator_hold', which on its own asserts no fault."
+            ),
+        ),
+    ] = None
+    terminal_failure_code: Annotated[
+        PublicValidationFailureCode | None,
+        Field(
+            default=None,
+            description=(
+                "Allowlisted machine cause behind a terminal disposition, from "
+                "the same set as a validation attempt's ``failure_code``."
+            ),
+        ),
+    ] = None
+    hold_failure_code: Annotated[
+        PublicValidationFailureCode | None,
+        Field(
+            default=None,
+            description=(
+                "Allowlisted machine cause behind an operator hold, when every "
+                "remaining slot agrees on one. Null means the hold is "
+                "unattributed, not that the fleet is at fault."
+            ),
+        ),
+    ] = None
+    retry_after: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description="Earliest UTC time an expired ticket may be re-leased.",
+        ),
+    ] = None
+
+
 class PublicSubmissionPipeline(BaseModel):
     """Full public execution history for one submitted agent."""
 
@@ -3877,6 +3992,13 @@ class PublicSubmissionPipeline(BaseModel):
         description=(
             "Live admission-retry state while the submission is still in "
             "build & admission; null once admission is terminal."
+        ),
+    )
+    validator_retry: PublicValidatorRetry | None = Field(
+        default=None,
+        description=(
+            "Live validator-retry state while the submission is below quorum; "
+            "null once it finalizes, and before any validator work exists."
         ),
     )
     ordinary_review: PublicOrdinaryReview | None = Field(
@@ -4193,6 +4315,16 @@ class PublicAuditResponse(BaseModel):
     head_hash: Annotated[
         str | None,
         Field(default=None, description="entry_hash of the last entry in this page."),
+    ]
+    moderation_signer_public_keys: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description=(
+                "Ed25519 role public keys (hex) trusted to sign moderation "
+                "events on this chain. The current key is first."
+            ),
+        ),
     ]
     entries: Annotated[
         list[PublicAuditEntry],
@@ -4629,6 +4761,12 @@ class PublicRolloutQueueEntry(BaseModel):
     quorum: Annotated[int, Field(ge=1)]
     retry_state: RetryState | None = None
     retry_after: datetime | None = None
+    retry_disposition: RetryDisposition | None = None
+    """Same reading as the operations feed; see ``PublicActivityEntry``."""
+    terminal_failure_code: PublicValidationFailureCode | None = None
+    """Allowlisted cause behind a terminal disposition, else null."""
+    hold_failure_code: PublicValidationFailureCode | None = None
+    """Allowlisted cause behind an operator hold, else null; see the feed."""
     active_benchmarks: list[PublicBenchmarkProgress] = Field(default_factory=list)
 
 

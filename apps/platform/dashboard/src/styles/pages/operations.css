@@ -144,8 +144,9 @@
   letter-spacing: 0.01em;
   white-space: nowrap;
 }
-/* Retry-state chip: flags a waiting submission that is stuck (exhausted →
-   needs an operator) or cooling down, from the ops feed's retry_state. */
+/* Retry chip: flags a waiting submission that is parked or cooling down.
+   A parked row reads from retry_disposition -- .hold when the fleet owes it
+   another attempt, .exhausted when the artifact itself cannot finish. */
 .retry-chip {
   display: inline-flex;
   align-items: center;
@@ -160,6 +161,11 @@
   color: var(--danger);
   border: 1px solid color-mix(in oklab, var(--danger) 50%, transparent);
   background: color-mix(in oklab, var(--danger) 13%, transparent);
+}
+.retry-chip.hold {
+  color: var(--warn);
+  border: 1px solid color-mix(in oklab, var(--warn) 50%, transparent);
+  background: color-mix(in oklab, var(--warn) 12%, transparent);
 }
 .retry-chip.cooling {
   color: var(--warn);

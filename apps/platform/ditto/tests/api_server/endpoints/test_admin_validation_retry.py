@@ -3542,7 +3542,11 @@ async def _seed_provider_parked_submission(
                 epoch=uuid4(),
                 opened_at=now - timedelta(hours=6),
                 retry_at=now + timedelta(minutes=2),
-                last_failure_at=now - timedelta(minutes=1),
+                last_failure_at=(
+                    now - timedelta(hours=1)
+                    if circuit_state == "closed"
+                    else now - timedelta(minutes=1)
+                ),
                 closed_at=(
                     now - timedelta(minutes=5) if circuit_state == "closed" else None
                 ),
@@ -3978,3 +3982,185 @@ async def test_batch_retry_rejects_duplicate_agent_ids(
         "/api/v1/admin/validation-retries/batch-retry", headers=_HEADERS, json=payload
     )
     assert resp.status_code == 422
+
+
+async def _mark_provider_outage_exhausted(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    agent_id: UUID,
+    validator_hotkey: str,
+    attempted_epoch: UUID,
+) -> None:
+    """Shape a slot the way a second outage park leaves it (ditto-subnet#2087).
+
+    The lease already spent its single no-fault resume in ``attempted_epoch``,
+    so the next park charged it: expired, infrastructure-classified, and at its
+    attempt cap with no parked epoch left to resume from.
+    """
+    async with maker() as session, session.begin():
+        ticket = await session.get(
+            ValidatorTicket, (agent_id, _BENCH_VERSION, validator_hotkey)
+        )
+        assert ticket is not None
+        ticket.failure_reason = "infrastructure"
+        ticket.failure_detail = "provider_outage_parked"
+        ticket.failed_at = ticket.deadline
+        ticket.provider_outage_epoch = None
+        ticket.provider_outage_attempted_epoch = attempted_epoch
+
+
+async def _set_provider_circuit(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    state: str,
+    epoch: UUID,
+    last_failure_at: datetime,
+) -> None:
+    async with maker() as session, session.begin():
+        circuit = await session.get(ProviderOutageCircuit, "openrouter")
+        if circuit is None:
+            circuit = ProviderOutageCircuit(
+                provider="openrouter",
+                state=state,
+                epoch=epoch,
+                opened_at=last_failure_at,
+                retry_at=last_failure_at + timedelta(minutes=2),
+                last_failure_at=last_failure_at,
+                failure_count=1,
+                last_status=429,
+                last_error_code="upstream_http_429",
+                updated_at=last_failure_at,
+            )
+            session.add(circuit)
+        circuit.state = state
+        circuit.epoch = epoch
+        circuit.opened_at = min(circuit.opened_at, last_failure_at)
+        circuit.retry_at = last_failure_at + timedelta(minutes=2)
+        circuit.last_failure_at = last_failure_at
+        circuit.closed_at = (
+            last_failure_at + timedelta(minutes=3) if state == "closed" else None
+        )
+        circuit.probe_kind = None
+        circuit.probe_key = None
+        circuit.probe_expires_at = None
+        circuit.updated_at = last_failure_at
+
+
+async def test_open_provider_circuit_withholds_retry_whatever_exhausted_the_slot(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """An open circuit parks the next lease no matter what killed the last one.
+
+    ``park_scoring_leases`` expires every issued ticket and revokes its grant,
+    filtering on nothing but the live half-open probe, so while the circuit is
+    open a grant cannot be spent safely on any exhausted slot. Once it closes,
+    the recovery-window rule narrows back to the slots the outage itself parked.
+    """
+    agent_id = await _seed(retry_maker, score_count=2, ticket_count=3)
+    async with retry_maker() as session, session.begin():
+        ticket = await session.get(
+            ValidatorTicket, (agent_id, _BENCH_VERSION, "validator-2")
+        )
+        assert ticket is not None
+        ticket.failure_reason = "scoring_error"
+        ticket.failure_detail = "harness_timeout"
+        ticket.failed_at = ticket.deadline
+    _install(app, retry_maker)
+    now = datetime.now(UTC)
+
+    await _set_provider_circuit(
+        retry_maker, state="open", epoch=uuid4(), last_failure_at=now
+    )
+    detail = await _detail(client, agent_id)
+    assert detail["recovery_allowed"] is False
+    assert detail["recommended_action"] is None
+    assert detail["provider_outage_blocks_retry"] is True
+    assert detail["provider_outage"]["state"] == "open"
+
+    # Closed but still inside the recovery window: this slot was not parked by
+    # the circuit and no park is in force, so the ordinary retry path returns.
+    await _set_provider_circuit(
+        retry_maker,
+        state="closed",
+        epoch=uuid4(),
+        last_failure_at=now - timedelta(minutes=5),
+    )
+    detail = await _detail(client, agent_id)
+    assert detail["provider_outage_blocks_retry"] is False
+    assert detail["recommended_action"] == "retry"
+
+
+async def test_provider_outage_exhaustion_withholds_retry_until_provider_recovers(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Triage must not advertise ``retry`` into a still-failing provider.
+
+    ditto-subnet#2087: Backroom kept returning ``recommended_action=retry`` for
+    a slot the provider circuit had just parked, so each grant re-leased into
+    the same outage. Operator authority is unchanged (``recovery_allowed``);
+    only the recommendation waits, and the outage evidence is on the row.
+    """
+    agent_id = await _seed(retry_maker, score_count=2, ticket_count=3)
+    await _mark_provider_outage_exhausted(
+        retry_maker,
+        agent_id=agent_id,
+        validator_hotkey="validator-2",
+        attempted_epoch=uuid4(),
+    )
+    _install(app, retry_maker)
+    epoch = uuid4()
+    now = datetime.now(UTC)
+
+    await _set_provider_circuit(
+        retry_maker, state="open", epoch=epoch, last_failure_at=now
+    )
+    detail = await _detail(client, agent_id)
+    assert detail["recovery_allowed"] is False
+    assert detail["recommended_action"] is None
+    assert detail["dominant_failure_code"] is None
+    assert detail["provider_outage_blocks_retry"] is True
+    assert detail["provider_outage"]["state"] == "open"
+    assert detail["provider_outage"]["epoch"] == str(epoch)
+
+    listed = await client.get(
+        "/api/v1/admin/validation-retries",
+        params={"state": "exhausted"},
+        headers=_HEADERS,
+    )
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    (row,) = [item for item in body["submissions"] if item["agent_id"] == str(agent_id)]
+    assert row["retry_state"] == "exhausted"
+    assert row["recovery_allowed"] is False
+    assert row["recommended_action"] is None
+    assert row["provider_outage_blocks_retry"] is True
+    assert row["provider_outage"]["state"] == "open"
+
+    # A circuit that just closed after a recent failure is still flapping.
+    await _set_provider_circuit(
+        retry_maker,
+        state="closed",
+        epoch=epoch,
+        last_failure_at=now - timedelta(minutes=5),
+    )
+    detail = await _detail(client, agent_id)
+    assert detail["provider_outage_blocks_retry"] is True
+    assert detail["recommended_action"] is None
+    assert detail["recovery_allowed"] is False
+
+    # A provider that has stayed quiet is healthy again: retry is the remedy.
+    await _set_provider_circuit(
+        retry_maker,
+        state="closed",
+        epoch=epoch,
+        last_failure_at=now - timedelta(hours=6),
+    )
+    detail = await _detail(client, agent_id)
+    assert detail["provider_outage_blocks_retry"] is False
+    assert detail["provider_outage"]["state"] == "closed"
+    assert detail["recovery_allowed"] is True
+    assert detail["recommended_action"] == "retry"

@@ -35,6 +35,18 @@ flags older ones), and the count of pending outlier ATH reviews. The tool is
 read-only. It is not `/admin/score-outliers`, which covers validator
 disagreement inside one quorum.
 
+`get_outlier_escalation_dry_run` replays the same escalation decision through
+`GET /api/v1/admin/outlier-escalation/dry-run` over the current scored ledger
+for one benchmark version, active by default. It uses the ledger that scoring
+reads at finalization, one scored row per owner, and judges each row against
+all the others. The mode is ignored. Settings are the effective ones, and
+`minCohortSize`, `modifiedZThreshold` and `minCompositeFloor` can override them
+for the replay only. It returns the cohort size, ledger median and MAD, the
+exact would-trigger count, and up to 20 rows (100 at most) with each agent's
+composite, modified z-score and evidence. Held agents are not replayed. Each
+row is judged against today's ledger, not the ledger at its own finalization.
+The tool opens no hold and changes no setting.
+
 `https://backroom.dittobench.ai/mcp` is an OAuth-protected Streamable HTTP MCP
 server exposing the same operations as the console: screening quarantines and
 disputes, validator queue/slot/inference policy, benchmark rollouts, scoring
@@ -231,6 +243,19 @@ so a compromised or stale process can be stopped. Both writes require
 `backroom:write` and forward the signed-in operator email as `X-Admin-Actor`.
 No key registration, capacity change, or live host enrollment is performed by
 these tools merely becoming available.
+
+## Finding a submission
+
+`search_submissions` resolves what an operator knows (an agent name or name
+prefix, a miner hotkey or payment coldkey, an artifact SHA-256, statuses, reason
+codes, a submitted window) to exact rows in one call. Platform applies the
+AND-combined filters server-side on `GET /admin/screening-submissions`, and
+`count` is the filtered total. The tool defaults to `generation=all`, because
+the row being looked for often predates the active benchmark, and to
+`detail=identity`, which returns only `agent_id`, name, version, status,
+`submitted_at`, and `artifact_sha256`. Paging `list_screening_submissions` and
+filtering client-side is the pattern it replaces: finding one name that way
+once took eight 200-row pages and about 1.4 MB of JSON.
 
 ## The review queue
 

@@ -155,6 +155,13 @@ SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 _MINER_A = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _MINER_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
 _VALIDATOR_C = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+
+
+def _fake_validator_hotkey(index: int) -> str:
+    """A distinct SS58-shaped hotkey; the public models validate the pattern."""
+    return f"5{'BCDEFGH'[index]}" + "A" * 46
+
+
 # The era every generic fixture in this file sits on. Almost nothing here is
 # about a particular benchmark generation -- these tests need *a* score, and v2
 # was only ever the value ``DEFAULT_BENCH_VERSION`` happened to hold. The
@@ -6631,6 +6638,9 @@ class TestPublicActivity:
                 "quorum": 3,
                 "retry_state": "queued",
                 "retry_after": None,
+                "retry_disposition": None,
+                "terminal_failure_code": None,
+                "hold_failure_code": None,
                 "active_benchmarks": [],
             }
         ]
@@ -6910,6 +6920,9 @@ class TestPublicActivity:
             "quorum",
             "retry_state",
             "retry_after",
+            "retry_disposition",
+            "terminal_failure_code",
+            "hold_failure_code",
             "screening_policy_version",
             "required_screening_policy_version",
             "screening_attempt_id",
@@ -9624,6 +9637,158 @@ class TestPublicActivity:
         ).json()["entries"][0]
         assert rejected["retry_state"] is None
         assert rejected["retry_after"] is None
+
+    async def test_a_parked_row_publishes_whose_failure_it_was(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Two exhausted rows, one Ditto's fault and one the artifact's.
+
+        This is the shape the operator queue actually holds: on 2026-09-21 it
+        carried seven rows recoverable by an operator and one exhausted on a
+        named agent-attributable code. Before this the public feed called both
+        of them "exhausted" and nothing more, so a miner could not tell a fleet
+        outage from a dead artifact.
+        """
+        now = datetime.now(UTC)
+        held_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="held",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        terminal_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_B,
+                status=AgentStatus.EVALUATING,
+                name="terminal",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        failures = {
+            held_id: ("infrastructure", "provider_outage_parked"),
+            terminal_id: ("scoring_error", "inference_request_rejected"),
+        }
+        async with session_maker() as session, session.begin():
+            for agent_id, (reason, detail) in failures.items():
+                for index in range(3):
+                    session.add(
+                        ValidatorTicket(
+                            agent_id=agent_id,
+                            validator_hotkey=_fake_validator_hotkey(index),
+                            status=TicketStatus.EXPIRED,
+                            issued_at=now - timedelta(hours=3),
+                            deadline=now - timedelta(hours=2, minutes=index),
+                            bench_version=_ERA,
+                            attempt_count=2,
+                            manual_retry_grants=0,
+                            failure_reason=reason,
+                            failure_detail=detail,
+                            failed_at=now - timedelta(hours=2, minutes=index),
+                            retry_after=now - timedelta(hours=1),
+                        )
+                    )
+        _install_db(app, session_maker)
+
+        by_id = {
+            entry["agent_id"]: entry
+            for entry in (await client.get("/api/v1/public/operations")).json()[
+                "activity"
+            ]["entries"]
+        }
+        held = by_id[str(held_id)]
+        terminal = by_id[str(terminal_id)]
+        assert held["retry_state"] == terminal["retry_state"] == "exhausted"
+        assert held["retry_disposition"] == "operator_hold"
+        assert held["terminal_failure_code"] is None
+        # Every slot agreed on one no-fault code, so this hold is attributable.
+        assert held["hold_failure_code"] == "provider_outage_parked"
+        assert terminal["retry_disposition"] == "terminal_artifact_failure"
+        assert terminal["terminal_failure_code"] == "inference_request_rejected"
+
+        # The per-submission page must agree with the feed for the same agent,
+        # and it publishes the no-fault outage code rather than staying silent.
+        pipeline = (await client.get(f"/api/v1/public/agent/{held_id}/pipeline")).json()
+        assert pipeline["validator_retry"]["state"] == "exhausted"
+        assert pipeline["validator_retry"]["disposition"] == "operator_hold"
+        assert pipeline["validator_retry"]["terminal_failure_code"] is None
+        assert {
+            attempt["failure_code"] for attempt in pipeline["validation_attempts"]
+        } == {"provider_outage_parked"}
+
+    async def test_an_unnamed_parked_cause_never_blames_the_submission(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A validator diagnostic the allowlist does not name stays no-fault.
+
+        The public code field also stays null rather than leaking the raw
+        detail, which is free-form text written by the validator.
+        """
+        now = datetime.now(UTC)
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="unnamed",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        async with session_maker() as session, session.begin():
+            for index in range(3):
+                session.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        validator_hotkey=_fake_validator_hotkey(index),
+                        status=TicketStatus.EXPIRED,
+                        issued_at=now - timedelta(hours=3),
+                        deadline=now - timedelta(hours=2, minutes=index),
+                        bench_version=_ERA,
+                        attempt_count=2,
+                        manual_retry_grants=0,
+                        failure_reason="infrastructure",
+                        failure_detail=(
+                            "DittobenchError: run deadbeef did not finish within "
+                            "6600.0s"
+                        ),
+                        failed_at=now - timedelta(hours=2, minutes=index),
+                        retry_after=now - timedelta(hours=1),
+                    )
+                )
+        _install_db(app, session_maker)
+
+        entry = {
+            item["agent_id"]: item
+            for item in (await client.get("/api/v1/public/operations")).json()[
+                "activity"
+            ]["entries"]
+        }[str(agent_id)]
+        assert entry["retry_state"] == "exhausted"
+        assert entry["retry_disposition"] == "operator_hold"
+        assert entry["terminal_failure_code"] is None
+        # Every slot agrees here, but the cause is a free-form validator
+        # diagnostic rather than an allowlisted code. Agreement is not enough:
+        # the row still publishes no cause, so nothing downstream can describe
+        # it as the fleet's failure or as the miner's.
+        assert entry["hold_failure_code"] is None
+        pipeline = (
+            await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        ).json()
+        assert pipeline["validator_retry"]["disposition"] == "operator_hold"
+        assert all(
+            attempt["failure_code"] is None
+            for attempt in pipeline["validation_attempts"]
+        )
+        assert "deadbeef" not in json.dumps(pipeline)
 
     async def test_retry_label_ignores_attempts_on_an_issuance_paused_validator(
         self,
@@ -12629,11 +12794,42 @@ class TestBenchConfig:
         assert body["public_mirror_url_template"] == (
             "https://storage.googleapis.com/ditto-platform-public-dev/scored/{agent_id}.json"
         )
-        assert body["public_transcript_url_template"] == (
-            "https://storage.googleapis.com/ditto-platform-public-dev/transcripts/{sha256}.json"
-        )
+        assert body["public_transcript_url_template"] is None
         assert body["public_transcript_telemetry_url_template"] == (
             "/api/v1/public/bench/transcript/{sha256}/telemetry"
+        )
+
+    async def test_transcript_template_requires_the_audited_setting(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch,
+    ) -> None:
+        from ditto.db.models import TranscriptMirrorSettingsRevision
+
+        _install_db(app, session_maker)
+        monkeypatch.setenv("STORAGE_PUBLIC_BUCKET", "ditto-platform-public-dev")
+        async with session_maker() as session, session.begin():
+            current = await session.scalar(
+                select(TranscriptMirrorSettingsRevision).order_by(
+                    TranscriptMirrorSettingsRevision.revision.desc()
+                )
+            )
+            assert current is not None
+            assert current.enabled is False
+            session.add(
+                TranscriptMirrorSettingsRevision(
+                    parent_revision=current.revision,
+                    enabled=True,
+                    reason="Operator enabled the quorum transcript mirror",
+                    actor="test",
+                )
+            )
+        body = (await client.get("/api/v1/public/bench/config")).json()
+        assert body["public_transcript_url_template"] == (
+            "https://storage.googleapis.com/ditto-platform-public-dev/"
+            "transcripts/{sha256}.json"
         )
 
     async def test_transcript_telemetry_is_verified_allowlisted_and_immutable(

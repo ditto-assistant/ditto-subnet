@@ -15,7 +15,14 @@ from ditto.db.models import (
     ScreeningReviewEvent,
     ScreeningVerificationReceipt,
 )
-from ditto_screening_protocol import ScreenResultRequest
+from ditto.db.queries.moderation_audit import (
+    ACTION_QUARANTINE,
+    ACTION_TYPES,
+    latest_moderation_action_id,
+    public_status,
+    record_moderation_audit_if_enabled,
+)
+from ditto_screening_protocol import AgentStatus, ScreenResultRequest
 
 
 def _status(value: object) -> str:
@@ -122,6 +129,21 @@ async def append_automated_review_event(
         created_at=datetime.now(UTC),
     )
     session.add(event)
+    if (
+        _status(prior_agent_status) != AgentStatus.QUARANTINED
+        and _status(next_agent_status) == AgentStatus.QUARANTINED
+    ):
+        await record_moderation_audit_if_enabled(
+            session,
+            action_type=ACTION_QUARANTINE,
+            agent_id=agent.agent_id,
+            miner_hotkey=agent.miner_hotkey,
+            artifact_sha256=attempt.artifact_sha256 or agent.sha256,
+            screened_image_sha256=agent.screened_image_sha256,
+            previous_status=_status(prior_agent_status),
+            resulting_status=_status(next_agent_status),
+            recorded_at=datetime.now(UTC),
+        )
     return event
 
 
@@ -163,6 +185,21 @@ async def append_platform_hold_event(
         created_at=created_at,
     )
     session.add(event)
+    if (
+        _status(prior_agent_status) != AgentStatus.QUARANTINED
+        and _status(agent.status) == AgentStatus.QUARANTINED
+    ):
+        await record_moderation_audit_if_enabled(
+            session,
+            action_type=ACTION_QUARANTINE,
+            agent_id=agent.agent_id,
+            miner_hotkey=agent.miner_hotkey,
+            artifact_sha256=agent.sha256,
+            screened_image_sha256=agent.screened_image_sha256,
+            previous_status=_status(prior_agent_status),
+            resulting_status=_status(agent.status),
+            recorded_at=created_at,
+        )
     return event
 
 
@@ -215,4 +252,25 @@ async def append_manual_review_event(
         created_at=created_at,
     )
     session.add(event)
+    if resolution in ACTION_TYPES:
+        related = None
+        if (
+            resolution == "release"
+            and _status(prior_agent_status) == AgentStatus.REJECTED
+        ):
+            related = await latest_moderation_action_id(
+                session, agent_id=agent.agent_id, action_type="reject"
+            )
+        await record_moderation_audit_if_enabled(
+            session,
+            action_type=resolution,
+            agent_id=agent.agent_id,
+            miner_hotkey=agent.miner_hotkey,
+            artifact_sha256=attempt.artifact_sha256 or agent.sha256,
+            screened_image_sha256=agent.screened_image_sha256,
+            previous_status=public_status(prior_agent_status),
+            resulting_status=public_status(next_agent_status),
+            recorded_at=created_at,
+            related_action_id=related,
+        )
     return event

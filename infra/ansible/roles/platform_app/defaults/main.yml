@@ -231,6 +231,8 @@ platform_caddy_email: peyton@omniaura.ai
 # Shared Secret Manager secret ids (per-env ones are set in host_vars).
 secret_db_password: platform-db-password
 secret_hmac_secret: platform-storage-hmac-secret
+platform_moderation_audit_enabled: false
+secret_moderation_audit_signing_key: platform-moderation-audit-signing-key
 secret_github_deploy_key: platform-github-deploy-key
 # Shared with trusted internal operator tools. The value already exists in
 # Secret Manager; Terraform only grants this VM's runtime identity read access.

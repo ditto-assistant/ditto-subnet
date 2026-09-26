@@ -149,6 +149,7 @@ from ditto.api_models import (
     PublicValidatorHeartbeatsResponse,
     PublicValidatorName,
     PublicValidatorNamesResponse,
+    PublicValidatorRetry,
     PublicValidatorScore,
     PublicValidatorSlotPolicy,
     PublicValidatorWeightVector,
@@ -368,6 +369,7 @@ from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
 from ditto.db.queries.ledger_epochs import latest_pin, list_pins
 from ditto.db.queries.miner_avatars import get_miner_avatar, list_miner_avatars
+from ditto.db.queries.moderation_audit import published_signer_public_keys
 from ditto.db.queries.orphaned_leases import OrphanedLease, list_orphaned_leases
 from ditto.db.queries.queue_order import (
     QueueGate,
@@ -432,6 +434,7 @@ from ditto.db.queries.tickets import (
     get_score_priority_floors,
     score_priority_floor_rows_from_resolved_ledger,
 )
+from ditto.db.queries.transcript_mirror_settings import transcript_mirror_enabled
 from ditto.score_order import score_order_key
 from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
@@ -5875,6 +5878,31 @@ def _public_activity_response(
                     and row.agent.agent_id in retry_by_agent
                     else None
                 ),
+                # Scoped to the same waiting lanes as ``retry_state`` for the
+                # same reason: on a finalized row a past parked lease is
+                # history, not the reason anything is or is not moving.
+                retry_disposition=(
+                    retry_by_agent[row.agent.agent_id].disposition
+                    if row_status in ("waiting_validator", "below_score_floor")
+                    and row.agent.agent_id in retry_by_agent
+                    else None
+                ),
+                terminal_failure_code=(
+                    public_validation_failure_code(
+                        retry_by_agent[row.agent.agent_id].terminal_failure_code
+                    )
+                    if row_status in ("waiting_validator", "below_score_floor")
+                    and row.agent.agent_id in retry_by_agent
+                    else None
+                ),
+                hold_failure_code=(
+                    public_validation_failure_code(
+                        retry_by_agent[row.agent.agent_id].hold_failure_code
+                    )
+                    if row_status in ("waiting_validator", "below_score_floor")
+                    and row.agent.agent_id in retry_by_agent
+                    else None
+                ),
                 screening_policy_version=row.agent.screening_policy_version,
                 required_screening_policy_version=effective_screening_policy_version(),
                 screening_attempt_id=(
@@ -6814,6 +6842,19 @@ async def operations(
                     retry_after=(
                         retry.earliest_retry_after if retry is not None else None
                     ),
+                    retry_disposition=(
+                        retry.disposition if retry is not None else None
+                    ),
+                    terminal_failure_code=(
+                        public_validation_failure_code(retry.terminal_failure_code)
+                        if retry is not None
+                        else None
+                    ),
+                    hold_failure_code=(
+                        public_validation_failure_code(retry.hold_failure_code)
+                        if retry is not None
+                        else None
+                    ),
                     active_benchmarks=progress,
                 )
             )
@@ -7410,6 +7451,33 @@ async def agent_pipeline(
         )
     )
     canonical_version = await active_bench_version(session)
+    # The same classification the operations feed publishes, for one agent. A
+    # submission that is finalized, withdrawn, or has no validator work yet is
+    # absent from the result, which is the null case on the wire.
+    validator_retry_state = (
+        await _public_retry_states(
+            request,
+            session,
+            agents=[agent],
+            now=now,
+            canonical_version=canonical_version,
+        )
+    ).get(agent_id)
+    validator_retry = (
+        PublicValidatorRetry(
+            state=validator_retry_state.state,
+            disposition=validator_retry_state.disposition,
+            terminal_failure_code=public_validation_failure_code(
+                validator_retry_state.terminal_failure_code
+            ),
+            hold_failure_code=public_validation_failure_code(
+                validator_retry_state.hold_failure_code
+            ),
+            retry_after=validator_retry_state.earliest_retry_after,
+        )
+        if validator_retry_state is not None
+        else None
+    )
     # Read every generation before owner reduction, then run the same current
     # official-score resolver and canonical owner dedupe used by ranking/floor
     # authority. The old detail path read the SQL pre-efficiency representative,
@@ -7584,6 +7652,7 @@ async def agent_pipeline(
         generated_at=now,
         agent_id=agent_id,
         admission_retry=admission_retry,
+        validator_retry=validator_retry,
         ordinary_review=ordinary_review,
         artifact_release=(
             await _artifact_release_snapshot(
@@ -8097,6 +8166,7 @@ async def audit(
         count=len(entries),
         genesis_hash=GENESIS_HASH,
         head_hash=entries[-1].entry_hash if entries else None,
+        moderation_signer_public_keys=published_signer_public_keys(),
         entries=[
             PublicAuditEntry(
                 seq=e.seq,
@@ -8206,7 +8276,7 @@ async def bench_config(
     )
     transcript_template = (
         f"https://storage.googleapis.com/{public_bucket}/transcripts/{{sha256}}.json"
-        if public_bucket
+        if public_bucket and await transcript_mirror_enabled(session)
         else None
     )
     return PublicBenchConfigResponse(

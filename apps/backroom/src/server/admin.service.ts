@@ -168,6 +168,7 @@ import {
   expireRunningScreeningResponseSchema,
   rejectScreeningSubmissionInputSchema,
   rejectScreeningSubmissionResponseSchema,
+  screeningSubmissionFiltersSchema,
   resolveScreeningQuarantineInputSchema,
   resolveScreeningQuarantineResponseSchema,
   resolveScreeningDisputeInputSchema,
@@ -303,6 +304,8 @@ import {
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
   sourceReviewQueueSloSchema,
+  outlierEscalationDryRunInputSchema,
+  outlierEscalationDryRunSchema,
   outlierEscalationInputSchema,
   outlierEscalationSchema,
   queuePolicySettingsControlSchema,
@@ -1495,6 +1498,28 @@ export async function fetchOutlierEscalation(rawInput: unknown = {}) {
   return outlierEscalationSchema.parse(payload)
 }
 
+export async function fetchOutlierEscalationDryRun(rawInput: unknown = {}) {
+  const input = outlierEscalationDryRunInputSchema.parse(rawInput)
+  const params = new URLSearchParams({ limit: String(input.limit) })
+  if (input.benchVersion !== undefined) {
+    params.set('bench_version', String(input.benchVersion))
+  }
+  if (input.minCohortSize !== undefined) {
+    params.set('min_cohort_size', String(input.minCohortSize))
+  }
+  if (input.modifiedZThreshold !== undefined) {
+    params.set('modified_z_threshold', String(input.modifiedZThreshold))
+  }
+  if (input.minCompositeFloor !== undefined) {
+    params.set('min_composite_floor', String(input.minCompositeFloor))
+  }
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/outlier-escalation/dry-run?${params.toString()}`,
+    { retries: 1 },
+  )
+  return outlierEscalationDryRunSchema.parse(payload)
+}
+
 export async function fetchInferenceFailureTaxonomy() {
   const payload = await platformAdminRequest(INFERENCE_FAILURE_TAXONOMY_PATH, {
     timeoutMs: 30_000,
@@ -2282,12 +2307,30 @@ export async function fetchScreeningSubmissions(
   limit = 200,
   offset = 0,
   generation: 'active' | 'all' = 'active',
+  rawFilters: unknown = {},
 ) {
+  const filters = screeningSubmissionFiltersSchema.parse(rawFilters)
   const query = new URLSearchParams({
     generation,
     limit: String(limit),
     offset: String(offset),
   })
+  const scalar: Array<[string, string | undefined]> = [
+    ['agent_name', filters.agentName],
+    ['agent_name_prefix', filters.agentNamePrefix],
+    ['miner_hotkey', filters.minerHotkey],
+    ['miner_coldkey', filters.minerColdkey],
+    ['artifact_sha256', filters.artifactSha256],
+    ['submitted_after', filters.submittedAfter],
+    ['submitted_before', filters.submittedBefore],
+  ]
+  for (const [key, value] of scalar) {
+    if (value !== undefined) query.set(key, value)
+  }
+  for (const status of filters.agentStatus ?? []) query.append('agent_status', status)
+  for (const code of filters.screeningReasonCode ?? []) {
+    query.append('screening_reason_code', code)
+  }
   const payload = await platformAdminRequest(
     `/api/v1/admin/screening-submissions?${query.toString()}`,
   )

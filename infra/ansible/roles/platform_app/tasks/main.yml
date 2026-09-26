@@ -273,6 +273,28 @@
   no_log: true
   when: platform_screener_hotkey | length > 0
 
+# The role key is deliberately absent until an operator has added a Secret
+# Manager version and explicitly enables the staged audit rollout.
+- name: Read moderation audit signer when the rollout is enabled
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_moderation_audit_signing_key }} --project={{ gcp_project }}"
+  register: platform_moderation_audit_signing_key_read
+  changed_when: false
+  no_log: true
+  when: platform_moderation_audit_enabled | bool
+
+- name: Validate moderation audit signer before rendering the enabled rollout
+  ansible.builtin.assert:
+    that:
+      - platform_moderation_audit_signing_key_read.stdout is match('^[0-9a-fA-F]{64}$')
+  no_log: true
+  when: platform_moderation_audit_enabled | bool
+
+- name: Fold the moderation audit signer into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'moderation_audit_signing_key': platform_moderation_audit_signing_key_read.stdout}) }}"
+  no_log: true
+  when: platform_moderation_audit_enabled | bool
+
 - name: Read screener capacity-controller token from Secret Manager
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_screener_controller_api_token }} --project={{ gcp_project }}"
   register: platform_screener_controller_token_read

@@ -34,6 +34,7 @@ import {
   integrityReviewView,
   pipelineAgentVersionLabel,
   pipelineColumnViews,
+  parkedReading,
   pipelineRescoreState,
   policyRescreenView,
   queueGateLabel,
@@ -390,17 +391,22 @@ function PipelineCard(props: {
   );
 }
 
-/** Flag a waiting submission whose retry state needs a human (exhausted) or
- * is waiting out a cooldown; other states advance on their own (7926–7935). */
+/** Flag a waiting submission that is parked (whose failure it was) or is
+ * waiting out a cooldown; other states advance on their own (7926–7935).
+ *
+ * The parked reading comes from the API's retry_disposition. One badge for both
+ * cases used to leave a miner unable to tell a fleet outage from a dead
+ * artifact, which is the whole point of #604. */
 function RetryChip(props: { entry: PipelineEntryExt }): JSX.Element {
+  const parked = createMemo(() => parkedReading(props.entry));
   return (
     <>
-      <Show when={props.entry.retry_state === "exhausted"}>
+      <Show when={parked()}>
         <span
-          class="retry-chip exhausted"
-          title="Every remaining validator spent its retry budget. Grant a retry after verified infrastructure failure, or withdraw an agent-attributable exhaustion from the validator queue."
+          class={"retry-chip " + (parked()?.tone === "terminal" ? "exhausted" : "hold")}
+          title={parked()?.title}
         >
-          Stuck · needs operator
+          {parked()?.label}
         </span>
       </Show>
       <Show when={props.entry.retry_state === "cooling_down"}>

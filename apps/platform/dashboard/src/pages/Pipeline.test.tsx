@@ -96,9 +96,15 @@ describe("pipeline board from the shared snapshot", () => {
     await waitFor(() =>
       expect(document.querySelectorAll("#pipeline-wait-validator .pipeline-item").length).toBe(3),
     );
-    const chips = document.querySelectorAll("#pipeline-wait-validator .retry-chip.exhausted");
+    // Without a disposition on the wire the board still parks the row, and it
+    // parks it as unattributed: it may not call the row the miner's failure,
+    // and with no agreed cause published it may not call it Ditto's either.
+    const chips = document.querySelectorAll("#pipeline-wait-validator .retry-chip.hold");
     expect(chips.length).toBe(3);
-    expect(chips[0]?.textContent).toBe("Stuck · needs operator");
+    expect(chips[0]?.textContent).toBe("On hold · needs operator review");
+    expect(document.querySelectorAll("#pipeline-wait-validator .retry-chip.exhausted").length).toBe(
+      0,
+    );
   });
 
   it("hides the rescreen notice when no policy rescreen is queued", async () => {

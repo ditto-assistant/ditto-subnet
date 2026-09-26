@@ -4924,6 +4924,69 @@ export const screeningSubmissionListSchema = z.object({
   active_bench_version: z.number().int().positive(),
 })
 
+// Server-side search filters for GET /admin/screening-submissions (#560).
+// Every filter is optional and AND-combined; the bounds mirror the Platform
+// query validation so a bad value fails here with a readable zod error instead
+// of a 422 round trip. Status and reason-code lists match any of their values.
+export const SCREENING_SUBMISSION_AGENT_STATUSES = [
+  'uploaded',
+  'screening',
+  'screening_passed',
+  'screening_failed',
+  'quarantined',
+  'rejected',
+  'evaluating',
+  'scored',
+  'live',
+  'ath_pending_review',
+  'banned',
+] as const satisfies ReadonlyArray<PlatformComponents['schemas']['AgentStatus']>
+
+// Exhaustiveness: a status Platform adds to AgentStatus that is missing above
+// makes this `false` and fails the type check instead of silently drifting.
+type MissingScreeningSubmissionAgentStatus = Exclude<
+  PlatformComponents['schemas']['AgentStatus'],
+  (typeof SCREENING_SUBMISSION_AGENT_STATUSES)[number]
+>
+const screeningSubmissionAgentStatusesExhaustive: [
+  MissingScreeningSubmissionAgentStatus,
+] extends [never]
+  ? true
+  : false = true
+void screeningSubmissionAgentStatusesExhaustive
+
+const submissionAgentNameSchema = z.string().min(1).max(64)
+const submissionSs58KeySchema = z.string().regex(/^[A-Za-z0-9]{1,64}$/)
+
+export const screeningSubmissionFiltersSchema = z.object({
+  agentName: submissionAgentNameSchema.optional(),
+  agentNamePrefix: submissionAgentNameSchema.optional(),
+  minerHotkey: submissionSs58KeySchema.optional(),
+  minerColdkey: submissionSs58KeySchema.optional(),
+  artifactSha256: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/)
+    .optional(),
+  agentStatus: z
+    .array(z.enum(SCREENING_SUBMISSION_AGENT_STATUSES))
+    .min(1)
+    .max(SCREENING_SUBMISSION_AGENT_STATUSES.length)
+    .optional(),
+  screeningReasonCode: z
+    .array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/))
+    .min(1)
+    .max(20)
+    .optional(),
+  submittedAfter: z.string().datetime({ offset: true }).optional(),
+  submittedBefore: z.string().datetime({ offset: true }).optional(),
+})
+
+export type ScreeningSubmissionFilters = z.infer<typeof screeningSubmissionFiltersSchema>
+
+export function hasScreeningSubmissionFilters(filters: ScreeningSubmissionFilters) {
+  return Object.values(filters).some((value) => value !== undefined)
+}
+
 export const summarizeScreeningFailuresInputSchema = z.object({
   // Operator worklists default to the active benchmark era. `all` is the
   // explicit audit opt-in for a previous generation.
@@ -5210,6 +5273,8 @@ export const screeningQuarantineBatchPreviewItemSchema = z.object({
   reason: z.string(),
   disposition: z.enum(['ready', 'already_applied', 'conflict', 'not_found']),
   resulting_agent_status: z.string().nullable().default(null),
+  public_reason_code: z.string().nullable().default(null),
+  public_record_hash: z.string().nullable().default(null),
   message: z.string(),
 })
 
@@ -9151,3 +9216,43 @@ export const outlierEscalationInputSchema = z.object({
 })
 
 export type OutlierEscalation = z.infer<typeof outlierEscalationSchema>
+
+// Would-trigger replay of the same escalation over the current scored ledger,
+// under the effective settings or operator overrides. Read-only.
+type GeneratedOutlierEscalationDryRunEntry =
+  PlatformComponents['schemas']['OutlierEscalationDryRunEntryView']
+type GeneratedOutlierEscalationDryRunResponse =
+  PlatformComponents['schemas']['AdminOutlierEscalationDryRunResponse']
+
+const outlierEscalationDryRunEntrySchema = z.object({
+  agent_id: z.string().uuid(),
+  miner_hotkey: z.string(),
+  evidence: outlierEscalationEvidenceSchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationDryRunEntry>)
+
+export const outlierEscalationDryRunSchema = z.object({
+  generated_at: z.string(),
+  bench_version: z.number().int(),
+  bench_version_in_scope: z.boolean(),
+  settings: outlierEscalationSettingsSchema,
+  overridden_fields: z.array(outlierSettingFieldSchema).max(5),
+  ledger_size: z.number().int().nonnegative(),
+  cohort_size: z.number().int().nonnegative(),
+  cohort_too_small: z.boolean(),
+  ledger_median: z.number().nullish(),
+  ledger_mad: z.number().nullish(),
+  would_trigger_count: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  would_trigger: z.array(outlierEscalationDryRunEntrySchema).max(100),
+  truncated: z.boolean(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationDryRunResponse>)
+
+export const outlierEscalationDryRunInputSchema = z.object({
+  benchVersion: z.number().int().positive().optional(),
+  minCohortSize: z.number().int().min(1).max(1000).optional(),
+  modifiedZThreshold: z.number().positive().max(1000).optional(),
+  minCompositeFloor: z.number().min(0).max(1).optional(),
+  limit: z.number().int().min(1).max(100).default(20),
+})
+
+export type OutlierEscalationDryRun = z.infer<typeof outlierEscalationDryRunSchema>

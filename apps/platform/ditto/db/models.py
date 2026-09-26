@@ -438,6 +438,13 @@ class Agent(Base):
         ),
         Index("agents_miner_hotkey_idx", "miner_hotkey"),
         Index("agents_sha256_idx", "sha256"),
+        # Operator submission search: exact name and literal ``LIKE 'x%'``
+        # prefix. ``text_pattern_ops`` because the collation is not ``C``.
+        Index(
+            "agents_name_pattern_idx",
+            "name",
+            postgresql_ops={"name": "text_pattern_ops"},
+        ),
         Index("agents_created_agent_idx", "created_at", "agent_id"),
         # Exact-repack duplicate lookups for the quarantine review console.
         Index("agents_normalized_source_hash_idx", "normalized_source_hash"),
@@ -1910,6 +1917,8 @@ class EvaluationPayment(Base):
             name="evaluation_payments_extrinsic_index_check",
         ),
         Index("evaluation_payments_miner_hotkey_idx", "miner_hotkey"),
+        # Operator submission search by payment-time owner.
+        Index("evaluation_payments_miner_coldkey_idx", "miner_coldkey"),
         Index(
             "evaluation_payments_available_credit_idx",
             "miner_hotkey",
@@ -6522,6 +6531,42 @@ class ArtifactReleaseSettingsRevision(Base):
         UniqueConstraint(
             "parent_revision",
             name="artifact_release_settings_parent_revision_key",
+        ),
+    )
+
+
+class TranscriptMirrorSettingsRevision(Base):
+    """Append-only gate for copying quorum transcripts into the public bucket."""
+
+    __tablename__ = "transcript_mirror_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="transcript_mirror_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="transcript_mirror_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="transcript_mirror_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="transcript_mirror_settings_parent_revision_key",
         ),
     )
 

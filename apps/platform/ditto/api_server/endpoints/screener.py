@@ -221,6 +221,10 @@ from ditto.db.queries.heartbeats import (
     prune_stale_screener_heartbeats,
     upsert_screener_heartbeat,
 )
+from ditto.db.queries.moderation_audit import (
+    ACTION_ARTIFACT_SUPERSESSION,
+    record_moderation_audit_if_enabled,
+)
 from ditto.db.queries.provider_outages import (
     lock_provider_work_gate,
     register_provider_probe,
@@ -6915,6 +6919,24 @@ async def submit_result(
         ):
             agent.screening_policy_version = payload.policy_version
         if payload.passed and not late_deferred_result and not payload.policy_only:
+            prior_image_sha256 = agent.screened_image_sha256
+            if (
+                prior_image_sha256
+                and payload.image_sha256
+                and prior_image_sha256 != payload.image_sha256
+            ):
+                await record_moderation_audit_if_enabled(
+                    session,
+                    action_type=ACTION_ARTIFACT_SUPERSESSION,
+                    agent_id=agent.agent_id,
+                    miner_hotkey=agent.miner_hotkey,
+                    artifact_sha256=agent.sha256,
+                    screened_image_sha256=payload.image_sha256,
+                    previous_status=str(agent.status),
+                    resulting_status=str(agent.status),
+                    recorded_at=datetime.now(UTC),
+                    related_action_id=None,
+                )
             agent.screened_image_sha256 = payload.image_sha256
             agent.screened_image_size_bytes = payload.image_size_bytes
             agent.screened_image_id = payload.image_id

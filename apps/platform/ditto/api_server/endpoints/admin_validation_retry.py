@@ -558,19 +558,22 @@ def _provider_outage_view(
     circuit: ProviderOutageCircuit | None,
     scores: list[Score],
     tickets: list[ValidatorTicket],
+    now: datetime,
 ) -> tuple[ProviderCircuitSnapshot | None, bool]:
     """``(circuit snapshot, blocks_retry)`` for one submission's remaining slots.
 
     The snapshot is shown in two cases: the circuit is open, so it is why a
     grant is blocked whatever the slots last failed on; or it is closed but a
-    remaining exhausted slot was parked by it, so ``closed_at`` (the last time
-    a provider request succeeded and closed the circuit) is the evidence for
-    granting now. Otherwise the circuit is unrelated to this submission and
+    remaining exhausted slot was parked by it, so ``last_failure_at`` and
+    ``closed_at`` explain whether the quiet window still blocks retry.
+    Otherwise the circuit is unrelated to this submission and
     reporting it would be noise.
     """
     if circuit is None:
         return None, False
-    blocked = provider_outage_blocks_retry(circuit=circuit)
+    blocked = provider_outage_blocks_retry(
+        circuit=circuit, scores=scores, tickets=tickets, now=now
+    )
     if not blocked and not provider_outage_parked_exhaustion(
         scores=scores, tickets=tickets
     ):
@@ -668,7 +671,7 @@ async def list_validation_retries(
         agent = agents_by_id[agent_id]
         scored_hotkeys = {s.validator_hotkey for s in retry.scores}
         provider_outage, provider_blocked = _provider_outage_view(
-            circuit=circuit, scores=retry.scores, tickets=retry.tickets
+            circuit=circuit, scores=retry.scores, tickets=retry.tickets, now=now
         )
         submissions.append(
             AdminStuckSubmission(
@@ -806,7 +809,10 @@ async def get_validation_retry(
         else eviction_reason
     )
     provider_outage, provider_blocked = _provider_outage_view(
-        circuit=await _provider_circuit(session), scores=scores, tickets=tickets
+        circuit=await _provider_circuit(session),
+        scores=scores,
+        tickets=tickets,
+        now=now,
     )
     grantable = allowed and withdrawal is None
     blocking_reason: str | None
@@ -934,11 +940,16 @@ async def _apply_recovery(
         return "skipped", gate_reason or "retry unavailable", None
     # Advisory read, deliberately unlocked: the lease path locks the circuit
     # before tickets, and this transaction already holds ticket locks.
-    if provider_outage_blocks_retry(circuit=await _provider_circuit(session)):
+    if provider_outage_blocks_retry(
+        circuit=await _provider_circuit(session),
+        scores=scores,
+        tickets=tickets,
+        now=now,
+    ):
         if not acknowledge_provider_outage:
             return "skipped", PROVIDER_OUTAGE_RETRY_BLOCKING_REASON, None
         logger.warning(
-            "validator retry granted into open provider outage agent_id=%s "
+            "validator retry granted during provider outage recovery agent_id=%s "
             "actor=%s request_id=%s",
             agent_id,
             actor,

@@ -1246,6 +1246,12 @@ export function ScreeningQuarantinePanel({
                   </span>
                 </div>
                 <p className="mt-2 leading-5 text-[var(--muted)]">{item.reason}</p>
+                {item.public_reason_code ? (
+                  <p className="mt-2 font-mono text-[10px] leading-4 text-[var(--muted-strong)]">
+                    Public audit {item.public_reason_code}
+                    {item.public_record_hash ? ` · ${item.public_record_hash}` : ''}
+                  </p>
+                ) : null}
                 <p className="mt-1 text-[10px] text-[var(--muted)]">{item.message}</p>
               </div>
             ))}

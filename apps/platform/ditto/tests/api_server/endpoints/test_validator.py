@@ -19,7 +19,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import bittensor
@@ -146,6 +146,7 @@ from ditto.db.models import (
     Score,
     ScoreAuditEntry,
     ScreenerHeartbeat,
+    TranscriptMirrorSettingsRevision,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
     ValidatorRequestNonce,
@@ -9567,6 +9568,327 @@ class TestTranscriptPublication:
     _TRANSCRIPT = b'{"run_id":"run_t_0","cases":[{"case_id":"a","response":{}}]}'
     _digest = hashlib.sha256(_TRANSCRIPT).hexdigest()
 
+    @staticmethod
+    async def _enable_mirror(maker: async_sessionmaker[AsyncSession]) -> None:
+        async with maker() as session, session.begin():
+            current = await session.scalar(
+                select(TranscriptMirrorSettingsRevision)
+                .order_by(TranscriptMirrorSettingsRevision.revision.desc())
+                .limit(1)
+            )
+            assert current is not None
+            session.add(
+                TranscriptMirrorSettingsRevision(
+                    parent_revision=current.revision,
+                    enabled=True,
+                    reason="Enable the public transcript mirror for this test",
+                    actor="test",
+                )
+            )
+
+    @staticmethod
+    def _record_objects(storage: MagicMock) -> dict[tuple[str | None, str], bytes]:
+        objects: dict[tuple[str | None, str], bytes] = {}
+
+        async def exists(*, key: str, bucket: str | None = None) -> bool:
+            return (bucket, key) in objects
+
+        async def put(
+            *, key: str, body: bytes, content_type: str, bucket: str | None = None
+        ) -> None:
+            assert content_type == "application/json"
+            objects[bucket, key] = body
+
+        async def get(*, key: str, max_bytes: int) -> bytes:
+            body = objects[None, key]
+            assert len(body) <= max_bytes
+            return body
+
+        storage.object_exists = AsyncMock(side_effect=exists)
+        storage.put_object = AsyncMock(side_effect=put)
+        storage.get_object = AsyncMock(side_effect=get)
+        return objects
+
+    async def test_enabled_mirror_copies_upload_before_quorum(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        storage = _install_storage(app)
+        storage.public_bucket = "ditto-public"
+        objects = self._record_objects(storage)
+        await self._enable_mirror(session_maker)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._record_score_with_transcript(client, session_maker, agent_id)
+
+        key = f"transcripts/{self._digest}.json"
+        response = await client.put(
+            f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
+            content=self._TRANSCRIPT,
+            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+        )
+        assert response.status_code == 200, response.text
+        assert objects[None, key] == self._TRANSCRIPT
+        assert ("ditto-public", key) not in objects
+
+        for index, keypair in enumerate(_KEYPAIRS[1:], start=1):
+            await _seed_ticket(session_maker, agent_id, keypair=keypair)
+            response = await client.post(
+                f"/api/v1/validator/agent/{agent_id}/score",
+                json=_score_payload(
+                    agent_id,
+                    run_id=f"run_t_{index}",
+                    keypair=keypair,
+                    details={"transcript_sha256": self._digest},
+                ),
+            )
+            assert response.status_code == 200, response.text
+        assert objects["ditto-public", key] == self._TRANSCRIPT
+
+    async def test_enabled_mirror_copies_upload_after_quorum(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        storage = _install_storage(app)
+        storage.public_bucket = "ditto-public"
+        objects = self._record_objects(storage)
+        await self._enable_mirror(session_maker)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _score_to_quorum(
+            client,
+            agent_id,
+            maker=session_maker,
+            run_id="run_t",
+            details={"transcript_sha256": self._digest},
+        )
+
+        key = f"transcripts/{self._digest}.json"
+        assert ("ditto-public", key) not in objects
+        for _ in range(2):
+            response = await client.put(
+                f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
+                content=self._TRANSCRIPT,
+                headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+            )
+            assert response.status_code == 200, response.text
+        assert objects[None, key] == self._TRANSCRIPT
+        assert objects["ditto-public", key] == self._TRANSCRIPT
+        assert (
+            sum(
+                call.kwargs.get("bucket") == "ditto-public"
+                and call.kwargs.get("key") == key
+                for call in storage.put_object.await_args_list
+            )
+            == 1
+        )
+
+    async def test_enabled_mirror_keeps_late_v13_upload_private(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        storage = _install_storage(app)
+        storage.public_bucket = "ditto-public"
+        objects = self._record_objects(storage)
+        await self._enable_mirror(session_maker)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _score_to_quorum(
+            client,
+            agent_id,
+            maker=session_maker,
+            run_id="run_t",
+            details={"transcript_sha256": self._digest},
+        )
+        async with session_maker() as session, session.begin():
+            scores = await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            )
+            for score in scores:
+                score.bench_version = 13
+
+        response = await client.put(
+            f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
+            content=self._TRANSCRIPT,
+            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+        )
+        assert response.status_code == 200, response.text
+        key = f"transcripts/{self._digest}.json"
+        assert objects[None, key] == self._TRANSCRIPT
+        assert ("ditto-public", key) not in objects
+
+    async def test_quorum_mirror_never_exposes_v13_transcript(self) -> None:
+        storage = MagicMock()
+        storage.public_bucket = "ditto-public"
+        storage.object_exists = AsyncMock()
+        storage.put_object = AsyncMock()
+        session = AsyncMock(spec=AsyncSession)
+
+        await validator_endpoint._mirror_quorum_transcripts(
+            storage,
+            session,
+            [Score(bench_version=13, details={"transcript_sha256": self._digest})],
+        )
+
+        session.scalar.assert_not_awaited()
+        storage.object_exists.assert_not_awaited()
+
+        await validator_endpoint._publish_finalized_run(
+            storage,
+            session=session,
+            agent=MagicMock(),
+            scores=[
+                Score(bench_version=13, details={"transcript_sha256": self._digest})
+            ],
+            median=0.5,
+            mirror_transcripts=True,
+        )
+        storage.put_object.assert_not_awaited()
+
+    async def test_quorum_mirror_respects_private_dataset_pin(self) -> None:
+        storage = MagicMock()
+        storage.public_bucket = "ditto-public"
+        storage.object_exists = AsyncMock()
+        storage.put_object = AsyncMock()
+        session = AsyncMock(spec=AsyncSession)
+        session.scalar.return_value = uuid4()
+
+        await validator_endpoint._mirror_quorum_transcripts(
+            storage,
+            session,
+            [
+                Score(
+                    bench_version=14,
+                    details={
+                        "dataset_sha256": "cd" * 32,
+                        "transcript_sha256": self._digest,
+                    },
+                )
+            ],
+        )
+
+        session.scalar.assert_awaited_once()
+        storage.object_exists.assert_not_awaited()
+
+        await validator_endpoint._publish_finalized_run(
+            storage,
+            session=session,
+            agent=MagicMock(),
+            scores=[
+                Score(
+                    bench_version=14,
+                    details={
+                        "dataset_sha256": "cd" * 32,
+                        "transcript_sha256": self._digest,
+                    },
+                )
+            ],
+            median=0.5,
+            mirror_transcripts=True,
+        )
+        storage.put_object.assert_not_awaited()
+
+    async def test_enabled_mirror_keeps_held_agent_transcript_private(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """An agent held for review publishes no transcript, even at quorum."""
+        _install_db(app, session_maker)
+        _install_chain(app)
+        storage = _install_storage(app)
+        storage.public_bucket = "ditto-public"
+        objects = self._record_objects(storage)
+        await self._enable_mirror(session_maker)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _score_to_quorum(
+            client,
+            agent_id,
+            maker=session_maker,
+            run_id="run_t",
+            details={"transcript_sha256": self._digest},
+        )
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            agent.status = AgentStatus.ATH_PENDING_REVIEW
+
+        response = await client.put(
+            f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
+            content=self._TRANSCRIPT,
+            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+        )
+        assert response.status_code == 200, response.text
+        key = f"transcripts/{self._digest}.json"
+        assert objects[None, key] == self._TRANSCRIPT
+        assert ("ditto-public", key) not in objects
+
+    async def test_finalized_run_skips_transcripts_for_held_agent(self) -> None:
+        storage = MagicMock()
+        storage.public_bucket = "ditto-public"
+        storage.object_exists = AsyncMock(return_value=True)
+        storage.get_object = AsyncMock(return_value=self._TRANSCRIPT)
+        storage.put_object = AsyncMock()
+        session = AsyncMock(spec=AsyncSession)
+        session.scalar.return_value = None
+
+        await validator_endpoint._publish_finalized_run(
+            storage,
+            session=session,
+            agent=MagicMock(status=AgentStatus.ATH_PENDING_REVIEW),
+            scores=[
+                Score(bench_version=7, details={"transcript_sha256": self._digest})
+            ],
+            median=0.5,
+            mirror_transcripts=True,
+        )
+        storage.get_object.assert_not_awaited()
+        assert all(
+            not str(call.kwargs.get("key", "")).startswith("transcripts/")
+            for call in storage.put_object.await_args_list
+        )
+
+    async def test_quorum_mirror_copies_eligible_public_transcript(self) -> None:
+        storage = MagicMock()
+        storage.public_bucket = "ditto-public"
+        storage.object_exists = AsyncMock(side_effect=[False, True])
+        storage.get_object = AsyncMock(return_value=self._TRANSCRIPT)
+        storage.put_object = AsyncMock()
+        session = AsyncMock(spec=AsyncSession)
+        session.scalar.return_value = None
+
+        await validator_endpoint._mirror_quorum_transcripts(
+            storage,
+            session,
+            [
+                Score(
+                    bench_version=7,
+                    details={
+                        "dataset_sha256": "cd" * 32,
+                        "transcript_sha256": self._digest,
+                    },
+                )
+            ],
+        )
+
+        key = f"transcripts/{self._digest}.json"
+        storage.put_object.assert_awaited_once_with(
+            key=key,
+            body=self._TRANSCRIPT,
+            content_type="application/json",
+            bucket="ditto-public",
+        )
+
     async def test_score_signature_binds_transcript_digest(
         self,
         app: FastAPI,
@@ -9650,15 +9972,13 @@ class TestTranscriptPublication:
         assert body["stored"] is True
         assert body["transcript_sha256"] == self._digest
         key = f"transcripts/{self._digest}.json"
-        assert storage.put_object.await_args_list == [
-            call(key=key, body=self._TRANSCRIPT, content_type="application/json"),
-            call(
-                key=key,
-                body=self._TRANSCRIPT,
-                content_type="application/json",
-                bucket="ditto-public",
-            ),
-        ]
+        storage.put_object.assert_awaited_once_with(
+            key=key, body=self._TRANSCRIPT, content_type="application/json"
+        )
+        assert all(
+            call.kwargs.get("bucket") is None
+            for call in storage.put_object.await_args_list
+        )
 
         # Idempotent: a re-upload of an existing object writes nothing new.
         storage.object_exists = AsyncMock(return_value=True)
@@ -9668,7 +9988,7 @@ class TestTranscriptPublication:
             headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
         )
         assert response.status_code == 200
-        assert storage.put_object.await_count == 2  # still exactly two writes
+        assert storage.put_object.await_count == 1
 
     async def test_v13_transcript_is_private_even_without_dataset_metadata(
         self,
