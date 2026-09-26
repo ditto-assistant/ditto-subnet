@@ -19,6 +19,7 @@ Construction and reads are synchronous CPU work; endpoint callers run them via
 
 from __future__ import annotations
 
+import codecs
 import fnmatch
 import io
 import re
@@ -47,9 +48,15 @@ SEARCH_LINE_CHARS = 500
 MAX_TARBALL_BYTES = 64 * 1024 * 1024
 MAX_MEMBERS = 4096
 MAX_UNPACKED_BYTES = 256 * 1024 * 1024
-# The screener sandbox refuses an archive that expands past 64 MiB. Upload
-# uses that tighter cap so a gzip bomb never reaches object storage.
+# Upload-time archive limits mirror the screener's archive contract
+# (workers/screener/ditto_screener/gate.py: _MAX_ARCHIVE_MEMBERS,
+# _MAX_UNPACKED_BYTES). Upload rejects a gzip bomb or junk archive before it
+# reaches object storage, but it must never be stricter than the screener: an
+# archive the screener accepts must upload. ``test_upload_archive`` pins both
+# values to the screener's source.
+UPLOAD_MAX_MEMBERS = 20_000
 UPLOAD_MAX_UNPACKED_BYTES = 64 * 1024 * 1024
+_DOCKERFILE_READ_CHUNK = 64 * 1024
 
 
 class SourceInspectError(Exception):
@@ -526,10 +533,10 @@ class TarSourceInspector:
 def validate_upload_archive(tar_bytes: bytes) -> None:
     """Reject an upload that is not a bounded gzip tar with a root Dockerfile.
 
-    One sequential pass. Member count and unpacked size use the inspect and
-    screener sandbox caps. Unsafe paths, links, and special files are rejected
-    rather than skipped. Import allowlisting stays with the screener: there is
-    no upload-time crate allowlist yet.
+    One sequential pass mirroring the screener's archive contract. Member
+    count and unpacked size use the screener's caps. Unsafe paths, links, and
+    special files are rejected rather than skipped. Import allowlisting stays
+    with the screener: there is no upload-time crate allowlist yet.
     """
     if not tar_bytes.startswith(b"\x1f\x8b"):
         raise SourceInspectError("archive-not-gzip", "archive is not gzip-compressed")
@@ -541,10 +548,10 @@ def validate_upload_archive(tar_bytes: bytes) -> None:
         with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r|gz") as archive:
             for member in archive:
                 count += 1
-                if count > MAX_MEMBERS:
+                if count > UPLOAD_MAX_MEMBERS:
                     raise SourceInspectError(
                         "artifact-too-many-members",
-                        f"archive exceeds {MAX_MEMBERS} members",
+                        f"archive exceeds {UPLOAD_MAX_MEMBERS} members",
                     )
                 name = member.name.removeprefix("./")
                 if not name and member.isdir():
@@ -589,19 +596,19 @@ def validate_upload_archive(tar_bytes: bytes) -> None:
                 seen.add(canonical_name)
                 if canonical_name != "Dockerfile" or not member.isfile():
                     continue
-                if member.size > TEXT_SIZE_LIMIT:
-                    raise SourceInspectError(
-                        "archive-dockerfile-unreadable",
-                        "Dockerfile is not valid UTF-8 text",
-                    )
                 extracted = archive.extractfile(member)
                 if extracted is None:
                     raise SourceInspectError(
                         "archive-dockerfile-unreadable",
                         "Dockerfile could not be read",
                     )
+                # The screener decodes the whole Dockerfile; do the same in
+                # bounded chunks (the unpacked-size cap already bounds it).
+                decoder = codecs.getincrementaldecoder("utf-8")()
                 try:
-                    extracted.read(TEXT_SIZE_LIMIT + 1).decode("utf-8")
+                    while chunk := extracted.read(_DOCKERFILE_READ_CHUNK):
+                        decoder.decode(chunk)
+                    decoder.decode(b"", final=True)
                 except UnicodeDecodeError as error:
                     raise SourceInspectError(
                         "archive-dockerfile-unreadable",
@@ -634,6 +641,7 @@ __all__ = [
     "OMIT_REASON_BYTE_BUDGET",
     "OMIT_REASON_FILE_LIMIT",
     "OMIT_REASON_UNREADABLE",
+    "UPLOAD_MAX_MEMBERS",
     "UPLOAD_MAX_UNPACKED_BYTES",
     "SEARCH_LINE_CHARS",
     "OmittedTextFile",
