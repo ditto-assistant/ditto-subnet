@@ -7,6 +7,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import httpx

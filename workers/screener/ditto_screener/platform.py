@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import fcntl
-import hashlib
 import logging
 import os
 import time
