@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,6 +34,7 @@ class L2CanaryClaim(BaseModel):
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     bench_version: int
     policy_version: int
+    run_mode: Literal["source_only", "full_runtime"] = "source_only"
     miner_hotkey: str
     lease_token: str
     lease_expires_at: datetime
@@ -53,6 +54,9 @@ def _identity_report(
         "source_attempt_id": str(claim.source_attempt_id),
         "artifact_sha256": claim.artifact_sha256,
         "policy_version": claim.policy_version,
+        "run_mode": claim.run_mode,
+        "challenge_status": "not_run",
+        "challenge_evidence_codes": [],
         "settings_revision": settings.revision,
         "settings_checksum": settings.checksum,
         "scored_runtime_evidence": claim.scored_runtime_evidence.model_dump(
@@ -70,7 +74,23 @@ def _report(
 ) -> dict[str, Any]:
     report = _identity_report(claim, settings)
     report["decision_outcome"] = str(decision.outcome)
-    report["decision_evidence_codes"] = [item.code for item in decision.evidence]
+    codes = [item.code for item in decision.evidence]
+    report["decision_evidence_codes"] = codes
+    challenge_codes = [
+        code for code in codes if code.startswith(("challenge-", "behavioral-oracle-"))
+    ]
+    report["challenge_evidence_codes"] = challenge_codes
+    if claim.run_mode == "source_only" or not challenge_codes:
+        report["challenge_status"] = "not_run"
+    elif any(
+        code in {"challenge-inconclusive", "challenge-pack-unavailable"}
+        or code.startswith(("challenge-http-", "challenge-transport-"))
+        or code == "behavioral-oracle-inconclusive"
+        for code in challenge_codes
+    ):
+        report["challenge_status"] = "inconclusive"
+    else:
+        report["challenge_status"] = "completed"
     if shadow is None:
         report["l2"] = None
         return report
@@ -214,10 +234,13 @@ async def consume(
             sha256=claim.artifact_sha256,
             download_url=claim.download_url,
             deadline=deadline,
-            policy_only=True,
             policy_version=13,
             scored_runtime_evidence=claim.scored_runtime_evidence,
             progress=progress,
+            execution_namespace=(
+                claim.canary_id if claim.run_mode == "full_runtime" else None
+            ),
+            policy_only=claim.run_mode == "source_only",
         )
         shadow = gate.pop_shadow_review(claim.source_attempt_id)
         report = _report(

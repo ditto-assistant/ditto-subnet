@@ -12,6 +12,8 @@ import pytest
 from ditto_screener import l2_report_canary
 from ditto_screener.l2_review import L2RunResult, L2Usage
 from ditto_screener.policy import (
+    PolicyEvidence,
+    ScreeningDecision,
     ScreeningOutcome,
     SourceReviewObservation,
     core_decision,
@@ -21,8 +23,9 @@ from ditto_screening_protocol import ScoredRuntimeEvidenceLease
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("run_mode", ["source_only", "full_runtime"])
 async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
-    make_config, monkeypatch: pytest.MonkeyPatch
+    make_config, monkeypatch: pytest.MonkeyPatch, run_mode: str
 ) -> None:
     config = make_config()
     settings = bootstrap_review_settings(config)
@@ -52,6 +55,7 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
         "artifact_sha256": "b" * 64,
         "bench_version": 13,
         "policy_version": 13,
+        "run_mode": run_mode,
         "miner_hotkey": "miner",
         "lease_token": "token",
         "lease_expires_at": (datetime.now(UTC) + timedelta(minutes=45)).isoformat(),
@@ -85,11 +89,29 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
             assert canary_config.review_journal_file != config.review_journal_file
 
         async def screen(self, **kwargs):
-            assert kwargs["policy_only"] is True
+            assert kwargs["policy_only"] is (run_mode == "source_only")
+            assert kwargs["execution_namespace"] == (
+                canary_id if run_mode == "full_runtime" else None
+            )
             assert kwargs.get("publish_image") is None
             assert kwargs.get("record_runtime_verification") is None
             assert kwargs["scored_runtime_evidence"] == packet
             kwargs["progress"]("source_review_0")
+            if run_mode == "full_runtime":
+                return ScreeningDecision(
+                    outcome=ScreeningOutcome.PASS,
+                    detail="isolated runtime passed",
+                    manifest_digest="a" * 64,
+                    evidence=(
+                        PolicyEvidence(
+                            "oracle", "behavioral-oracle-passed", "runtime observed"
+                        ),
+                        PolicyEvidence(
+                            "challenge", "challenge-observed", "challenge observed"
+                        ),
+                    ),
+                    policy_version=13,
+                )
             return core_decision(
                 ScreeningOutcome.INCONCLUSIVE,
                 code="source-review-inconclusive",
@@ -136,6 +158,10 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
     report = completions[0][1]["report"]
     assert report["authority"] == "none"
     assert report["review_mode"] == "shadow"
+    assert report["run_mode"] == run_mode
+    assert report["challenge_status"] == (
+        "completed" if run_mode == "full_runtime" else "not_run"
+    )
     assert report["source_attempt_id"] == str(attempt_id)
     assert report["l2"]["risk_level"] == "low"
     assert report["l2"]["failure_subcode"] == "no_tool_call_after_corrections"
@@ -153,6 +179,7 @@ def test_inconclusive_model_audit_is_report_only() -> None:
         source_attempt_id=uuid4(),
         artifact_sha256="b" * 64,
         policy_version=13,
+        run_mode="source_only",
         scored_runtime_evidence=SimpleNamespace(model_dump=lambda **_: {}),
     )
     settings = SimpleNamespace(revision=134, checksum="c" * 64)
@@ -180,3 +207,38 @@ def test_inconclusive_model_audit_is_report_only() -> None:
     )
     assert report["authority"] == "none"
     assert report["l2"]["inconclusive_model_audit"] == audit
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("challenge-inconclusive", "inconclusive"),
+        ("source-review-inconclusive", "not_run"),
+    ],
+)
+def test_full_runtime_report_distinguishes_challenge_state(
+    code: str, expected: str
+) -> None:
+    claim = SimpleNamespace(
+        canary_id=uuid4(),
+        agent_id=uuid4(),
+        source_attempt_id=uuid4(),
+        artifact_sha256="b" * 64,
+        policy_version=13,
+        run_mode="full_runtime",
+        scored_runtime_evidence=SimpleNamespace(model_dump=lambda **_: {}),
+    )
+    report = l2_report_canary._report(
+        claim=claim,
+        decision=core_decision(
+            ScreeningOutcome.INCONCLUSIVE,
+            code=code,
+            summary="held",
+            detail="held",
+            policy_version=13,
+        ),
+        shadow=None,
+        settings=SimpleNamespace(revision=134, checksum="c" * 64),
+    )
+    assert report["challenge_status"] == expected
+    assert report["authority"] == "none"
