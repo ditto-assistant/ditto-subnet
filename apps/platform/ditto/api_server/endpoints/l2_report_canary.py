@@ -117,10 +117,13 @@ def _valid_report(row: ScreenerL2ReportCanary, report: dict) -> bool:
             expected_challenge_status = "completed"
         if report.get("challenge_status") != expected_challenge_status:
             return False
+    allowed_review_modes = (
+        {"shadow", "enforce_preview"} if row.run_mode == "full_runtime" else {"shadow"}
+    )
     return (
         report.get("kind") == "l2_report_canary_v1"
         and report.get("authority") == "none"
-        and report.get("review_mode") == "shadow"
+        and report.get("review_mode") in allowed_review_modes
         and report.get("canary_id") == str(row.canary_id)
         and report.get("agent_id") == str(row.agent_id)
         and report.get("source_attempt_id") == str(row.source_attempt_id)

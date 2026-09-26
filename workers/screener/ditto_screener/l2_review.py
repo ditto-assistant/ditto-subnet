@@ -5253,10 +5253,12 @@ class LayeredSourceReviewAgent:
         adjudicator: SourceReviewAdjudicator | None = None,
         adjudicator_reserve_seconds: float = 0.0,
         always_escalate: bool = False,
+        capture_enforce_result: bool = False,
     ) -> None:
         if mode not in {"off", "shadow", "enforce"}:
             raise ValueError("invalid L2 mode")
         self._always_escalate = always_escalate
+        self._capture_enforce_result = capture_enforce_result
         self._l1 = l1
         self._l2 = l2
         self._mode = mode
@@ -5265,6 +5267,7 @@ class LayeredSourceReviewAgent:
         self._adjudicator = adjudicator
         self._adjudicator_reserve_seconds = max(0.0, float(adjudicator_reserve_seconds))
         self._shadow_results: dict[UUID, L2RunResult] = {}
+        self._preview_l1_results: dict[UUID, SourceReviewObservation] = {}
 
     def _runtime_evidence_hold(
         self, *, policy_version: int, review_disabled: bool
@@ -5330,8 +5333,12 @@ class LayeredSourceReviewAgent:
         return min(deadline, asyncio.get_running_loop().time() + reserve)
 
     def pop_shadow_result(self, attempt_id: UUID) -> L2RunResult | None:
-        """Consume non-authoritative shadow telemetry for one attempt."""
+        """Consume shadow telemetry or an isolated enforce-preview result."""
         return self._shadow_results.pop(attempt_id, None)
+
+    def pop_preview_l1_result(self, attempt_id: UUID) -> SourceReviewObservation | None:
+        """Consume the broad-review lead retained for an isolated preview."""
+        return self._preview_l1_results.pop(attempt_id, None)
 
     async def _adjudicate(
         self,
@@ -5522,6 +5529,8 @@ class LayeredSourceReviewAgent:
                 and self._mode == "off",
             )
         l1 = l1_observation
+        if self._capture_enforce_result:
+            self._preview_l1_results[attempt_id] = l1
         if review_deadline is None and deadline is not None and self._adjudicator:
             review_deadline = self._exploration_deadline(deadline)
         court_deadline = self._court_deadline(deadline, review_deadline)
@@ -5576,6 +5585,8 @@ class LayeredSourceReviewAgent:
             scored_runtime_evidence=scored_runtime_evidence,
         )
         report(9)
+        if self._capture_enforce_result:
+            self._shadow_results[attempt_id] = result
         if self._mode == "shadow":
             self._shadow_results[attempt_id] = result
             report(10)

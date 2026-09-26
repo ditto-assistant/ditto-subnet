@@ -104,11 +104,19 @@ async def test_full_runtime_claim_requires_exact_adopted_worker() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("run_mode", ["source_only", "full_runtime"])
+@pytest.mark.parametrize(
+    ("run_mode", "review_mode"),
+    [
+        ("source_only", "shadow"),
+        ("full_runtime", "shadow"),  # An already leased older worker can finish.
+        ("full_runtime", "enforce_preview"),
+    ],
+)
 async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
     session_maker: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
     run_mode: str,
+    review_mode: str,
 ) -> None:
     sha = "a" * 64
     agent_id = await _seed_agent(session_maker, status=AgentStatus.REJECTED, sha256=sha)
@@ -220,7 +228,7 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
     report = {
         "kind": "l2_report_canary_v1",
         "authority": "none",
-        "review_mode": "shadow",
+        "review_mode": review_mode,
         "canary_id": str(canary_id),
         "agent_id": str(agent_id),
         "source_attempt_id": str(attempt_id),
@@ -254,6 +262,19 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
                 session,
             )
     assert bad_identity.value.status_code == 409
+    if run_mode == "source_only":
+        async with session_maker() as session:
+            with pytest.raises(HTTPException) as wrong_review_mode:
+                await endpoints.complete_l2_report_canary(
+                    canary_id,
+                    body.model_copy(
+                        update={"report": {**report, "review_mode": "enforce_preview"}}
+                    ),
+                    request,
+                    "hotkey",
+                    session,
+                )
+        assert wrong_review_mode.value.status_code == 409
     if run_mode == "full_runtime":
         async with session_maker() as session:
             with pytest.raises(HTTPException) as wrong_mode:

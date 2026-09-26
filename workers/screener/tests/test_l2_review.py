@@ -1020,6 +1020,30 @@ async def test_clean_l1_skips_sol() -> None:
     assert l2.calls == 0
 
 
+async def test_isolated_enforce_preview_captures_the_applied_l2_result() -> None:
+    l1 = _FakeL1(_l1("low", clearance_certified=True))
+    l2_result = _model_result(_safe())
+    l2 = _FakeL2(l2_result)
+    layered = LayeredSourceReviewAgent(
+        l1=l1,
+        l2=l2,
+        mode="enforce",
+        always_escalate=True,
+        capture_enforce_result=True,
+    )  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert result.ok and result.risk_level == "low"
+    assert l2.calls == 1
+    assert layered.pop_shadow_result(ATTEMPT) is l2_result
+    assert layered.pop_shadow_result(ATTEMPT) is None
+    assert layered.pop_preview_l1_result(ATTEMPT) is l1.result
+    assert layered.pop_preview_l1_result(ATTEMPT) is None
+
+
 async def test_certified_l1_low_escalates_when_always_escalate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1033,6 +1033,7 @@ class BuildGate:
         *,
         policy: PolicyEngine,
         journal: ReviewJournal,
+        capture_enforce_result: bool = False,
     ) -> None:
         self._config = config
         self._client = client
@@ -1043,6 +1044,7 @@ class BuildGate:
         )
         self._review_settings_key: tuple[int, str] | None = None
         self._executor_verified = False
+        self._capture_enforce_result = capture_enforce_result
         self._configure_source_reviewer(config)
 
     def _configure_source_reviewer(self, config: ScreenerConfig) -> None:
@@ -1105,6 +1107,7 @@ class BuildGate:
             adjudicator=build_adjudicator(config),
             adjudicator_reserve_seconds=config.adjudicator_timeout_seconds,
             always_escalate=config.l2_always_escalate,
+            capture_enforce_result=self._capture_enforce_result,
         )
 
     def apply_review_settings(self, effective: EffectiveReviewSettings) -> bool:
@@ -1135,6 +1138,10 @@ class BuildGate:
     def pop_shadow_review(self, attempt_id: UUID) -> L2RunResult | None:
         """Return and remove one attempt's non-authoritative shadow result."""
         return self._source_reviewer.pop_shadow_result(attempt_id)
+
+    def pop_preview_l1_review(self, attempt_id: UUID) -> SourceReviewObservation | None:
+        """Return the L1 lead paired with an isolated enforce preview."""
+        return self._source_reviewer.pop_preview_l1_result(attempt_id)
 
     async def screen(
         self,
