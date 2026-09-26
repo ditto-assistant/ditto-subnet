@@ -23,7 +23,6 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SCREENER_WALLET_HOTKEY",
         "SCREENER_GH_TOKEN_FILE",
         "SCREENER_BUILD_TIMEOUT_SECONDS",
-        "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS",
         "SCREENER_REMOTE_BUILD_MODE",
         "SCREENER_BUILD_MEMORY",
         "SCREENER_IMAGE_BUILD_MEMORY",
@@ -45,8 +44,6 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not cfg.require_rootless_docker
     assert cfg.container_port == 8080
     assert cfg.image_build_memory == "8g"
-    assert cfg.remote_build_timeout_seconds == 1500
-    assert cfg.remote_build_mode == "off"
     assert cfg.v13_runtime_receipts_mode == "off"
     assert cfg.gh_token_file is None
     # Must default to (at least) the platform's 20 MiB upload cap, else the gate
@@ -120,19 +117,6 @@ def test_v13_runtime_receipts_require_explicit_shadow_opt_in(
         parse_screener_config_from_env()
 
 
-def test_remote_build_timeout_is_independent_and_configurable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _base_env(monkeypatch)
-    monkeypatch.setenv("SCREENER_BUILD_TIMEOUT_SECONDS", "1200")
-    monkeypatch.setenv("SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS", "1800")
-
-    cfg = parse_screener_config_from_env()
-
-    assert cfg.build_timeout_seconds == 1200
-    assert cfg.remote_build_timeout_seconds == 1800
-
-
 @pytest.mark.parametrize(
     ("name", "value", "match"),
     [
@@ -165,14 +149,9 @@ def test_remote_build_timeout_is_independent_and_configurable(
         ("SCREENER_L2_ANALYST_REASONING_EFFORT", "high", "model_default"),
         ("SCREENER_L2_CRITIC_REASONING_EFFORT", "none", "low, medium, or high"),
         (
-            "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS",
-            "60",
-            "between 300 and 2400",
-        ),
-        (
             "SCREENER_REMOTE_BUILD_MODE",
-            "always",
-            "off, prefer, or require",
+            "require",
+            "is retired",
         ),
     ],
 )

@@ -336,11 +336,9 @@ SCREENER_BUILD_MEMORY=2g
 # Language-neutral image builds get a larger but still bounded compiler/linker
 # envelope. The built harness keeps the validator-compatible runtime limits.
 SCREENER_IMAGE_BUILD_MEMORY=8g
-SCREENER_REMOTE_BUILD_MODE=off
 # GCE MIG instances are whole-screen overflow capacity. They build and smoke
 # locally immediately; they do not enqueue work back onto the Hetzner node and
 # wait before doing the same build themselves.
-SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS=1500
 SCREENER_PIDS_LIMIT=512
 SCREENER_DOCKER_HOST=$rootless_host
 DOCKER_HOST=$rootless_host

@@ -52,11 +52,11 @@ def test_deploy_reinstalls_and_probes_embedded_protocol() -> None:
     assert "verify-installed-signing-contract.py" in bootstrap
 
 
-def test_bootstrap_preserves_separate_remote_and_local_build_budgets() -> None:
+def test_bootstrap_uses_local_build_budget_only() -> None:
     bootstrap = (ROOT / "scripts" / "bootstrap-screener.sh").read_text()
 
-    assert "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS=1500" in bootstrap
     assert "SCREENER_BUILD_TIMEOUT_SECONDS=2700" in bootstrap
+    assert "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS" not in bootstrap
 
 
 def test_deploy_repairs_legacy_remote_build_mode_and_restarts_worker() -> None:
