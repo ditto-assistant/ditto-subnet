@@ -103,6 +103,18 @@ class PlatformInfrastructureError(PlatformError):
     """A platform dependency failure unrelated to the submission."""
 
 
+class WeightReceiptConflictError(PlatformError):
+    """Platform refused a weight receipt that conflicts with an immutable identity.
+
+    ``code`` is Platform's bounded reason category, ``"unknown"`` when absent or
+    malformed; it never carries receipt contents.
+    """
+
+    def __init__(self, code: str) -> None:
+        super().__init__(f"weight receipt conflict ({code})")
+        self.code = code
+
+
 FAILURE_DETAIL_MAX_LENGTH = 4096
 """Mirrors ``ditto.api_models.validator.FAILURE_DETAIL_MAX_LENGTH``.
 

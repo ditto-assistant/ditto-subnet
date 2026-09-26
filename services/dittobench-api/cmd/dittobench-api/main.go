@@ -313,7 +313,7 @@ func main() {
 	routerBackend := routerbackend.NewOffloadedBackend(
 		strings.TrimSpace(os.Getenv("DITTOBENCH_ROUTER_OFFLOAD_URL")), allowPrivate,
 	)
-	routerGetClient := netguard.Client(allowPrivate)
+	routerGetClient := routerbackend.NewProbeClient(allowPrivate)
 	s.routerDispatcher = routerbackend.Dispatcher{
 		Backend: routerBackend,
 		Get:     routerGetClient.Get,

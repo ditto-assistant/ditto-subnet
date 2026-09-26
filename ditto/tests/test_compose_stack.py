@@ -402,9 +402,9 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
 
     api = compose["services"]["dittobench-api"]
     assert "DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES" not in api["environment"]
-    # The worker fails closed and claims nothing at all when the scorer
-    # advertises fewer full-run slots than the worker configured, so these two
-    # must ride the same variable with the same default. A host that sets
+    # When the scorer advertises fewer full-run slots than the worker
+    # configured, the worker runs only the scorer's count, so these two must
+    # ride the same variable with the same default. A host that sets
     # nothing must land on the production value, not on the old behaviour.
     # That default is the protocol maximum on purpose: the platform's cap can
     # narrow an advertised eight to anything in [1, 8] within seconds and with

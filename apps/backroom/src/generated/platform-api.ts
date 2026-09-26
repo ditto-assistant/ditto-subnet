@@ -4268,6 +4268,9 @@ export interface paths {
         /**
          * Accept Link Decide
          * @description Consume the single-use accept token: accept → authenticated, else failed.
+         *
+         *     The token is read only from the form body, so the answering request's
+         *     URL (and the history entry it leaves) carries just ``attempt``.
          */
         post: operations["accept_link_decide_api_v1_miner_auth_ditto_accept_post"];
         delete?: never;
@@ -13173,6 +13176,8 @@ export interface components {
             replacement_allowed: boolean;
             /** Replacement Pending */
             replacement_pending: boolean;
+            /** Replacement Queued */
+            replacement_queued: boolean;
             /** Replacement Reason */
             replacement_reason: string | null;
             /** Replacement Request Id */
@@ -14035,6 +14040,13 @@ export interface components {
              * @enum {string}
              */
             relay_delay_fingerprint_mode: "off" | "shadow";
+        };
+        /** Body_accept_link_decide_api_v1_miner_auth_ditto_accept_post */
+        Body_accept_link_decide_api_v1_miner_auth_ditto_accept_post: {
+            /** Decision */
+            decision: string;
+            /** T */
+            t: string;
         };
         /** Body_set_miner_avatar_api_v1_miner_avatars_post */
         Body_set_miner_avatar_api_v1_miner_avatars_post: {
@@ -22768,10 +22780,17 @@ export interface components {
          *     infrastructure failure is retried automatically with backoff, no earlier than
          *     that time. After too many consecutive failures, or a long park, it reports
          *     ``stuck`` and needs a guarded retry like any other.
+         *
+         *     ``lane`` names the admission lane (image build, runtime smoke, or source
+         *     review) the latest attempt is in or stopped in, and is null whenever
+         *     Platform holds no evidence for it (no attempt yet, a worker-local lane, or
+         *     a failure that names no lane).
          */
         PublicAdmissionRetry: {
             /** Attempt Count */
             attempt_count: number;
+            /** Lane */
+            lane?: ("build" | "runtime_smoke" | "source_review") | null;
             /**
              * Last Failure Infrastructure
              * @default false
@@ -23900,7 +23919,7 @@ export interface components {
             quality_factors?: components["schemas"]["PublicBenchmarkQualityFactor"][];
             /**
              * Token Efficiency Multiplier
-             * @description Benchmark-v5 token multiplier; null when token efficiency does not apply or was unavailable.
+             * @description Signed token multiplier (a neutral 1.0 under the bench v7+ quality-only contract); null when it was unavailable.
              */
             token_efficiency_multiplier?: number | null;
             /**
@@ -26500,7 +26519,8 @@ export interface components {
         };
         /**
          * PublicTokenEfficiency
-         * @description Auditable v5 relay-token waste penalty.
+         * @description Auditable relay-token decision: the v5 waste penalty, or the neutral
+         *     bench v7+ quality-only record that meters usage without scoring it.
          */
         PublicTokenEfficiency: {
             /** Adjusted Composite */
@@ -42472,14 +42492,16 @@ export interface operations {
         parameters: {
             query: {
                 attempt: string;
-                t: string;
-                decision: string;
             };
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_accept_link_decide_api_v1_miner_auth_ditto_accept_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

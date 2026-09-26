@@ -6581,6 +6581,7 @@ export const validatorScoreReplacementDetailSchema = z.object({
   ticket_status: z.enum(['issued', 'scored', 'expired']).nullable(),
   ticket_deadline: z.string().nullable(),
   replacement_pending: z.boolean(),
+  replacement_queued: z.boolean(),
   replacement_request_id: z.string().uuid().nullable(),
   replacement_reason: z.string().nullable(),
   replacement_actor: z.string().nullable(),
