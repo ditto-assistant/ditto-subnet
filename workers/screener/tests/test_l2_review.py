@@ -51,6 +51,7 @@ from ditto_screener.l2_review import (
     _finalize_without_l3,
     _graph_covers_l1_slice,
     _has_mixed_causal_families,
+    _l1_lead_packet,
     _l2_review_system_prompt,
     _make_writable,
     _needs_violation_adjudication,
@@ -62,6 +63,7 @@ from ditto_screener.l2_review import (
     _review_adaptation_hold,
     _safety_clearance_gaps,
     _served_generator_hold,
+    _validate_lead_dispositions,
     _write_all,
     l2_cause_prompt_revision,
     l2_cause_tiebreaker_prompt_revision,
@@ -215,7 +217,7 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
     assert l2_prompt_revision(11) == "l2-terra-source-review-v37-policy-v11"
     assert l2_prompt_revision(10) == "l2-terra-source-review-v37-policy-v10"
-    assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v12"
+    assert L2_DOSSIER_REVISION == "l1-lead-packet-v13"
     assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v27-policy-v11"
     assert l2_cause_tiebreaker_prompt_revision(11) == (
         "l3-sol-cause-disagreement-v7-policy-v11"
@@ -1109,6 +1111,184 @@ def test_l3_disabled_makes_l2_result_authoritative() -> None:
     assert result.clearance_path == "l2_only_l3_disabled"
 
 
+def test_v13_static_hold_retains_analyst_explanation() -> None:
+    analyst = replace(
+        _clearance_candidate(), analyst_summary="Independent source analysis"
+    )
+    attention = replace(analyst, observation=_l1("medium"))
+    held = _finalize_without_l3(
+        analyst,
+        dossier_tools=(),
+        analyst_cache_hit=False,
+        policy_version=13,
+        static_attention=attention,
+    )
+    assert held.observation is attention.observation
+    assert held.analyst_finding == analyst.observation.finding
+    assert held.analyst_summary == "Independent source analysis"
+
+
+def test_l1_lead_packet_deduplicates_without_losing_note_provenance() -> None:
+    l1 = replace(
+        _l1("medium"),
+        notes=(
+            {
+                "kind": "concern",
+                "path": "src/main.rs",
+                "line": 1,
+                "area": "answer_construction",
+                "category": "benchmark_emulation",
+                "confidence": 0.8,
+                "summary": "First concern at the deciding prompt",
+            },
+            {
+                "kind": "concern",
+                "path": "src/main.rs",
+                "line": 1,
+                "area": "answer_construction",
+                "category": "benchmark_emulation",
+                "confidence": 0.99,
+                "summary": "Different concern at the same source line",
+            },
+        ),
+    )
+    leads = _l1_lead_packet(l1)
+    assert len(leads) == 1
+    assert leads[0]["note_indices"] == [0, 1]
+    assert leads[0]["occurrences"] == 2
+    assert leads[0]["max_confidence"] == 0.99
+    assert [item["summary"] for item in leads[0]["diagnostics_untrusted"]] == [
+        "First concern at the deciding prompt",
+        "Different concern at the same source line",
+    ]
+
+
+def test_l1_unlocated_concern_remains_in_packet_and_blocks_medium_clear() -> None:
+    l1 = replace(
+        _l1("medium"),
+        notes=(
+            {
+                "kind": "concern",
+                "path": "src/main.rs",
+                "line": 1,
+                "area": "answer_construction",
+                "category": "benchmark_emulation",
+                "summary": "Located lead",
+            },
+            {
+                "kind": "concern",
+                "category": "benchmark_emulation",
+                "summary": "Unlocated distinct concern",
+            },
+        ),
+    )
+    leads = _l1_lead_packet(l1)
+    assert len(leads) == 2
+    assert leads[0]["location_complete"] is True
+    assert leads[1]["location_complete"] is False
+    assert leads[1]["note_indices"] == [1]
+    candidate = replace(
+        _clearance_candidate(response_models=("openai/gpt-6-sol",)),
+        l1_lead_dispositions=tuple(
+            {
+                "lead_id": lead["lead_id"],
+                "disposition": "resolved",
+                "citation": {"path": "src/main.rs", "line": 1, "file_sha256": "e" * 64},
+            }
+            for lead in leads
+        ),
+    )
+    held = _finalize_without_l3(
+        candidate,
+        dossier_tools=(),
+        analyst_cache_hit=False,
+        policy_version=13,
+        l1_observation=l1,
+        dossier={"deterministic": {"main_call_graph": {}}},
+        expected_model="openai/gpt-6-sol",
+    )
+    assert not held.observation.clearance_certified
+    assert "l1-lead-location-incomplete" in (held.failure_subcode or "")
+
+
+def test_l1_note_changes_invalidate_both_l2_cache_keys(tmp_path: Path) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    original = _l1("medium")
+    revised = replace(
+        original,
+        notes=({"kind": "concern", "summary": "New unresolved lead"},),
+    )
+    assert original.finding_digest == revised.finding_digest
+    assert agent._cache_key("ab" * 32, original) != agent._cache_key("ab" * 32, revised)
+    assert agent._analyst_cache_key("ab" * 32, original) != agent._analyst_cache_key(
+        "ab" * 32, revised
+    )
+
+
+def test_l2_lead_disposition_requires_exact_source_citation(tmp_path: Path) -> None:
+    archive, _ = _tar(tmp_path, "fn main() {}\n")
+    repository = TarSourceRepository(str(archive))
+    leads = _l1_lead_packet(_l1("medium"))
+    digest = hashlib.sha256(b"fn main() {}\n").hexdigest()
+    analyzed = ({"path": "src/main.rs", "sha256": digest},)
+    item = {
+        "lead_id": leads[0]["lead_id"],
+        "disposition": "resolved",
+        "reason": "The cited branch still delegates the answer to the model.",
+        "citation": {"path": "src/main.rs", "line": 1, "file_sha256": digest},
+    }
+    assert _validate_lead_dispositions(
+        [item], leads=leads, analyzed=analyzed, repository=repository
+    ) == (item,)
+    with pytest.raises(ValueError, match="artifact-bound"):
+        _validate_lead_dispositions(
+            [{**item, "citation": {**item["citation"], "file_sha256": "0" * 64}}],
+            leads=leads,
+            analyzed=analyzed,
+            repository=repository,
+        )
+    with pytest.raises(ValueError, match="every unique"):
+        _validate_lead_dispositions(
+            [], leads=leads, analyzed=analyzed, repository=repository
+        )
+
+
+def test_v13_medium_l1_requires_resolved_leads_and_direct_clear_graph() -> None:
+    l1 = _l1("medium")
+    lead = _l1_lead_packet(l1)[0]
+    candidate = _clearance_candidate(response_models=("openai/gpt-6-sol",))
+    kwargs = {
+        "dossier_tools": (),
+        "analyst_cache_hit": False,
+        "policy_version": 13,
+        "l1_observation": l1,
+        "dossier": {"deterministic": {"main_call_graph": {}}},
+        "expected_model": "openai/gpt-6-sol",
+    }
+    unresolved = _finalize_without_l3(candidate, **kwargs)
+    assert unresolved.failure_subcode is not None
+    assert "l1-leads-unresolved" in unresolved.failure_subcode
+    assert unresolved.analyst_finding == candidate.observation.finding
+    resolved = replace(
+        candidate,
+        l1_lead_dispositions=(
+            {
+                "lead_id": lead["lead_id"],
+                "disposition": "resolved",
+                "citation": {"path": "src/main.rs", "line": 1, "file_sha256": "e" * 64},
+            },
+        ),
+    )
+    clear = _finalize_without_l3(resolved, **kwargs)
+    assert clear.observation.clearance_certified
+    assert clear.clearance_path == "l2_only_certified_low"
+    incomplete_graph = _finalize_without_l3(
+        replace(resolved, direct_clear_graph_complete=False), **kwargs
+    )
+    assert not incomplete_graph.observation.ok
+    assert "direct-clear-graph" in (incomplete_graph.failure_subcode or "")
+
+
 def test_v13_l3_off_certifies_only_complete_clean_l1_l2_agreement() -> None:
     candidate = _clearance_candidate()
     analyst = L2RunResult(
@@ -1656,8 +1836,8 @@ def test_served_generator_constellation_cannot_auto_clear(
             static_attention=held,
             dossier=dossier,
             expected_model="openai/gpt-5.6-terra",
-        )
-        is held
+        ).observation
+        is held.observation
     )
     assert {item["role"] for item in held.causal_path} == {
         "trigger",
@@ -1793,8 +1973,8 @@ def test_review_adaptive_model_routing_cannot_auto_clear(tmp_path: Path) -> None
             static_attention=held,
             dossier=dossier,
             expected_model="openai/gpt-5.6-terra",
-        )
-        is held
+        ).observation
+        is held.observation
     )
     assert held.critic_disposition == "not_required_static_hold"
     assert {item["role"] for item in held.causal_path} == {

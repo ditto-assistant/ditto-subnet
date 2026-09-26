@@ -137,6 +137,9 @@ def _report(
         "direct_clear_graph_complete": l2_result.direct_clear_graph_complete,
         "failure_subcode": l2_result.failure_subcode,
         "inconclusive_model_audit": observation.inconclusive_model_audit,
+        "l1_lead_dispositions": list(l2_result.l1_lead_dispositions),
+        "analyst_finding": l2_result.analyst_finding,
+        "analyst_summary": l2_result.analyst_summary,
     }
     return report
 
