@@ -1,3 +1,5 @@
+import os
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -53,6 +55,64 @@ def _platform_checkout_root() -> str:
         (ROOT / "infra/ansible/roles/platform_app/defaults/main.yml").read_text()
     )
     return defaults["platform_checkout_root"]
+
+
+def test_platform_deploy_passes_config_over_ssh_stdin(tmp_path: Path) -> None:
+    """The deploy secret must reach the VM without entering gcloud's argv/env."""
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/platform-deploy.yml").read_text()
+    )
+    step = next(
+        step
+        for step in workflow["jobs"]["deploy"]["steps"]
+        if step.get("id") == "deploy"
+    )
+    assert step["env"]["DITTO_UPLOAD_PAYMENT_ADDRESS"] == (
+        "${{ secrets.DITTO_UPLOAD_PAYMENT_ADDRESS }}"
+    )
+    assert "${{ secrets.DITTO_UPLOAD_PAYMENT_ADDRESS }}" not in step["run"]
+
+    # A stub receives exactly the gcloud process boundary: the command line,
+    # environment and stdin. No live SSH connection or secret is involved.
+    stub = tmp_path / "gcloud"
+    stub.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "assert 'DITTO_UPLOAD_PAYMENT_ADDRESS' not in os.environ\n"
+        "assert 'DITTO_DASHBOARD_WANDB_URL' not in os.environ\n"
+        "args = ' '.join(sys.argv[1:])\n"
+        "assert 'payment-address-sentinel' not in args\n"
+        "assert 'wandb-url-sentinel' not in args\n"
+        "assert '--ssh-flag=-T' in args\n"
+        "assert 'IFS= read -r DITTO_UPLOAD_PAYMENT_ADDRESS' in args\n"
+        "assert 'IFS= read -r DITTO_DASHBOARD_WANDB_URL' in args\n"
+        "assert sys.stdin.read() == 'payment-address-sentinel\\n'"
+        " + 'wandb-url-sentinel\\n'\n"
+        "print('deployed-commit=' + os.environ['DEPLOY_REVISION'])\n"
+    )
+    stub.chmod(0o700)
+    deploy_log = tmp_path / "deploy.log"
+    script = (
+        step["run"]
+        .replace("${{ steps.target.outputs.vm }}", "test-vm")
+        .replace("/tmp/deploy.log", str(deploy_log))
+    )
+    output = tmp_path / "github-output"
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "DITTO_UPLOAD_PAYMENT_ADDRESS": "payment-address-sentinel",
+        "DITTO_DASHBOARD_WANDB_URL": "wandb-url-sentinel",
+        "DEPLOY_REVISION": "a" * 40,
+        "GCP_ZONE": "test-zone",
+        "GITHUB_OUTPUT": str(output),
+    }
+    result = subprocess.run(
+        ["bash", "-c", script], env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == f"commit={'a' * 40}\n"
+    assert "payment-address-sentinel" not in deploy_log.read_text()
 
 
 def test_platform_deploy_targets_the_ansible_provisioned_checkout() -> None:

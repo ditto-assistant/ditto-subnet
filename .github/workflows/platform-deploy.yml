@@ -244,8 +244,10 @@ jobs:
         # `sudo -iu deploy bash -lc` runs a LOGIN shell as deploy so uv/pm2/docker
         # are on PATH (a bare `sudo -u deploy` uses a minimal secure_path and
         # would fail on `uv`/`pm2`). DITTO_UPLOAD_PAYMENT_ADDRESS is the env-scoped
-        # GitHub secret (a public on-chain receive address); update.sh upserts it
-        # into the VM's .env.deploy before (re)starting. The workflow checks out
+        # GitHub secret (a public on-chain receive address). Send it over SSH
+        # stdin without a PTY; neither it nor the dashboard URL belongs in the
+        # remote command argv. update.sh upserts both into the VM's .env.deploy
+        # before (re)starting. The workflow checks out
         # the target first so the first deployment of an updater change executes
         # the new script rather than the old process inode. Optional chain
         # archive-provider configuration and the Taostats display-name key are
@@ -315,18 +317,26 @@ jobs:
         # come from the runner's ssh, before the host was reached -- which is
         # what makes "nothing was half-applied" a checked fact here rather than
         # an assumption about update.sh being idempotent.
+        env:
+          DITTO_UPLOAD_PAYMENT_ADDRESS: ${{ secrets.DITTO_UPLOAD_PAYMENT_ADDRESS }}
+          DITTO_DASHBOARD_WANDB_URL: ${{ vars.DITTO_DASHBOARD_WANDB_URL }}
         run: |
           set -euo pipefail
+
+          : "${DITTO_UPLOAD_PAYMENT_ADDRESS:?DITTO_UPLOAD_PAYMENT_ADDRESS environment secret is not set}"
 
           attempt=1
           max_attempts=3
           while :; do
             rc=0
-            gcloud compute ssh "${{ steps.target.outputs.vm }}" \
+            printf '%s\n%s\n' "$DITTO_UPLOAD_PAYMENT_ADDRESS" "$DITTO_DASHBOARD_WANDB_URL" | \
+              env -u DITTO_UPLOAD_PAYMENT_ADDRESS -u DITTO_DASHBOARD_WANDB_URL \
+              gcloud compute ssh "${{ steps.target.outputs.vm }}" \
               --zone "$GCP_ZONE" \
               --tunnel-through-iap \
               --quiet \
-              --command "sudo -iu deploy bash -lc 'if [ ! -d /opt/ditto-subnet/.git ]; then echo \"ERROR: /opt/ditto-subnet is not a monorepo checkout on this host, so this workflow cannot deploy it.\" >&2; if [ -d /opt/ditto-platform/.git ]; then echo \"This host still serves the platform from the PRE-CUTOVER /opt/ditto-platform checkout (ditto-assistant/ditto-platform). Merging to this monorepo does NOT reach production until the cutover completes.\" >&2; fi; echo \"Provision the monorepo checkout with the platform_app role: infra/ansible/playbooks/gcp-platform-app.yml (platform_checkout_root).\" >&2; exit 78; fi; if [ ! -s /opt/ditto-subnet/apps/platform/.env ]; then echo \"ERROR: /opt/ditto-subnet exists but apps/platform/.env is missing or empty, so this host is HALF provisioned.\" >&2; echo \"A converge that aborts between cloning the checkout and rendering .env leaves exactly this state, and it looks deployable. Re-run infra/ansible/playbooks/gcp-platform-app.yml to completion.\" >&2; exit 78; fi; cd /opt/ditto-subnet && git fetch --prune origin && git checkout --detach $DEPLOY_REVISION && git reset --hard $DEPLOY_REVISION && cd apps/platform && DITTO_DEPLOY_BRANCH=main DITTO_DEPLOY_COMMIT=$DEPLOY_REVISION DITTO_UPLOAD_PAYMENT_ADDRESS=${{ secrets.DITTO_UPLOAD_PAYMENT_ADDRESS }} DITTO_DASHBOARD_WANDB_URL=${{ vars.DITTO_DASHBOARD_WANDB_URL }} ./scripts/update.sh'" \
+              --ssh-flag="-T" \
+              --command "sudo -iu deploy bash -lc 'IFS= read -r DITTO_UPLOAD_PAYMENT_ADDRESS || exit 78; IFS= read -r DITTO_DASHBOARD_WANDB_URL || exit 78; export DITTO_UPLOAD_PAYMENT_ADDRESS DITTO_DASHBOARD_WANDB_URL; if [ ! -d /opt/ditto-subnet/.git ]; then echo \"ERROR: /opt/ditto-subnet is not a monorepo checkout on this host, so this workflow cannot deploy it.\" >&2; if [ -d /opt/ditto-platform/.git ]; then echo \"This host still serves the platform from the PRE-CUTOVER /opt/ditto-platform checkout (ditto-assistant/ditto-platform). Merging to this monorepo does NOT reach production until the cutover completes.\" >&2; fi; echo \"Provision the monorepo checkout with the platform_app role: infra/ansible/playbooks/gcp-platform-app.yml (platform_checkout_root).\" >&2; exit 78; fi; if [ ! -s /opt/ditto-subnet/apps/platform/.env ]; then echo \"ERROR: /opt/ditto-subnet exists but apps/platform/.env is missing or empty, so this host is HALF provisioned.\" >&2; echo \"A converge that aborts between cloning the checkout and rendering .env leaves exactly this state, and it looks deployable. Re-run infra/ansible/playbooks/gcp-platform-app.yml to completion.\" >&2; exit 78; fi; cd /opt/ditto-subnet && git fetch --prune origin && git checkout --detach $DEPLOY_REVISION && git reset --hard $DEPLOY_REVISION && cd apps/platform && DITTO_DEPLOY_BRANCH=main DITTO_DEPLOY_COMMIT=$DEPLOY_REVISION ./scripts/update.sh'" \
               2>&1 | tee /tmp/deploy.log || rc=$?
             if [ "$rc" -eq 0 ]; then
               break
