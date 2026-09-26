@@ -234,7 +234,11 @@ immutable signed stack descriptor supplied by Compose:
 `supported_bench_versions` lists the versions in the advertised v8–v13 window
 that this build reports as production-ready (`supportedBenchVersions` in
 `cmd/dittobench-api/main.go`). It is empty when the v8 efficiency readiness
-check fails, and every scoring and practice request is then rejected.
+check fails, and every scoring and practice request is then rejected. A
+deployment that can launch untrusted miner images (screened images or source
+builds) also reports it empty until its sandbox executor passes the isolation
+check (`runtimeSupportedBenchVersions`), so validators do not negotiate work
+that host cannot run safely.
 
 Release identity is **derived from the compiled binary**, not asserted by the
 environment. The image build links it in:
