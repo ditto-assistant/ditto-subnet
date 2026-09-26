@@ -22,12 +22,14 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import bittensor
 import httpx
@@ -154,12 +156,18 @@ def _build_form(
     name: str = "alpha-agent",
 ) -> tuple[dict[str, Any], dict[str, tuple[str, bytes, str]]]:
     hotkey = keypair.ss58_address
-    payload = f"{hotkey}:{sha256}".encode()
+    signature_timestamp = int(time.time())
+    signature_nonce = uuid4()
+    payload = (
+        f"ditto-upload-v2:{hotkey}:{sha256}:{signature_timestamp}:{signature_nonce}"
+    ).encode("ascii")
     data: dict[str, Any] = {
         "hotkey": hotkey,
         "sha256": sha256,
         "name": name,
         "signature": keypair.sign(payload).hex(),
+        "signature_timestamp": signature_timestamp,
+        "signature_nonce": str(signature_nonce),
         "payment_block_hash": block_hash,
         "payment_block_number": 13579,
         "payment_extrinsic_index": ext_idx,

@@ -5,12 +5,13 @@ from __future__ import annotations
 import hashlib
 import io
 import tarfile
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import bittensor
 import httpx
@@ -112,6 +113,26 @@ def _make_keypair() -> bittensor.Keypair:
     return bittensor.Keypair.create_from_uri("//Alice")
 
 
+def _signed_upload_auth(
+    keypair: bittensor.Keypair,
+    *,
+    hotkey: str,
+    sha256: str,
+    signature_timestamp: int | None = None,
+    signature_nonce: UUID | None = None,
+) -> dict[str, object]:
+    timestamp = (
+        signature_timestamp if signature_timestamp is not None else int(time.time())
+    )
+    nonce = signature_nonce or uuid4()
+    payload = (f"ditto-upload-v2:{hotkey}:{sha256}:{timestamp}:{nonce}").encode("ascii")
+    return {
+        "signature": keypair.sign(payload).hex(),
+        "signature_timestamp": timestamp,
+        "signature_nonce": str(nonce),
+    }
+
+
 def _signed_request_body(
     *,
     keypair: bittensor.Keypair | None = None,
@@ -121,12 +142,11 @@ def _signed_request_body(
 ) -> dict[str, object]:
     kp = keypair or _make_keypair()
     hotkey = override_hotkey or kp.ss58_address
-    payload = f"{hotkey}:{sha256}".encode()
     return {
         "hotkey": hotkey,
         "sha256": sha256,
         "file_size_bytes": file_size_bytes,
-        "signature": kp.sign(payload).hex(),
+        **_signed_upload_auth(kp, hotkey=hotkey, sha256=sha256),
     }
 
 
@@ -556,6 +576,48 @@ class TestUploadCheck:
         assert result["ok"] is False
         assert ERROR_CODE_BAD_SIGNATURE in result["error_codes"]
 
+    @pytest.mark.parametrize("offset_seconds", [-301, 301])
+    async def test_signed_request_outside_clock_window_is_rejected(
+        self, app: FastAPI, client: httpx.AsyncClient, offset_seconds: int
+    ) -> None:
+        override_get_chain_client(app)
+        keypair = _make_keypair()
+        body = _signed_request_body(keypair=keypair)
+        body.update(
+            _signed_upload_auth(
+                keypair,
+                hotkey=keypair.ss58_address,
+                sha256=_GOOD_SHA256,
+                signature_timestamp=int(time.time()) + offset_seconds,
+            )
+        )
+        response = await client.post("/api/v1/upload/check", json=body)
+        assert response.status_code == 200
+        assert ERROR_CODE_BAD_SIGNATURE in response.json()["error_codes"]
+
+    async def test_nonce_cannot_be_changed_after_signing(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        override_get_chain_client(app)
+        body = _signed_request_body()
+        body["signature_nonce"] = str(uuid4())
+        response = await client.post("/api/v1/upload/check", json=body)
+        assert response.status_code == 200
+        assert ERROR_CODE_BAD_SIGNATURE in response.json()["error_codes"]
+
+    async def test_legacy_static_signature_is_not_accepted(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        override_get_chain_client(app)
+        keypair = _make_keypair()
+        body = _signed_request_body(keypair=keypair)
+        body["signature"] = keypair.sign(
+            f"{keypair.ss58_address}:{_GOOD_SHA256}".encode()
+        ).hex()
+        response = await client.post("/api/v1/upload/check", json=body)
+        assert response.status_code == 200
+        assert ERROR_CODE_BAD_SIGNATURE in response.json()["error_codes"]
+
     async def test_unregistered_hotkey_returns_1101(
         self, app: FastAPI, client: httpx.AsyncClient
     ):
@@ -815,13 +877,11 @@ def _upload_agent_form(
 ) -> tuple[dict[str, Any], dict[str, tuple[str, bytes, str]]]:
     kp = keypair or bittensor.Keypair.create_from_uri("//Alice")
     hotkey = override_hotkey or kp.ss58_address
-    payload = f"{hotkey}:{sha256}".encode()
-    signature_hex = kp.sign(payload).hex()
     data: dict[str, Any] = {
         "hotkey": hotkey,
         "sha256": sha256,
         "name": name,
-        "signature": signature_hex,
+        **_signed_upload_auth(kp, hotkey=hotkey, sha256=sha256),
         "payment_block_hash": payment_block_hash,
         "payment_block_number": payment_block_number,
         "payment_extrinsic_index": payment_extrinsic_index,
@@ -1134,6 +1194,24 @@ class TestUploadAgentValidationFailures:
         assert response.status_code == 400
         assert "signature" in response.json()["message"]
 
+    async def test_signed_but_expired_upload_is_rejected_before_payment_work(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        deps = _wire_full_stack(app)
+        keypair = _make_keypair()
+        data, files = _upload_agent_form(keypair=keypair)
+        data.update(
+            _signed_upload_auth(
+                keypair,
+                hotkey=keypair.ss58_address,
+                sha256=_GOOD_TAR_SHA,
+                signature_timestamp=int(time.time()) - 301,
+            )
+        )
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+        assert response.status_code == 400
+        deps["verifier"].verify_payment.assert_not_awaited()
+
     async def test_banned_hotkey_returns_403(
         self,
         app: FastAPI,
@@ -1202,12 +1280,11 @@ class TestUploadAgentValidationFailures:
         # Claim a different sha than the actual bytes will hash to.
         bogus_sha = "ff" * 32
         kp = bittensor.Keypair.create_from_uri("//Alice")
-        payload = f"{kp.ss58_address}:{bogus_sha}".encode()
         data = {
             "hotkey": kp.ss58_address,
             "sha256": bogus_sha,
             "name": "alpha-agent",
-            "signature": kp.sign(payload).hex(),
+            **_signed_upload_auth(kp, hotkey=kp.ss58_address, sha256=bogus_sha),
             "payment_block_hash": _GOOD_BLOCK_HASH,
             "payment_block_number": 13579,
             "payment_extrinsic_index": 7,
@@ -1226,12 +1303,11 @@ class TestUploadAgentValidationFailures:
         oversized = b"\x1f\x8b" + b"x" * (MAX_TARBALL_SIZE_BYTES - 1)
         big_sha = hashlib.sha256(oversized).hexdigest()
         kp = bittensor.Keypair.create_from_uri("//Alice")
-        payload = f"{kp.ss58_address}:{big_sha}".encode()
         data = {
             "hotkey": kp.ss58_address,
             "sha256": big_sha,
             "name": "alpha-agent",
-            "signature": kp.sign(payload).hex(),
+            **_signed_upload_auth(kp, hotkey=kp.ss58_address, sha256=big_sha),
             "payment_block_hash": _GOOD_BLOCK_HASH,
             "payment_block_number": 13579,
             "payment_extrinsic_index": 7,
@@ -1440,12 +1516,11 @@ class TestUploadAgentBoundaries:
         _override_payment_verifier(
             app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
         )
-        payload = f"{kp.ss58_address}:{at_cap_sha}".encode()
         data = {
             "hotkey": kp.ss58_address,
             "sha256": at_cap_sha,
             "name": "alpha-agent",
-            "signature": kp.sign(payload).hex(),
+            **_signed_upload_auth(kp, hotkey=kp.ss58_address, sha256=at_cap_sha),
             "payment_block_hash": _GOOD_BLOCK_HASH,
             "payment_block_number": 13579,
             "payment_extrinsic_index": 7,
@@ -1463,12 +1538,11 @@ class TestUploadAgentBoundaries:
         over = b"\x1f\x8b" + b"x" * (MAX_TARBALL_SIZE_BYTES - 2) + b"!"
         over_sha = hashlib.sha256(over).hexdigest()
         kp = bittensor.Keypair.create_from_uri("//Alice")
-        payload = f"{kp.ss58_address}:{over_sha}".encode()
         data = {
             "hotkey": kp.ss58_address,
             "sha256": over_sha,
             "name": "alpha-agent",
-            "signature": kp.sign(payload).hex(),
+            **_signed_upload_auth(kp, hotkey=kp.ss58_address, sha256=over_sha),
             "payment_block_hash": _GOOD_BLOCK_HASH,
             "payment_block_number": 13579,
             "payment_extrinsic_index": 7,

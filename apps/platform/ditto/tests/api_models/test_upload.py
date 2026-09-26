@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -18,6 +19,7 @@ from ditto.db.models import AgentStatus
 _GOOD_SS58 = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _GOOD_SHA256 = "1d8a3b6f04e2c7f9a51bd3e5c8f2a7b06d4e9c1f2a3b4c5d6e7f8a9b0c1d2e3f"
 _GOOD_SIG = "a" * 128
+_GOOD_NONCE = UUID("123e4567-e89b-42d3-a456-426614174000")
 
 
 class TestEvalPricingResponse:
@@ -42,6 +44,8 @@ class TestUploadCheckRequest:
             sha256=_GOOD_SHA256,
             file_size_bytes=1000,
             signature=_GOOD_SIG,
+            signature_timestamp=1_798_000_000,
+            signature_nonce=_GOOD_NONCE,
         )
         assert r.hotkey == _GOOD_SS58
 
@@ -54,6 +58,9 @@ class TestUploadCheckRequest:
             ("signature", "a" * 127),  # too short
             ("signature", "a" * 129),  # too long
             ("signature", "z" * 128),  # not hex
+            ("signature_timestamp", 0),
+            ("signature_nonce", "not-a-uuid"),
+            ("signature_nonce", UUID("123e4567-e89b-12d3-a456-426614174000")),
             ("file_size_bytes", 0),  # must be >= 1
             ("file_size_bytes", -10),
         ],
@@ -64,6 +71,8 @@ class TestUploadCheckRequest:
             "sha256": _GOOD_SHA256,
             "file_size_bytes": 1000,
             "signature": _GOOD_SIG,
+            "signature_timestamp": 1_798_000_000,
+            "signature_nonce": _GOOD_NONCE,
         }
         kwargs[field] = value
         with pytest.raises(ValidationError):

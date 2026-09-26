@@ -31,6 +31,15 @@ So the effective bar today is: **the hotkey is not banned, payment is valid, the
 tarball is within limits, the crate builds, and the running container speaks the
 `/run` protocol well enough to be scored.**
 
+Upload hotkey signatures use the ASCII payload
+`ditto-upload-v2:{hotkey}:{sha256}:{signature_timestamp}:{signature_nonce}`.
+The timestamp is Unix seconds and the nonce is a UUID4; both are required on
+`/upload/check` and `/upload/agent`. Platform rejects signatures outside a
+five-minute clock-skew window. The CLI signs each check and each upload retry
+separately, so registration waits, payment finality, and recovery do not reuse
+an expired proof. The nonce distinguishes requests; it is not a one-use server
+challenge, so a captured request can still be replayed within that window.
+
 ## What is deferred — NOT enforced yet
 
 Per `CLAUDE.md`, several `/upload/*`-adjacent validations are intentionally

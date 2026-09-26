@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import UUID4, BaseModel, Field, model_validator
 
 from ditto.api_models.agent_status import AgentStatus
 
@@ -36,8 +36,8 @@ class EvalPricingResponse(BaseModel):
 class UploadCheckRequest(BaseModel):
     """Body of ``POST /upload/check``.
 
-    The signature is over the UTF-8 bytes of ``f"{hotkey}:{sha256}"``,
-    produced by the hotkey's keypair (sr25519 by default).
+    The hotkey signs the domain-separated upload v2 payload containing the
+    digest, Unix timestamp, and random request nonce.
     """
 
     hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
@@ -50,7 +50,13 @@ class UploadCheckRequest(BaseModel):
     """Tarball size in bytes. Server caps at MAX_TARBALL_SIZE_BYTES."""
 
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
-    """Hex sr25519 signature over ``f"{hotkey}:{sha256}"``."""
+    """Hex sr25519 signature over the upload v2 payload."""
+
+    signature_timestamp: Annotated[int, Field(ge=1, le=2**63 - 1)]
+    """Unix timestamp in seconds, signed with the hotkey."""
+
+    signature_nonce: UUID4
+    """New random nonce for this request, signed with the hotkey."""
 
     allow_identical_rescore: bool = False
     """Explicitly permit buying another seed for byte-identical source.
