@@ -151,7 +151,7 @@ L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v3"
 L2_DOSSIER_REVISION = "l1-compressed-dossier-v12"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
-L2_HARNESS_REVISION = "l2-isolated-coding-harness-v19"
+L2_HARNESS_REVISION = "l2-isolated-coding-harness-v20"
 L2_PRICING_REVISION = "openrouter-catalog-2026-08-31-terra-glm-5-2-sol-reported-cost-v3"
 L2_STARTER_MANIFESTS = tuple(
     sorted((Path(__file__).parent / "data").glob("starter-kit-provenance-*.json"))

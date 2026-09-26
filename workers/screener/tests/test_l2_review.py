@@ -6082,6 +6082,43 @@ async def test_function_diff_covers_bounded_nonstarter_rust_artifact(
     assert len(json.dumps(result, separators=(",", ":"))) < 256_000
 
 
+async def test_scorer_flow_ignores_available_tool_retry_but_keeps_ab_score_controls(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "main.rs").write_text(
+        "fn run(mut response: RunResponse) -> RunResponse {\n"
+        "    response.tool_calls = model_calls();\n"
+        "    let available = response.tool_calls.clone();\n"
+        "    if available.is_empty() {\n"
+        "        response.tool_calls = Vec::new();\n"
+        "    }\n"
+        "    response\n"
+        "}\n"
+        "fn scored(mut response: RunResponse, ab_score: f64) -> RunResponse {\n"
+        "    response.answer = Some(model_answer());\n"
+        "    if ab_score > 0.9 { response.answer = None; }\n"
+        "    response\n"
+        "}\n"
+        "fn scored_alt(mut response: RunResponse, a_b_score: f64) -> RunResponse {\n"
+        "    response.abstain = Some(false);\n"
+        "    if a_b_score > 0.9 { response.abstain = None; }\n"
+        "    response\n"
+        "}\n"
+    )
+    result = json.loads(
+        await InProcessAnalyzerHarness().run(source, "scorer_field_flow", {})
+    )
+    assert not result["truncated"]
+    assert result["flow_count"] == 2
+    assert {(flow["function"], flow["field"]) for flow in result["flows"]} == {
+        ("scored", "answer"),
+        ("scored_alt", "abstain"),
+    }
+    assert not any(item["function"] == "run" for item in result["score_controls"])
+
+
 @pytest.mark.integration
 async def test_real_analyzer_container_isolated_and_canonical_starter_clean(
     tmp_path: Path,

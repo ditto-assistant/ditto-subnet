@@ -96,7 +96,9 @@ SCORED_FIELD = re.compile(
     r"(?:^|_)(?:answer|abstain|final_text|tool_calls?)(?:$|_)", re.I
 )
 SCORE_CONTROL = re.compile(
-    r"(?:score|scoring|scorer|a[_-]?b|ab[_-]?(?:test|score|result)|on[_-]?chain|"
+    # A/B is a standalone control, not the "ab" inside available/stable.
+    r"(?:score|scoring|scorer|(?<![A-Za-z0-9_])a[_-]?b(?![A-Za-z0-9_])|"
+    r"a[_-]?b[_-]?(?:test|score|result)|on[_-]?chain|"
     r"canary|composite|leaderboard|benchmark|grader)",
     re.I,
 )
