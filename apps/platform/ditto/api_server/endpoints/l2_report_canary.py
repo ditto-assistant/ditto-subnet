@@ -541,8 +541,9 @@ async def claim_l2_report_canary(
         )
         if any(row.claimed_instance_id == payload.instance_id for row in active):
             return None
-        # Keep private-challenge runs isolated. Source-only reports may use the
-        # other healthy workers, with the node row lock serializing this count.
+        # Keep private-challenge runs isolated. Preserve the legacy first lease
+        # without requiring a heartbeat; additional source-only leases require
+        # fresh worker heartbeats and the node lock serializes their count.
         if any(row.run_mode == "full_runtime" for row in active):
             return None
         if active:

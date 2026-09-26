@@ -531,6 +531,24 @@ async def test_source_only_claims_use_one_lease_per_fresh_worker_and_expire_clea
         next(
             row for row in leased if row.claimed_instance_id == f"{node_id}-worker-1"
         ).lease_expires_at = now - timedelta(seconds=1)
+        heartbeat = await session.scalar(
+            select(ScreenerHeartbeat).where(
+                ScreenerHeartbeat.screener_hotkey == hotkey,
+                ScreenerHeartbeat.instance_id == f"{node_id}-worker-1",
+            )
+        )
+        assert heartbeat is not None
+        heartbeat.seen_at = now - timedelta(minutes=6)
+    assert await claim(1) is None  # Expired lease does not admit a stale worker.
+    async with session_maker() as session, session.begin():
+        heartbeat = await session.scalar(
+            select(ScreenerHeartbeat).where(
+                ScreenerHeartbeat.screener_hotkey == hotkey,
+                ScreenerHeartbeat.instance_id == f"{node_id}-worker-1",
+            )
+        )
+        assert heartbeat is not None
+        heartbeat.seen_at = datetime.now(UTC)
     assert await claim(1) is not None
     async with session_maker() as session:
         statuses = list(
@@ -756,6 +774,58 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
     assert claim.scored_runtime_evidence == packet
     expected_lease = timedelta(minutes=150 if run_mode == "full_runtime" else 100)
     assert abs((claim.lease_expires_at - now - expected_lease).total_seconds()) < 30
+    # A fresh second worker must not claim the opposite run mode while one is
+    # leased. The source-only case also exercises the queued full-runtime gate.
+    other_canary_id = uuid4()
+    async with session_maker() as session, session.begin():
+        other_attempt_id = uuid4()
+        session.add(
+            ScreeningAttempt(
+                attempt_id=other_attempt_id,
+                agent_id=agent_id,
+                artifact_sha256=sha,
+                screener_hotkey=f"hotkey-{node_id}",
+                policy_version=13,
+                status="rejected",
+                started_at=now - timedelta(minutes=1),
+                deadline=now,
+                finished_at=now,
+            )
+        )
+        session.add(
+            ScreenerHeartbeat(
+                screener_hotkey=f"hotkey-{node_id}",
+                instance_id=f"{node_id}-worker-2",
+                software_version="0.319.0",
+                protocol_version=7,
+                policy_version=13,
+                state="polling",
+                reported_at=now,
+                seen_at=now,
+                signature="f" * 128,
+            )
+        )
+        await session.flush()
+        session.add(
+            ScreenerL2ReportCanary(
+                canary_id=other_canary_id,
+                request_id=uuid4(),
+                agent_id=agent_id,
+                source_attempt_id=other_attempt_id,
+                artifact_sha256=sha,
+                policy_version=13,
+                bench_version=13,
+                target_node_id=node_id,
+                expected_agent_status="rejected",
+                expected_score_count=0,
+                review_label="known_reject",
+                run_mode="full_runtime" if run_mode == "source_only" else "source_only",
+                status="queued",
+            )
+        )
+    monkeypatch.setattr(
+        endpoints, "_full_runtime_worker_ready", AsyncMock(return_value=True)
+    )
     async with session_maker() as session:
         view = await endpoints.get_l2_report_canary(claim.canary_id, None, session)
     assert view.lease_expires_at == claim.lease_expires_at
@@ -773,6 +843,12 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
             storage,
         )
     assert second is None
+    async with session_maker() as session, session.begin():
+        other = await session.get(ScreenerL2ReportCanary, other_canary_id)
+        assert other is not None
+        other.status = "incomplete"
+        other.error_code = "test-opposite-mode"
+        other.completed_at = datetime.now(UTC)
     report = {
         "kind": "l2_report_canary_v1",
         "authority": "none",
