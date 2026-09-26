@@ -584,8 +584,8 @@ is running.
 
 Heartbeat protocol 10 adds authoritative bounded capacity: configured and
 healthy slot ids, admission state, and privacy-safe progress for every active
-benchmark. Active heartbeats refresh every 30 seconds, with changed aggregate
-question counts eligible every 15 seconds. The stack advertises eight slots by
+benchmark. Active heartbeats refresh every 10 seconds, with changed aggregate
+question counts eligible every 5 seconds. The stack advertises eight slots by
 default — the protocol maximum — and the platform's operator cap decides how many
 receive tickets; draining or paused validators advertise no healthy slots and
 receive no new work.
