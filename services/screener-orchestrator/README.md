@@ -8,8 +8,9 @@ Nested-Docker Targon screener slots are retired: leftover
 `ditto-screener-*-slot-*` rentals are drained and deleted, never created.
 
 The Targon one-shot build, runtime, and source-review contracts below are
-retained for compatibility and operator rollback. The enrolled production
-workers no longer call those jobs; they build, probe, review, and sign locally.
+retained for historical compatibility. The enrolled production workers no
+longer call those jobs; they build, probe, review, and sign locally. Reusing
+Targon screening would require a separate reviewed worker and routing rollout.
 An old `['gcp', 'targon']` provider list is not a working hybrid: first-provider
 wins for the retained one-shot lanes.
 

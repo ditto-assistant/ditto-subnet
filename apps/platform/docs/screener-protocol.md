@@ -65,8 +65,9 @@ next version.
 ## Retained provider-routed screening jobs
 
 The normal Hetzner and GCE workers run the complete build, smoke, and review
-path locally. The following Targon one-shot contract remains for compatibility
-and controlled rollback; production workers no longer call it.
+path locally. The following Targon one-shot contract remains for historical
+compatibility; production workers no longer call it. Selecting a Targon provider
+list alone cannot restore screening on that path.
 
 Build, runtime smoke, and source review have independent revisioned provider
 lists. Targon is enabled for a lane only when that list starts with `targon`.

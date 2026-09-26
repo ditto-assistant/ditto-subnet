@@ -33,8 +33,9 @@ Hetzner lane is retried on GCE.
   a matching two local worker processes.
 - **GCE-only** (`['gcp']`): an audited emergency posture in which GCE workers
   run the whole build, smoke, and review pipeline locally.
-- **Targon-only** (`['targon']`): retained for rollback compatibility, not the
-  normal fleet posture.
+- **Targon-only** (`['targon']`): historical routing option. The current
+  worker cannot consume its one-shot results; do not select it for active
+  screening without a separate reviewed worker rollout.
 
 Within one submission, static execution-safety preflight runs first, followed
 by build, runtime smoke, general source review, and verdict. General review is
@@ -48,8 +49,8 @@ append-only control. New nodes default to zero capacity.
 
 ## Retired Targon one-shot notes
 
-The following describes the retained Targon implementation and its rollback
-contracts; it is not the normal Hetzner-primary posture.
+The following describes the retained Targon implementation and historical
+contracts. The current worker cannot consume these one-shot results.
 
 Screening on Targon is Kaniko compile, direct-image `/health` smoke of that
 exact archive, and L1 then L2/L3 review of the extracted source tarball in one
