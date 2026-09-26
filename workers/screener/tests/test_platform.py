@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,11 +22,8 @@ from ditto_screener.enrollment import (
 from ditto_screener.errors import PlatformError
 from ditto_screener.heartbeat import ScreenerHeartbeatRequest
 from ditto_screener.platform import (
-    _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS,
     _TRANSIENT_PLATFORM_RETRY_DELAYS,
     PlatformClient,
-    RemoteSubmissionBuildRejected,
-    _remote_source_review_poll_deadline,
 )
 from ditto_screener.review_settings import bootstrap_review_settings
 from ditto_screening_protocol import SCREENING_POLICY_VERSION, ScreenResultOutcome
@@ -35,12 +31,6 @@ from ditto_screening_protocol import SCREENING_POLICY_VERSION, ScreenResultOutco
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _TOKEN = "test-screener-token-at-least-32-characters"
-
-
-def test_remote_source_review_poll_reserves_terminal_commit_grace() -> None:
-    assert _remote_source_review_poll_deadline(now=10.0, timeout=1_800.0) == (
-        10.0 + 1_800.0 + _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS
-    )
 
 
 def _assert_auth(request: httpx.Request) -> None:
@@ -391,179 +381,6 @@ async def test_get_artifact_parses_url(
     assert str(art.download_url).startswith("https://storage.test/")
 
 
-async def test_targon_build_download_is_fully_hashed_before_import(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    attempt_id = uuid4()
-    build_id = uuid4()
-    image = b"verified docker archive"
-    digest = hashlib.sha256(image).hexdigest()
-    status = {
-        "build_id": str(build_id),
-        "attempt_id": str(attempt_id),
-        "status": "succeeded",
-        "provider": "targon",
-        "artifact_sha256": "de" * 32,
-        "image_ref": f"ditto-screen/{_AGENT}-{attempt_id}:latest",
-        "output_sha256": digest,
-        "output_size_bytes": len(image),
-        "download_url": "https://storage.test/image.tar",
-        "error_code": None,
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "storage.test":
-            return httpx.Response(200, content=image)
-        if request.method == "POST":
-            assert request.url.path.endswith("/submission-image-builds")
-            return httpx.Response(200, json=status)
-        raise AssertionError(f"unexpected request: {request.method} {request.url}")
-
-    client, http = _make_client(make_config(), handler)
-    async with http:
-        archive = await client.build_submission_image(
-            _AGENT, attempt_id=attempt_id, timeout=1
-        )
-    assert archive is not None
-    try:
-        assert archive.build_id == build_id
-        assert Path(archive.path).read_bytes() == image
-        assert archive.sha256 == digest
-    finally:
-        os.unlink(archive.path)
-
-
-async def test_targon_build_digest_mismatch_discards_and_falls_back(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    attempt_id = uuid4()
-    build_id = uuid4()
-    deletes: list[str] = []
-    status = {
-        "build_id": str(build_id),
-        "attempt_id": str(attempt_id),
-        "status": "succeeded",
-        "provider": "targon",
-        "artifact_sha256": "de" * 32,
-        "image_ref": f"ditto-screen/{_AGENT}-{attempt_id}:latest",
-        "output_sha256": "ab" * 32,
-        "output_size_bytes": 6,
-        "download_url": "https://storage.test/image.tar",
-        "error_code": None,
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "storage.test":
-            return httpx.Response(200, content=b"tamper")
-        if request.method == "POST":
-            return httpx.Response(200, json=status)
-        if request.method == "DELETE":
-            deletes.append(request.url.path)
-            return httpx.Response(204)
-        raise AssertionError(f"unexpected request: {request.method} {request.url}")
-
-    client, http = _make_client(make_config(), handler)
-    async with http:
-        archive = await client.build_submission_image(
-            _AGENT, attempt_id=attempt_id, timeout=1
-        )
-    assert archive is None
-    assert deletes == [
-        f"/api/v1/screener/agent/{_AGENT}/submission-image-builds/{build_id}"
-    ]
-
-
-async def test_remote_kaniko_failure_is_a_deterministic_build_rejection(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    attempt_id = uuid4()
-    build_id = uuid4()
-    status = {
-        "build_id": str(build_id),
-        "attempt_id": str(attempt_id),
-        "status": "fallback_required",
-        "provider": "hetzner",
-        "artifact_sha256": "de" * 32,
-        "image_ref": f"ditto-screen/{_AGENT}-{attempt_id}:latest",
-        "error_code": "FLEET_SUBMISSION_KANIKO_FAILED",
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "POST"
-        return httpx.Response(200, json=status)
-
-    client, http = _make_client(make_config(), handler)
-    async with http:
-        with pytest.raises(
-            RemoteSubmissionBuildRejected,
-            match="FLEET_SUBMISSION_KANIKO_FAILED",
-        ):
-            await client.build_submission_image(
-                _AGENT, attempt_id=attempt_id, timeout=1
-            )
-
-
-@pytest.mark.parametrize(
-    ("observation", "accepted"),
-    [
-        (
-            {
-                "ok": True,
-                "risk_level": "low",
-                "categories": [],
-                "clearance_certified": True,
-            },
-            True,
-        ),
-        (
-            {
-                "ok": True,
-                "risk_level": "medium",
-                "categories": ["suspicious"],
-                "clearance_certified": False,
-            },
-            True,
-        ),
-    ],
-)
-async def test_targon_source_review_returns_succeeded_observation(
-    make_config: Callable[..., ScreenerConfig],
-    observation: dict[str, object],
-    accepted: bool,
-) -> None:
-    attempt_id = uuid4()
-    review_id = uuid4()
-    deleted = False
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal deleted
-        if request.method == "POST":
-            return httpx.Response(
-                200,
-                json={
-                    "review_id": str(review_id),
-                    "attempt_id": str(attempt_id),
-                    "status": "succeeded",
-                    "provider": "targon",
-                    "artifact_sha256": "de" * 32,
-                    "observation": observation,
-                    "error_code": None,
-                },
-            )
-        if request.method == "DELETE":
-            deleted = True
-            return httpx.Response(204)
-        raise AssertionError(f"unexpected request: {request.method} {request.url}")
-
-    client, http = _make_client(make_config(), handler)
-    async with http:
-        result = await client.review_submission_source(
-            _AGENT, attempt_id=attempt_id, timeout=1
-        )
-    assert (result is not None) is accepted
-    assert deleted
-
-
 async def test_submit_result_posts_signed_verdict(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -604,67 +421,6 @@ async def test_submit_result_posts_signed_verdict(
     assert captured["detail"] == "ok"
     assert captured["policy_version"] == SCREENING_POLICY_VERSION
     assert captured["attempt_id"] == "550e8400-e29b-41d4-a716-446655440001"
-
-
-async def test_source_review_retries_transient_platform_failure(
-    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    attempt_id = uuid4()
-    review_id = uuid4()
-    polls = 0
-
-    async def no_sleep(_delay: float) -> None:
-        return None
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal polls
-        if request.method == "POST":
-            return httpx.Response(
-                200,
-                json={
-                    "review_id": str(review_id),
-                    "attempt_id": str(attempt_id),
-                    "status": "running",
-                    "provider": "hetzner",
-                    "artifact_sha256": "de" * 32,
-                    "observation": None,
-                    "error_code": None,
-                },
-            )
-        if request.method == "GET":
-            polls += 1
-            if polls == 1:
-                return httpx.Response(502, text="rolling platform deploy")
-            return httpx.Response(
-                200,
-                json={
-                    "review_id": str(review_id),
-                    "attempt_id": str(attempt_id),
-                    "status": "succeeded",
-                    "provider": "hetzner",
-                    "artifact_sha256": "de" * 32,
-                    "observation": {
-                        "ok": True,
-                        "risk_level": "low",
-                        "categories": [],
-                        "clearance_certified": True,
-                    },
-                    "error_code": None,
-                },
-            )
-        if request.method == "DELETE":
-            return httpx.Response(204)
-        raise AssertionError(f"unexpected request: {request.method} {request.url}")
-
-    monkeypatch.setattr(asyncio, "sleep", no_sleep)
-    client, http = _make_client(make_config(), handler)
-    async with http:
-        result = await client.review_submission_source(
-            _AGENT, attempt_id=attempt_id, timeout=1
-        )
-    assert result is not None
-    assert result.clearance_certified is True
-    assert polls == 2
 
 
 async def test_submit_result_retries_transient_server_failure(

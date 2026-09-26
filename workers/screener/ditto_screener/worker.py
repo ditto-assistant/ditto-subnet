@@ -20,7 +20,7 @@ import os
 import re
 import socket
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -44,7 +44,6 @@ from ditto_screener.heartbeat import (
 from ditto_screener.policy import (
     PolicyEvidence,
     ScreeningOutcome,
-    SourceReviewObservation,
     builtin_policy_manifest,
     core_decision,
 )
@@ -838,71 +837,6 @@ class ScreenerWorker:
                         agent_id, attempt_id=attempt_id
                     )
 
-                    async def remote_build():  # type: ignore[no-untyped-def]
-                        if self._config.remote_build_mode == "off":
-                            return None
-                        # The remote and local caps are separate on purpose.
-                        # A normal 70-minute lease budgets 25 minutes for
-                        # Targon, then up to 45 minutes for local Docker. Do not
-                        # derive this from the local cap: older hosts may carry
-                        # a stale local override, which previously collapsed
-                        # Targon to a one-minute attempt.
-                        return await self._platform.build_submission_image(
-                            agent_id,
-                            attempt_id=attempt_id,
-                            timeout=self._config.remote_build_timeout_seconds,
-                        )
-
-                    async def remote_build_consumed(build_id: UUID) -> None:
-                        await self._platform.discard_submission_image_build(
-                            agent_id,
-                            attempt_id=attempt_id,
-                            build_id=build_id,
-                        )
-
-                    # A local build has no provider-owned image-build record.
-                    # Its review must therefore stay in this gate: the fleet
-                    # source-review claim correctly requires a completed
-                    # provider build and runtime smoke, and queueing one here
-                    # would wait on a prerequisite that local mode can never
-                    # produce.
-                    remote_source_review: (
-                        Callable[[], Awaitable[SourceReviewObservation | None]] | None
-                    ) = None
-                    if self._config.remote_build_mode != "off":
-
-                        async def review_with_remote_provider() -> (
-                            SourceReviewObservation | None
-                        ):
-                            payload = await self._platform.review_submission_source(
-                                agent_id,
-                                attempt_id=attempt_id,
-                                timeout=self._config.source_review_timeout_seconds,
-                            )
-                            if payload is None:
-                                return None
-                            return SourceReviewObservation(
-                                ok=payload.ok,
-                                risk_level=payload.risk_level,
-                                finding_digest=payload.finding_digest,
-                                categories=tuple(payload.categories),
-                                error_code=payload.error_code,
-                                finding=(
-                                    payload.finding.model_dump(mode="json")
-                                    if payload.finding is not None
-                                    else None
-                                ),
-                                failure_disposition=payload.failure_disposition,
-                                clearance_certified=payload.clearance_certified,
-                                review_audit=(
-                                    payload.review_audit.model_dump(mode="json")
-                                    if payload.review_audit is not None
-                                    else None
-                                ),
-                            )
-
-                        remote_source_review = review_with_remote_provider
-
                     result = await self._gate.screen(
                         agent_id=agent_id,
                         attempt_id=attempt_id,
@@ -916,9 +850,6 @@ class ScreenerWorker:
                         publish_held_image=publish_held_image,
                         record_archive_verification=record_archive_verification,
                         record_runtime_verification=record_runtime_verification,
-                        remote_build=remote_build,
-                        remote_build_consumed=remote_build_consumed,
-                        remote_source_review=remote_source_review,
                         # A build-only item requests the mechanical lane. That
                         # lane is used both for an already-adjudicated rebuild
                         # and for score-first admission when the complete source

@@ -1,6 +1,6 @@
 ---
 name: ditto-subnet-release-ops
-description: Design, implement, audit, or operate ditto-subnet semantic releases, affected-component CI, container builds, automatic application deployments, validator rollouts, screener autoscaling and trusted builds, Targon-first capacity with GCE fallback, GCP IAM/WIF, Cloudflare Workers, Terraform, Ansible, and rollback. Use for release or live-runtime work where exact SHA, credentials, provider safety, or activation boundaries matter.
+description: Design, implement, audit, or operate ditto-subnet semantic releases, affected-component CI, container builds, automatic application deployments, validator rollouts, screener autoscaling and trusted builds, Hetzner primary capacity with GCE overflow, GCP IAM/WIF, Cloudflare Workers, Terraform, Ansible, and rollback. Use for release or live-runtime work where exact SHA, credentials, provider safety, or activation boundaries matter.
 ---
 
 # Ditto Subnet Release Ops
@@ -55,4 +55,4 @@ Terraform. Protected apply must not replace the VMs.
 
 ## Capacity invariants
 
-Targon is primary. GCE normally targets zero and is a bounded residual/failure fallback. The controller must be fenced and count pending workers; an independently fenced GCP watchdog may add fallback capacity only when backlog exists and the primary heartbeat is stale. Fail closed when provider isolation cannot be proven.
+The enrolled Hetzner worker is primary. GCE normally targets zero and supplies bounded backlog or outage capacity. The controller must be fenced and count pending workers; an independently fenced GCP watchdog may add fallback capacity only when backlog exists and the primary heartbeat is stale. Fail closed when provider isolation cannot be proven.

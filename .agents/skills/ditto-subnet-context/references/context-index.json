@@ -226,13 +226,13 @@
       "id": "screener-capacity",
       "title": "Screener queue, autoscaling, Targon, GCE, and trusted builds",
       "keywords": ["screener", "screening", "capacity", "autoscale", "targon", "gce", "trusted builder", "kaniko build", "rental", "scale zero", "cloud run", "cloudrun", "CLOUDRUN_PROVISION_ERROR", "source review job"],
-      "summary": "Platform queues work; the fenced controller reconciles Targon-first capacity with bounded GCE fallback and a separate trusted builder.",
+      "summary": "Platform queues work; the fenced controller keeps enrolled Hetzner workers primary and adds bounded GCE overflow capacity.",
       "skills": ["ditto-subnet-release-ops", "gcloud-ditto-readonly"],
       "owns": ["services/screener-orchestrator", "apps/platform/ditto/api_server/endpoints/admin_screener_capacity.py", "infra/terraform/stacks/gcp-platform"],
       "read": ["infra/docs/screener-scaling.md", "apps/platform/docs/screener-protocol.md", "docs/UNTRUSTED-EXECUTION-RUNBOOK.md"],
       "search": ["rg -n 'Targon|GCE|fence|epoch|heartbeat|scale' services/screener-orchestrator", "rg -n 'screener|builder' .github/workflows infra/terraform/stacks/gcp-platform"],
       "validate": ["uv run --project services/screener-orchestrator pytest services/screener-orchestrator/tests -q", "terraform -chdir=infra/terraform/stacks/gcp-platform validate"],
-      "invariants": ["Targon is primary and GCE normally targets zero; fallback remains bounded and independently fenced.", "Untrusted builds never receive cloud, GitHub, Platform, or provider credentials."],
+      "invariants": ["Enrolled Hetzner workers are primary; GCE normally targets zero and adds bounded backlog or outage capacity.", "Untrusted builds never receive cloud, GitHub, Platform, or provider credentials."],
       "related": ["screener-worker", "platform-api", "release-delivery", "infra-cloud", "prod-readonly"]
     },
     {
