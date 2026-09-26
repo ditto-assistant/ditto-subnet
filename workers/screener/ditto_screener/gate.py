@@ -1084,6 +1084,7 @@ class BuildGate:
             max_input_tokens=config.l2_max_input_tokens,
             max_output_tokens=config.l2_max_output_tokens,
             max_completion_tokens=config.l2_max_completion_tokens,
+            max_completion_request_seconds=config.l2_max_completion_request_seconds,
             max_cost_usd=config.l2_max_cost_usd,
             analyst_reasoning_effort=config.l2_analyst_reasoning_effort,
             critic_reasoning_effort=config.l2_critic_reasoning_effort,

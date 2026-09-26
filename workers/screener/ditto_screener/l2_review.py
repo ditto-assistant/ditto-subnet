@@ -73,14 +73,35 @@ L2_MODEL = "openai/gpt-5.6-terra"
 L2_FALLBACK_MODELS = ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
 L3_MODEL = "openai/gpt-5.6-sol"
 L3_PROVIDER = "openrouter"
-# A reviewer has several dependent model turns and the final court needs a
-# meaningful slice of the lease. Do not allow one stalled upstream turn to
-# consume the entire L2/L3 window before the terminal adjudicator can run.
-# Each L2/L3 turn is bounded by the selected completion budget (2.4k in the
-# production profile), so 45 seconds allows a healthy high-throughput provider
-# to finish while reserving room for one fresh connection after an outage.
-_MAX_COMPLETION_REQUEST_SECONDS = 45.0
+# HTTPX's read timeout is an inactivity timeout, so every L2/L3 model turn
+# also carries a wall-clock cap (tried at most twice). The cap must cover a
+# turn that legitimately spends the whole selected completion budget: the live
+# profile allows 16k completion tokens (Platform review setting
+# ``max_completion_tokens``), which a flat 45s cap sized for the old 2.4k
+# budget cut short as l2-/l3-critic-timeouterror holds. Size the default from
+# a conservative sustained decode rate instead, so it follows the Platform
+# setting without a second knob: 2.4k -> 45s (the old floor), 16k -> ~267s,
+# clamped to the same 30-600s range an explicit override may use.
+# ``SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS`` overrides it per node. The
+# court reserve does not depend on this cap: LayeredSourceReviewAgent already
+# partitions the lease deadline, and every turn is also clamped to it.
+_COMPLETION_REQUEST_FLOOR_SECONDS = 45.0
+_COMPLETION_REQUEST_CEILING_SECONDS = 600.0
+_COMPLETION_REQUEST_MIN_TOKENS_PER_SECOND = 60.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
+
+
+def default_completion_request_seconds(max_completion_tokens: int) -> float:
+    """Wall-clock cap for one L2/L3 turn that can spend its whole budget."""
+    return max(
+        _COMPLETION_REQUEST_FLOOR_SECONDS,
+        min(
+            _COMPLETION_REQUEST_CEILING_SECONDS,
+            max_completion_tokens / _COMPLETION_REQUEST_MIN_TOKENS_PER_SECOND,
+        ),
+    )
+
+
 # Every policy version whose L2/L3 policy text this build carries. The
 # platform may require any one of them during a scheduled activation window.
 _SUPPORTED_POLICY_VERSIONS = tuple(
@@ -2589,7 +2610,11 @@ class TerraSolSourceReviewAgent:
             30 <= max_completion_request_seconds <= 600
         ):
             raise ValueError("L2 completion request timeout must be 30-600 seconds")
-        self._max_completion_request_seconds = max_completion_request_seconds
+        self._max_completion_request_seconds = (
+            default_completion_request_seconds(max_completion_tokens)
+            if max_completion_request_seconds is None
+            else float(max_completion_request_seconds)
+        )
         self._independent_analyst = independent_analyst
         if terminal_verdict_required and l3_enabled:
             raise ValueError("terminal-only comparator cannot enable L3")
@@ -3519,7 +3544,9 @@ class TerraSolSourceReviewAgent:
                     analyst_cache_hit=analyst_cache_hit,
                 )
             if (
-                _qualifies_for_direct_clear(l1_observation, analyst)
+                _qualifies_for_direct_clear(
+                    l1_observation, analyst, expected_model=self._model
+                )
                 and not _dossier_has_scorer_attention(dossier)
                 and not integrity_attention
             ):
@@ -4764,7 +4791,7 @@ class TerraSolSourceReviewAgent:
         for attempt in range(_MAX_COMPLETION_REQUEST_ATTEMPTS):
             timeout = min(
                 self._turn_timeout(deadline),
-                self._max_completion_request_seconds or _MAX_COMPLETION_REQUEST_SECONDS,
+                self._max_completion_request_seconds,
             )
             try:
                 async with asyncio.timeout(timeout):
@@ -5793,9 +5820,16 @@ def _l2_only_clearance_gaps(
 
 
 def _qualifies_for_direct_clear(
-    l1_observation: SourceReviewObservation, analyst: L2RunResult
+    l1_observation: SourceReviewObservation,
+    analyst: L2RunResult,
+    *,
+    expected_model: str,
 ) -> bool:
-    """Accept only a complete primary-Terra certificate for medium-risk leads."""
+    """Accept only a complete primary-model certificate for medium-risk leads.
+
+    ``expected_model`` is the configured primary analyst model. Fallback-model
+    responses (e.g. the GLM chain) never direct-clear.
+    """
     finding = analyst.observation.finding
     if (
         l1_observation.risk_level != "medium"
@@ -5808,7 +5842,7 @@ def _qualifies_for_direct_clear(
         or not analyst.tools
         or not analyst.response_models
         or any(
-            model != L2_MODEL and not model.startswith(f"{L2_MODEL}-")
+            model != expected_model and not model.startswith(f"{expected_model}-")
             for model in analyst.response_models
         )
         or not isinstance(finding, Mapping)

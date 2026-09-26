@@ -230,6 +230,8 @@ class ScreenerConfig:
     signed_runtime_lease_max_age_seconds: int = 300
     adjudicator_max_completion_tokens: int | None = None
     """L4-only output cap; None inherits the existing L2 completion cap."""
+    l2_max_completion_request_seconds: float | None = None
+    """Per-turn L2/L3 wall-clock cap; None derives it from the completion budget."""
     remote_build_mode: str = "off"
     """How the gate uses a prebuilt image archive.
 
@@ -285,6 +287,11 @@ def _parse_int(name: str, default: str) -> int:
 def _parse_optional_int(name: str) -> int | None:
     raw = os.environ.get(name)
     return None if raw is None or not raw.strip() else _parse_int(name, raw)
+
+
+def _parse_optional_float(name: str) -> float | None:
+    raw = os.environ.get(name)
+    return None if raw is None or not raw.strip() else _parse_float(name, raw)
 
 
 def _parse_bool(name: str, default: bool) -> bool:
@@ -505,6 +512,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         adjudicator_max_completion_tokens=_parse_optional_int(
             "SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS"
         ),
+        l2_max_completion_request_seconds=_parse_optional_float(
+            "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS"
+        ),
         remote_build_mode=os.environ.get("SCREENER_REMOTE_BUILD_MODE", "off"),
         remote_build_timeout_seconds=_parse_float(
             "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS", "1500"
@@ -656,6 +666,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if not 1 <= config.l2_max_completion_tokens <= config.l2_max_output_tokens:
         raise ScreenerConfigError(
             "SCREENER_L2_MAX_COMPLETION_TOKENS must be within the output budget"
+        )
+    if config.l2_max_completion_request_seconds is not None and not (
+        30 <= config.l2_max_completion_request_seconds <= 600
+    ):
+        raise ScreenerConfigError(
+            "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS must be between 30 and 600"
         )
     if not 1 <= config.l2_max_input_tokens <= 5_000_000:
         raise ScreenerConfigError(

@@ -152,6 +152,11 @@ def _parse_bool(name: str, default: str) -> bool:
     raise ValueError(f"invalid boolean {name}")
 
 
+def _parse_optional_float(name: str) -> float | None:
+    raw = os.environ.get(name, "").strip()
+    return float(raw) if raw else None
+
+
 def _parse_csv(name: str, default: str) -> tuple[str, ...]:
     raw = os.environ.get(name, default)
     return tuple(part.strip() for part in raw.split(",") if part.strip())
@@ -216,6 +221,9 @@ def _build_reviewer(
         ),
         max_completion_tokens=int(
             os.environ.get("SCREENER_L2_MAX_COMPLETION_TOKENS", "16000")
+        ),
+        max_completion_request_seconds=_parse_optional_float(
+            "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS"
         ),
         max_cost_usd=float(os.environ.get("SCREENER_L2_MAX_COST_USD", "25.00")),
         analyst_reasoning_effort=os.environ.get(

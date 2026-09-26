@@ -3356,3 +3356,23 @@ async def test_the_locked_persistence_paths_reach_the_smoke_container(
     )
     assert "DITTOBENCH_MEMORY_PATH=/tmp/dittobench-memory.json" in run_call
     assert "DITTOBENCH_DB=/tmp/dittobench.db" in run_call
+
+
+def test_gate_threads_l2_turn_timeout_to_the_reviewer(make_config) -> None:  # type: ignore[no-untyped-def]
+    derived = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    # conftest keeps the 2.4k profile, so the derived cap stays at its floor.
+    assert derived._source_reviewer._l2._max_completion_request_seconds == 45.0
+    derived = _gate_with(
+        make_config(l2_max_completion_tokens=16_000, l2_max_output_tokens=1_000_000),
+        _ok_run(),
+        tarball=_valid_tar(),
+    )
+    assert derived._source_reviewer._l2._max_completion_request_seconds == (
+        pytest.approx(16_000 / 60)
+    )
+    explicit = _gate_with(
+        make_config(l2_max_completion_request_seconds=300.0),
+        _ok_run(),
+        tarball=_valid_tar(),
+    )
+    assert explicit._source_reviewer._l2._max_completion_request_seconds == 300.0

@@ -29,6 +29,7 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SCREENER_IMAGE_BUILD_MEMORY",
         "SCREENER_V13_RUNTIME_RECEIPTS_MODE",
         "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE",
+        "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS",
         "NETUID",
     ):
         monkeypatch.delenv(k, raising=False)
@@ -73,6 +74,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.l2_max_input_tokens == 5_000_000
     assert cfg.l2_max_output_tokens == 1_000_000
     assert cfg.l2_max_completion_tokens == 16_000
+    assert cfg.l2_max_completion_request_seconds is None
     assert cfg.l2_max_cost_usd == 25.0
     assert cfg.l2_analyst_reasoning_effort == "model_default"
     assert cfg.l2_critic_reasoning_effort == "medium"
@@ -360,6 +362,9 @@ def test_platform_review_budget_limits_are_accepted(monkeypatch):
         ("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000001"),
         ("SCREENER_L2_MAX_COST_USD", "25.01"),
         ("SCREENER_L2_TIMEOUT_SECONDS", "1801"),
+        ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "29"),
+        ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "601"),
+        ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "soon"),
     ],
 )
 def test_review_budgets_remain_bounded(monkeypatch, name, value):
@@ -367,3 +372,9 @@ def test_review_budgets_remain_bounded(monkeypatch, name, value):
     monkeypatch.setenv(name, value)
     with pytest.raises(ScreenerConfigError):
         parse_screener_config_from_env()
+
+
+def test_l2_turn_timeout_override_is_parsed(monkeypatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "240")
+    assert parse_screener_config_from_env().l2_max_completion_request_seconds == 240
