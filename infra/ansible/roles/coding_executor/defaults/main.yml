@@ -130,3 +130,11 @@ coding_executor_artifact_canary_root: /var/lib/ditto-coding-executor/artifact-ca
 coding_executor_artifact_canary_temporary_directory: /var/lib/ditto-coding-executor/artifact-canary/tmp
 coding_executor_artifact_canary_receipt_path: /var/lib/ditto-coding-executor/artifact-canary/receipt.json
 coding_executor_artifact_canary_capability_path: /var/lib/ditto-coding-executor/credentials/artifact-capability.json
+
+# Docker's apt signing key (https://download.docker.com/linux/debian/gpg),
+# pinned so a tampered or substituted key file fails closed instead of becoming
+# an apt trust root. Fingerprint 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88
+# ("Docker Release (CE deb)"). To rotate, verify the new key's fingerprint out of
+# band, then update every copy; infra/ansible/tests/test_docker_apt_key_pin.py
+# keeps them identical.
+docker_apt_key_sha256: "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"

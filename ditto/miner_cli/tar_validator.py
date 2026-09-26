@@ -20,7 +20,7 @@ import gzip
 import hashlib
 import logging
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from ditto.miner_cli.errors import TarStructureError
 from ditto.miner_cli.models import PreflightCheckResult, PreflightResult
@@ -28,13 +28,23 @@ from ditto.miner_cli.models import PreflightCheckResult, PreflightResult
 logger = logging.getLogger(__name__)
 
 
-# Must match the platform's upload cap (ditto-platform
-# ditto/api_server/endpoints/upload.py:DEFAULT_MAX_TARBALL_SIZE_BYTES,
+# Must match the platform's upload cap
+# (apps/platform/ditto/api_server/endpoints/upload.py:DEFAULT_MAX_TARBALL_SIZE_BYTES,
 # env-overridable there via DITTO_MAX_TARBALL_SIZE_BYTES). Duplicated here so
 # the CLI can reject oversize tars before bothering the API; if either side
 # changes, both must change. A larger local value makes `ditto verify` pass a
 # tarball the server then rejects at /upload/check.
 MAX_TARBALL_SIZE_BYTES = 20 * 1024 * 1024
+
+# Must match the screener's archive contract (workers/screener/ditto_screener/
+# gate.py: _MAX_ARCHIVE_MEMBERS, _MAX_UNPACKED_BYTES, _contract_error). The
+# screener rejects a violating archive only after the upload fee is paid, so
+# checking the same rules here lets `ditto verify` and the upload preflight
+# fail first. Never make these stricter than the screener: a stricter local
+# rule would block archives the screener accepts.
+# ditto/tests/miner_cli/test_archive_contract_pins.py keeps the limits aligned.
+MAX_ARCHIVE_MEMBERS = 20_000
+MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 
 
 def run_preflight(tar_path: Path) -> PreflightResult:
@@ -61,7 +71,10 @@ def run_preflight(tar_path: Path) -> PreflightResult:
     size = tar_path.stat().st_size
     checks.append(_check_file_size(size))
     checks.append(_check_gzip_valid(tar_path))
-    checks.append(_check_tar_opens(tar_path))
+    tar_opens = _check_tar_opens(tar_path)
+    checks.append(tar_opens)
+    if tar_opens.passed:
+        checks.append(_check_archive_contract(tar_path))
 
     # Deferred checks (logged, not gating, pending external artifacts)
     checks.extend(_deferred_checks())
@@ -125,6 +138,105 @@ def _check_tar_opens(tar_path: Path) -> PreflightCheckResult:
         name="tar_opens",
         passed=True,
         detail=f"{len(names)} entries",
+    )
+
+
+def _contract_failure(code: str, problem: str, fix: str) -> PreflightCheckResult:
+    return PreflightCheckResult(
+        name="archive_contract",
+        passed=False,
+        detail=f"{code}: {problem}; {fix}",
+    )
+
+
+def _check_archive_contract(tar_path: Path) -> PreflightCheckResult:
+    """Apply the screener's archive and root-Dockerfile contract locally."""
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            members: dict[str, tarfile.TarInfo] = {}
+            unpacked = 0
+            for member_count, member in enumerate(tar, start=1):
+                if member_count > MAX_ARCHIVE_MEMBERS:
+                    return _contract_failure(
+                        "SCR-ARCHIVE-005",
+                        "archive contains too many members",
+                        "remove generated directories and package only the harness",
+                    )
+                name = member.name.removeprefix("./")
+                if not name and member.isdir():
+                    continue
+                path = PurePosixPath(name)
+                if (
+                    not name
+                    or name.startswith("/")
+                    or "\\" in name
+                    or (path.parts and path.parts[0].endswith(":"))
+                    or ".." in path.parts
+                ):
+                    return _contract_failure(
+                        "SCR-ARCHIVE-001",
+                        f"archive contains an unsafe path ({member.name!r})",
+                        "remove absolute paths, parent traversals, backslashes, "
+                        "and drive-prefixed entries",
+                    )
+                if str(path) != name:
+                    return _contract_failure(
+                        "SCR-ARCHIVE-001",
+                        f"archive contains a non-canonical path ({member.name!r})",
+                        "remove redundant path separators and dot components",
+                    )
+                if name in members:
+                    return _contract_failure(
+                        "SCR-ARCHIVE-002",
+                        f"archive contains a duplicate path ({name!r})",
+                        "package each path exactly once",
+                    )
+                if not (member.isfile() or member.isdir()):
+                    return _contract_failure(
+                        "SCR-ARCHIVE-003",
+                        f"archive contains a link or special file ({name!r})",
+                        "package only regular files and directories",
+                    )
+                unpacked += member.size
+                if unpacked > MAX_UNPACKED_BYTES:
+                    return _contract_failure(
+                        "SCR-ARCHIVE-004",
+                        "archive expands beyond the safety limit",
+                        "remove generated assets and build output before packaging",
+                    )
+                members[name] = member
+            dockerfile = members.get("Dockerfile")
+            if dockerfile is None or not dockerfile.isfile():
+                return _contract_failure(
+                    "SCR-CONTRACT-001",
+                    "Dockerfile is missing from the archive root",
+                    "package the harness contents so Dockerfile is at the top level",
+                )
+            handle = tar.extractfile(dockerfile)
+            if handle is None:
+                return _contract_failure(
+                    "SCR-CONTRACT-002",
+                    "Dockerfile could not be read",
+                    "recreate the archive from readable regular files",
+                )
+            try:
+                handle.read().decode("utf-8")
+            except UnicodeDecodeError:
+                return _contract_failure(
+                    "SCR-CONTRACT-003",
+                    "Dockerfile is not valid UTF-8 text",
+                    "commit a readable UTF-8 Dockerfile that builds the harness",
+                )
+    except (tarfile.TarError, OSError):
+        return _contract_failure(
+            "SCR-ARCHIVE-006",
+            "archive is not a readable gzip-compressed tar",
+            "recreate it as a .tar.gz archive and retry",
+        )
+    return PreflightCheckResult(
+        name="archive_contract",
+        passed=True,
+        detail=f"{len(members)} paths; root Dockerfile present",
     )
 
 

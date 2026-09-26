@@ -18,10 +18,18 @@ build/
 htmlcov/
 **/.tmp/pprof/
 
-# Env files
+# Env files. Every variant is ignored; the tracked templates are re-included.
 .env
+.env.*
+!.env.example
+.envrc
 .validator-update/
-.env.local
+
+# Private keys and certificate bundles (never commit)
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Local docker-compose overrides for dev / smoke testing. Tracked
 # baseline is docker-compose.yml; this pattern is for per-developer

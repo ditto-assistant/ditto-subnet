@@ -153,9 +153,10 @@ services:
       DITTOBENCH_SANDBOX_SECCOMP_PROFILE: ${DITTOBENCH_SANDBOX_SECCOMP_PROFILE:-}
       DITTOBENCH_SANDBOX_APPARMOR_PROFILE: ${DITTOBENCH_SANDBOX_APPARMOR_PROFILE:-}
       # Scorer-side run capacity. Rides the same variable as the validator's
-      # advertised slot count so the two can never disagree: the worker fails
-      # closed (claims nothing at all) when the scorer advertises fewer full-run
-      # slots than the worker has configured. The compose default is the
+      # advertised slot count so the two agree once the stack is recreated
+      # together. If the scorer advertises fewer full-run slots than the worker
+      # has configured (a targeted update refreshed only one of them), the worker
+      # claims on the scorer's count and logs a warning. The compose default is the
       # production value; the platform's operator cap decides how many of these
       # slots actually receive tickets.
       DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
@@ -330,7 +331,8 @@ services:
       VALIDATOR_EPOCH_SECONDS: "3600"
       VALIDATOR_QUEUE_LIMIT: "50"
       # Heartbeat v10+ advertises every active slot. The scorer independently
-      # publishes the same bound and the worker fails closed on mismatch.
+      # publishes the same bound, and on a mismatch the worker claims on the
+      # smaller of the two.
       #
       # This is the CAPABILITY the host offers, not the concurrency it will run.
       # How many of these slots actually receive tickets is decided by the

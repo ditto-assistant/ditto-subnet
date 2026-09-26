@@ -21,6 +21,20 @@ check that each managed validator lands at boundary `+3` rather than at the
 boundary itself. A null implied block means the commit block's timestamp state
 was unreadable on the node, not a healthy result.
 
+`get_outlier_escalation` reads the anomalous-score escalation that can open ATH
+holds (`review_kind` `anomalous_score`) through
+`GET /api/v1/admin/outlier-escalation`. The escalation is configured only by
+`DITTO_OUTLIER_ESCALATION_*` variables that each Platform process reads once at
+startup, so this is where to check the effective mode (`off`, `observe` or
+`enforce`) and thresholds. `sources` marks each value `env`, `default`, or
+`default_invalid_env`: the variable was set, rejected, and replaced by the
+shipped default. The rejected text is never returned. Activity comes from the
+append-only score audit chain. It gives exact observe and enforce counts over
+all time and over the last 168 hours, the 20 newest entries (`recent_truncated`
+flags older ones), and the count of pending outlier ATH reviews. The tool is
+read-only. It is not `/admin/score-outliers`, which covers validator
+disagreement inside one quorum.
+
 `https://backroom.dittobench.ai/mcp` is an OAuth-protected Streamable HTTP MCP
 server exposing the same operations as the console: screening quarantines and
 disputes, validator queue/slot/inference policy, benchmark rollouts, scoring
@@ -119,6 +133,11 @@ operator selected on consent, and the account's live level. Consent can narrow
 a request but never widen it: a `scope=backroom:read` request yields a
 read-only grant whatever is selected, and a client that needs more must
 reconnect and request the broader scope (the step-up challenge above names it).
+The unauthenticated `/mcp` 401 challenge advertises all three scopes, because
+MCP clients request exactly the challenged scope: a first connection asks for
+everything, and the operator narrows it on consent. The consent screen always
+shows all four levels and disables any this request or account cannot receive,
+with the reason.
 Approving a client replaces every earlier grant that client id held, and a
 token request can only downscope within its grant. `get_backroom_access`
 reports the connection's exact `grant` id and client id, the token's
@@ -128,13 +147,15 @@ under them) on the Agent access page, backed by `GET /oauth/grants` and
 same-origin `POST /oauth/grants/revoke`.
 
 Access tokens never outlive the operator session. `mcpTokenExchange` clamps the
-token TTL to the session's exact remaining seconds (capped at 50 minutes) and
+token TTL to the session's exact remaining seconds (capped at 24 hours) and
 answers `invalid_grant` when less than 60 seconds remain, because Workers KV
 cannot express an expiry under a minute and rounding it up would outlive the
 session. The MCP handler re-checks `session.expiresAt` on every request, exactly
 as it re-derives the live email level, so an expired session ends read, artifact,
-and write access at once. There is no refresh path for the identity itself — when
-the session ends, the operator authorizes again.
+and write access at once. `get_backroom_access` reports that access-token
+`expires_at`. Signed artifact download URLs stay on their own short lifetime
+and are not extended with the session. There is no refresh path for the
+identity itself — when the session ends, the operator authorizes again.
 
 ## Bindings
 

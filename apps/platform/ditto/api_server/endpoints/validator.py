@@ -28,9 +28,10 @@ Lifecycle + scope decisions (documented so they're easy to revisit):
   **canonical payload** binding the agent id and the reported
   ``run_id`` / ``composite`` / ``seed`` (see :func:`_score_signing_message`), so
   a captured signature can neither be replayed against a different agent nor
-  cover an altered composite. The remaining GET endpoints are read-only and
-  authenticate via the ``X-Validator-Hotkey`` header + on-chain permit check;
-  they cannot allocate a quorum slot or submit a score.
+  cover an altered composite. The artifact GET is read-only but likewise
+  requires a fresh, one-time signed nonce (the ``X-Validator-Artifact-*``
+  headers) on top of the permit check and an unexpired issued ticket; it cannot
+  allocate a quorum slot or submit a score.
 """
 
 from __future__ import annotations
@@ -201,7 +202,9 @@ from ditto.api_server.outlier_escalation import (
     OUTLIER_ALGORITHM_VERSION,
     OUTLIER_REVIEW_KIND,
     OutlierEscalationSettings,
+    OutlierEscalationSettingsLoad,
     evaluate_score_outlier,
+    load_outlier_escalation_settings,
 )
 from ditto.api_server.private_benchmark_preparation import lease_dataset_sha
 from ditto.api_server.queue_policy_settings import (
@@ -476,46 +479,17 @@ def _outlier_escalation_settings_from_env() -> OutlierEscalationSettings:
     """Build the escalation policy from the environment, falling back to shipped
     defaults for any variable that is unset or unparseable (fail-safe: a bad
     value degrades to the conservative default rather than crashing scoring)."""
-    defaults = OutlierEscalationSettings()
-
-    mode = (
-        os.environ.get("DITTO_OUTLIER_ESCALATION_MODE", defaults.mode).strip().lower()
-    )
-    if mode not in {"off", "observe", "enforce"}:
-        mode = defaults.mode
-
-    def _int(name: str, fallback: int) -> int:
-        try:
-            return int(os.environ[name])
-        except (KeyError, ValueError):
-            return fallback
-
-    def _float(name: str, fallback: float) -> float:
-        try:
-            return float(os.environ[name])
-        except (KeyError, ValueError):
-            return fallback
-
-    return OutlierEscalationSettings(
-        mode=mode,
-        min_bench_version=_int(
-            "DITTO_OUTLIER_ESCALATION_MIN_BENCH_VERSION", defaults.min_bench_version
-        ),
-        min_cohort_size=_int(
-            "DITTO_OUTLIER_ESCALATION_MIN_COHORT_SIZE", defaults.min_cohort_size
-        ),
-        modified_z_threshold=_float(
-            "DITTO_OUTLIER_ESCALATION_MODIFIED_Z_THRESHOLD",
-            defaults.modified_z_threshold,
-        ),
-        min_composite_floor=_float(
-            "DITTO_OUTLIER_ESCALATION_MIN_COMPOSITE_FLOOR",
-            defaults.min_composite_floor,
-        ),
-    )
+    return load_outlier_escalation_settings(os.environ).settings
 
 
-OUTLIER_ESCALATION_SETTINGS = _outlier_escalation_settings_from_env()
+# Loaded once per process at import, like the transform-audit toggle. The load
+# record keeps each field's source (env / default / default_invalid_env) so the
+# admin posture read can show a silently-rejected variable; scoring only ever
+# consumes ``OUTLIER_ESCALATION_SETTINGS``.
+OUTLIER_ESCALATION_SETTINGS_LOAD: OutlierEscalationSettingsLoad = (
+    load_outlier_escalation_settings(os.environ)
+)
+OUTLIER_ESCALATION_SETTINGS = OUTLIER_ESCALATION_SETTINGS_LOAD.settings
 
 
 def _binomial_tail(k: int, n: int, p: float = 0.5) -> float:
@@ -3094,7 +3068,14 @@ async def submit_weight_receipt(
                 session, submission=request_body, now=now
             )
     except WeightReceiptConflict as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        logger.warning(
+            "weight receipt conflict code=%s validator=%s request=%s attempt=%s",
+            error.code,
+            validator_hotkey,
+            receipt.request_id,
+            receipt.attempt.attempt_id,
+        )
+        raise HTTPException(status_code=409, detail=f"{error.code}: {error}") from error
     return SubmitWeightReceiptResponse(
         request_id=receipt.request_id,
         attempt_id=receipt.attempt.attempt_id,

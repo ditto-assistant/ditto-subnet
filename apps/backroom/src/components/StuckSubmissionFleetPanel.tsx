@@ -1,11 +1,24 @@
 import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, RefreshCw, RotateCcw } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { StuckSubmissionsList } from '../lib/admin.schemas'
+import type { StuckSubmission, StuckSubmissionsList } from '../lib/admin.schemas'
 import { batchRetryStuckSubmissions, listStuckSubmissions } from '../server/admin.functions'
 
 function short(value: string, length = 16) {
   return value.length > length ? `${value.slice(0, length)}…` : value
+}
+
+// Same priority as the Platform's recommended_retry_action: an
+// agent-attributable exhaustion is a withdraw even while the provider circuit
+// is open, because no retry, now or after recovery, can repair it. Only
+// otherwise does an open circuit mean "wait for the provider".
+function actionLabel(item: StuckSubmission): string {
+  const code = item.dominant_failure_code ? ` · ${item.dominant_failure_code}` : ''
+  if (item.recommended_action === 'withdraw') return `withdraw${code}`
+  if (item.provider_outage_blocks_retry) {
+    return `wait for provider · ${item.provider_outage?.last_error_code ?? 'circuit open'}`
+  }
+  return `${item.recommended_action ?? (item.recovery_allowed ? 'retry' : '—')}${code}`
 }
 
 export function StuckSubmissionFleetPanel({
@@ -79,7 +92,7 @@ export function StuckSubmissionFleetPanel({
             <h2 className="text-sm font-semibold">Fleet retry backlog</h2>
           </div>
           <p className="mt-1 max-w-[76ch] text-xs leading-5 text-[var(--muted)]">
-            Current benchmark v{data.active_bench_version}. Historical rows are hidden by default. Retry only when recommended_action is retry (verified infrastructure). Agent-attributable rows recommend withdraw — re-leasing the same image cannot repair them, and a retry grant is refused.
+            Current benchmark v{data.active_bench_version}. Historical rows are hidden by default. Retry only when recommended_action is retry (verified infrastructure). Agent-attributable rows recommend withdraw — re-leasing the same image cannot repair them, and a retry grant is refused. Rows waiting for provider are blocked by the provider-wide outage circuit: while it is open EVERY restored lease is parked again, whatever the slot failed on before.
           </p>
         </div>
         <button type="button" onClick={() => void refresh()} disabled={busy} className="ml-auto flex min-h-10 items-center gap-2 rounded-lg border border-[var(--line)] px-3 text-xs disabled:opacity-40">
@@ -106,7 +119,7 @@ export function StuckSubmissionFleetPanel({
                 <td>{item.score_count}/{item.quorum}</td>
                 <td>{item.attempts_used}</td>
                 <td>{item.exhausted_validator_count}</td>
-                <td className="pr-3">{item.recommended_action ?? (item.recovery_allowed ? 'retry' : '—')}{item.dominant_failure_code ? ` · ${item.dominant_failure_code}` : ''}</td>
+                <td className="pr-3">{actionLabel(item)}</td>
                 <td className="max-w-[24rem] pr-3 text-[var(--muted-strong)]">{item.blocking_reason ?? (item.recovery_allowed ? 'Operator evidence required' : 'Not recoverable')}</td>
               </tr>
             ))}

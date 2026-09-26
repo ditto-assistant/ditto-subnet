@@ -6,7 +6,14 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    computed_field,
+    model_validator,
+)
 
 from ditto.api_models.screener import (
     ScreenEvidenceItem,
@@ -23,6 +30,72 @@ from ditto_screening_protocol import (
 QuarantineResolution = Literal["release", "rescreen", "reject"]
 DisputeResolution = Literal["release", "uphold"]
 DisputeKind = Literal["screening", "gate_notes"]
+
+ResolutionReasonCode = Literal[
+    "operator-released-quarantine",
+    "operator-rescreened-quarantine",
+    "operator-rejected-quarantine",
+]
+
+# A manual resolution is an operator *ruling* on a quarantine, so it carries a
+# code of its own instead of inheriting the code the reviewed quarantine was
+# opened with. Those are two different facts — "why the screener held this
+# submission" and "what an operator decided about the hold" — and reusing one
+# field for both is how a submission the screener cleared ends up labelled with
+# the code that cleared it. The vocabularies are disjoint by construction: no
+# screening-origin code starts with ``operator-``, so a bare code still says
+# which of the two a reader is holding.
+#
+# Named for the object ruled on, not the outcome, so they cannot collide with
+# ``_OPERATOR_REJECT_REASON_CODE`` (``operator-rejected-screening``) minted by
+# the pre-quarantine ``/screening-submissions/{id}/reject`` route. That
+# route's retry guard treats its own code as proof it already ran, so a shared
+# token would make it report a quarantined submission as its own idempotent
+# retry; the two routes are different actions with different preconditions and
+# stay separately named.
+OPERATOR_RELEASED_QUARANTINE: ResolutionReasonCode = "operator-released-quarantine"
+OPERATOR_RESCREENED_QUARANTINE: ResolutionReasonCode = "operator-rescreened-quarantine"
+OPERATOR_REJECTED_QUARANTINE: ResolutionReasonCode = "operator-rejected-quarantine"
+
+RESOLUTION_REASON_CODES: dict[str, ResolutionReasonCode] = {
+    "release": OPERATOR_RELEASED_QUARANTINE,
+    "rescreen": OPERATOR_RESCREENED_QUARANTINE,
+    "reject": OPERATOR_REJECTED_QUARANTINE,
+}
+
+
+def resolution_reason_code(resolution: str | None) -> ResolutionReasonCode | None:
+    """The operator ruling code a ``resolution`` implies, or ``None``.
+
+    A resolution is a ruling, so its code is a pure function of it and is
+    derived at read time rather than stored — that keeps every row already in
+    the database correct without a migration, and leaves no denormalized copy
+    to drift. ``None`` covers the three "no ruling here" cases a read path must
+    tolerate: an unresolved quarantine, a miner dispute's ``uphold`` (which
+    records no ruling of its own), and any future resolution value this build
+    does not know — an unknown value degrades to "no code" instead of raising.
+    """
+    if resolution is None:
+        return None
+    return RESOLUTION_REASON_CODES.get(resolution)
+
+
+def review_event_resolution_reason_code(
+    event_kind: str, effective_decision: str | None
+) -> ResolutionReasonCode | None:
+    """The operator ruling code of a review event, or ``None``.
+
+    Only a *manual* event can carry an operator basis: an automated
+    ``effective_decision='reject'`` is the screener's own verdict arriving over
+    the signed screening path, and attributing it to an operator would invent a
+    ruling that never happened. The event's stored ``reason_code`` is left
+    alone — it is the screening-origin code the reviewed quarantine carried,
+    snapshotted verbatim.
+    """
+    if event_kind != "manual":
+        return None
+    return resolution_reason_code(effective_decision)
+
 
 # One-to-one with the 19 mandatory checks in docs/policy-v13.md, plus the
 # conditional private package. Presence of a receipt is never a pass verdict.
@@ -55,6 +128,10 @@ class AdminQuarantineResolutionEvent(BaseModel):
     reason: str
     actor: str
     created_at: datetime
+    resolution_reason_code: ResolutionReasonCode | None = None
+    """The operator ruling's own code, derived from ``resolution``: one of the
+    ``operator-*-quarantine`` tokens. Never the screening code of the
+    quarantine this ruling closed."""
 
 
 class AdminQuarantineItem(BaseModel):
@@ -77,7 +154,26 @@ class AdminQuarantineItem(BaseModel):
     policy_version: int
     manifest_digest: str
     finding_digest: str | None
-    reason_code: str
+    screening_reason_code: str
+    """Why the screener held *this submission*: the reason code from the signed
+    verdict that opened the quarantine. Screening-origin provenance, and it
+    survives the hold — a resolved quarantine still reports the code it was
+    opened with. It is **not** the operator's decision; read ``resolution``
+    with ``resolution_reason_code`` for that."""
+
+    @computed_field(deprecated=True)  # type: ignore[prop-decorator]
+    @property
+    def reason_code(self) -> str:
+        """Deprecated alias for ``screening_reason_code``, kept for the rollout.
+
+        Platform and Backroom deploy in parallel from one release, so a Backroom
+        that has not been redeployed still requires this field and would reject
+        every quarantine item if it disappeared. It always carries the same
+        screening-origin code as ``screening_reason_code`` — never the operator's
+        ruling — and is removed once the console reads only the new name.
+        """
+        return self.screening_reason_code
+
     review_audit_digest: str | None = None
     review_audit: ScreenReviewAudit | None = None
     review_notes_digest: str | None = None
@@ -94,6 +190,11 @@ class AdminQuarantineItem(BaseModel):
     resolved_by: str | None
     resolution: QuarantineResolution | None
     resolution_reason: str | None
+    resolution_reason_code: ResolutionReasonCode | None = None
+    """What the operator decided, as a code: ``operator-released-quarantine`` /
+    ``operator-rescreened-quarantine`` / ``operator-rejected-quarantine``.
+    Derived from ``resolution``, so it is present on every resolved quarantine
+    including ones resolved before this field existed. Null while active."""
     resolution_history: list[AdminQuarantineResolutionEvent] = Field(
         default_factory=list
     )
@@ -120,7 +221,29 @@ class AdminScreeningReviewEvent(BaseModel):
     reviewer_model: str | None
     outcome: str
     effective_decision: str
-    reason_code: str | None
+    screening_reason_code: str | None
+    """Screening-origin code, snapshotted at event time. On an ``automated``
+    event it is the code the screener's verdict carried; on a ``manual`` event
+    it is the code the reviewed quarantine was opened with, inherited verbatim
+    and preserved. On a manual event it therefore describes the lead the
+    operator ruled on, **not** the ruling — see
+    ``resolution_reason_code``."""
+
+    @computed_field(deprecated=True)  # type: ignore[prop-decorator]
+    @property
+    def reason_code(self) -> str | None:
+        """Deprecated alias for ``screening_reason_code``, kept for the rollout.
+
+        Same value, same screening-origin meaning, and lost as soon as the
+        console reads only the new name — see ``AdminQuarantineItem.reason_code``
+        for why the transition needs it.
+        """
+        return self.screening_reason_code
+
+    resolution_reason_code: ResolutionReasonCode | None = None
+    """The operator's own basis, derived from ``effective_decision``. Non-null
+    only on a ``manual`` event: an automated ``reject`` is the screener's
+    verdict arriving over the signed screening path, not an operator ruling."""
     reason: str | None
     prior_agent_status: str
     next_agent_status: str
@@ -787,10 +910,27 @@ class AdminMinerQuarantineSummary(BaseModel):
     quarantine_id: UUID
     agent_id: UUID
     agent_name: str
-    reason_code: str
+    screening_reason_code: str
+    """Why the screener held that submission. Preserved across the resolution:
+    this is the lead the operator ruled on, not the ruling."""
+
+    @computed_field(deprecated=True)  # type: ignore[prop-decorator]
+    @property
+    def reason_code(self) -> str:
+        """Deprecated alias for ``screening_reason_code``, kept for the rollout.
+
+        Same value, same screening-origin meaning, and lost as soon as the
+        console reads only the new name — see ``AdminQuarantineItem.reason_code``
+        for why the transition needs it.
+        """
+        return self.screening_reason_code
+
     status: Literal["active", "resolved"]
     resolution: QuarantineResolution | None
     resolution_reason: str | None
+    resolution_reason_code: ResolutionReasonCode | None = None
+    """The operator's ruling as a code, derived from ``resolution``. Null while
+    there is no ruling — an active quarantine, or a miner dispute's ``uphold``."""
     created_at: datetime
     resolved_at: datetime | None
 
@@ -1067,12 +1207,22 @@ class AdminBaselineDiffManifest(BaseModel):
     stock_kit_count: int
     custom_file_count: int
     # Lines that are neither baseline code nor kit code at any revision: the
-    # size of the surface a reviewer actually has to read.
+    # size of the surface a reviewer actually has to read. Summed over every
+    # compared file, not only the rows ``files`` returns.
     custom_added_lines: int
     # True when the submission's paths were realigned by stripping one wrapping
     # directory so they line up with the kit layout.
     path_aligned: bool
     truncated: bool
+    # Readable text files the bounded source read skipped (combined text budget
+    # or file cap). They were NOT compared: they appear in no ``files`` row and
+    # no count above, and ``file_count`` covers compared paths only.
+    omitted_file_count: int
+    # The first MAX_OMITTED_PATHS omitted paths, sorted.
+    omitted_paths: list[str]
+    # False whenever anything was omitted: ``custom_added_lines`` is then a
+    # lower bound, never the whole custom surface.
+    custom_added_lines_complete: bool
 
 
 class AdminBaselineDiffFileDetail(BaseModel):

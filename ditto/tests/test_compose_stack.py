@@ -2,6 +2,7 @@
 
 import hashlib
 import re
+import shlex
 from pathlib import Path
 
 import yaml
@@ -333,6 +334,43 @@ def test_sandbox_egress_policy_installs_before_dockerd_starts() -> None:
     assert "docker network prune" not in entrypoint
 
 
+def test_sandbox_daemon_api_listens_on_loopback_only() -> None:
+    """The privileged nested daemon's TCP API must never leave this netns.
+
+    The upstream dind entrypoint prepends ``--host=tcp://0.0.0.0:2375`` when its
+    first argument is an option and TLS is disabled, which would expose an
+    unauthenticated, privileged daemon to every container on the compose
+    network. Naming ``dockerd`` first disables that default, so the listeners
+    must be spelled out here and the TCP one must be loopback.
+    """
+    entrypoint = SANDBOX_ENTRYPOINT_PATH.read_text()
+    start = entrypoint.index("exec dockerd-entrypoint.sh")
+    exec_argv = shlex.split(entrypoint[start:].split('"$@"')[0].replace("\\\n", " "))
+
+    assert exec_argv[:3] == ["exec", "dockerd-entrypoint.sh", "dockerd"]
+    hosts = [arg.split("=", 1)[1] for arg in exec_argv if arg.startswith("--host=")]
+    assert hosts == ["unix:///var/run/docker.sock", "tcp://127.0.0.1:2375"]
+    assert "0.0.0.0" not in entrypoint[start:]
+
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    services = compose["services"]
+    # Every TCP client of the daemon shares the sandbox network namespace.
+    assert (
+        services["sandbox-docker"]["environment"]["DOCKER_HOST"]
+        == "tcp://127.0.0.1:2375"
+    )
+    scorer = services["dittobench-api"]
+    assert scorer["network_mode"] == "service:sandbox-docker"
+    assert scorer["environment"]["DOCKER_HOST"] == "tcp://127.0.0.1:2375"
+    # No other service may depend on reaching the daemon across the network.
+    for name, service in services.items():
+        if name in {"sandbox-docker", "dittobench-api"}:
+            continue
+        serialized = yaml.safe_dump(service)
+        assert "sandbox-docker:2375" not in serialized, name
+        assert ":2375" not in serialized, name
+
+
 def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     service = compose["services"]["dittobench-api"]
@@ -364,9 +402,9 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
 
     api = compose["services"]["dittobench-api"]
     assert "DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES" not in api["environment"]
-    # The worker fails closed and claims nothing at all when the scorer
-    # advertises fewer full-run slots than the worker configured, so these two
-    # must ride the same variable with the same default. A host that sets
+    # When the scorer advertises fewer full-run slots than the worker
+    # configured, the worker runs only the scorer's count, so these two must
+    # ride the same variable with the same default. A host that sets
     # nothing must land on the production value, not on the old behaviour.
     # That default is the protocol maximum on purpose: the platform's cap can
     # narrow an advertised eight to anything in [1, 8] within seconds and with

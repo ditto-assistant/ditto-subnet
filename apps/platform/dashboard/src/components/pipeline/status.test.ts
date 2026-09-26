@@ -1,16 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import type { ReviewConclusion } from "../../types/pipeline";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   ACTIVITY_FILTER_LABELS,
+  admissionLaneLine,
   admissionRetryLine,
   ACTIVITY_FILTERS,
   ACTIVITY_STATUSES,
   activityStage,
+  deferredReviewSummary,
   isSourceReviewIncomplete,
-  SOURCE_REVIEW_INCONCLUSIVE_REASON,
   duplicateComparisonLabel,
   policyScreeningLabel,
   reviewEventLabel,
@@ -69,19 +71,70 @@ describe("status vocabulary (row 10)", () => {
     expect(activityStage("nonsense")).toEqual(["Pending", ""]);
   });
 
-  it("keeps a review-budget hold neutral and states no finding was made", () => {
+  it("keeps a review-budget hold neutral and states no finding was made (#562)", () => {
     const held = {
       status: "under_review",
-      screening_reason: "Bounded source review was inconclusive; held for review",
+      deferred_review_triggers: ["top_five"] as const,
+      review_conclusion: "budget_exhausted" as const,
     };
     expect(isSourceReviewIncomplete(held)).toBe(true);
     expect(activityStage("under_review", held)).toEqual(["Deferred source review", ""]);
-    const tripwire = {
+    expect(deferredReviewSummary(held)).toBe(
+      "Score qualified (top 5) \u00b7 automated review ran out of budget \u2014 no finding",
+    );
+    // A review that ran and ended inconclusive without exhausting a budget
+    // never borrows the budget copy.
+    const inconclusive = { ...held, review_conclusion: "no_finding" as const };
+    expect(isSourceReviewIncomplete(inconclusive)).toBe(true);
+    expect(activityStage("under_review", inconclusive)).toEqual(["Deferred source review", ""]);
+    expect(deferredReviewSummary(inconclusive)).toBe(
+      "Score qualified (top 5) \u00b7 automated review inconclusive \u2014 no finding",
+    );
+    // An auditless or preflight hold: claim only that no review completed with
+    // a recorded conclusion, never a budget; the chip stays neutral because no
+    // finding was recorded.
+    const notCompleted = { ...held, review_conclusion: "not_completed" as const };
+    expect(isSourceReviewIncomplete(notCompleted)).toBe(false);
+    expect(activityStage("under_review", notCompleted)).toEqual(["Deferred source review", ""]);
+    expect(deferredReviewSummary(notCompleted)).toBe(
+      "Score qualified (top 5) \u00b7 automated review did not complete \u2014 no finding recorded",
+    );
+    expect(deferredReviewSummary(notCompleted)).not.toContain("budget");
+    expect(deferredReviewSummary(notCompleted)).not.toContain("did not run");
+    const adverse = {
       status: "under_review",
-      screening_reason: "Submission held for anti-cheat review",
+      deferred_review_triggers: ["anomaly"] as const,
+      review_conclusion: "adverse_signal" as const,
     };
-    expect(isSourceReviewIncomplete(tripwire)).toBe(false);
-    expect(activityStage("under_review", tripwire)).toEqual(["Deferred source review", "warn"]);
+    expect(isSourceReviewIncomplete(adverse)).toBe(false);
+    expect(activityStage("under_review", adverse)).toEqual(["Deferred source review", "warn"]);
+    expect(deferredReviewSummary(adverse)).toBe(
+      "Anomaly hold \u00b7 automated review raised a concern",
+    );
+    const pending = {
+      status: "under_review",
+      deferred_review_triggers: ["top_five", "anomaly"] as const,
+      review_conclusion: "pending" as const,
+    };
+    expect(activityStage("under_review", pending)).toEqual(["Deferred source review", "progress"]);
+    expect(deferredReviewSummary(pending)).toBe(
+      "Score qualified (top 5) \u00b7 Anomaly hold \u00b7 automated review pending",
+    );
+    // A hold without an automated conclusion (copy review, older API) keeps
+    // the previous warn chip and adds no summary line.
+    expect(activityStage("under_review", { status: "under_review" })).toEqual([
+      "Deferred source review",
+      "warn",
+    ]);
+    expect(deferredReviewSummary({ status: "under_review" })).toBe("");
+    // The public reason text alone no longer decides the tone.
+    expect(
+      isSourceReviewIncomplete({
+        status: "under_review",
+        screening_reason: "Bounded source review was inconclusive; held for review",
+      } as { status: string }),
+    ).toBe(false);
+    expect(deferredReviewSummary({ ...held, status: "scored" })).toBe("");
   });
 
   it("names the quick filters with the deferred-review vocabulary", () => {
@@ -96,11 +149,25 @@ describe("status vocabulary (row 10)", () => {
     );
   });
 
-  it("says no finding only when the automated review merely ran out of budget", () => {
-    const detail = (screening_reason: string) =>
-      validationDetail({ status: "under_review", screening_reason });
-    expect(detail(SOURCE_REVIEW_INCONCLUSIVE_REASON)).toContain("which is not a finding");
-    expect(detail("Submission held for anti-cheat review")).not.toContain("not a finding");
+  it("says 'ran out of budget' only for a recorded budget exhaustion", () => {
+    const detail = (review_conclusion: ReviewConclusion) =>
+      validationDetail({
+        status: "under_review",
+        deferred_review_triggers: ["top_five"],
+        review_conclusion,
+      });
+    expect(detail("budget_exhausted")).toContain("ran out of budget");
+    expect(detail("budget_exhausted")).toContain("which is not a finding");
+    expect(detail("budget_exhausted")).toContain("its score placed it in the top five");
+    expect(detail("no_finding")).toContain("without reaching a decision and made no finding");
+    expect(detail("no_finding")).not.toContain("budget");
+    expect(detail("not_completed")).toContain("did not complete and recorded no finding");
+    expect(detail("not_completed")).not.toContain("before reviewing");
+    expect(detail("not_completed")).not.toContain("budget");
+    expect(detail("adverse_signal")).not.toContain("ran out of budget");
+    expect(detail("adverse_signal")).toContain("raised a concern");
+    expect(detail("pending")).toContain("has not reported yet");
+    expect(detail("pending")).not.toContain("budget");
   });
 
   it("labels previous-generation and closed-generation rows (#458/#462)", () => {
@@ -370,5 +437,38 @@ describe("admissionRetryLine (#1215)", () => {
   it("renders nothing without the block or for unknown states", () => {
     expect(admissionRetryLine(null, now)).toBe("");
     expect(admissionRetryLine({ state: "finished" }, now)).toBe("");
+  });
+});
+
+describe("admissionLaneLine (#1215)", () => {
+  it("names the lane a running attempt is in", () => {
+    expect(admissionLaneLine({ state: "running", lane: "build" })).toBe(
+      "Current lane: image build.",
+    );
+    expect(admissionLaneLine({ state: "running", lane: "runtime_smoke" })).toBe(
+      "Current lane: runtime smoke test.",
+    );
+    expect(admissionLaneLine({ state: "running", lane: "source_review" })).toBe(
+      "Current lane: source review.",
+    );
+  });
+
+  it("names the lane a waiting attempt stopped in", () => {
+    expect(admissionLaneLine({ state: "stuck", lane: "runtime_smoke" })).toBe(
+      "Last attempt stopped in: runtime smoke test.",
+    );
+    expect(admissionLaneLine({ state: "retry_queued", lane: "build" })).toBe(
+      "Last attempt stopped in: image build.",
+    );
+    expect(admissionLaneLine({ state: "parked", lane: "source_review" })).toBe(
+      "Last attempt stopped in: source review.",
+    );
+  });
+
+  it("never guesses an unevidenced lane", () => {
+    expect(admissionLaneLine(null)).toBe("");
+    expect(admissionLaneLine({ state: "running", lane: null })).toBe("");
+    expect(admissionLaneLine({ state: "running", lane: "verdict" })).toBe("");
+    expect(admissionLaneLine({ state: "queued", lane: "build" })).toBe("");
   });
 });

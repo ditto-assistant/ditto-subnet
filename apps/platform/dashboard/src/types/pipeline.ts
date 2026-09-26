@@ -13,6 +13,17 @@ import type {
 
 // ── Activity / submissions (/public/activity) ────────────────
 
+/** Coarse public reason a submission entered deferred source review. */
+export type DeferredReviewTrigger = "top_five" | "anomaly";
+
+/** Public automated-review conclusion for a held submission. */
+export type ReviewConclusion =
+  | "pending"
+  | "not_completed"
+  | "no_finding"
+  | "budget_exhausted"
+  | "adverse_signal";
+
 export interface ActivityEntry {
   agent_id?: string;
   name?: string | null;
@@ -33,6 +44,12 @@ export interface ActivityEntry {
   score_floor?: number | null;
   review_reason?: string | null;
   screening_reason?: string | null;
+  /** Why an active deferred-source-review hold was opened (#562). Empty when
+   * the row is not held for deferred review. */
+  deferred_review_triggers?: DeferredReviewTrigger[] | null;
+  /** What the automated source review concluded for a held row (#562); null
+   * when the hold has no automated conclusion (e.g. a copy review). */
+  review_conclusion?: ReviewConclusion | null;
   duplicate_of?: string | null;
   duplicate_name?: string | null;
   duplicate_version?: number | null;
@@ -276,6 +293,8 @@ export interface AdmissionRetry {
   attempt_count?: number | null;
   next_retry_at?: string | null;
   last_failure_infrastructure?: boolean | null;
+  /** "build" | "runtime_smoke" | "source_review"; null when unknown. */
+  lane?: string | null;
 }
 
 /** /public/agent/{id}/pipeline — the drawer's full history. */

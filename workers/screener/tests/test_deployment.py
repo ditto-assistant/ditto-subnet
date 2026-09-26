@@ -344,6 +344,14 @@ def test_rootless_executor_is_separate_from_worker_and_denies_private_egress() -
         '"${user_systemctl[@]}" enable --now "$SCREENER_ROOTLESS_UNIT"'
     )
     assert guard_start < user_daemon_start
+    group_grant = installer.index('usermod -aG "$EXECUTOR_GROUP" "$SCREENER_USER"')
+    consumer_probe = installer.index(
+        'runuser -u "$SCREENER_USER" -- env DOCKER_HOST="$docker_host"'
+    )
+    drop_rootful = installer.index('gpasswd -d "$SCREENER_USER" docker')
+    assert user_daemon_start < group_grant < consumer_probe < drop_rootful
+    assert 'stat -c %G "$runtime_dir/docker.sock"' in installer
+    assert "rootless screener docker did not become ready" in installer
     assert 'daemon_root="$EXECUTOR_HOME/docker"' in installer
     assert "SCREENER_EXECUTOR_HOME=/var/lib/ditto-screener-docker" in bootstrap
     assert 'executor_home="$(env_value SCREENER_EXECUTOR_HOME)"' in updater

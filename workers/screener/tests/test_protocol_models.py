@@ -280,6 +280,36 @@ def test_l2_review_audit_accepts_operator_budget_ceiling() -> None:
         )
 
 
+def test_preflight_hold_audit_round_trips_with_signed_request() -> None:
+    audit = ScreenReviewAudit(
+        stage="l2",
+        reason_code="l2-runtime-evidence-unavailable",
+        prompt_revision="l2-v13",
+        max_steps=256,
+        steps_used=0,
+        max_input_tokens=5_000_000,
+        input_tokens_used=0,
+        max_output_tokens=1_000_000,
+        output_tokens_used=0,
+        max_cost_usd=25,
+        cost_usd_used=0,
+        requested_model="openai/gpt-6-sol",
+        final_stage="preflight",
+        cause_detail="lease_unavailable",
+        max_elapsed_ms=1_800_000,
+        elapsed_ms=0,
+    )
+    request = _request(
+        outcome=ScreenResultOutcome.INCONCLUSIVE,
+        review_audit=audit,
+        review_audit_digest=audit.canonical_digest(),
+    )
+    assert request.review_audit == audit
+    assert (
+        ScreenResultRequest.model_validate(request.model_dump(mode="json")) == request
+    )
+
+
 def test_legacy_outcome_rejects_image_metadata() -> None:
     with pytest.raises(ValidationError, match="legacy result cannot carry"):
         _request(

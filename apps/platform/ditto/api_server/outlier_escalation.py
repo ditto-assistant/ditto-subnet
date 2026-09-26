@@ -31,9 +31,11 @@ yield the same verdict, so re-scoring an agent can never flip its fate.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from statistics import median
+from typing import Literal
 
 # ---------------------------------------------------------------------------
 # Defaults. These ship as the shipped behaviour and are overridable from the
@@ -107,6 +109,123 @@ class OutlierEscalationSettings:
     min_cohort_size: int = DEFAULT_MIN_COHORT_SIZE
     modified_z_threshold: float = DEFAULT_MODIFIED_Z_THRESHOLD
     min_composite_floor: float = DEFAULT_MIN_COMPOSITE_FLOOR
+
+
+OUTLIER_ESCALATION_MODES: frozenset[str] = frozenset({"off", "observe", "enforce"})
+
+# The environment variable behind each tunable. Operators read these names back
+# through the admin posture endpoint; the values themselves are never echoed.
+OUTLIER_ESCALATION_ENV_VARS: Mapping[str, str] = {
+    "mode": "DITTO_OUTLIER_ESCALATION_MODE",
+    "min_bench_version": "DITTO_OUTLIER_ESCALATION_MIN_BENCH_VERSION",
+    "min_cohort_size": "DITTO_OUTLIER_ESCALATION_MIN_COHORT_SIZE",
+    "modified_z_threshold": "DITTO_OUTLIER_ESCALATION_MODIFIED_Z_THRESHOLD",
+    "min_composite_floor": "DITTO_OUTLIER_ESCALATION_MIN_COMPOSITE_FLOOR",
+}
+
+# Where one effective value came from. ``default_invalid_env`` means the
+# variable WAS set but was rejected, so the shipped default is in force -- the
+# silent fallback an operator otherwise cannot see.
+OutlierSettingSource = Literal["env", "default", "default_invalid_env"]
+
+
+@dataclass(frozen=True)
+class OutlierEscalationSettingSources:
+    """Per-field provenance of the loaded :class:`OutlierEscalationSettings`."""
+
+    mode: OutlierSettingSource = "default"
+    min_bench_version: OutlierSettingSource = "default"
+    min_cohort_size: OutlierSettingSource = "default"
+    modified_z_threshold: OutlierSettingSource = "default"
+    min_composite_floor: OutlierSettingSource = "default"
+
+
+@dataclass(frozen=True)
+class OutlierEscalationSettingsLoad:
+    """The settings scoring uses, plus how each field was resolved.
+
+    ``settings`` is exactly what the pre-existing env builder returned; the
+    sources are a read-only side record and never feed back into scoring.
+    """
+
+    settings: OutlierEscalationSettings
+    sources: OutlierEscalationSettingSources
+    loaded_at: datetime
+
+
+def load_outlier_escalation_settings(
+    environ: Mapping[str, str], *, now: datetime | None = None
+) -> OutlierEscalationSettingsLoad:
+    """Resolve the escalation policy from ``environ`` and record each source.
+
+    Fallback behaviour is unchanged from the original env builder: an unset
+    variable, an unknown mode, or an unparseable number degrades to the shipped
+    default rather than crashing scoring. Parsing is the same ``strip().lower()``
+    for the mode and bare ``int()`` / ``float()`` for the numbers, so any value
+    accepted before is accepted now and resolves to the same number. The raw
+    rejected string is deliberately not retained.
+    """
+    defaults = OutlierEscalationSettings()
+    env = OUTLIER_ESCALATION_ENV_VARS
+
+    raw_mode = environ.get(env["mode"])
+    mode_source: OutlierSettingSource
+    if raw_mode is None:
+        mode, mode_source = defaults.mode, "default"
+    else:
+        candidate = raw_mode.strip().lower()
+        if candidate in OUTLIER_ESCALATION_MODES:
+            mode, mode_source = candidate, "env"
+        else:
+            mode, mode_source = defaults.mode, "default_invalid_env"
+
+    def _int(field_name: str, fallback: int) -> tuple[int, OutlierSettingSource]:
+        raw = environ.get(env[field_name])
+        if raw is None:
+            return fallback, "default"
+        try:
+            return int(raw), "env"
+        except ValueError:
+            return fallback, "default_invalid_env"
+
+    def _float(field_name: str, fallback: float) -> tuple[float, OutlierSettingSource]:
+        raw = environ.get(env[field_name])
+        if raw is None:
+            return fallback, "default"
+        try:
+            return float(raw), "env"
+        except ValueError:
+            return fallback, "default_invalid_env"
+
+    min_bench_version, min_bench_version_source = _int(
+        "min_bench_version", defaults.min_bench_version
+    )
+    min_cohort_size, min_cohort_size_source = _int(
+        "min_cohort_size", defaults.min_cohort_size
+    )
+    modified_z_threshold, modified_z_threshold_source = _float(
+        "modified_z_threshold", defaults.modified_z_threshold
+    )
+    min_composite_floor, min_composite_floor_source = _float(
+        "min_composite_floor", defaults.min_composite_floor
+    )
+    return OutlierEscalationSettingsLoad(
+        settings=OutlierEscalationSettings(
+            mode=mode,
+            min_bench_version=min_bench_version,
+            min_cohort_size=min_cohort_size,
+            modified_z_threshold=modified_z_threshold,
+            min_composite_floor=min_composite_floor,
+        ),
+        sources=OutlierEscalationSettingSources(
+            mode=mode_source,
+            min_bench_version=min_bench_version_source,
+            min_cohort_size=min_cohort_size_source,
+            modified_z_threshold=modified_z_threshold_source,
+            min_composite_floor=min_composite_floor_source,
+        ),
+        loaded_at=now if now is not None else datetime.now(UTC),
+    )
 
 
 @dataclass(frozen=True)

@@ -106,8 +106,15 @@ if ! command -v cosign >/dev/null; then
 fi
 
 if ! command -v docker >/dev/null; then
-  install -m 0644 /dev/null /usr/share/keyrings/docker.asc
-  curl -fsSL https://download.docker.com/linux/debian/gpg >/usr/share/keyrings/docker.asc
+  # Pin the apt trust root the same way as the cosign and uv bytes above: a
+  # substituted key file must fail closed, not become a trusted signer.
+  # Fingerprint 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88.
+  docker_key_tmp="$(mktemp)"
+  curl -fsSL https://download.docker.com/linux/debian/gpg -o "$docker_key_tmp"
+  echo "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570  $docker_key_tmp" \
+    | sha256sum --check
+  install -o root -g root -m 0644 "$docker_key_tmp" /usr/share/keyrings/docker.asc
+  rm -f "$docker_key_tmp"
   . /etc/os-release
   echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" \
     >/etc/apt/sources.list.d/docker.list

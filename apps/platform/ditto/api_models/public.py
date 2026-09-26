@@ -332,15 +332,21 @@ class PublicV9BaseEvidence(BaseModel):
     score_gates: PublicV9ScoreGateEvidence
 
 
+# DittoBench's bench v7+ token contract: usage is metered and recorded, but the
+# record is always neutral and carries no budget (``budget_percentile`` is 0).
+QUALITY_ONLY_TOKEN_FORMULA = "v7-quality-only-v1"
+
+
 class PublicTokenEfficiency(BaseModel):
-    """Auditable v5 relay-token waste penalty."""
+    """Auditable relay-token decision: the v5 waste penalty, or the neutral
+    bench v7+ quality-only record that meters usage without scoring it."""
 
     formula_version: str
     baseline_id: str | None = None
     baseline_prompt_tokens: Annotated[int | None, Field(default=None, ge=0)]
     baseline_completion_tokens: Annotated[int | None, Field(default=None, ge=0)]
     baseline_total_tokens: Annotated[int | None, Field(default=None, ge=0)]
-    budget_percentile: Annotated[float, Field(gt=0.0, le=1.0)]
+    budget_percentile: Annotated[float, Field(ge=0.0, le=1.0)]
     observed_prompt_tokens: Annotated[int, Field(ge=0)]
     observed_completion_tokens: Annotated[int, Field(ge=0)]
     observed_total_tokens: Annotated[int, Field(ge=0)]
@@ -352,6 +358,15 @@ class PublicTokenEfficiency(BaseModel):
     adjusted_composite: Annotated[float, Field(ge=0.0, le=1.0)]
     penalty_applied: bool
     decision_reason: str
+
+    @model_validator(mode="after")
+    def budget_matches_formula(self) -> PublicTokenEfficiency:
+        if self.formula_version == QUALITY_ONLY_TOKEN_FORMULA:
+            if self.multiplier != 1.0 or self.penalty_applied:
+                raise ValueError("Quality-only token record must be neutral")
+        elif self.budget_percentile == 0.0:
+            raise ValueError("Budgeted token record needs a budget percentile")
+        return self
 
 
 class PublicBenchmarkQualityFactor(BaseModel):
@@ -390,8 +405,8 @@ class PublicCompositeBreakdown(BaseModel):
             ge=0.9,
             le=1.0,
             description=(
-                "Benchmark-v5 token multiplier; null when token efficiency does "
-                "not apply or was unavailable."
+                "Signed token multiplier (a neutral 1.0 under the bench v7+ "
+                "quality-only contract); null when it was unavailable."
             ),
         ),
     ] = None
@@ -2903,6 +2918,40 @@ class PublicConfirmationProgress(BaseModel):
     subjects: list[PublicConfirmationSubject] = Field(default_factory=list)
 
 
+PublicDeferredReviewTrigger = Literal["top_five", "anomaly"]
+"""Why an active hold entered deferred source review (coarse, public-safe)."""
+
+PublicReviewConclusion = Literal[
+    "pending", "not_completed", "no_finding", "budget_exhausted", "adverse_signal"
+]
+"""What the automated source review concluded for a held submission."""
+
+_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION = (
+    "Why an active deferred source review hold was opened: ``top_five`` when "
+    "the canonical score placed the submission in the top five, ``anomaly`` "
+    "when a robust score anomaly check fired. Empty when the submission is not "
+    "held for deferred source review. Ranks, thresholds, and evidence are not "
+    "exposed."
+)
+_REVIEW_CONCLUSION_DESCRIPTION = (
+    "What the automated source review concluded for a held (``under_review``) "
+    "submission. ``pending``: the automated deep review has not reported yet, "
+    "or it was interrupted and awaits a retry. ``not_completed``: no automated "
+    "review completed with a recorded conclusion (there is no recorded review "
+    "audit, or the review stopped before its model stage, for example because "
+    "a runtime lease was unavailable or review was disabled), and no finding "
+    "was recorded; an operator decision is pending. ``no_finding``: a recorded "
+    "audit shows a model review ran and ended without a decision or finding. "
+    "``budget_exhausted``: a recorded audit shows a model review ran and "
+    "exhausted its read, step, tool, or model budget without a finding, and "
+    "its recorded concerns did not reach the hold threshold. "
+    "``adverse_signal``: it reported a concern that an operator must "
+    "adjudicate, including a budget-terminated review held because of its "
+    "recorded concerns. Null when the hold has no automated review conclusion "
+    "(for example a copy review) or the submission is not held."
+)
+
+
 class PublicActivityEntry(BaseModel):
     """One submission's safe, public lifecycle state."""
 
@@ -3037,6 +3086,12 @@ class PublicActivityEntry(BaseModel):
             ),
         ),
     ] = None
+    deferred_review_triggers: list[PublicDeferredReviewTrigger] = Field(
+        default_factory=list, description=_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION
+    )
+    review_conclusion: PublicReviewConclusion | None = Field(
+        default=None, description=_REVIEW_CONCLUSION_DESCRIPTION
+    )
     review_opened_at: Annotated[
         datetime | None,
         Field(
@@ -3349,6 +3404,9 @@ class PublicScreeningAttempt(BaseModel):
     review_notes: list[PublicScreeningReviewNote] = Field(default_factory=list)
 
 
+PublicAdmissionLane = Literal["build", "runtime_smoke", "source_review"]
+
+
 class PublicAdmissionRetry(BaseModel):
     """Live admission state for a submission still in build & admission.
 
@@ -3361,6 +3419,11 @@ class PublicAdmissionRetry(BaseModel):
     infrastructure failure is retried automatically with backoff, no earlier than
     that time. After too many consecutive failures, or a long park, it reports
     ``stuck`` and needs a guarded retry like any other.
+
+    ``lane`` names the admission lane (image build, runtime smoke, or source
+    review) the latest attempt is in or stopped in, and is null whenever
+    Platform holds no evidence for it (no attempt yet, a worker-local lane, or
+    a failure that names no lane).
     """
 
     state: Literal["queued", "running", "parked", "stuck", "retry_queued"]
@@ -3370,6 +3433,7 @@ class PublicAdmissionRetry(BaseModel):
     # infrastructure retry reports the earliest time it may start.
     next_retry_at: datetime | None = None
     last_failure_infrastructure: bool = False
+    lane: PublicAdmissionLane | None = None
 
 
 class PublicOrdinaryReview(BaseModel):
@@ -3787,6 +3851,12 @@ class PublicAgentSummary(BaseModel):
     review_event_at: datetime | None = None
     review_original_reason: str | None = None
     review_opened_at: datetime | None = None
+    deferred_review_triggers: list[PublicDeferredReviewTrigger] = Field(
+        default_factory=list, description=_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION
+    )
+    review_conclusion: PublicReviewConclusion | None = Field(
+        default=None, description=_REVIEW_CONCLUSION_DESCRIPTION
+    )
     preserved_composite: Annotated[
         float | None, Field(default=None, ge=0.0, le=1.0)
     ] = None

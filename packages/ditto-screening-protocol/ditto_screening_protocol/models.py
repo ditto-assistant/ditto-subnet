@@ -1155,6 +1155,22 @@ class ScreenReviewAudit(BaseModel):
     budget_stop_reason: (
         Literal["none", "step", "tool", "aggregate", "token", "cost", "time"] | None
     ) = None
+    requested_model: Annotated[
+        str | None, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9/._:-]{0,127}$")
+    ] = None
+    response_provider: Annotated[
+        str | None, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")
+    ] = None
+    final_stage: Literal["preflight", "analyst", "critic", "adjudicator"] | None = None
+    cause_detail: Literal["lease_unavailable", "review_disabled"] | None = None
+    model_tool_failure_subcode: Literal[
+        "invalid_submit_call_id",
+        "no_tool_call_after_corrections",
+        "malformed_tool_arguments_json",
+        "invalid_tool_call_shape",
+    ] | None = None
+    max_elapsed_ms: Annotated[int | None, Field(ge=1, le=3_600_000)] = None
+    elapsed_ms: Annotated[int | None, Field(ge=0, le=3_600_000)] = None
 
     @model_validator(mode="after")
     def validate_pairs_and_usage(self) -> ScreenReviewAudit:
@@ -1168,6 +1184,8 @@ class ScreenReviewAudit(BaseModel):
                 raise ValueError(f"{label} maximum and usage must be paired")
         if self.steps_used > self.max_steps:
             raise ValueError("review steps used exceed configured maximum")
+        if (self.max_elapsed_ms is None) != (self.elapsed_ms is None):
+            raise ValueError("elapsed maximum and usage must be paired")
         return self
 
     def canonical_digest(self) -> str:
@@ -1177,6 +1195,13 @@ class ScreenReviewAudit(BaseModel):
             "model_steps_observed",
             "tool_calls_observed",
             "budget_stop_reason",
+            "requested_model",
+            "response_provider",
+            "final_stage",
+            "cause_detail",
+            "model_tool_failure_subcode",
+            "max_elapsed_ms",
+            "elapsed_ms",
         }
         absent_diagnostics = {
             field for field in diagnostic_fields if getattr(self, field) is None

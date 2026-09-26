@@ -255,6 +255,12 @@ class AdminSourceDiffManifest(BaseModel):
     # True when more files exist than the manifest bound returns; file_count
     # still reflects the real total so the omission is never silent.
     truncated: bool
+    # Readable text files the bounded source read skipped in EITHER artifact
+    # (combined text budget or file cap). They were NOT compared, so they appear
+    # in no ``files`` row or count; ``file_count`` covers compared paths only.
+    omitted_file_count: int = 0
+    # The first MAX_OMITTED_PATHS omitted paths, sorted.
+    omitted_paths: list[str] = Field(default_factory=list)
 
 
 class AdminSourceDiffFileDetail(BaseModel):

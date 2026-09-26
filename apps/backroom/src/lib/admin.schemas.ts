@@ -264,11 +264,12 @@ export const screeningDisputeKindSchema = z.enum(['screening', 'gate_notes'])
 export const screenerReviewModeSchema = z.enum(['off', 'shadow', 'enforce', 'inherit'])
 export const screenerReviewModelSchema = z.enum([
   'openai/gpt-5.6-terra',
+  'openai/gpt-6-sol',
   'moonshotai/kimi-k3',
   'z-ai/glm-5.2',
   'openai/gpt-5.6-sol',
 ])
-export const sourceReviewModelSchema = z.enum(['openai/gpt-5.6-luna'])
+export const sourceReviewModelSchema = z.enum(['openai/gpt-5.6-luna', 'openai/gpt-6-luna'])
 export const fanoutShadowStatusSchema = z.enum([
   'queued',
   'leased',
@@ -292,7 +293,7 @@ export const screenerReviewSettingsSchema = z
     l2_model: screenerReviewModelSchema,
     l2_fallback_models: z.array(screenerReviewModelSchema).max(2),
     l3_enabled: z.boolean().default(true),
-    l3_model: z.literal('openai/gpt-5.6-sol'),
+    l3_model: z.enum(['openai/gpt-5.6-sol', 'openai/gpt-6-sol']),
     timeout_seconds: z.number().int().min(30).max(1_800),
     max_steps: z.number().int().min(1).max(256),
     source_review_max_steps: z.number().int().min(1).max(240).default(200),
@@ -481,6 +482,22 @@ export const l2ReportCanaryLookupInputSchema = z.object({
   canaryId: z.string().uuid(),
 })
 
+export const l2ReportCanaryPreflightInputSchema = z.object({
+  agentId: z.string().uuid(),
+  sourceAttemptId: z.string().uuid(),
+})
+
+export const l2ReportCanaryPreflightViewSchema = z.object({
+  agent_id: z.string().uuid(),
+  source_attempt_id: z.string().uuid(),
+  agent_artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  source_attempt_artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  agent_status: z.string(),
+  attempt_policy_version: z.number().int().nonnegative(),
+  arrival_bench_version: z.number().int().nonnegative(),
+  score_row_count: z.number().int().nonnegative(),
+})
+
 export const scheduleL2ReportCanaryInputSchema = z.object({
   requestId: z.string().uuid(),
   agentId: z.string().uuid(),
@@ -490,6 +507,7 @@ export const scheduleL2ReportCanaryInputSchema = z.object({
   expectedScoreCount: z.number().int().nonnegative(),
   targetNodeId: z.string().min(1).max(63),
   reviewLabel: z.enum(['candidate_clear', 'known_reject']),
+  runMode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   confirmation: z.literal('QUEUE REPORT ONLY L2 CANARY'),
 })
 
@@ -503,8 +521,10 @@ export const l2ReportCanaryViewSchema = z.object({
   expected_agent_status: z.string(),
   expected_score_count: z.number().int().nonnegative(),
   review_label: z.string(),
+  run_mode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   status: z.string(),
   claimed_instance_id: z.string().nullable(),
+  lease_expires_at: z.string().nullable().optional(),
   report: z.record(z.string(), z.unknown()).nullable(),
   error_code: z.string().nullable(),
   created_at: z.string(),
@@ -4437,6 +4457,23 @@ export const sourceReviewNoteSchema = z.strictObject({
   stage: z.enum(['l1', 'l2', 'l3']),
 } satisfies PlatformResponseShape<GeneratedSourceReviewNote>)
 
+// Platform and Backroom deploy in parallel from one release with no ordering
+// between them, so for one release the screening-origin code has to answer to
+// both names: a Backroom that ships first reads a Platform that still calls it
+// `reason_code`, and a Platform that ships first keeps emitting that name for a
+// Backroom that has not been redeployed. Accept either spelling, hand the rest
+// of the console a single value under the current name, and drop the deprecated
+// alias from the parsed object so nothing downstream has to know the transition
+// is happening. The alias is declared as a validator rather than left on the
+// wire because these are plain `z.object`s, which strip unknown keys. Remove
+// this, the `reason_code` validators, and the Platform alias together.
+function screeningOriginCode(
+  screeningReasonCode: string | null | undefined,
+  reasonCode: string | null | undefined,
+) {
+  return screeningReasonCode ?? reasonCode ?? null
+}
+
 export const screeningQuarantineSchema = z.object({
   quarantine_id: z.string().uuid(),
   agent_id: z.string().uuid(),
@@ -4453,7 +4490,14 @@ export const screeningQuarantineSchema = z.object({
   policy_version: z.number().int().nonnegative(),
   manifest_digest: z.string(),
   finding_digest: z.string().nullable(),
-  reason_code: z.string(),
+  // Why the screener held this submission: the code from the signed verdict
+  // that opened the quarantine. Renamed from `reason_code` so the console
+  // cannot read it as the operator's own ruling.
+  screening_reason_code: z.string().nullish().default(null),
+  // Deprecated Platform alias for the same value, non-null until the Platform
+  // drops it. Never a second fact — coalesced and stripped by the transform
+  // below, so the console only ever sees the current name.
+  reason_code: z.string().nullish().default(null),
   // Nullish with defaults so Backroom keeps working against a platform that
   // has not deployed the review payloads yet.
   evidence: z.array(screeningEvidenceItemSchema).nullish().default(null),
@@ -4467,35 +4511,55 @@ export const screeningQuarantineSchema = z.object({
   resolved_by: z.string().nullable(),
   resolution: quarantineResolutionSchema.nullable(),
   resolution_reason: z.string().nullable(),
-})
+  // The operator's ruling as its own code, derived by the platform from
+  // `resolution`. Null while the quarantine is active. Deliberately a plain
+  // string rather than an enum: a platform that learns a new resolution value
+  // must not blank the panel here.
+  resolution_reason_code: z.string().nullish().default(null),
+}).transform(({ reason_code, ...rest }) => ({
+  ...rest,
+  screening_reason_code: screeningOriginCode(rest.screening_reason_code, reason_code),
+}))
 
 export const screeningQuarantineListSchema = z.object({
   items: z.array(screeningQuarantineSchema),
   count: z.number().int().nonnegative(),
 })
 
+const screeningReviewEventSchema = z.object({
+  event_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  quarantine_id: z.string().uuid().nullable(),
+  resolution_id: z.string().uuid().nullable(),
+  previous_event_id: z.string().uuid().nullable(),
+  event_kind: z.enum(['automated', 'manual']),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  policy_version: z.number().int().positive(),
+  actor: z.string(),
+  reviewer_model: z.string().nullable(),
+  outcome: z.string(),
+  effective_decision: z.string(),
+  // Screening-origin code, snapshotted when the event was written. On a
+  // manual event it is the code the reviewed quarantine was opened with —
+  // the lead the operator ruled on, not the ruling itself. See
+  // `resolution_reason_code`.
+  screening_reason_code: z.string().nullish().default(null),
+  // Deprecated Platform alias, coalesced and stripped by the transform below.
+  reason_code: z.string().nullish().default(null),
+  resolution_reason_code: z.string().nullish().default(null),
+  reason: z.string().nullable(),
+  prior_agent_status: z.string(),
+  next_agent_status: z.string(),
+  evidence: z.record(z.string(), z.unknown()),
+  created_at: z.string(),
+}).transform(({ reason_code, ...rest }) => ({
+  ...rest,
+  screening_reason_code: screeningOriginCode(rest.screening_reason_code, reason_code),
+}))
+
 export const screeningReviewEventListSchema = z.object({
-  items: z.array(z.object({
-    event_id: z.string().uuid(),
-    agent_id: z.string().uuid(),
-    attempt_id: z.string().uuid(),
-    quarantine_id: z.string().uuid().nullable(),
-    resolution_id: z.string().uuid().nullable(),
-    previous_event_id: z.string().uuid().nullable(),
-    event_kind: z.enum(['automated', 'manual']),
-    artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
-    policy_version: z.number().int().positive(),
-    actor: z.string(),
-    reviewer_model: z.string().nullable(),
-    outcome: z.string(),
-    effective_decision: z.string(),
-    reason_code: z.string().nullable(),
-    reason: z.string().nullable(),
-    prior_agent_status: z.string(),
-    next_agent_status: z.string(),
-    evidence: z.record(z.string(), z.unknown()),
-    created_at: z.string(),
-  })),
+  items: z.array(screeningReviewEventSchema),
   count: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
@@ -4992,13 +5056,21 @@ export const minerQuarantineSummarySchema = z.object({
   quarantine_id: z.string().uuid(),
   agent_id: z.string().uuid(),
   agent_name: z.string(),
-  reason_code: z.string(),
+  // The screening-origin code that opened this quarantine, preserved across
+  // the resolution. Read it as "why it was held", never as "how it ended".
+  screening_reason_code: z.string().nullish().default(null),
+  // Deprecated Platform alias, coalesced and stripped by the transform below.
+  reason_code: z.string().nullish().default(null),
   status: z.enum(['active', 'resolved']),
   resolution: quarantineResolutionSchema.nullable(),
   resolution_reason: z.string().nullable(),
+  resolution_reason_code: z.string().nullish().default(null),
   created_at: z.string(),
   resolved_at: z.string().nullable(),
-})
+}).transform(({ reason_code, ...rest }) => ({
+  ...rest,
+  screening_reason_code: screeningOriginCode(rest.screening_reason_code, reason_code),
+}))
 
 export const minerContextSchema = z.object({
   miner_hotkey: z.string(),
@@ -5480,6 +5552,34 @@ export const validationQueueReinstatementSchema = z.object({
   created_at: z.string(),
 })
 
+// The relay-owned, provider-WIDE outage circuit. Attached to a retry row while
+// it is open (then it is why the grant is refused, whatever the slot failed on),
+// and while closed if a remaining slot carries `provider_outage_parked`.
+// `closed_at` is the last time a provider request succeeded and closed it — a
+// current-state observation, not proof the route is healthy now.
+export const validationProviderOutageSchema = z.object({
+  provider: z.string(),
+  state: z.enum(['open', 'closed']),
+  epoch: z.string(),
+  opened_at: z.string(),
+  retry_at: z.string(),
+  last_failure_at: z.string(),
+  closed_at: z.string().nullable(),
+  failure_count: z.number().int(),
+  last_status: z.number().int().nullable(),
+  last_error_code: z.string(),
+  probe_kind: z.string().nullable(),
+  probe_key: z.string().nullable(),
+  probe_expires_at: z.string().nullable(),
+})
+
+// Nullish-tolerant for the same split-deploy reason as the eviction fields:
+// an older platform omits both, which means "cannot tell you".
+const providerOutageRetryFields = {
+  provider_outage: validationProviderOutageSchema.nullish().default(null),
+  provider_outage_blocks_retry: z.boolean().nullish().default(null),
+}
+
 export const validationRetryDetailSchema = z.object({
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
@@ -5494,6 +5594,7 @@ export const validationRetryDetailSchema = z.object({
   blocking_reason: z.string().nullable(),
   recommended_action: z.enum(['retry', 'withdraw']).nullish().default(null),
   dominant_failure_code: z.string().nullish().default(null),
+  ...providerOutageRetryFields,
   withdrawal_allowed: z.boolean(),
   withdrawal_blocking_reason: z.string().nullable(),
   // Eviction reporting is nullish-tolerant because Backroom and the platform
@@ -5525,6 +5626,9 @@ export const retryValidationInputSchema = z.object({
   agentId: z.string().uuid(),
   expectedSnapshot: z.string().regex(/^[0-9a-f]{64}$/),
   reason: auditReasonSchema(3),
+  // Required to grant while provider_outage_blocks_retry is true: the
+  // provider-wide circuit is open, so every restored lease is parked again.
+  acknowledgeProviderOutage: z.boolean().default(false),
 })
 
 export const retryValidationResponseSchema = z.object({
@@ -5654,6 +5758,7 @@ export const stuckSubmissionSchema = z.object({
   blocking_reason: z.string().nullable(),
   recommended_action: z.enum(['retry', 'withdraw']).nullish().default(null),
   dominant_failure_code: z.string().nullish().default(null),
+  ...providerOutageRetryFields,
   earliest_retry_after: z.string().nullable(),
   attempts_used: z.number().int().nonnegative(),
   exhausted_validator_count: z.number().int().nonnegative(),
@@ -5742,6 +5847,8 @@ export const batchRetryValidationItemSchema = z.object({
 
 export const batchRetryValidationInputSchema = z.object({
   reason: auditReasonSchema(3),
+  // Applies to every item; see retryValidationInputSchema.
+  acknowledgeProviderOutage: z.boolean().default(false),
   items: z
     .array(batchRetryValidationItemSchema)
     .min(1)
@@ -6474,6 +6581,7 @@ export const validatorScoreReplacementDetailSchema = z.object({
   ticket_status: z.enum(['issued', 'scored', 'expired']).nullable(),
   ticket_deadline: z.string().nullable(),
   replacement_pending: z.boolean(),
+  replacement_queued: z.boolean(),
   replacement_request_id: z.string().uuid().nullable(),
   replacement_reason: z.string().nullable(),
   replacement_actor: z.string().nullable(),
@@ -7053,7 +7161,7 @@ export const screenReviewAuditSchema = z.object({
   max_read_bytes: z.number().int().positive().nullish().default(null),
   read_bytes_used: z.number().int().nonnegative().nullish().default(null),
   max_input_tokens: z.number().int().positive().nullish().default(null),
-  input_tokens_used: z.number().int().min(0).max(20_000_000).nullish().default(null),
+  input_tokens_used: z.number().int().min(0).max(100_000_000).nullish().default(null),
   max_output_tokens: z.number().int().min(1).max(1_000_000).nullish().default(null),
   output_tokens_used: z.number().int().min(0).max(1_000_000).nullish().default(null),
   max_cost_usd: z.number().positive().nullish().default(null),
@@ -7063,6 +7171,18 @@ export const screenReviewAuditSchema = z.object({
   model_steps_observed: z.number().int().min(0).max(10_000).nullish().default(null),
   tool_calls_observed: z.number().int().min(0).max(10_000).nullish().default(null),
   budget_stop_reason: z.enum(['none', 'step', 'tool', 'aggregate', 'token', 'cost', 'time']).nullish().default(null),
+  requested_model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9/._:-]{0,127}$/).nullish().default(null),
+  response_provider: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$/).nullish().default(null),
+  final_stage: z.enum(['preflight', 'analyst', 'critic', 'adjudicator']).nullish().default(null),
+  cause_detail: z.enum(['lease_unavailable', 'review_disabled']).nullish().default(null),
+  model_tool_failure_subcode: z.enum([
+    'invalid_submit_call_id',
+    'no_tool_call_after_corrections',
+    'malformed_tool_arguments_json',
+    'invalid_tool_call_shape',
+  ]).nullish().default(null),
+  max_elapsed_ms: z.number().int().min(1).max(3_600_000).nullish().default(null),
+  elapsed_ms: z.number().int().min(0).max(3_600_000).nullish().default(null),
 })
 
 export const deferredReviewEvidenceSchema = z.object({
@@ -7519,6 +7639,11 @@ export const sourceDiffManifestSchema = z.object({
   removed_count: z.number().int().nonnegative(),
   renamed_count: z.number().int().nonnegative().default(0),
   truncated: z.boolean(),
+  // Files the Platform's bounded source read skipped in either artifact: not
+  // compared, so absent from `files` and every count. Older Platforms omit
+  // these fields.
+  omitted_file_count: z.number().int().nonnegative().nullish().transform((value) => value ?? 0),
+  omitted_paths: z.array(z.string()).nullish().transform((value) => value ?? []),
 })
 
 export const sourceDiffFileInputSchema = z.object({
@@ -7583,6 +7708,13 @@ export const baselineDiffManifestSchema = z.object({
   custom_added_lines: z.number().int().nonnegative(),
   path_aligned: z.boolean(),
   truncated: z.boolean(),
+  // Files the Platform's bounded source read skipped: not compared, so absent
+  // from `files` and every count. When any exist custom_added_lines is a lower
+  // bound and custom_added_lines_complete is false. An older Platform omits all
+  // three, and its completeness is unknown (null), not assumed.
+  omitted_file_count: z.number().int().nonnegative().nullish().transform((value) => value ?? 0),
+  omitted_paths: z.array(z.string()).nullish().transform((value) => value ?? []),
+  custom_added_lines_complete: z.boolean().nullish().transform((value) => value ?? null),
 })
 
 export const baselineDiffFileInputSchema = z.object({
@@ -8838,3 +8970,102 @@ export const sourceReviewQueueSloSchema = z.object({
 })
 
 export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
+
+// Anomalous-score outlier escalation (issue #476): the env-only posture that
+// can open ATH holds, each value's source, and its audit-chain activity.
+// Read-only. Distinct from /admin/score-outliers (validator disagreement).
+type GeneratedOutlierEscalationSettings =
+  PlatformComponents['schemas']['OutlierEscalationSettingsView']
+type GeneratedOutlierEscalationSources =
+  PlatformComponents['schemas']['OutlierEscalationSettingSourcesView']
+type GeneratedOutlierEscalationEvidence =
+  PlatformComponents['schemas']['OutlierEscalationEvidence']
+type GeneratedOutlierEscalationEntry =
+  PlatformComponents['schemas']['OutlierEscalationEntryView']
+type GeneratedOutlierEscalationActivity =
+  PlatformComponents['schemas']['OutlierEscalationActivityView']
+type GeneratedOutlierEscalationResponse =
+  PlatformComponents['schemas']['AdminOutlierEscalationResponse']
+
+const outlierSettingFieldSchema = z.enum([
+  'mode',
+  'min_bench_version',
+  'min_cohort_size',
+  'modified_z_threshold',
+  'min_composite_floor',
+])
+const outlierSettingSourceSchema = z.enum(['env', 'default', 'default_invalid_env'])
+
+const outlierEscalationSettingsSchema = z.object({
+  mode: z.enum(['off', 'observe', 'enforce']),
+  min_bench_version: z.number().int(),
+  min_cohort_size: z.number().int(),
+  // Null only for a non-finite env value (nan/inf) that scoring IS using.
+  modified_z_threshold: z.number().nullable(),
+  min_composite_floor: z.number().nullable(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationSettings>)
+
+const outlierEscalationSourcesSchema = z.object({
+  mode: outlierSettingSourceSchema,
+  min_bench_version: outlierSettingSourceSchema,
+  min_cohort_size: outlierSettingSourceSchema,
+  modified_z_threshold: outlierSettingSourceSchema,
+  min_composite_floor: outlierSettingSourceSchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationSources>)
+
+const outlierEscalationEvidenceSchema = z.object({
+  composite: z.number().nullish(),
+  cohort_size: z.number().int().nullish(),
+  cohort_median: z.number().nullish(),
+  cohort_mad: z.number().nullish(),
+  modified_z: z.number().nullish(),
+  min_cohort_size: z.number().int().nullish(),
+  modified_z_threshold: z.number().nullish(),
+  min_composite_floor: z.number().nullish(),
+  upward: z.boolean().nullish(),
+  above_floor: z.boolean().nullish(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationEvidence>)
+
+const outlierEscalationEntrySchema = z.object({
+  seq: z.number().int().positive(),
+  agent_id: z.string().uuid(),
+  recorded_at: z.string(),
+  enforced: z.boolean(),
+  bench_version: z.number().int().nullish(),
+  algorithm_version: z.string().nullish(),
+  evidence: outlierEscalationEvidenceSchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationEntry>)
+
+const outlierEscalationActivitySchema = z.object({
+  window_hours: z.number().int().positive(),
+  window_started_at: z.string(),
+  observed_total: z.number().int().nonnegative(),
+  enforced_total: z.number().int().nonnegative(),
+  observed_in_window: z.number().int().nonnegative(),
+  enforced_in_window: z.number().int().nonnegative(),
+  latest_recorded_at: z.string().nullish(),
+  recent_limit: z.number().int().positive(),
+  recent: z.array(outlierEscalationEntrySchema).max(100),
+  recent_truncated: z.boolean(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationActivity>)
+
+export const outlierEscalationSchema = z.object({
+  generated_at: z.string(),
+  settings_loaded_at: z.string(),
+  settings: outlierEscalationSettingsSchema,
+  defaults: outlierEscalationSettingsSchema,
+  sources: outlierEscalationSourcesSchema,
+  env_vars: z.record(z.string(), z.string()),
+  invalid_env_fields: z.array(outlierSettingFieldSchema).max(5),
+  review_kind: z.string(),
+  algorithm_version: z.string(),
+  pending_review_count: z.number().int().nonnegative(),
+  activity: outlierEscalationActivitySchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationResponse>)
+
+export const outlierEscalationInputSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(20),
+  windowHours: z.number().int().min(1).max(720).default(168),
+})
+
+export type OutlierEscalation = z.infer<typeof outlierEscalationSchema>

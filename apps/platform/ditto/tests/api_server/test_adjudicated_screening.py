@@ -6,7 +6,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
+from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -23,10 +25,16 @@ from ditto.db.models import (
     SubmissionImageBuild,
     SubmissionSourceReview,
 )
+from ditto.tests.api_server.endpoints.test_public import _install_db
 from ditto.tests.api_server.endpoints.test_screener import (
     _SCREENER_HOTKEY,
     _SHA256,
     _seed_agent,
+)
+from ditto_screening_protocol.models import (
+    ScreenReviewAudit,
+    SourceReviewNote,
+    source_review_notes_digest,
 )
 
 _CONFIG_DIGEST = "sha256:" + "ab" * 32
@@ -512,3 +520,97 @@ async def test_an_unadjudicated_hold_is_unchanged(
         attempt = await session.get(ScreeningAttempt, attempt_id)
         assert attempt is not None
         assert attempt.status == "quarantined"
+
+
+# ── #562: the Targon hold retains its notes ledger for the public conclusion ──
+
+
+def _budget_hold_observation(concern_lines: list[int]) -> dict[str, object]:
+    """A read-budget-terminated L1 review with ``len(concern_lines)`` concerns."""
+    return {
+        "ok": False,
+        "risk_level": None,
+        "finding_digest": None,
+        "categories": [],
+        "error_code": "source-review-read-budget-exhausted",
+        "finding": None,
+        "failure_disposition": "inconclusive",
+        "clearance_certified": False,
+        "review_audit": ScreenReviewAudit(
+            stage="l1",
+            reason_code="source-review-read-budget-exhausted",
+            prompt_revision="l1-v13",
+            max_steps=240,
+            steps_used=37,
+            max_read_bytes=320_000,
+            read_bytes_used=338_278,
+        ).model_dump(mode="json"),
+        "notes": [
+            {
+                "kind": "concern",
+                "category": "none",
+                "path": "src/main.rs",
+                "line": line,
+                "summary": "reads the grader's expected answer",
+            }
+            for line in concern_lines
+        ]
+        + [{"kind": "cleared", "category": "none", "summary": "tool loop is honest"}],
+        "adjudication": None,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("concern_lines", "expected"),
+    [
+        # Three substantiated concerns reach the pinned default threshold (3):
+        # the worker held on the concerns, so the public reads a concern.
+        ([10, 20, 30], "adverse_signal"),
+        # One concern is thin coverage: a budget hold with no finding.
+        ([10], "budget_exhausted"),
+    ],
+)
+async def test_targon_budget_hold_persists_notes_for_the_public_conclusion(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    concern_lines: list[int],
+    expected: str,
+) -> None:
+    observation = _budget_hold_observation(concern_lines)
+    attempt_id = await _seed_held_screen(
+        session_maker, observation=observation, adjudicator_mode="off"
+    )
+
+    await _finalize(session_maker, attempt_id)
+
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        quarantine = await session.scalar(
+            select(ScreeningQuarantine).where(
+                ScreeningQuarantine.attempt_id == attempt_id
+            )
+        )
+        assert quarantine is not None
+        assert quarantine.reason_code == "source-review-inconclusive"
+        assert quarantine.review_audit is not None
+        # The typed ledger is retained exactly as the host path retains it.
+        notes = [
+            SourceReviewNote.model_validate(note)
+            for note in cast(list[object], observation["notes"])
+        ]
+        assert quarantine.review_notes == [
+            note.model_dump(mode="json") for note in notes
+        ]
+        assert quarantine.review_notes_digest == source_review_notes_digest(notes)
+        agent_id = attempt.agent_id
+
+    _install_db(app, session_maker)
+    summary = await client.get(f"/api/v1/public/agent/{agent_id}/summary")
+    assert summary.status_code == 200
+    assert summary.json()["status"] == "under_review"
+    assert summary.json()["review_conclusion"] == expected
+    assert "src/main.rs" not in summary.text
+    assert "grader" not in summary.text
