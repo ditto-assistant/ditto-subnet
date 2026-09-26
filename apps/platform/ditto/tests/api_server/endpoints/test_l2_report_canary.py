@@ -792,19 +792,20 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
                 finished_at=now,
             )
         )
-        session.add(
-            ScreenerHeartbeat(
-                screener_hotkey=f"hotkey-{node_id}",
-                instance_id=f"{node_id}-worker-2",
-                software_version="0.319.0",
-                protocol_version=7,
-                policy_version=13,
-                state="polling",
-                reported_at=now,
-                seen_at=now,
-                signature="f" * 128,
+        for worker in (1, 2):
+            session.add(
+                ScreenerHeartbeat(
+                    screener_hotkey=f"hotkey-{node_id}",
+                    instance_id=f"{node_id}-worker-{worker}",
+                    software_version="0.319.0",
+                    protocol_version=7,
+                    policy_version=13,
+                    state="polling",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="f" * 128,
+                )
             )
-        )
         await session.flush()
         session.add(
             ScreenerL2ReportCanary(
