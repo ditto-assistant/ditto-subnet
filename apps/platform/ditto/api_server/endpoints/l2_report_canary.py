@@ -60,9 +60,7 @@ _FULL_RUNTIME_MIN_RELEASE = (0, 317, 2)
 
 def _canary_lease(*, source_review_timeout_seconds: int, run_mode: str) -> timedelta:
     overhead = (
-        _FULL_RUNTIME_OVERHEAD
-        if run_mode == "full_runtime"
-        else _SOURCE_ONLY_OVERHEAD
+        _FULL_RUNTIME_OVERHEAD if run_mode == "full_runtime" else _SOURCE_ONLY_OVERHEAD
     )
     return max(_MIN_LEASE, timedelta(seconds=source_review_timeout_seconds) + overhead)
 

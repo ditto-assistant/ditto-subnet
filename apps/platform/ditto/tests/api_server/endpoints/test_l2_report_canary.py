@@ -277,9 +277,7 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
     assert claim.source_attempt_id == attempt_id
     assert claim.run_mode == run_mode
     assert claim.scored_runtime_evidence == packet
-    expected_lease = timedelta(
-        minutes=120 if run_mode == "full_runtime" else 70
-    )
+    expected_lease = timedelta(minutes=120 if run_mode == "full_runtime" else 70)
     assert abs((claim.lease_expires_at - now - expected_lease).total_seconds()) < 30
     async with session_maker() as session:
         view = await endpoints.get_l2_report_canary(claim.canary_id, None, session)
