@@ -5,6 +5,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ditto-assistant/dittobench-datagen/gen"
 )
@@ -34,7 +35,10 @@ func newRouter() *router {
 // trainRouter generates seeds [first, first+n) and fits the memory-question
 // and tool-prompt classifiers. Tool categories and memory families share one
 // label space prefixed by side so the two never collide.
-func trainRouter(benchVersion int, runSize string, first int64, n int) (*router, error) {
+func trainRouter(benchVersion int, runSize string, first int64, n, workers int) (*router, error) {
+	if workers < 1 || workers > 16 {
+		return nil, fmt.Errorf("router workers must be between 1 and 16")
+	}
 	prof, ok := gen.ProfileForVersion(runSize, benchVersion)
 	if !ok {
 		return nil, errUnsupportedRunSize(runSize)
@@ -54,16 +58,22 @@ func trainRouter(benchVersion int, runSize string, first int64, n int) (*router,
 		classN[class]++
 		total++
 	}
-	for i := 0; i < n; i++ {
-		a, err := gen.GenerateDataset(first+int64(i), prof, benchVersion)
+	for i := 0; i < n; i += workers {
+		// Keep at most one bounded batch in memory. Accumulate in seed order,
+		// preserving the serial fit exactly and reporting the earliest error.
+		batch, err := routerTrainingBatch(first+int64(i), min(workers, n-i), func(seed int64) (gen.DatasetArtifact, error) {
+			return gen.GenerateDataset(seed, prof, benchVersion)
+		})
 		if err != nil {
-			return nil, fmt.Errorf("seed %d: %w", first+int64(i), err)
+			return nil, err
 		}
-		for _, mc := range a.MemoryCases {
-			add("mem:"+routerLabel(mc.QuestionType), mc.Question)
-		}
-		for _, tc := range a.ToolCases {
-			add("tool:"+toolControlFamily(benchVersion, tc), tc.Prompt)
+		for _, a := range batch {
+			for _, mc := range a.MemoryCases {
+				add("mem:"+routerLabel(mc.QuestionType), mc.Question)
+			}
+			for _, tc := range a.ToolCases {
+				add("tool:"+toolControlFamily(benchVersion, tc), tc.Prompt)
+			}
 		}
 	}
 	r := newRouter()
@@ -92,6 +102,26 @@ func trainRouter(benchVersion int, runSize string, first int64, n int) (*router,
 	}
 	sort.Strings(r.classes)
 	return r, nil
+}
+
+func routerTrainingBatch(first int64, count int, generate func(int64) (gen.DatasetArtifact, error)) ([]gen.DatasetArtifact, error) {
+	artifacts := make([]gen.DatasetArtifact, count)
+	errors := make([]error, count)
+	var group sync.WaitGroup
+	for i := range artifacts {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			artifacts[i], errors[i] = generate(first + int64(i))
+		}()
+	}
+	group.Wait()
+	for i, err := range errors {
+		if err != nil {
+			return nil, fmt.Errorf("seed %d: %w", first+int64(i), err)
+		}
+	}
+	return artifacts, nil
 }
 
 // routerLabel collapses the record-balance shapes to one surface label: the
