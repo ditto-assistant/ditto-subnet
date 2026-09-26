@@ -6190,7 +6190,7 @@ async def test_scorer_flow_keeps_score_helper_before_clear(
     source = tmp_path / "source"
     source.mkdir()
     (source / "main.rs").write_text(
-        "fn high(score: f64) -> bool { score > 0.9 }\n"
+        "fn high(score: f64) -> bool { let result = score > 0.9; result }\n"
         "fn run(mut response: RunResponse, score: f64) -> RunResponse {\n"
         "    response.answer = Some(model_answer());\n"
         "    let hide = high(score);\n"
@@ -6226,6 +6226,58 @@ async def test_scorer_flow_keeps_cross_function_conditional_population(
     assert not result["truncated"]
     assert len(result["interprocedural_candidates"]) == 1
     assert result["interprocedural_candidates"][0]["callee"] == "populate"
+
+
+async def test_scorer_flow_keeps_cross_file_score_controlled_clear(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "run.rs").write_text(
+        "fn run(mut response: RunResponse, ab_score: f64) -> RunResponse {\n"
+        "    response.answer = Some(model_answer());\n"
+        "    if ab_score > 0.9 { clear_answer(&mut response); }\n"
+        "    response\n"
+        "}\n"
+    )
+    (source / "response.rs").write_text(
+        "fn clear_answer(response: &mut RunResponse) { response.answer = None; }\n"
+    )
+    result = json.loads(
+        await InProcessAnalyzerHarness().run(source, "scorer_field_flow", {})
+    )
+    assert not result["truncated"]
+    assert result["flow_count"] == 0
+    assert len(result["interprocedural_candidates"]) == 1
+    assert result["interprocedural_candidates"][0]["field_assignments"][0][
+        "path"
+    ] == "response.rs"
+    assert _dossier_has_scorer_attention(
+        {"deterministic": {"scorer_field_flow": result}}
+    )
+
+
+async def test_scorer_flow_keeps_cross_file_score_helper(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "run.rs").write_text(
+        "fn run(mut response: RunResponse, metric: f64) -> RunResponse {\n"
+        "    response.answer = Some(model_answer());\n"
+        "    if high(metric) { response.answer = None; }\n"
+        "    response\n"
+        "}\n"
+    )
+    (source / "score.rs").write_text(
+        "fn high(score: f64) -> bool { let result = score > 0.9; result }\n"
+    )
+    result = json.loads(
+        await InProcessAnalyzerHarness().run(source, "scorer_field_flow", {})
+    )
+    assert not result["truncated"]
+    assert result["flow_count"] == 1
+    assert result["flows"][0]["field"] == "answer"
 
 
 @pytest.mark.integration
