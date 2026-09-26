@@ -22,7 +22,7 @@ def upgrade() -> None:
         sa.Column("run_mode", sa.Text(), nullable=False, server_default="source_only"),
     )
     op.create_check_constraint(
-        "screener_l2_canary_run_mode_check",
+        op.f("ck_screener_l2_report_canaries_run_mode_check"),
         "screener_l2_report_canaries",
         "run_mode IN ('source_only', 'full_runtime')",
     )
@@ -30,7 +30,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_constraint(
-        "screener_l2_canary_run_mode_check",
+        op.f("ck_screener_l2_report_canaries_run_mode_check"),
         "screener_l2_report_canaries",
     )
     op.drop_column("screener_l2_report_canaries", "run_mode")

@@ -7058,7 +7058,7 @@ class ScreenerL2ReportCanary(Base):
         ),
         CheckConstraint(
             "run_mode IN ('source_only', 'full_runtime')",
-            name="screener_l2_canary_run_mode_check",
+            name="run_mode_check",
         ),
         CheckConstraint(
             "status IN ('queued', 'leased', 'succeeded', 'incomplete', 'expired')",
