@@ -296,7 +296,9 @@ describe('Backroom MCP tools', () => {
         'cancel_benchmark_canary',
         'resolve_screening_quarantine',
         'resolve_screening_dispute',
+        'preview_ath_hold_withdrawal',
         'resolve_ath_review',
+        'withdraw_ath_hold',
         'create_ath_rulings_upload',
         'preview_ath_rulings_batch',
         'execute_ath_rulings_batch',
@@ -405,7 +407,9 @@ describe('Backroom MCP tools', () => {
     // retain about 0.5 KB headroom.
     // The search_submissions lookup (server-side filters, #560) brings the
     // measured catalog to 171,685 bytes; keep the same ~0.5 KB headroom.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(172_200)
+    // Guarded ATH withdrawal adds two bounded operations; the combined
+    // catalog measures 174,384 bytes.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(174_900)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -435,7 +439,9 @@ describe('Backroom MCP tools', () => {
       // shadow-policy descriptions bring the measured total to 29,850.
       // The taxonomy's rate_limit_bursts catalog note measured 30,520; the
       // one-line outlier-escalation dry-run read brings it to 30,794.
-      31_200,
+      // Guarded ATH withdrawal adds two more bounded summaries; the combined
+      // descriptions measure 30,915 characters.
+      31_400,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

@@ -138,7 +138,11 @@ import {
   type CopyReviewGeneration,
   athPrecedentListSchema,
   getAthReviewInputSchema,
+  executeAthHoldWithdrawalInputSchema,
+  executeAthHoldWithdrawalResponseSchema,
   openAthReviewInputSchema,
+  previewAthHoldWithdrawalInputSchema,
+  previewAthHoldWithdrawalResponseSchema,
   searchAthPrecedentsInputSchema,
   openAthReviewResponseSchema,
   athRulingsUploadResponseSchema,
@@ -2168,6 +2172,48 @@ export async function resolveCopyReview(rawInput: unknown, actor: string) {
   )
   invalidateCopyReviewsCache()
   return resolveCopyReviewResponseSchema.parse(payload)
+}
+
+export async function previewAthHoldWithdrawal(rawInput: unknown, actor: string) {
+  const input = previewAthHoldWithdrawalInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/withdraw/preview`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        review_id: input.reviewId,
+        expected_sha256: input.expectedSha256,
+        expected_score_count: input.expectedScoreCount,
+        expected_agent_status: input.expectedAgentStatus,
+        reason: input.reason,
+      },
+      timeoutMs: 60_000,
+    },
+  )
+  return previewAthHoldWithdrawalResponseSchema.parse(payload)
+}
+
+export async function executeAthHoldWithdrawal(rawInput: unknown, actor: string) {
+  const input = executeAthHoldWithdrawalInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/withdraw`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        review_id: input.reviewId,
+        expected_sha256: input.expectedSha256,
+        expected_score_count: input.expectedScoreCount,
+        expected_agent_status: input.expectedAgentStatus,
+        reason: input.reason,
+        preview_token: input.previewToken,
+        confirmation: input.confirmation,
+      },
+    },
+  )
+  invalidateCopyReviewsCache()
+  return executeAthHoldWithdrawalResponseSchema.parse(payload)
 }
 
 export async function fetchAthReview(rawInput: unknown) {

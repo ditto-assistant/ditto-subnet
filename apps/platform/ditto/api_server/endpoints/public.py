@@ -211,6 +211,10 @@ from ditto.api_models.validator_capabilities import (
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.api_models.validator_updater import ValidatorUpdaterStatus
 from ditto.api_server.artifact_audit import client_ip, request_detail
+from ditto.api_server.ath_hold_withdrawal import (
+    emission_withheld_agent_ids,
+    without_emission_withheld,
+)
 from ditto.api_server.ath_review_state import (
     DEFAULT_OPEN_REASON,
     derive_ath_review_lifecycle,
@@ -2334,6 +2338,7 @@ def _public_entry(
     coding_shadow: PublicCodingShadowScore | None = None,
     router_shadow_by_hotkey: Mapping[str, float] | None = None,
     router_shadow_queued: bool = False,
+    reward_withheld: bool = False,
 ) -> PublicLeaderboardEntry:
     """Map a ledger row to the public entry, exposing only the safe subset of
     ``details`` (never ``per_case``, which carries the answer key)."""
@@ -2430,7 +2435,11 @@ def _public_entry(
         miner_uid=miner_uid,
         registered=registered,
         emission_eligible=(
-            finalized and r.eligible and registered if registered is not None else None
+            False
+            if reward_withheld
+            else finalized and r.eligible and registered
+            if registered is not None
+            else None
         ),
         composite=r.composite,
         official_composite=(
@@ -3429,6 +3438,14 @@ async def build_public_leaderboard(
         if registered_uids is None
         else [row for row in finalized_rows if row.miner_hotkey in registered_uids]
     )
+    # Rank presentation includes a withdrawn precautionary hold. The emission
+    # projection does not, until the terminal exact-artifact gate marks that
+    # exact artifact reward-eligible.
+    withheld_reward_ids = await emission_withheld_agent_ids(
+        session,
+        [row.agent_id for row in finalized_rows],
+    )
+    emission_rows = without_emission_withheld(emission_rows, withheld_reward_ids)
     # The factor-adjusted finalized board is now one row per owner, so the
     # provisional overlay suppresses and dedupes on that same owner graph.
     provisional_candidates = (
@@ -3764,6 +3781,7 @@ async def build_public_leaderboard(
                 v9_confirmation=v9_confirmations.get(row.agent_id),
                 router_shadow_by_hotkey=router_shadow_by_hotkey,
                 router_shadow_queued=bool(router_shadow_by_hotkey),
+                reward_withheld=row.agent_id in withheld_reward_ids,
             )
         )
     for row, count in provisional_rows:
@@ -3818,6 +3836,7 @@ async def build_public_leaderboard(
                 v9_confirmation=v9_confirmations.get(row.agent_id),
                 router_shadow_by_hotkey=router_shadow_by_hotkey,
                 router_shadow_queued=bool(router_shadow_by_hotkey),
+                reward_withheld=row.agent_id in withheld_reward_ids,
             )
         )
     return PublicLeaderboardResponse(
@@ -5993,7 +6012,7 @@ async def _duplicate_submission_metadata(
 class _PublicAthReviewSnapshot:
     """Public-safe projection of the latest durable ATH lifecycle event."""
 
-    event: Literal["opened", "reopened", "cleared", "rejected"]
+    event: Literal["opened", "reopened", "cleared", "rejected", "withdrawn"]
     reason: str
     event_at: datetime
     opened_at: datetime

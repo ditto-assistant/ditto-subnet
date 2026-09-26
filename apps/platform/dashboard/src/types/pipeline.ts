@@ -97,7 +97,7 @@ export interface AgentSummaryPayload extends ActivityEntry {
   last_scored_at?: string | null;
   /** Median composite across accepted current-benchmark scores. */
   score_composite?: number | null;
-  review_event?: "opened" | "reopened" | "cleared" | "rejected" | null;
+  review_event?: "opened" | "reopened" | "cleared" | "rejected" | "withdrawn" | null;
   review_event_at?: string | null;
   review_original_reason?: string | null;
   review_opened_at?: string | null;

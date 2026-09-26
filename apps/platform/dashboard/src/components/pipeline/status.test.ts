@@ -215,6 +215,7 @@ describe("review-event evidence (#622/#636)", () => {
     expect(reviewEventLabel({ review_event: "reopened" })).toBe("Review reopened");
     expect(reviewEventLabel({ review_event: "cleared" })).toBe("Review cleared");
     expect(reviewEventLabel({ review_event: "rejected" })).toBe("Review rejected");
+    expect(reviewEventLabel({ review_event: "withdrawn" })).toBe("Hold withdrawn");
     expect(reviewEventLabel({})).toBe("Operator review");
     expect(reviewEventLabel({ review_event: "surprise" })).toBe("Operator review");
   });

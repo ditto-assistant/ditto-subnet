@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.db.models import AthReview, AthReviewAction
 
-AthReviewEvent = Literal["opened", "reopened", "cleared", "rejected"]
+AthReviewEvent = Literal["opened", "reopened", "cleared", "rejected", "withdrawn"]
 AthReasonSource = Literal["original_hold", "reconsideration"]
 
 DEFAULT_OPEN_REASON = "Submission routed to ATH review."
@@ -105,8 +105,14 @@ def derive_ath_review_lifecycle(
     resolution = review.resolution or (
         latest_action.action if latest_action is not None else None
     )
+    if resolution == "reject":
+        event: AthReviewEvent = "rejected"
+    elif resolution == "withdraw":
+        event = "withdrawn"
+    else:
+        event = "cleared"
     return AthReviewLifecycle(
-        event="rejected" if resolution == "reject" else "cleared",
+        event=event,
         reason=(
             review.resolution_reason
             or (latest_action.reason if latest_action is not None else None)

@@ -239,3 +239,21 @@ a copy hold opened at upload has no scores at all, and a hold that survived a
 benchmark rollout has none at the new active version. Both are still waiting for
 an operator. The MCP queue tool pins `generation=all` and does not expose the
 parameter.
+
+## Withdrawing a precautionary hold
+
+`clear` certifies the artifact and `reject` records a violation. Neither is
+the right exit when an operator-opened manual hold (`snapshot =
+manual-admin-hold`) no longer has a supported opening rationale.
+`POST /admin/copy-reviews/{agent_id}/withdraw/preview` then
+`POST /admin/copy-reviews/{agent_id}/withdraw` records `resolution = withdraw`.
+
+The preview binds the review id, pending state, agent UUID, artifact SHA-256,
+score count, agent status, correction reason, and the resulting public crown.
+Execute re-reads those guards and refuses a stale or repeated request. The
+original reason, opener, timestamps, score rows, and action history stay.
+Score and rank presentation return to the pre-hold status. Reward eligibility
+does not: until the terminal exact-artifact gate in #2041 can decide this
+exact artifact, the withdrawal stays out of the emission pool. A sibling
+artifact's clear or reject is not consulted. Automated holds still leave
+through `clear` or `reject`. Withdrawals are omitted from the precedent search.
