@@ -641,6 +641,98 @@ class PublicCodingShadowScore(BaseModel):
         return self
 
 
+class PublicRewardEligibility(BaseModel):
+    """Whether one exact artifact is earning, and in plain words why not.
+
+    Deliberately a separate object rather than another flag on the row, because
+    #2041 and #2053 ask for score rank, provisional champion status and reward
+    eligibility to be three readable things instead of one collapsed verdict. A
+    withheld artifact keeps its ``composite``, its ``rank`` and its whole review
+    history; this object is the only thing that says it is not being paid.
+
+    It carries no source, no reviewer output and no cohort statistics -- only the
+    state, the fixed miner-facing sentence for that state, and the posture
+    identity needed to reproduce the verdict.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    state: Annotated[
+        str,
+        Field(
+            description=(
+                "``eligible`` or one of the withheld classes: "
+                "``unresolved_review``, ``review_inconclusive``, "
+                "``review_escalated``, ``review_infrastructure_failed``, "
+                "``review_missing``, ``review_rejected``, "
+                "``awaiting_next_window``."
+            )
+        ),
+    ]
+    reason: Annotated[
+        str,
+        Field(
+            description=(
+                "Fixed miner-facing explanation for ``state``. The same sentence "
+                "the submission page, the board and Backroom publish, so they can "
+                "never disagree about why a score is not yet earning."
+            )
+        ),
+    ]
+    reward_eligible: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether this artifact is earning emissions under the CURRENT "
+                "posture. True while the gate is off or in shadow even when "
+                "``posture_satisfied`` is false -- those postures publish the "
+                "finding without acting on it."
+            )
+        ),
+    ]
+    posture_satisfied: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether the required review posture is met, independent of "
+                "enforcement. False with ``reward_eligible`` true is exactly a "
+                "row that enforcement would withhold."
+            )
+        ),
+    ]
+    enforcement: Annotated[
+        str,
+        Field(description="Operator posture in force: ``off``/``shadow``/``enforce``."),
+    ]
+    policy_revision: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Eligibility posture revision this verdict was reached under. "
+                "``0`` means no revision is stored and the documented default "
+                "(enforcement off) is in force."
+            ),
+        ),
+    ]
+    window_start: Annotated[
+        datetime,
+        Field(description="Opening instant of the emission window evaluated (UTC)."),
+    ]
+    activates_at: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description=(
+                "When a cleared artifact starts earning. Set only for "
+                "``awaiting_next_window``: a clear takes effect at the next "
+                "window boundary and is never applied backwards, so no reward is "
+                "granted for the period spent under review."
+            ),
+        ),
+    ] = None
+
+
 class PublicLeaderboardEntry(BaseModel):
     """One miner's best score, aggregate-only, for public display.
 
@@ -815,12 +907,27 @@ class PublicLeaderboardEntry(BaseModel):
             default=None,
             description=(
                 "Whether this entry is finalized on the current benchmark, "
-                "full-benchmark eligible, and currently registered, so validators "
-                "may include it in the active weight fold. Null when registration "
-                "could not be read."
+                "full-benchmark eligible, currently registered, AND holds a "
+                "terminal review for its exact artifact while the operator's "
+                "eligibility gate is enforcing, so validators may include it in "
+                "the active weight fold. Null when registration could not be "
+                "read. Read ``reward_eligibility`` for which of those it is."
             ),
         ),
     ]
+    reward_eligibility: Annotated[
+        PublicRewardEligibility | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Terminal-review reward eligibility for this exact artifact, "
+                "separate from ``rank`` and from champion status. Absent on a "
+                "historical board and on a platform with the gate switched off "
+                "and nothing to report."
+            ),
+        ),
+    ] = None
     composite: Annotated[
         float,
         Field(
@@ -1600,6 +1707,45 @@ class PublicKothEmissions(BaseModel):
     tail_size: Annotated[int, Field(ge=0)]
     champion_agent_id: UUID
     champion_miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    champion_reward_eligible: Annotated[
+        bool,
+        Field(
+            default=True,
+            description=(
+                "Whether the crowned agent is also earning emissions. Holding the "
+                "crown and being paid are separate facts (#2041): a champion whose "
+                "exact artifact has an open, inconclusive, infrastructure-failed or "
+                "escalated review keeps the crown and the top rank and earns "
+                "nothing while the operator's eligibility gate is enforcing. True "
+                "whenever the gate is off or in shadow."
+            ),
+        ),
+    ] = True
+    provisional_champion: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "The crown is held provisionally: this projection's champion is "
+                "not currently reward-eligible, so the 65% slot is unpaid rather "
+                "than reassigned. The inverse of ``champion_reward_eligible``, "
+                "published under its own name because it is the word the board "
+                "renders."
+            ),
+        ),
+    ] = False
+    reward_eligibility_mode: Annotated[
+        str | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "``enforce`` while the terminal-review emission gate is withholding "
+                "from this projection; absent when it is off or in shadow, in which "
+                "case this projection is exactly the pre-gate one."
+            ),
+        ),
+    ] = None
     raw_leader_agent_id: UUID
     raw_leader_miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     raw_leader_decision: PublicDethroneDecision | None = None
@@ -4012,6 +4158,16 @@ class PublicSubmissionPipeline(BaseModel):
         description=(
             "Current-benchmark submission family when this agent shares a "
             "leaderboard ownership slot with another finalized generation."
+        ),
+    )
+    reward_eligibility: PublicRewardEligibility | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Terminal-review reward eligibility for this exact artifact: whether "
+            "it is earning emissions, and if not, the plain-language reason. "
+            "Separate from ``status`` and from the score fields, because a score "
+            "stays published and ranked while its review is open (#2041)."
         ),
     )
     active_bench_version: Annotated[

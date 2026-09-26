@@ -208,6 +208,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/emission-eligibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Eligibility
+         * @description One exact artifact's eligibility record, plus why the fold sees it or not.
+         *
+         *     ``in_ledger`` is read from the same ``list_eligible_ledger`` the validator
+         *     reads. ``in_ledger`` false alongside a terminal review means the hold is
+         *     somewhere else entirely (``agents.status``, the ranked-run floor, or a
+         *     rollout version pin) -- which is the answer a miner appeal usually needs and
+         *     the one an operator otherwise has to guess at.
+         */
+        get: operations["get_agent_eligibility_api_v1_admin_agents__agent_id__emission_eligibility_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/scoring-readiness": {
         parameters: {
             query?: never;
@@ -1200,6 +1226,24 @@ export interface paths {
          *     compute-path cache so the change lands on the next read.
          */
         post: operations["create_settings_revision_api_v1_admin_efficiency_bonus_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/emission-eligibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_api_v1_admin_emission_eligibility_get"];
+        put?: never;
+        /** Create Settings Revision */
+        post: operations["create_settings_revision_api_v1_admin_emission_eligibility_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8121,6 +8165,18 @@ export interface components {
             offset: number;
         };
         /**
+         * AdminAgentEmissionEligibilityResponse
+         * @description Per-agent eligibility read for Backroom and the operator console.
+         */
+        AdminAgentEmissionEligibilityResponse: {
+            effective: components["schemas"]["EffectiveEmissionEligibilitySettings"];
+            eligibility: components["schemas"]["AgentEmissionEligibility"];
+            /** In Ledger */
+            in_ledger: boolean;
+            /** Shadow Records */
+            shadow_records: components["schemas"]["AdminEmissionEligibilityShadowRecord"][];
+        };
+        /**
          * AdminArtifactDuplicate
          * @description Another submission whose artifact matches this one.
          */
@@ -9897,6 +9953,79 @@ export interface components {
             /** History */
             history: components["schemas"]["EfficiencyBonusSettingsRevision"][];
             seed_default: components["schemas"]["EfficiencyBonusSettings"];
+        };
+        /** AdminEmissionEligibilitySettingsRequest */
+        AdminEmissionEligibilitySettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["EmissionEligibilitySettings"];
+        };
+        /** AdminEmissionEligibilitySettingsResponse */
+        AdminEmissionEligibilitySettingsResponse: {
+            /** Confirmation Phrase */
+            confirmation_phrase: string;
+            current: components["schemas"]["EmissionEligibilitySettingsRevision"] | null;
+            default: components["schemas"]["EmissionEligibilitySettings"];
+            effective: components["schemas"]["EffectiveEmissionEligibilitySettings"];
+            /** History */
+            history: components["schemas"]["EmissionEligibilitySettingsRevision"][];
+            /** Recent Shadow Records */
+            recent_shadow_records: components["schemas"]["AdminEmissionEligibilityShadowRecord"][];
+        };
+        /**
+         * AdminEmissionEligibilityShadowRecord
+         * @description One append-only rehearsal row: what ``enforce`` would have withheld.
+         */
+        AdminEmissionEligibilityShadowRecord: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bench Version */
+            bench_version: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Enforcement
+             * @enum {string}
+             */
+            enforcement: "off" | "shadow" | "enforce";
+            /** Policy Checksum */
+            policy_checksum: string;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "eligible" | "unresolved_review" | "review_inconclusive" | "review_escalated" | "review_infrastructure_failed" | "review_missing" | "review_rejected" | "awaiting_next_window";
+            /**
+             * Window Start
+             * Format: date-time
+             */
+            window_start: string;
         };
         /**
          * AdminEvictedLease
@@ -13675,6 +13804,69 @@ export interface components {
             shadow_only: true;
             /** Total */
             total: number;
+        };
+        /**
+         * AgentEmissionEligibility
+         * @description The shared eligibility record, bound to one exact artifact.
+         *
+         *     One record type is read by the validator ledger, the public board, the
+         *     submission page and Backroom, so a miner asking "why am I not earning" and
+         *     an operator asking "why did the fold skip that row" are answered from the
+         *     same evaluation rather than two re-derivations that can disagree
+         *     (#2041 acceptance: *validator folds and public projections consume the same
+         *     eligibility record*).
+         *
+         *     ``agent_id`` + ``artifact_sha256`` + ``bench_version`` + ``policy_revision``
+         *     + ``policy_checksum`` is the binding the issue asks for: a different upload,
+         *     a different benchmark contract, or a different posture is a different record.
+         */
+        AgentEmissionEligibility: {
+            /** Activates At */
+            activates_at?: string | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bench Version */
+            bench_version?: number | null;
+            /**
+             * Enforcement
+             * @enum {string}
+             */
+            enforcement: "off" | "shadow" | "enforce";
+            /** Policy Checksum */
+            policy_checksum: string;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Posture Satisfied */
+            posture_satisfied: boolean;
+            /** Reason */
+            reason: string;
+            /** Review Kind */
+            review_kind?: string | null;
+            /** Review Resolution */
+            review_resolution?: string | null;
+            /** Review Resolved At */
+            review_resolved_at?: string | null;
+            /** Review Status */
+            review_status?: string | null;
+            /** Reward Eligible */
+            reward_eligible: boolean;
+            /** Screening Reason Code */
+            screening_reason_code?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "eligible" | "unresolved_review" | "review_inconclusive" | "review_escalated" | "review_infrastructure_failed" | "review_missing" | "review_rejected" | "awaiting_next_window";
+            /**
+             * Window Start
+             * Format: date-time
+             */
+            window_start: string;
         };
         /**
          * AgentResponse
@@ -19009,6 +19201,50 @@ export interface components {
             /** Source */
             source: string;
         };
+        /** EffectiveEmissionEligibilitySettings */
+        EffectiveEmissionEligibilitySettings: {
+            /** Checksum */
+            checksum: string;
+            /**
+             * Current Window Start
+             * Format: date-time
+             */
+            current_window_start: string;
+            /**
+             * @default {
+             *       "activation_window_seconds": 3600,
+             *       "clearance_activation": "next_window",
+             *       "enforcement": "off",
+             *       "exclude_escalated": true,
+             *       "exclude_inconclusive": true,
+             *       "exclude_infrastructure_failed": true,
+             *       "require_completed_review": false,
+             *       "require_terminal_review": true
+             *     }
+             */
+            default: components["schemas"]["EmissionEligibilitySettings"];
+            /** Live Validator Count */
+            live_validator_count?: number | null;
+            /** Max Age Seconds */
+            max_age_seconds: number;
+            /**
+             * Next Window Start
+             * Format: date-time
+             */
+            next_window_start: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["EmissionEligibilitySettings"];
+            /** Shadow Excluded Count */
+            shadow_excluded_count?: number | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "revision" | "default";
+        };
         /**
          * EffectiveInferenceConcurrencySettings
          * @description What the admission path is enforcing right now, and where it came from.
@@ -19278,6 +19514,75 @@ export interface components {
             minimum_factor: number;
             /** Quality Floor */
             quality_floor: number;
+        };
+        /**
+         * EmissionEligibilitySettings
+         * @description Complete subnet-global reward-eligibility posture, stored per revision.
+         */
+        EmissionEligibilitySettings: {
+            /**
+             * Activation Window Seconds
+             * @default 3600
+             */
+            activation_window_seconds: number;
+            /**
+             * Clearance Activation
+             * @default next_window
+             * @constant
+             */
+            clearance_activation: "next_window";
+            /**
+             * Enforcement
+             * @default off
+             * @enum {string}
+             */
+            enforcement: "off" | "shadow" | "enforce";
+            /**
+             * Exclude Escalated
+             * @default true
+             */
+            exclude_escalated: boolean;
+            /**
+             * Exclude Inconclusive
+             * @default true
+             */
+            exclude_inconclusive: boolean;
+            /**
+             * Exclude Infrastructure Failed
+             * @default true
+             */
+            exclude_infrastructure_failed: boolean;
+            /**
+             * Require Completed Review
+             * @default false
+             */
+            require_completed_review: boolean;
+            /**
+             * Require Terminal Review
+             * @default true
+             */
+            require_terminal_review: boolean;
+        };
+        /** EmissionEligibilitySettingsRevision */
+        EmissionEligibilitySettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["EmissionEligibilitySettings"];
         };
         /**
          * EvalPricingResponse
@@ -21319,6 +21624,11 @@ export interface components {
              * @description Head block the pin's epoch schedule was read at.
              */
             pinned_block?: number | null;
+            /**
+             * Reward Eligibility Mode
+             * @description Present only while the operator's terminal-review emission gate is enforcing (ditto-subnet #2041). When present, every entry below has a terminal review decision for its exact artifact digest at this benchmark version under the posture revision the platform resolved: artifacts with an unresolved, inconclusive, infrastructure-failed or escalated review have already been withheld from this pool, and a clear recorded inside the current emission window takes effect at the next one. Absent -- the default, and what an older platform's omission means -- says the gate is off or in shadow, in which case this ledger is exactly what it was before the gate existed. The pool is filtered platform-side either way, so a validator that ignores this field folds correctly; it is served so the fold's telemetry can state which posture produced the pool.
+             */
+            reward_eligibility_mode?: "enforce" | null;
             /**
              * Stale
              * @description True when the live DB read failed and this is a served last-known-good snapshot. A fold may still use it (the ledger is durable and slow-moving) but should treat it as advisory.
@@ -24937,6 +25247,12 @@ export interface components {
             champion_defense?: components["schemas"]["PublicDethroneDecision"] | null;
             /** Champion Miner Hotkey */
             champion_miner_hotkey: string;
+            /**
+             * Champion Reward Eligible
+             * @description Whether the crowned agent is also earning emissions. Holding the crown and being paid are separate facts (#2041): a champion whose exact artifact has an open, inconclusive, infrastructure-failed or escalated review keeps the crown and the top rank and earns nothing while the operator's eligibility gate is enforcing. True whenever the gate is off or in shadow.
+             * @default true
+             */
+            champion_reward_eligible: boolean;
             /** Champion Share */
             champion_share: number;
             /**
@@ -24967,6 +25283,12 @@ export interface components {
             margin: number;
             /** @description What the next epoch pin would record if it were taken from the live board right now: the fold over the current rows with the current pin's champion as incumbent. Read changes_crown to know whether weights will move at the next pin. */
             next_pin_projection?: components["schemas"]["PublicNextPinProjection"] | null;
+            /**
+             * Provisional Champion
+             * @description The crown is held provisionally: this projection's champion is not currently reward-eligible, so the 65% slot is unpaid rather than reassigned. The inverse of ``champion_reward_eligible``, published under its own name because it is the word the board renders.
+             * @default false
+             */
+            provisional_champion: boolean;
             /** Rank Shares */
             rank_shares: number[];
             /**
@@ -24979,6 +25301,11 @@ export interface components {
             raw_leader_miner_hotkey: string;
             /** Recipients */
             recipients?: components["schemas"]["PublicEmissionRecipient"][];
+            /**
+             * Reward Eligibility Mode
+             * @description ``enforce`` while the terminal-review emission gate is withholding from this projection; absent when it is off or in shadow, in which case this projection is exactly the pre-gate one.
+             */
+            reward_eligibility_mode?: string | null;
             /**
              * Score Ceiling Pool Size
              * @default 0
@@ -25236,7 +25563,7 @@ export interface components {
             eligible: boolean;
             /**
              * Emission Eligible
-             * @description Whether this entry is finalized on the current benchmark, full-benchmark eligible, and currently registered, so validators may include it in the active weight fold. Null when registration could not be read.
+             * @description Whether this entry is finalized on the current benchmark, full-benchmark eligible, currently registered, AND holds a terminal review for its exact artifact while the operator's eligibility gate is enforcing, so validators may include it in the active weight fold. Null when registration could not be read. Read ``reward_eligibility`` for which of those it is.
              */
             emission_eligible?: boolean | null;
             /**
@@ -25333,6 +25660,8 @@ export interface components {
              * @default 0
              */
             retained_sample_count: number;
+            /** @description Terminal-review reward eligibility for this exact artifact, separate from ``rank`` and from champion status. Absent on a historical board and on a platform with the gate switched off and nothing to report. */
+            reward_eligibility?: components["schemas"]["PublicRewardEligibility"] | null;
             /**
              * Rollout Composite
              * @description Median of the agent's accepted scores on the desired (rolling out) benchmark version so far. Preliminary until rollout_score_count reaches score_quorum; null when there is no open rollout or no accepted score on the desired version yet.
@@ -26075,6 +26404,63 @@ export interface components {
             verification_command?: string | null;
         };
         /**
+         * PublicRewardEligibility
+         * @description Whether one exact artifact is earning, and in plain words why not.
+         *
+         *     Deliberately a separate object rather than another flag on the row, because
+         *     #2041 and #2053 ask for score rank, provisional champion status and reward
+         *     eligibility to be three readable things instead of one collapsed verdict. A
+         *     withheld artifact keeps its ``composite``, its ``rank`` and its whole review
+         *     history; this object is the only thing that says it is not being paid.
+         *
+         *     It carries no source, no reviewer output and no cohort statistics -- only the
+         *     state, the fixed miner-facing sentence for that state, and the posture
+         *     identity needed to reproduce the verdict.
+         */
+        PublicRewardEligibility: {
+            /**
+             * Activates At
+             * @description When a cleared artifact starts earning. Set only for ``awaiting_next_window``: a clear takes effect at the next window boundary and is never applied backwards, so no reward is granted for the period spent under review.
+             */
+            activates_at?: string | null;
+            /**
+             * Enforcement
+             * @description Operator posture in force: ``off``/``shadow``/``enforce``.
+             */
+            enforcement: string;
+            /**
+             * Policy Revision
+             * @description Eligibility posture revision this verdict was reached under. ``0`` means no revision is stored and the documented default (enforcement off) is in force.
+             */
+            policy_revision: number;
+            /**
+             * Posture Satisfied
+             * @description Whether the required review posture is met, independent of enforcement. False with ``reward_eligible`` true is exactly a row that enforcement would withhold.
+             */
+            posture_satisfied: boolean;
+            /**
+             * Reason
+             * @description Fixed miner-facing explanation for ``state``. The same sentence the submission page, the board and Backroom publish, so they can never disagree about why a score is not yet earning.
+             */
+            reason: string;
+            /**
+             * Reward Eligible
+             * @description Whether this artifact is earning emissions under the CURRENT posture. True while the gate is off or in shadow even when ``posture_satisfied`` is false -- those postures publish the finding without acting on it.
+             */
+            reward_eligible: boolean;
+            /**
+             * State
+             * @description ``eligible`` or one of the withheld classes: ``unresolved_review``, ``review_inconclusive``, ``review_escalated``, ``review_infrastructure_failed``, ``review_missing``, ``review_rejected``, ``awaiting_next_window``.
+             */
+            state: string;
+            /**
+             * Window Start
+             * Format: date-time
+             * @description Opening instant of the emission window evaluated (UTC).
+             */
+            window_start: string;
+        };
+        /**
          * PublicRolloutQueueEntry
          * @description One inherited submission waiting on the desired benchmark rollout.
          */
@@ -26605,6 +26991,8 @@ export interface components {
             provisional_scores?: components["schemas"]["PublicProvisionalScore"][];
             /** Quorum */
             quorum: number;
+            /** @description Terminal-review reward eligibility for this exact artifact: whether it is earning emissions, and if not, the plain-language reason. Separate from ``status`` and from the score fields, because a score stays published and ranked while its review is open (#2041). */
+            reward_eligibility?: components["schemas"]["PublicRewardEligibility"] | null;
             /**
              * Score Bench Version
              * @description Benchmark version ``score_count`` and ``final_composite`` are counted against: the era this submission belongs to. Equal to ``active_bench_version`` for current-generation submissions, and older for one whose generation has closed.
@@ -35066,6 +35454,41 @@ export interface operations {
             };
         };
     };
+    get_agent_eligibility_api_v1_admin_agents__agent_id__emission_eligibility_get: {
+        parameters: {
+            query?: {
+                shadow_limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAgentEmissionEligibilityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     scoring_readiness_api_v1_admin_agents__agent_id__scoring_readiness_get: {
         parameters: {
             query?: never;
@@ -37145,6 +37568,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EfficiencyBonusSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_admin_emission_eligibility_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminEmissionEligibilitySettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_emission_eligibility_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminEmissionEligibilitySettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmissionEligibilitySettingsRevision"];
                 };
             };
             /** @description Validation Error */

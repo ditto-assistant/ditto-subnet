@@ -289,7 +289,10 @@ import {
   efficiencyBonusSettingsControlSchema,
   efficiencyBonusSettingsRevisionSchema,
   setEfficiencyBonusSettingsInputSchema,
+  agentEmissionEligibilityInputSchema,
+  agentEmissionEligibilitySchema,
   burnSettingsControlSchema,
+  emissionEligibilityControlSchema,
   burnSettingsRevisionSchema,
   setBurnSettingsInputSchema,
   continualRetestSettingsForPlatform,
@@ -1075,6 +1078,28 @@ export async function setEfficiencyBonusSettings(rawInput: unknown, actor: strin
   } catch (cause) {
     throw efficiencyBonusConflict(cause) ?? cause
   }
+}
+
+const EMISSION_ELIGIBILITY_PATH = '/api/v1/admin/emission-eligibility'
+
+/** The terminal-review emission posture, its history, and the rehearsal feed.
+ *
+ * Read-only on purpose. The gate decides who the validator fold may pay and it
+ * ships `off`; moving it is deliberately a Platform write with a typed
+ * confirmation, not something this console can do as a side effect of a read.
+ */
+export async function fetchEmissionEligibility() {
+  const payload = await platformAdminRequest(EMISSION_ELIGIBILITY_PATH)
+  return emissionEligibilityControlSchema.parse(payload)
+}
+
+/** One exact artifact's eligibility record, plus whether the fold can see it. */
+export async function fetchAgentEmissionEligibility(rawInput: unknown) {
+  const { agentId } = agentEmissionEligibilityInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(agentId)}/emission-eligibility`,
+  )
+  return agentEmissionEligibilitySchema.parse(payload)
 }
 
 const BURN_SETTINGS_PATH = '/api/v1/admin/burn-settings'

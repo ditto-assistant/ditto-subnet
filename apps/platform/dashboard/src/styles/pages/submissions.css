@@ -354,6 +354,34 @@
   font-family: var(--mono);
   font-size: 11.5px;
 }
+/* Reward eligibility (#2041). Deliberately quiet: an open review is not a
+   finding, and this note sits beside a score that is still published and still
+   ranked. It borrows the warn tone only for an adjudicated rejection. */
+.reward-eligibility-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--detail-space-xs);
+  margin: 0 0 var(--detail-space-xl);
+  padding: var(--detail-space-md) var(--detail-space-lg);
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--border) 18%, transparent);
+}
+.reward-eligibility-label {
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 700;
+}
+.reward-eligibility-note.rehearsal .reward-eligibility-label {
+  color: var(--text-dim);
+}
+.reward-eligibility-reason {
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
 .score-headline {
   display: flex;
   flex-wrap: wrap;

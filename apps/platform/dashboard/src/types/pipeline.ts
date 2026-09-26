@@ -314,9 +314,30 @@ export interface AdmissionRetry {
   lane?: string | null;
 }
 
+/** Terminal-review reward eligibility for this exact artifact (#2041).
+ *
+ * Separate from `status` and from the score fields: the score, its rank and the
+ * review history below all stand while a review is open. Absent while the
+ * operator gate is off, which is every platform running the shipped posture. */
+export interface RewardEligibilityDetail {
+  state: string;
+  /** The platform's own sentence. Rendered verbatim so this page and the board
+   * cannot word the same withheld state differently. */
+  reason: string;
+  reward_eligible: boolean;
+  posture_satisfied: boolean;
+  /** "off" | "shadow" | "enforce". */
+  enforcement: string;
+  policy_revision?: number;
+  window_start?: string;
+  /** When a clear starts earning; never backdated. */
+  activates_at?: string | null;
+}
+
 /** /public/agent/{id}/pipeline — the drawer's full history. */
 export interface PipelinePayload {
   status?: string;
+  reward_eligibility?: RewardEligibilityDetail | null;
   admission_retry?: AdmissionRetry | null;
   validator_retry?: ValidatorRetry | null;
   quorum?: number | null;

@@ -204,6 +204,41 @@ function ScoreHeadline(props: { pipeline: PipelineDetailPayload }): JSX.Element 
   );
 }
 
+/**
+ * Why a published score is not earning (#2041).
+ *
+ * Sits under the median rather than replacing it, because the contract is that
+ * the score stays visible and ranked while its review is open. The sentence is
+ * the platform's; this component decides placement and tone, not wording.
+ *
+ * Renders nothing when the artifact is earning or the gate is off. A shadow
+ * posture is labelled as a rehearsal, because in that posture the submission IS
+ * still being paid and saying otherwise would be false.
+ */
+function RewardEligibilityNote(props: { pipeline: PipelineDetailPayload }): JSX.Element {
+  const record = () => props.pipeline.reward_eligibility ?? null;
+  const withheld = (): boolean => record()?.posture_satisfied === false;
+  const enforcing = (): boolean => record()?.enforcement === "enforce";
+  return (
+    <Show when={withheld()}>
+      <section
+        class={"reward-eligibility-note" + (enforcing() ? "" : " rehearsal")}
+        aria-label="Reward eligibility"
+      >
+        <span class="reward-eligibility-label">
+          {enforcing() ? "Not earning emissions" : "Would not earn emissions"}
+        </span>
+        <span class="reward-eligibility-reason">{record()?.reason}</span>
+        <Show when={!enforcing()}>
+          <span class="reward-eligibility-reason">
+            The operator gate is in rehearsal, so this submission is still being paid.
+          </span>
+        </Show>
+      </section>
+    </Show>
+  );
+}
+
 // ── Family standing (renderFamilyStanding 7757–7782) ────────────────────────
 
 function FamilyStanding(props: {
@@ -1017,6 +1052,7 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
           {(detail) => (
             <>
               <ScoreHeadline pipeline={detail()} />
+              <RewardEligibilityNote pipeline={detail()} />
               <FamilyStanding pipeline={detail()} entries={entries} settledView={settled()} />
             </>
           )}

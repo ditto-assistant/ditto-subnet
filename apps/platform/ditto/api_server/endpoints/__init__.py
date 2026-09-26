@@ -59,6 +59,9 @@ from ditto.api_server.endpoints.admin_core_qualification import (
 from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
     router as admin_efficiency_bonus_settings_router,
 )
+from ditto.api_server.endpoints.admin_emission_eligibility import (
+    router as admin_emission_eligibility_router,
+)
 from ditto.api_server.endpoints.admin_hotkey_bans import (
     router as admin_hotkey_bans_router,
 )
@@ -220,6 +223,7 @@ __all__ = [
     "admin_attestation_router",
     "admin_benchmark_rollout_router",
     "admin_burn_settings_router",
+    "admin_emission_eligibility_router",
     "admin_treasury_settings_router",
     "admin_treasury_quote_router",
     "admin_inference_admission_router",

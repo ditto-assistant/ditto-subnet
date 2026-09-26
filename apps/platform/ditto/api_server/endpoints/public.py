@@ -38,7 +38,7 @@ import os
 import re
 import statistics
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from datetime import time as datetime_time
@@ -118,6 +118,7 @@ from ditto.api_models import (
     PublicOrphanedSlot,
     PublicPinAgreement,
     PublicProvisionalScore,
+    PublicRewardEligibility,
     PublicRolloutQueueEntry,
     PublicRunModels,
     PublicScreenerHeartbeat,
@@ -236,6 +237,7 @@ from ditto.api_server.efficiency import (
     preview_efficiency_board,
     read_efficiency_board,
 )
+from ditto.api_server.emission_eligibility import classify, evaluate_ledger
 from ditto.api_server.endpoints.scoring import (
     _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
     _UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
@@ -352,6 +354,10 @@ from ditto.db.queries.confirmation_scores import (
     confirmation_depths,
 )
 from ditto.db.queries.desired_era_backlog import prev_generation_agent_ids
+from ditto.db.queries.emission_eligibility import (
+    AgentReviewPosture,
+    load_review_postures,
+)
 from ditto.db.queries.heartbeats import (
     ActiveValidatorAssignment,
     ActiveValidatorWork,
@@ -2294,6 +2300,101 @@ def _public_coding_shadow(
     )
 
 
+def _public_reward_eligibility(
+    record: Any | None,
+) -> PublicRewardEligibility | None:
+    """Project the shared eligibility record onto the public wire.
+
+    ``None`` when the gate has nothing to say (posture ``off`` and a satisfied
+    artifact), so an untouched board keeps its pre-#2041 payload exactly.
+    """
+    if record is None:
+        return None
+    if record.enforcement == "off" and record.posture_satisfied:
+        return None
+    return PublicRewardEligibility(
+        state=record.state,
+        reason=record.reason,
+        reward_eligible=record.reward_eligible,
+        posture_satisfied=record.posture_satisfied,
+        enforcement=record.enforcement,
+        policy_revision=record.policy_revision,
+        window_start=record.window_start,
+        activates_at=record.activates_at,
+    )
+
+
+async def _agent_reward_eligibility(
+    request: Request,
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    artifact_sha256: str,
+    bench_version: int | None,
+    now: datetime,
+) -> Any | None:
+    """One artifact's eligibility record for the submission page.
+
+    Reaches the same pure classifier the ledger and the board use, so a miner
+    reading "why am I not earning" is reading the fold's own answer rather than a
+    second derivation of it. Degrades to ``None`` on any failure: the submission
+    page must still render, and the annotation is additive.
+    """
+    resolver = getattr(request.app.state, "emission_eligibility", None)
+    if resolver is None:
+        return None
+    try:
+        policy = await resolver.resolve(
+            getattr(request.app.state, "session_maker", None)
+        )
+        if not policy.evaluating:
+            return None
+        postures = await load_review_postures(session, [agent_id])
+    except SQLAlchemyError:
+        logger.warning(
+            "could not resolve reward eligibility for agent %s", agent_id, exc_info=True
+        )
+        return None
+    return classify(
+        agent_id=agent_id,
+        artifact_sha256=artifact_sha256,
+        bench_version=bench_version,
+        posture=postures.get(agent_id) or AgentReviewPosture(agent_id=agent_id),
+        policy=policy,
+        now=now,
+    )
+
+
+async def _resolve_reward_eligibility(
+    request: Request, session: AsyncSession, rows: Sequence[LedgerRow], *, now: datetime
+) -> dict:
+    """Eligibility records for a set of board rows, keyed by agent id.
+
+    Uses the same resolver, the same review reads and the same pure classifier
+    the validator ledger uses, which is #2041's requirement that the fold and the
+    public projection consume one eligibility record rather than two derivations.
+    A failure degrades to ``{}``: the board keeps rendering with no eligibility
+    annotation rather than 500ing, and the validator ledger is unaffected
+    because it resolves this independently.
+    """
+    resolver = getattr(request.app.state, "emission_eligibility", None)
+    if resolver is None or not rows:
+        return {}
+    try:
+        policy = await resolver.resolve(
+            getattr(request.app.state, "session_maker", None)
+        )
+        if not policy.evaluating:
+            return {}
+        postures = await load_review_postures(session, [row.agent_id for row in rows])
+    except SQLAlchemyError:
+        logger.warning(
+            "could not resolve reward eligibility for the public board", exc_info=True
+        )
+        return {}
+    return evaluate_ledger(rows, postures, policy=policy, now=now).records
+
+
 def _public_entry(
     rank: int,
     r: LedgerRow,
@@ -2334,6 +2435,7 @@ def _public_entry(
     coding_shadow: PublicCodingShadowScore | None = None,
     router_shadow_by_hotkey: Mapping[str, float] | None = None,
     router_shadow_queued: bool = False,
+    reward_eligibility: Any | None = None,
 ) -> PublicLeaderboardEntry:
     """Map a ledger row to the public entry, exposing only the safe subset of
     ``details`` (never ``per_case``, which carries the answer key)."""
@@ -2430,8 +2532,17 @@ def _public_entry(
         miner_uid=miner_uid,
         registered=registered,
         emission_eligible=(
-            finalized and r.eligible and registered if registered is not None else None
+            finalized
+            and r.eligible
+            and registered
+            # Only ``enforce`` withholds; ``off``/``shadow`` leave this boolean
+            # exactly as it was, so the board does not start reporting a stop
+            # that is not happening.
+            and (reward_eligibility is None or reward_eligibility.reward_eligible)
+            if registered is not None
+            else None
         ),
+        reward_eligibility=_public_reward_eligibility(reward_eligibility),
         composite=r.composite,
         official_composite=(
             official_composite if official_composite is not None else r.composite
@@ -2646,6 +2757,7 @@ def _public_koth_emissions(
     ceiling_band_clamp: bool = False,
     ledger_pin: PublicLedgerPin | None = None,
     crown_incumbent_active: bool = False,
+    reward_eligibility: dict | None = None,
 ) -> PublicKothEmissions | None:
     """Project the caller's finalized, registration-eligible score pool.
 
@@ -2771,6 +2883,14 @@ def _public_koth_emissions(
         )
         for index, entry in enumerate(allocation.members)
     ]
+    champion_record = (reward_eligibility or {}).get(projection.champion.agent_id)
+    # Holding the crown and being paid are separate facts. An enforcing gate has
+    # already removed withheld rows from ``rows``, so a champion here is normally
+    # eligible; this stays defensive because the crown can also be carried by an
+    # incumbent id that the current pool no longer vouches for.
+    champion_reward_eligible = (
+        champion_record is None or champion_record.reward_eligible
+    )
     decision = projection.raw_leader_decision
     defense = champion_defense(
         fold_entries, projection, ceiling_band_clamp=ceiling_band_clamp
@@ -2795,6 +2915,16 @@ def _public_koth_emissions(
         tail_size=KOTH_TAIL_SIZE,
         champion_agent_id=projection.champion.agent_id,
         champion_miner_hotkey=projection.champion.miner_hotkey,
+        champion_reward_eligible=champion_reward_eligible,
+        provisional_champion=not champion_reward_eligible,
+        reward_eligibility_mode=(
+            "enforce"
+            if any(
+                record.enforcement == "enforce"
+                for record in (reward_eligibility or {}).values()
+            )
+            else None
+        ),
         raw_leader_agent_id=projection.raw_leader.agent_id,
         raw_leader_miner_hotkey=projection.raw_leader.miner_hotkey,
         raw_leader_decision=(
@@ -3626,6 +3756,29 @@ async def build_public_leaderboard(
     avatar_hotkeys = {row.miner_hotkey for row in rows}
     avatar_rows = await list_miner_avatars(session, hotkeys=avatar_hotkeys)
     avatar_urls = {hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows}
+    # Terminal-review reward eligibility (#2041). Evaluated over every row the
+    # board shows -- finalized and provisional -- because the board's job is to
+    # publish the score AND say whether it is earning. Only the emissions
+    # projection drops anything, and only while the gate is enforcing, so the
+    # visible board keeps a withheld artifact's score, rank and history.
+    reward_eligibility = await _resolve_reward_eligibility(
+        request,
+        session,
+        finalized_rows + [row for row, _count in provisional_rows],
+        now=now,
+    )
+    enforcing_eligibility = any(
+        record.enforcement == "enforce" for record in reward_eligibility.values()
+    )
+    if enforcing_eligibility:
+        # The same subset the validator's ledger read is now serving, so the
+        # public champion and the folded champion cannot disagree.
+        emission_rows = [
+            row
+            for row in emission_rows
+            if reward_eligibility.get(row.agent_id) is None
+            or reward_eligibility[row.agent_id].posture_satisfied
+        ]
     entries = []
     for i, row in enumerate(finalized_rows, start=1):
         settled, rolling, rolling_count = rollout_states.get(
@@ -3764,6 +3917,7 @@ async def build_public_leaderboard(
                 v9_confirmation=v9_confirmations.get(row.agent_id),
                 router_shadow_by_hotkey=router_shadow_by_hotkey,
                 router_shadow_queued=bool(router_shadow_by_hotkey),
+                reward_eligibility=reward_eligibility.get(row.agent_id),
             )
         )
     for row, count in provisional_rows:
@@ -3818,6 +3972,7 @@ async def build_public_leaderboard(
                 v9_confirmation=v9_confirmations.get(row.agent_id),
                 router_shadow_by_hotkey=router_shadow_by_hotkey,
                 router_shadow_queued=bool(router_shadow_by_hotkey),
+                reward_eligibility=reward_eligibility.get(row.agent_id),
             )
         )
     return PublicLeaderboardResponse(
@@ -3867,6 +4022,7 @@ async def build_public_leaderboard(
                     request, session, continual_settings
                 ),
                 crown_incumbent_active=crown_incumbent_active,
+                reward_eligibility=reward_eligibility,
             )
         ),
         efficiency=_efficiency_status(efficiency_view),
@@ -7674,6 +7830,19 @@ async def agent_pipeline(
             retired=agent_retired,
         ),
         submission_family=submission_family,
+        # Why this exact artifact is or is not earning, separate from ``status``
+        # and from the score fields above. The score, its rank on the board and
+        # the review history below all stand regardless (#2041).
+        reward_eligibility=_public_reward_eligibility(
+            await _agent_reward_eligibility(
+                request,
+                session,
+                agent_id=agent_id,
+                artifact_sha256=agent.sha256,
+                bench_version=era_version,
+                now=now,
+            )
+        ),
         active_bench_version=canonical_version,
         emission_bench_version=canonical_version,
         score_bench_version=era_version,

@@ -8838,6 +8838,128 @@ class BurnSettingsRevision(Base):
     )
 
 
+class EmissionEligibilitySettingsRevision(Base):
+    """Append-only operator posture binding emissions to a terminal review.
+
+    Shaped exactly like :class:`BurnSettingsRevision` because it has the same
+    blast radius: it decides which scored artifacts the validator fold may pay.
+    ``enforcement`` ships ``off``, so a row must exist before anything is
+    withheld and the log answers "who turned this on, when, and why".
+
+    See :mod:`ditto.api_models.emission_eligibility`.
+    """
+
+    __tablename__ = "emission_eligibility_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="emission_eligibility_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="emission_eligibility_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="emission_eligibility_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="emission_eligibility_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="emission_eligibility_actor_check",
+        ),
+        Index(
+            "emission_eligibility_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="emission_eligibility_scope_parent_key",
+        ),
+    )
+
+
+class EmissionEligibilityShadowRecord(Base):
+    """Append-only rehearsal: one artifact ``enforce`` would have withheld.
+
+    Written while the posture is ``shadow`` (and, for an audit trail, while it is
+    ``enforce``), so an operator can read the exact blast radius of flipping the
+    switch before flipping it -- and afterwards, read why a row left the fold.
+
+    One row per ``(agent_id, bench_version, policy_revision, window_start)``:
+    validators poll the ledger every 30 seconds, so without that key this table
+    would grow by the size of the withheld set twice a minute. The unique index
+    makes the write an idempotent ``ON CONFLICT DO NOTHING``.
+    """
+
+    __tablename__ = "emission_eligibility_shadow_records"
+
+    record_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    """NOT NULL on purpose: it is part of the idempotency key below, and a
+    nullable column would let every 30-second validator poll insert another
+    row (``NULL`` never conflicts with ``NULL`` in Postgres)."""
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    enforcement: Mapped[str] = mapped_column(Text, nullable=False)
+    window_start: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'",
+            name="emission_eligibility_shadow_sha_check",
+        ),
+        CheckConstraint(
+            "enforcement IN ('off', 'shadow', 'enforce')",
+            name="emission_eligibility_shadow_enforcement_check",
+        ),
+        CheckConstraint(
+            "length(policy_checksum) = 64",
+            name="emission_eligibility_shadow_checksum_check",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "bench_version",
+            "policy_revision",
+            "window_start",
+            name="emission_eligibility_shadow_window_key",
+        ),
+        Index(
+            "emission_eligibility_shadow_window_idx",
+            "window_start",
+            "created_at",
+        ),
+        Index("emission_eligibility_shadow_agent_idx", "agent_id", "created_at"),
+    )
+
+
 class QueuePolicySettingsRevision(Base):
     """Append-only operator policy for the validator queue.
 

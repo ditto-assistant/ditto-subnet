@@ -140,6 +140,9 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
         entries=list(pin.entries),
         active_bench_version=pin.bench_version,
         v9_confirmation_mode=served.get("v9_confirmation_mode"),
+        # Frozen with the pin like every other marker: a posture flip after the
+        # pin was taken lands at the next pin, for the whole fleet at once.
+        reward_eligibility_mode=served.get("reward_eligibility_mode"),
         tie_weighting_mode=served.get("tie_weighting_mode"),
         dethrone_band_mode=served.get("dethrone_band_mode"),
         count=len(pin.entries),
@@ -454,6 +457,11 @@ def build_pin_draft(
     # validator re-deriving the champion-anchored family from a pin sees the
     # same binding a live read would have served. Keyed only when present, so
     # every pin below the binding floor keeps its pre-v13 digest.
+    # Keyed only when the gate is enforcing, so every pin taken with the gate
+    # off or in shadow keeps its pre-#2041 digest byte for byte.
+    reward_eligibility_mode = getattr(snapshot, "reward_eligibility_mode", None)
+    if reward_eligibility_mode is not None:
+        served["reward_eligibility_mode"] = reward_eligibility_mode
     seed_anchors = getattr(snapshot, "confirmation_seed_anchors", None) or ()
     if seed_anchors:
         served["confirmation_seed_anchors"] = [

@@ -1526,6 +1526,136 @@ export type BurnSettings = z.infer<typeof burnSettingsSchema>
 export type BurnSettingsWrite = z.infer<typeof burnSettingsWriteSchema>
 export type BurnSettingsControl = z.infer<typeof burnSettingsControlSchema>
 
+// ─── Terminal-review emission eligibility (ditto-subnet #2041) ──────────────
+// Read-only here. The gate decides which scored artifacts the validator fold may
+// pay, and it ships `off`: a posture that reads `off` / `source: "default"` is a
+// platform where nothing is being withheld, which is what an operator needs to
+// be able to confirm at a glance before and after a flip.
+export const EMISSION_ELIGIBILITY_ENFORCEMENTS = [
+  'off',
+  'shadow',
+  'enforce',
+] as const
+
+export const EMISSION_ELIGIBILITY_STATES = [
+  'eligible',
+  'unresolved_review',
+  'review_inconclusive',
+  'review_escalated',
+  'review_infrastructure_failed',
+  'review_missing',
+  'review_rejected',
+  'awaiting_next_window',
+] as const
+
+// Deliberately not `z.enum`: Platform may add a withheld class before this
+// console ships, and a strict enum would throw away the whole response rather
+// than render one unfamiliar state. The same lesson as `rank` above.
+const emissionEligibilityStateSchema = z.string()
+
+const emissionEligibilitySettingsSchema = z.object({
+  enforcement: z.enum(EMISSION_ELIGIBILITY_ENFORCEMENTS),
+  require_terminal_review: z.boolean(),
+  exclude_inconclusive: z.boolean(),
+  exclude_infrastructure_failed: z.boolean(),
+  exclude_escalated: z.boolean(),
+  require_completed_review: z.boolean(),
+  clearance_activation: z.string(),
+  activation_window_seconds: z.number().int().positive(),
+})
+
+const emissionEligibilityRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: emissionEligibilitySettingsSchema,
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+  checksum: z.string().regex(/^[0-9a-f]{64}$/),
+})
+
+const emissionEligibilityShadowRecordSchema = z.object({
+  agent_id: z.string(),
+  artifact_sha256: z.string(),
+  bench_version: z.number().int().nullable().default(null),
+  state: emissionEligibilityStateSchema,
+  reason: z.string(),
+  policy_revision: z.number().int().nonnegative(),
+  policy_checksum: z.string(),
+  enforcement: z.string(),
+  window_start: z.string(),
+  created_at: z.string(),
+})
+
+const effectiveEmissionEligibilitySchema = z.object({
+  revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: emissionEligibilitySettingsSchema,
+  checksum: z.string(),
+  source: z.enum(['revision', 'default']),
+  max_age_seconds: z.number().nonnegative(),
+  default: emissionEligibilitySettingsSchema,
+  // When a clear recorded now would take effect. Published so "when does this
+  // miner start earning" is never an operator calculation.
+  current_window_start: z.string(),
+  next_window_start: z.string(),
+  live_validator_count: z.number().int().nonnegative().nullable().default(null),
+  // How many artifacts the rehearsal has recorded in the current window: exactly
+  // how many rows leave the fold if the posture is moved to `enforce`.
+  shadow_excluded_count: z.number().int().nonnegative().nullable().default(null),
+})
+
+export const emissionEligibilityControlSchema = z.object({
+  current: emissionEligibilityRevisionSchema.nullable().default(null),
+  history: z.array(emissionEligibilityRevisionSchema),
+  default: emissionEligibilitySettingsSchema,
+  effective: effectiveEmissionEligibilitySchema,
+  confirmation_phrase: z.string(),
+  recent_shadow_records: z.array(emissionEligibilityShadowRecordSchema),
+})
+
+const emissionEligibilityRecordSchema = z.object({
+  agent_id: z.string(),
+  artifact_sha256: z.string(),
+  bench_version: z.number().int().nullable().default(null),
+  policy_revision: z.number().int().nonnegative(),
+  policy_checksum: z.string(),
+  enforcement: z.string(),
+  state: emissionEligibilityStateSchema,
+  reason: z.string(),
+  reward_eligible: z.boolean(),
+  posture_satisfied: z.boolean(),
+  window_start: z.string(),
+  activates_at: z.string().nullable().default(null),
+  review_status: z.string().nullable().default(null),
+  review_resolution: z.string().nullable().default(null),
+  review_kind: z.string().nullable().default(null),
+  review_resolved_at: z.string().nullable().default(null),
+  screening_reason_code: z.string().nullable().default(null),
+})
+
+export const agentEmissionEligibilityInputSchema = z.object({
+  agentId: z.string().uuid(),
+})
+
+export const agentEmissionEligibilitySchema = z.object({
+  eligibility: emissionEligibilityRecordSchema,
+  // False alongside a terminal review means something OTHER than this gate is
+  // holding the row out of the fold: agents.status, the ranked-run floor, or a
+  // rollout version pin.
+  in_ledger: z.boolean(),
+  effective: effectiveEmissionEligibilitySchema,
+  shadow_records: z.array(emissionEligibilityShadowRecordSchema),
+})
+
+export type EmissionEligibilityControl = z.infer<
+  typeof emissionEligibilityControlSchema
+>
+export type AgentEmissionEligibility = z.infer<
+  typeof agentEmissionEligibilitySchema
+>
+
 export const CONTINUAL_RETEST_SETTINGS_SCOPE = '*'
 export const CONTINUAL_RETEST_CONFIRMATION = 'APPLY CONTINUAL RETEST SETTINGS'
 

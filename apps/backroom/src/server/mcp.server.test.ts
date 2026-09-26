@@ -168,6 +168,7 @@ describe('Backroom MCP tools', () => {
         'get_confirmation_bundle',
         'get_confirmation_lane_diagnosis',
         'get_efficiency_bonus_settings',
+        'get_emission_eligibility_policy',
         'get_inference_concurrency_settings',
         'get_inference_runtime_metrics',
         'get_source_review_queue_slo',
@@ -257,6 +258,7 @@ describe('Backroom MCP tools', () => {
         'issue_coding_shadow_ticket_set',
         'get_validator_weight_diagnostics',
         'get_agent_core_qualification',
+        'get_agent_emission_eligibility',
         'get_agent_scores',
         'get_leaderboard',
         'get_ledger_epoch_snapshots',
@@ -405,7 +407,9 @@ describe('Backroom MCP tools', () => {
     // retain about 0.5 KB headroom.
     // The search_submissions lookup (server-side filters, #560) brings the
     // measured catalog to 171,685 bytes; keep the same ~0.5 KB headroom.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(172_200)
+    // The two terminal-review eligibility reads (#2041) add a settings-history
+    // input and one uuid input; measured 173,113 bytes together.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(173_600)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -434,7 +438,8 @@ describe('Backroom MCP tools', () => {
       // plus later main summaries measured 29,329. Two short treasury
       // shadow-policy descriptions bring the measured total to 29,850.
       // The taxonomy's rate_limit_bursts catalog note measured 30,520; the
-      // one-line outlier-escalation dry-run read brings it to 30,794.
+      // one-line outlier-escalation dry-run read brings it to 30,794. The two
+      // one-line terminal-review eligibility reads (#2041) measure 30,954.
       31_200,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)

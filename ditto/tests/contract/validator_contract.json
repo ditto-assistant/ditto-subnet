@@ -5530,6 +5530,18 @@
         ],
         "default": null
       },
+      "reward_eligibility_mode": {
+        "anyOf": [
+          {
+            "const": "enforce",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "stale": {
         "default": false,
         "type": "boolean"

@@ -105,6 +105,7 @@ import {
   continualRetestDiagnosticInputSchema,
   scoreLeaderboardInputSchema,
   ownerFootprintLookupInputSchema,
+  agentEmissionEligibilityInputSchema,
   setBurnSettingsInputSchema,
   setEfficiencyBonusSettingsInputSchema,
   setContinualRetestSettingsInputSchema,
@@ -296,8 +297,10 @@ import {
   fetchLedgerEpochSnapshots,
   fetchValidatorAssignments,
   setValidatorSlotSettings,
+  fetchAgentEmissionEligibility,
   setValidatorIssuancePause,
   fetchBurnSettings,
+  fetchEmissionEligibility,
   setBurnSettings,
   fetchSubmissionSettingsControl,
   fetchArtifactReleaseControl,
@@ -835,6 +838,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Apply the subnet-owner emission burn as an append-only revision with expectedRevision, reason, and "APPLY BURN SETTINGS". THIS MOVES TAO. burn_share is the fraction of miner emission routed to the owner burn hotkey; the remainder is normalized across the eligible miner weights, so it scales the competitive vector WITHOUT re-ordering it. Validators pick it up on their next ledger read, but one that already submitted this epoch keeps its vector until the next, so the subnet-wide effect lands over roughly an epoch.',
   get_burn_settings:
     'Read the emission burn in force, the miner share it leaves, the governing revision, and how many validators are live enough to fold it. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
+  get_emission_eligibility_policy:
+    'Read the terminal-review emission gate: posture (off/shadow/enforce), stored or default revision, emission windows, and the shadow withheld count. Opt-in history.',
+  get_agent_emission_eligibility:
+    'Explain one exact agent UUID: whether it is earning, the withheld class and reason, when a clear starts earning, and whether the validator fold sees it.',
   get_submission_cooldown:
     'Read the current miner submission fee and owner-coldkey cooldown. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
   list_hotkey_bans: 'Hotkey bans.',
@@ -3214,6 +3221,36 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           REVISION_LISTS,
         ),
       ),
+  )
+
+  registerTool(
+    'get_emission_eligibility_policy',
+    {
+      title: 'Get terminal-review emission eligibility policy',
+      description:
+        'Read the operator posture that binds SN118 reward eligibility to a terminal source-review decision for the exact artifact (ditto-subnet #2041). Returns the enforcement mode — off (the shipped default: nothing is evaluated and the validator ledger is byte-identical to the pre-gate one), shadow (every ledger read evaluates the gate and records what enforcement WOULD have withheld, while the pool keeps paying exactly as before), or enforce (withheld artifacts leave the pool the fold reads) — together with source (revision or default; default alongside a nonzero revision means a stored revision could not be parsed and the platform is deliberately running on the safe default, which keeps paying miners), the per-class switches (require_terminal_review, exclude_inconclusive, exclude_infrastructure_failed, exclude_escalated, require_completed_review), the tumbling emission window length, the current and next window boundary (a terminal clear takes effect at the NEXT boundary and is never applied backwards — there is no back-pay and no clawback), live_validator_count, shadow_excluded_count for the current window, the confirmation phrase a write requires, the newest rehearsal rows naming each withheld artifact and why, and the append-only revision history with actor and reason. Revision history is newest-first and opt-in with historyLimit (default 0). Requires backroom:read and changes nothing.',
+      inputSchema: MCP_SETTINGS_HISTORY_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ historyLimit, historyOffset }) =>
+      result(
+        compacted(
+          pageRevisionHistory(await fetchEmissionEligibility(), historyLimit, historyOffset),
+          REVISION_LISTS,
+        ),
+      ),
+  )
+
+  registerTool(
+    'get_agent_emission_eligibility',
+    {
+      title: 'Explain one artifact reward eligibility',
+      description:
+        'Read the terminal-review eligibility record for one exact agent UUID: the state (eligible, unresolved_review, review_inconclusive, review_escalated, review_infrastructure_failed, review_missing, review_rejected, or awaiting_next_window), the fixed miner-facing reason published for it, reward_eligible (whether it is earning under the CURRENT posture — true while the gate is off or in shadow even when the posture is not satisfied) versus posture_satisfied (the verdict enforcement would reach), activates_at for a clear waiting on the next window, the artifact digest, benchmark version and posture revision the verdict is bound to, the ath_reviews status/resolution/kind and screening reason code it was derived from so it joins straight back to the operator queue, in_ledger (false alongside a terminal review means something OTHER than this gate is holding the row out — agents.status, the ranked-run floor, or a rollout version pin), and this artifact rehearsal history. Grants nothing and resolves nothing. Requires backroom:read.',
+      inputSchema: agentEmissionEligibilityInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchAgentEmissionEligibility(input)),
   )
 
   registerTool(

@@ -113,7 +113,11 @@ _ADJUDICATED_NEGATIVE_OWNER_STATUSES = (
 # A platform-raised quarantine has no screener finding, but the row's
 # manifest_digest is NOT NULL and shown verbatim in the operator console. This
 # stable sentinel marks the origin as "platform, attempts exhausted".
-_EXHAUSTED_REASON_CODE = "repeatedly-inconclusive"
+EXHAUSTED_REASON_CODE = "repeatedly-inconclusive"
+"""Public alias: the emission-eligibility gate
+(:mod:`ditto.api_server.emission_eligibility`) classifies this code as
+inconclusive, and must not carry its own copy of the string."""
+_EXHAUSTED_REASON_CODE = EXHAUSTED_REASON_CODE
 _EXHAUSTED_PUBLIC_REASON = (
     "Screening was inconclusive repeatedly; held for operator review"
 )

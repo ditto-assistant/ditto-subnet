@@ -56,6 +56,12 @@ from ditto.api_server.continual_retest_settings import (
     tie_weighting_is_active,
 )
 from ditto.api_server.efficiency import ensure_current_efficiency_state
+from ditto.api_server.emission_eligibility import (
+    DEFAULT_POLICY,
+    ResolvedEligibilityPolicy,
+    evaluate_ledger,
+    shadow_rows,
+)
 from ditto.api_server.endpoints.validator import (
     ChainDep,
     SessionDep,
@@ -68,6 +74,10 @@ from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.confirmation_scores import (
     confirmation_composites_by_seed,
     confirmation_history_by_agent,
+)
+from ditto.db.queries.emission_eligibility import (
+    load_review_postures,
+    record_shadow_exclusions,
 )
 from ditto.db.queries.heartbeats import (
     live_validator_fleet_supports_protocol,
@@ -165,6 +175,10 @@ class _LedgerSnapshot:
     lasts. Replaying the last known share is the only answer that does not move
     emissions because of a database problem."""
     v9_confirmation_mode: Literal["enforce"] | None = None
+    reward_eligibility_mode: Literal["enforce"] | None = None
+    """Whether the terminal-review emission gate withheld anything from this
+    snapshot's entries. ``None`` under ``off``/``shadow``, where the pool is
+    byte-identical to the pre-gate ledger."""
     tie_weighting_mode: Literal["pool"] | None = None
     dethrone_band_mode: Literal["headroom_capped"] | None = None
     continual_retest_cohort_size: int = 5
@@ -190,6 +204,11 @@ class _LedgerPolicy:
     efficiency: EfficiencyBonusConfig
     continual_retest: ContinualRetestSettings
     burn: BurnSettings
+    reward_eligibility: ResolvedEligibilityPolicy
+    """Part of the snapshot-reuse key: a posture flip must rebuild the pool
+    rather than be answered from a snapshot taken under the previous one. The
+    whole resolved policy, not just the settings, so the revision and checksum a
+    withheld artifact's record is bound to come from the same read."""
 
 
 @dataclass(frozen=True)
@@ -338,10 +357,17 @@ async def _resolve_ledger_policy(app_state: Any) -> _LedgerPolicy:
     efficiency = await app_state.efficiency_settings.resolve(session_maker)
     continual_retest = await app_state.continual_retest_settings.resolve(session_maker)
     burn = await app_state.burn_settings.resolve(session_maker)
+    resolver = getattr(app_state, "emission_eligibility", None)
+    eligibility = (
+        await resolver.resolve(session_maker)
+        if resolver is not None
+        else DEFAULT_POLICY
+    )
     return _LedgerPolicy(
         efficiency=efficiency,
         continual_retest=continual_retest,
         burn=burn,
+        reward_eligibility=eligibility,
     )
 
 
@@ -478,6 +504,7 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         entries=snapshot.entries,
         active_bench_version=snapshot.active_bench_version,
         v9_confirmation_mode=snapshot.v9_confirmation_mode,
+        reward_eligibility_mode=snapshot.reward_eligibility_mode,
         tie_weighting_mode=snapshot.tie_weighting_mode,
         dethrone_band_mode=snapshot.dethrone_band_mode,
         count=len(snapshot.entries),
@@ -567,6 +594,38 @@ def _finish_ledger_materialization_when_done(
     _finish_ledger_materialization(request, owned)
 
 
+async def _record_eligibility_rehearsal(app_state: Any, evaluation: Any) -> None:
+    """Append the withheld set for this window, best effort.
+
+    On its own session, never the ledger's: the ledger read must not be able to
+    fail because a rehearsal insert did, and it must not inherit this write's
+    transaction. ``ON CONFLICT DO NOTHING`` on the per-window key makes the
+    second and later validator polls of the same window free.
+
+    A failure here is logged and swallowed. Losing a rehearsal row is an
+    observability loss; failing the ledger read would zero every miner.
+    """
+    rows = shadow_rows(evaluation)
+    if not rows:
+        return
+    session_maker = getattr(app_state, "session_maker", None)
+    if session_maker is None:
+        return
+    try:
+        async with session_maker() as write_session, write_session.begin():
+            inserted = await record_shadow_exclusions(write_session, rows=rows)
+        if inserted:
+            logger.warning(
+                "recorded %d new emission-eligibility exclusion(s) for window %s",
+                inserted,
+                rows[0]["window_start"],
+            )
+    except SQLAlchemyError:
+        logger.warning(
+            "could not record emission-eligibility rehearsal rows", exc_info=True
+        )
+
+
 async def materialize_ledger_snapshot(
     app_state: Any,
     session: AsyncSession,
@@ -611,6 +670,41 @@ async def materialize_ledger_snapshot(
     v9_confirmation_mode: Literal["enforce"] | None = (
         "enforce" if await v9_confirmation_enforcement_active(session) else None
     )
+    # ── Terminal-review emission eligibility (ditto-subnet #2041) ───────────
+    # The gate runs here, on the rows the ledger just materialized, rather than
+    # inside ``list_eligible_ledger``: the public board reads that same query
+    # and must keep publishing a withheld artifact's score and rank. Filtering
+    # in the query would delete the score from the board, which is the one thing
+    # the issue says not to do.
+    eligibility_policy = ledger_context.policy.reward_eligibility
+    eligibility = evaluate_ledger(
+        rows,
+        await load_review_postures(session, [r.agent_id for r in rows])
+        if eligibility_policy.evaluating
+        else {},
+        policy=eligibility_policy,
+        now=now,
+    )
+    reward_eligibility_mode: Literal["enforce"] | None = (
+        "enforce" if eligibility_policy.enforcing else None
+    )
+    if eligibility_policy.evaluating:
+        withheld = eligibility.withheld
+        if withheld:
+            logger.warning(
+                "emission eligibility (%s, revision %d) %s %d artifact(s) for "
+                "window %s: %s",
+                eligibility_policy.settings.enforcement,
+                eligibility_policy.revision,
+                "withheld" if eligibility_policy.enforcing else "would withhold",
+                len(withheld),
+                eligibility.window_start.isoformat(),
+                ", ".join(
+                    f"{record.agent_id}:{record.state}" for record in withheld[:10]
+                ),
+            )
+        await _record_eligibility_rehearsal(app_state, eligibility)
+        rows = eligibility.filter_rows(rows)
     # The k=3 quorum spread per agent -> composite_stderr when the run itself
     # did not stash one, so the KOTH z-band is noise-aware with no re-score.
     quorum = await quorum_composites(
@@ -789,6 +883,7 @@ async def materialize_ledger_snapshot(
         active_bench_version=canonical_version,
         burn_share=burn_settings.burn_share,
         v9_confirmation_mode=v9_confirmation_mode,
+        reward_eligibility_mode=reward_eligibility_mode,
         tie_weighting_mode="pool" if tie_weighting_active else None,
         dethrone_band_mode=("headroom_capped" if dethrone_band_clamp_active else None),
         continual_retest_cohort_size=continual_settings.retest_cohort_size,
@@ -1209,6 +1304,10 @@ def _serve_last_known(
         # infer rollout authority from the highest row while the DB is down.
         active_bench_version=snapshot.active_bench_version,
         v9_confirmation_mode=snapshot.v9_confirmation_mode,
+        # Replayed, not re-resolved. The snapshot's entries were already
+        # filtered under this posture; serving them while claiming the gate is
+        # off would misreport a pool that IS gated.
+        reward_eligibility_mode=snapshot.reward_eligibility_mode,
         tie_weighting_mode=snapshot.tie_weighting_mode,
         dethrone_band_mode=snapshot.dethrone_band_mode,
         count=len(entries),

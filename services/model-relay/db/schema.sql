@@ -3040,6 +3040,69 @@ CREATE TABLE public.efficiency_cohort_snapshots (
 
 
 --
+-- Name: emission_eligibility_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.emission_eligibility_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_emission_eligibility_settings_revisions_emission_eli_1c86 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_emission_eligibility_settings_revisions_emission_eli_2d1c CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_emission_eligibility_settings_revisions_emission_eli_5ee4 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_emission_eligibility_settings_revisions_emission_eli_9009 CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_emission_eligibility_settings_revisions_emission_eli_e7d6 CHECK ((scope = '*'::text))
+);
+
+
+--
+-- Name: emission_eligibility_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.emission_eligibility_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: emission_eligibility_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.emission_eligibility_settings_revisions_revision_seq OWNED BY public.emission_eligibility_settings_revisions.revision;
+
+
+--
+-- Name: emission_eligibility_shadow_records; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.emission_eligibility_shadow_records (
+    record_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    bench_version integer NOT NULL,
+    state text NOT NULL,
+    reason text NOT NULL,
+    policy_revision integer NOT NULL,
+    policy_checksum text NOT NULL,
+    enforcement text NOT NULL,
+    window_start timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_emission_eligibility_shadow_records_emission_eligibi_0253 CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_emission_eligibility_shadow_records_emission_eligibi_2dab CHECK ((length(policy_checksum) = 64)),
+    CONSTRAINT ck_emission_eligibility_shadow_records_emission_eligibi_be6a CHECK ((enforcement = ANY (ARRAY['off'::text, 'shadow'::text, 'enforce'::text])))
+);
+
+
+--
 -- Name: evaluation_payments; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5832,6 +5895,13 @@ ALTER TABLE ONLY public.efficiency_bonus_settings_revisions ALTER COLUMN revisio
 
 
 --
+-- Name: emission_eligibility_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.emission_eligibility_settings_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: hotkey_ban_audit seq; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -6768,6 +6838,22 @@ ALTER TABLE ONLY public.efficiency_cohort_snapshots
 
 
 --
+-- Name: emission_eligibility_settings_revisions emission_eligibility_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_settings_revisions
+    ADD CONSTRAINT emission_eligibility_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
+-- Name: emission_eligibility_shadow_records emission_eligibility_shadow_window_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_shadow_records
+    ADD CONSTRAINT emission_eligibility_shadow_window_key UNIQUE (agent_id, bench_version, policy_revision, window_start);
+
+
+--
 -- Name: evaluation_payments evaluation_payments_agent_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7325,6 +7411,22 @@ ALTER TABLE ONLY public.efficiency_bonus_settings_revisions
 
 ALTER TABLE ONLY public.efficiency_cohort_snapshots
     ADD CONSTRAINT pk_efficiency_cohort_snapshots PRIMARY KEY (snapshot_id);
+
+
+--
+-- Name: emission_eligibility_settings_revisions pk_emission_eligibility_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_settings_revisions
+    ADD CONSTRAINT pk_emission_eligibility_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: emission_eligibility_shadow_records pk_emission_eligibility_shadow_records; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_shadow_records
+    ADD CONSTRAINT pk_emission_eligibility_shadow_records PRIMARY KEY (record_id);
 
 
 --
@@ -8884,6 +8986,27 @@ CREATE INDEX efficiency_bonuses_snapshot_idx ON public.efficiency_bonuses USING 
 --
 
 CREATE INDEX efficiency_cohort_snapshots_board_idx ON public.efficiency_cohort_snapshots USING btree (bench_version, run_size, epoch_index);
+
+
+--
+-- Name: emission_eligibility_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX emission_eligibility_scope_revision_idx ON public.emission_eligibility_settings_revisions USING btree (scope, revision);
+
+
+--
+-- Name: emission_eligibility_shadow_agent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX emission_eligibility_shadow_agent_idx ON public.emission_eligibility_shadow_records USING btree (agent_id, created_at);
+
+
+--
+-- Name: emission_eligibility_shadow_window_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX emission_eligibility_shadow_window_idx ON public.emission_eligibility_shadow_records USING btree (window_start, created_at);
 
 
 --
@@ -10660,6 +10783,14 @@ ALTER TABLE ONLY public.confirmation_inference_requests
 
 ALTER TABLE ONLY public.conversation_assessments
     ADD CONSTRAINT fk_conversation_assessments_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id);
+
+
+--
+-- Name: emission_eligibility_shadow_records fk_emission_eligibility_shadow_records_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_shadow_records
+    ADD CONSTRAINT fk_emission_eligibility_shadow_records_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
 
 
 --

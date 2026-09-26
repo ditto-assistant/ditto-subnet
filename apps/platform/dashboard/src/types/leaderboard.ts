@@ -26,6 +26,35 @@ export interface EmissionRecipient {
   shared_seed_confirmations?: number | null;
 }
 
+/** Terminal-review reward eligibility for one exact artifact (#2041).
+ *
+ * Separate from `rank` and from champion role on purpose: a withheld artifact
+ * keeps its score and its rank on the board, and this is the only thing that
+ * says it is not being paid. Absent when the operator gate has nothing to
+ * report, which is every platform running the shipped `off` posture. */
+export interface RewardEligibility {
+  /** "eligible" | "unresolved_review" | "review_inconclusive" |
+   * "review_escalated" | "review_infrastructure_failed" | "review_missing" |
+   * "review_rejected" | "awaiting_next_window". Read as a string, not a union:
+   * Platform may add a class before this client ships. */
+  state: string;
+  /** Fixed miner-facing sentence published for `state`. Rendered verbatim so
+   * the board and the submission page cannot word it differently. */
+  reason: string;
+  /** Earning under the CURRENT posture. True in shadow even when the posture
+   * is not satisfied -- shadow publishes the finding without acting on it. */
+  reward_eligible: boolean;
+  /** The verdict enforcement would reach, independent of the posture. */
+  posture_satisfied: boolean;
+  /** "off" | "shadow" | "enforce". */
+  enforcement: string;
+  policy_revision: number;
+  window_start: string;
+  /** When a cleared artifact starts earning. Set only for
+   * `awaiting_next_window`; a clear is never applied backwards. */
+  activates_at?: string | null;
+}
+
 export interface RawLeaderDecision {
   /** "paired" | "unpaired" | anything else reads as the fixed margin. */
   method?: string;
@@ -49,6 +78,15 @@ export interface RawLeaderDecision {
 /** KOTH emissions fold parameters. Consensus constants are always read from
  * here, never hardcoded in copy. */
 export interface EmissionsFold {
+  /** The crowned agent is also being paid. False means the crown is held but
+   * the 65% slot is unpaid rather than reassigned (#2041). */
+  champion_reward_eligible?: boolean;
+  /** The inverse, published under its own name because it is the word the
+   * board renders. */
+  provisional_champion?: boolean;
+  /** "enforce" while the terminal-review gate is withholding from this
+   * projection; absent when it is off or in shadow. */
+  reward_eligibility_mode?: string | null;
   margin?: number;
   dethrone_z?: number;
   champion_share?: number;
@@ -299,6 +337,7 @@ export interface LeaderboardEntry {
   /** Strict === true means registered; null/missing is UNKNOWN, not false. */
   registered?: boolean | null;
   emission_eligible?: boolean;
+  reward_eligibility?: RewardEligibility | null;
   miner_uid?: number | null;
   score_count?: number;
   score_quorum?: number;

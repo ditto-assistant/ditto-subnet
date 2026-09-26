@@ -64,6 +64,7 @@ from ditto.api_server.efficiency_settings import (
     EfficiencyBonusSettingsResolver,
 )
 from ditto.api_server.embedding import create_embedder
+from ditto.api_server.emission_eligibility import EmissionEligibilityResolver
 from ditto.api_server.endpoints import (
     admin_artifact_release_settings_router,
     admin_ath_rulings_router,
@@ -84,6 +85,7 @@ from ditto.api_server.endpoints import (
     admin_copy_review_router,
     admin_core_qualification_router,
     admin_efficiency_bonus_settings_router,
+    admin_emission_eligibility_router,
     admin_hotkey_bans_router,
     admin_inference_admission_router,
     admin_inference_concurrency_settings_router,
@@ -647,6 +649,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Served on the scoring ledger, so a change reaches the fleet on its next
     # poll instead of on a validator release.
     app.state.burn_settings = BurnSettingsResolver()
+    app.state.emission_eligibility = EmissionEligibilityResolver()
     app.state.continual_retest_settings = ContinualRetestSettingsResolver()
     app.state.queue_policy_settings = QueuePolicySettingsResolver()
     # Scheduled screening-policy activation: the required version rises to the
@@ -795,6 +798,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_core_qualification_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
+    app.include_router(admin_emission_eligibility_router, prefix="/api/v1")
     app.include_router(admin_treasury_settings_router, prefix="/api/v1")
     app.include_router(admin_treasury_quote_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
