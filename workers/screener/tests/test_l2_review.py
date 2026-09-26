@@ -212,7 +212,7 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
     assert l2_prompt_revision(11) == "l2-terra-source-review-v37-policy-v11"
     assert l2_prompt_revision(10) == "l2-terra-source-review-v37-policy-v10"
-    assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v12"
+    assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v13"
     assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v27-policy-v11"
     assert l2_cause_tiebreaker_prompt_revision(11) == (
         "l3-sol-cause-disagreement-v7-policy-v11"
@@ -296,10 +296,50 @@ def test_scorer_attention_is_independent_of_l1_category() -> None:
         {
             "deterministic": {
                 "scorer_field_flow": {
-                    "score_controls": [{"path": "src/main.rs", "line": 1}],
-                    "field_clears": [],
+                    "score_controls": [
+                        {"path": "src/main.rs", "function": "run", "line": 1}
+                    ],
+                    "field_clears": [
+                        {"path": "src/main.rs", "function": "run", "line": 2}
+                    ],
                     "field_populations": [],
                     "same_function_candidates": [],
+                }
+            }
+        }
+    )
+    assert _dossier_has_scorer_attention(
+        {"deterministic": {"scorer_field_flow": {"interprocedural_candidates": [{}]}}}
+    )
+    assert _dossier_has_scorer_attention(
+        {"deterministic": {"scorer_field_flow": {"truncated": True}}}
+    )
+    assert not _dossier_has_scorer_attention(
+        {
+            "deterministic": {
+                "scorer_field_flow": {
+                    "score_controls": [
+                        {"path": "src/main.rs", "function": "rank", "line": 1}
+                    ],
+                    "field_clears": [
+                        {"path": "src/main.rs", "function": "run", "line": 2}
+                    ],
+                    "field_populations": [],
+                }
+            }
+        }
+    )
+    assert _dossier_has_scorer_attention(
+        {
+            "deterministic": {
+                "scorer_field_flow": {
+                    "score_controls": [
+                        {"path": "src/main.rs", "function": "run", "line": 1}
+                    ],
+                    "field_clears": [],
+                    "field_populations": [
+                        {"path": "src/main.rs", "function": "run", "line": 2}
+                    ],
                 }
             }
         }
@@ -6117,6 +6157,75 @@ async def test_scorer_flow_ignores_available_tool_retry_but_keeps_ab_score_contr
         ("scored_alt", "abstain"),
     }
     assert not any(item["function"] == "run" for item in result["score_controls"])
+
+
+async def test_scorer_flow_keeps_cross_function_score_controlled_clear(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "main.rs").write_text(
+        "fn clear_answer(response: &mut RunResponse) { response.answer = None; }\n"
+        "fn run(mut response: RunResponse, ab_score: f64) -> RunResponse {\n"
+        "    response.answer = Some(model_answer());\n"
+        "    if ab_score > 0.9 { clear_answer(&mut response); }\n"
+        "    response\n"
+        "}\n"
+    )
+    result = json.loads(
+        await InProcessAnalyzerHarness().run(source, "scorer_field_flow", {})
+    )
+    assert not result["truncated"]
+    assert result["flow_count"] == 0
+    assert len(result["interprocedural_candidates"]) == 1
+    assert result["interprocedural_candidates"][0]["callee"] == "clear_answer"
+    assert _dossier_has_scorer_attention(
+        {"deterministic": {"scorer_field_flow": result}}
+    )
+
+
+async def test_scorer_flow_keeps_score_helper_before_clear(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "main.rs").write_text(
+        "fn high(score: f64) -> bool { score > 0.9 }\n"
+        "fn run(mut response: RunResponse, score: f64) -> RunResponse {\n"
+        "    response.answer = Some(model_answer());\n"
+        "    let hide = high(score);\n"
+        "    if hide { response.answer = None; }\n"
+        "    response\n"
+        "}\n"
+    )
+    result = json.loads(
+        await InProcessAnalyzerHarness().run(source, "scorer_field_flow", {})
+    )
+    assert not result["truncated"]
+    assert result["flow_count"] == 1
+    assert result["flows"][0]["field"] == "answer"
+
+
+async def test_scorer_flow_keeps_cross_function_conditional_population(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "main.rs").write_text(
+        "fn populate(response: &mut RunResponse) {\n"
+        "    response.answer = Some(model_answer());\n"
+        "}\n"
+        "fn run(mut response: RunResponse, ab_score: f64) -> RunResponse {\n"
+        "    if ab_score > 0.9 { populate(&mut response); }\n"
+        "    response\n"
+        "}\n"
+    )
+    result = json.loads(
+        await InProcessAnalyzerHarness().run(source, "scorer_field_flow", {})
+    )
+    assert not result["truncated"]
+    assert len(result["interprocedural_candidates"]) == 1
+    assert result["interprocedural_candidates"][0]["callee"] == "populate"
 
 
 @pytest.mark.integration

@@ -833,8 +833,10 @@ def _score_terms(raw: bytes, node: Node, score_bindings: set[str]) -> list[str]:
     return sorted(terms)[:6]
 
 
-def _derive_score_bindings(raw: bytes, nodes: list[Node]) -> set[str]:
-    bindings: set[str] = set()
+def _derive_score_bindings(
+    raw: bytes, nodes: list[Node], *, score_helpers: set[str] | None = None
+) -> set[str]:
+    bindings: set[str] = set(score_helpers or ())
     candidates = [
         node
         for node in nodes
@@ -882,6 +884,7 @@ def scorer_field_flow(_: dict[str, object]) -> object:
     score_controls: list[dict[str, object]] = []
     field_clears: list[dict[str, object]] = []
     field_populations: list[dict[str, object]] = []
+    interprocedural_candidates: list[dict[str, object]] = []
     sampled: set[str] = set()
     files, workspace_truncated = _files_with_truncation()
     analysis_truncated = workspace_truncated
@@ -895,7 +898,27 @@ def scorer_field_flow(_: dict[str, object]) -> object:
         tree = Parser(RUST_LANGUAGE).parse(raw)
         nodes, truncated = _walk(tree.root_node)
         analysis_truncated = analysis_truncated or truncated or tree.root_node.has_error
-        for function in (node for node in nodes if node.type == "function_item"):
+        assignment_functions: dict[str, list[dict[str, object]]] = {}
+        scored_branches: list[tuple[str, Node]] = []
+        functions = [node for node in nodes if node.type == "function_item"]
+        score_helpers: set[str] = set()
+        for function in functions:
+            name = function.child_by_field_name("name")
+            body = function.child_by_field_name("body")
+            if name is None or body is None or not body.named_children:
+                continue
+            # Only propagate helpers whose returned value is score-derived.
+            # Scanning an entire function would taint generic names like `run`
+            # just because unrelated retrieval code mentions a score.
+            body_nodes, body_truncated = _walk(body)
+            analysis_truncated = analysis_truncated or body_truncated
+            score_bindings = _derive_score_bindings(raw, body_nodes)
+            returned = [body.named_children[-1]] + [
+                node for node in body_nodes if node.type == "return_expression"
+            ]
+            if any(_score_terms(raw, node, score_bindings) for node in returned):
+                score_helpers.add(_node_text(raw, name).casefold())
+        for function in functions:
             name_node = function.child_by_field_name("name")
             function_name = (
                 _node_text(raw, name_node)[:120]
@@ -904,7 +927,9 @@ def scorer_field_flow(_: dict[str, object]) -> object:
             )
             function_nodes, function_truncated = _walk(function)
             analysis_truncated = analysis_truncated or function_truncated
-            score_bindings = _derive_score_bindings(raw, function_nodes)
+            score_bindings = _derive_score_bindings(
+                raw, function_nodes, score_helpers=score_helpers
+            )
             assignments: list[tuple[int, str, str]] = []
             for node in function_nodes:
                 fact = _assignment_fact(raw, node)
@@ -912,6 +937,13 @@ def scorer_field_flow(_: dict[str, object]) -> object:
                     assignments.append((node.start_point[0] + 1, *fact))
                     field, state = fact
                     target = field_populations if state == "populated" else field_clears
+                    assignment_functions.setdefault(function_name, []).append(
+                        {
+                            "field": field,
+                            "line": node.start_point[0] + 1,
+                            "state": state,
+                        }
+                    )
                     if len(target) < MAX_SCORER_FLOWS:
                         target.append(
                             {
@@ -934,6 +966,7 @@ def scorer_field_flow(_: dict[str, object]) -> object:
                 condition = node.named_children[0]
                 terms = _score_terms(raw, condition, score_bindings)
                 if terms and len(score_controls) < MAX_SCORER_FLOWS:
+                    scored_branches.append((function_name, node))
                     score_controls.append(
                         {
                             "path": _relative(path),
@@ -943,6 +976,7 @@ def scorer_field_flow(_: dict[str, object]) -> object:
                         }
                     )
                 elif terms:
+                    scored_branches.append((function_name, node))
                     sampled.add("score_controls")
             for node in function_nodes:
                 fact = _assignment_fact(raw, node)
@@ -982,6 +1016,43 @@ def scorer_field_flow(_: dict[str, object]) -> object:
                     )
                 else:
                     sampled.add("flows")
+        # A score-controlled caller can assign a response field through a helper.
+        # Keep that cross-function path as attention even when no assignment is
+        # nested directly inside the caller's `if` expression.
+        for caller, branch in scored_branches:
+            condition = branch.named_children[0]
+            branch_nodes, branch_truncated = _walk(branch)
+            analysis_truncated = analysis_truncated or branch_truncated
+            for call in (
+                node for node in branch_nodes if node.type == "call_expression"
+            ):
+                if call.start_byte <= condition.end_byte:
+                    continue
+                target = call.child_by_field_name("function")
+                name_match = re.search(
+                    r"([A-Za-z_][A-Za-z0-9_]*)$",
+                    _node_text(raw, target) if target is not None else "",
+                )
+                callee = name_match.group(1) if name_match else None
+                if (
+                    callee is None
+                    or callee == caller
+                    or callee not in assignment_functions
+                ):
+                    continue
+                if len(interprocedural_candidates) >= MAX_SCORER_FLOWS:
+                    sampled.add("interprocedural_candidates")
+                    break
+                interprocedural_candidates.append(
+                    {
+                        "path": _relative(path),
+                        "caller": caller,
+                        "condition_line": condition.start_point[0] + 1,
+                        "callee": callee,
+                        "call_line": call.start_point[0] + 1,
+                        "field_assignments": assignment_functions[callee][:8],
+                    }
+                )
     function_keys = sorted(
         {
             (str(item["path"]), str(item["function"]))
@@ -1039,6 +1110,7 @@ def scorer_field_flow(_: dict[str, object]) -> object:
         "flows": flows,
         "flow_count": len(flows),
         "same_function_candidates": candidates,
+        "interprocedural_candidates": interprocedural_candidates,
         "score_controls": score_controls,
         "field_clears": field_clears,
         "field_populations": field_populations,

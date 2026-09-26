@@ -148,10 +148,10 @@ def l2_prompt_cache_key(policy_version: int) -> str:
 
 
 L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v3"
-L2_DOSSIER_REVISION = "l1-compressed-dossier-v12"
+L2_DOSSIER_REVISION = "l1-compressed-dossier-v13"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
-L2_HARNESS_REVISION = "l2-isolated-coding-harness-v20"
+L2_HARNESS_REVISION = "l2-isolated-coding-harness-v21"
 L2_PRICING_REVISION = "openrouter-catalog-2026-08-31-terra-glm-5-2-sol-reported-cost-v3"
 L2_STARTER_MANIFESTS = tuple(
     sorted((Path(__file__).parent / "data").glob("starter-kit-provenance-*.json"))
@@ -5686,15 +5686,33 @@ def _dossier_has_scorer_attention(dossier: Mapping[str, object]) -> bool:
     )
     if not isinstance(scorer_flow, Mapping):
         return False
-    return any(
-        isinstance(scorer_flow.get(key), list) and bool(scorer_flow[key])
-        for key in (
-            "score_controls",
-            "field_clears",
-            "field_populations",
-            "same_function_candidates",
-        )
-    )
+    if scorer_flow.get("truncated") or scorer_flow.get("sampled"):
+        return True
+    for key in ("flows", "same_function_candidates", "interprocedural_candidates"):
+        if scorer_flow.get(key):
+            return True
+    controls = scorer_flow.get("score_controls")
+    clears = scorer_flow.get("field_clears")
+    populations = scorer_flow.get("field_populations")
+    if not all(isinstance(items, list) for items in (controls, clears, populations)):
+        return bool(controls or clears or populations)
+    assert isinstance(controls, list)
+    assert isinstance(clears, list)
+    assert isinstance(populations, list)
+    # A score decision and a scored field assignment in the same function need
+    # review even when no post-assignment clear exists.
+    for control in controls:
+        if not isinstance(control, Mapping):
+            return True
+        for assignment in clears + populations:
+            if not isinstance(assignment, Mapping):
+                return True
+            if (control.get("path"), control.get("function")) == (
+                assignment.get("path"),
+                assignment.get("function"),
+            ):
+                return True
+    return False
 
 
 def _l1_concerns_resolved(notes: tuple[Mapping[str, object], ...]) -> bool:

@@ -75,8 +75,8 @@ digests, prompt revisions `l2-terra-source-review-v37-policy-v10`,
 `l3-sol-cause-disagreement-v6-policy-v10`,
 `l3-sol-safety-adjudicator-v23-policy-v10`, and
 `l2-integrity-static-hold-v3`, dossier revision
-`l1-compressed-dossier-v10`, harness revision
-`l2-isolated-coding-harness-v20`, and the supported canonical-starter revision
+`l1-compressed-dossier-v13`, harness revision
+`l2-isolated-coding-harness-v21`, and the supported canonical-starter revision
 set. The compressed L1 dossier now also surfaces C13 bench-family fingerprint
 leads; they remain search prompts, never auto-bans. L1 and this L2 prompt apply
 all seven policy-v10 invariants. I4, independent I5, and I7 are not cleared by
