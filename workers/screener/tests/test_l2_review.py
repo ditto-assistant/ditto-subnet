@@ -3150,6 +3150,56 @@ async def test_l3_no_tool_failure_reports_bounded_subcode(
     )
 
 
+@pytest.mark.parametrize(
+    ("first_silent_request", "error_code"),
+    [
+        (2, "l3-critic-model-tool-contract"),
+        (1, "l2-model-tool-contract"),
+    ],
+    ids=["l3-critic", "l2-analyst"],
+)
+async def test_every_trajectory_failure_carries_its_subcode(
+    tmp_path: Path, first_silent_request: int, error_code: str
+) -> None:
+    # The canary report reads ``failure_subcode`` from the final result, so each
+    # L2TrajectoryError handler must carry it, not only the L3 adjudicator's.
+    source = "fn main() { serve(); }\nfn serve() {}"
+    archive, artifact_sha = _tar(tmp_path, source)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    safe = _clearance_certificate(
+        {
+            "disposition": "safe",
+            "risk_level": "low",
+            "confidence": 1.0,
+            "resolution_basis": "authoritative_model_tool_path",
+            "categories": ["none"],
+            "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+            "evidence": [],
+            "summary": "sanitized",
+        }
+    )
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests >= first_silent_request:
+            return _response([])
+        return _response([_tool_call(str(requests), "submit_l2_review", safe)])
+
+    result = await _sol_agent(tmp_path, _PartialHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.error_code == error_code
+    assert result.observation.failure_disposition == "retryable_infra"
+    assert result.failure_subcode == "no_tool_call_after_corrections"
+
+
 async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     tmp_path: Path,
 ) -> None:

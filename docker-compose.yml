@@ -161,8 +161,10 @@ services:
       # slots actually receive tickets.
       DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
       # LongMemEval runs in a disjoint pool. It defaults to half the ordinary
-      # capacity and never consumes the canonical full-run semaphore.
-      DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS: ${VALIDATOR_LONGMEM_CAPACITY:-4}
+      # capacity and never consumes the canonical full-run semaphore. Left
+      # empty, the scorer and the worker both derive half rounded up (8 -> 4,
+      # 4 -> 2); a fixed 4 would crash-loop a worker sized below 7 slots.
+      DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS: ${VALIDATOR_LONGMEM_CAPACITY:-}
       # Public release assets opt the scorer into the bounded shadow executor.
       # These are immutable files inside the image, not host mounts, cloud
       # identities, Secret Manager references, or provider credentials.
@@ -343,7 +345,10 @@ services:
       # here gives the operator room to ramp without shipping a new stack; idle
       # slots only add lightweight polls to each sweep.
       VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
-      VALIDATOR_LONGMEM_CAPACITY: ${VALIDATOR_LONGMEM_CAPACITY:-4}
+      # Empty derives half of VALIDATOR_BENCHMARK_CAPACITY rounded up, the only
+      # value the worker accepts for the documented smaller hosts. An explicit
+      # value is still validated against that bound.
+      VALIDATOR_LONGMEM_CAPACITY: ${VALIDATOR_LONGMEM_CAPACITY:-}
       # Self-imposed resource ceilings. At or above these the worker stops
       # claiming tickets and reports admission=resource_constrained, while
       # still heartbeating and still finishing what it holds. High on purpose:

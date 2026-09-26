@@ -2995,6 +2995,7 @@ class TerraSolSourceReviewAgent:
                 response_providers=error.response_providers,
                 clearance_path="l2_retryable_infra",
                 dossier_complete=error.dossier_complete,
+                failure_subcode=error.failure_subcode,
             )
         except L2InconclusiveError as error:
             logger.warning(
@@ -3206,6 +3207,7 @@ class TerraSolSourceReviewAgent:
                             clearance_path="l3_violation_adjudicator_retryable_infra",
                             dossier_complete=error.dossier_complete,
                             analyst_cache_hit=analyst_cache_hit,
+                            failure_subcode=error.failure_subcode,
                         )
                     except (
                         L2InconclusiveError,
@@ -3379,6 +3381,7 @@ class TerraSolSourceReviewAgent:
                                 clearance_path="l3_cause_disagreement_retryable_infra",
                                 dossier_complete=error.dossier_complete,
                                 analyst_cache_hit=analyst_cache_hit,
+                                failure_subcode=error.failure_subcode,
                             )
                         except (
                             L2InconclusiveError,
@@ -3605,6 +3608,7 @@ class TerraSolSourceReviewAgent:
                     clearance_path="l3_retryable_infra",
                     dossier_complete=error.dossier_complete,
                     analyst_cache_hit=analyst_cache_hit,
+                    failure_subcode=error.failure_subcode,
                 )
             except L2InconclusiveError:
                 return L2RunResult(

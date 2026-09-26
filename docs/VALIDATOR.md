@@ -146,6 +146,7 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_WALLET_HOTKEY` | Hotkey file inside that wallet. |
 | `PYLON_TOKEN` | Random token generated above. |
 | `VALIDATOR_BENCHMARK_CAPACITY` | Full-run slots this host advertises, `1`-`8`. Leave unset to take the compose default of `8` (the protocol maximum) so the platform's cap is the only lever; the platform decides how many are actually used. Set `4` on a 16 GB host — see the sizing table. |
+| `VALIDATOR_LONGMEM_CAPACITY` | LongMemEval confirmation slots, `0`-`4` and at most half of `VALIDATOR_BENCHMARK_CAPACITY` rounded up. Leave unset to derive it (`8` → `4`, `4` → `2`); `0` disables the lane. |
 | `VALIDATOR_DISK_PERCENT_CEILING` | Stop claiming tickets at or above this disk usage (default `95`). `0` disables; otherwise a multiple of 5 in `[50, 100]`. |
 | `VALIDATOR_MEMORY_PERCENT_CEILING` | Same, for memory (default `95`). |
 | `VALIDATOR_CPU_PERCENT_CEILING` | Same, for CPU. Defaults to `0` (disabled) -- a pinned CPU is a working benchmark host, not a failing one. |

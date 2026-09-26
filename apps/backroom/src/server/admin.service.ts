@@ -1,5 +1,5 @@
 import '@tanstack/react-start/server-only'
-import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema } from '../lib/treasury.schemas'
+import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
 
 export async function previewTreasuryTopup(rawInput: unknown) {
   const input = treasuryPreviewInputSchema.parse(rawInput)
@@ -7,9 +7,7 @@ export async function previewTreasuryTopup(rawInput: unknown) {
     fetchTreasurySettings(), fetchTreasuryQuote(input),
   ])
   const proposed = policy.effective
-  const quoteImpact = input.route === 'tao'
-    ? quote.tao_path.price_impact_bps
-    : quote.tao_path.price_impact_bps + quote.gm_alpha_path.price_impact_bps
+  const quoteImpact = treasuryRouteImpactBps(input.route, quote)
   return {
     dry_run: true as const,
     execution_enabled: false as const,

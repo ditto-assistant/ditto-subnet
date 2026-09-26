@@ -77,3 +77,15 @@ export const treasuryQuoteSchema = z.object({
   execution_enabled: z.literal(false),
   settlement: z.string(),
 })
+
+// Each path's price_impact_bps is already cumulative for that route: Platform
+// compounds both swaps into gm_alpha_path, so adding tao_path would count the
+// DITTO-to-TAO hop twice.
+export function treasuryRouteImpactBps(
+  route: z.infer<typeof treasuryPreviewInputSchema>['route'],
+  quote: z.infer<typeof treasuryQuoteSchema>,
+): number {
+  return route === 'tao'
+    ? quote.tao_path.price_impact_bps
+    : quote.gm_alpha_path.price_impact_bps
+}

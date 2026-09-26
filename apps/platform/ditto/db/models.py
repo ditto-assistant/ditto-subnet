@@ -7887,6 +7887,69 @@ class InferenceRoutingAudit(Base):
     __table_args__ = (Index("inference_routing_audit_history_idx", "recorded_at"),)
 
 
+class InferenceAdmissionRejection(Base):
+    """A request refused before any inference_requests row existed.
+
+    The columns are operational telemetry only. Prompt text, bodies, headers,
+    and provider credentials are not stored.
+    """
+
+    __tablename__ = "inference_admission_rejections"
+
+    rejection_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    lane: Mapped[str] = mapped_column(Text, nullable=False)
+    http_status: Mapped[int] = mapped_column(Integer, nullable=False)
+    admission_code: Mapped[str] = mapped_column(Text, nullable=False)
+    grant_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    validator_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correlation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    request_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    byte_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    platform_revision: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "lane IN ('inference', 'embedding')",
+            name="inference_admission_rejections_lane_check",
+        ),
+        CheckConstraint(
+            "http_status IN (400, 403, 409, 413)",
+            name="inference_admission_rejections_status_check",
+        ),
+        CheckConstraint(
+            "admission_code IN ("
+            "'invalid_json', 'invalid_schema', 'request_too_large', "
+            "'stale_session', 'model_not_allowed', 'grant_not_servable')",
+            name="inference_admission_rejections_code_check",
+        ),
+        CheckConstraint(
+            "request_bytes >= 0",
+            name="inference_admission_rejections_bytes_check",
+        ),
+        CheckConstraint(
+            "byte_limit IS NULL OR byte_limit >= 0",
+            name="inference_admission_rejections_limit_check",
+        ),
+        CheckConstraint(
+            "length(platform_revision) BETWEEN 1 AND 64",
+            name="inference_admission_rejections_revision_check",
+        ),
+        CheckConstraint(
+            "validator_hotkey IS NULL OR length(validator_hotkey) BETWEEN 1 AND 120",
+            name="inference_admission_rejections_hotkey_check",
+        ),
+        Index(
+            "inference_admission_rejections_grant_idx",
+            "grant_id",
+            "created_at",
+        ),
+        Index("inference_admission_rejections_created_idx", "created_at"),
+    )
+
+
 class InferenceRequest(Base):
     """Replay ledger and bounded accounting for one proxy request."""
 
