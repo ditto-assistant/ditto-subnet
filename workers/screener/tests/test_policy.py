@@ -899,6 +899,40 @@ async def test_reasoning_harness_passes_the_oracle() -> None:
     assert any(item.code == "behavioral-oracle-passed" for item in decision.evidence)
 
 
+async def test_v13_certified_source_still_requires_private_oracle() -> None:
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=True,
+            risk_level="low",
+            finding_digest="ab" * 32,
+            categories=("none",),
+            clearance_certified=True,
+        )
+
+    async def unavailable(*_args: object) -> ChallengeObservation:
+        raise AssertionError("skip_challenges must stop before private runtime")
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="source-and-oracle",
+            module_specs=(
+                {"kind": "agentic_source_review"},
+                {"kind": "behavioral_oracle"},
+            ),
+        ),
+        (
+            AgenticSourceReviewModule(module_id="private-source-review"),
+            BehavioralOracleModule(module_id="oracle"),
+        ),
+    )
+    decision = await engine.evaluate(
+        _context(unavailable, review), skip_challenges=True
+    )
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert not decision.submits_verdict
+    assert any(item.code == "challenge-inconclusive" for item in decision.evidence)
+
+
 async def test_single_call_oracle_is_inconclusive_without_causal_evidence() -> None:
     async def observe(*_):  # type: ignore[no-untyped-def]
         return ChallengeObservation(
