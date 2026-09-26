@@ -7056,6 +7056,9 @@ class ScreenerL2ReportCanary(Base):
     expected_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
     expected_score_count: Mapped[int] = mapped_column(Integer, nullable=False)
     review_label: Mapped[str] = mapped_column(Text, nullable=False)
+    run_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="source_only"
+    )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     claimed_instance_id: Mapped[str | None] = mapped_column(Text)
     settings_revision: Mapped[int | None] = mapped_column(Integer)
@@ -7092,6 +7095,10 @@ class ScreenerL2ReportCanary(Base):
         CheckConstraint(
             "review_label IN ('candidate_clear', 'known_reject')",
             name="screener_l2_canary_label_check",
+        ),
+        CheckConstraint(
+            "run_mode IN ('source_only', 'full_runtime')",
+            name="run_mode_check",
         ),
         CheckConstraint(
             "status IN ('queued', 'leased', 'succeeded', 'incomplete', 'expired')",

@@ -675,6 +675,7 @@ export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
       expected_score_count: input.expectedScoreCount,
       target_node_id: input.targetNodeId,
       review_label: input.reviewLabel,
+      run_mode: input.runMode,
       confirm_report_only: true,
     },
   })

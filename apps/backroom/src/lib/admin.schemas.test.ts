@@ -2052,6 +2052,9 @@ describe('L2 report canary read schema', () => {
     expect(l2ReportCanaryViewSchema.parse({ ...view, lease_expires_at }).lease_expires_at)
       .toBe(lease_expires_at)
     expect(l2ReportCanaryViewSchema.parse(view).lease_expires_at).toBeUndefined()
+    expect(l2ReportCanaryViewSchema.parse(view).run_mode).toBe('source_only')
+    expect(l2ReportCanaryViewSchema.parse({ ...view, run_mode: 'full_runtime' }).run_mode)
+      .toBe('full_runtime')
   })
 })
 

@@ -1166,6 +1166,7 @@ class BuildGate:
         deferred_source_review: bool = False,
         policy_version: int = SCREENING_POLICY_VERSION,
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
+        execution_namespace: UUID | None = None,
     ) -> ScreeningDecision:
         """Screen one agent end-to-end; never raises.
 
@@ -1198,6 +1199,12 @@ class BuildGate:
 
         if build_only and policy_only:
             raise ValueError("build-only and policy-only modes are mutually exclusive")
+        if execution_namespace is not None and (
+            publish_image is not None
+            or publish_held_image is not None
+            or remote_build is not None
+        ):
+            raise ValueError("isolated execution cannot publish or import an image")
         if replay_runtime_probes and (not build_only or policy_version != 13):
             raise ValueError("replay runtime probes require v13 build-only mode")
         if preverified_image is not None and (
@@ -1243,8 +1250,14 @@ class BuildGate:
         # published image reference remains stable for the immutable agent
         # submission; downstream consumers and rescreens share that identity.
         execution_id = f"{agent_id}-{attempt_id}"
+        if execution_namespace is not None:
+            execution_id += f"-{execution_namespace.hex}"
         build_tag = f"ditto-screen/{execution_id}:latest"
-        image_ref = f"ditto-screen/{agent_id}:latest"
+        image_ref = (
+            f"ditto-screen/{agent_id}:latest"
+            if execution_namespace is None
+            else f"ditto-screen/canary-{execution_namespace.hex}:latest"
+        )
         container = f"ditto-screen-{execution_id}"
         gateway_container = f"ditto-gateway-{execution_id}"
         network = f"ditto-screen-{execution_id}"
