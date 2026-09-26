@@ -2418,6 +2418,28 @@ const inferenceRouteBasisSchema = z.enum([
   'unrecognized',
 ])
 
+const inferenceRateLimitBurstSchema = z.object({
+  request_kind: inferenceRequestKindSchema,
+  window_seconds: z.number().int().positive(),
+  rate_limited_failures: z.number().int().nonnegative(),
+  threshold: z.number().int().positive(),
+  peak_global_concurrency: z.number().int().nonnegative(),
+  global_concurrency_limit: z.number().int().positive(),
+  active: z.boolean(),
+  tickets_total: z.number().int().nonnegative(),
+  tickets_truncated: z.boolean(),
+  tickets: z.array(
+    z.object({
+      agent_id: z.string().uuid(),
+      bench_version: z.number().int(),
+      validator_hotkey: z.string(),
+      slot_id: z.string(),
+      ticket_deadline: z.string(),
+      rate_limited_failures: z.number().int().positive(),
+    }),
+  ),
+})
+
 export const inferenceFailureTaxonomySchema = z.object({
   observed_at: z.string(),
   window_seconds: z.array(z.number().int().positive()),
@@ -2459,6 +2481,11 @@ export const inferenceFailureTaxonomySchema = z.object({
       share_of_settled_calls: z.number().nonnegative(),
     }),
   ),
+  // Report-only: `active` is five-minute upstream_http_429 >= the provisional
+  // threshold while the local global in-flight peak stayed below its limit.
+  // Nothing is enforced, rerouted, or retried on it. Null (not []) when the
+  // Platform predates the signal, so a rollout skew never reads as "no burst".
+  rate_limit_bursts: z.array(inferenceRateLimitBurstSchema).nullish().default(null),
 })
 
 export const runtimeProfileCaptureInputSchema = z
