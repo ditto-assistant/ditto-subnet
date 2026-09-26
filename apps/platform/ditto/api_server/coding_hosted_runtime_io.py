@@ -75,7 +75,11 @@ def write_private(path: Path, body: bytes) -> None:
         output.write(body)
         output.flush()
         os.fsync(output.fileno())
-    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    fsync_directory(path.parent)
+
+
+def fsync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         os.fsync(fd)
     finally:
