@@ -28,8 +28,8 @@ from ditto.miner_cli.models import PreflightCheckResult, PreflightResult
 logger = logging.getLogger(__name__)
 
 
-# Must match the platform's upload cap (ditto-platform
-# ditto/api_server/endpoints/upload.py:DEFAULT_MAX_TARBALL_SIZE_BYTES,
+# Must match the platform's upload cap
+# (apps/platform/ditto/api_server/endpoints/upload.py:DEFAULT_MAX_TARBALL_SIZE_BYTES,
 # env-overridable there via DITTO_MAX_TARBALL_SIZE_BYTES). Duplicated here so
 # the CLI can reject oversize tars before bothering the API; if either side
 # changes, both must change. A larger local value makes `ditto verify` pass a

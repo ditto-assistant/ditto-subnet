@@ -244,8 +244,9 @@ class ApiClient:
     ) -> UploadAgentResponse:
         """Submit the tarball + payment proof.
 
-        Multipart shape mirrors ``ditto/api_server/endpoints/upload.py``
-        lines 156-173 exactly. Any drift here breaks every upload.
+        Multipart shape mirrors ``upload_agent`` in
+        ``apps/platform/ditto/api_server/endpoints/upload.py`` exactly. Any
+        drift here breaks every upload.
         """
         files = {
             "agent_tar": (
