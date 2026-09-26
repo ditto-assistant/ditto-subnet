@@ -202,6 +202,13 @@ impl CodingService {
             )
             .await?;
         let claim_id = claim.claim_id();
+        let mut release = ClaimRelease {
+            memory: self.memory.clone(),
+            ticket_id: request.ticket_id.clone(),
+            case_id: request.case_id.clone(),
+            claim_id,
+            armed: true,
+        };
         let result = async {
             let model = self.models.create(&request)?;
             let workspace = WorkspaceClient::new_for_version(
@@ -226,7 +233,40 @@ impl CodingService {
             .memory
             .finish_claim(&request.ticket_id, &request.case_id, claim_id)
             .await;
+        release.armed = false;
         result
+    }
+}
+
+/// Releases a run's claim when the run future is dropped before it finishes,
+/// e.g. the client disconnects or the executor times out. Without it the case
+/// stays claimed forever (`purge_expired` keeps claimed entries), and
+/// `MAX_ACTIVE_CASES` such leaks make every `/coding/seed` return 429 until
+/// the process restarts. `finish_claim` only removes a case this claim still
+/// owns, so a release racing the normal path is harmless.
+struct ClaimRelease {
+    memory: MemoryRegistry,
+    ticket_id: String,
+    case_id: String,
+    claim_id: u64,
+    armed: bool,
+}
+
+impl Drop for ClaimRelease {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let memory = self.memory.clone();
+        let ticket_id = std::mem::take(&mut self.ticket_id);
+        let case_id = std::mem::take(&mut self.case_id);
+        let claim_id = self.claim_id;
+        runtime.spawn(async move {
+            let _ = memory.finish_claim(&ticket_id, &case_id, claim_id).await;
+        });
     }
 }
 
@@ -402,6 +442,35 @@ mod tests {
 
         release.notify_one();
         assert!(first.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn cancelled_run_releases_its_claim() {
+        let started = Arc::new(Notify::new());
+        let service = CodingService::new(Arc::new(BlockingFactory {
+            started: Arc::clone(&started),
+            release: Arc::new(Notify::new()),
+        }));
+        let seed = seed_request();
+        service.seed(seed.clone()).await.unwrap();
+
+        // The executor drops the request mid-run, as on a client disconnect.
+        let started_wait = started.notified();
+        let running_service = service.clone();
+        let running = tokio::spawn(async move { running_service.run(run_request()).await });
+        started_wait.await;
+        running.abort();
+        assert!(running.await.unwrap_err().is_cancelled());
+
+        // The claimed case is released, so the same case seeds fresh rather
+        // than staying claimed until the process restarts.
+        for _ in 0..100 {
+            if !service.seed(seed.clone()).await.unwrap().idempotent_replay {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("cancelled run left its case claimed");
     }
 
     #[tokio::test]
