@@ -5485,11 +5485,22 @@ class LayeredSourceReviewAgent:
         # can therefore decide from whatever durable notes/finding exist when
         # L1/L2 run out of time.
         review_deadline = self._exploration_deadline(deadline)
+        # A longer report-only lease reserves a separate L2 window. Bound L1
+        # to its own configured aggregate timeout so a slow but legitimate L1
+        # cannot consume the entire lease before L2 starts. Shorter ordinary
+        # screening leases remain the tighter bound.
+        l1_timeout = getattr(self._l1, "_timeout_seconds", None)
+        l1_deadline = review_deadline
+        if isinstance(l1_timeout, (int, float)) and l1_timeout > 0:
+            bounded = asyncio.get_running_loop().time() + l1_timeout
+            l1_deadline = (
+                bounded if review_deadline is None else min(review_deadline, bounded)
+            )
         l1 = await self._l1.review(
             archive_path,
             artifact_sha256=artifact_sha256,
             progress=report_l1 if progress is not None else None,
-            deadline=review_deadline,
+            deadline=l1_deadline,
             policy_version=policy_version,
         )
         return await self.resolve_lead(

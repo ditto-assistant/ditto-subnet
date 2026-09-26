@@ -49,8 +49,8 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 ScreenerDep = Annotated[str, Depends(require_screener)]
 _MIN_LEASE = timedelta(minutes=45)
-# The source reviewer owns one deadline for L1 and L2 together. Source-only
-# replays still need time to download, validate, and submit the signed report.
+# L1 and L2 each have their own aggregate deadline in the report-only lane.
+# Source-only replays also need time to download, validate, and submit the report.
 _SOURCE_ONLY_OVERHEAD = timedelta(minutes=10)
 # Full-runtime replays additionally build and probe an untrusted image and run
 # bounded private challenges before the source-review result is complete.
@@ -58,11 +58,17 @@ _FULL_RUNTIME_OVERHEAD = timedelta(minutes=60)
 _FULL_RUNTIME_MIN_RELEASE = (0, 317, 2)
 
 
-def _canary_lease(*, source_review_timeout_seconds: int, run_mode: str) -> timedelta:
+def _canary_lease(
+    *, source_review_timeout_seconds: int, l2_timeout_seconds: int, run_mode: str
+) -> timedelta:
     overhead = (
         _FULL_RUNTIME_OVERHEAD if run_mode == "full_runtime" else _SOURCE_ONLY_OVERHEAD
     )
-    return max(_MIN_LEASE, timedelta(seconds=source_review_timeout_seconds) + overhead)
+    return max(
+        _MIN_LEASE,
+        timedelta(seconds=source_review_timeout_seconds + l2_timeout_seconds)
+        + overhead,
+    )
 
 
 def _utc(value: datetime) -> datetime:
@@ -444,6 +450,7 @@ async def claim_l2_report_canary(
             source_review_timeout_seconds=(
                 effective.settings.source_review_timeout_seconds
             ),
+            l2_timeout_seconds=effective.settings.timeout_seconds,
             run_mode=row.run_mode,
         )
         # URL issuance is scoped to this canary, not to a running screening attempt.

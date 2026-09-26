@@ -26,7 +26,7 @@ from ditto_screening_protocol import ScoredRuntimeEvidenceLease
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("run_mode", "lease_minutes"),
-    [("source_only", 70), ("full_runtime", 120)],
+    [("source_only", 100), ("full_runtime", 150)],
 )
 async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
     make_config, monkeypatch: pytest.MonkeyPatch, run_mode: str, lease_minutes: int

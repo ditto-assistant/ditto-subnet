@@ -6602,6 +6602,25 @@ class _FakeAdjudicator:
         )
 
 
+async def test_long_report_lease_preserves_separate_l1_and_l2_windows() -> None:
+    l1 = _FakeL1(_l1("medium"))
+    l1._timeout_seconds = 3_600
+    l2 = _FakeL2(_model_result(_safe()))
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=l1, l2=l2, mode="enforce"
+    )
+    started = asyncio.get_running_loop().time()
+    deadline = started + 6_000
+
+    await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, deadline=deadline
+    )
+
+    assert l1.deadline == pytest.approx(started + 3_600, abs=0.1)
+    assert l2.deadline == deadline
+    assert l2.deadline - l1.deadline >= 1_800
+
+
 async def test_exploration_reserves_the_terminal_adjudicator_deadline() -> None:
     l1 = _FakeL1(_l1("medium"))
     l2 = _FakeL2(_model_result(_safe()))
