@@ -864,6 +864,22 @@
     - screener_fleet_runtime_enabled
     - screener_fleet_auto_update_enabled
 
+- name: Install the fleet drain helper beside the updater
+  ansible.builtin.copy:
+    src: "{{ screener_fleet_checkout }}/scripts/{{ item }}"
+    dest: "{{ screener_fleet_update_state_dir }}/{{ item }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+    force: false
+  loop:
+    - screener-fleet-drain.py
+    - screener-fleet-release-hold.sh
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_auto_update_enabled
+
 - name: Install screener fleet updater units
   ansible.builtin.template:
     src: "{{ item.src }}"

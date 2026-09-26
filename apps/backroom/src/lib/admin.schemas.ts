@@ -9096,3 +9096,43 @@ export const outlierEscalationInputSchema = z.object({
 })
 
 export type OutlierEscalation = z.infer<typeof outlierEscalationSchema>
+
+// Would-trigger replay of the same escalation over the current scored ledger,
+// under the effective settings or operator overrides. Read-only.
+type GeneratedOutlierEscalationDryRunEntry =
+  PlatformComponents['schemas']['OutlierEscalationDryRunEntryView']
+type GeneratedOutlierEscalationDryRunResponse =
+  PlatformComponents['schemas']['AdminOutlierEscalationDryRunResponse']
+
+const outlierEscalationDryRunEntrySchema = z.object({
+  agent_id: z.string().uuid(),
+  miner_hotkey: z.string(),
+  evidence: outlierEscalationEvidenceSchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationDryRunEntry>)
+
+export const outlierEscalationDryRunSchema = z.object({
+  generated_at: z.string(),
+  bench_version: z.number().int(),
+  bench_version_in_scope: z.boolean(),
+  settings: outlierEscalationSettingsSchema,
+  overridden_fields: z.array(outlierSettingFieldSchema).max(5),
+  ledger_size: z.number().int().nonnegative(),
+  cohort_size: z.number().int().nonnegative(),
+  cohort_too_small: z.boolean(),
+  ledger_median: z.number().nullish(),
+  ledger_mad: z.number().nullish(),
+  would_trigger_count: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  would_trigger: z.array(outlierEscalationDryRunEntrySchema).max(100),
+  truncated: z.boolean(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationDryRunResponse>)
+
+export const outlierEscalationDryRunInputSchema = z.object({
+  benchVersion: z.number().int().positive().optional(),
+  minCohortSize: z.number().int().min(1).max(1000).optional(),
+  modifiedZThreshold: z.number().positive().max(1000).optional(),
+  minCompositeFloor: z.number().min(0).max(1).optional(),
+  limit: z.number().int().min(1).max(100).default(20),
+})
+
+export type OutlierEscalationDryRun = z.infer<typeof outlierEscalationDryRunSchema>

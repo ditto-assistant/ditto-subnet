@@ -172,6 +172,7 @@ describe('Backroom MCP tools', () => {
         'get_inference_runtime_metrics',
         'get_source_review_queue_slo',
         'get_outlier_escalation',
+        'get_outlier_escalation_dry_run',
         'get_inference_failure_taxonomy',
         'list_inference_traces',
         'download_inference_trace',
@@ -399,7 +400,9 @@ describe('Backroom MCP tools', () => {
     // measured catalog to 167,798 bytes. The exact-source canary preflight
     // adds one bounded read; retain about 0.5 KB headroom at 169,300 bytes.
     // The taxonomy's report-only rate_limit_bursts note adds about 80 bytes.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(169_300)
+    // The bounded outlier-escalation dry-run read measures 169,755 bytes;
+    // retain about 0.5 KB headroom.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(170_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -427,8 +430,9 @@ describe('Backroom MCP tools', () => {
       // The one-line outlier-escalation read (79 chars; detail in tool help)
       // plus later main summaries measured 29,329. Two short treasury
       // shadow-policy descriptions bring the measured total to 29,850.
-      // The taxonomy's rate_limit_bursts catalog note measured 30,520.
-      30_950,
+      // The taxonomy's rate_limit_bursts catalog note measured 30,520; the
+      // one-line outlier-escalation dry-run read brings it to 30,794.
+      31_200,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -3620,6 +3624,104 @@ describe('Backroom MCP tools', () => {
 
       const bad = await client.callTool({ name: 'get_outlier_escalation', arguments: {} })
       expect(bad.isError).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  const outlierDryRunPayload = () => ({
+    generated_at: '2026-09-25T12:00:00Z',
+    bench_version: 12,
+    bench_version_in_scope: true,
+    settings: {
+      mode: 'observe',
+      min_bench_version: 12,
+      min_cohort_size: 8,
+      modified_z_threshold: 4.5,
+      min_composite_floor: 0.9,
+    },
+    overridden_fields: ['modified_z_threshold'],
+    ledger_size: 40,
+    cohort_size: 39,
+    cohort_too_small: false,
+    ledger_median: 0.61,
+    ledger_mad: 0.02,
+    would_trigger_count: 3,
+    limit: 2,
+    would_trigger: [
+      {
+        agent_id: '11111111-1111-4111-8111-111111111111',
+        miner_hotkey: '5Miner',
+        evidence: {
+          composite: 0.99,
+          cohort_size: 39,
+          cohort_median: 0.61,
+          cohort_mad: 0.02,
+          modified_z: 12.8,
+          min_cohort_size: 8,
+          modified_z_threshold: 4.5,
+          min_composite_floor: 0.9,
+          upward: true,
+          above_floor: true,
+          raw_cohort: [0.6, 0.61],
+        },
+        source_path: 'must-not-escape',
+      },
+    ],
+    truncated: true,
+  })
+
+  it('dry-runs the outlier escalation with overrides and bounded rows', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(outlierDryRunPayload()))
+      .mockResolvedValueOnce(Response.json(outlierDryRunPayload()))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_outlier_escalation_dry_run',
+        arguments: { benchVersion: 12, modifiedZThreshold: 4.5, limit: 2 },
+      })
+
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as ReturnType<typeof outlierDryRunPayload>
+      expect(body).toMatchObject({
+        bench_version: 12,
+        overridden_fields: ['modified_z_threshold'],
+        would_trigger_count: 3,
+        truncated: true,
+      })
+      expect(body.would_trigger[0].evidence.modified_z).toBe(12.8)
+      expect(JSON.stringify(body)).not.toContain('must-not-escape')
+      expect(JSON.stringify(body)).not.toContain('raw_cohort')
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/outlier-escalation/dry-run?limit=2&bench_version=12&modified_z_threshold=4.5',
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+
+      await client.callTool({ name: 'get_outlier_escalation_dry_run', arguments: {} })
+      expect(String(fetchMock.mock.calls[1][0])).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/outlier-escalation/dry-run?limit=20',
+      )
+
+      const invalid = await client.callTool({
+        name: 'get_outlier_escalation_dry_run',
+        arguments: { minCompositeFloor: 1.5 },
+      })
+      expect(invalid.isError).toBe(true)
+
+      const help = await client.callTool({
+        name: 'get_backroom_tool_help',
+        arguments: { tool: 'get_outlier_escalation_dry_run' },
+      })
+      const guidance = (readJsonResult(help) as { guidance: string }).guidance
+      expect(guidance).toContain('mode is reported but not applied')
+      expect(guidance).toContain('writes nothing')
+      expect(fetchMock).toHaveBeenCalledTimes(2)
     } finally {
       await client.close()
       await server.close()
