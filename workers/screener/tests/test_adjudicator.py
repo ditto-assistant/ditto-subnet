@@ -2835,3 +2835,45 @@ def test_the_court_uses_its_own_cap_without_changing_l2(make_config) -> None:
     assert built is not None
     assert built._max_completion_tokens == 4_096
     assert config.l2_max_completion_tokens == 16_384
+
+
+async def test_completion_observer_receives_only_bounded_metering(
+    tmp_path: Path,
+) -> None:
+    observations: list[dict[str, object]] = []
+    payload = {
+        "model": "openai/gpt-5.6-sol",
+        "provider": "Sail Research",
+        "usage": {"prompt_tokens": 12, "completion_tokens": 5, "cost": 0.003},
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "private source must not enter the observer",
+                    "tool_calls": [],
+                }
+            }
+        ],
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    court = SourceReviewAdjudicator(
+        api_key_file=str(_key(tmp_path)),
+        base_url="https://example.test",
+        model="openai/gpt-5.6-sol",
+        transport=httpx.MockTransport(handler),
+        completion_observer=observations.append,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await court._completion_message(client, "sk-test", [], timeout=10)
+    assert observations == [
+        {
+            "prompt_tokens": 12,
+            "completion_tokens": 5,
+            "cost_usd": 0.003,
+            "model": "openai/gpt-5.6-sol",
+            "upstream": "sail-research",
+        }
+    ]

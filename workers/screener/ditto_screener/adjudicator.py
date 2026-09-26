@@ -39,7 +39,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
@@ -1326,6 +1326,7 @@ class SourceReviewAdjudicator:
         max_completion_tokens: int = _MAX_COMPLETION_TOKENS,
         transport: httpx.AsyncBaseTransport | None = None,
         inference_provider: str = "openrouter",
+        completion_observer: Callable[[Mapping[str, object]], None] | None = None,
     ) -> None:
         self._api_key_file = api_key_file
         self._base_url = base_url.rstrip("/")
@@ -1335,6 +1336,9 @@ class SourceReviewAdjudicator:
         self._max_steps = max(1, int(max_steps))
         self._max_completion_tokens = max(1_000, int(max_completion_tokens))
         self._transport = transport
+        # Report-only calibration can meter a response without retaining the
+        # model text, tool arguments, or source. Production leaves this unset.
+        self._completion_observer = completion_observer
 
     async def adjudicate(
         self,
@@ -2113,6 +2117,45 @@ class SourceReviewAdjudicator:
                         if request_trace is not None:
                             request_trace.stage = "complete"
                         _observe_upstream(payload)
+                        if self._completion_observer is not None:
+                            usage = (
+                                payload.get("usage")
+                                if isinstance(payload, dict)
+                                else None
+                            )
+                            metering: dict[str, object] = {
+                                "prompt_tokens": (
+                                    _token_count(usage.get("prompt_tokens"))
+                                    if isinstance(usage, dict)
+                                    else None
+                                ),
+                                "completion_tokens": (
+                                    _token_count(usage.get("completion_tokens"))
+                                    if isinstance(usage, dict)
+                                    else None
+                                ),
+                                "cost_usd": (
+                                    float(usage["cost"])
+                                    if isinstance(usage, dict)
+                                    and isinstance(usage.get("cost"), (int, float))
+                                    and not isinstance(usage.get("cost"), bool)
+                                    and 0 <= usage["cost"] <= 100
+                                    else None
+                                ),
+                                "model": (
+                                    payload.get("model")
+                                    if isinstance(payload, dict)
+                                    and isinstance(payload.get("model"), str)
+                                    and _MODEL_RE.fullmatch(payload["model"])
+                                    else None
+                                ),
+                                "upstream": (
+                                    _upstream_slug(payload.get("provider"))
+                                    if isinstance(payload, dict)
+                                    else None
+                                ),
+                            }
+                            self._completion_observer(metering)
                         if _retryable_model_error_type(payload) is not None:
                             raise ProviderBodyError(
                                 "adjudicator model body was unusable"
