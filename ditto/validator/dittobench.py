@@ -525,15 +525,17 @@ class DittobenchClient:
         return self._transcripts.pop(run_id, None)
 
     def _control_headers(self) -> dict[str, str]:
-        """Authorize this validator on the scorer's inference control plane.
+        """Authorize this validator on the scorer's control plane.
 
-        The scorer admits ``/v1/inference/session*`` from a loopback peer or a
-        matching bearer. It joins sandbox-docker's network namespace while this
-        worker stays on the Compose bridge, so the call always arrives from a
-        private-bridge address and the bearer is the only thing that can
-        authorize it. Sent on the control plane alone — the shared
-        ``httpx.AsyncClient`` also talks to the platform, so this must never
-        become a client-wide default header.
+        The scorer requires this bearer on every control-plane route except
+        ``GET /health`` (logged in shadow mode, rejected under
+        ``DITTOBENCH_CONTROL_AUTH_MODE=enforce``), so every scorer call in
+        this client sends it. The scorer joins sandbox-docker's network
+        namespace while this worker stays on the Compose bridge, so the call
+        always arrives from a private-bridge address and the bearer is the
+        only thing that can authorize it. Sent on the control plane alone —
+        the shared ``httpx.AsyncClient`` also talks to the platform, so this
+        must never become a client-wide default header.
         """
         token = str(getattr(self._config, "dittobench_control_token", "") or "")
         return {"Authorization": f"Bearer {token}"} if token else {}
@@ -913,6 +915,7 @@ class DittobenchClient:
         try:
             response = await self._client.get(
                 f"{self._config.dittobench_api_url}/v1/capabilities",
+                headers=self._control_headers(),
                 timeout=getattr(
                     self._config, "dittobench_capabilities_timeout_seconds", 3.0
                 ),
@@ -1414,7 +1417,9 @@ class DittobenchClient:
         endpoint = "/v2/score"
         url = f"{self._config.dittobench_api_url}{endpoint}"
         try:
-            resp = await self._client.post(url, json=body)
+            resp = await self._client.post(
+                url, json=body, headers=self._control_headers()
+            )
         except httpx.HTTPError as e:
             raise DittobenchError(f"submit failed: {e}") from e
         if resp.status_code in (429, 503):
@@ -1478,7 +1483,7 @@ class DittobenchClient:
         run_token = hashlib.sha256(run_id.encode()).hexdigest()[:16]
         try:
             while time.monotonic() - started <= budget:
-                resp = await self._client.get(url)
+                resp = await self._client.get(url, headers=self._control_headers())
                 # A poll that cannot be read says nothing about the run itself,
                 # which is still live in the sandbox. Cancel it like every other
                 # non-terminal exit so it cannot keep the sandbox after the
@@ -1716,7 +1721,7 @@ class DittobenchClient:
             return None
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}/transcript"
         try:
-            resp = await self._client.get(url)
+            resp = await self._client.get(url, headers=self._control_headers())
         except httpx.HTTPError as e:
             logger.warning("run %s transcript fetch failed: %s", run_id, e)
             return None
@@ -1754,7 +1759,9 @@ class DittobenchClient:
         """
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}"
         try:
-            resp = await self._client.delete(url, timeout=_CANCEL_TIMEOUT_SECONDS)
+            resp = await self._client.delete(
+                url, headers=self._control_headers(), timeout=_CANCEL_TIMEOUT_SECONDS
+            )
             if resp.status_code not in (200, 202, 404, 405):
                 logger.warning(
                     "dittobench run %s cancellation rejected (%d): %s",

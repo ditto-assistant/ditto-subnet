@@ -212,7 +212,7 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
     assert l2_prompt_revision(11) == "l2-terra-source-review-v37-policy-v11"
     assert l2_prompt_revision(10) == "l2-terra-source-review-v37-policy-v10"
-    assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v11"
+    assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v12"
     assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v27-policy-v11"
     assert l2_cause_tiebreaker_prompt_revision(11) == (
         "l3-sol-cause-disagreement-v7-policy-v11"
@@ -364,6 +364,42 @@ def test_request_local_identical_tool_memoization_is_not_fabrication() -> None:
     assert "fake_completed_call" in violation["source"]
 
 
+def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
+    fixtures = {
+        case["id"]: case
+        for case in json.loads(
+            (ROOT / "tests/fixtures/l2-review-regressions.json").read_text()
+        )
+    }
+    safe = fixtures["safe-local-memory-id-guard-preserves-external-catalog"]
+    violation = fixtures["violation-external-pair-id-blocked-by-local-memory-guard"]
+    assert safe["disposition"] == "safe"
+    assert violation["disposition"] == "violation"
+    assert violation["category"] == "mandatory_contract_failure"
+    assert "selected = model_select(offered)" in safe["source"]
+    assert "selected = model_select(offered)" in violation["source"]
+    assert "req.tool_endpoint.post(selected.name, selected.args)" in safe["source"]
+    assert violation["source"].index("blocked_before_endpoint") < violation[
+        "source"
+    ].index("req.tool_endpoint.post")
+
+    v12 = _l2_review_system_prompt(12)
+    v13 = _l2_review_system_prompt(13)
+    assert "identity and argument schema of the offered tool" not in v12
+    assert "identity and argument schema of the offered tool" in v13
+    assert "local memory tool may check ownership of its own" in v13
+    assert "host-wide check that treats that argument as a local" in v13
+    assert "blocks the call before endpoint dispatch" in v13
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v43-policy-v13"
+    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v22-policy-v13"
+    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v26-policy-v13"
+    assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
+    assert "Use at most four targeted analyzer" not in (
+        l2_review._V13_SAFETY_ADJUDICATOR_TASK
+    )
+    assert "adjacent served-path files" in l2_review._V13_SAFETY_ADJUDICATOR_TASK
+
+
 def test_l2_policy_v10_prompt_keeps_the_original_i7_text() -> None:
     from ditto_screener.l2_review import _assert_l2_policy_tails_differ
 
@@ -428,6 +464,10 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
 
     assert _L2_POLICY_TAILS[13].startswith(_L2_POLICY_TAILS[12])
     assert "decide I1 through I8 independently" in v13
+    assert "every I1-I7 invariant" not in v13
+    assert "replaces I1-I7" not in v13
+    assert "one decision for I1 through I7" not in v13
+    assert "every I1-I7 invariant" in _l2_review_system_prompt(12)
     assert "always-on\nbenchmark recipe is activated on every request" in v13
     assert "reject unjustified removal" in v13
     assert "evaluation_identity_authoritative" in v13
@@ -437,7 +477,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "validator mints `inference_base_url`" in v13
     assert "A URL derived from user text" in v13
     assert "validator mints `inference_base_url`" not in _l2_review_system_prompt(12)
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v41-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v43-policy-v13"
     assert "v13" not in _benchmark_contract_capsule(12)
     assert _benchmark_contract_capsule(12)["supported_versions"] == [3, 4, 5, 6]
     assert (
@@ -860,6 +900,68 @@ async def test_required_lease_holds_before_l1_or_l4_can_clear() -> None:
     assert audit.max_elapsed_ms == 1_800_000 and audit.elapsed_ms == 0
 
 
+async def test_v13_l3_off_requires_matching_signed_lease_even_without_env_flag() -> (
+    None
+):
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+    missing = await layered.review(
+        "unused",
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+    )
+    assert missing.error_code == "l2-runtime-evidence-unavailable"
+    assert l1.calls == l2.calls == 0
+
+    revision = "a" * 40
+    keys = ("DITTOBENCH_DB", "DITTOBENCH_MODEL")
+    digest = hashlib.sha256(
+        ("scored-runtime-env-v1\n13\n" + revision + "\n" + "\n".join(keys)).encode()
+    ).hexdigest()
+    lease = ScoredRuntimeEvidenceLease(
+        attempt_id=ATTEMPT,
+        artifact_sha256="ab" * 32,
+        policy_version=13,
+        bench_version=13,
+        scorer_source_revision=revision,
+        release_descriptor_digest="sha256:" + "d" * 64,
+        scorer_image_digest="sha256:" + "e" * 64,
+        scorer_env_sha256=digest,
+        injected_keys=keys,
+        validator_count=2,
+        observed_at=int(time.time()),
+    )
+    accepted = await layered.review(
+        "unused",
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+        scored_runtime_evidence=lease,
+    )
+    assert accepted.ok
+    assert l1.calls == l2.calls == 1
+
+
+async def test_future_policy_l3_off_does_not_certify_without_runtime_contract() -> None:
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        policy_version=14,
+        scored_runtime_evidence=None,
+    )
+    assert result.error_code == "l2-runtime-evidence-unavailable"
+    assert l1.calls == l2.calls == 0
+
+
 async def test_v13_disabled_review_reports_preflight_cause() -> None:
     l1 = _FakeL1(_l1("low", clearance_certified=True))
     l2 = _FakeL2(_model_result(_safe()))
@@ -916,6 +1018,30 @@ async def test_clean_l1_skips_sol() -> None:
     assert result is l1.result
     assert l1.calls == 1
     assert l2.calls == 0
+
+
+async def test_isolated_enforce_preview_captures_the_applied_l2_result() -> None:
+    l1 = _FakeL1(_l1("low", clearance_certified=True))
+    l2_result = _model_result(_safe())
+    l2 = _FakeL2(l2_result)
+    layered = LayeredSourceReviewAgent(
+        l1=l1,
+        l2=l2,
+        mode="enforce",
+        always_escalate=True,
+        capture_enforce_result=True,
+    )  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert result.ok and result.risk_level == "low"
+    assert l2.calls == 1
+    assert layered.pop_shadow_result(ATTEMPT) is l2_result
+    assert layered.pop_shadow_result(ATTEMPT) is None
+    assert layered.pop_preview_l1_result(ATTEMPT) is l1.result
+    assert layered.pop_preview_l1_result(ATTEMPT) is None
 
 
 async def test_certified_l1_low_escalates_when_always_escalate(
@@ -977,6 +1103,268 @@ def test_l3_disabled_makes_l2_result_authoritative() -> None:
     assert result.observation is analyst.observation
     assert result.tools == ("source_inventory",)
     assert result.critic_disposition == "disabled"
+    assert result.clearance_path == "l2_only_l3_disabled"
+
+
+def test_v13_l3_off_certifies_only_complete_clean_l1_l2_agreement() -> None:
+    candidate = _clearance_candidate()
+    analyst = L2RunResult(
+        **{
+            **candidate.__dict__,
+            "response_models": ("openai/gpt-6-sol",),
+            # A clean L1 has no cited slice, so this flag is normally false.
+            "direct_clear_graph_complete": False,
+        }
+    )
+    # The analyzer only resolves local Rust calls. Ordinary starter-kit
+    # dependencies leave many unresolved calls, and Python/TS have no Rust
+    # entry at all. Neither is a source finding for a certified clean L1.
+    starter_graph = {
+        "entry": "main",
+        "unresolved": False,
+        "entry_ambiguous": False,
+        "truncated": False,
+        "analysis_truncated": False,
+        "reachable_truncated": False,
+        "nodes": [
+            {
+                "id": "src/main.rs::main@1",
+                "path": "src/main.rs",
+                "line": 1,
+                "end_line": 4,
+            }
+        ],
+        "node_count": 1,
+        "ambiguous_count": 0,
+        "ambiguous_sampled": False,
+        "unresolved_count": 263,
+        "unresolved_sampled": False,
+    }
+    kwargs = {
+        "dossier_tools": ("source_inventory",),
+        "analyst_cache_hit": False,
+        "policy_version": 13,
+        "dossier": {"deterministic": {"main_call_graph": starter_graph}},
+        "expected_model": "openai/gpt-6-sol",
+    }
+    clear = _finalize_without_l3(analyst, l1_observation=_l1("low"), **kwargs)
+    assert clear.observation.clearance_certified
+    assert clear.clearance_path == "l2_only_certified_low"
+
+    resolved_l1 = SourceReviewObservation(
+        **{
+            **_l1("low").__dict__,
+            "notes": (
+                {
+                    "kind": "concern",
+                    "path": "src/app.rs",
+                    "area": "served_entrypoint",
+                    "line": 84,
+                    "confidence": 0.87,
+                },
+                {
+                    "kind": "cleared",
+                    "path": "src/app.rs",
+                    "area": "served_entrypoint",
+                    "line": 84,
+                    "confidence": 0.91,
+                },
+            ),
+        }
+    )
+    resolved = _finalize_without_l3(analyst, l1_observation=resolved_l1, **kwargs)
+    assert resolved.observation.clearance_certified
+    assert resolved.failure_subcode is None
+
+    python_graph = {
+        **starter_graph,
+        "unresolved": True,
+        "nodes": [],
+        "node_count": 0,
+        "unresolved_count": 0,
+    }
+    python_clear = _finalize_without_l3(
+        analyst,
+        l1_observation=_l1("low"),
+        **{
+            **kwargs,
+            "dossier": {"deterministic": {"main_call_graph": python_graph}},
+        },
+    )
+    assert python_clear.observation.clearance_certified
+
+    for l1, changed in (
+        (_l1("medium"), {}),
+        (_l1("low", clearance_certified=False), {}),
+        (
+            SourceReviewObservation(
+                **{
+                    **_l1("low").__dict__,
+                    "notes": ({"kind": "concern"},),
+                }
+            ),
+            {},
+        ),
+        (_l1("low"), {"tools": ()}),
+        (_l1("low"), {"dossier_complete": False}),
+        (_l1("low"), {"response_models": ("other/model",)}),
+    ):
+        result = _finalize_without_l3(
+            L2RunResult(**{**analyst.__dict__, **changed}),
+            l1_observation=l1,
+            **kwargs,
+        )
+        assert not result.observation.ok
+        assert result.observation.error_code == "l2-only-clearance-unproven"
+        assert result.clearance_path == "l2_only_clearance_hold"
+        assert result.failure_subcode
+
+    for notes in (
+        (
+            {
+                "kind": "concern",
+                "path": "src/app.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.9,
+            },
+            {
+                "kind": "cleared",
+                "path": "src/other.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.95,
+            },
+        ),
+        (
+            {
+                "kind": "concern",
+                "path": "src/app.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.9,
+            },
+            {
+                "kind": "cleared",
+                "path": "src/app.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.89,
+            },
+        ),
+        (
+            {
+                "kind": "cleared",
+                "path": "src/app.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.95,
+            },
+            {
+                "kind": "concern",
+                "path": "src/app.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.9,
+            },
+        ),
+    ):
+        unresolved_l1 = SourceReviewObservation(
+            **{**_l1("low").__dict__, "notes": notes}
+        )
+        unresolved = _finalize_without_l3(
+            analyst, l1_observation=unresolved_l1, **kwargs
+        )
+        assert not unresolved.observation.ok
+        assert "l1-concern-unresolved" in (unresolved.failure_subcode or "")
+
+    two_concerns_one_clear = SourceReviewObservation(
+        **{
+            **_l1("low").__dict__,
+            "notes": (
+                {
+                    "kind": "concern",
+                    "path": "src/app.rs",
+                    "area": "served_entrypoint",
+                    "line": 79,
+                    "confidence": 0.86,
+                },
+                {
+                    "kind": "concern",
+                    "path": "src/app.rs",
+                    "area": "served_entrypoint",
+                    "line": 84,
+                    "confidence": 0.87,
+                },
+                {
+                    "kind": "cleared",
+                    "path": "src/app.rs",
+                    "area": "served_entrypoint",
+                    "line": 84,
+                    "confidence": 0.91,
+                },
+            ),
+        }
+    )
+    unresolved_pair = _finalize_without_l3(
+        analyst, l1_observation=two_concerns_one_clear, **kwargs
+    )
+    assert not unresolved_pair.observation.ok
+    assert "l1-concern-unresolved" in (unresolved_pair.failure_subcode or "")
+
+    scorer_attention = _finalize_without_l3(
+        analyst,
+        l1_observation=_l1("low"),
+        **{
+            **kwargs,
+            "dossier": {
+                "deterministic": {"scorer_field_flow": {"score_controls": ["lead"]}}
+            },
+        },
+    )
+    assert scorer_attention.observation.error_code == "l2-only-clearance-unproven"
+
+    missing_dossier = _finalize_without_l3(
+        analyst,
+        l1_observation=_l1("low"),
+        **{**kwargs, "dossier": None},
+    )
+    assert missing_dossier.observation.error_code == "l2-only-clearance-unproven"
+
+
+@pytest.mark.parametrize("risk", ["medium", "high"])
+async def test_l3_off_preserves_elevated_analyst_result_without_static_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, risk: str
+) -> None:
+    archive, artifact_sha256 = _tar(tmp_path, "fn main() {}")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (tmp_path / "cache").mkdir()
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _: httpx.Response(500))
+    agent._l3_enabled = False
+    elevated = _model_result(
+        SourceReviewObservation(
+            ok=True,
+            risk_level=risk,
+            finding_digest="b" * 64,
+            categories=("model_tool_planning_bypass",),
+        )
+    )
+
+    async def analyst(*_args: object, **_kwargs: object) -> L2RunResult:
+        return elevated
+
+    monkeypatch.setattr(agent, "_run_trajectory", analyst)
+    result = await agent._run_model(
+        workspace,
+        TarSourceRepository(str(archive)),
+        analyst_cache_key="elevated-analyst",
+        artifact_sha256=artifact_sha256,
+        l1_observation=_l1("high"),
+        deadline=None,
+        policy_version=13,
+    )
+    assert result.observation.risk_level == risk
     assert result.clearance_path == "l2_only_l3_disabled"
 
 
@@ -1202,6 +1590,19 @@ def test_served_generator_constellation_cannot_auto_clear(
     assert held.clearance_path == "deterministic_served_generator_hold"
     assert held.critic_disposition == "not_required_static_hold"
     assert held.resolution_basis == "benchmark_answer_replacement"
+    assert (
+        _finalize_without_l3(
+            analyst,
+            dossier_tools=(),
+            analyst_cache_hit=False,
+            policy_version=13,
+            l1_observation=_l1("low"),
+            static_attention=held,
+            dossier=dossier,
+            expected_model="openai/gpt-5.6-terra",
+        )
+        is held
+    )
     assert {item["role"] for item in held.causal_path} == {
         "trigger",
         "decision",
@@ -1326,6 +1727,19 @@ def test_review_adaptive_model_routing_cannot_auto_clear(tmp_path: Path) -> None
     assert "benchmark_emulation" in held.observation.categories
     assert held.resolution_basis == "benchmark_answer_replacement"
     assert held.clearance_path == "deterministic_review_adaptation_hold"
+    assert (
+        _finalize_without_l3(
+            analyst,
+            dossier_tools=(),
+            analyst_cache_hit=False,
+            policy_version=13,
+            l1_observation=_l1("low"),
+            static_attention=held,
+            dossier=dossier,
+            expected_model="openai/gpt-5.6-terra",
+        )
+        is held
+    )
     assert held.critic_disposition == "not_required_static_hold"
     assert {item["role"] for item in held.causal_path} == {
         "context",
@@ -1403,6 +1817,7 @@ def test_generalized_evidence_fixtures_are_artifact_bound(
                 "scorer_contract_manipulation": "scorer_field_manipulation",
                 "hidden_value_leakage": "hidden_model_bypass",
                 "fabricated_tool_trajectory": "fabricated_tool_trajectory",
+                "mandatory_contract_failure": "mandatory_contract_failure",
                 "provider_bypass": "hidden_model_bypass",
                 "data_exfiltration": "credential_exfiltration",
             }.get(category, "benchmark_answer_replacement")
@@ -1425,6 +1840,16 @@ def test_generalized_evidence_fixtures_are_artifact_bound(
     if disposition == "inconclusive":
         assert not observation.ok
         assert observation.failure_disposition == "inconclusive"
+        audit = observation.inconclusive_model_audit
+        assert audit is not None
+        assert audit["artifact_sha256"] == artifact_sha
+        assert (
+            audit["summary_sha256"]
+            == hashlib.sha256(result["summary"].encode()).hexdigest()
+        )
+        assert "model text is discarded" not in str(audit)
+        assert audit["submitted_invariant_count"] == 8
+        assert all("summary" not in decision for decision in audit["invariants"])
     else:
         assert observation.ok
         assert observation.risk_level == risk
@@ -2666,6 +3091,113 @@ async def test_partial_dossier_safe_consensus_cannot_clear(tmp_path: Path) -> No
     assert result.observation.failure_disposition == "retryable_infra"
     assert result.observation.error_code == "l3-adjudicator-incomplete"
     assert not result.dossier_complete
+
+
+@pytest.mark.parametrize("recovers", [False, True])
+async def test_l3_no_tool_failure_reports_bounded_subcode(
+    tmp_path: Path, recovers: bool
+) -> None:
+    source = "fn main() { serve(); }\nfn serve() {}"
+    archive, artifact_sha = _tar(tmp_path, source)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    safe = _clearance_certificate(
+        {
+            "disposition": "safe",
+            "risk_level": "low",
+            "confidence": 1.0,
+            "resolution_basis": "authoritative_model_tool_path",
+            "categories": ["none"],
+            "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+            "evidence": [],
+            "summary": "sanitized",
+        }
+    )
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests >= 3 and (not recovers or requests == 3):
+            return _response([])
+        return _response([_tool_call(str(requests), "submit_l2_review", safe)])
+
+    result = await _sol_agent(tmp_path, _PartialHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    if recovers:
+        assert requests == 4
+        assert result.observation.error_code == "l3-adjudicator-incomplete"
+        assert result.failure_subcode is None
+        return
+    assert requests == 5
+    assert result.observation.error_code == "l3-adjudicator-model-tool-contract"
+    assert result.observation.failure_disposition == "retryable_infra"
+    assert result.failure_subcode == "no_tool_call_after_corrections"
+    audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+    assert audit.reason_code == result.observation.error_code
+    assert audit.final_stage == "adjudicator"
+    assert audit.model_tool_failure_subcode == "no_tool_call_after_corrections"
+    assert (
+        audit.canonical_digest()
+        != audit.model_copy(
+            update={"model_tool_failure_subcode": None}
+        ).canonical_digest()
+    )
+
+
+@pytest.mark.parametrize(
+    ("first_silent_request", "error_code"),
+    [
+        (2, "l3-critic-model-tool-contract"),
+        (1, "l2-model-tool-contract"),
+    ],
+    ids=["l3-critic", "l2-analyst"],
+)
+async def test_every_trajectory_failure_carries_its_subcode(
+    tmp_path: Path, first_silent_request: int, error_code: str
+) -> None:
+    # The canary report reads ``failure_subcode`` from the final result, so each
+    # L2TrajectoryError handler must carry it, not only the L3 adjudicator's.
+    source = "fn main() { serve(); }\nfn serve() {}"
+    archive, artifact_sha = _tar(tmp_path, source)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    safe = _clearance_certificate(
+        {
+            "disposition": "safe",
+            "risk_level": "low",
+            "confidence": 1.0,
+            "resolution_basis": "authoritative_model_tool_path",
+            "categories": ["none"],
+            "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+            "evidence": [],
+            "summary": "sanitized",
+        }
+    )
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests >= first_silent_request:
+            return _response([])
+        return _response([_tool_call(str(requests), "submit_l2_review", safe)])
+
+    result = await _sol_agent(tmp_path, _PartialHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.error_code == error_code
+    assert result.observation.failure_disposition == "retryable_infra"
+    assert result.failure_subcode == "no_tool_call_after_corrections"
 
 
 async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
@@ -4084,17 +4616,17 @@ async def test_adjudicator_retry_reuses_analyst_and_critic_stage_caches(
             return _response([_tool_call("1", "submit_l2_review", safe)])
         if requests == 2:
             return _response([_tool_call("2", "submit_l2_review", challenge)])
-        if requests == 3:
+        if requests in {3, 4, 5}:
             return _response([])
-        if requests == 4:
+        if requests == 6:
             return _response(
-                [_tool_call("4", "read_file", {"path": "src/main.rs"})],
+                [_tool_call("6", "read_file", {"path": "src/main.rs"})],
                 input_tokens=0,
                 output_tokens=0,
                 reasoning_tokens=0,
                 cost=0,
             )
-        return _response([_tool_call("5", "submit_l2_review", adjudicated_safe)])
+        return _response([_tool_call("7", "submit_l2_review", adjudicated_safe)])
 
     agent = _sol_agent(tmp_path, _FakeHarness(), handler)
     first = await agent.review(
@@ -4117,7 +4649,7 @@ async def test_adjudicator_retry_reuses_analyst_and_critic_stage_caches(
     assert second.analyst_cache_hit
     assert second.critic_cache_hit
     assert second.adjudicator_disposition == "overturn_to_safe"
-    assert requests == 5, "the manual retry must rerun only the SOL adjudicator"
+    assert requests == 7, "the manual retry must rerun only the SOL adjudicator"
     assert second.usage.input_tokens == 1_000, "only adjudicator usage is new"
 
 
@@ -4663,7 +5195,7 @@ def _assert_logan_certificate_contract(
         certificate,
         artifact_sha256=artifact_sha256,
         repository=repository,
-        prompt_revision="l2-terra-source-review-v41-policy-v13-sol-independent-compact-v1",
+        prompt_revision="l2-terra-source-review-v43-policy-v13-sol-independent-compact-v1",
         policy_version=13,
     )
     assert observation.ok and observation.risk_level == "high"
@@ -4707,6 +5239,95 @@ def test_logan_certificate_contract_with_synthetic_archive(tmp_path: Path) -> No
     _assert_logan_certificate_contract(
         TarSourceRepository(str(archive)), artifact_sha256, "src/main.rs"
     )
+
+
+def test_scorer_slot_rewrite_requires_i4_without_spurious_i3_breach(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha256 = _tar(tmp_path, "// fixture\n" * 2476)
+    repository = TarSourceRepository(str(archive))
+    certificate = _logan_v13_certificate(repository, path="src/main.rs")
+    certificate["causal_evidence"]["authority_transition"] = "scorer_field_rewritten"
+    for decision in certificate["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="pass",
+                pass_clause="model_dissent_preserved",
+                evidence_indices=[],
+            )
+    observation, _, _, basis = _parse_l2_review(
+        certificate,
+        artifact_sha256=artifact_sha256,
+        repository=repository,
+        policy_version=13,
+    )
+    assert observation.ok and basis == "scorer_field_manipulation"
+
+    invalid = copy.deepcopy(certificate)
+    for decision in invalid["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="breach", pass_clause=None, evidence_indices=[3]
+            )
+        elif decision["invariant"] == "i4_derived_value_authority":
+            decision.update(
+                disposition="pass", pass_clause="no_derived_value", evidence_indices=[]
+            )
+    with pytest.raises(
+        ValueError, match="scorer field rewrite requires I4 breach"
+    ) as raised:
+        _parse_l2_review(
+            invalid,
+            artifact_sha256=artifact_sha256,
+            repository=repository,
+            policy_version=13,
+        )
+    assert l2_review._submission_validation_subcode(raised.value) == (
+        "slot_rewrite_invariant"
+    )
+
+
+def test_pre_v12_scorer_slot_rewrite_keeps_i3_binding(tmp_path: Path) -> None:
+    archive, artifact_sha256 = _tar(tmp_path, "// fixture\n" * 2476)
+    repository = TarSourceRepository(str(archive))
+    certificate = _logan_v13_certificate(repository, path="src/main.rs")
+    certificate["causal_evidence"]["authority_transition"] = "scorer_field_rewritten"
+    certificate["invariants"] = [
+        item
+        for item in certificate["invariants"]
+        if item["invariant"] != "i8_evaluation_independence"
+    ]
+    for decision in certificate["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="pass",
+                pass_clause="model_dissent_preserved",
+                evidence_indices=[],
+            )
+    with pytest.raises(ValueError, match="required invariant breach"):
+        _parse_l2_review(
+            certificate,
+            artifact_sha256=artifact_sha256,
+            repository=repository,
+            policy_version=11,
+        )
+
+    for decision in certificate["invariants"]:
+        if decision["invariant"] == "i3_model_dissent":
+            decision.update(
+                disposition="breach", pass_clause=None, evidence_indices=[3]
+            )
+        elif decision["invariant"] == "i4_derived_value_authority":
+            decision.update(
+                disposition="pass", pass_clause="no_derived_value", evidence_indices=[]
+            )
+    observation, _, _, _ = _parse_l2_review(
+        certificate,
+        artifact_sha256=artifact_sha256,
+        repository=repository,
+        policy_version=11,
+    )
+    assert observation.ok and observation.risk_level == "high"
 
 
 def test_submit_tool_schema_has_host_only_artifact_and_invariant_checks() -> None:
@@ -5491,6 +6112,61 @@ def test_cache_lock_excludes_another_worker_process(tmp_path: Path) -> None:
     assert fd is not None
     fcntl.flock(fd, fcntl.LOCK_UN)
     os.close(fd)
+
+
+async def test_function_diff_covers_bounded_nonstarter_rust_artifact(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "src").mkdir()
+    (source / "src/agent.rs").write_text(
+        "\n".join(f"fn distinct_{index}() {{}}" for index in range(328))
+    )
+    result = json.loads(
+        await InProcessAnalyzerHarness().run(source, "starter_function_diff", {})
+    )
+    assert result["added_count"] == 328
+    assert len(result["added"]) == 328
+    assert not result["truncated"]
+    assert len(json.dumps(result, separators=(",", ":"))) < 256_000
+
+
+async def test_scorer_flow_ignores_available_tool_retry_but_keeps_ab_score_controls(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "main.rs").write_text(
+        "fn run(mut response: RunResponse) -> RunResponse {\n"
+        "    response.tool_calls = model_calls();\n"
+        "    let available = response.tool_calls.clone();\n"
+        "    if available.is_empty() {\n"
+        "        response.tool_calls = Vec::new();\n"
+        "    }\n"
+        "    response\n"
+        "}\n"
+        "fn scored(mut response: RunResponse, ab_score: f64) -> RunResponse {\n"
+        "    response.answer = Some(model_answer());\n"
+        "    if ab_score > 0.9 { response.answer = None; }\n"
+        "    response\n"
+        "}\n"
+        "fn scored_alt(mut response: RunResponse, a_b_score: f64) -> RunResponse {\n"
+        "    response.abstain = Some(false);\n"
+        "    if a_b_score > 0.9 { response.abstain = None; }\n"
+        "    response\n"
+        "}\n"
+    )
+    result = json.loads(
+        await InProcessAnalyzerHarness().run(source, "scorer_field_flow", {})
+    )
+    assert not result["truncated"]
+    assert result["flow_count"] == 2
+    assert {(flow["function"], flow["field"]) for flow in result["flows"]} == {
+        ("scored", "answer"),
+        ("scored_alt", "abstain"),
+    }
+    assert not any(item["function"] == "run" for item in result["score_controls"])
 
 
 @pytest.mark.integration

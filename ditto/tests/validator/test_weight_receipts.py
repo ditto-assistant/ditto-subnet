@@ -17,6 +17,7 @@ from ditto.api_models.weight_receipt import (
     weight_receipt_digest,
     weight_vector_digest,
 )
+from ditto.validator.errors import WeightReceiptConflictError
 from ditto.validator.platform import PlatformClient
 from ditto.validator.weight_receipts import WeightReceiptRelay
 
@@ -210,6 +211,56 @@ async def test_platform_post_signs_immutable_receipt_and_checks_ack():
         result = await platform.submit_weight_receipt(claim)
     assert result.stored is True
     assert signed[0].startswith(b"ditto-validator-weight-receipt:v1:")
+
+
+@pytest.mark.parametrize(
+    "body,code",
+    [
+        ({"error_code": 3002, "message": "attempt_rebound: reason"}, "attempt_rebound"),
+        ({"message": "Pylon attempt identity already has a receipt"}, "unknown"),
+        ({"message": "private body: attempt_rebound"}, "unknown"),
+        ({"detail": "unexpected shape"}, "unknown"),
+    ],
+)
+async def test_platform_conflict_surfaces_only_bounded_code(body, code):
+    claim = finalized()
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(409, json=body))
+    ) as http:
+        platform = PlatformClient(
+            SimpleNamespace(
+                platform_api_url="https://platform.invalid",
+                validator_hotkey="validator",
+            ),
+            http,
+            SimpleNamespace(sign=lambda _: b"x" * 64),
+        )
+        with pytest.raises(WeightReceiptConflictError) as raised:
+            await platform.submit_weight_receipt(claim)
+    assert raised.value.code == code
+
+
+async def test_recovery_logs_conflict_code_and_leaves_receipt_unacknowledged(caplog):
+    claim = finalized()
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(
+            return_value={"receipts": [envelope(claim)], "next_after_task_id": None}
+        ),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(
+            side_effect=WeightReceiptConflictError("request_rebound")
+        )
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    with caplog.at_level("WARNING", logger="ditto.validator.weight_receipts"):
+        await relay.recover()
+    setter.acknowledge_weight_receipt.assert_not_awaited()
+    assert relay.diagnostics.recovery_status == "forwarding_platform_failed"
+    assert relay.diagnostics.page_deferred == 1
+    assert "WeightReceiptConflictError(request_rebound)" in caplog.text
 
 
 async def test_pin_benchmark_identity_wins_over_compatible_champion_version():

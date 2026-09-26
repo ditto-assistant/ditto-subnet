@@ -327,6 +327,63 @@ async def test_last_source_review_turn_requires_the_final_verdict_tool(
     assert [tool["function"]["name"] for tool in seen[0]["tools"]] == ["submit_review"]
 
 
+async def test_invalid_final_pass_clause_is_corrected_in_same_review(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    valid = _with_policy_v10_invariants(_BENIGN_REVIEW)
+    invalid = json.loads(json.dumps(valid))
+    invalid["invariants"][0]["pass_clause"] = "no_tool_planning"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        if len(seen) == 1:
+            calls = [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 20},
+                ),
+                _tool("search-1", "search", {"query": "call_model"}),
+            ]
+        else:
+            calls = [
+                _tool(
+                    f"submit-{len(seen)}",
+                    "submit_review",
+                    invalid if len(seen) == 2 else valid,
+                )
+            ]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "tool_calls": calls}}]},
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=2,
+        transport=httpx.MockTransport(handler),
+    )
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok and observation.risk_level == "low"
+    assert len(seen) == 3  # One schema repair is available after the final turn.
+    feedback = json.loads(seen[2]["messages"][-2]["content"])
+    assert feedback["field"] == "invariants[0].pass_clause"
+    assert feedback["invariant"] == "i1_model_invocation"
+    assert feedback["correctable"] is True
+    assert "no_tool_planning" not in json.dumps(feedback)
+
+
 def _archive_with(tmp_path: Path, extra: dict[str, bytes]) -> Path:
     path = tmp_path / "agent.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
@@ -2485,6 +2542,44 @@ async def test_each_source_review_completion_has_a_short_hard_timeout(
     assert observation.error_code == "source-review-timeouterror"
 
 
+async def test_default_source_turn_allows_delayed_success_with_retry_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def delayed_success(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.02)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=None,
+        model="openai/gpt-6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=600,
+        max_steps=1,
+        transport=httpx.MockTransport(delayed_success),
+    )
+    request_timeouts: list[float] = []
+
+    def headers(_key: str, effective_timeout: float) -> dict[str, str]:
+        request_timeouts.append(effective_timeout)
+        return {}
+
+    monkeypatch.setattr(agent, "_completion_request_headers", headers)
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        message = await agent._completion_message(
+            client,
+            "test-key",
+            [{"role": "user", "content": "test"}],
+            timeout=600,
+            reasoning_effort="high",
+        )
+    assert message["content"] == "ok"
+    assert request_timeouts == [180.0]
+    assert request_timeouts[0] * 2 < agent._timeout_seconds
+
+
 async def test_completion_request_timeout_override_still_obeys_review_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3323,7 +3418,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v26-policy-v13"
+    assert _prompt_revision(13) == "source-review-v27-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -3449,6 +3544,9 @@ def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
 
     assert _POLICY_TAILS[13].startswith(_POLICY_TAILS[12])
     assert "Decide I1 through I8 independently" in v13
+    assert "all seven invariants below" not in v13
+    assert "one decision for each I1 through I7" not in v13
+    assert "all seven invariants below" in v12
     assert "EVALUATION INDEPENDENCE" in v13
     assert "always-on benchmark recipe is activated on every served request" in v13
     assert "unknown, none, or\nn/a" in v13

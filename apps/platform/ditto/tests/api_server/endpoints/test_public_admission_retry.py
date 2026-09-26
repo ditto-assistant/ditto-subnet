@@ -2,7 +2,8 @@
 
 ``admission_retry`` distinguishes parked provider failures, stuck Ditto
 infrastructure, and guarded retries. Only a Docker build infrastructure
-failure promises (and schedules) an automatic retry.
+failure promises (and schedules) an automatic retry. ``lane`` names the
+admission lane only where Platform holds evidence for it.
 """
 
 from __future__ import annotations
@@ -25,11 +26,14 @@ from ditto.db.models import (
     BenchmarkRollout,
     ScreeningAttempt,
     ScreeningRetryOverride,
+    SubmissionImageBuild,
     ValidatorQueueWithdrawal,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version
+from ditto.db.queries.screening import PROVIDER_BACKOFF_REASON_CODES
 from ditto.db.queries.screening_infra_retry import (
     INFRA_AUTO_RETRY_MAX_STREAK,
+    INFRA_AUTO_RETRY_REASON_CODES,
     infra_retry_delay,
 )
 
@@ -387,3 +391,143 @@ async def test_running_and_terminal_states(
     response = await client.get(f"/api/v1/public/agent/{rejected}/pipeline")
     assert response.status_code == 200, response.text
     assert response.json()["admission_retry"] is None
+
+
+async def _seed_running_attempt(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    agent_id: UUID,
+    build: tuple[str, str] | None,
+    build_only: bool = False,
+) -> None:
+    """A running attempt, with its (status, runtime_status) image build if any."""
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_hotkey("screener"),
+                policy_version=SCREENING_POLICY_VERSION,
+                status="running",
+                started_at=now - timedelta(minutes=5),
+                deadline=now + timedelta(minutes=40),
+                build_only=build_only,
+            )
+        )
+        await session.flush()
+        if build is not None:
+            build_id = uuid4()
+            session.add(
+                SubmissionImageBuild(
+                    build_id=build_id,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    environment="prod",
+                    artifact_sha256=sha256(str(agent_id).encode()).hexdigest(),
+                    image_ref=f"ditto-screen/{agent_id}-{attempt_id}:latest",
+                    output_key=f"remote-builds/{build_id}/image.tar",
+                    status=build[0],
+                    runtime_status=build[1],
+                )
+            )
+
+
+@pytest.mark.parametrize(
+    ("build", "build_only", "lane"),
+    [
+        (("queued", "pending"), False, "build"),
+        (("running", "pending"), False, "build"),
+        (("succeeded", "pending"), False, "runtime_smoke"),
+        (("consumed", "running"), False, "runtime_smoke"),
+        (("succeeded", "succeeded"), False, "source_review"),
+        # A build-only rebuild never enters source review.
+        (("succeeded", "succeeded"), True, None),
+        # The worker builds or smokes locally: no row evidences its lane.
+        (("fallback_required", "skipped"), False, None),
+        (("succeeded", "skipped"), False, None),
+        (None, False, None),
+    ],
+)
+async def test_running_attempt_reports_only_an_evidenced_lane(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    build: tuple[str, str] | None,
+    build_only: bool,
+    lane: str | None,
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name=f"lane-{build}-{build_only}", status=AgentStatus.SCREENING
+    )
+    await _seed_running_attempt(
+        maker, agent_id=agent_id, build=build, build_only=build_only
+    )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    retry = response.json()["admission_retry"]
+    assert retry["state"] == "running"
+    assert retry["lane"] == lane
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "lane"),
+    [
+        ("docker-build-infrastructure", "build"),
+        ("cloudrun-build-unavailable", "build"),
+        ("targon-runtime-unavailable", "runtime_smoke"),
+        ("source-review-retryable-infra", "source_review"),
+        ("executor-isolation-unavailable", None),
+    ],
+)
+async def test_failed_attempt_reports_the_lane_its_reason_names(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    reason_code: str,
+    lane: str | None,
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name=f"lane-{reason_code}", status=AgentStatus.SCREENING_FAILED
+    )
+    now = datetime.now(UTC)
+    await _seed_failed_attempt(
+        maker,
+        agent_id=agent_id,
+        finished_at=now - timedelta(minutes=1),
+        deadline=now + timedelta(minutes=60),
+        reason_code=reason_code,
+    )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    assert response.json()["admission_retry"]["lane"] == lane
+
+
+def test_every_infrastructure_retry_code_names_a_lane() -> None:
+    from ditto.api_server.endpoints.public import _ADMISSION_LANE_BY_REASON_CODE
+
+    assert set(_ADMISSION_LANE_BY_REASON_CODE) == {
+        *PROVIDER_BACKOFF_REASON_CODES,
+        *INFRA_AUTO_RETRY_REASON_CODES,
+    }
+
+
+async def test_queued_submission_reports_no_lane(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name="lane-requeued", status=AgentStatus.UPLOADED
+    )
+    await _seed_infra_failure(maker, agent_id)
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    retry = response.json()["admission_retry"]
+    assert retry["state"] == "queued"
+    assert retry["lane"] is None

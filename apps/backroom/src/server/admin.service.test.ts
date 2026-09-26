@@ -17,6 +17,7 @@ import {
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
   fetchScreeningFailureSummary,
+  fetchL2ReportCanaryPreflight,
   fetchOwnerAttestations,
   fetchScreeningDisputes,
   fetchValidatorAssignments,
@@ -690,6 +691,30 @@ describe('inference route administration', () => {
 })
 
 describe('screening submission admin service', () => {
+  it('reads the exact L2 canary guard snapshot through Platform admin', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const sourceAttemptId = '22222222-2222-4222-8222-222222222222'
+    const snapshot = {
+      agent_id: agentId,
+      source_attempt_id: sourceAttemptId,
+      agent_artifact_sha256: 'a'.repeat(64),
+      source_attempt_artifact_sha256: null,
+      agent_status: 'evaluating',
+      attempt_policy_version: 13,
+      arrival_bench_version: 13,
+      score_row_count: 2,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(snapshot))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchL2ReportCanaryPreflight({ agentId, sourceAttemptId })).resolves.toEqual(snapshot)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/preflight/${agentId}/${sourceAttemptId}`,
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
   it('forwards explicit pagination for screening history and disputes', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi
@@ -3157,6 +3182,7 @@ describe('copy review admin service', () => {
       ticket_status: 'scored',
       ticket_deadline: '2026-07-20T04:00:00Z',
       replacement_pending: false,
+      replacement_queued: false,
       replacement_request_id: null,
       replacement_reason: null,
       replacement_actor: null,
@@ -3247,9 +3273,9 @@ describe('copy review admin service', () => {
         queue_position: null,
         replacement_deadline: deadline,
         replacement_allowed: false,
-        blocking_reason: 'replacement score is already pending',
+        blocking_reason: 'replacement ticket is already issued and pending a score',
         queue_allowed: false,
-        queue_blocking_reason: 'replacement score is already queued or pending',
+        queue_blocking_reason: 'replacement ticket is already issued and pending a score',
       }],
       count: 1,
       limit: 50,

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -83,7 +84,12 @@ def test_coding_executor_scorer_image_carries_its_runtime_contract() -> None:
         "# ---- dedicated coding executor scorer artifact ----", 1
     )[1]
     workflow = RELEASE_WORKFLOW.read_text()
-    assert "FROM docker:28.3.3-cli-alpine3.22 AS coding-executor-scorer" in image
+    assert re.search(
+        r"^FROM docker:28\.3\.3-cli-alpine3\.22@sha256:[0-9a-f]{64} "
+        r"AS coding-executor-scorer$",
+        image,
+        re.MULTILINE,
+    )
     assert "coding_inference_policy_locked_v1.json" in image
     assert "chmod 0555 /opt/ditto /opt/ditto/coding" in image
     assert (

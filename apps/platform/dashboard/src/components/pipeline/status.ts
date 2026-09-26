@@ -522,6 +522,7 @@ export interface AdmissionRetryState {
   attempt_count?: number | null;
   next_retry_at?: string | null;
   last_failure_infrastructure?: boolean | null;
+  lane?: string | null;
 }
 
 /**
@@ -566,6 +567,24 @@ export function admissionRetryLine(
     return "Stuck after a Ditto infrastructure failure, not a miner failure. It will not retry automatically; an operator must authorize the next attempt.";
   }
   return "";
+}
+
+const ADMISSION_LANE_LABELS: Record<string, string> = {
+  build: "image build",
+  runtime_smoke: "runtime smoke test",
+  source_review: "source review",
+};
+
+/**
+ * The admission lane the latest attempt is in, or stopped in. Platform sends
+ * a lane only when it can evidence one; anything else renders nothing.
+ */
+export function admissionLaneLine(retry: AdmissionRetryState | null | undefined): string {
+  const lane = retry?.lane ? ADMISSION_LANE_LABELS[retry.lane] : undefined;
+  if (!lane || retry?.state === "queued") return "";
+  return retry?.state === "running"
+    ? "Current lane: " + lane + "."
+    : "Last attempt stopped in: " + lane + ".";
 }
 
 export function admissionRetryChip(

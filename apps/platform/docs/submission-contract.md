@@ -22,30 +22,29 @@ top of). The platform stores the tarball in object storage keyed by agent id and
 
 | Stage | Where | Check |
 | --- | --- | --- |
-| **Upload** | `endpoints/upload.py` (`/api/v1/upload/*`) | On-chain eval-fee payment verified (replay-protected); tarball ≤ **20 MiB** by default (`MAX_TARBALL_SIZE_BYTES`, overridable with `DITTO_MAX_TARBALL_SIZE_BYTES`) enforced from the *actual streamed bytes*; **SHA-256 re-verified** against the miner's claim; one payment per upload; **hotkey-level ban enforced** — `/upload/agent` returns a hard 403 right after the signature proves hotkey ownership and before any chain/payment/storage work, `/upload/check` reports it in the dry run so a banned miner learns it before spending TAO, and `/retrieval/agent-by-hotkey` surfaces it as `banned`. Active bans live in the `banned_hotkeys` table. Backroom can inspect the complete active list and remove one exact ban with a timestamp guard, operator reason, exact confirmation, and append-only audit; agent-level bans remain unchanged. |
+| **Upload** | `endpoints/upload.py` (`/api/v1/upload/*`) | On-chain eval-fee payment verified (replay-protected); tarball ≤ **20 MiB** by default (`MAX_TARBALL_SIZE_BYTES`, overridable with `DITTO_MAX_TARBALL_SIZE_BYTES`) enforced from the *actual streamed bytes*; **SHA-256 re-verified** against the miner's claim; gzip magic, a bounded tar member list (no absolute paths, traversals, links, or special files; member and unpacked-size caps), and a UTF-8 `Dockerfile` at the archive root, all before payment verification or object storage; one payment per upload; **hotkey-level ban enforced** — `/upload/agent` returns a hard 403 right after the signature proves hotkey ownership and before any chain/payment/storage work, `/upload/check` reports it in the dry run so a banned miner learns it before spending TAO, and `/retrieval/agent-by-hotkey` surfaces it as `banned`. Active bans live in the `banned_hotkeys` table. Backroom can inspect the complete active list and remove one exact ban with a timestamp guard, operator reason, exact confirmation, and append-only audit; agent-level bans remain unchanged. |
 | **Screen** | `endpoints/screener.py` (`/api/v1/screener/*`) + public `ditto-screener` source | The screening core — built-in `SCREENING_POLICY_VERSION` **13** in `ditto-screening-protocol`, with the effective required version selected separately by the scheduled activation record — verifies the bounded archive and SHA-256, enforces the root Rust package contract, builds the image, and requires `/health` with no default `/run` assertion. Policy v10-v12 findings bind I1-I7; policy v13 findings bind I1-I8. Its lease-bound signed verdict maps pass → `evaluating`, deterministic fail → `rejected`, and retryable infrastructure failure → `screening_failed`. Private timing, random-control, fingerprint, and behavioral signals can only pass or route to quarantine/inconclusive review; no model finding automatically rejects. The screener is **platform-operated** and authenticates with a dedicated allowlisted hotkey plus bearer token, not a validator permit. |
 | **Evaluate** | `dittobench-api` (mode B) | Fetch the presigned tarball; safe-extract with zip-slip + gzip-bomb guards; require a `Dockerfile` at the tarball root (or a single top-level dir); `docker build` + run the container; drive `GET /health`, `POST /seed`, `POST /run`; score. |
 | **Anti-overfit** | `dittobench-api` datagen | A **fresh seed per run** (stratified categories); the miner cannot see or pin the dataset. Difficulty variance is calibrated to a between-seed stddev ≤ 0.03. |
 
 So the effective bar today is: **the hotkey is not banned, payment is valid, the
-tarball is within limits, the crate builds, and the running container speaks the
-`/run` protocol well enough to be scored.**
+tarball is a bounded gzip archive with a root Dockerfile, the crate builds, and
+the running container speaks the `/run` protocol well enough to be scored.**
 
 ## What is deferred — NOT enforced yet
 
-Per `CLAUDE.md`, several `/upload/*`-adjacent validations are intentionally
-deferred pending the harness-interface spec and supporting tables. Stated plainly
-so miners and reviewers aren't misled:
+Several `/upload/*`-adjacent validations stay deferred pending the
+harness-interface spec and supporting tables. Stated plainly so miners and
+reviewers aren't misled:
 
 - **tar manifest** format validation (a declared file/entrypoint manifest);
 - **import / dependency allowlist** (what the crate may pull in);
 - **schema diff** — verifying the crate still implements the required harness
   interface rather than just building.
 
-The screener's build gate is the first real guard. The manifest + allowlist +
-schema checks are the planned next layer; until they land, "it builds and serves
-the protocol" is the whole bar, and a submission is trusted to be a good-faith
-harness crate.
+Gzip structure, member safety, and a root Dockerfile are enforced at upload.
+The screener's build gate is still the first check that the crate builds and
+serves the protocol.
 
 ## Lifecycle
 

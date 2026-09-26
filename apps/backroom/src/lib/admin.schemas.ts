@@ -482,6 +482,22 @@ export const l2ReportCanaryLookupInputSchema = z.object({
   canaryId: z.string().uuid(),
 })
 
+export const l2ReportCanaryPreflightInputSchema = z.object({
+  agentId: z.string().uuid(),
+  sourceAttemptId: z.string().uuid(),
+})
+
+export const l2ReportCanaryPreflightViewSchema = z.object({
+  agent_id: z.string().uuid(),
+  source_attempt_id: z.string().uuid(),
+  agent_artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  source_attempt_artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  agent_status: z.string(),
+  attempt_policy_version: z.number().int().nonnegative(),
+  arrival_bench_version: z.number().int().nonnegative(),
+  score_row_count: z.number().int().nonnegative(),
+})
+
 export const scheduleL2ReportCanaryInputSchema = z.object({
   requestId: z.string().uuid(),
   agentId: z.string().uuid(),
@@ -491,6 +507,7 @@ export const scheduleL2ReportCanaryInputSchema = z.object({
   expectedScoreCount: z.number().int().nonnegative(),
   targetNodeId: z.string().min(1).max(63),
   reviewLabel: z.enum(['candidate_clear', 'known_reject']),
+  runMode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   confirmation: z.literal('QUEUE REPORT ONLY L2 CANARY'),
 })
 
@@ -504,6 +521,7 @@ export const l2ReportCanaryViewSchema = z.object({
   expected_agent_status: z.string(),
   expected_score_count: z.number().int().nonnegative(),
   review_label: z.string(),
+  run_mode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   status: z.string(),
   claimed_instance_id: z.string().nullable(),
   lease_expires_at: z.string().nullable().optional(),
@@ -2400,6 +2418,28 @@ const inferenceRouteBasisSchema = z.enum([
   'unrecognized',
 ])
 
+const inferenceRateLimitBurstSchema = z.object({
+  request_kind: inferenceRequestKindSchema,
+  window_seconds: z.number().int().positive(),
+  rate_limited_failures: z.number().int().nonnegative(),
+  threshold: z.number().int().positive(),
+  peak_global_concurrency: z.number().int().nonnegative(),
+  global_concurrency_limit: z.number().int().positive(),
+  active: z.boolean(),
+  tickets_total: z.number().int().nonnegative(),
+  tickets_truncated: z.boolean(),
+  tickets: z.array(
+    z.object({
+      agent_id: z.string().uuid(),
+      bench_version: z.number().int(),
+      validator_hotkey: z.string(),
+      slot_id: z.string(),
+      ticket_deadline: z.string(),
+      rate_limited_failures: z.number().int().positive(),
+    }),
+  ),
+})
+
 export const inferenceFailureTaxonomySchema = z.object({
   observed_at: z.string(),
   window_seconds: z.array(z.number().int().positive()),
@@ -2441,6 +2481,11 @@ export const inferenceFailureTaxonomySchema = z.object({
       share_of_settled_calls: z.number().nonnegative(),
     }),
   ),
+  // Report-only: `active` is five-minute upstream_http_429 >= the provisional
+  // threshold while the local global in-flight peak stayed below its limit.
+  // Nothing is enforced, rerouted, or retried on it. Null (not []) when the
+  // Platform predates the signal, so a rollout skew never reads as "no burst".
+  rate_limit_bursts: z.array(inferenceRateLimitBurstSchema).nullish().default(null),
 })
 
 export const runtimeProfileCaptureInputSchema = z
@@ -6565,6 +6610,7 @@ export const validatorScoreReplacementDetailSchema = z.object({
   ticket_status: z.enum(['issued', 'scored', 'expired']).nullable(),
   ticket_deadline: z.string().nullable(),
   replacement_pending: z.boolean(),
+  replacement_queued: z.boolean(),
   replacement_request_id: z.string().uuid().nullable(),
   replacement_reason: z.string().nullable(),
   replacement_actor: z.string().nullable(),
@@ -7158,6 +7204,12 @@ export const screenReviewAuditSchema = z.object({
   response_provider: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$/).nullish().default(null),
   final_stage: z.enum(['preflight', 'analyst', 'critic', 'adjudicator']).nullish().default(null),
   cause_detail: z.enum(['lease_unavailable', 'review_disabled']).nullish().default(null),
+  model_tool_failure_subcode: z.enum([
+    'invalid_submit_call_id',
+    'no_tool_call_after_corrections',
+    'malformed_tool_arguments_json',
+    'invalid_tool_call_shape',
+  ]).nullish().default(null),
   max_elapsed_ms: z.number().int().min(1).max(3_600_000).nullish().default(null),
   elapsed_ms: z.number().int().min(0).max(3_600_000).nullish().default(null),
 })
@@ -9046,3 +9098,43 @@ export const outlierEscalationInputSchema = z.object({
 })
 
 export type OutlierEscalation = z.infer<typeof outlierEscalationSchema>
+
+// Would-trigger replay of the same escalation over the current scored ledger,
+// under the effective settings or operator overrides. Read-only.
+type GeneratedOutlierEscalationDryRunEntry =
+  PlatformComponents['schemas']['OutlierEscalationDryRunEntryView']
+type GeneratedOutlierEscalationDryRunResponse =
+  PlatformComponents['schemas']['AdminOutlierEscalationDryRunResponse']
+
+const outlierEscalationDryRunEntrySchema = z.object({
+  agent_id: z.string().uuid(),
+  miner_hotkey: z.string(),
+  evidence: outlierEscalationEvidenceSchema,
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationDryRunEntry>)
+
+export const outlierEscalationDryRunSchema = z.object({
+  generated_at: z.string(),
+  bench_version: z.number().int(),
+  bench_version_in_scope: z.boolean(),
+  settings: outlierEscalationSettingsSchema,
+  overridden_fields: z.array(outlierSettingFieldSchema).max(5),
+  ledger_size: z.number().int().nonnegative(),
+  cohort_size: z.number().int().nonnegative(),
+  cohort_too_small: z.boolean(),
+  ledger_median: z.number().nullish(),
+  ledger_mad: z.number().nullish(),
+  would_trigger_count: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  would_trigger: z.array(outlierEscalationDryRunEntrySchema).max(100),
+  truncated: z.boolean(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationDryRunResponse>)
+
+export const outlierEscalationDryRunInputSchema = z.object({
+  benchVersion: z.number().int().positive().optional(),
+  minCohortSize: z.number().int().min(1).max(1000).optional(),
+  modifiedZThreshold: z.number().positive().max(1000).optional(),
+  minCompositeFloor: z.number().min(0).max(1).optional(),
+  limit: z.number().int().min(1).max(100).default(20),
+})
+
+export type OutlierEscalationDryRun = z.infer<typeof outlierEscalationDryRunSchema>
