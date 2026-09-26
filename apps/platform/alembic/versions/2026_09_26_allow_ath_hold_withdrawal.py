@@ -1,13 +1,8 @@
 """Allow a withdrawn resolution on precautionary ATH holds.
 
 Revision ID: c4e8a1b27d90
-<<<<<<<< HEAD:apps/platform/alembic/versions/2026_09_23_allow_ath_hold_withdrawal.py
-Revises: 1bc9d8a6207e
-Create Date: 2026-09-23
-========
-Revises: a40f7d9c621e
-Create Date: 2026-09-24
->>>>>>>> 98e9d86dd (fix(platform): chain ATH hold withdrawal onto the current migration head):apps/platform/alembic/versions/2026_09_25_allow_ath_hold_withdrawal.py
+Revises: a2f4d9c51e60
+Create Date: 2026-09-27
 
 ``withdraw`` records that an operator removed an unsupported precautionary
 hold. It is not a policy clear and not a reject.
@@ -18,11 +13,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "c4e8a1b27d90"
-<<<<<<<< HEAD:apps/platform/alembic/versions/2026_09_23_allow_ath_hold_withdrawal.py
-down_revision: str | Sequence[str] | None = "1bc9d8a6207e"
-========
-down_revision: str | Sequence[str] | None = "a40f7d9c621e"
->>>>>>>> 98e9d86dd (fix(platform): chain ATH hold withdrawal onto the current migration head):apps/platform/alembic/versions/2026_09_25_allow_ath_hold_withdrawal.py
+down_revision: str | Sequence[str] | None = "a2f4d9c51e60"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
