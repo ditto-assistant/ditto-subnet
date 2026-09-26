@@ -16,13 +16,15 @@ import pytest
 def _write_good_tar(dest: Path) -> Path:
     """Build a small valid .tar.gz with a few harness-shaped entries.
 
-    Files do not have to be real harness shape; pre-flight only checks
-    structural integrity at this layer. Real manifest / allowlist /
-    schema content lands when those validators stop being deferred.
+    Files do not have to be real harness shape, but the archive must meet
+    the screener's contract that pre-flight mirrors: regular files only and
+    a Dockerfile at the root. Real manifest / allowlist / schema content
+    lands when those validators stop being deferred.
     """
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for name, content in (
+            ("Dockerfile", b"FROM scratch\n"),
             ("manifest.yaml", b"name: alpha\nversion: 1\n"),
             ("src/main.rs", b'fn main() { println!("ok"); }\n'),
             (
@@ -45,9 +47,8 @@ def _write_bad_gzip(dest: Path) -> Path:
 
 
 def _write_empty_tar(dest: Path) -> Path:
-    """A valid empty .tar.gz (zero entries). Edge case: the structure
-    parses cleanly but the tar contains nothing. Real preflight checks
-    must still pass because we are validating containers, not contents."""
+    """A valid empty .tar.gz (zero entries). The gzip and tar layers parse
+    cleanly, but the archive contract fails: there is no root Dockerfile."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz"):
         pass
