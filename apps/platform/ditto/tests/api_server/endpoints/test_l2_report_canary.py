@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
@@ -12,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException, Request, Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -27,6 +29,7 @@ from ditto.db.models import (
     Agent,
     AthReview,
     AthReviewAction,
+    ScreenerHeartbeat,
     ScreenerL2ReportCanary,
     ScreenerNode,
     ScreeningAttempt,
@@ -393,6 +396,172 @@ def _packet(attempt_id, sha: str) -> ScoredRuntimeEvidenceLease:
     )
 
 
+@pytest.mark.asyncio
+async def test_source_only_claims_use_one_lease_per_fresh_worker_and_expire_cleanly(
+    session_maker: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sha = "a" * 64
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.REJECTED, sha256=sha)
+    node_id = f"canary-parallel-{uuid4().hex[:12]}"
+    hotkey = f"hotkey-{node_id}"
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id=node_id,
+                provider="hetzner",
+                provider_resource_id=node_id,
+                screener_hotkey=hotkey,
+                token_hash="f" * 64,
+                token_expires_at=now + timedelta(hours=1),
+                status="active",
+                capacity=1,
+            )
+        )
+        for worker in range(1, 5):
+            session.add(
+                ScreenerHeartbeat(
+                    screener_hotkey=hotkey,
+                    instance_id=f"{node_id}-worker-{worker}",
+                    software_version="0.319.0",
+                    protocol_version=7,
+                    policy_version=13,
+                    state="polling",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="f" * 128,
+                )
+            )
+        attempt_ids = [uuid4() for _ in range(5)]
+        for attempt_id in attempt_ids:
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    artifact_sha256=sha,
+                    screener_hotkey=hotkey,
+                    policy_version=13,
+                    status="rejected",
+                    started_at=now - timedelta(minutes=1),
+                    deadline=now,
+                    finished_at=now,
+                )
+            )
+        await session.flush()
+        for attempt_id in attempt_ids:
+            session.add(
+                ScreenerL2ReportCanary(
+                    canary_id=uuid4(),
+                    request_id=uuid4(),
+                    agent_id=agent_id,
+                    source_attempt_id=attempt_id,
+                    artifact_sha256=sha,
+                    policy_version=13,
+                    bench_version=13,
+                    target_node_id=node_id,
+                    expected_agent_status="rejected",
+                    expected_score_count=0,
+                    review_label="known_reject",
+                    run_mode="source_only",
+                    status="queued",
+                )
+            )
+
+    monkeypatch.setattr(
+        endpoints,
+        "_resolve_effective_review_settings",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                revision=137,
+                checksum="d" * 64,
+                settings=SimpleNamespace(
+                    source_review_timeout_seconds=3600, timeout_seconds=1800
+                ),
+            )
+        ),
+    )
+
+    async def evidence_lookup(_session: AsyncSession, *, attempt_id, **_kwargs):
+        return _packet(attempt_id, sha)
+
+    monkeypatch.setattr(endpoints, "scored_runtime_evidence_for_lease", evidence_lookup)
+    storage = cast(
+        S3StorageClient,
+        SimpleNamespace(
+            presigned_get_url=AsyncMock(return_value="https://example.test/source")
+        ),
+    )
+    request = cast(
+        Request, SimpleNamespace(state=SimpleNamespace(screener_node_id=node_id))
+    )
+
+    async def claim(worker: int):
+        async with session_maker() as session:
+            return await endpoints.claim_l2_report_canary(
+                L2CanaryClaimRequest(
+                    instance_id=f"{node_id}-worker-{worker}",
+                    settings_revision=137,
+                    settings_checksum="d" * 64,
+                ),
+                request,
+                Response(),
+                hotkey,
+                session,
+                storage,
+            )
+
+    claims = await asyncio.gather(*(claim(worker) for worker in (1, 2, 3, 4, 1)))
+    assert len([claim for claim in claims if claim is not None]) == 4
+    assert await claim(5) is None  # A fifth worker has no fresh heartbeat.
+    async with session_maker() as session, session.begin():
+        leased = list(
+            await session.scalars(
+                select(ScreenerL2ReportCanary).where(
+                    ScreenerL2ReportCanary.target_node_id == node_id,
+                    ScreenerL2ReportCanary.status == "leased",
+                )
+            )
+        )
+        assert {row.claimed_instance_id for row in leased} == {
+            f"{node_id}-worker-{worker}" for worker in range(1, 5)
+        }
+        assert len(leased) == 4
+        assert all(row.run_mode == "source_only" for row in leased)
+        next(
+            row for row in leased if row.claimed_instance_id == f"{node_id}-worker-1"
+        ).lease_expires_at = now - timedelta(seconds=1)
+        heartbeat = await session.scalar(
+            select(ScreenerHeartbeat).where(
+                ScreenerHeartbeat.screener_hotkey == hotkey,
+                ScreenerHeartbeat.instance_id == f"{node_id}-worker-1",
+            )
+        )
+        assert heartbeat is not None
+        heartbeat.seen_at = now - timedelta(minutes=6)
+    assert await claim(1) is None  # Expired lease does not admit a stale worker.
+    async with session_maker() as session, session.begin():
+        heartbeat = await session.scalar(
+            select(ScreenerHeartbeat).where(
+                ScreenerHeartbeat.screener_hotkey == hotkey,
+                ScreenerHeartbeat.instance_id == f"{node_id}-worker-1",
+            )
+        )
+        assert heartbeat is not None
+        heartbeat.seen_at = datetime.now(UTC)
+    assert await claim(1) is not None
+    async with session_maker() as session:
+        statuses = list(
+            await session.scalars(
+                select(ScreenerL2ReportCanary.status).where(
+                    ScreenerL2ReportCanary.target_node_id == node_id
+                )
+            )
+        )
+    assert statuses.count("leased") == 4
+    assert statuses.count("expired") == 1
+
+
 @pytest.mark.parametrize(
     ("timeout", "l2_timeout", "run_mode", "expected_seconds"),
     [
@@ -605,6 +774,59 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
     assert claim.scored_runtime_evidence == packet
     expected_lease = timedelta(minutes=150 if run_mode == "full_runtime" else 100)
     assert abs((claim.lease_expires_at - now - expected_lease).total_seconds()) < 30
+    # A fresh second worker must not claim the opposite run mode while one is
+    # leased. The source-only case also exercises the queued full-runtime gate.
+    other_canary_id = uuid4()
+    async with session_maker() as session, session.begin():
+        other_attempt_id = uuid4()
+        session.add(
+            ScreeningAttempt(
+                attempt_id=other_attempt_id,
+                agent_id=agent_id,
+                artifact_sha256=sha,
+                screener_hotkey=f"hotkey-{node_id}",
+                policy_version=13,
+                status="rejected",
+                started_at=now - timedelta(minutes=1),
+                deadline=now,
+                finished_at=now,
+            )
+        )
+        for worker in (1, 2):
+            session.add(
+                ScreenerHeartbeat(
+                    screener_hotkey=f"hotkey-{node_id}",
+                    instance_id=f"{node_id}-worker-{worker}",
+                    software_version="0.319.0",
+                    protocol_version=7,
+                    policy_version=13,
+                    state="polling",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="f" * 128,
+                )
+            )
+        await session.flush()
+        session.add(
+            ScreenerL2ReportCanary(
+                canary_id=other_canary_id,
+                request_id=uuid4(),
+                agent_id=agent_id,
+                source_attempt_id=other_attempt_id,
+                artifact_sha256=sha,
+                policy_version=13,
+                bench_version=13,
+                target_node_id=node_id,
+                expected_agent_status="rejected",
+                expected_score_count=0,
+                review_label="known_reject",
+                run_mode="full_runtime" if run_mode == "source_only" else "source_only",
+                status="queued",
+            )
+        )
+    monkeypatch.setattr(
+        endpoints, "_full_runtime_worker_ready", AsyncMock(return_value=True)
+    )
     async with session_maker() as session:
         view = await endpoints.get_l2_report_canary(claim.canary_id, None, session)
     assert view.lease_expires_at == claim.lease_expires_at
@@ -622,6 +844,12 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
             storage,
         )
     assert second is None
+    async with session_maker() as session, session.begin():
+        other = await session.get(ScreenerL2ReportCanary, other_canary_id)
+        assert other is not None
+        other.status = "incomplete"
+        other.error_code = "test-opposite-mode"
+        other.completed_at = datetime.now(UTC)
     report = {
         "kind": "l2_report_canary_v1",
         "authority": "none",

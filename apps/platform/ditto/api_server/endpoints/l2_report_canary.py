@@ -60,6 +60,8 @@ _SOURCE_ONLY_OVERHEAD = timedelta(minutes=10)
 # bounded private challenges before the source-review result is complete.
 _FULL_RUNTIME_OVERHEAD = timedelta(minutes=60)
 _FULL_RUNTIME_MIN_RELEASE = (0, 317, 2)
+_MAX_PARALLEL_SOURCE_ONLY = 4
+_WORKER_HEARTBEAT_MAX_AGE = timedelta(minutes=5)
 
 
 def _canary_lease(
@@ -527,20 +529,44 @@ async def claim_l2_report_canary(
             stale.status = "expired"
             stale.error_code = "lease-expired"
             stale.completed_at = now
-        active = await session.scalar(
-            select(func.count())
-            .select_from(ScreenerL2ReportCanary)
-            .where(
-                ScreenerL2ReportCanary.target_node_id == node_id,
-                ScreenerL2ReportCanary.status == "leased",
+        active = list(
+            await session.scalars(
+                select(ScreenerL2ReportCanary)
+                .where(
+                    ScreenerL2ReportCanary.target_node_id == node_id,
+                    ScreenerL2ReportCanary.status == "leased",
+                )
+                .with_for_update()
             )
         )
-        if active:
+        if any(row.claimed_instance_id == payload.instance_id for row in active):
             return None
+        # Keep private-challenge runs isolated. Preserve the legacy first lease
+        # without requiring a heartbeat; additional source-only leases require
+        # fresh worker heartbeats and the node lock serializes their count.
+        if any(row.run_mode == "full_runtime" for row in active):
+            return None
+        if active:
+            healthy_workers = set(
+                await session.scalars(
+                    select(ScreenerHeartbeat.instance_id).where(
+                        ScreenerHeartbeat.screener_hotkey == node.screener_hotkey,
+                        ScreenerHeartbeat.instance_id.like(f"{node_id}-worker-%"),
+                        ScreenerHeartbeat.seen_at >= now - _WORKER_HEARTBEAT_MAX_AGE,
+                        ScreenerHeartbeat.state.in_(("polling", "screening")),
+                    )
+                )
+            )
+            if payload.instance_id not in healthy_workers or len(active) >= min(
+                _MAX_PARALLEL_SOURCE_ONLY, len(healthy_workers)
+            ):
+                return None
         queued = select(ScreenerL2ReportCanary).where(
             ScreenerL2ReportCanary.target_node_id == node_id,
             ScreenerL2ReportCanary.status == "queued",
         )
+        if active:
+            queued = queued.where(ScreenerL2ReportCanary.run_mode == "source_only")
         if not await _full_runtime_worker_ready(
             session, node=node, now=now, instance_id=payload.instance_id
         ):
