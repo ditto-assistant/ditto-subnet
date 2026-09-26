@@ -9,6 +9,7 @@ import {
   BACKROOM_WRITE_SCOPE,
   createBackroomMcpServer,
   type McpGrantProps,
+  TOOL_SCOPE_REQUIREMENTS,
 } from './mcp.server'
 
 const session: BackroomSession = {
@@ -1182,6 +1183,32 @@ describe('Backroom MCP tools', () => {
       history_count: 3,
       history_has_more: false,
     })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('requires backroom:write up front for every tool annotated as a write', async () => {
+    // docs/mcp.md: a new write tool must be added to WRITE_TOOL_NAMES so the
+    // pre-flight scope check answers a read-only token with a 403 step-up
+    // challenge. Without it the call only fails in-band, and clients never
+    // learn to re-authorize for write.
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+      BACKROOM_ARTIFACT_SCOPE,
+    ])
+    const { tools } = await client.listTools()
+    const writeTools = tools
+      .filter((tool) => tool.annotations?.readOnlyHint === false)
+      .map((tool) => tool.name)
+
+    expect(writeTools.length).toBeGreaterThan(0)
+    expect(
+      writeTools.filter(
+        (name) => TOOL_SCOPE_REQUIREMENTS.get(name) !== BACKROOM_WRITE_SCOPE,
+      ),
+    ).toEqual([])
 
     await client.close()
     await server.close()

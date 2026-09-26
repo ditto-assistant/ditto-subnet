@@ -366,6 +366,12 @@ export type BackroomEnv = {
 }
 
 export const WRITE_TOOL_NAMES = new Set([
+  'advance_scored_policy_rescreen',
+  'record_treasury_settings',
+  'record_v13_benign_approval',
+  'record_v13_replay_private_group',
+  'register_v13_replay_private_package',
+  'schedule_l2_report_canary',
   'create_screener_bootstrap_grant',
   'set_screener_provider_settings',
   'set_screener_node_channel_settings',
