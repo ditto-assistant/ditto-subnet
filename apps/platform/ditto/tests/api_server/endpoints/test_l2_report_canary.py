@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
@@ -12,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException, Request, Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -27,6 +29,7 @@ from ditto.db.models import (
     Agent,
     AthReview,
     AthReviewAction,
+    ScreenerHeartbeat,
     ScreenerL2ReportCanary,
     ScreenerNode,
     ScreeningAttempt,
@@ -391,6 +394,154 @@ def _packet(attempt_id, sha: str) -> ScoredRuntimeEvidenceLease:
         validator_count=3,
         observed_at=int(datetime.now(UTC).timestamp()),
     )
+
+
+@pytest.mark.asyncio
+async def test_source_only_claims_use_one_lease_per_fresh_worker_and_expire_cleanly(
+    session_maker: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sha = "a" * 64
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.REJECTED, sha256=sha)
+    node_id = f"canary-parallel-{uuid4().hex[:12]}"
+    hotkey = f"hotkey-{node_id}"
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id=node_id,
+                provider="hetzner",
+                provider_resource_id=node_id,
+                screener_hotkey=hotkey,
+                token_hash="f" * 64,
+                token_expires_at=now + timedelta(hours=1),
+                status="active",
+                capacity=1,
+            )
+        )
+        for worker in range(1, 5):
+            session.add(
+                ScreenerHeartbeat(
+                    screener_hotkey=hotkey,
+                    instance_id=f"{node_id}-worker-{worker}",
+                    software_version="0.319.0",
+                    protocol_version=7,
+                    policy_version=13,
+                    state="polling",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="f" * 128,
+                )
+            )
+        attempt_ids = [uuid4() for _ in range(5)]
+        for attempt_id in attempt_ids:
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    artifact_sha256=sha,
+                    screener_hotkey=hotkey,
+                    policy_version=13,
+                    status="rejected",
+                    started_at=now - timedelta(minutes=1),
+                    deadline=now,
+                    finished_at=now,
+                )
+            )
+        await session.flush()
+        for attempt_id in attempt_ids:
+            session.add(
+                ScreenerL2ReportCanary(
+                    canary_id=uuid4(),
+                    request_id=uuid4(),
+                    agent_id=agent_id,
+                    source_attempt_id=attempt_id,
+                    artifact_sha256=sha,
+                    policy_version=13,
+                    bench_version=13,
+                    target_node_id=node_id,
+                    expected_agent_status="rejected",
+                    expected_score_count=0,
+                    review_label="known_reject",
+                    run_mode="source_only",
+                    status="queued",
+                )
+            )
+
+    monkeypatch.setattr(
+        endpoints,
+        "_resolve_effective_review_settings",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                revision=137,
+                checksum="d" * 64,
+                settings=SimpleNamespace(
+                    source_review_timeout_seconds=3600, timeout_seconds=1800
+                ),
+            )
+        ),
+    )
+
+    async def evidence_lookup(_session: AsyncSession, *, attempt_id, **_kwargs):
+        return _packet(attempt_id, sha)
+
+    monkeypatch.setattr(endpoints, "scored_runtime_evidence_for_lease", evidence_lookup)
+    storage = cast(
+        S3StorageClient,
+        SimpleNamespace(
+            presigned_get_url=AsyncMock(return_value="https://example.test/source")
+        ),
+    )
+    request = cast(
+        Request, SimpleNamespace(state=SimpleNamespace(screener_node_id=node_id))
+    )
+
+    async def claim(worker: int):
+        async with session_maker() as session:
+            return await endpoints.claim_l2_report_canary(
+                L2CanaryClaimRequest(
+                    instance_id=f"{node_id}-worker-{worker}",
+                    settings_revision=137,
+                    settings_checksum="d" * 64,
+                ),
+                request,
+                Response(),
+                hotkey,
+                session,
+                storage,
+            )
+
+    claims = await asyncio.gather(*(claim(worker) for worker in (1, 2, 3, 4, 1)))
+    assert len([claim for claim in claims if claim is not None]) == 4
+    assert await claim(5) is None  # A fifth worker has no fresh heartbeat.
+    async with session_maker() as session, session.begin():
+        leased = list(
+            await session.scalars(
+                select(ScreenerL2ReportCanary).where(
+                    ScreenerL2ReportCanary.target_node_id == node_id,
+                    ScreenerL2ReportCanary.status == "leased",
+                )
+            )
+        )
+        assert {row.claimed_instance_id for row in leased} == {
+            f"{node_id}-worker-{worker}" for worker in range(1, 5)
+        }
+        assert len(leased) == 4
+        assert all(row.run_mode == "source_only" for row in leased)
+        next(
+            row for row in leased if row.claimed_instance_id == f"{node_id}-worker-1"
+        ).lease_expires_at = now - timedelta(seconds=1)
+    assert await claim(1) is not None
+    async with session_maker() as session:
+        statuses = list(
+            await session.scalars(
+                select(ScreenerL2ReportCanary.status).where(
+                    ScreenerL2ReportCanary.target_node_id == node_id
+                )
+            )
+        )
+    assert statuses.count("leased") == 4
+    assert statuses.count("expired") == 1
 
 
 @pytest.mark.parametrize(
