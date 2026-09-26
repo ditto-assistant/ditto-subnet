@@ -28,9 +28,10 @@ Lifecycle + scope decisions (documented so they're easy to revisit):
   **canonical payload** binding the agent id and the reported
   ``run_id`` / ``composite`` / ``seed`` (see :func:`_score_signing_message`), so
   a captured signature can neither be replayed against a different agent nor
-  cover an altered composite. The remaining GET endpoints are read-only and
-  authenticate via the ``X-Validator-Hotkey`` header + on-chain permit check;
-  they cannot allocate a quorum slot or submit a score.
+  cover an altered composite. The artifact GET is read-only but likewise
+  requires a fresh, one-time signed nonce (the ``X-Validator-Artifact-*``
+  headers) on top of the permit check and an unexpired issued ticket; it cannot
+  allocate a quorum slot or submit a score.
 """
 
 from __future__ import annotations
