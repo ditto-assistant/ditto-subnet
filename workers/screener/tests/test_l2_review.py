@@ -1085,13 +1085,40 @@ def test_l3_disabled_makes_l2_result_authoritative() -> None:
 def test_v13_l3_off_certifies_only_complete_clean_l1_l2_agreement() -> None:
     candidate = _clearance_candidate()
     analyst = L2RunResult(
-        **{**candidate.__dict__, "response_models": ("openai/gpt-6-sol",)}
+        **{
+            **candidate.__dict__,
+            "response_models": ("openai/gpt-6-sol",),
+            # A clean L1 has no cited slice, so the slice-specific flag is
+            # false even when the reachable main graph is complete.
+            "direct_clear_graph_complete": False,
+        }
     )
+    clean_graph = {
+        "entry": "main",
+        "unresolved": False,
+        "entry_ambiguous": False,
+        "truncated": False,
+        "analysis_truncated": False,
+        "reachable_truncated": False,
+        "nodes": [
+            {
+                "id": "src/main.rs::main@1",
+                "path": "src/main.rs",
+                "line": 1,
+                "end_line": 4,
+            }
+        ],
+        "node_count": 1,
+        "ambiguous_count": 0,
+        "ambiguous_sampled": False,
+        "unresolved_count": 0,
+        "unresolved_sampled": False,
+    }
     kwargs = {
         "dossier_tools": ("source_inventory",),
         "analyst_cache_hit": False,
         "policy_version": 13,
-        "dossier": {},
+        "dossier": {"deterministic": {"main_call_graph": clean_graph}},
         "expected_model": "openai/gpt-6-sol",
     }
     clear = _finalize_without_l3(analyst, l1_observation=_l1("low"), **kwargs)
@@ -1112,7 +1139,6 @@ def test_v13_l3_off_certifies_only_complete_clean_l1_l2_agreement() -> None:
         ),
         (_l1("low"), {"tools": ()}),
         (_l1("low"), {"dossier_complete": False}),
-        (_l1("low"), {"direct_clear_graph_complete": False}),
         (_l1("low"), {"response_models": ("other/model",)}),
     ):
         result = _finalize_without_l3(
@@ -1135,6 +1161,27 @@ def test_v13_l3_off_certifies_only_complete_clean_l1_l2_agreement() -> None:
         },
     )
     assert scorer_attention.observation.error_code == "l2-only-clearance-unproven"
+
+    for changed in (
+        {"unresolved_count": 1},
+        {"ambiguous_count": 1},
+        {"entry_ambiguous": True},
+        {"node_count": 2},
+        {"reachable_truncated": True},
+    ):
+        incomplete = _finalize_without_l3(
+            analyst,
+            l1_observation=_l1("low"),
+            **{
+                **kwargs,
+                "dossier": {
+                    "deterministic": {
+                        "main_call_graph": {**clean_graph, **changed}
+                    }
+                },
+            },
+        )
+        assert incomplete.observation.error_code == "l2-only-clearance-unproven"
 
 
 def test_direct_clear_graph_requires_unique_resolved_l1_slice() -> None:

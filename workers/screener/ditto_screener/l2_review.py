@@ -5699,7 +5699,13 @@ def _qualifies_l2_only_clear(
         and analyst.observation.categories == ("none",)
         and analyst.resolution_basis in _SAFE_RESOLUTION_BASES
         and analyst.dossier_complete
-        and analyst.direct_clear_graph_complete
+        and (
+            analyst.direct_clear_graph_complete
+            or (
+                not _l1_evidence(l1)
+                and _clean_l1_graph_complete(dossier)
+            )
+        )
         and "read_file" in analyst.tools
         and bool(analyst.analyzed_files)
         and bool(analyst.response_models)
@@ -5712,6 +5718,46 @@ def _qualifies_l2_only_clear(
         and finding.get("evidence") == []
         and dossier is not None
         and not _dossier_has_scorer_attention(dossier)
+    )
+
+
+def _clean_l1_graph_complete(dossier: Mapping[str, object] | None) -> bool:
+    """Check the complete reachable main graph when clean L1 cited no slice."""
+    deterministic = dossier.get("deterministic") if dossier is not None else None
+    graph = (
+        deterministic.get("main_call_graph")
+        if isinstance(deterministic, Mapping)
+        else None
+    )
+    if not isinstance(graph, Mapping) or _contains_truncation(graph):
+        return False
+    nodes = graph.get("nodes")
+    if (
+        graph.get("entry") != "main"
+        or graph.get("unresolved") is not False
+        or graph.get("entry_ambiguous") is not False
+        or graph.get("ambiguous_sampled") is not False
+        or graph.get("unresolved_sampled") is not False
+        or type(graph.get("ambiguous_count")) is not int
+        or graph.get("ambiguous_count") != 0
+        or type(graph.get("unresolved_count")) is not int
+        or graph.get("unresolved_count") != 0
+        or not isinstance(nodes, list)
+        or not nodes
+        or type(graph.get("node_count")) is not int
+        or graph.get("node_count") != len(nodes)
+    ):
+        return False
+    return all(
+        isinstance(node, Mapping)
+        and isinstance(node.get("id"), str)
+        and bool(node["id"])
+        and isinstance(node.get("path"), str)
+        and bool(node["path"])
+        and type(node.get("line")) is int
+        and type(node.get("end_line")) is int
+        and node["line"] <= node["end_line"]
+        for node in nodes
     )
 
 
