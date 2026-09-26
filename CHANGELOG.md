@@ -2,6 +2,211 @@
 
 <!-- version list -->
 
+## v0.318.7 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Bound A/B signal in scorer flow analyzer
+  ([#2377](https://github.com/ditto-assistant/ditto-subnet/pull/2377),
+  [`a6bd0c4`](https://github.com/ditto-assistant/ditto-subnet/commit/a6bd0c4c76f9d9e04af65d1bc6ec01e393108a1e))
+
+
+## v0.318.6 (2026-09-26)
+
+### Bug Fixes
+
+- **backroom**: Expose exact canary scheduling guards
+  ([#2378](https://github.com/ditto-assistant/ditto-subnet/pull/2378),
+  [`f828fcc`](https://github.com/ditto-assistant/ditto-subnet/commit/f828fcc2a743783b0d1f73a02ebeda740022bd6a))
+
+
+## v0.318.5 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Allow longer bounded L1 model turns
+  ([#2371](https://github.com/ditto-assistant/ditto-subnet/pull/2371),
+  [`ab723dd`](https://github.com/ditto-assistant/ditto-subnet/commit/ab723dd6c09590cba2161948bec3394f7bb15cd5))
+
+
+## v0.318.4 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Certify resolved L1 leads with complete L2 dossier
+  ([#2361](https://github.com/ditto-assistant/ditto-subnet/pull/2361),
+  [`e02bcf8`](https://github.com/ditto-assistant/ditto-subnet/commit/e02bcf888083388c6b6888b7d5cdac5748387c20))
+
+
+## v0.318.3 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Guard v13 clearance with L3 disabled
+  ([#2358](https://github.com/ditto-assistant/ditto-subnet/pull/2358),
+  [`c702429`](https://github.com/ditto-assistant/ditto-subnet/commit/c702429d7ac2786dcc1e47068f372544863b2ca7))
+
+- **screener**: Preview enforced v13 clearance in report canaries
+  ([#2359](https://github.com/ditto-assistant/ditto-subnet/pull/2359),
+  [`5899f2c`](https://github.com/ditto-assistant/ditto-subnet/commit/5899f2c52c5abec006927ae4043a8da3df0af0b3))
+
+
+## v0.318.2 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Expose bounded L3 tool failure subtype
+  ([#2355](https://github.com/ditto-assistant/ditto-subnet/pull/2355),
+  [`a2a6d2b`](https://github.com/ditto-assistant/ditto-subnet/commit/a2a6d2b572aaa89e733622015a8a856e3f4d3855))
+
+
+## v0.318.1 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Align v13 prompts and repair invalid verdicts
+  ([#2349](https://github.com/ditto-assistant/ditto-subnet/pull/2349),
+  [`eda0d59`](https://github.com/ditto-assistant/ditto-subnet/commit/eda0d59187b5973b82fa14012f656b88d4d5a461))
+
+- **screener**: Correct no-tool adjudicator turns
+  ([#2350](https://github.com/ditto-assistant/ditto-subnet/pull/2350),
+  [`b9e6298`](https://github.com/ditto-assistant/ditto-subnet/commit/b9e6298d9f7f5e3f45d9337944ac2d811081ab9c))
+
+
+## v0.318.0 (2026-09-26)
+
+### Features
+
+- **screener**: Add isolated full-runtime report canaries
+  ([#2343](https://github.com/ditto-assistant/ditto-subnet/pull/2343),
+  [`60de114`](https://github.com/ditto-assistant/ditto-subnet/commit/60de114f4511ec8aa9e8571f038afc453a5c87ef))
+
+
+## v0.317.1 (2026-09-25)
+
+### Bug Fixes
+
+- **screener**: Preserve external tools and complete L3 review
+  ([#2322](https://github.com/ditto-assistant/ditto-subnet/pull/2322),
+  [`ab8741f`](https://github.com/ditto-assistant/ditto-subnet/commit/ab8741ff38623621fb06bebaba3b669024a5a92e))
+
+
+## v0.317.0 (2026-09-25)
+
+### Bug Fixes
+
+- **screener**: Expose bounded L3 inconclusive canary audit
+  ([#2332](https://github.com/ditto-assistant/ditto-subnet/pull/2332),
+  [`1074cd0`](https://github.com/ditto-assistant/ditto-subnet/commit/1074cd0e1ea08987420a1194299c16b4bf8df8c8))
+
+### Features
+
+- **platform**: Add public treasury receipt activity feed
+  ([#2328](https://github.com/ditto-assistant/ditto-subnet/pull/2328),
+  [`39713e2`](https://github.com/ditto-assistant/ditto-subnet/commit/39713e2e1cce266143f6e94d7ce339000d599312))
+
+
+## v0.316.0 (2026-09-25)
+
+### Features
+
+- Prepare isolated treasury planner and key verification
+  ([#2325](https://github.com/ditto-assistant/ditto-subnet/pull/2325),
+  [`a6b0b23`](https://github.com/ditto-assistant/ditto-subnet/commit/a6b0b23cd9d7bb49dd91a84209421876893fb9f2))
+
+- **treasury**: Add durable bounded payment execution
+  ([#2320](https://github.com/ditto-assistant/ditto-subnet/pull/2320),
+  [`770c38a`](https://github.com/ditto-assistant/ditto-subnet/commit/770c38a524edc2702092f1bfb9cfbd93e5d05a6e))
+
+- **treasury**: Add isolated signer and dry-run tooling
+  ([#2316](https://github.com/ditto-assistant/ditto-subnet/pull/2316),
+  [`3234e95`](https://github.com/ditto-assistant/ditto-subnet/commit/3234e95a5854b8adf817497f550e39c57b8ab8c4))
+
+- **treasury**: Add shadow allocation and quote controls
+  ([#2315](https://github.com/ditto-assistant/ditto-subnet/pull/2315),
+  [`c23d57a`](https://github.com/ditto-assistant/ditto-subnet/commit/c23d57a6210703068d6baaf259bb14a991fe480e))
+
+- **treasury**: Schedule bounded GM credit requests
+  ([#2321](https://github.com/ditto-assistant/ditto-subnet/pull/2321),
+  [`28de327`](https://github.com/ditto-assistant/ditto-subnet/commit/28de327bf72ef6bc148d4043d21e2a15a3daab68))
+
+
+## v0.315.1 (2026-09-25)
+
+### Bug Fixes
+
+- **screener**: Report L3 model tool contract subtype
+  ([#2323](https://github.com/ditto-assistant/ditto-subnet/pull/2323),
+  [`406bfa9`](https://github.com/ditto-assistant/ditto-subnet/commit/406bfa9e747f0dfb1f8b1096998f918e1a062fdb))
+
+
+## v0.315.0 (2026-09-25)
+
+### Features
+
+- **screener**: Add report-only v14 generator template leads
+  ([#2310](https://github.com/ditto-assistant/ditto-subnet/pull/2310),
+  [`19dd961`](https://github.com/ditto-assistant/ditto-subnet/commit/19dd961a557067f855bc88df0e51aff4afc40441))
+
+
+## v0.314.1 (2026-09-25)
+
+### Bug Fixes
+
+- **screener**: Bind scorer slot rewrites to I4
+  ([#2306](https://github.com/ditto-assistant/ditto-subnet/pull/2306),
+  [`571caf4`](https://github.com/ditto-assistant/ditto-subnet/commit/571caf4c83e13117cb63186000939bb96344509b))
+
+
+## v0.314.0 (2026-09-25)
+
+### Features
+
+- **platform**: Expose the outlier escalation posture and activity to Backroom
+  ([#2303](https://github.com/ditto-assistant/ditto-subnet/pull/2303),
+  [`b70b5df`](https://github.com/ditto-assistant/ditto-subnet/commit/b70b5df011f050f1bb245f66045c85ccf4e55999))
+
+
+## v0.313.4 (2026-09-25)
+
+### Bug Fixes
+
+- **validator**: Cancel the scorer run when a poll fails
+  ([#2302](https://github.com/ditto-assistant/ditto-subnet/pull/2302),
+  [`cecf680`](https://github.com/ditto-assistant/ditto-subnet/commit/cecf680c2c941c1575b28b1e14c41a90b809b326))
+
+### Documentation
+
+- Clarify local dev quickstart scope
+  ([#2091](https://github.com/ditto-assistant/ditto-subnet/pull/2091),
+  [`5e4d9c4`](https://github.com/ditto-assistant/ditto-subnet/commit/5e4d9c4e5e0ac57d47af04cf857b113f30e5dbd8))
+
+
+## v0.313.3 (2026-09-25)
+
+### Bug Fixes
+
+- **backroom**: Expose L2 canary lease expiry
+  ([#2296](https://github.com/ditto-assistant/ditto-subnet/pull/2296),
+  [`fc9b687`](https://github.com/ditto-assistant/ditto-subnet/commit/fc9b687384bd98967d83170bbdd2ed2bf9063749))
+
+- **datagen**: Keep ordinary English out of v8 answer pools
+  ([#2222](https://github.com/ditto-assistant/ditto-subnet/pull/2222),
+  [`4629325`](https://github.com/ditto-assistant/ditto-subnet/commit/4629325612a250c2519dc16624ee980956f2f786))
+
+- **platform**: Count every compared file in the baseline diff and report what was omitted
+  ([#2253](https://github.com/ditto-assistant/ditto-subnet/pull/2253),
+  [`0eb6a74`](https://github.com/ditto-assistant/ditto-subnet/commit/0eb6a74d30dd09b71c36d2ee242115180586156c))
+
+- **screener**: Align bootstrap defaults with GPT-6 review
+  ([#2299](https://github.com/ditto-assistant/ditto-subnet/pull/2299),
+  [`e78b631`](https://github.com/ditto-assistant/ditto-subnet/commit/e78b631112aaba345271fb8547c8ecd8355fd66f))
+
+- **screener**: Ignore quoted source when classifying build infrastructure failures
+  ([#2298](https://github.com/ditto-assistant/ditto-subnet/pull/2298),
+  [`f462b85`](https://github.com/ditto-assistant/ditto-subnet/commit/f462b85aa99319f7fd41b1070398917e6389e9a2))
+
+
 ## v0.313.2 (2026-09-25)
 
 ### Bug Fixes

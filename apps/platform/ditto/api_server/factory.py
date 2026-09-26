@@ -92,6 +92,7 @@ from ditto.api_server.endpoints import (
     admin_leaderboard_router,
     admin_lease_revocations_router,
     admin_miner_fees_router,
+    admin_outlier_escalation_router,
     admin_owner_router,
     admin_quarantine_router,
     admin_queue_policy_settings_router,
@@ -106,6 +107,8 @@ from ditto.api_server.endpoints import (
     admin_submission_deposit_address_router,
     admin_submission_settings_router,
     admin_traces_router,
+    admin_treasury_quote_router,
+    admin_treasury_settings_router,
     admin_v13_private_generation_router,
     admin_v13_scorer_cohort_router,
     admin_validation_retry_router,
@@ -695,6 +698,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     from ditto.api_server.endpoints.public_admin_activity import (
         router as activity_router,
     )
+    from ditto.api_server.endpoints.public_treasury_activity import (
+        router as treasury_activity_router,
+    )
 
     app.include_router(health_router)
     app.include_router(metrics_router)
@@ -707,6 +713,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
         app.include_router(inference_router, prefix="/api/v1")
         return app
     app.include_router(activity_router, prefix="/api/v1")
+    app.include_router(treasury_activity_router, prefix="/api/v1")
     app.include_router(attestation_router, prefix="/api/v1")
     app.include_router(name_claims_router, prefix="/api/v1")
     app.include_router(miner_avatars_router, prefix="/api/v1")
@@ -766,6 +773,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_screener_capacity_router, prefix="/api/v1")
     app.include_router(admin_screening_infra_retry_router, prefix="/api/v1")
     app.include_router(admin_source_review_queue_slo_router, prefix="/api/v1")
+    app.include_router(admin_outlier_escalation_router, prefix="/api/v1")
     app.include_router(admin_submission_settings_router, prefix="/api/v1")
     app.include_router(admin_submission_deposit_address_router, prefix="/api/v1")
     app.include_router(admin_copy_review_router, prefix="/api/v1")
@@ -783,6 +791,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_core_qualification_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
+    app.include_router(admin_treasury_settings_router, prefix="/api/v1")
+    app.include_router(admin_treasury_quote_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
     app.include_router(admin_conversation_router, prefix="/api/v1")
     app.include_router(screener_conversation_router, prefix="/api/v1")

@@ -1493,6 +1493,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/outlier-escalation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Outlier Escalation
+         * @description Effective escalation settings with sources, plus recent activity.
+         */
+        get: operations["get_outlier_escalation_api_v1_admin_outlier_escalation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/owner-attestations/{attestation_id}/revoke": {
         parameters: {
             query?: never;
@@ -1796,6 +1816,26 @@ export interface paths {
          * @description Queue one exact source once; this never reopens a screening attempt.
          */
         post: operations["schedule_l2_report_canary_api_v1_admin_screener_l2_report_canaries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screener-l2-report-canaries/preflight/{agent_id}/{source_attempt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get L2 Report Canary Preflight
+         * @description Expose exact guard inputs; scheduling still rechecks them under a lock.
+         */
+        get: operations["get_l2_report_canary_preflight_api_v1_admin_screener_l2_report_canaries_preflight__agent_id___source_attempt_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3011,6 +3051,41 @@ export interface paths {
          *     with ``record_omitted="too_large"``.
          */
         post: operations["peek_trace_object_api_v1_admin_traces_peek_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/treasury-quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Treasury Quote */
+        get: operations["get_treasury_quote_api_v1_admin_treasury_quote_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/treasury-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Treasury Settings */
+        get: operations["get_treasury_settings_api_v1_admin_treasury_settings_get"];
+        put?: never;
+        /** Record Treasury Settings */
+        post: operations["record_treasury_settings_api_v1_admin_treasury_settings_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4989,6 +5064,23 @@ export interface paths {
          *     excluded: only settled public scores appear.
          */
         get: operations["submissions_api_v1_public_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/treasury-activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Treasury Activity */
+        get: operations["list_treasury_activity_api_v1_public_treasury_activity_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10210,6 +10302,45 @@ export interface components {
             reason: "oversized" | "non_utf8";
         };
         /**
+         * AdminOutlierEscalationResponse
+         * @description Effective posture, per-field sources, and audit-chain activity.
+         */
+        AdminOutlierEscalationResponse: {
+            activity: components["schemas"]["OutlierEscalationActivityView"];
+            /** Algorithm Version */
+            algorithm_version: string;
+            defaults: components["schemas"]["OutlierEscalationSettingsView"];
+            /**
+             * Env Vars
+             * @description Environment variable name per setting (names only).
+             */
+            env_vars: {
+                [key: string]: string;
+            };
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Invalid Env Fields */
+            invalid_env_fields: ("mode" | "min_bench_version" | "min_cohort_size" | "modified_z_threshold" | "min_composite_floor")[];
+            /**
+             * Pending Review Count
+             * @description Pending ATH reviews opened as anomalous_score.
+             */
+            pending_review_count: number;
+            /** Review Kind */
+            review_kind: string;
+            settings: components["schemas"]["OutlierEscalationSettingsView"];
+            /**
+             * Settings Loaded At
+             * Format: date-time
+             * @description When this API process read the environment. Settings change only on a process restart.
+             */
+            settings_loaded_at: string;
+            sources: components["schemas"]["OutlierEscalationSettingSourcesView"];
+        };
+        /**
          * AdminOwnerAgent
          * @description One submission belonging to a linked hotkey.
          */
@@ -12408,6 +12539,24 @@ export interface components {
             expected_registration_sha256: string;
             /** Reason */
             reason: string;
+        };
+        /** AdminTreasurySettingsRequest */
+        AdminTreasurySettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "RECORD TREASURY SHADOW POLICY";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            settings: components["schemas"]["TreasurySettings"];
         };
         /**
          * AdminV13PrivatePackageReadiness
@@ -20438,6 +20587,12 @@ export interface components {
             miner_hotkey: string;
             /** Policy Version */
             policy_version: number;
+            /**
+             * Run Mode
+             * @default source_only
+             * @enum {string}
+             */
+            run_mode: "source_only" | "full_runtime";
             scored_runtime_evidence: components["schemas"]["ScoredRuntimeEvidenceLease"];
             /**
              * Source Attempt Id
@@ -20465,6 +20620,34 @@ export interface components {
         L2CanaryCompleteResponse: {
             /** Accepted */
             accepted: boolean;
+        };
+        /**
+         * L2CanaryPreflightView
+         * @description Current values of the scheduler's exact-source guards, before its recheck.
+         */
+        L2CanaryPreflightView: {
+            /** Agent Artifact Sha256 */
+            agent_artifact_sha256: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Arrival Bench Version */
+            arrival_bench_version: number;
+            /** Attempt Policy Version */
+            attempt_policy_version: number;
+            /** Score Row Count */
+            score_row_count: number;
+            /** Source Attempt Artifact Sha256 */
+            source_attempt_artifact_sha256: string | null;
+            /**
+             * Source Attempt Id
+             * Format: uuid
+             */
+            source_attempt_id: string;
         };
         /** L2CanaryScheduleRequest */
         L2CanaryScheduleRequest: {
@@ -20499,6 +20682,12 @@ export interface components {
              * @enum {string}
              */
             review_label: "candidate_clear" | "known_reject";
+            /**
+             * Run Mode
+             * @default source_only
+             * @enum {string}
+             */
+            run_mode: "source_only" | "full_runtime";
             /**
              * Source Attempt Id
              * Format: uuid
@@ -20549,6 +20738,11 @@ export interface components {
             request_id: string;
             /** Review Label */
             review_label: string;
+            /**
+             * Run Mode
+             * @enum {string}
+             */
+            run_mode: "source_only" | "full_runtime";
             /**
              * Source Attempt Id
              * Format: uuid
@@ -21789,6 +21983,143 @@ export interface components {
              * @default
              */
             schema_sha256: string;
+        };
+        /** OutlierEscalationActivityView */
+        OutlierEscalationActivityView: {
+            /** Enforced In Window */
+            enforced_in_window: number;
+            /** Enforced Total */
+            enforced_total: number;
+            /** Latest Recorded At */
+            latest_recorded_at?: string | null;
+            /** Observed In Window */
+            observed_in_window: number;
+            /** Observed Total */
+            observed_total: number;
+            /** Recent */
+            recent: components["schemas"]["OutlierEscalationEntryView"][];
+            /** Recent Limit */
+            recent_limit: number;
+            /**
+             * Recent Truncated
+             * @description More matching entries exist beyond recent_limit.
+             */
+            recent_truncated: boolean;
+            /** Window Hours */
+            window_hours: number;
+            /**
+             * Window Started At
+             * Format: date-time
+             */
+            window_started_at: string;
+        };
+        /** OutlierEscalationEntryView */
+        OutlierEscalationEntryView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Algorithm Version */
+            algorithm_version?: string | null;
+            /** Bench Version */
+            bench_version?: number | null;
+            /**
+             * Enforced
+             * @description true: an ATH hold was opened (enforce). false: a would-be hold was only recorded (observe).
+             */
+            enforced: boolean;
+            evidence: components["schemas"]["OutlierEscalationEvidence"];
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /**
+             * Seq
+             * @description score_audit_log append order.
+             */
+            seq: number;
+        };
+        /**
+         * OutlierEscalationEvidence
+         * @description Scalar evidence the escalation recorded; null when absent or mistyped.
+         */
+        OutlierEscalationEvidence: {
+            /** Above Floor */
+            above_floor?: boolean | null;
+            /** Cohort Mad */
+            cohort_mad?: number | null;
+            /** Cohort Median */
+            cohort_median?: number | null;
+            /** Cohort Size */
+            cohort_size?: number | null;
+            /** Composite */
+            composite?: number | null;
+            /** Min Cohort Size */
+            min_cohort_size?: number | null;
+            /** Min Composite Floor */
+            min_composite_floor?: number | null;
+            /**
+             * Modified Z
+             * @description Null for a zero-MAD cohort (no spread to divide by).
+             */
+            modified_z?: number | null;
+            /** Modified Z Threshold */
+            modified_z_threshold?: number | null;
+            /** Upward */
+            upward?: boolean | null;
+        };
+        /** OutlierEscalationSettingSourcesView */
+        OutlierEscalationSettingSourcesView: {
+            /**
+             * Min Bench Version
+             * @enum {string}
+             */
+            min_bench_version: "env" | "default" | "default_invalid_env";
+            /**
+             * Min Cohort Size
+             * @enum {string}
+             */
+            min_cohort_size: "env" | "default" | "default_invalid_env";
+            /**
+             * Min Composite Floor
+             * @enum {string}
+             */
+            min_composite_floor: "env" | "default" | "default_invalid_env";
+            /**
+             * Mode
+             * @description env: the variable was set and parsed. default: unset, shipped default. default_invalid_env: set but rejected, so the shipped default is in force.
+             * @enum {string}
+             */
+            mode: "env" | "default" | "default_invalid_env";
+            /**
+             * Modified Z Threshold
+             * @enum {string}
+             */
+            modified_z_threshold: "env" | "default" | "default_invalid_env";
+        };
+        /** OutlierEscalationSettingsView */
+        OutlierEscalationSettingsView: {
+            /** Min Bench Version */
+            min_bench_version: number;
+            /** Min Cohort Size */
+            min_cohort_size: number;
+            /**
+             * Min Composite Floor
+             * @description Null only when the environment set a non-finite value (nan/inf), which the loader accepts and JSON cannot carry. Scoring is using that value.
+             */
+            min_composite_floor: number | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "observe" | "enforce";
+            /**
+             * Modified Z Threshold
+             * @description Null only when the environment set a non-finite value (nan/inf), which the loader accepts and JSON cannot carry. Scoring is using that value.
+             */
+            modified_z_threshold: number | null;
         };
         /**
          * OwnerLinkProof
@@ -26245,6 +26576,94 @@ export interface components {
             /** Usage Unavailable */
             usage_unavailable: number;
         };
+        /** PublicTreasuryEvent */
+        PublicTreasuryEvent: {
+            /** Accepted Work Ref */
+            accepted_work_ref: string | null;
+            /** Actor Provenance */
+            actor_provenance: string;
+            /** Actor Public Id */
+            actor_public_id: string;
+            /** Allocated Alpha Rao */
+            allocated_alpha_rao: string;
+            /** Allocation Bps */
+            allocation_bps: number;
+            /** Block Hash */
+            block_hash: string;
+            /** Bounty Award Id */
+            bounty_award_id: string | null;
+            /** Burn Revision */
+            burn_revision: number;
+            /** Burn Share Micros */
+            burn_share_micros: number;
+            /** Credited Usd Nano */
+            credited_usd_nano: string | null;
+            /**
+             * Denominator
+             * @enum {string}
+             */
+            denominator: "miner_emission" | "released_miner_emission";
+            /** Deposit Amount Atomic */
+            deposit_amount_atomic: string;
+            /**
+             * Deposit Asset
+             * @enum {string}
+             */
+            deposit_asset: "TAO" | "SN28_ALPHA" | "SN118_ALPHA";
+            /**
+             * Event At
+             * Format: date-time
+             */
+            event_at: string;
+            /** Event Index */
+            event_index: number;
+            /**
+             * Event Kind
+             * @enum {string}
+             */
+            event_kind: "gm_token_deposit" | "gm_credit_purchase" | "maintenance_bounty";
+            /** Extrinsic Index */
+            extrinsic_index: number;
+            /** Finalized Event Id */
+            finalized_event_id: number | null;
+            /** Gm Bps */
+            gm_bps: number;
+            /** Id */
+            id: number;
+            /** Maintenance Bps */
+            maintenance_bps: number;
+            /** Payment Id */
+            payment_id: string;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Public Recipient */
+            public_recipient: string;
+            /** Public Sender */
+            public_sender: string;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Route */
+            route: string;
+            /** Source Alpha Rao */
+            source_alpha_rao: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "chain_finalized" | "reconciled";
+            /** Verification Source */
+            verification_source: string;
+        };
+        /** PublicTreasuryEventPage */
+        PublicTreasuryEventPage: {
+            /** Items */
+            items: components["schemas"]["PublicTreasuryEvent"][];
+            /** Next Before */
+            next_before: number | null;
+        };
         /**
          * PublicV13ReviewClockRevision
          * @description One public notice, without private operator identity or reason text.
@@ -28081,6 +28500,8 @@ export interface components {
             model_disposition?: "inconclusive" | null;
             /** Model Steps Observed */
             model_steps_observed?: number | null;
+            /** Model Tool Failure Subcode */
+            model_tool_failure_subcode?: ("invalid_submit_call_id" | "no_tool_call_after_corrections" | "malformed_tool_arguments_json" | "invalid_tool_call_shape") | null;
             /** Output Tokens Used */
             output_tokens_used?: number | null;
             /** Prompt Revision */
@@ -31236,6 +31657,81 @@ export interface components {
             status?: string | null;
             /** Validator Hotkey */
             validator_hotkey?: string | null;
+        };
+        /** TreasurySettings */
+        TreasurySettings: {
+            /** Gm Account Ref */
+            gm_account_ref?: string | null;
+            /**
+             * Gm Bps
+             * @default 0
+             */
+            gm_bps: number;
+            /**
+             * Maintenance Bps
+             * @default 0
+             */
+            maintenance_bps: number;
+            /**
+             * Max Daily Outflow Rao
+             * @default 0
+             */
+            max_daily_outflow_rao: number;
+            /**
+             * Max Single Topup Rao
+             * @default 0
+             */
+            max_single_topup_rao: number;
+            /**
+             * Max Slippage Bps
+             * @default 0
+             */
+            max_slippage_bps: number;
+            /**
+             * Mode
+             * @default shadow
+             * @constant
+             */
+            mode: "shadow";
+            /** Treasury Coldkey */
+            treasury_coldkey?: string | null;
+            /** Treasury Hotkey */
+            treasury_hotkey?: string | null;
+        };
+        /** TreasurySettingsControl */
+        TreasurySettingsControl: {
+            effective: components["schemas"]["TreasurySettings"];
+            /** History */
+            history: components["schemas"]["TreasurySettingsRevision"][];
+            /** Miner Bps */
+            miner_bps: number;
+            /** Revision */
+            revision: number;
+            /**
+             * Weight Effect
+             * @default none
+             * @constant
+             */
+            weight_effect: "none";
+        };
+        /** TreasurySettingsRevision */
+        TreasurySettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["TreasurySettings"];
         };
         /** TrustedImageBuildClaimRequest */
         TrustedImageBuildClaimRequest: {
@@ -36754,6 +37250,40 @@ export interface operations {
             };
         };
     };
+    get_outlier_escalation_api_v1_admin_outlier_escalation_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                window_hours?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOutlierEscalationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     revoke_owner_attestation_api_v1_admin_owner_attestations__attestation_id__revoke_post: {
         parameters: {
             query?: never;
@@ -37258,6 +37788,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["L2CanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_l2_report_canary_preflight_api_v1_admin_screener_l2_report_canaries_preflight__agent_id___source_attempt_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+                source_attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["L2CanaryPreflightView"];
                 };
             };
             /** @description Validation Error */
@@ -39669,6 +40233,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TracePeekResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_treasury_quote_api_v1_admin_treasury_quote_get: {
+        parameters: {
+            query: {
+                source_alpha_rao: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_treasury_settings_api_v1_admin_treasury_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasurySettingsControl"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_treasury_settings_api_v1_admin_treasury_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTreasurySettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasurySettingsRevision"];
                 };
             };
             /** @description Validation Error */
@@ -42856,6 +43521,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicSubmissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_treasury_activity_api_v1_public_treasury_activity_get: {
+        parameters: {
+            query?: {
+                before?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicTreasuryEventPage"];
                 };
             };
             /** @description Validation Error */

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -18,9 +19,11 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryClaimResponse,
     L2CanaryCompleteRequest,
     L2CanaryCompleteResponse,
+    L2CanaryPreflightView,
     L2CanaryScheduleRequest,
     L2CanaryView,
 )
+from ditto.api_models.system_health import fleet_release_from_heartbeat_envelope
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.screener import (
@@ -33,6 +36,7 @@ from ditto.api_server.storage import S3StorageClient
 from ditto.db.models import (
     Agent,
     Score,
+    ScreenerHeartbeat,
     ScreenerL2ReportCanary,
     ScreenerNode,
     ScreeningAttempt,
@@ -45,6 +49,7 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 ScreenerDep = Annotated[str, Depends(require_screener)]
 _LEASE = timedelta(minutes=45)
+_FULL_RUNTIME_MIN_RELEASE = (0, 317, 2)
 
 
 def _utc(value: datetime) -> datetime:
@@ -62,6 +67,7 @@ def _view(row: ScreenerL2ReportCanary) -> L2CanaryView:
         expected_agent_status=row.expected_agent_status,
         expected_score_count=row.expected_score_count,
         review_label=row.review_label,
+        run_mode=cast(Literal["source_only", "full_runtime"], row.run_mode),
         status=row.status,
         claimed_instance_id=row.claimed_instance_id,
         lease_expires_at=row.lease_expires_at,
@@ -79,10 +85,46 @@ def _valid_report(row: ScreenerL2ReportCanary, report: dict) -> bool:
     digest = hashlib.sha256(
         json.dumps(packet, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    if row.run_mode == "full_runtime":
+        codes = report.get("decision_evidence_codes", [])
+        if not isinstance(codes, list) or not all(
+            isinstance(code, str) for code in codes
+        ):
+            return False
+        challenge_codes = [
+            code
+            for code in codes
+            if code.startswith(("challenge-", "behavioral-oracle-"))
+        ]
+        if report.get("challenge_evidence_codes") != challenge_codes:
+            return False
+        if not challenge_codes:
+            expected_challenge_status = "not_run"
+        elif any(
+            code
+            not in {
+                "challenge-observed",
+                "challenge-model-call-missing",
+                "challenge-gateway-token-missing",
+                "challenge-shape-anomaly",
+                "behavioral-oracle-passed",
+                "behavioral-oracle-wrong-answer",
+                "behavioral-oracle-implausibly-fast",
+            }
+            for code in challenge_codes
+        ):
+            expected_challenge_status = "inconclusive"
+        else:
+            expected_challenge_status = "completed"
+        if report.get("challenge_status") != expected_challenge_status:
+            return False
+    allowed_review_modes = (
+        {"shadow", "enforce_preview"} if row.run_mode == "full_runtime" else {"shadow"}
+    )
     return (
         report.get("kind") == "l2_report_canary_v1"
         and report.get("authority") == "none"
-        and report.get("review_mode") == "shadow"
+        and report.get("review_mode") in allowed_review_modes
         and report.get("canary_id") == str(row.canary_id)
         and report.get("agent_id") == str(row.agent_id)
         and report.get("source_attempt_id") == str(row.source_attempt_id)
@@ -90,8 +132,45 @@ def _valid_report(row: ScreenerL2ReportCanary, report: dict) -> bool:
         and report.get("policy_version") == row.policy_version
         and report.get("settings_revision") == row.settings_revision
         and report.get("settings_checksum") == row.settings_checksum
+        and report.get("run_mode", "source_only") == row.run_mode
         and secrets.compare_digest(digest, row.runtime_evidence_sha256)
     )
+
+
+async def _full_runtime_worker_ready(
+    session: AsyncSession,
+    *,
+    node: ScreenerNode,
+    now: datetime,
+    instance_id: str | None = None,
+) -> bool:
+    """Do not give a new-mode lease to a rolling old worker."""
+    rows = await session.scalars(
+        select(ScreenerHeartbeat).where(
+            ScreenerHeartbeat.screener_hotkey == node.screener_hotkey,
+            ScreenerHeartbeat.seen_at >= now - timedelta(minutes=5),
+        )
+    )
+    for row in rows:
+        if instance_id is None:
+            if not row.instance_id.startswith(f"{node.node_id}-worker-"):
+                continue
+        elif row.instance_id != instance_id:
+            continue
+        release = fleet_release_from_heartbeat_envelope(row.system_metrics)
+        match = (
+            re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", release.version)
+            if release is not None and release.version is not None
+            else None
+        )
+        if (
+            match is not None
+            and release is not None
+            and release.revision is not None
+            and tuple(map(int, match.groups())) >= _FULL_RUNTIME_MIN_RELEASE
+        ):
+            return True
+    return False
 
 
 async def _score_count(session: AsyncSession, agent_id: UUID) -> int:
@@ -122,6 +201,36 @@ async def _exact_source(
     return agent, attempt
 
 
+@admin_router.get(
+    "/preflight/{agent_id}/{source_attempt_id}", response_model=L2CanaryPreflightView
+)
+async def get_l2_report_canary_preflight(
+    agent_id: UUID,
+    source_attempt_id: UUID,
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> L2CanaryPreflightView:
+    """Expose exact guard inputs; scheduling still rechecks them under a lock."""
+    response.headers["Cache-Control"] = "no-store"
+    agent = await session.get(Agent, agent_id)
+    attempt = await session.get(ScreeningAttempt, source_attempt_id)
+    if agent is None or attempt is None or attempt.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="canary source not found")
+    return L2CanaryPreflightView(
+        agent_id=agent_id,
+        source_attempt_id=source_attempt_id,
+        agent_artifact_sha256=agent.sha256.lower(),
+        source_attempt_artifact_sha256=(
+            attempt.artifact_sha256.lower() if attempt.artifact_sha256 else None
+        ),
+        agent_status=agent.status.value,
+        attempt_policy_version=attempt.policy_version,
+        arrival_bench_version=await arrival_bench_version(session, agent=agent),
+        score_row_count=await _score_count(session, agent_id),
+    )
+
+
 @admin_router.post("", response_model=L2CanaryView)
 async def schedule_l2_report_canary(
     payload: L2CanaryScheduleRequest,
@@ -142,6 +251,7 @@ async def schedule_l2_report_canary(
                 or existing.artifact_sha256 != payload.artifact_sha256
                 or existing.target_node_id != payload.target_node_id
                 or existing.review_label != payload.review_label
+                or existing.run_mode != payload.run_mode
                 or existing.policy_version != payload.policy_version
                 or existing.expected_agent_status != payload.expected_agent_status
                 or existing.expected_score_count != payload.expected_score_count
@@ -155,6 +265,10 @@ async def schedule_l2_report_canary(
             raise HTTPException(
                 status_code=409, detail="target is not an active Hetzner screener node"
             )
+        if payload.run_mode == "full_runtime" and not await _full_runtime_worker_ready(
+            session, node=node, now=datetime.now(UTC)
+        ):
+            raise HTTPException(409, "full-runtime canary worker not adopted")
         # Serialize two distinct request ids for the same source attempt before
         # the partial unique index supplies its final database backstop.
         await session.scalar(
@@ -184,6 +298,7 @@ async def schedule_l2_report_canary(
             expected_agent_status=payload.expected_agent_status,
             expected_score_count=payload.expected_score_count,
             review_label=payload.review_label,
+            run_mode=payload.run_mode,
             status="queued",
         )
         agent, _ = await _exact_source(session, row)
@@ -275,6 +390,10 @@ async def claim_l2_report_canary(
         )
         if row is None:
             return None
+        if row.run_mode == "full_runtime" and not await _full_runtime_worker_ready(
+            session, node=node, now=now, instance_id=payload.instance_id
+        ):
+            return None
         try:
             agent, _ = await _exact_source(session, row)
         except HTTPException:
@@ -316,6 +435,7 @@ async def claim_l2_report_canary(
             artifact_sha256=row.artifact_sha256,
             bench_version=row.bench_version,
             policy_version=row.policy_version,
+            run_mode=cast(Literal["source_only", "full_runtime"], row.run_mode),
             miner_hotkey=agent.miner_hotkey,
             lease_token=token,
             lease_expires_at=row.lease_expires_at,
