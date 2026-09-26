@@ -19,6 +19,7 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryClaimResponse,
     L2CanaryCompleteRequest,
     L2CanaryCompleteResponse,
+    L2CanaryPreflightView,
     L2CanaryScheduleRequest,
     L2CanaryView,
 )
@@ -198,6 +199,36 @@ async def _exact_source(
     ):
         raise HTTPException(status_code=409, detail="canary exact-source guard changed")
     return agent, attempt
+
+
+@admin_router.get(
+    "/preflight/{agent_id}/{source_attempt_id}", response_model=L2CanaryPreflightView
+)
+async def get_l2_report_canary_preflight(
+    agent_id: UUID,
+    source_attempt_id: UUID,
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> L2CanaryPreflightView:
+    """Expose exact guard inputs; scheduling still rechecks them under a lock."""
+    response.headers["Cache-Control"] = "no-store"
+    agent = await session.get(Agent, agent_id)
+    attempt = await session.get(ScreeningAttempt, source_attempt_id)
+    if agent is None or attempt is None or attempt.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="canary source not found")
+    return L2CanaryPreflightView(
+        agent_id=agent_id,
+        source_attempt_id=source_attempt_id,
+        agent_artifact_sha256=agent.sha256.lower(),
+        source_attempt_artifact_sha256=(
+            attempt.artifact_sha256.lower() if attempt.artifact_sha256 else None
+        ),
+        agent_status=agent.status.value,
+        attempt_policy_version=attempt.policy_version,
+        arrival_bench_version=await arrival_bench_version(session, agent=agent),
+        score_row_count=await _score_count(session, agent_id),
+    )
 
 
 @admin_router.post("", response_model=L2CanaryView)

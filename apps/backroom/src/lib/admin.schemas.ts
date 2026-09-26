@@ -482,6 +482,22 @@ export const l2ReportCanaryLookupInputSchema = z.object({
   canaryId: z.string().uuid(),
 })
 
+export const l2ReportCanaryPreflightInputSchema = z.object({
+  agentId: z.string().uuid(),
+  sourceAttemptId: z.string().uuid(),
+})
+
+export const l2ReportCanaryPreflightViewSchema = z.object({
+  agent_id: z.string().uuid(),
+  source_attempt_id: z.string().uuid(),
+  agent_artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  source_attempt_artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  agent_status: z.string(),
+  attempt_policy_version: z.number().int().nonnegative(),
+  arrival_bench_version: z.number().int().nonnegative(),
+  score_row_count: z.number().int().nonnegative(),
+})
+
 export const scheduleL2ReportCanaryInputSchema = z.object({
   requestId: z.string().uuid(),
   agentId: z.string().uuid(),

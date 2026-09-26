@@ -116,6 +116,7 @@ import {
   applyScreenerReviewSettingsInputSchema,
   screenerFanoutShadowInputSchema,
   l2ReportCanaryLookupInputSchema,
+  l2ReportCanaryPreflightInputSchema,
   scheduleL2ReportCanaryInputSchema,
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
@@ -273,6 +274,7 @@ import {
   fetchScreenerReviewControl,
   fetchScreenerFanoutShadow,
   fetchL2ReportCanary,
+  fetchL2ReportCanaryPreflight,
   scheduleL2ReportCanary,
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
@@ -697,6 +699,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read bounded baseline/fan-out shadow comparisons, coverage, disagreements, latency, and spend.',
   get_l2_report_canary:
     'Read one exact-attempt non-authoritative L2 canary report and lease outcome.',
+  get_l2_report_canary_preflight:
+    'Read current exact-source canary guards; scheduling rechecks them.',
   get_v13_scorer_cohort:
     'Read the immutable three-validator V13 scorer pin, including exact signed runtime packet.',
   get_v13_scorer_cohort_preflight:
@@ -2378,6 +2382,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchL2ReportCanary(input)),
+  )
+
+  registerTool(
+    'get_l2_report_canary_preflight',
+    {
+      title: 'Get L2 canary preflight',
+      description: 'Read agent/attempt SHA, status, policy/bench version and raw Score count. Advisory snapshot; scheduling rechecks. Requires backroom:read.',
+      inputSchema: l2ReportCanaryPreflightInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchL2ReportCanaryPreflight(input)),
   )
 
   registerTool(

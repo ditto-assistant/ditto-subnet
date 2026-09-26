@@ -52,6 +52,21 @@ class L2CanaryView(BaseModel):
     completed_at: datetime | None
 
 
+class L2CanaryPreflightView(BaseModel):
+    """Current values of the scheduler's exact-source guards, before its recheck."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    agent_id: UUID
+    source_attempt_id: UUID
+    agent_artifact_sha256: str
+    source_attempt_artifact_sha256: str | None
+    agent_status: str
+    attempt_policy_version: int
+    arrival_bench_version: int
+    score_row_count: int
+
+
 class L2CanaryClaimRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 

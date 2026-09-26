@@ -335,6 +335,8 @@ import {
   screenerFanoutShadowInputSchema,
   screenerFanoutShadowResponseSchema,
   l2ReportCanaryLookupInputSchema,
+  l2ReportCanaryPreflightInputSchema,
+  l2ReportCanaryPreflightViewSchema,
   scheduleL2ReportCanaryInputSchema,
   l2ReportCanaryViewSchema,
   screenerPolicyManifestControlSchema,
@@ -658,6 +660,14 @@ export async function fetchL2ReportCanary(rawInput: unknown) {
     `/api/v1/admin/screener-l2-report-canaries/${input.canaryId}`,
   )
   return l2ReportCanaryViewSchema.parse(payload)
+}
+
+export async function fetchL2ReportCanaryPreflight(rawInput: unknown) {
+  const input = l2ReportCanaryPreflightInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/preflight/${input.agentId}/${input.sourceAttemptId}`,
+  )
+  return l2ReportCanaryPreflightViewSchema.parse(payload)
 }
 
 export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {

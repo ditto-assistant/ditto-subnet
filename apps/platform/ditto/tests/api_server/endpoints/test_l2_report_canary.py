@@ -23,7 +23,7 @@ from ditto.api_models.l2_report_canary import (
 from ditto.api_server.endpoints import l2_report_canary as endpoints
 from ditto.api_server.storage import S3StorageClient
 from ditto.db.models import ScreenerL2ReportCanary, ScreenerNode, ScreeningAttempt
-from ditto.tests.api_server.endpoints.test_screener import _seed_agent
+from ditto.tests.api_server.endpoints.test_screener import _seed_agent, _seed_score
 from ditto_screening_protocol import ScoredRuntimeEvidenceLease
 
 
@@ -101,6 +101,53 @@ async def test_full_runtime_claim_requires_exact_adopted_worker() -> None:
     assert not await endpoints._full_runtime_worker_ready(
         session, node=node, now=current, instance_id=heartbeat.instance_id
     )
+
+
+@pytest.mark.asyncio
+async def test_canary_preflight_exposes_scheduler_guard_values_without_mutation(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_sha, attempt_sha = "a" * 64, "b" * 64
+    agent_id = await _seed_agent(
+        session_maker, status=AgentStatus.EVALUATING, sha256=agent_sha
+    )
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                artifact_sha256=attempt_sha,
+                screener_hotkey="preflight-test-hotkey",
+                policy_version=13,
+                status="passed",
+                started_at=now - timedelta(minutes=1),
+                deadline=now,
+                finished_at=now,
+            )
+        )
+    await _seed_score(session_maker, agent_id=agent_id)
+    response = Response()
+    async with session_maker() as session:
+        view = await endpoints.get_l2_report_canary_preflight(
+            agent_id, attempt_id, response, None, session
+        )
+    assert response.headers["Cache-Control"] == "no-store"
+    assert view.agent_id == agent_id
+    assert view.source_attempt_id == attempt_id
+    assert view.agent_artifact_sha256 == agent_sha
+    assert view.source_attempt_artifact_sha256 == attempt_sha
+    assert view.agent_status == "evaluating"
+    assert view.attempt_policy_version == 13
+    assert view.score_row_count == 1
+    assert view.arrival_bench_version >= 1
+    async with session_maker() as session:
+        with pytest.raises(HTTPException) as error:
+            await endpoints.get_l2_report_canary_preflight(
+                uuid4(), attempt_id, Response(), None, session
+            )
+    assert error.value.status_code == 404
 
 
 @pytest.mark.asyncio
