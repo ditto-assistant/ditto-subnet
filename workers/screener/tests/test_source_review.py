@@ -2542,6 +2542,44 @@ async def test_each_source_review_completion_has_a_short_hard_timeout(
     assert observation.error_code == "source-review-timeouterror"
 
 
+async def test_default_source_turn_allows_delayed_success_with_retry_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def delayed_success(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.02)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=None,
+        model="openai/gpt-6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=600,
+        max_steps=1,
+        transport=httpx.MockTransport(delayed_success),
+    )
+    request_timeouts: list[float] = []
+
+    def headers(_key: str, effective_timeout: float) -> dict[str, str]:
+        request_timeouts.append(effective_timeout)
+        return {}
+
+    monkeypatch.setattr(agent, "_completion_request_headers", headers)
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        message = await agent._completion_message(
+            client,
+            "test-key",
+            [{"role": "user", "content": "test"}],
+            timeout=600,
+            reasoning_effort="high",
+        )
+    assert message["content"] == "ok"
+    assert request_timeouts == [180.0]
+    assert request_timeouts[0] * 2 < agent._timeout_seconds
+
+
 async def test_completion_request_timeout_override_still_obeys_review_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

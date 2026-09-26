@@ -348,12 +348,12 @@ _RETRYABLE_MODEL_ERROR_TYPES = frozenset(
     }
 )
 
-# A single upstream completion must not consume the whole L1 budget.  The
+# A single upstream completion must not consume the whole L1 budget. The
 # caller keeps the renewable lease deadline as the overall review budget, while
-# this cap leaves time for one fresh retry and OpenRouter's provider failover.
-# A source-review turn produces a tool call or compact verdict, not a long-form
-# answer; 45 seconds is already generous for the 4k operator output budget.
-_MAX_COMPLETION_REQUEST_SECONDS = 45.0
+# this cap leaves time for one fresh retry and provider failover. High-reasoning
+# source turns can exceed 45 seconds even on a healthy provider; that cap
+# caused two timeouts and a failed review within a 600-second aggregate budget.
+_MAX_COMPLETION_REQUEST_SECONDS = 180.0
 
 
 def _retryable_model_error_type(payload: object) -> str | None:
