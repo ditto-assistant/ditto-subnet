@@ -7344,6 +7344,8 @@ export const resolveCopyReviewInputSchema = z.object({
   agentId: z.string().uuid(),
   resolution: copyReviewResolutionSchema,
   reason: auditReasonSchema(3),
+  evidenceReferences: z.array(z.string().trim().min(3).max(512)).min(1).max(64),
+  reasonCodes: z.array(z.string().trim().min(2)).max(16).default([]),
 })
 
 export const resolveCopyReviewResponseSchema = z.object({
@@ -7413,6 +7415,10 @@ export const athReviewAuditSchema = z.object({
     previous_status: z.string().nullable(),
     artifact_sha256: z.string().nullable(),
     score_count: z.number().int().nonnegative().nullable(),
+    evidence_references: z.array(z.string()).default([]),
+    reason_codes: z.array(z.string()).default([]),
+    policy_version: z.number().int().positive().nullable().default(null),
+    violation_proven: z.boolean().nullable().default(null),
   })).default([]),
 })
 
@@ -7475,6 +7481,7 @@ export const athRulingSchema = z.object({
   expected_score_count: z.number().int().nonnegative(),
   reason: auditReasonSchema(3),
   evidence_references: z.array(athRulingEvidenceReferenceSchema).max(64).default([]),
+  reason_codes: z.array(z.string().trim().min(2)).max(16).default([]),
 })
 
 const uniqueRulingAgents = (
@@ -7549,6 +7556,7 @@ export const athRulingPreviewItemSchema = z.object({
   steps: z.array(athRulingActionSchema).default([]),
   reason: z.string(),
   evidence_references: z.array(z.string()).default([]),
+  reason_codes: z.array(z.string()).default([]),
   message: z.string(),
 } satisfies PlatformResponseShape<GeneratedAthRulingPreviewItem>)
 

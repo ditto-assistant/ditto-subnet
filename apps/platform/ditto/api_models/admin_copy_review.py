@@ -4,9 +4,10 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from ditto.api_models.screener import ScreenReviewAudit
+from ditto_screening_protocol.policy_reason_codes import unpublished_violation_codes
 
 
 class AdminDeferredReviewEvidence(BaseModel):
@@ -207,6 +208,10 @@ class AdminCopyReviewAction(BaseModel):
     previous_status: str | None = None
     artifact_sha256: str | None = None
     score_count: int | None = None
+    evidence_references: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
+    policy_version: int | None = None
+    violation_proven: bool | None = None
 
 
 class AdminCopyReviewAudit(BaseModel):
@@ -282,6 +287,44 @@ class AdminCopyReviewResolveRequest(BaseModel):
     # release/ban remain accepted for Backroom #20 wire compatibility.
     resolution: Literal["clear", "reject", "release", "ban"]
     reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3)]
+    evidence_references: Annotated[
+        list[
+            Annotated[
+                str,
+                StringConstraints(
+                    strip_whitespace=True,
+                    min_length=3,
+                    max_length=512,
+                    pattern=r"^\S+:(?:\d+(?:-\d+)?|[0-9a-fA-F-]{36})$",
+                ),
+            ]
+        ],
+        Field(min_length=1, max_length=64),
+    ]
+    reason_codes: Annotated[list[str], Field(max_length=16)] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def _validate_decision_evidence(self) -> "AdminCopyReviewResolveRequest":
+        if self.resolution in ("clear", "release") and self.reason_codes:
+            raise ValueError("clear must not assert a violation reason code")
+        if self.resolution in ("reject", "ban"):
+            if not self.reason_codes:
+                raise ValueError(
+                    "reject requires a published proven-violation reason code"
+                )
+            if any(
+                not reference.rsplit(":", 1)[-1].split("-", 1)[0].isdigit()
+                for reference in self.evidence_references
+            ):
+                raise ValueError("reject evidence must cite source path:line")
+            unknown = unpublished_violation_codes(self.reason_codes)
+            if unknown:
+                raise ValueError(
+                    f"unpublished proven-violation reason codes: {unknown}"
+                )
+        return self
 
 
 class AdminCopyReviewOpenRequest(BaseModel):

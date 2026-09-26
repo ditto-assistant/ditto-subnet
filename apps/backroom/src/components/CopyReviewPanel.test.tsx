@@ -369,10 +369,11 @@ describe('CopyReviewPanel', () => {
     render(<CopyReviewPanel {...panelProps} initialItems={[eligible]} initialBulkEligibleCount={1} readOnly={false} />)
     fireEvent.click(screen.getByText(/held-agent/))
     fireEvent.change(screen.getByPlaceholderText(/Miner-visible reason/), { target: { value: detailedReason } })
+    fireEvent.change(screen.getByLabelText('Decision evidence citations'), { target: { value: 'src/agent.py:42' } })
     fireEvent.click(screen.getByText('Preview clear'))
     expect(decideCopyReview).not.toHaveBeenCalled()
     fireEvent.click(screen.getByText('Confirm and execute'))
-    await waitFor(() => expect(decideCopyReview).toHaveBeenCalledWith({ data: { agentId: eligible.agent_id, resolution: 'clear', reason: detailedReason } }))
+    await waitFor(() => expect(decideCopyReview).toHaveBeenCalledWith({ data: { agentId: eligible.agent_id, resolution: 'clear', reason: detailedReason, evidenceReferences: ['src/agent.py:42'], reasonCodes: [] } }))
   })
 
   it('labels a deferred-review rejection without calling it benchmark overfit', async () => {
@@ -410,6 +411,8 @@ describe('CopyReviewPanel', () => {
     fireEvent.change(screen.getByPlaceholderText(/Miner-visible reason/), {
       target: { value: 'manual source review found a current-policy violation' },
     })
+    fireEvent.change(screen.getByLabelText('Decision evidence citations'), { target: { value: 'src/agent.py:42' } })
+    fireEvent.change(screen.getByLabelText('Published policy reason codes'), { target: { value: 'I5.benchmark_semantic_compiler' } })
     fireEvent.click(screen.getByText('Preview reject'))
     fireEvent.click(screen.getByText('Confirm and execute'))
 

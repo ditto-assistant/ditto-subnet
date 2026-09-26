@@ -1167,7 +1167,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Resolve ATH review',
       description:
-        'Clear or reject one ATH hold with an auditable public reason. Clearing restores the status held before a manual benchmark-overfit review; rejecting bans the submission. Requires backroom:write.',
+        'Resolve ATH hold. Supply reason, evidenceReferences (path:line or anti-copy-comparison:<UUID> for clear), and published I*/S* reasonCodes for reject. Requires backroom:write.',
       inputSchema: resolveCopyReviewInputSchema,
       annotations: toolAnnotations('write', true),
     },

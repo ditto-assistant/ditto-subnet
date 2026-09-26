@@ -179,7 +179,14 @@ async def test_conflicting_concurrent_resolution_has_one_winner() -> None:
                 return await resolve_copy_review(
                     held_id,
                     AdminCopyReviewResolveRequest(
-                        resolution=action, reason=f"Operator chose {action}"
+                        resolution=action,
+                        reason=f"Operator chose {action}",
+                        evidence_references=["src/agent.py:42"],
+                        reason_codes=(
+                            ["I5.benchmark_semantic_compiler"]
+                            if action == "reject"
+                            else []
+                        ),
                     ),
                     None,
                     session,

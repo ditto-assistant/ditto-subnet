@@ -102,6 +102,10 @@ from ditto.db.models import Agent, AgentStatus, AthReview, AthReviewAction, Scor
 from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.heartbeats import live_validator_fleet_supports_protocol
 from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
+from ditto_screening_protocol.policy_reason_codes import (
+    FIRST_REASON_CODE_POLICY_VERSION,
+    unpublished_violation_codes,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -491,6 +495,7 @@ async def _preview_ruling(
         "agent_id": ruling.agent_id,
         "reason": ruling.reason,
         "evidence_references": list(ruling.evidence_references),
+        "reason_codes": list(ruling.reason_codes),
         "would_change_crown": False,
         "stale_guard": False,
     }
@@ -540,14 +545,29 @@ async def _preview_ruling(
             conflict_reason="score count changed",
             message="score count changed since the ruling was prepared",
         )
-    if ruling.action == "reject" and not ruling.evidence_references:
+    if ruling.action in ("clear", "reject") and not ruling.evidence_references:
         return _blocked(
             **base,
             ok=False,
             disposition="invalid",
-            conflict_reason="reject requires evidence_references",
-            message="a reject ruling must cite at least one path:line",
+            conflict_reason=f"{ruling.action} requires evidence_references",
+            message=f"a {ruling.action} ruling must cite at least one path:line",
         )
+    if ruling.action == "reject":
+        policy_version = max(
+            FIRST_REASON_CODE_POLICY_VERSION,
+            agent.screening_policy_version,
+            review.original_policy_version if review is not None else 1,
+        )
+        unpublished = unpublished_violation_codes(ruling.reason_codes, policy_version)
+        if not ruling.reason_codes or unpublished is None or unpublished:
+            return _blocked(
+                **base,
+                ok=False,
+                disposition="invalid",
+                conflict_reason="reject requires published violation reason_codes",
+                message="reject requires reason_codes published for its policy version",
+            )
 
     held = (
         agent.status == AgentStatus.ATH_PENDING_REVIEW
@@ -858,7 +878,12 @@ async def _apply_step(
     else:
         await resolve_copy_review(
             ruling.agent_id,
-            AdminCopyReviewResolveRequest(resolution=step, reason=ruling.reason),
+            AdminCopyReviewResolveRequest(
+                resolution=step,
+                reason=ruling.reason,
+                evidence_references=list(ruling.evidence_references),
+                reason_codes=list(ruling.reason_codes),
+            ),
             None,
             session,
             x_admin_actor=actor,
