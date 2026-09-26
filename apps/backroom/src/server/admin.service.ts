@@ -1,4 +1,60 @@
 import '@tanstack/react-start/server-only'
+import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema } from '../lib/treasury.schemas'
+
+export async function previewTreasuryTopup(rawInput: unknown) {
+  const input = treasuryPreviewInputSchema.parse(rawInput)
+  const [policy, quote] = await Promise.all([
+    fetchTreasurySettings(), fetchTreasuryQuote(input),
+  ])
+  const proposed = policy.effective
+  const quoteImpact = input.route === 'tao'
+    ? quote.tao_path.price_impact_bps
+    : quote.tao_path.price_impact_bps + quote.gm_alpha_path.price_impact_bps
+  return {
+    dry_run: true as const,
+    execution_enabled: false as const,
+    route: input.route,
+    quote,
+    policy_revision: policy.revision,
+    checks: {
+      gm_allocation_proposed: proposed.gm_bps > 0,
+      single_topup_within_limit: quote.tao_path.amount_rao <= proposed.max_single_topup_rao,
+      price_impact_within_limit: quoteImpact <= proposed.max_slippage_bps,
+      linked_wallet_verified: false,
+      current_payment_instructions_verified: false,
+      daily_spend_reconciled: false,
+    },
+  }
+}
+
+export async function fetchTreasuryQuote(rawInput: unknown) {
+  const input = treasuryQuoteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/treasury-quote?source_alpha_rao=${input.sourceAlphaRao}`,
+  )
+  return treasuryQuoteSchema.parse(payload)
+}
+
+export async function fetchTreasurySettings() {
+  return treasuryControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-settings'))
+}
+
+export async function recordTreasurySettings(rawInput: unknown, actor: string) {
+  const input = recordTreasurySettingsInputSchema.parse(rawInput)
+  const revision = await platformAdminRequest('/api/v1/admin/treasury-settings', {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      settings: input.settings,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  treasuryRevisionSchema.parse(revision)
+  return fetchTreasurySettings()
+}
 
 import {
   listV13BenignApprovalsInputSchema,
@@ -280,6 +336,8 @@ import {
   screenerFanoutShadowInputSchema,
   screenerFanoutShadowResponseSchema,
   l2ReportCanaryLookupInputSchema,
+  l2ReportCanaryPreflightInputSchema,
+  l2ReportCanaryPreflightViewSchema,
   scheduleL2ReportCanaryInputSchema,
   l2ReportCanaryViewSchema,
   screenerPolicyManifestControlSchema,
@@ -605,6 +663,14 @@ export async function fetchL2ReportCanary(rawInput: unknown) {
   return l2ReportCanaryViewSchema.parse(payload)
 }
 
+export async function fetchL2ReportCanaryPreflight(rawInput: unknown) {
+  const input = l2ReportCanaryPreflightInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/preflight/${input.agentId}/${input.sourceAttemptId}`,
+  )
+  return l2ReportCanaryPreflightViewSchema.parse(payload)
+}
+
 export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
   const input = scheduleL2ReportCanaryInputSchema.parse(rawInput)
   const payload = await platformAdminRequest('/api/v1/admin/screener-l2-report-canaries', {
@@ -620,6 +686,7 @@ export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
       expected_score_count: input.expectedScoreCount,
       target_node_id: input.targetNodeId,
       review_label: input.reviewLabel,
+      run_mode: input.runMode,
       confirm_report_only: true,
     },
   })

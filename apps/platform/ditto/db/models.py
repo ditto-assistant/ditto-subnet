@@ -7025,6 +7025,9 @@ class ScreenerL2ReportCanary(Base):
     expected_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
     expected_score_count: Mapped[int] = mapped_column(Integer, nullable=False)
     review_label: Mapped[str] = mapped_column(Text, nullable=False)
+    run_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="source_only"
+    )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     claimed_instance_id: Mapped[str | None] = mapped_column(Text)
     settings_revision: Mapped[int | None] = mapped_column(Integer)
@@ -7061,6 +7064,10 @@ class ScreenerL2ReportCanary(Base):
         CheckConstraint(
             "review_label IN ('candidate_clear', 'known_reject')",
             name="screener_l2_canary_label_check",
+        ),
+        CheckConstraint(
+            "run_mode IN ('source_only', 'full_runtime')",
+            name="run_mode_check",
         ),
         CheckConstraint(
             "status IN ('queued', 'leased', 'succeeded', 'incomplete', 'expired')",
@@ -8647,6 +8654,33 @@ class ContinualRetestSettingsRevision(Base):
             "parent_revision",
             name="continual_retest_settings_scope_parent_key",
         ),
+    )
+
+
+class TreasurySettingsRevision(Base):
+    """Append-only shadow policy; no validator or signer consumes it."""
+
+    __tablename__ = "treasury_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("parent_revision >= 0", name="treasury_settings_parent_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="treasury_settings_checksum_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="treasury_settings_reason_check"
+        ),
+        UniqueConstraint("parent_revision", name="treasury_settings_parent_key"),
     )
 
 
@@ -11008,4 +11042,121 @@ class AdminActivityOutcome(Base):
             "status IN ('succeeded', 'failed', 'recorded')",
             name="admin_activity_outcome_status",
         ),
+    )
+
+
+class TreasuryPublicEvent(Base):
+    """Public, append-only projection of independently verified treasury receipts.
+
+    A payment can have a finalized and a reconciled event. No credentials,
+    GM account identifiers, private billing rows, or free-form payloads belong
+    in this table. Producers must verify the chain receipt before insertion.
+    """
+
+    __tablename__ = "treasury_public_events"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    payment_id: Mapped[str] = mapped_column(Text, nullable=False)
+    event_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    finalized_event_id: Mapped[int | None] = mapped_column(BigInteger)
+    event_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    burn_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    burn_share_micros: Mapped[int] = mapped_column(Integer, nullable=False)
+    denominator: Mapped[str] = mapped_column(Text, nullable=False)
+    maintenance_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    gm_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocation_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocated_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    route: Mapped[str] = mapped_column(Text, nullable=False)
+    deposit_asset: Mapped[str] = mapped_column(Text, nullable=False)
+    deposit_amount_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    credited_usd_nano: Mapped[int | None] = mapped_column(BigInteger)
+    bounty_award_id: Mapped[str | None] = mapped_column(Text)
+    accepted_work_ref: Mapped[str | None] = mapped_column(Text)
+    public_sender: Mapped[str] = mapped_column(Text, nullable=False)
+    public_recipient: Mapped[str] = mapped_column(Text, nullable=False)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor_provenance: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_public_id: Mapped[str] = mapped_column(Text, nullable=False)
+    verification_source: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(["finalized_event_id"], ["treasury_public_events.id"]),
+        UniqueConstraint("payment_id", "state", name="treasury_public_payment_state"),
+        UniqueConstraint(
+            "block_hash",
+            "extrinsic_index",
+            "event_index",
+            "state",
+            name="treasury_public_chain_event_state",
+        ),
+        CheckConstraint(
+            "(event_kind = 'gm_token_deposit' AND state = 'chain_finalized' "
+            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NULL AND accepted_work_ref IS NULL) OR "
+            "(event_kind = 'gm_credit_purchase' AND state = 'reconciled' "
+            "AND finalized_event_id IS NOT NULL AND credited_usd_nano IS NOT NULL "
+            "AND credited_usd_nano > 0 AND bounty_award_id IS NULL "
+            "AND accepted_work_ref IS NULL) OR "
+            "(event_kind = 'maintenance_bounty' AND state = 'chain_finalized' "
+            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NOT NULL AND accepted_work_ref IS NOT NULL "
+            "AND length(bounty_award_id) BETWEEN 8 AND 120 "
+            "AND length(accepted_work_ref) BETWEEN 8 AND 240)",
+            name="treasury_public_kind",
+        ),
+        CheckConstraint(
+            "state IN ('chain_finalized', 'reconciled')", name="treasury_public_state"
+        ),
+        CheckConstraint(
+            "denominator IN ('miner_emission', 'released_miner_emission')",
+            name="treasury_public_denominator",
+        ),
+        CheckConstraint(
+            "maintenance_bps BETWEEN 0 AND 10000 AND "
+            "gm_bps BETWEEN 0 AND 10000 AND "
+            "allocation_bps BETWEEN 0 AND 10000 AND "
+            "allocated_alpha_rao >= 0 AND source_alpha_rao > 0 AND "
+            "burn_revision >= 0 AND burn_share_micros BETWEEN 0 AND 1000000",
+            name="treasury_public_allocation",
+        ),
+        CheckConstraint(
+            "(event_kind = 'maintenance_bounty' AND allocation_bps = maintenance_bps) "
+            "OR (event_kind <> 'maintenance_bounty' AND allocation_bps = gm_bps)",
+            name="treasury_public_purpose_allocation",
+        ),
+        CheckConstraint(
+            "deposit_amount_atomic > 0 AND "
+            "deposit_asset IN ('TAO', 'SN28_ALPHA', 'SN118_ALPHA')",
+            name="treasury_public_amounts",
+        ),
+        CheckConstraint(
+            "route IN ('alpha_to_tao', 'alpha_to_gm_alpha', "
+            "'alpha_transfer', 'alpha_to_tao_bounty')",
+            name="treasury_public_route",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0 AND event_index >= 0", name="treasury_public_indexes"
+        ),
+        CheckConstraint(
+            "actor_provenance IN "
+            "('treasury_signer', 'gm_reconciler', 'bounty_executor')",
+            name="treasury_public_actor_provenance",
+        ),
+        CheckConstraint(
+            "length(actor_public_id) BETWEEN 3 AND 120",
+            name="treasury_public_actor_id",
+        ),
+        CheckConstraint(
+            "verification_source IN "
+            "('finalized_chain_rpc', 'chain_and_provider_reconciliation')",
+            name="treasury_public_verification_source",
+        ),
+        Index("treasury_public_event_at_idx", "event_at", "id"),
     )

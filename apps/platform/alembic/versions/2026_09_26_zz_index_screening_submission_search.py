@@ -1,8 +1,8 @@
 """index agent name and payment coldkey for screening-submission search
 
 Revision ID: 7bc0400d90c2
-Revises: 9e4c7a1b6d20
-Create Date: 2026-09-25
+Revises: f9c3a2b671d4
+Create Date: 2026-09-26
 
 ``GET /admin/screening-submissions`` filters by exact ``agent_name``, literal
 ``agent_name_prefix``, and payment-time ``miner_coldkey`` (#560). ``agents`` had
@@ -33,7 +33,7 @@ from alembic import op
 from ditto.db.migration_lock import MAX_ATTEMPTS, backoff_delay, is_retryable, sqlstate
 
 revision: str = "7bc0400d90c2"
-down_revision: str | Sequence[str] | None = "9e4c7a1b6d20"
+down_revision: str | Sequence[str] | None = "f9c3a2b671d4"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

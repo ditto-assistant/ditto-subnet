@@ -37,7 +37,7 @@ MAX_GRAPH_NODES = 1_000
 MAX_GRAPH_SAMPLES = 300
 MAX_INTEGRITY_HITS_PER_SURFACE = 32
 MAX_SCORER_FLOWS = 48
-MAX_FUNCTION_DIFFS = 256
+MAX_FUNCTION_DIFFS = 512
 SOURCE_SUFFIXES = {
     ".c",
     ".cc",
@@ -96,7 +96,9 @@ SCORED_FIELD = re.compile(
     r"(?:^|_)(?:answer|abstain|final_text|tool_calls?)(?:$|_)", re.I
 )
 SCORE_CONTROL = re.compile(
-    r"(?:score|scoring|scorer|a[_-]?b|ab[_-]?(?:test|score|result)|on[_-]?chain|"
+    # A/B is a standalone control, not the "ab" inside available/stable.
+    r"(?:score|scoring|scorer|(?<![A-Za-z0-9_])a[_-]?b(?![A-Za-z0-9_])|"
+    r"a[_-]?b[_-]?(?:test|score|result)|on[_-]?chain|"
     r"canary|composite|leaderboard|benchmark|grader)",
     re.I,
 )

@@ -2064,6 +2064,9 @@ describe('L2 report canary read schema', () => {
     expect(l2ReportCanaryViewSchema.parse({ ...view, lease_expires_at }).lease_expires_at)
       .toBe(lease_expires_at)
     expect(l2ReportCanaryViewSchema.parse(view).lease_expires_at).toBeUndefined()
+    expect(l2ReportCanaryViewSchema.parse(view).run_mode).toBe('source_only')
+    expect(l2ReportCanaryViewSchema.parse({ ...view, run_mode: 'full_runtime' }).run_mode)
+      .toBe('full_runtime')
   })
 })
 
@@ -2234,6 +2237,18 @@ describe('screener review settings schemas', () => {
 })
 
 describe('screen review audit schema', () => {
+  it('keeps the fixed L3 no-tool subtype in the operator diagnostic', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l3-adjudicator-model-tool-contract',
+      prompt_revision: 'l2-safety-v13', max_steps: 256, steps_used: 3,
+      final_stage: 'adjudicator', model_tool_failure_subcode: 'no_tool_call_after_corrections',
+    }
+    expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_tool_failure_subcode: 'model response text',
+    })).toThrow()
+  })
+
   it('accepts the configured L2 step and output ceilings', () => {
     const audit = {
       stage: 'l2', reason_code: 'l2-model-inconclusive', prompt_revision: 'l2-v13',

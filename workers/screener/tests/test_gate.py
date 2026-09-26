@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -636,6 +636,7 @@ async def _screen(  # type: ignore[no-untyped-def]
     policy_only=False,
     policy_version=SCREENING_POLICY_VERSION,
     record_archive_verification=None,
+    execution_namespace=None,
 ):
     return await gate.screen(
         agent_id=_AGENT,
@@ -649,6 +650,7 @@ async def _screen(  # type: ignore[no-untyped-def]
         policy_only=policy_only,
         policy_version=policy_version,
         record_archive_verification=record_archive_verification,
+        execution_namespace=execution_namespace,
     )
 
 
@@ -1214,6 +1216,39 @@ async def test_default_v6_builds_and_health_checks_without_run(
     assert not any("http://harness:8080/run" in arg for call in calls for arg in call)
 
 
+async def test_canary_execution_uses_separate_docker_names_and_cannot_publish(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    namespace = uuid4()
+    async with gate._client:
+        result = await _screen(
+            gate,
+            hashlib.sha256(tarball).hexdigest(),
+            execution_namespace=namespace,
+        )
+
+        async def publish(_image: BuiltImageArtifact) -> None:
+            raise AssertionError("isolated canary cannot publish")
+
+        with pytest.raises(ValueError, match="isolated execution"):
+            await gate.screen(
+                agent_id=_AGENT,
+                attempt_id=_ATTEMPT,
+                bench_version=13,
+                miner_hotkey=_MINER,
+                sha256=hashlib.sha256(tarball).hexdigest(),
+                download_url=_URL,
+                execution_namespace=namespace,
+                publish_image=publish,
+            )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert any(namespace.hex in arg for call in calls for arg in call)
+
+
 async def test_archive_receipt_follows_verified_contract_only(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1473,6 +1508,7 @@ class _SafeStaticLeadReviewer:
             risk_level="low",
             finding_digest="a" * 64,
             categories=("none",),
+            clearance_certified=True,
             finding={
                 "prompt_revision": "l3-sol-adversarial-critic-v3",
                 "risk_level": "low",
@@ -1534,6 +1570,39 @@ async def test_l3_cleared_static_lead_can_continue_to_build(
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
     assert any(call[0] == "build" for call in calls)
+
+
+async def test_v13_uncertified_static_preflight_low_holds_before_build(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
+            "scripts/local-only.sh": (
+                b'path="/var/run/docker.sock"\nconnect_control_socket "$path"\n'
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+
+    class UncertifiedReviewer(_SafeStaticLeadReviewer):
+        async def resolve_lead(
+            self, *_args: Any, **_kwargs: Any
+        ) -> SourceReviewObservation:
+            cleared = await super().resolve_lead(*_args, **_kwargs)
+            return SourceReviewObservation(
+                **{**cleared.__dict__, "clearance_certified": False}
+            )
+
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    gate._source_reviewer = UncertifiedReviewer()  # type: ignore[assignment]
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), policy_version=13
+        )
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert result.evidence[0].code == "source-review-clearance-unproven"
+    assert not any(call[0] == "build" for call in calls)
 
 
 async def test_v13_l4_cleared_static_lead_holds_before_build(
@@ -1615,6 +1684,7 @@ class _StubReviewer:
             risk_level="low",
             finding_digest=None,
             categories=("none",),
+            clearance_certified=True,
         )
 
 
@@ -1633,6 +1703,7 @@ class _TransportSettlingReviewer(_StubReviewer):
             risk_level="low",
             finding_digest="a" * 64,
             categories=("none",),
+            clearance_certified=True,
             notes=(
                 {
                     "kind": "observation",
