@@ -18,6 +18,7 @@ from ditto.api_models.weight_receipt import (
     weight_receipt_digest,
     weight_vector_digest,
 )
+from ditto.validator.errors import WeightReceiptConflictError
 
 logger = logging.getLogger(__name__)
 
@@ -186,9 +187,10 @@ class WeightReceiptRelay:
                             deferred_stage,
                             page_deferred=self.diagnostics.page_deferred + 1,
                         )
-                        logger.warning(
-                            "individual weight receipt deferred: %s", type(exc).__name__
-                        )
+                        reason = type(exc).__name__
+                        if isinstance(exc, WeightReceiptConflictError):
+                            reason += f"({exc.code})"
+                        logger.warning("individual weight receipt deferred: %s", reason)
                 stage = "validating_page"
                 next_cursor = page.get("next_after_task_id")
                 if next_cursor is not None and (

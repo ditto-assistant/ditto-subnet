@@ -565,6 +565,100 @@ async def test_same_block_reveal_pays_exact_submission_before_new_same_hotkey_cl
     )
 
 
+async def test_v467_transition_recovers_on_the_second_archive(
+    app, session_maker, monkeypatch
+):
+    from ditto.chain.errors import ChainEmissionReceiptUnavailable
+    from ditto.db.models import SourceEmissionCollectorCursor, SourceEmissionPayout
+
+    previous = "0xff4ba0da10fb8ac26fab3e446f23413ef7f91de4a604802097ece0b928d53a8e"
+    runtime = "0x2f175dcc64196ec8a6b9235f8d7cfd84efef6c68bb925c4455949591cef9f6d2"
+    cursor_block = 9095775
+    a, _ = await _prepare(app, session_maker)
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        cursor.block = cursor_block
+        cursor.block_hash = _hash(cursor_block)
+        cursor.runtime_code_hash = previous
+    collector = _collector(app, session_maker)
+    opened = []
+
+    def observed(block, *, payout=False, reset=None):
+        base = _observed(a, block, payout=payout)
+        return SourceEmissionBlock(
+            base.block,
+            base.block_hash,
+            base.parent_hash,
+            False if reset else base.is_payout,
+            () if reset else base.updates,
+            base.voting_stake,
+            base.vector_digests,
+            runtime,
+            reset,
+        )
+
+    class Archive:
+        def __init__(self, *, url):
+            self.url = url
+
+        async def __aenter__(self):
+            opened.append(self.url)
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get_chain_finalised_head(self):
+            return _hash(cursor_block + 3)
+
+        async def get_block_header(self, **_kwargs):
+            return {"header": {"number": cursor_block + 3}}
+
+    async def read(substrate, *, netuid, block, expected_runtime_code_hash=None):
+        assert netuid == a["netuid"]
+        assert expected_runtime_code_hash is None
+        if substrate.url == "pruned":
+            raise ValueError(f"runtime fingerprint is not audited: {runtime}")
+        if block == cursor_block + 1:
+            return observed(block, reset="runtime_changed")
+        if block == cursor_block + 2:
+            return observed(block)
+        return observed(block, payout=True)
+
+    async def receipt(*_args, **_kwargs):
+        raise ChainEmissionReceiptUnavailable("historical receipt is unavailable")
+
+    app.state.chain = SimpleNamespace(
+        _historical_substrate_urls=lambda: ["pruned", "archive"],
+        _safe_rpc_error=lambda error: str(error),
+        get_miner_emission_receipt=receipt,
+    )
+    monkeypatch.setattr("async_substrate_interface.AsyncSubstrateInterface", Archive)
+    monkeypatch.setattr(
+        "ditto.api_server.source_emission_collector.read_source_emission_block",
+        read,
+    )
+    await collector.sweep()
+    assert opened == ["pruned", "archive"]
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        assert cursor.block == cursor_block + 3
+        assert cursor.block_hash == _hash(cursor_block + 3)
+        assert cursor.runtime_code_hash == runtime
+        assert cursor.last_blocked_reason is None
+        payout = await session.get(
+            SourceEmissionPayout, (a["netuid"], _hash(cursor_block + 3))
+        )
+        assert payout is not None and payout.terminal is True
+        assert payout.proof["runtime_code_hash"] == runtime
+        assert (
+            await session.get(
+                SourceEmissionPayout, (a["netuid"], _hash(cursor_block + 1))
+            )
+            is None
+        )
+
+
 async def test_pending_payout_resolves_before_failing_block_scan(
     app, client, session_maker, monkeypatch
 ):

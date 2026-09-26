@@ -1300,6 +1300,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/inference-admission-rejections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Admission Rejections
+         * @description Counts and recent rows. Bodies, prompts, and credentials are not stored.
+         */
+        get: operations["list_admission_rejections_api_v1_admin_inference_admission_rejections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/inference-concurrency-settings": {
         parameters: {
             query?: never;
@@ -1342,7 +1362,9 @@ export interface paths {
          *
          *     ``/admin/inference-runtime-metrics`` already reports failures per lane per
          *     window; this splits the same bounded windows by the dimensions an upstream
-         *     rate-limit burst actually moves. Counts and identifiers only.
+         *     rate-limit burst actually moves, and flags a report-only five-minute
+         *     ``upstream_http_429`` burst per lane with the tickets it touched. Counts
+         *     and identifiers only.
          */
         get: operations["get_inference_failure_taxonomy_api_v1_admin_inference_failure_taxonomy_get"];
         put?: never;
@@ -1850,6 +1872,26 @@ export interface paths {
          * @description Queue one exact source once; this never reopens a screening attempt.
          */
         post: operations["schedule_l2_report_canary_api_v1_admin_screener_l2_report_canaries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screener-l2-report-canaries/preflight/{agent_id}/{source_attempt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get L2 Report Canary Preflight
+         * @description Expose exact guard inputs; scheduling still rechecks them under a lock.
+         */
+        get: operations["get_l2_report_canary_preflight_api_v1_admin_screener_l2_report_canaries_preflight__agent_id___source_attempt_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4282,6 +4324,9 @@ export interface paths {
         /**
          * Accept Link Decide
          * @description Consume the single-use accept token: accept → authenticated, else failed.
+         *
+         *     The token is read only from the form body, so the answering request's
+         *     URL (and the history entry it leaves) carries just ``attempt``.
          */
         post: operations["accept_link_decide_api_v1_miner_auth_ditto_accept_post"];
         delete?: never;
@@ -13292,6 +13337,8 @@ export interface components {
             replacement_allowed: boolean;
             /** Replacement Pending */
             replacement_pending: boolean;
+            /** Replacement Queued */
+            replacement_queued: boolean;
             /** Replacement Reason */
             replacement_reason: string | null;
             /** Replacement Request Id */
@@ -14154,6 +14201,13 @@ export interface components {
              * @enum {string}
              */
             relay_delay_fingerprint_mode: "off" | "shadow";
+        };
+        /** Body_accept_link_decide_api_v1_miner_auth_ditto_accept_post */
+        Body_accept_link_decide_api_v1_miner_auth_ditto_accept_post: {
+            /** Decision */
+            decision: string;
+            /** T */
+            t: string;
         };
         /** Body_set_miner_avatar_api_v1_miner_avatars_post */
         Body_set_miner_avatar_api_v1_miner_avatars_post: {
@@ -19809,6 +19863,54 @@ export interface components {
              */
             weight_eligible: false;
         };
+        /** InferenceAdmissionRejectionRow */
+        InferenceAdmissionRejectionRow: {
+            /** Admission Code */
+            admission_code: string;
+            /** Byte Limit */
+            byte_limit: number | null;
+            /**
+             * Correlation Id
+             * Format: uuid
+             */
+            correlation_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Grant Id */
+            grant_id: string | null;
+            /** Http Status */
+            http_status: number;
+            /** Lane */
+            lane: string;
+            /** Platform Revision */
+            platform_revision: string;
+            /**
+             * Rejection Id
+             * Format: uuid
+             */
+            rejection_id: string;
+            /** Request Bytes */
+            request_bytes: number;
+            /** Validator Hotkey */
+            validator_hotkey: string | null;
+        };
+        /** InferenceAdmissionRejectionSummary */
+        InferenceAdmissionRejectionSummary: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Rows */
+            rows: components["schemas"]["InferenceAdmissionRejectionRow"][];
+        };
         /** InferenceCalibrationRoute */
         InferenceCalibrationRoute: {
             /** Model */
@@ -20185,6 +20287,8 @@ export interface components {
              * Format: date-time
              */
             observed_at: string;
+            /** Rate Limit Bursts */
+            rate_limit_bursts: components["schemas"]["InferenceRateLimitBurst"][];
             /** Window Seconds */
             window_seconds: number[];
         };
@@ -20280,6 +20384,64 @@ export interface components {
             tokens_per_second: number;
             /** Window Seconds */
             window_seconds: number;
+        };
+        /**
+         * InferenceRateLimitBurst
+         * @description Report-only five-minute upstream rate-limit signal for one lane.
+         *
+         *     ``active`` means the lane's ``upstream_http_429`` count reached the
+         *     provisional ``threshold`` while the local global in-flight peak stayed below
+         *     the configured limit -- the upstream pool, not Ditto's own admission, was
+         *     the bottleneck. Nothing is enforced, rerouted, or retried on it.
+         */
+        InferenceRateLimitBurst: {
+            /** Active */
+            active: boolean;
+            /** Global Concurrency Limit */
+            global_concurrency_limit: number;
+            /** Peak Global Concurrency */
+            peak_global_concurrency: number;
+            /** Rate Limited Failures */
+            rate_limited_failures: number;
+            /**
+             * Request Kind
+             * @enum {string}
+             */
+            request_kind: "chat" | "embedding";
+            /** Threshold */
+            threshold: number;
+            /** Tickets */
+            tickets: components["schemas"]["InferenceRateLimitedTicket"][];
+            /** Tickets Total */
+            tickets_total: number;
+            /** Tickets Truncated */
+            tickets_truncated: boolean;
+            /** Window Seconds */
+            window_seconds: number;
+        };
+        /**
+         * InferenceRateLimitedTicket
+         * @description One validator ticket whose calls hit ``upstream_http_429`` in the window.
+         */
+        InferenceRateLimitedTicket: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Rate Limited Failures */
+            rate_limited_failures: number;
+            /** Slot Id */
+            slot_id: string;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /** InferenceRouteView */
         InferenceRouteView: {
@@ -20739,6 +20901,34 @@ export interface components {
         L2CanaryCompleteResponse: {
             /** Accepted */
             accepted: boolean;
+        };
+        /**
+         * L2CanaryPreflightView
+         * @description Current values of the scheduler's exact-source guards, before its recheck.
+         */
+        L2CanaryPreflightView: {
+            /** Agent Artifact Sha256 */
+            agent_artifact_sha256: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Arrival Bench Version */
+            arrival_bench_version: number;
+            /** Attempt Policy Version */
+            attempt_policy_version: number;
+            /** Score Row Count */
+            score_row_count: number;
+            /** Source Attempt Artifact Sha256 */
+            source_attempt_artifact_sha256: string | null;
+            /**
+             * Source Attempt Id
+             * Format: uuid
+             */
+            source_attempt_id: string;
         };
         /** L2CanaryScheduleRequest */
         L2CanaryScheduleRequest: {
@@ -22859,10 +23049,17 @@ export interface components {
          *     infrastructure failure is retried automatically with backoff, no earlier than
          *     that time. After too many consecutive failures, or a long park, it reports
          *     ``stuck`` and needs a guarded retry like any other.
+         *
+         *     ``lane`` names the admission lane (image build, runtime smoke, or source
+         *     review) the latest attempt is in or stopped in, and is null whenever
+         *     Platform holds no evidence for it (no attempt yet, a worker-local lane, or
+         *     a failure that names no lane).
          */
         PublicAdmissionRetry: {
             /** Attempt Count */
             attempt_count: number;
+            /** Lane */
+            lane?: ("build" | "runtime_smoke" | "source_review") | null;
             /**
              * Last Failure Infrastructure
              * @default false
@@ -23991,7 +24188,7 @@ export interface components {
             quality_factors?: components["schemas"]["PublicBenchmarkQualityFactor"][];
             /**
              * Token Efficiency Multiplier
-             * @description Benchmark-v5 token multiplier; null when token efficiency does not apply or was unavailable.
+             * @description Signed token multiplier (a neutral 1.0 under the bench v7+ quality-only contract); null when it was unavailable.
              */
             token_efficiency_multiplier?: number | null;
             /**
@@ -26591,7 +26788,8 @@ export interface components {
         };
         /**
          * PublicTokenEfficiency
-         * @description Auditable v5 relay-token waste penalty.
+         * @description Auditable relay-token decision: the v5 waste penalty, or the neutral
+         *     bench v7+ quality-only record that meters usage without scoring it.
          */
         PublicTokenEfficiency: {
             /** Adjusted Composite */
@@ -28591,6 +28789,8 @@ export interface components {
             model_disposition?: "inconclusive" | null;
             /** Model Steps Observed */
             model_steps_observed?: number | null;
+            /** Model Tool Failure Subcode */
+            model_tool_failure_subcode?: ("invalid_submit_call_id" | "no_tool_call_after_corrections" | "malformed_tool_arguments_json" | "invalid_tool_call_shape") | null;
             /** Output Tokens Used */
             output_tokens_used?: number | null;
             /** Prompt Revision */
@@ -37037,6 +37237,39 @@ export interface operations {
             };
         };
     };
+    list_admission_rejections_api_v1_admin_inference_admission_rejections_get: {
+        parameters: {
+            query: {
+                grant_id: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InferenceAdmissionRejectionSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_settings_api_v1_admin_inference_concurrency_settings_get: {
         parameters: {
             query?: never;
@@ -37953,6 +38186,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["L2CanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_l2_report_canary_preflight_api_v1_admin_screener_l2_report_canaries_preflight__agent_id___source_attempt_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+                source_attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["L2CanaryPreflightView"];
                 };
             };
             /** @description Validation Error */
@@ -42603,14 +42870,16 @@ export interface operations {
         parameters: {
             query: {
                 attempt: string;
-                t: string;
-                decision: string;
             };
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_accept_link_decide_api_v1_miner_auth_ditto_accept_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

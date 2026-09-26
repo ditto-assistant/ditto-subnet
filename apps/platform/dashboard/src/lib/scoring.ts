@@ -1357,12 +1357,13 @@ export function qualityGateChipLabel(b: CompositeBreakdown | null | undefined): 
 /**
  * Token-penalty chip (5648–5658): penalized when penalty > 0.00005; label
  * `"token −" + (penalty * 100).toFixed(1) + "%"` or "token no penalty".
- * Null when the breakdown carries no token_penalty at all.
+ * Null when the breakdown carries no token_penalty at all, or when its token
+ * contract cannot penalize (the neutral bench v7+ quality-only record).
  */
 export function tokenPenaltyChipLabel(
   b: CompositeBreakdown | null | undefined,
 ): { label: string; penalized: boolean } | null {
-  if (!b || b.token_penalty == null) return null;
+  if (!b || b.token_penalty == null || b.maximum_token_penalty === 0) return null;
   const penalty = Math.max(0, Number(b.token_penalty) || 0);
   const penalized = penalty > 0.00005;
   return {

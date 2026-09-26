@@ -53,3 +53,55 @@ async def test_quote_surface(
     assert response.headers["cache-control"] == "no-store"
     assert response.json()["execution_enabled"] is False
     assert calls == [1_000_000_000]
+
+
+async def test_gm_alpha_path_impact_compounds_both_hops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # DITTO->TAO loses 100 bps and TAO->SN28 loses another 100 bps. The GM route
+    # pays both, so it reports the compounded 199 bps, not the last hop's 100.
+    import bittensor as bt
+
+    class _Pool:
+        def __init__(self, received: int, lost: int) -> None:
+            self._swap = (bt.Balance.from_rao(received), bt.Balance.from_rao(lost))
+
+        def alpha_to_tao_with_slippage(self, _amount: object) -> tuple:
+            return self._swap
+
+        def tao_to_alpha_with_slippage(self, _tao: object) -> tuple:
+            return self._swap
+
+    class _Substrate:
+        async def get_chain_finalised_head(self) -> str:
+            return "0x" + "b" * 64
+
+        async def get_block_number(self, _block_hash: str) -> int:
+            return 7
+
+    pools = {118: _Pool(9_900, 100), 28: _Pool(19_800, 200)}
+
+    class _Chain:
+        substrate = _Substrate()
+
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "_Chain":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def subnet(self, netuid: int, *, block_hash: str) -> _Pool:
+            # Both pools must be read at the same finalized block.
+            assert block_hash == "0x" + "b" * 64
+            return pools[netuid]
+
+    monkeypatch.setattr(admin_treasury_quote.bt, "AsyncSubtensor", _Chain)
+
+    quote = await admin_treasury_quote._read_quote(10_000)
+
+    assert quote["tao_path"]["price_impact_bps"] == 100
+    assert quote["gm_alpha_path"]["price_impact_bps"] == 199
+    assert quote["gm_alpha_path"]["amount_rao"] == 19_800

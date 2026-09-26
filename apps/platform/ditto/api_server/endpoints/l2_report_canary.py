@@ -19,6 +19,7 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryClaimResponse,
     L2CanaryCompleteRequest,
     L2CanaryCompleteResponse,
+    L2CanaryPreflightView,
     L2CanaryScheduleRequest,
     L2CanaryView,
 )
@@ -117,10 +118,13 @@ def _valid_report(row: ScreenerL2ReportCanary, report: dict) -> bool:
             expected_challenge_status = "completed"
         if report.get("challenge_status") != expected_challenge_status:
             return False
+    allowed_review_modes = (
+        {"shadow", "enforce_preview"} if row.run_mode == "full_runtime" else {"shadow"}
+    )
     return (
         report.get("kind") == "l2_report_canary_v1"
         and report.get("authority") == "none"
-        and report.get("review_mode") == "shadow"
+        and report.get("review_mode") in allowed_review_modes
         and report.get("canary_id") == str(row.canary_id)
         and report.get("agent_id") == str(row.agent_id)
         and report.get("source_attempt_id") == str(row.source_attempt_id)
@@ -195,6 +199,36 @@ async def _exact_source(
     ):
         raise HTTPException(status_code=409, detail="canary exact-source guard changed")
     return agent, attempt
+
+
+@admin_router.get(
+    "/preflight/{agent_id}/{source_attempt_id}", response_model=L2CanaryPreflightView
+)
+async def get_l2_report_canary_preflight(
+    agent_id: UUID,
+    source_attempt_id: UUID,
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> L2CanaryPreflightView:
+    """Expose exact guard inputs; scheduling still rechecks them under a lock."""
+    response.headers["Cache-Control"] = "no-store"
+    agent = await session.get(Agent, agent_id)
+    attempt = await session.get(ScreeningAttempt, source_attempt_id)
+    if agent is None or attempt is None or attempt.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="canary source not found")
+    return L2CanaryPreflightView(
+        agent_id=agent_id,
+        source_attempt_id=source_attempt_id,
+        agent_artifact_sha256=agent.sha256.lower(),
+        source_attempt_artifact_sha256=(
+            attempt.artifact_sha256.lower() if attempt.artifact_sha256 else None
+        ),
+        agent_status=agent.status.value,
+        attempt_policy_version=attempt.policy_version,
+        arrival_bench_version=await arrival_bench_version(session, agent=agent),
+        score_row_count=await _score_count(session, agent_id),
+    )
 
 
 @admin_router.post("", response_model=L2CanaryView)
@@ -345,20 +379,24 @@ async def claim_l2_report_canary(
         )
         if active:
             return None
-        row = await session.scalar(
-            select(ScreenerL2ReportCanary)
-            .where(
-                ScreenerL2ReportCanary.target_node_id == node_id,
-                ScreenerL2ReportCanary.status == "queued",
-            )
-            .order_by(ScreenerL2ReportCanary.created_at)
-            .with_for_update(skip_locked=True)
+        queued = select(ScreenerL2ReportCanary).where(
+            ScreenerL2ReportCanary.target_node_id == node_id,
+            ScreenerL2ReportCanary.status == "queued",
         )
-        if row is None:
-            return None
-        if row.run_mode == "full_runtime" and not await _full_runtime_worker_ready(
+        if not await _full_runtime_worker_ready(
             session, node=node, now=now, instance_id=payload.instance_id
         ):
+            # Leave full-runtime rows for an adopted worker rather than
+            # returning nothing: scheduling accepts any adopted worker on the
+            # node, so the oldest row may be one this caller can never take,
+            # and it must not block the source-only rows queued behind it.
+            queued = queued.where(ScreenerL2ReportCanary.run_mode != "full_runtime")
+        row = await session.scalar(
+            queued.order_by(ScreenerL2ReportCanary.created_at).with_for_update(
+                skip_locked=True
+            )
+        )
+        if row is None:
             return None
         try:
             agent, _ = await _exact_source(session, row)

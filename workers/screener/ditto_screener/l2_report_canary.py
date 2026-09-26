@@ -48,7 +48,9 @@ def _identity_report(
     return {
         "kind": "l2_report_canary_v1",
         "authority": "none",
-        "review_mode": "shadow",
+        "review_mode": (
+            "enforce_preview" if claim.run_mode == "full_runtime" else "shadow"
+        ),
         "canary_id": str(claim.canary_id),
         "agent_id": str(claim.agent_id),
         "source_attempt_id": str(claim.source_attempt_id),
@@ -69,10 +71,20 @@ def _report(
     *,
     claim: L2CanaryClaim,
     decision: Any,
-    shadow: Any | None,
+    l2_result: Any | None,
     settings: EffectiveReviewSettings,
+    l1_observation: Any | None = None,
 ) -> dict[str, Any]:
     report = _identity_report(claim, settings)
+    if l1_observation is not None:
+        report["l1"] = {
+            "ok": l1_observation.ok,
+            "risk_level": l1_observation.risk_level,
+            "categories": list(l1_observation.categories),
+            "clearance_certified": l1_observation.clearance_certified,
+            "finding_digest": l1_observation.finding_digest,
+            "finding": l1_observation.finding,
+        }
     report["decision_outcome"] = str(decision.outcome)
     codes = [item.code for item in decision.evidence]
     report["decision_evidence_codes"] = codes
@@ -98,10 +110,10 @@ def _report(
         report["challenge_status"] = "inconclusive"
     else:
         report["challenge_status"] = "completed"
-    if shadow is None:
+    if l2_result is None:
         report["l2"] = None
         return report
-    observation = shadow.observation
+    observation = l2_result.observation
     report["l2"] = {
         "ok": observation.ok,
         "risk_level": observation.risk_level,
@@ -113,16 +125,16 @@ def _report(
         "finding": observation.finding,
         "review_audit": observation.review_audit,
         "notes": list(observation.notes),
-        "usage": asdict(shadow.usage),
-        "cache_hit": shadow.cache_hit,
-        "response_models": list(shadow.response_models),
-        "response_providers": list(shadow.response_providers),
-        "resolution_basis": shadow.resolution_basis,
-        "clearance_path": shadow.clearance_path,
-        "critic_disposition": shadow.critic_disposition,
-        "dossier_complete": shadow.dossier_complete,
-        "direct_clear_graph_complete": shadow.direct_clear_graph_complete,
-        "failure_subcode": shadow.failure_subcode,
+        "usage": asdict(l2_result.usage),
+        "cache_hit": l2_result.cache_hit,
+        "response_models": list(l2_result.response_models),
+        "response_providers": list(l2_result.response_providers),
+        "resolution_basis": l2_result.resolution_basis,
+        "clearance_path": l2_result.clearance_path,
+        "critic_disposition": l2_result.critic_disposition,
+        "dossier_complete": l2_result.dossier_complete,
+        "direct_clear_graph_complete": l2_result.direct_clear_graph_complete,
+        "failure_subcode": l2_result.failure_subcode,
         "inconclusive_model_audit": observation.inconclusive_model_audit,
     }
     return report
@@ -209,7 +221,7 @@ async def consume(
     )
     canary_config = replace(
         effective,
-        l2_review_mode="shadow",
+        l2_review_mode=("enforce" if claim.run_mode == "full_runtime" else "shadow"),
         l2_always_escalate=True,
         require_signed_runtime_lease=True,
         # L1 preparation may outlast the ordinary five-minute packet window.
@@ -226,11 +238,12 @@ async def consume(
         primary_gate._client,
         policy=load_policy_engine(
             canary_config.policy_manifest_file,
-            l2_mode="shadow",
+            l2_mode=canary_config.l2_review_mode,
             manifest_profile=settings.settings.policy_manifest_profile,
             rotation_id=settings.settings.policy_manifest_rotation_id,
         ),
         journal=ReviewJournal(canary_config.review_journal_file),
+        capture_enforce_result=claim.run_mode == "full_runtime",
     )
     try:
         decision = await gate.screen(
@@ -249,12 +262,21 @@ async def consume(
             ),
             policy_only=claim.run_mode == "source_only",
         )
-        shadow = gate.pop_shadow_review(claim.source_attempt_id)
-        report = _report(
-            claim=claim, decision=decision, shadow=shadow, settings=settings
+        l2_result = gate.pop_shadow_review(claim.source_attempt_id)
+        l1_observation = (
+            gate.pop_preview_l1_review(claim.source_attempt_id)
+            if claim.run_mode == "full_runtime"
+            else None
         )
-        status = "succeeded" if shadow is not None else "incomplete"
-        error_code = None if shadow is not None else "l2-not-run"
+        report = _report(
+            claim=claim,
+            decision=decision,
+            l2_result=l2_result,
+            settings=settings,
+            l1_observation=l1_observation,
+        )
+        status = "succeeded" if l2_result is not None else "incomplete"
+        error_code = None if l2_result is not None else "l2-not-run"
     except Exception:
         logger.exception("report-only L2 canary failed canary_id=%s", claim.canary_id)
         report = _identity_report(claim, settings)

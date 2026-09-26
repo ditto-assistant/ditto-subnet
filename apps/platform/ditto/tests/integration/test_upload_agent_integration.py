@@ -20,8 +20,10 @@ bucket.
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import subprocess
+import tarfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -47,7 +49,17 @@ from ditto.api_server.payment_verifier import VerifiedPayment
 pytestmark = pytest.mark.integration
 
 
-_TAR_BYTES = b"\x1f\x8b" + b"x" * 1024
+def _integration_tar() -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        data = b"FROM scratch\n"
+        info = tarfile.TarInfo("Dockerfile")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+_TAR_BYTES = _integration_tar()
 _TAR_SHA = hashlib.sha256(_TAR_BYTES).hexdigest()
 # Operator-controlled 0.04 TAO fee.
 _QUOTE_RAO = 40_000_000

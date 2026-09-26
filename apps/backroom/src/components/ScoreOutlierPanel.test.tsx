@@ -98,7 +98,7 @@ describe('ScoreOutlierPanel', () => {
       replacement_pending: true,
       replacement_deadline: '2026-07-20T20:00:00Z',
       replacement_allowed: false,
-      blocking_reason: 'replacement score is already pending',
+      blocking_reason: 'replacement ticket is already issued and pending a score',
     }
     listScoreOutliers.mockResolvedValue({ items: [pending], count: 1 })
     render(<ScoreOutlierPanel initialItems={[pending]} initialCount={1} readOnly={false} />)

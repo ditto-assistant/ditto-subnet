@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 import httpx
+from pydantic import ValidationError
 
 from ditto_screener.binary_analysis import (
     analyze_binary,
@@ -83,7 +84,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v26-policy-v13"
+        return "source-review-v27-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -347,12 +348,12 @@ _RETRYABLE_MODEL_ERROR_TYPES = frozenset(
     }
 )
 
-# A single upstream completion must not consume the whole L1 budget.  The
+# A single upstream completion must not consume the whole L1 budget. The
 # caller keeps the renewable lease deadline as the overall review budget, while
-# this cap leaves time for one fresh retry and OpenRouter's provider failover.
-# A source-review turn produces a tool call or compact verdict, not a long-form
-# answer; 45 seconds is already generous for the 4k operator output budget.
-_MAX_COMPLETION_REQUEST_SECONDS = 45.0
+# this cap leaves time for one fresh retry and provider failover. High-reasoning
+# source turns can exceed 45 seconds even on a healthy provider; that cap
+# caused two timeouts and a failed review within a 600-second aggregate budget.
+_MAX_COMPLETION_REQUEST_SECONDS = 180.0
 
 
 def _retryable_model_error_type(payload: object) -> str | None:
@@ -1924,6 +1925,8 @@ def _source_review_system_prompt(policy_version: int) -> str:
     prompt = _SYSTEM_PROMPT_HEAD + tail + batch_guidance
     if policy_version >= 13:
         prompt = prompt.replace(
+            "all seven invariants below", "all eight invariants below"
+        ).replace(
             "one decision for each I1 through I7.",
             "one decision for each I1 through I8.",
         )
@@ -3446,6 +3449,12 @@ class OpenRouterSourceReviewAgent:
                 deadline=deadline,
                 notes=notes,
                 policy_version=policy_version,
+                validate_result=lambda value: _parse_review(
+                    value,
+                    artifact_sha256=artifact_sha256,
+                    repository=repository,
+                    policy_version=policy_version,
+                ),
             )
             observation = _parse_review(
                 result,
@@ -3534,6 +3543,7 @@ class OpenRouterSourceReviewAgent:
         deadline: float | None = None,
         notes: list[dict[str, object]] | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        validate_result: Callable[[object], object] | None = None,
     ) -> tuple[object, bool]:
         if notes is None:
             notes = []
@@ -3556,12 +3566,16 @@ class OpenRouterSourceReviewAgent:
         tool_correction_used = False
         read_files: set[str] = set()
         runtime_source_read = False
+        schema_repair_turn = False
+        last_schema_error: ValueError | None = None
         if progress is not None:
             progress(0, self._max_steps)
         async with httpx.AsyncClient(
             transport=self._transport, timeout=self._timeout_seconds
         ) as client:
-            for _step in range(self._max_steps):
+            for _step in range(self._max_steps + 1):
+                if _step == self._max_steps and not schema_repair_turn:
+                    break
                 # The per-request timeout bounds one model turn; the lease
                 # deadline bounds the whole review across turns. Without the
                 # aggregate bound, max_steps slow turns could each run the full
@@ -3577,7 +3591,7 @@ class OpenRouterSourceReviewAgent:
                     or any(note.get("kind") == "concern" for note in notes)
                     or _step >= max(2, (self._max_steps * 3) // 4)
                 )
-                final_turn = _step + 1 == self._max_steps
+                final_turn = _step + 1 >= self._max_steps
                 if final_turn:
                     # Do not discard a complete review merely because the
                     # analyst kept exploring until its final allowed turn.
@@ -3662,8 +3676,26 @@ class OpenRouterSourceReviewAgent:
                             )
                         continue
                     if name == "submit_review":
+                        if validate_result is not None:
+                            try:
+                                validate_result(arguments)
+                            except ValueError as error:
+                                schema_repair_turn = True
+                                last_schema_error = error
+                                messages.append(
+                                    {
+                                        "role": "tool",
+                                        "tool_call_id": call_id,
+                                        "content": json.dumps(
+                                            _submit_review_schema_feedback(
+                                                error, arguments
+                                            )
+                                        ),
+                                    }
+                                )
+                                continue
                         if progress is not None:
-                            progress(_step + 1, self._max_steps)
+                            progress(min(_step + 1, self._max_steps), self._max_steps)
                         return arguments, (
                             inspection_calls >= 2 and runtime_source_read
                         )
@@ -3725,7 +3757,9 @@ class OpenRouterSourceReviewAgent:
                         }
                     )
                 if progress is not None:
-                    progress(_step + 1, self._max_steps)
+                    progress(min(_step + 1, self._max_steps), self._max_steps)
+        if last_schema_error is not None:
+            raise last_schema_error
         raise SourceReviewBudgetExhausted(
             "source-review-step-budget-exhausted",
             max_steps=self._max_steps,
@@ -3898,6 +3932,64 @@ def _source_review_failure_code(error: BaseException) -> str:
     if suffix is None:
         return f"source-review-{type(error).__name__.lower()}"
     return f"source-review-{suffix}"
+
+
+def _submit_review_schema_feedback(
+    error: ValueError, arguments: dict[str, object]
+) -> dict[str, object]:
+    """Give the reviewer a bounded correction without echoing untrusted output."""
+    if isinstance(error, ValidationError):
+        issues = error.errors(
+            include_url=False, include_input=False, include_context=False
+        )
+        if issues:
+            issue = issues[0]
+            location = issue.get("loc", ())
+            if (
+                len(location) >= 2
+                and location[0] == "decisions"
+                and isinstance(location[1], int)
+            ):
+                index = location[1]
+                invariants = arguments.get("invariants")
+                item = (
+                    invariants[index]
+                    if isinstance(invariants, list) and index < len(invariants)
+                    else None
+                )
+                invariant = item.get("invariant") if isinstance(item, dict) else None
+                if (
+                    issue.get("msg")
+                    == "Value error, invariant pass clause is missing or incompatible"
+                ):
+                    return {
+                        "error": "submit-review-schema",
+                        "field": f"invariants[{index}].pass_clause",
+                        "invariant": (
+                            invariant
+                            if isinstance(invariant, str)
+                            and invariant
+                            in {item.value for item in SourceReviewInvariant}
+                            else None
+                        ),
+                        "detail": (
+                            "A PASS needs a published pass_clause for this same "
+                            "invariant and served path. Choose a compatible clause "
+                            "supported by your inspection, or mark this invariant "
+                            "INCONCLUSIVE. Preserve all other findings."
+                        ),
+                        "correctable": True,
+                    }
+    return {
+        "error": "submit-review-schema",
+        "code": _source_review_failure_code(error),
+        "detail": (
+            "The submitted review did not satisfy the structured contract. "
+            "Correct its fields and resubmit; do not change a substantive "
+            "finding merely to satisfy formatting."
+        ),
+        "correctable": True,
+    }
 
 
 def _assistant_message(payload: object) -> dict[str, object]:

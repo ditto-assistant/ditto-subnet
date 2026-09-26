@@ -15,6 +15,7 @@ type Limiter struct {
 	max    int
 	window time.Duration
 	hits   map[string][]time.Time
+	sweep  time.Time        // next time idle keys are dropped
 	now    func() time.Time // injectable for tests
 }
 
@@ -29,13 +30,26 @@ func New(max int, window time.Duration) *Limiter {
 }
 
 // Allow records an event for key and reports whether it is within the limit.
-// Expired timestamps are pruned on access; empty keys are garbage-collected.
+// Expired timestamps are pruned on access. At most once per window, keys with
+// no event inside the window are dropped, so the map only holds clients seen
+// in the last two windows; each event keeps its key alive for at most two
+// sweeps, so sweeping stays O(1) amortized per call.
 func (l *Limiter) Allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := l.now()
 	cutoff := now.Add(-l.window)
+
+	if !now.Before(l.sweep) {
+		for k, ts := range l.hits {
+			// Timestamps are appended in order, so the last is the newest.
+			if len(ts) == 0 || !ts[len(ts)-1].After(cutoff) {
+				delete(l.hits, k)
+			}
+		}
+		l.sweep = now.Add(l.window)
+	}
 
 	kept := l.hits[key][:0]
 	for _, t := range l.hits[key] {

@@ -190,6 +190,7 @@ describe('Backroom MCP tools', () => {
         'get_screener_review_settings',
         'get_screener_fanout_shadow',
         'get_l2_report_canary',
+        'get_l2_report_canary_preflight',
         'get_conversation_assessments',
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
@@ -397,9 +398,12 @@ describe('Backroom MCP tools', () => {
     // The no-input outlier-escalation read adds about 360 bytes; its bounds
     // live on the Platform endpoint. With later main tools the catalog measured
     // 164,066 bytes. Four treasury policy, quote and preview tools bring the
-    // measured catalog to 167,798 bytes. Guarded ATH withdrawal adds two
-    // bounded operations; the combined catalog measures 170,497 bytes.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(171_000)
+    // measured catalog to 167,798 bytes. The exact-source canary preflight
+    // adds one bounded read; retain about 0.5 KB headroom at 169,300 bytes.
+    // The taxonomy's report-only rate_limit_bursts note adds about 80 bytes.
+    // Guarded ATH withdrawal adds two bounded operations; the combined
+    // catalog measures 171,690 bytes.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(172_200)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -427,9 +431,10 @@ describe('Backroom MCP tools', () => {
       // The one-line outlier-escalation read (79 chars; detail in tool help)
       // plus later main summaries measured 29,329. Two short treasury
       // shadow-policy descriptions bring the measured total to 29,850.
+      // The taxonomy's rate_limit_bursts catalog note measured 30,520.
       // Guarded ATH withdrawal adds two more bounded summaries; the combined
-      // descriptions measure 30,717 characters.
-      31_200,
+      // descriptions measure 30,990 characters.
+      31_450,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -1566,6 +1571,7 @@ describe('Backroom MCP tools', () => {
       ticket_status: 'scored',
       ticket_deadline: '2026-07-20T04:00:00Z',
       replacement_pending: false,
+      replacement_queued: false,
       replacement_request_id: null,
       replacement_reason: null,
       replacement_actor: null,
@@ -3687,6 +3693,29 @@ describe('Backroom MCP tools', () => {
             share_of_settled_calls: 0.0321,
           },
         ],
+        rate_limit_bursts: [
+          {
+            request_kind: 'chat',
+            window_seconds: 300,
+            rate_limited_failures: 209,
+            threshold: 100,
+            peak_global_concurrency: 31,
+            global_concurrency_limit: 96,
+            active: true,
+            tickets_total: 1,
+            tickets_truncated: false,
+            tickets: [
+              {
+                agent_id: '22222222-2222-4222-8222-222222222222',
+                bench_version: 13,
+                validator_hotkey: '5validator',
+                slot_id: 'slot-0',
+                ticket_deadline: '2026-09-22T19:00:00Z',
+                rate_limited_failures: 209,
+              },
+            ],
+          },
+        ],
       }),
     )
     vi.stubGlobal('fetch', fetchMock)
@@ -3704,6 +3733,7 @@ describe('Backroom MCP tools', () => {
     const taxonomy = readJsonResult(response) as {
       lanes: { rate_limited_failures: number }[]
       groups: { upstream_route: string | null; route_basis: string }[]
+      rate_limit_bursts: { active: boolean; tickets: { slot_id: string }[] }[]
     }
     expect(taxonomy.lanes[0]).toMatchObject({
       failed: 209,
@@ -3720,6 +3750,10 @@ describe('Backroom MCP tools', () => {
     expect(
       taxonomy.groups.some((group) => group.route_basis === 'confirmed_selected'),
     ).toBe(false)
+    expect(taxonomy.rate_limit_bursts[0]).toMatchObject({
+      active: true,
+      tickets: [{ slot_id: 'slot-0' }],
+    })
 
     await client.close()
     await server.close()

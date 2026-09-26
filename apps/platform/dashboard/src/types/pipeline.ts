@@ -293,6 +293,8 @@ export interface AdmissionRetry {
   attempt_count?: number | null;
   next_retry_at?: string | null;
   last_failure_infrastructure?: boolean | null;
+  /** "build" | "runtime_smoke" | "source_review"; null when unknown. */
+  lane?: string | null;
 }
 
 /** /public/agent/{id}/pipeline — the drawer's full history. */

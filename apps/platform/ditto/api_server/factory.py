@@ -86,6 +86,7 @@ from ditto.api_server.endpoints import (
     admin_core_qualification_router,
     admin_efficiency_bonus_settings_router,
     admin_hotkey_bans_router,
+    admin_inference_admission_router,
     admin_inference_concurrency_settings_router,
     admin_inference_observability_router,
     admin_inference_routes_router,
@@ -752,6 +753,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_policy_activation_router, prefix="/api/v1")
     app.include_router(admin_v13_private_generation_router, prefix="/api/v1")
+    app.include_router(admin_inference_admission_router, prefix="/api/v1")
     app.include_router(admin_v13_scorer_cohort_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
