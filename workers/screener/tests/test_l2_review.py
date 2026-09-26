@@ -314,7 +314,7 @@ def test_scorer_attention_is_independent_of_l1_category() -> None:
     assert _dossier_has_scorer_attention(
         {"deterministic": {"scorer_field_flow": {"truncated": True}}}
     )
-    assert not _dossier_has_scorer_attention(
+    assert _dossier_has_scorer_attention(
         {
             "deterministic": {
                 "scorer_field_flow": {
@@ -6279,6 +6279,32 @@ async def test_scorer_flow_keeps_cross_file_score_helper(
     assert not result["truncated"]
     assert result["flow_count"] == 1
     assert result["flows"][0]["field"] == "answer"
+
+
+async def test_scorer_attention_keeps_indirect_function_pointer_clear(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "run.rs").write_text(
+        "fn run(mut response: RunResponse, ab_score: f64) -> RunResponse {\n"
+        "    response.answer = Some(model_answer());\n"
+        "    let clear: fn(&mut RunResponse) = clear_answer;\n"
+        "    if ab_score > 0.9 { clear(&mut response); }\n"
+        "    response\n"
+        "}\n"
+    )
+    (source / "response.rs").write_text(
+        "fn clear_answer(response: &mut RunResponse) { response.answer = None; }\n"
+    )
+    result = json.loads(
+        await InProcessAnalyzerHarness().run(source, "scorer_field_flow", {})
+    )
+    assert result["flow_count"] == 0
+    assert not result["interprocedural_candidates"]
+    assert _dossier_has_scorer_attention(
+        {"deterministic": {"scorer_field_flow": result}}
+    )
 
 
 @pytest.mark.integration

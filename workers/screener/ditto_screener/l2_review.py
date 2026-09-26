@@ -5688,31 +5688,19 @@ def _dossier_has_scorer_attention(dossier: Mapping[str, object]) -> bool:
         return False
     if scorer_flow.get("truncated") or scorer_flow.get("sampled"):
         return True
-    for key in ("flows", "same_function_candidates", "interprocedural_candidates"):
-        if scorer_flow.get(key):
-            return True
-    controls = scorer_flow.get("score_controls")
-    clears = scorer_flow.get("field_clears")
-    populations = scorer_flow.get("field_populations")
-    if not all(isinstance(items, list) for items in (controls, clears, populations)):
-        return bool(controls or clears or populations)
-    assert isinstance(controls, list)
-    assert isinstance(clears, list)
-    assert isinstance(populations, list)
-    # A score decision and a scored field assignment in the same function need
-    # review even when no post-assignment clear exists.
-    for control in controls:
-        if not isinstance(control, Mapping):
-            return True
-        for assignment in clears + populations:
-            if not isinstance(assignment, Mapping):
-                return True
-            if (control.get("path"), control.get("function")) == (
-                assignment.get("path"),
-                assignment.get("function"),
-            ):
-                return True
-    return False
+    # Calls through pointers, traits, or macros can evade a lexical call graph.
+    # Preserve attention until an exact-source coding-agent review resolves it.
+    return any(
+        bool(scorer_flow.get(key))
+        for key in (
+            "flows",
+            "same_function_candidates",
+            "interprocedural_candidates",
+            "score_controls",
+            "field_clears",
+            "field_populations",
+        )
+    )
 
 
 def _l1_concerns_resolved(notes: tuple[Mapping[str, object], ...]) -> bool:
