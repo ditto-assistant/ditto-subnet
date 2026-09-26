@@ -500,9 +500,10 @@ fn submit() -> anyhow::Result<()> {
     let out = "dittobench-submission.tgz";
     // Never package secrets or local state: `.env` / `.env.*` hold your
     // OPENROUTER_API_KEY, `*.db` is your local Turso DB and `*.db-*` its
-    // WAL/SHM sidecars. The tarball is uploaded to the platform — keep them out.
+    // WAL/SHM sidecars. Development skills contain repository symlinks, not runtime
+    // inputs. The tarball is uploaded to the platform — keep all of these out.
     let excludes = [
-        "target", ".git", "*.tgz", "*.db", "*.db-*", ".env", ".env.*",
+        "target", ".git", "*.tgz", "*.db", "*.db-*", ".env", ".env.*", ".agents", ".claude",
     ];
     let mut cmd = std::process::Command::new("tar");
     for pat in excludes {
