@@ -2057,6 +2057,93 @@ async def test_replace_score_fails_closed_on_run_change_or_busy_validator(
     )
 
 
+async def test_replacement_detail_reports_queued_and_active_retests_consistently(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A queued re-test must not read as "no request" while also blocking one."""
+    agent_id = await _seed(retry_maker, score_count=3, composites=[0.12, 0.81, 0.83])
+    busy_agent = await _seed(retry_maker)
+    async with retry_maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.status = AgentStatus.SCORED
+        busy = await session.get(
+            ValidatorTicket, (busy_agent, _BENCH_VERSION, "validator-0")
+        )
+        assert busy is not None
+        busy.status = TicketStatus.ISSUED
+        busy.deadline = datetime.now(UTC) + timedelta(minutes=30)
+    await _seed_capable_heartbeat(retry_maker, hotkey="validator-0")
+    _install(app, retry_maker)
+    url = f"/api/v1/admin/validation-retries/{agent_id}/validators/validator-0"
+
+    none = (await client.get(url, headers=_HEADERS)).json()
+    assert none["replacement_pending"] is False
+    assert none["replacement_queued"] is False
+    assert none["replacement_request_id"] is None
+    assert none["blocking_reason"] == (
+        "validator is currently assigned to another submission"
+    )
+
+    request_id = uuid4()
+    reason = "Validator relay failure made this accepted score untrustworthy"
+    queued_response = await client.post(
+        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
+        headers=_HEADERS,
+        json={
+            "reason": reason,
+            "items": [
+                {
+                    "agent_id": str(agent_id),
+                    "request_id": str(request_id),
+                    "expected_snapshot": none["snapshot"],
+                    "expected_run_id": "run-0",
+                }
+            ],
+        },
+    )
+    assert queued_response.status_code == 200, queued_response.text
+    assert queued_response.json()["queued"] == 1
+
+    queued = (await client.get(url, headers=_HEADERS)).json()
+    assert queued["replacement_pending"] is False
+    assert queued["replacement_queued"] is True
+    assert queued["replacement_request_id"] == str(request_id)
+    assert queued["replacement_reason"] == reason
+    assert queued["replacement_actor"] == "operator"
+    assert queued["replacement_allowed"] is False
+    assert queued["blocking_reason"] == (
+        "replacement re-test is already queued behind current validator work"
+    )
+
+    async with retry_maker() as session, session.begin():
+        busy = await session.get(
+            ValidatorTicket, (busy_agent, _BENCH_VERSION, "validator-0")
+        )
+        assert busy is not None
+        busy.status = TicketStatus.SCORED
+        promoted = await activate_next_score_retest(
+            session,
+            validator_hotkey="validator-0",
+            now=datetime.now(UTC),
+            supports_version=lambda version: version == _BENCH_VERSION,
+        )
+        assert promoted is not None and promoted.agent_id == agent_id
+
+    active = (await client.get(url, headers=_HEADERS)).json()
+    assert active["replacement_pending"] is True
+    assert active["replacement_queued"] is False
+    assert active["replacement_request_id"] == str(request_id)
+    assert active["replacement_reason"] == reason
+    assert active["replacement_actor"] == "operator"
+    assert active["replacement_allowed"] is False
+    assert active["blocking_reason"] == (
+        "replacement ticket is already issued and pending a score"
+    )
+
+
 async def test_v9_contract_retest_preview_is_exact_and_includes_evaluating_agents(
     app: FastAPI,
     client: httpx.AsyncClient,

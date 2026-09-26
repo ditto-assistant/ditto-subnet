@@ -172,6 +172,7 @@ from ditto.api_models.public import (
     BenchServiceability,
     FleetAvailability,
     FleetHealth,
+    PublicAdmissionLane,
     PublicDeferredReviewTrigger,
     PublicReviewConclusion,
     PublicScreeningInvariantAssessment,
@@ -7122,6 +7123,49 @@ async def agent_summary(
     )
 
 
+# The lane each Ditto-side admission failure stopped in. Any other reason code
+# names no lane the public pipeline can vouch for.
+_ADMISSION_LANE_BY_REASON_CODE: dict[str, PublicAdmissionLane] = {
+    "docker-build-infrastructure": "build",
+    "targon-build-unavailable": "build",
+    "cloudrun-build-unavailable": "build",
+    "targon-runtime-unavailable": "runtime_smoke",
+    "cloudrun-runtime-unavailable": "runtime_smoke",
+    "targon-source-review-unavailable": "source_review",
+    "source-review-retryable-infra": "source_review",
+}
+
+
+async def _admission_lane(
+    session: AsyncSession, attempt: ScreeningAttempt
+) -> PublicAdmissionLane | None:
+    """The admission lane ``attempt`` is in or stopped in, when Platform knows.
+
+    A failure's reason code names the lane that failed. Otherwise the attempt's
+    Platform-queued image build orders the lanes: build, then runtime smoke,
+    then source review. A worker-local build or smoke leaves no row to evidence
+    its progress, so that lane stays unknown.
+    """
+    if attempt.reason_code is not None:
+        return _ADMISSION_LANE_BY_REASON_CODE.get(attempt.reason_code)
+    build = await session.scalar(
+        select(SubmissionImageBuild).where(
+            SubmissionImageBuild.attempt_id == attempt.attempt_id
+        )
+    )
+    if build is None:
+        return None
+    if build.status in ("queued", "leased", "running"):
+        return "build"
+    if build.status not in ("succeeded", "consumed"):
+        return None
+    if build.runtime_status in ("pending", "running"):
+        return "runtime_smoke"
+    if build.runtime_status == "succeeded" and not attempt.build_only:
+        return "source_review"
+    return None
+
+
 @router.get("/agent/{agent_id}/pipeline", response_model=PublicSubmissionPipeline)
 async def agent_pipeline(
     request: Request,
@@ -7207,6 +7251,12 @@ async def agent_pipeline(
             attempt_count=len(attempts),
             next_retry_at=next_retry_at,
             last_failure_infrastructure=last_failure_infrastructure,
+            # A queued submission has not entered this cycle's first lane yet.
+            lane=(
+                await _admission_lane(session, latest_attempt)
+                if latest_attempt is not None and retry_state != "queued"
+                else None
+            ),
         )
     quarantines = list(
         await session.scalars(

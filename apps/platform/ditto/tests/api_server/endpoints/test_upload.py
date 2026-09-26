@@ -709,20 +709,25 @@ class TestOpenApiInclusion:
         assert "/api/v1/upload/agent" in paths
 
 
-_GOOD_TAR_BYTES = b"\x1f\x8b" + b"x" * 1024  # gzip magic + padding
+def _tar_bytes(files: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+_DOCKERFILE = b"FROM scratch\n"
+_GOOD_TAR_BYTES = _tar_bytes({"Dockerfile": _DOCKERFILE})
 _GOOD_TAR_SHA = hashlib.sha256(_GOOD_TAR_BYTES).hexdigest()
 
 
 def _real_source_tar() -> bytes:
-    """A genuine tar.gz with a Rust source file, so the fingerprint/embedding-input
-    extractors yield real content (the junk ``_GOOD_TAR_BYTES`` decodes to None)."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        data = b"fn handle(x: i64) -> i64 {\n    let acc = x + 1;\n    acc * 2\n}\n"
-        info = tarfile.TarInfo("src/lib.rs")
-        info.size = len(data)
-        tar.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
+    """A genuine tar.gz with a root Dockerfile and a Rust source file."""
+    source = b"fn handle(x: i64) -> i64 {\n    let acc = x + 1;\n    acc * 2\n}\n"
+    return _tar_bytes({"Dockerfile": _DOCKERFILE, "src/lib.rs": source})
 
 
 _GOOD_BLOCK_HASH = "0x" + "ab" * 32
@@ -1052,6 +1057,24 @@ class TestUploadAgentHappyPath:
         assert put_kwargs["key"] == f"{agent_id}/agent.tar.gz"
         assert put_kwargs["content_type"] == "application/gzip"
         assert put_kwargs["body"] == _GOOD_TAR_BYTES
+
+    async def test_rejects_a_non_archive_before_payment_or_storage(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        deps = _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        junk = b"\x1f\x8b" + b"x" * 64
+        data, _ = _upload_agent_form(
+            keypair=kp, sha256=hashlib.sha256(junk).hexdigest()
+        )
+        files = {"agent_tar": ("harness.tar.gz", junk, "application/gzip")}
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 400
+        assert "gzip-compressed tar" in response.json()["message"]
+        deps["verifier"].verify_payment.assert_not_awaited()
+        deps["storage"].put_object.assert_not_awaited()
 
     async def test_stores_code_embedding_when_enabled(
         self, app: FastAPI, client: httpx.AsyncClient
@@ -1428,13 +1451,19 @@ class TestUploadAgentBoundaries:
     reject legitimate uploads or accept malformed ones."""
 
     async def test_size_exactly_at_cap_accepted(
-        self, app: FastAPI, client: httpx.AsyncClient
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """``_read_tar_capped_with_sha`` uses ``size > max_bytes``; this
         test pins the boundary so a refactor to ``>=`` is caught."""
         _wire_full_stack(app)
-        # gzip magic + filler up to exactly the cap.
-        at_cap = b"\x1f\x8b" + b"x" * (MAX_TARBALL_SIZE_BYTES - 2)
+        at_cap = _GOOD_TAR_BYTES
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.MAX_TARBALL_SIZE_BYTES",
+            len(at_cap),
+        )
         at_cap_sha = hashlib.sha256(at_cap).hexdigest()
         kp = bittensor.Keypair.create_from_uri("//Alice")
         _override_payment_verifier(

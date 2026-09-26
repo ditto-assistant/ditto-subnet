@@ -464,6 +464,80 @@ def test_composite_breakdown_shows_no_token_penalty_when_within_budget() -> None
     assert breakdown.token_penalty == 0.0
 
 
+def test_composite_breakdown_publishes_neutral_quality_only_token_multiplier() -> None:
+    # Byte shape of DittoBench's efficiency.ApplyForVersion for bench v7+: no
+    # baseline, and a zero budget percentile because no budget exists.
+    token_efficiency = {
+        "formula_version": "v7-quality-only-v1",
+        "budget_percentile": 0,
+        "observed_prompt_tokens": 1_000_000,
+        "observed_completion_tokens": 283_639,
+        "observed_total_tokens": 1_283_639,
+        "excess_ratio": 0,
+        "maximum_penalty": 0,
+        "minimum_multiplier": 1,
+        "multiplier": 1,
+        "raw_composite": 0.834978,
+        "adjusted_composite": 0.834978,
+        "raw_composite_stderr": 0.01,
+        "adjusted_composite_stderr": 0.01,
+        "penalty_applied": False,
+        "decision_reason": "v7_quality_only_contract",
+    }
+    details = {"token_efficiency": token_efficiency}
+
+    decision = public_endpoint._safe_token_efficiency(details)
+    breakdown = public_endpoint._composite_breakdown(
+        tool_mean=0.95,
+        memory_mean=0.9768707482,
+        final_composite=0.834978,
+        details=details,
+    )
+
+    assert decision is not None and decision.budget_percentile == 0.0
+    assert breakdown is not None
+    assert breakdown.pre_token_composite == 0.834978
+    assert breakdown.token_efficiency_multiplier == 1.0
+    assert breakdown.token_penalty == 0.0
+    assert breakdown.maximum_token_penalty == 0.0
+
+    # The zero percentile is accepted only on a record that stayed neutral.
+    token_efficiency["multiplier"] = 0.95
+    assert public_endpoint._safe_token_efficiency(details) is None
+    token_efficiency["multiplier"] = 1
+    token_efficiency["penalty_applied"] = True
+    assert public_endpoint._safe_token_efficiency(details) is None
+
+
+def test_budgeted_token_record_still_requires_a_budget_percentile() -> None:
+    details = {
+        "token_efficiency": {
+            "formula_version": "v5-relay-token-waste-p90-v1",
+            "baseline_id": "v5-baseline",
+            "baseline_total_tokens": 1_491_793,
+            "budget_percentile": 0,
+            "observed_prompt_tokens": 1_000_000,
+            "observed_completion_tokens": 283_639,
+            "observed_total_tokens": 1_283_639,
+            "excess_ratio": 0.0,
+            "maximum_penalty": 0.1,
+            "minimum_multiplier": 0.9,
+            "multiplier": 1.0,
+            "raw_composite": 0.493952,
+            "adjusted_composite": 0.493952,
+            "penalty_applied": False,
+            "decision_reason": "within_budget",
+        },
+    }
+
+    assert public_endpoint._safe_token_efficiency(details) is None
+    breakdown = public_endpoint._composite_breakdown(
+        tool_mean=0.8, memory_mean=0.8, final_composite=0.493952, details=details
+    )
+    assert breakdown is not None
+    assert breakdown.token_efficiency_multiplier is None
+
+
 def test_public_coding_shadow_keeps_absent_pending_stale_and_zero_distinct() -> None:
     now = datetime(2026, 9, 10, 20, 0, tzinfo=UTC)
     run = SimpleNamespace(

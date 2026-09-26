@@ -121,7 +121,7 @@ const BOARD_SORT_LABELS: Record<BoardSortKey, string> = {
   rank: "Rank",
   composite: "Score",
   cost: "Average run cost",
-  latency: "Latency",
+  latency: "Median case latency",
   first_seen: "Crown since",
 };
 
@@ -136,8 +136,8 @@ const MOBILE_SORT_OPTIONS: { value: string; label: string }[] = [
   { value: "composite:1", label: "Score · low to high" },
   { value: "cost:1", label: "Avg run cost · low to high" },
   { value: "cost:-1", label: "Avg run cost · high to low" },
-  { value: "latency:1", label: "Latency · fastest first" },
-  { value: "latency:-1", label: "Latency · slowest first" },
+  { value: "latency:1", label: "Median case latency · fastest first" },
+  { value: "latency:-1", label: "Median case latency · slowest first" },
   { value: "first_seen:-1", label: "Crown since · newest first" },
   { value: "first_seen:1", label: "Crown since · oldest first" },
 ];
@@ -227,10 +227,10 @@ const HEADERS: HeaderSpec[] = [
   },
   {
     key: "latency",
-    label: "Latency",
+    label: "Median case latency",
     class: "num hide-sm",
-    width: "96px",
-    tip: "Median per-case response time for the run, and how many cases were scored (a full benchmark is ~114 cases).",
+    width: "120px",
+    tip: "Median response time per case, not total run time, and how many cases the run scored. Advisory: latency does not enter the score.",
   },
   {
     key: "first_seen",
@@ -278,6 +278,17 @@ function emissionsColTip(store: LeaderboardStore): string {
         ".") +
     rankedCopy +
     tieCopy
+  );
+}
+
+/** A latency cell's tooltip, counted from its own run rather than a fixed
+ * benchmark size. */
+function caseLatencyTip(e: BoardEntry): string {
+  return (
+    fmtMs(e.median_ms as number) +
+    " median per case" +
+    (e.n != null ? " across the run's " + e.n + " scored cases" : "") +
+    ". Advisory: latency does not enter the score."
   );
 }
 
@@ -921,11 +932,12 @@ function BoardRow(props: {
           </Show>
         </td>
         <Show when={e().median_ms != null} fallback={<td class="num hide-sm lat muted">–</td>}>
-          <td class="num hide-sm lat">
+          <td class="num hide-sm lat" title={caseLatencyTip(e())}>
             {fmtMs(e().median_ms as number)}
-            <Show when={e().n != null}>
-              <div class="cases">{e().n} cases</div>
-            </Show>
+            <div class="cases">
+              median/case
+              <Show when={e().n != null}> · {e().n} cases</Show>
+            </div>
           </td>
         </Show>
         <td

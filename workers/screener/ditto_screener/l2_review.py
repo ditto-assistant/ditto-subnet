@@ -91,7 +91,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v42-policy-v13"
+        return "l2-terra-source-review-v43-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -148,10 +148,10 @@ def l2_prompt_cache_key(policy_version: int) -> str:
 
 
 L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v3"
-L2_DOSSIER_REVISION = "l1-compressed-dossier-v11"
+L2_DOSSIER_REVISION = "l1-compressed-dossier-v12"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
-L2_HARNESS_REVISION = "l2-isolated-coding-harness-v19"
+L2_HARNESS_REVISION = "l2-isolated-coding-harness-v20"
 L2_PRICING_REVISION = "openrouter-catalog-2026-08-31-terra-glm-5-2-sol-reported-cost-v3"
 L2_STARTER_MANIFESTS = tuple(
     sorted((Path(__file__).parent / "data").glob("starter-kit-provenance-*.json"))
@@ -1318,9 +1318,13 @@ def _l2_review_system_prompt(policy_version: int) -> str:
         ) from None
     prompt = _L2_SYSTEM_PROMPT_HEAD + tail + _L2_SYSTEM_PROMPT_TAIL
     if policy_version >= 13:
-        prompt = prompt.replace(
-            "exactly one decision for I1 through I7.",
-            "exactly one decision for I1 through I8.",
+        prompt = (
+            prompt.replace("every I1-I7 invariant", "every I1-I8 invariant")
+            .replace("replaces I1-I7.", "replaces I1-I8.")
+            .replace(
+                "exactly one decision for I1 through I7.",
+                "exactly one decision for I1 through I8.",
+            )
         )
     return prompt
 
@@ -2160,14 +2164,47 @@ def _finalize_without_l3(
     *,
     dossier_tools: tuple[str, ...],
     analyst_cache_hit: bool,
+    policy_version: int = 12,
+    l1_observation: SourceReviewObservation | None = None,
+    static_attention: L2RunResult | None = None,
+    dossier: Mapping[str, object] | None = None,
+    expected_model: str = L2_MODEL,
 ) -> L2RunResult:
-    """Make the paid L2 analyst authoritative when L3 is disabled."""
+    """Use the analyst alone only when v13 has independent clean coverage."""
+    if policy_version >= 13 and static_attention is not None:
+        return static_attention
+    observation = analyst.observation
+    clearance_path = "l2_only_l3_disabled"
+    clearance_gaps: tuple[str, ...] = ()
+    if policy_version >= 13 and observation.ok and observation.risk_level == "low":
+        clearance_gaps = _l2_only_clearance_gaps(
+            l1_observation, analyst, dossier, expected_model=expected_model
+        )
+        if not clearance_gaps:
+            observation = replace(observation, clearance_certified=True)
+            clearance_path = "l2_only_certified_low"
+        else:
+            observation = (
+                _carry_l1_notes(
+                    _failure("l2-only-clearance-unproven", "inconclusive"),
+                    l1_observation,
+                )
+                if l1_observation is not None
+                else _failure("l2-only-clearance-unproven", "inconclusive")
+            )
+            clearance_path = "l2_only_clearance_hold"
     return replace(
         analyst,
+        observation=observation,
         tools=dossier_tools + analyst.tools,
         critic_disposition="disabled",
-        clearance_path="l2_only_l3_disabled",
+        clearance_path=clearance_path,
         analyst_cache_hit=analyst_cache_hit,
+        failure_subcode=(
+            "+".join(clearance_gaps)
+            if clearance_path == "l2_only_clearance_hold"
+            else analyst.failure_subcode
+        ),
     )
 
 
@@ -2482,7 +2519,7 @@ def _signed_runtime_lease_matches(
     max_age_seconds: int = 300,
 ) -> bool:
     if lease is None:
-        return not (policy_version == 13 and required)
+        return not (policy_version >= 13 and required)
     age_seconds = int(time.time()) - lease.observed_at
     return (
         policy_version == 13
@@ -2621,7 +2658,8 @@ class TerraSolSourceReviewAgent:
             attempt_id=attempt_id,
             artifact_sha256=artifact_sha256,
             policy_version=policy_version,
-            required=self._require_signed_runtime_lease,
+            required=self._require_signed_runtime_lease
+            or (policy_version >= 13 and not self._l3_enabled),
             max_age_seconds=self._signed_runtime_lease_max_age_seconds,
         ):
             result = L2RunResult(
@@ -2660,7 +2698,8 @@ class TerraSolSourceReviewAgent:
                     "This describes the eligible scorer cohort at the signed "
                     "heartbeat observation time, not a selected future scorer. "
                     "Only scorer-injected variables are covered. Check image ENV, "
-                    "source defaults, runtime writes, and I1-I7 independently."
+                    "source defaults, runtime writes, and "
+                    f"I1-I{'8' if policy_version >= 13 else '7'} independently."
                 ),
             }
         elif policy_version == 13 and (
@@ -2790,6 +2829,37 @@ class TerraSolSourceReviewAgent:
                 or result.observation.failure_disposition == "inconclusive"
             ):
                 self._store_cache(cache_key, result)
+            if (
+                result.observation.error_code == "l3-adjudicator-model-tool-contract"
+                and result.failure_subcode
+                in {
+                    "invalid_submit_call_id",
+                    "no_tool_call_after_corrections",
+                    "malformed_tool_arguments_json",
+                    "invalid_tool_call_shape",
+                }
+            ):
+                # Preserve only the host's fixed contract-failure label in the
+                # existing signed audit. The private model response stays local.
+                audit = ScreenReviewAudit(
+                    stage="l2",
+                    reason_code=result.observation.error_code,
+                    prompt_revision=l2_safety_prompt_revision(policy_version),
+                    harness_revision=L2_HARNESS_REVISION,
+                    max_steps=self._max_steps,
+                    steps_used=min(len(result.response_models), self._max_steps),
+                    model_steps_observed=len(result.response_models),
+                    tool_calls_observed=len(result.tools),
+                    final_stage="adjudicator",
+                    model_tool_failure_subcode=result.failure_subcode,
+                )
+                result = replace(
+                    result,
+                    observation=replace(
+                        result.observation,
+                        review_audit=audit.model_dump(mode="json"),
+                    ),
+                )
             if result.observation.error_code == "l2-model-inconclusive":
                 # The model's bounded disposition is operational evidence, not
                 # a policy verdict. Carry only fixed labels and observed counts
@@ -2925,6 +2995,7 @@ class TerraSolSourceReviewAgent:
                 response_providers=error.response_providers,
                 clearance_path="l2_retryable_infra",
                 dossier_complete=error.dossier_complete,
+                failure_subcode=error.failure_subcode,
             )
         except L2InconclusiveError as error:
             logger.warning(
@@ -3028,6 +3099,7 @@ class TerraSolSourceReviewAgent:
                     }
                 )
             integrity_attention = False
+            static_attention: L2RunResult | None = None
             if analyst.observation.ok and analyst.observation.risk_level == "low":
                 static_attention = _served_generator_hold(
                     dossier=dossier,
@@ -3059,6 +3131,11 @@ class TerraSolSourceReviewAgent:
                     analyst,
                     dossier_tools=dossier_tools,
                     analyst_cache_hit=analyst_cache_hit,
+                    policy_version=policy_version,
+                    l1_observation=l1_observation,
+                    static_attention=static_attention,
+                    dossier=dossier,
+                    expected_model=self._model,
                 )
             # The L2 analyst has settled; every path below is L3. This is the
             # only public progress boundary inside the deep review, and it is
@@ -3130,6 +3207,7 @@ class TerraSolSourceReviewAgent:
                             clearance_path="l3_violation_adjudicator_retryable_infra",
                             dossier_complete=error.dossier_complete,
                             analyst_cache_hit=analyst_cache_hit,
+                            failure_subcode=error.failure_subcode,
                         )
                     except (
                         L2InconclusiveError,
@@ -3303,6 +3381,7 @@ class TerraSolSourceReviewAgent:
                                 clearance_path="l3_cause_disagreement_retryable_infra",
                                 dossier_complete=error.dossier_complete,
                                 analyst_cache_hit=analyst_cache_hit,
+                                failure_subcode=error.failure_subcode,
                             )
                         except (
                             L2InconclusiveError,
@@ -3529,6 +3608,7 @@ class TerraSolSourceReviewAgent:
                     clearance_path="l3_retryable_infra",
                     dossier_complete=error.dossier_complete,
                     analyst_cache_hit=analyst_cache_hit,
+                    failure_subcode=error.failure_subcode,
                 )
             except L2InconclusiveError:
                 return L2RunResult(
@@ -3983,7 +4063,8 @@ class TerraSolSourceReviewAgent:
         if role == "analyst":
             task = (
                 "No L1 finding is supplied. Independently review the entire served "
-                "artifact against I1-I7 using the dossier and targeted tools. "
+                f"artifact against I1-I{'8' if policy_version >= 13 else '7'} "
+                "using the dossier and targeted tools. "
                 "Reach a grounded terminal safe or violation verdict when the "
                 "evidence permits; return inconclusive only for a specific "
                 "unresolved causal link."
@@ -4364,7 +4445,7 @@ class TerraSolSourceReviewAgent:
                     }
                 )
             if not calls:
-                if role == "analyst" and no_call_corrections < 2:
+                if role in {"analyst", "adjudicator"} and no_call_corrections < 2:
                     no_call_corrections += 1
                     logger.warning(
                         "L2 model returned no tool call; correction %d/2",
@@ -4849,6 +4930,10 @@ class TerraSolSourceReviewAgent:
             runtime_evidence_digest=runtime_evidence_digest,
         )
         value["cause_prompt_revision"] = l2_cause_prompt_revision(policy_version)
+        # Final results from an older L3-off posture must never bypass the
+        # v13 clearance guard. Keep the separately cached analyst reusable.
+        value["l3_enabled"] = self._l3_enabled
+        value["l3_off_clearance_revision"] = 2
         value["cause_tiebreaker_prompt_revision"] = l2_cause_tiebreaker_prompt_revision(
             policy_version
         )
@@ -5180,10 +5265,12 @@ class LayeredSourceReviewAgent:
         adjudicator: SourceReviewAdjudicator | None = None,
         adjudicator_reserve_seconds: float = 0.0,
         always_escalate: bool = False,
+        capture_enforce_result: bool = False,
     ) -> None:
         if mode not in {"off", "shadow", "enforce"}:
             raise ValueError("invalid L2 mode")
         self._always_escalate = always_escalate
+        self._capture_enforce_result = capture_enforce_result
         self._l1 = l1
         self._l2 = l2
         self._mode = mode
@@ -5192,6 +5279,7 @@ class LayeredSourceReviewAgent:
         self._adjudicator = adjudicator
         self._adjudicator_reserve_seconds = max(0.0, float(adjudicator_reserve_seconds))
         self._shadow_results: dict[UUID, L2RunResult] = {}
+        self._preview_l1_results: dict[UUID, SourceReviewObservation] = {}
 
     def _runtime_evidence_hold(
         self, *, policy_version: int, review_disabled: bool
@@ -5257,8 +5345,12 @@ class LayeredSourceReviewAgent:
         return min(deadline, asyncio.get_running_loop().time() + reserve)
 
     def pop_shadow_result(self, attempt_id: UUID) -> L2RunResult | None:
-        """Consume non-authoritative shadow telemetry for one attempt."""
+        """Consume shadow telemetry or an isolated enforce-preview result."""
         return self._shadow_results.pop(attempt_id, None)
+
+    def pop_preview_l1_result(self, attempt_id: UUID) -> SourceReviewObservation | None:
+        """Consume the broad-review lead retained for an isolated preview."""
+        return self._preview_l1_results.pop(attempt_id, None)
 
     async def _adjudicate(
         self,
@@ -5360,7 +5452,9 @@ class LayeredSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> SourceReviewObservation:
-        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False)
+        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False) or (
+            policy_version >= 13 and getattr(self._l2, "_l3_enabled", True) is False
+        )
         lease_matches = _signed_runtime_lease_matches(
             scored_runtime_evidence,
             attempt_id=attempt_id,
@@ -5424,7 +5518,9 @@ class LayeredSourceReviewAgent:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> SourceReviewObservation:
         """Resolve a precomputed, artifact-bound L1 lead without rerunning L1."""
-        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False)
+        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False) or (
+            policy_version >= 13 and getattr(self._l2, "_l3_enabled", True) is False
+        )
         lease_matches = _signed_runtime_lease_matches(
             scored_runtime_evidence,
             attempt_id=attempt_id,
@@ -5445,6 +5541,8 @@ class LayeredSourceReviewAgent:
                 and self._mode == "off",
             )
         l1 = l1_observation
+        if self._capture_enforce_result:
+            self._preview_l1_results[attempt_id] = l1
         if review_deadline is None and deadline is not None and self._adjudicator:
             review_deadline = self._exploration_deadline(deadline)
         court_deadline = self._court_deadline(deadline, review_deadline)
@@ -5499,6 +5597,8 @@ class LayeredSourceReviewAgent:
             scored_runtime_evidence=scored_runtime_evidence,
         )
         report(9)
+        if self._capture_enforce_result:
+            self._shadow_results[attempt_id] = result
         if self._mode == "shadow":
             self._shadow_results[attempt_id] = result
             report(10)
@@ -5599,6 +5699,97 @@ def _dossier_has_scorer_attention(dossier: Mapping[str, object]) -> bool:
             "same_function_candidates",
         )
     )
+
+
+def _l1_concerns_resolved(notes: tuple[Mapping[str, object], ...]) -> bool:
+    """Retire a concern only with its own later, exact-location clear."""
+    consumed_clears: set[int] = set()
+    for index, note in enumerate(notes):
+        if note.get("kind") != "concern":
+            continue
+        path = note.get("path")
+        area = note.get("area")
+        line = note.get("line")
+        confidence = note.get("confidence")
+        if (
+            not isinstance(path, str)
+            or not path
+            or not isinstance(area, str)
+            or not area
+            or not isinstance(line, int)
+            or isinstance(line, bool)
+            or line < 1
+            or not isinstance(confidence, (int, float))
+            or isinstance(confidence, bool)
+        ):
+            return False
+        resolved = False
+        for later_index in range(index + 1, len(notes)):
+            if later_index in consumed_clears:
+                continue
+            later = notes[later_index]
+            later_confidence = later.get("confidence")
+            if (
+                later.get("kind") == "cleared"
+                and later.get("path") == path
+                and later.get("area") == area
+                and later.get("line") == line
+                and isinstance(later_confidence, (int, float))
+                and not isinstance(later_confidence, bool)
+                and float(later_confidence) >= float(confidence)
+            ):
+                consumed_clears.add(later_index)
+                resolved = True
+                break
+        if not resolved:
+            return False
+    return True
+
+
+def _l2_only_clearance_gaps(
+    l1: SourceReviewObservation | None,
+    analyst: L2RunResult,
+    dossier: Mapping[str, object] | None,
+    *,
+    expected_model: str,
+) -> tuple[str, ...]:
+    """Return bounded mechanical reasons a v13 L3-off safe claim cannot clear."""
+    finding = analyst.observation.finding
+    gaps: list[str] = []
+    if l1 is None or not (
+        l1.ok
+        and l1.risk_level == "low"
+        and l1.clearance_certified
+        and set(l1.categories) <= {"none"}
+    ):
+        gaps.append("l1-not-certified-low")
+    elif not _l1_concerns_resolved(l1.notes):
+        gaps.append("l1-concern-unresolved")
+    if not analyst.observation.ok or analyst.observation.risk_level != "low":
+        gaps.append("l2-not-low")
+    if analyst.observation.categories != ("none",):
+        gaps.append("l2-categories")
+    if analyst.resolution_basis not in _SAFE_RESOLUTION_BASES:
+        gaps.append("l2-resolution-basis")
+    if not analyst.dossier_complete:
+        gaps.append("dossier-incomplete")
+    if "read_file" not in analyst.tools or not analyst.analyzed_files:
+        gaps.append("source-not-read")
+    if not analyst.response_models or any(
+        model != expected_model and not model.startswith(f"{expected_model}-")
+        for model in analyst.response_models
+    ):
+        gaps.append("model-mismatch")
+    if (
+        not isinstance(finding, Mapping)
+        or _finding_confidence(finding) < _DIRECT_CLEAR_CONFIDENCE
+    ):
+        gaps.append("finding-confidence")
+    if not isinstance(finding, Mapping) or finding.get("evidence") != []:
+        gaps.append("finding-evidence")
+    if dossier is None or _dossier_has_scorer_attention(dossier):
+        gaps.append("scorer-attention")
+    return tuple(gaps)
 
 
 def _qualifies_for_direct_clear(

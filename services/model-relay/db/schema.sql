@@ -3123,6 +3123,32 @@ ALTER SEQUENCE public.hotkey_ban_audit_seq_seq OWNED BY public.hotkey_ban_audit.
 
 
 --
+-- Name: inference_admission_rejections; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.inference_admission_rejections (
+    rejection_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    lane text NOT NULL,
+    http_status integer NOT NULL,
+    admission_code text NOT NULL,
+    grant_id uuid,
+    validator_hotkey text,
+    correlation_id uuid NOT NULL,
+    request_bytes integer NOT NULL,
+    byte_limit integer,
+    platform_revision text NOT NULL,
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_1f3d CHECK (((length(platform_revision) >= 1) AND (length(platform_revision) <= 64))),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_2750 CHECK ((lane = ANY (ARRAY['inference'::text, 'embedding'::text]))),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_3c4a CHECK (((validator_hotkey IS NULL) OR ((length(validator_hotkey) >= 1) AND (length(validator_hotkey) <= 120)))),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_b2b6 CHECK ((http_status = ANY (ARRAY[400, 403, 409, 413]))),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_b85b CHECK ((request_bytes >= 0)),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_dd0f CHECK ((admission_code = ANY (ARRAY['invalid_json'::text, 'invalid_schema'::text, 'request_too_large'::text, 'stale_session'::text, 'model_not_allowed'::text, 'grant_not_servable'::text]))),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_e0a9 CHECK (((byte_limit IS NULL) OR (byte_limit >= 0)))
+);
+
+
+--
 -- Name: inference_concurrency_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7310,6 +7336,14 @@ ALTER TABLE ONLY public.feedback_track_contributions
 
 
 --
+-- Name: inference_admission_rejections pk_inference_admission_rejections; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inference_admission_rejections
+    ADD CONSTRAINT pk_inference_admission_rejections PRIMARY KEY (rejection_id);
+
+
+--
 -- Name: inference_concurrency_settings_revisions pk_inference_concurrency_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8871,6 +8905,20 @@ CREATE INDEX feedback_track_user_idx ON public.feedback_track_contributions USIN
 --
 
 CREATE INDEX hotkey_ban_audit_hotkey_recorded_idx ON public.hotkey_ban_audit USING btree (hotkey, recorded_at);
+
+
+--
+-- Name: inference_admission_rejections_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX inference_admission_rejections_created_idx ON public.inference_admission_rejections USING btree (created_at);
+
+
+--
+-- Name: inference_admission_rejections_grant_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX inference_admission_rejections_grant_idx ON public.inference_admission_rejections USING btree (grant_id, created_at);
 
 
 --

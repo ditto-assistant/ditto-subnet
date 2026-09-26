@@ -2,6 +2,77 @@
 
 <!-- version list -->
 
+## v0.318.7 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Bound A/B signal in scorer flow analyzer
+  ([#2377](https://github.com/ditto-assistant/ditto-subnet/pull/2377),
+  [`a6bd0c4`](https://github.com/ditto-assistant/ditto-subnet/commit/a6bd0c4c76f9d9e04af65d1bc6ec01e393108a1e))
+
+
+## v0.318.6 (2026-09-26)
+
+### Bug Fixes
+
+- **backroom**: Expose exact canary scheduling guards
+  ([#2378](https://github.com/ditto-assistant/ditto-subnet/pull/2378),
+  [`f828fcc`](https://github.com/ditto-assistant/ditto-subnet/commit/f828fcc2a743783b0d1f73a02ebeda740022bd6a))
+
+
+## v0.318.5 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Allow longer bounded L1 model turns
+  ([#2371](https://github.com/ditto-assistant/ditto-subnet/pull/2371),
+  [`ab723dd`](https://github.com/ditto-assistant/ditto-subnet/commit/ab723dd6c09590cba2161948bec3394f7bb15cd5))
+
+
+## v0.318.4 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Certify resolved L1 leads with complete L2 dossier
+  ([#2361](https://github.com/ditto-assistant/ditto-subnet/pull/2361),
+  [`e02bcf8`](https://github.com/ditto-assistant/ditto-subnet/commit/e02bcf888083388c6b6888b7d5cdac5748387c20))
+
+
+## v0.318.3 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Guard v13 clearance with L3 disabled
+  ([#2358](https://github.com/ditto-assistant/ditto-subnet/pull/2358),
+  [`c702429`](https://github.com/ditto-assistant/ditto-subnet/commit/c702429d7ac2786dcc1e47068f372544863b2ca7))
+
+- **screener**: Preview enforced v13 clearance in report canaries
+  ([#2359](https://github.com/ditto-assistant/ditto-subnet/pull/2359),
+  [`5899f2c`](https://github.com/ditto-assistant/ditto-subnet/commit/5899f2c52c5abec006927ae4043a8da3df0af0b3))
+
+
+## v0.318.2 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Expose bounded L3 tool failure subtype
+  ([#2355](https://github.com/ditto-assistant/ditto-subnet/pull/2355),
+  [`a2a6d2b`](https://github.com/ditto-assistant/ditto-subnet/commit/a2a6d2b572aaa89e733622015a8a856e3f4d3855))
+
+
+## v0.318.1 (2026-09-26)
+
+### Bug Fixes
+
+- **screener**: Align v13 prompts and repair invalid verdicts
+  ([#2349](https://github.com/ditto-assistant/ditto-subnet/pull/2349),
+  [`eda0d59`](https://github.com/ditto-assistant/ditto-subnet/commit/eda0d59187b5973b82fa14012f656b88d4d5a461))
+
+- **screener**: Correct no-tool adjudicator turns
+  ([#2350](https://github.com/ditto-assistant/ditto-subnet/pull/2350),
+  [`b9e6298`](https://github.com/ditto-assistant/ditto-subnet/commit/b9e6298d9f7f5e3f45d9337944ac2d811081ab9c))
+
+
 ## v0.318.0 (2026-09-26)
 
 ### Features

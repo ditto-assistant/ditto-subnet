@@ -61,10 +61,25 @@ def _load_wallet(project: str) -> SimpleNamespace:
     mnemonic = result.stdout.decode().strip()
     if len(mnemonic.split()) != 24:
         raise ValueError("treasury secret must be a 24-word mnemonic")
-    keypair = bt.Keypair.create_from_mnemonic(mnemonic)
-    # The SDK needs these three Wallet attributes; a disk-backed bt.Wallet
-    # would materialize the signing key on the host filesystem.
-    return SimpleNamespace(coldkey=keypair, coldkeypub=keypair, name="sn118-treasury")
+    return _memory_wallet(bt.Keypair.create_from_mnemonic(mnemonic))
+
+
+def _memory_wallet(keypair: bt.Keypair) -> SimpleNamespace:
+    """Expose an in-memory keypair through the Wallet surface the SDK uses.
+
+    A disk-backed bt.Wallet would materialize the signing key on the host
+    filesystem. Every SDK extrinsic this module calls first runs
+    ``ExtrinsicResponse.unlock_wallet``, which invokes ``unlock_coldkey()``;
+    without it each leg raises AttributeError after ``claim_leg`` and before
+    anything is submitted. The keypair is already usable, so unlocking is a
+    no-op.
+    """
+    return SimpleNamespace(
+        coldkey=keypair,
+        coldkeypub=keypair,
+        name="sn118-treasury",
+        unlock_coldkey=lambda: None,
+    )
 
 
 def validate_instructions(raw: bytes, plan: dict) -> None:

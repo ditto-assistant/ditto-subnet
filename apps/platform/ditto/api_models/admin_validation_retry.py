@@ -510,7 +510,11 @@ class AdminValidatorScoreReplacementDetail(BaseModel):
     ticket_status: Literal["issued", "scored", "expired"] | None
     ticket_deadline: datetime | None
     replacement_pending: bool
+    """A replacement ticket is issued and awaiting its score."""
+    replacement_queued: bool
+    """A replacement re-test is waiting behind the validator's current work."""
     replacement_request_id: UUID | None
+    """Identity of the open request, whether queued or pending."""
     replacement_reason: str | None
     replacement_actor: str | None
     replacement_allowed: bool

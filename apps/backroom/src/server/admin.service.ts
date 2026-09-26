@@ -1,5 +1,5 @@
 import '@tanstack/react-start/server-only'
-import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema } from '../lib/treasury.schemas'
+import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
 
 export async function previewTreasuryTopup(rawInput: unknown) {
   const input = treasuryPreviewInputSchema.parse(rawInput)
@@ -7,9 +7,7 @@ export async function previewTreasuryTopup(rawInput: unknown) {
     fetchTreasurySettings(), fetchTreasuryQuote(input),
   ])
   const proposed = policy.effective
-  const quoteImpact = input.route === 'tao'
-    ? quote.tao_path.price_impact_bps
-    : quote.tao_path.price_impact_bps + quote.gm_alpha_path.price_impact_bps
+  const quoteImpact = treasuryRouteImpactBps(input.route, quote)
   return {
     dry_run: true as const,
     execution_enabled: false as const,
@@ -335,6 +333,8 @@ import {
   screenerFanoutShadowInputSchema,
   screenerFanoutShadowResponseSchema,
   l2ReportCanaryLookupInputSchema,
+  l2ReportCanaryPreflightInputSchema,
+  l2ReportCanaryPreflightViewSchema,
   scheduleL2ReportCanaryInputSchema,
   l2ReportCanaryViewSchema,
   screenerPolicyManifestControlSchema,
@@ -658,6 +658,14 @@ export async function fetchL2ReportCanary(rawInput: unknown) {
     `/api/v1/admin/screener-l2-report-canaries/${input.canaryId}`,
   )
   return l2ReportCanaryViewSchema.parse(payload)
+}
+
+export async function fetchL2ReportCanaryPreflight(rawInput: unknown) {
+  const input = l2ReportCanaryPreflightInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/preflight/${input.agentId}/${input.sourceAttemptId}`,
+  )
+  return l2ReportCanaryPreflightViewSchema.parse(payload)
 }
 
 export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
