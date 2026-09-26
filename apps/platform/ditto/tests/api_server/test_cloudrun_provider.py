@@ -7,6 +7,7 @@ import pytest
 
 from ditto.api_server.cloudrun_client import (
     AsyncCloudRunClient,
+    CloudRunAPIError,
     error_reason_from_response,
 )
 from ditto.api_server.cloudrun_provider import CloudRunComputeProvider
@@ -42,7 +43,11 @@ class _FakeCloudRunClient:
     async def get_execution(self, execution_name: str) -> dict[str, Any]:
         del execution_name
         if self.fail_get_execution:
-            raise AssertionError("get_execution must not run for a v2 running ref")
+            raise CloudRunAPIError(
+                operation="get execution",
+                status=404,
+                reason="execution already gone",
+            )
         return self.execution
 
     async def list_job_logs(self, job_id: str, *, limit: int = 400) -> list[str]:
@@ -196,6 +201,30 @@ async def test_observe_failed_job_uses_redacted_log_marker() -> None:
     observation = await provider.observe_provision("job:ditto-miner-build-test")
     assert "do-not-return" not in observation.message
     assert "api_key=[REDACTED]" in observation.message
+    assert (
+        inflight_failure_code("gcp", observation.status, observation.message)
+        == "CLOUDRUN_SUBMISSION_KANIKO_FAILED"
+    )
+
+
+@pytest.mark.asyncio
+async def test_observe_failed_job_uses_logs_when_execution_detail_is_gone() -> None:
+    job = {
+        "status": {
+            "latestCreatedExecution": {
+                "name": "projects/p/locations/us-central1/jobs/job/executions/ex",
+                "completionStatus": "EXECUTION_FAILED",
+            }
+        }
+    }
+    provider = _provider(
+        {},
+        job=job,
+        fail_get_execution=True,
+        logs=["DITTO_SUBMISSION_BUILD_FAILED=KANIKO", "Container called exit(72)."],
+    )
+    observation = await provider.observe_provision("job:ditto-miner-build-test")
+    assert observation.status == "error"
     assert (
         inflight_failure_code("gcp", observation.status, observation.message)
         == "CLOUDRUN_SUBMISSION_KANIKO_FAILED"
