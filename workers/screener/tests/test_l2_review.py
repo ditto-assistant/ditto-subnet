@@ -900,6 +900,51 @@ async def test_required_lease_holds_before_l1_or_l4_can_clear() -> None:
     assert audit.max_elapsed_ms == 1_800_000 and audit.elapsed_ms == 0
 
 
+async def test_v13_l3_off_requires_matching_signed_lease_even_without_env_flag() -> (
+    None
+):
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+    missing = await layered.review(
+        "unused",
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+    )
+    assert missing.error_code == "l2-runtime-evidence-unavailable"
+    assert l1.calls == l2.calls == 0
+
+    revision = "a" * 40
+    keys = ("DITTOBENCH_DB", "DITTOBENCH_MODEL")
+    digest = hashlib.sha256(
+        ("scored-runtime-env-v1\n13\n" + revision + "\n" + "\n".join(keys)).encode()
+    ).hexdigest()
+    lease = ScoredRuntimeEvidenceLease(
+        attempt_id=ATTEMPT,
+        artifact_sha256="ab" * 32,
+        policy_version=13,
+        bench_version=13,
+        scorer_source_revision=revision,
+        release_descriptor_digest="sha256:" + "d" * 64,
+        scorer_image_digest="sha256:" + "e" * 64,
+        scorer_env_sha256=digest,
+        injected_keys=keys,
+        validator_count=2,
+        observed_at=int(time.time()),
+    )
+    accepted = await layered.review(
+        "unused",
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+        scored_runtime_evidence=lease,
+    )
+    assert accepted.ok
+    assert l1.calls == l2.calls == 1
+
+
 async def test_v13_disabled_review_reports_preflight_cause() -> None:
     l1 = _FakeL1(_l1("low", clearance_certified=True))
     l2 = _FakeL2(_model_result(_safe()))
@@ -1018,6 +1063,61 @@ def test_l3_disabled_makes_l2_result_authoritative() -> None:
     assert result.tools == ("source_inventory",)
     assert result.critic_disposition == "disabled"
     assert result.clearance_path == "l2_only_l3_disabled"
+
+
+def test_v13_l3_off_certifies_only_complete_clean_l1_l2_agreement() -> None:
+    candidate = _clearance_candidate()
+    analyst = L2RunResult(
+        **{**candidate.__dict__, "response_models": ("openai/gpt-6-sol",)}
+    )
+    kwargs = {
+        "dossier_tools": ("source_inventory",),
+        "analyst_cache_hit": False,
+        "policy_version": 13,
+        "dossier": {},
+        "expected_model": "openai/gpt-6-sol",
+    }
+    clear = _finalize_without_l3(analyst, l1_observation=_l1("low"), **kwargs)
+    assert clear.observation.clearance_certified
+    assert clear.clearance_path == "l2_only_certified_low"
+
+    for l1, changed in (
+        (_l1("medium"), {}),
+        (_l1("low", clearance_certified=False), {}),
+        (
+            SourceReviewObservation(
+                **{
+                    **_l1("low").__dict__,
+                    "notes": ({"kind": "concern"},),
+                }
+            ),
+            {},
+        ),
+        (_l1("low"), {"tools": ()}),
+        (_l1("low"), {"dossier_complete": False}),
+        (_l1("low"), {"direct_clear_graph_complete": False}),
+        (_l1("low"), {"response_models": ("other/model",)}),
+    ):
+        result = _finalize_without_l3(
+            L2RunResult(**{**analyst.__dict__, **changed}),
+            l1_observation=l1,
+            **kwargs,
+        )
+        assert not result.observation.ok
+        assert result.observation.error_code == "l2-only-clearance-unproven"
+        assert result.clearance_path == "l2_only_clearance_hold"
+
+    scorer_attention = _finalize_without_l3(
+        analyst,
+        l1_observation=_l1("low"),
+        **{
+            **kwargs,
+            "dossier": {
+                "deterministic": {"scorer_field_flow": {"score_controls": ["lead"]}}
+            },
+        },
+    )
+    assert scorer_attention.observation.error_code == "l2-only-clearance-unproven"
 
 
 def test_direct_clear_graph_requires_unique_resolved_l1_slice() -> None:
@@ -1242,6 +1342,19 @@ def test_served_generator_constellation_cannot_auto_clear(
     assert held.clearance_path == "deterministic_served_generator_hold"
     assert held.critic_disposition == "not_required_static_hold"
     assert held.resolution_basis == "benchmark_answer_replacement"
+    assert (
+        _finalize_without_l3(
+            analyst,
+            dossier_tools=(),
+            analyst_cache_hit=False,
+            policy_version=13,
+            l1_observation=_l1("low"),
+            static_attention=held,
+            dossier=dossier,
+            expected_model="openai/gpt-5.6-terra",
+        )
+        is held
+    )
     assert {item["role"] for item in held.causal_path} == {
         "trigger",
         "decision",
@@ -1366,6 +1479,19 @@ def test_review_adaptive_model_routing_cannot_auto_clear(tmp_path: Path) -> None
     assert "benchmark_emulation" in held.observation.categories
     assert held.resolution_basis == "benchmark_answer_replacement"
     assert held.clearance_path == "deterministic_review_adaptation_hold"
+    assert (
+        _finalize_without_l3(
+            analyst,
+            dossier_tools=(),
+            analyst_cache_hit=False,
+            policy_version=13,
+            l1_observation=_l1("low"),
+            static_attention=held,
+            dossier=dossier,
+            expected_model="openai/gpt-5.6-terra",
+        )
+        is held
+    )
     assert held.critic_disposition == "not_required_static_hold"
     assert {item["role"] for item in held.causal_path} == {
         "context",

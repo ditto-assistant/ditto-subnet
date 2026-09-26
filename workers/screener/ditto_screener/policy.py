@@ -262,6 +262,20 @@ class SourceReviewObservation:
     evidence it accumulated; at exhaustion they decide the gradient verdict."""
 
 
+def source_review_low_clearance_allowed(
+    observation: SourceReviewObservation, *, policy_version: int
+) -> bool:
+    """Require a source clearance certificate at every v13 admission path."""
+    return bool(
+        observation.ok
+        and observation.risk_level == "low"
+        and (
+            policy_version < STRICT_TWO_OUTCOME_POLICY_VERSION
+            or observation.clearance_certified
+        )
+    )
+
+
 ChallengeRunner = Callable[
     [str, Mapping[str, object], float], Awaitable[ChallengeObservation]
 ]
@@ -722,6 +736,23 @@ class AgenticSourceReviewModule(_BaseModule):
         if observation.risk_level == "low" and set(observation.categories) <= (
             {"none"} | _ADVISORY_SOURCE_CATEGORIES
         ):
+            if not source_review_low_clearance_allowed(
+                observation, policy_version=context.policy_version
+            ):
+                return ModuleResult(
+                    ModuleDisposition.QUARANTINE,
+                    (
+                        PolicyEvidence(
+                            self.module_id,
+                            "source-review-clearance-unproven",
+                            "private source review did not certify low-risk clearance",
+                            observation.finding_digest,
+                        ),
+                    ),
+                    finding=observation.finding,
+                    review_audit=observation.review_audit,
+                    review_notes=review_notes,
+                )
             # Keep the low-risk finding: if another module later quarantines,
             # clean or advisory-only source review is useful operator context.
             # Advisory correctness/build observations are not anti-cheat
@@ -1472,6 +1503,24 @@ class PolicyEngine:
                             if retryable
                             else "private source review could not resolve the lead"
                         ),
+                    ),
+                ),
+                observation.finding,
+                review_audit=observation.review_audit,
+                review_notes=observation.notes,
+                policy_version=policy_version,
+            )
+        if observation.risk_level == "low" and not source_review_low_clearance_allowed(
+            observation, policy_version=policy_version
+        ):
+            return self._decision(
+                ScreeningOutcome.QUARANTINE,
+                (
+                    PolicyEvidence(
+                        "agentic-preexecution-review",
+                        "source-review-clearance-unproven",
+                        "private source review did not certify a low-risk clearance",
+                        observation.finding_digest,
                     ),
                 ),
                 observation.finding,

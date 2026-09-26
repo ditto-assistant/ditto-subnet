@@ -2164,13 +2164,39 @@ def _finalize_without_l3(
     *,
     dossier_tools: tuple[str, ...],
     analyst_cache_hit: bool,
+    policy_version: int = 12,
+    l1_observation: SourceReviewObservation | None = None,
+    static_attention: L2RunResult | None = None,
+    dossier: Mapping[str, object] | None = None,
+    expected_model: str = L2_MODEL,
 ) -> L2RunResult:
-    """Make the paid L2 analyst authoritative when L3 is disabled."""
+    """Use the analyst alone only when v13 has independent clean coverage."""
+    if policy_version >= 13 and static_attention is not None:
+        return static_attention
+    observation = analyst.observation
+    clearance_path = "l2_only_l3_disabled"
+    if policy_version >= 13 and observation.ok and observation.risk_level == "low":
+        if _qualifies_l2_only_clear(
+            l1_observation, analyst, dossier, expected_model=expected_model
+        ):
+            observation = replace(observation, clearance_certified=True)
+            clearance_path = "l2_only_certified_low"
+        else:
+            observation = (
+                _carry_l1_notes(
+                    _failure("l2-only-clearance-unproven", "inconclusive"),
+                    l1_observation,
+                )
+                if l1_observation is not None
+                else _failure("l2-only-clearance-unproven", "inconclusive")
+            )
+            clearance_path = "l2_only_clearance_hold"
     return replace(
         analyst,
+        observation=observation,
         tools=dossier_tools + analyst.tools,
         critic_disposition="disabled",
-        clearance_path="l2_only_l3_disabled",
+        clearance_path=clearance_path,
         analyst_cache_hit=analyst_cache_hit,
     )
 
@@ -2625,7 +2651,8 @@ class TerraSolSourceReviewAgent:
             attempt_id=attempt_id,
             artifact_sha256=artifact_sha256,
             policy_version=policy_version,
-            required=self._require_signed_runtime_lease,
+            required=self._require_signed_runtime_lease
+            or (policy_version == 13 and not self._l3_enabled),
             max_age_seconds=self._signed_runtime_lease_max_age_seconds,
         ):
             result = L2RunResult(
@@ -3095,6 +3122,11 @@ class TerraSolSourceReviewAgent:
                     analyst,
                     dossier_tools=dossier_tools,
                     analyst_cache_hit=analyst_cache_hit,
+                    policy_version=policy_version,
+                    l1_observation=l1_observation,
+                    static_attention=static_attention,
+                    dossier=dossier,
+                    expected_model=self._model,
                 )
             # The L2 analyst has settled; every path below is L3. This is the
             # only public progress boundary inside the deep review, and it is
@@ -4886,6 +4918,10 @@ class TerraSolSourceReviewAgent:
             runtime_evidence_digest=runtime_evidence_digest,
         )
         value["cause_prompt_revision"] = l2_cause_prompt_revision(policy_version)
+        # Final results from an older L3-off posture must never bypass the
+        # v13 clearance guard. Keep the separately cached analyst reusable.
+        value["l3_enabled"] = self._l3_enabled
+        value["l3_off_clearance_revision"] = 1
         value["cause_tiebreaker_prompt_revision"] = l2_cause_tiebreaker_prompt_revision(
             policy_version
         )
@@ -5397,7 +5433,9 @@ class LayeredSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> SourceReviewObservation:
-        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False)
+        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False) or (
+            policy_version == 13 and getattr(self._l2, "_l3_enabled", True) is False
+        )
         lease_matches = _signed_runtime_lease_matches(
             scored_runtime_evidence,
             attempt_id=attempt_id,
@@ -5461,7 +5499,9 @@ class LayeredSourceReviewAgent:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> SourceReviewObservation:
         """Resolve a precomputed, artifact-bound L1 lead without rerunning L1."""
-        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False)
+        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False) or (
+            policy_version == 13 and getattr(self._l2, "_l3_enabled", True) is False
+        )
         lease_matches = _signed_runtime_lease_matches(
             scored_runtime_evidence,
             attempt_id=attempt_id,
@@ -5635,6 +5675,43 @@ def _dossier_has_scorer_attention(dossier: Mapping[str, object]) -> bool:
             "field_populations",
             "same_function_candidates",
         )
+    )
+
+
+def _qualifies_l2_only_clear(
+    l1: SourceReviewObservation | None,
+    analyst: L2RunResult,
+    dossier: Mapping[str, object] | None,
+    *,
+    expected_model: str,
+) -> bool:
+    """Certify only an independent, fully read clean L1/L2 agreement."""
+    finding = analyst.observation.finding
+    return bool(
+        l1 is not None
+        and l1.ok
+        and l1.risk_level == "low"
+        and l1.clearance_certified
+        and not any(note.get("kind") == "concern" for note in l1.notes)
+        and set(l1.categories) <= {"none"}
+        and analyst.observation.ok
+        and analyst.observation.risk_level == "low"
+        and analyst.observation.categories == ("none",)
+        and analyst.resolution_basis in _SAFE_RESOLUTION_BASES
+        and analyst.dossier_complete
+        and analyst.direct_clear_graph_complete
+        and "read_file" in analyst.tools
+        and bool(analyst.analyzed_files)
+        and bool(analyst.response_models)
+        and all(
+            model == expected_model or model.startswith(f"{expected_model}-")
+            for model in analyst.response_models
+        )
+        and isinstance(finding, Mapping)
+        and _finding_confidence(finding) >= _DIRECT_CLEAR_CONFIDENCE
+        and finding.get("evidence") == []
+        and dossier is not None
+        and not _dossier_has_scorer_attention(dossier)
     )
 
 

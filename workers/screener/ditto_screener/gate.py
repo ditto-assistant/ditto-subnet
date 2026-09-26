@@ -98,6 +98,7 @@ from ditto_screener.policy import (
     ScreeningDecision,
     ScreeningOutcome,
     load_policy_engine,
+    source_review_low_clearance_allowed,
 )
 from ditto_screener.policy import (
     core_decision as make_core_decision,
@@ -1386,7 +1387,9 @@ class BuildGate:
                         policy_version=policy_version,
                         scored_runtime_evidence=scored_runtime_evidence,
                     )
-                    if resolved_preflight.ok and resolved_preflight.risk_level == "low":
+                    if source_review_low_clearance_allowed(
+                        resolved_preflight, policy_version=policy_version
+                    ):
                         preflight_clearance = resolved_preflight
                     elif (
                         policy_version < 13
