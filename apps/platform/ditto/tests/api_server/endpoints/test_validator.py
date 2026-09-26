@@ -9797,6 +9797,67 @@ class TestTranscriptPublication:
         )
         storage.put_object.assert_not_awaited()
 
+    async def test_enabled_mirror_keeps_held_agent_transcript_private(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """An agent held for review publishes no transcript, even at quorum."""
+        _install_db(app, session_maker)
+        _install_chain(app)
+        storage = _install_storage(app)
+        storage.public_bucket = "ditto-public"
+        objects = self._record_objects(storage)
+        await self._enable_mirror(session_maker)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _score_to_quorum(
+            client,
+            agent_id,
+            maker=session_maker,
+            run_id="run_t",
+            details={"transcript_sha256": self._digest},
+        )
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            agent.status = AgentStatus.ATH_PENDING_REVIEW
+
+        response = await client.put(
+            f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
+            content=self._TRANSCRIPT,
+            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+        )
+        assert response.status_code == 200, response.text
+        key = f"transcripts/{self._digest}.json"
+        assert objects[None, key] == self._TRANSCRIPT
+        assert ("ditto-public", key) not in objects
+
+    async def test_finalized_run_skips_transcripts_for_held_agent(self) -> None:
+        storage = MagicMock()
+        storage.public_bucket = "ditto-public"
+        storage.object_exists = AsyncMock(return_value=True)
+        storage.get_object = AsyncMock(return_value=self._TRANSCRIPT)
+        storage.put_object = AsyncMock()
+        session = AsyncMock(spec=AsyncSession)
+        session.scalar.return_value = None
+
+        await validator_endpoint._publish_finalized_run(
+            storage,
+            session=session,
+            agent=MagicMock(status=AgentStatus.ATH_PENDING_REVIEW),
+            scores=[
+                Score(bench_version=7, details={"transcript_sha256": self._digest})
+            ],
+            median=0.5,
+            mirror_transcripts=True,
+        )
+        storage.get_object.assert_not_awaited()
+        assert all(
+            not str(call.kwargs.get("key", "")).startswith("transcripts/")
+            for call in storage.put_object.await_args_list
+        )
+
     async def test_quorum_mirror_copies_eligible_public_transcript(self) -> None:
         storage = MagicMock()
         storage.public_bucket = "ditto-public"

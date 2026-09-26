@@ -7890,8 +7890,13 @@ async def _publish_finalized_run(
                 agent.agent_id,
                 key,
             )
-    if mirror_transcripts:
+    # A held agent (ATH review, quarantine, ban) publishes no transcript even
+    # at quorum; only a scored or live agent's behavioral data is mirrored.
+    if mirror_transcripts and agent.status in _TRANSCRIPT_MIRROR_STATUSES:
         await _mirror_quorum_transcripts(storage, session, scores)
+
+
+_TRANSCRIPT_MIRROR_STATUSES = frozenset({AgentStatus.SCORED, AgentStatus.LIVE})
 
 
 async def _mirror_quorum_transcripts(
@@ -7934,6 +7939,9 @@ async def _mirror_late_transcript(
     if storage.public_bucket is None or not await transcript_mirror_enabled(session):
         return
     if await _score_uses_private_dataset(session, score):
+        return
+    agent = await session.get(Agent, score.agent_id)
+    if agent is None or agent.status not in _TRANSCRIPT_MIRROR_STATUSES:
         return
     score_count = await session.scalar(
         select(func.count())
