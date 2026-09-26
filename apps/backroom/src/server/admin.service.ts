@@ -48,7 +48,6 @@ export async function recordTreasurySettings(rawInput: unknown, actor: string) {
       expected_revision: input.expectedRevision,
       settings: input.settings,
       reason: input.reason,
-      actor,
       confirmation: input.confirmation,
     },
   })
