@@ -5212,6 +5212,27 @@ CREATE TABLE public.v13_group_package_registrations (
 
 
 --
+-- Name: v13_known_benign_attestations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_known_benign_attestations (
+    attestation_id uuid NOT NULL,
+    approval_id uuid NOT NULL,
+    principal_sub text NOT NULL,
+    principal_email text NOT NULL,
+    review_evidence_sha256 text NOT NULL,
+    assertion_sha256 text NOT NULL,
+    reason text NOT NULL,
+    attested_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_known_benign_attestations_v13ba_assertion CHECK ((length(assertion_sha256) = 64)),
+    CONSTRAINT ck_v13_known_benign_attestations_v13ba_email CHECK (((length(principal_email) >= 3) AND (length(principal_email) <= 254))),
+    CONSTRAINT ck_v13_known_benign_attestations_v13ba_evidence CHECK ((length(review_evidence_sha256) = 64)),
+    CONSTRAINT ck_v13_known_benign_attestations_v13ba_reason CHECK ((length(reason) >= 8)),
+    CONSTRAINT ck_v13_known_benign_attestations_v13ba_sub CHECK (((length(principal_sub) >= 1) AND (length(principal_sub) <= 120)))
+);
+
+
+--
 -- Name: v13_known_benign_control_approvals; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7674,6 +7695,14 @@ ALTER TABLE ONLY public.v13_group_package_registrations
 
 
 --
+-- Name: v13_known_benign_attestations pk_v13_known_benign_attestations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_known_benign_attestations
+    ADD CONSTRAINT pk_v13_known_benign_attestations PRIMARY KEY (attestation_id);
+
+
+--
 -- Name: v13_known_benign_control_approvals pk_v13_known_benign_control_approvals; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8271,6 +8300,22 @@ ALTER TABLE ONLY public.v13_private_generation_groups
 
 ALTER TABLE ONLY public.validator_weight_receipts
     ADD CONSTRAINT uq_validator_weight_receipts_receipt_digest UNIQUE (receipt_digest);
+
+
+--
+-- Name: v13_known_benign_attestations v13ba_approval_email_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_known_benign_attestations
+    ADD CONSTRAINT v13ba_approval_email_uq UNIQUE (approval_id, principal_email);
+
+
+--
+-- Name: v13_known_benign_attestations v13ba_approval_sub_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_known_benign_attestations
+    ADD CONSTRAINT v13ba_approval_sub_uq UNIQUE (approval_id, principal_sub);
 
 
 --
@@ -9808,6 +9853,13 @@ CREATE TRIGGER v13_group_package_registrations_immutable BEFORE DELETE OR UPDATE
 
 
 --
+-- Name: v13_known_benign_attestations v13_known_benign_attestations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_known_benign_attestations_immutable BEFORE DELETE OR UPDATE ON public.v13_known_benign_attestations FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
 -- Name: v13_known_benign_control_approvals v13_known_benign_control_approvals_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -10794,6 +10846,14 @@ ALTER TABLE ONLY public.treasury_public_events
 
 ALTER TABLE ONLY public.v13_group_package_registrations
     ADD CONSTRAINT fk_v13_group_package_registrations_group_id_v13_private_cf73 FOREIGN KEY (group_id) REFERENCES public.v13_private_generation_groups(group_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_known_benign_attestations fk_v13_known_benign_attestations_approval_id_v13_known__1680; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_known_benign_attestations
+    ADD CONSTRAINT fk_v13_known_benign_attestations_approval_id_v13_known__1680 FOREIGN KEY (approval_id) REFERENCES public.v13_known_benign_control_approvals(approval_id) ON DELETE RESTRICT;
 
 
 --

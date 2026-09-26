@@ -1,8 +1,9 @@
 """Append-only, digest-only V13 pre-randomness generation registry.
 
 Recording a group is an audit event, not permission to issue seeds or clear a
-hold. A future protected provisioner must fetch and verify this committed
-event before invoking CSPRNG or exposing any private case bytes.
+hold. A protected provisioner must call the trusted-approval read, which
+fails closed unless two distinct authenticated reviewers and the live image
+still match. ``X-Admin-Actor`` never upgrades a recorded approval.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,12 +27,19 @@ from ditto.api_models.v13_private_generation import (
     V13GroupPackageView,
     V13KnownBenignApprovalRequest,
     V13KnownBenignApprovalView,
+    V13KnownBenignAttestationRequest,
     V13ReplayGenerationGroupView,
     V13ReplayGroupPackageView,
+    V13TrustedKnownBenignApproval,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.verification_replay import _binding_ok
+from ditto.api_server.v13_benign_identity import verify_v13_benign_assertion
+from ditto.api_server.v13_benign_provenance import (
+    generator_conflicts,
+    load_trusted_known_benign_approval,
+)
 from ditto.db.models import (
     Agent,
     ScreenedImageUpload,
@@ -39,6 +47,7 @@ from ditto.db.models import (
     ScreeningPrivatePackageRegistration,
     ScreeningVerificationReplay,
     V13GroupPackageRegistration,
+    V13KnownBenignAttestation,
     V13KnownBenignControlApproval,
     V13PrivateGenerationGroup,
     V13ReplayGroupPackageRegistration,
@@ -262,6 +271,116 @@ async def record_known_benign_approval(
         raise HTTPException(
             status_code=409, detail="approval changed concurrently"
         ) from error
+
+
+@router.post(
+    "/known-benign-approvals/{approval_id}/attest",
+    response_model=V13KnownBenignApprovalView,
+)
+async def attest_known_benign_approval(
+    approval_id: UUID,
+    payload: V13KnownBenignAttestationRequest,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> V13KnownBenignApprovalView:
+    """Record one authenticated reviewer. The admin bearer cannot count."""
+    try:
+        async with session.begin():
+            approval = await session.get(
+                V13KnownBenignControlApproval, approval_id, with_for_update=True
+            )
+            if approval is None:
+                raise HTTPException(status_code=404, detail="approval not found")
+            principal = verify_v13_benign_assertion(
+                payload.assertion,
+                secret=request.app.state.config.v13_benign_attestation_secret,
+                approval_id=approval_id,
+                evidence_sha256=approval.review_evidence_sha256,
+                action="attest-known-benign",
+            )
+            existing = await session.scalar(
+                select(V13KnownBenignAttestation).where(
+                    V13KnownBenignAttestation.approval_id == approval_id,
+                    V13KnownBenignAttestation.principal_sub == principal.sub,
+                )
+            )
+            if existing is not None:
+                if existing.principal_email != principal.email:
+                    raise HTTPException(
+                        status_code=409, detail="reviewer identity changed"
+                    )
+                return _approval_view(approval)
+            session.add(
+                V13KnownBenignAttestation(
+                    attestation_id=uuid4(),
+                    approval_id=approval_id,
+                    principal_sub=principal.sub,
+                    principal_email=principal.email,
+                    review_evidence_sha256=approval.review_evidence_sha256,
+                    assertion_sha256=principal.assertion_sha256,
+                    reason=payload.reason,
+                    attested_at=await _database_now(session),
+                )
+            )
+            await session.flush()
+            return _approval_view(approval)
+    except IntegrityError as error:
+        raise HTTPException(
+            status_code=409, detail="attestation changed concurrently"
+        ) from error
+
+
+@router.get(
+    "/known-benign-approvals/{approval_id}/trusted",
+    response_model=V13TrustedKnownBenignApproval,
+)
+async def get_trusted_known_benign_approval(
+    approval_id: UUID, _admin: AdminDep, session: SessionDep
+) -> V13TrustedKnownBenignApproval:
+    """Verified two-person projection. A legacy row stays untrusted."""
+    approval = await session.get(V13KnownBenignControlApproval, approval_id)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    return await load_trusted_known_benign_approval(session, approval)
+
+
+@router.post(
+    "/known-benign-approvals/{approval_id}/authorize-generation",
+    response_model=V13TrustedKnownBenignApproval,
+)
+async def authorize_known_benign_generation(
+    approval_id: UUID,
+    payload: V13KnownBenignAttestationRequest,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> V13TrustedKnownBenignApproval:
+    """Allow generation only for a principal who did not approve the control."""
+    approval = await session.get(V13KnownBenignControlApproval, approval_id)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    trusted = await load_trusted_known_benign_approval(session, approval)
+    principal = verify_v13_benign_assertion(
+        payload.assertion,
+        secret=request.app.state.config.v13_benign_attestation_secret,
+        approval_id=approval_id,
+        evidence_sha256=approval.review_evidence_sha256,
+        action="authorize-generation",
+    )
+    emails = set(
+        await session.scalars(
+            select(V13KnownBenignAttestation.principal_email).where(
+                V13KnownBenignAttestation.approval_id == approval_id
+            )
+        )
+    )
+    if generator_conflicts(trusted, principal, reviewer_emails=emails):
+        raise HTTPException(
+            status_code=409,
+            detail="generation principal also approved the control",
+        )
+    return trusted
 
 
 @router.post("/groups", response_model=V13GenerationGroupView)
