@@ -11,16 +11,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const getValidatorTicketForUpdate = `-- name: GetValidatorTicketForUpdate :one
+const getValidatorTicketForShare = `-- name: GetValidatorTicketForShare :one
 
 SELECT agent_id, validator_hotkey, status, issued_at, deadline, created_at, updated_at, bench_version, attempt_count, retry_after, manual_retry_grants, infra_retry_grants, slot_id, purpose, legacy_completion_allowed, purpose_revision, seed, dataset_sha256, seed_block, seed_block_hash, failure_reason, failed_at, first_reported_at, failure_detail, container_log_tail, container_log_tail_attempt, provider_outage_epoch, provider_outage_attempted_epoch FROM validator_tickets
 WHERE agent_id = $1::uuid
   AND bench_version = $2::integer
   AND validator_hotkey = $3::text
-FOR UPDATE
+FOR SHARE
 `
 
-type GetValidatorTicketForUpdateParams struct {
+type GetValidatorTicketForShareParams struct {
 	AgentID         pgtype.UUID `json:"agentId"`
 	BenchVersion    int32       `json:"benchVersion"`
 	ValidatorHotkey string      `json:"validatorHotkey"`
@@ -28,15 +28,21 @@ type GetValidatorTicketForUpdateParams struct {
 
 // Validator tickets: LOCK RANK 1 of the repo-wide hot-table lock order
 // validator_tickets -> inference_grants -> inference_requests. Every relay
-// transaction that will lock a grant row MUST lock the owning ticket row
+// transaction that will lock a grant row MUST take its ticket row lock
 // first (activate_inference_grant, begin_inference_request,
 // finish_inference_request all do). The relay never updates ticket data
-// columns — it only locks the row and reads its liveness fields.
-// Lock and read the ticket that owns a grant (composite PK). Zero rows is a
-// legal outcome (ticket deleted): callers treat pgx.ErrNoRows as
+// columns — it only reads the ticket's liveness fields — so the lock is a
+// SHARE lock: relay transactions on the same ticket no longer queue behind
+// each other (the 2026-09-07 slow log showed 28,664 executions averaging
+// 916 ms on an 8,625-row table, all tuple-lock waits), while a Platform
+// UPDATE or DELETE of the ticket still waits for every in-flight relay
+// transaction and every later relay transaction sees the new row. Budget
+// accounting is serialized on the grant row (rank 2), not here.
+// Share-lock and read the ticket that owns a grant (composite PK). Zero rows
+// is a legal outcome (ticket deleted): callers treat pgx.ErrNoRows as
 // "ticket missing" and fail closed, they do not error out.
-func (q *Queries) GetValidatorTicketForUpdate(ctx context.Context, arg GetValidatorTicketForUpdateParams) (ValidatorTicket, error) {
-	row := q.db.QueryRow(ctx, getValidatorTicketForUpdate, arg.AgentID, arg.BenchVersion, arg.ValidatorHotkey)
+func (q *Queries) GetValidatorTicketForShare(ctx context.Context, arg GetValidatorTicketForShareParams) (ValidatorTicket, error) {
+	row := q.db.QueryRow(ctx, getValidatorTicketForShare, arg.AgentID, arg.BenchVersion, arg.ValidatorHotkey)
 	var i ValidatorTicket
 	err := row.Scan(
 		&i.AgentID,
