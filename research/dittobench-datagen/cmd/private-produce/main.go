@@ -34,6 +34,7 @@ func run() error {
 	probe := flag.Int("probe-surfaces", 0, "diagnostic sample only; never emits an accepted artifact (max 32)")
 	concurrency := flag.Int("concurrency", 4, "provider concurrency 1..16")
 	rewriteModel := flag.String("rewrite-model", "", "explicit OpenRouter model")
+	rewriteMode := flag.String("rewrite-mode", "", "explicit rewrite mode: empty legacy or literal-text-v1")
 	rewriteProvider := flag.String("rewrite-provider", "", "exclusive OpenRouter provider slug")
 	validatorModel := flag.String("validator-model", "", "independent semantic validator model")
 	validatorProvider := flag.String("validator-provider", "", "exclusive semantic validator provider slug")
@@ -44,6 +45,7 @@ func run() error {
 	maxCost := flag.Float64("max-cost-usd", 0, "required per-invocation allocation from the remaining total spending budget")
 	flag.Parse()
 	profile := privatesurface.Profile{RewriteModel: *rewriteModel, RewriteProvider: *rewriteProvider, ValidatorModel: *validatorModel, ValidatorProvider: *validatorProvider, RewriteReasoning: *rewriteReasoning, ValidatorReasoning: *validatorReasoning}
+	profile.RewriteMode = *rewriteMode
 	if *profileOnly {
 		digest, err := profile.Digest()
 		if err != nil {
@@ -112,18 +114,19 @@ func run() error {
 			return err
 		}
 		type sample struct {
-			Index   int                            `json:"index"`
-			Before  string                         `json:"before"`
-			After   string                         `json:"after"`
-			Error   string                         `json:"error,omitempty"`
-			Receipt *privatesurface.SurfaceReceipt `json:"receipt,omitempty"`
+			Index     int                            `json:"index"`
+			Before    string                         `json:"before"`
+			Protected []string                       `json:"protected"`
+			After     string                         `json:"after"`
+			Error     string                         `json:"error,omitempty"`
+			Receipt   *privatesurface.SurfaceReceipt `json:"receipt,omitempty"`
 		}
 		rows := make([]sample, 0, count)
 		accepted := 0
 		for i := 0; i < count; i++ {
 			index := i * len(requests) / count
 			after, receipt, err := client.ProbeChecked(ctx, requests[index], check)
-			row := sample{Index: index, Before: requests[index].Text, After: after, Receipt: &receipt}
+			row := sample{Index: index, Before: requests[index].Text, Protected: requests[index].Protected, After: after, Receipt: &receipt}
 			if err != nil {
 				row.Error = err.Error()
 			} else {
