@@ -3470,6 +3470,13 @@ class ValidatorWorker:
         accepts the connection and then stalls would otherwise spend the margin
         here and produce the silent expiry the abort exists to prevent.
         """
+        logger.info(
+            "ticket failure agent=%s reason=%s detail=%s",
+            job.agent_id,
+            reason,
+            detail,
+        )
+        self._telemetry.record_failure_detail(detail)
         # Counted here rather than at the eight call sites because every
         # hand-back funnels through this method, so one increment cannot drift
         # out of step with one of them. Counted BEFORE the send: the question

@@ -49,6 +49,53 @@ def _agent() -> Agent:
     )
 
 
+def test_classified_request_rejection_is_still_not_retried() -> None:
+    tickets = [
+        _ticket(
+            validator_hotkey=f"validator-{index}",
+            failure_detail="inference_request_rejected:request_too_large",
+        )
+        for index in range(3)
+    ]
+    assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is True
+
+
+def test_non_miner_refusals_remain_retryable() -> None:
+    for infrastructure_code in (
+        "stale_session",
+        "grant_not_servable",
+        "grant_rate_denied",
+        "platform_capacity",
+        "provider_failure",
+    ):
+        tickets = [
+            _ticket(
+                validator_hotkey="validator-0",
+                failure_detail="inference_request_rejected:request_too_large",
+            ),
+            _ticket(
+                validator_hotkey="validator-1",
+                failure_detail=f"inference_request_rejected:{infrastructure_code}",
+            ),
+            _ticket(
+                validator_hotkey="validator-2",
+                failure_detail="inference_request_rejected:invalid_schema",
+            ),
+        ]
+        assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is False
+        assert dominant_agent_failure_detail(scores=[], tickets=tickets) is None
+        assert (
+            recommended_retry_action(scores=[], tickets=tickets, recovery_allowed=True)
+            == "retry"
+        )
+        _, allowed, reason, selected = recovery_gate(
+            agent=_agent(), scores=[], tickets=tickets, now=_NOW, bench_version=11
+        )
+        assert allowed is True
+        assert reason is None
+        assert len(selected) == 3
+
+
 def test_named_agent_failures_are_withdraw_not_retry() -> None:
     tickets = [_ticket(validator_hotkey=f"validator-{index}") for index in range(3)]
     assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is True

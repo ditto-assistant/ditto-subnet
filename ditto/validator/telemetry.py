@@ -273,6 +273,26 @@ class ValidatorTelemetry:
         except Exception as e:  # noqa: BLE001 - telemetry must never break scoring
             logger.warning("wandb log failed (continuing): %s", e)
 
+    def record_failure_detail(self, detail: str | None) -> None:
+        """Log the same stable failure code the ticket stores. Swallows errors."""
+        if self._run is None or not detail:
+            return
+        try:
+            admission = None
+            prefix = "inference_request_rejected:"
+            if detail.startswith(prefix):
+                admission = detail.removeprefix(prefix)
+            self._wandb.log(
+                {
+                    "failure/detail": detail,
+                    "failure/admission_code": admission or detail,
+                },
+                step=self._step,
+            )
+            self._step += 1
+        except Exception as e:  # noqa: BLE001 - telemetry must never break scoring
+            logger.warning("wandb failure log failed (continuing): %s", e)
+
     def record_confirmation_failure(self, stat: ConfirmationFailureStat) -> None:
         """Log one confirmation slot failure. Swallows all errors.
 

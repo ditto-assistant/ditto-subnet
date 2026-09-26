@@ -2089,6 +2089,14 @@ class TestPublicValidationFailureCode:
             == "inference_lane_saturated"
         )
 
+    def test_prefixed_admission_code(self) -> None:
+        assert (
+            public_validation_failure_code(
+                "inference_request_rejected:request_too_large"
+            )
+            == "request_too_large"
+        )
+
     def test_prefixed_relay_cause(self) -> None:
         assert (
             public_validation_failure_code(

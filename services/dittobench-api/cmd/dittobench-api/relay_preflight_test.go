@@ -1125,3 +1125,32 @@ func TestRelayCountersCatchMaskedTwoHundredEmptyHarnessResponse(t *testing.T) {
 		t.Fatal("masked 200-empty response must not survive relay health validation")
 	}
 }
+
+func TestPreReservation413StaysRequestTooLarge(t *testing.T) {
+	if got := admissionCode(http.StatusRequestEntityTooLarge, ""); got != "request_too_large" {
+		t.Fatalf("413 code = %s", got)
+	}
+	if got := admissionCode(http.StatusBadRequest, "invalid JSON request"); got != "invalid_json" {
+		t.Fatalf("400 code = %s", got)
+	}
+	if got := admissionCode(http.StatusConflict, "inference request is stale"); got != "stale_session" {
+		t.Fatalf("409 code = %s", got)
+	}
+	failure := relayFinalizeFailure(errAgentRequestRejected)
+	if failure.Code != "inference_request_rejected" || failure.Retryable {
+		t.Fatalf("wire class = %+v", failure)
+	}
+	attachAdmissionTaxonomy(failure, map[string]admissionBucket{
+		"request_too_large": {Count: 2, HTTPStatus: 413, First: "a", Last: "b"},
+	})
+	taxonomy, ok := failure.Diagnostics["admission_taxonomy"].(map[string]admissionBucket)
+	if !ok || taxonomy["request_too_large"].Count != 2 {
+		t.Fatalf("taxonomy = %#v", failure.Diagnostics)
+	}
+	delta := admissionSince(nil, map[string]admissionBucket{
+		"request_too_large": {Count: 3, HTTPStatus: 413, First: "a", Last: "c"},
+	})
+	if delta["request_too_large"].Count != 3 || delta["request_too_large"].First != "a" {
+		t.Fatalf("delta = %+v", delta)
+	}
+}

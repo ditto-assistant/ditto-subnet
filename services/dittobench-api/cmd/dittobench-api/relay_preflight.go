@@ -65,6 +65,9 @@ type relayHealthSnapshot struct {
 	// UsageUnavailable; this exists so finalize can name a rejected request
 	// instead of a spent grant.
 	AgentRequestRejections uint64 `json:"agent_request_rejections"`
+	// Admission records pre-reservation refusals by stable code. Counts and
+	// timestamps only; request bodies are not copied.
+	Admission map[string]admissionBucket `json:"admission,omitempty"`
 	// CapacityExhaustions counts calls that spent their entire bounded
 	// backpressure wait budget and gave up. Reported separately from
 	// InfrastructureFailures so a saturated rail is legible, but deliberately
@@ -101,25 +104,26 @@ type relayHealthSnapshot struct {
 // therefore its digest -- are byte-identical to what this code produced before
 // retries existed. Only a run that actually retried carries the extra keys.
 type relayExecutionSummary struct {
-	Requests                  uint64 `json:"requests"`
-	Successes                 uint64 `json:"successes"`
-	InfrastructureFailures    uint64 `json:"infrastructure_failures"`
-	MinerRecoverableFailures  uint64 `json:"miner_recoverable_failures,omitempty"`
-	PlatformInternalFailures  uint64 `json:"platform_internal_failures,omitempty"`
-	GrantDenials              uint64 `json:"grant_denials,omitempty"`
-	GrantAgentDeclines        uint64 `json:"grant_agent_declines,omitempty"`
-	DeclineEvidenceMismatches uint64 `json:"decline_evidence_mismatches,omitempty"`
-	BudgetEvidenceAbsences    uint64 `json:"budget_evidence_absences,omitempty"`
-	AgentRequestRejections    uint64 `json:"agent_request_rejections,omitempty"`
-	CapacityExhaustions       uint64 `json:"capacity_exhaustions,omitempty"`
-	RecoveryWaits             uint64 `json:"recovery_waits,omitempty"`
-	RecoveryExhaustions       uint64 `json:"recovery_exhaustions,omitempty"`
-	CallerCancellations       uint64 `json:"caller_cancellations"`
-	UpstreamAttempts          uint64 `json:"upstream_attempts"`
-	Retries                   uint64 `json:"retries"`
-	EmbeddingRetries          uint64 `json:"embedding_retries,omitempty"`
-	RouteProbeAttempts        uint64 `json:"route_probe_attempts,omitempty"`
-	RouteProbeRouted          uint64 `json:"route_probe_routed,omitempty"`
+	Requests                  uint64                     `json:"requests"`
+	Successes                 uint64                     `json:"successes"`
+	InfrastructureFailures    uint64                     `json:"infrastructure_failures"`
+	MinerRecoverableFailures  uint64                     `json:"miner_recoverable_failures,omitempty"`
+	PlatformInternalFailures  uint64                     `json:"platform_internal_failures,omitempty"`
+	GrantDenials              uint64                     `json:"grant_denials,omitempty"`
+	GrantAgentDeclines        uint64                     `json:"grant_agent_declines,omitempty"`
+	DeclineEvidenceMismatches uint64                     `json:"decline_evidence_mismatches,omitempty"`
+	BudgetEvidenceAbsences    uint64                     `json:"budget_evidence_absences,omitempty"`
+	AgentRequestRejections    uint64                     `json:"agent_request_rejections,omitempty"`
+	Admission                 map[string]admissionBucket `json:"admission,omitempty"`
+	CapacityExhaustions       uint64                     `json:"capacity_exhaustions,omitempty"`
+	RecoveryWaits             uint64                     `json:"recovery_waits,omitempty"`
+	RecoveryExhaustions       uint64                     `json:"recovery_exhaustions,omitempty"`
+	CallerCancellations       uint64                     `json:"caller_cancellations"`
+	UpstreamAttempts          uint64                     `json:"upstream_attempts"`
+	Retries                   uint64                     `json:"retries"`
+	EmbeddingRetries          uint64                     `json:"embedding_retries,omitempty"`
+	RouteProbeAttempts        uint64                     `json:"route_probe_attempts,omitempty"`
+	RouteProbeRouted          uint64                     `json:"route_probe_routed,omitempty"`
 }
 
 // provesV9RouteDisposition distinguishes a genuine zero-request scored
@@ -608,6 +612,7 @@ func relayExecutionSince(start, end relayHealthSnapshot) (relayExecutionSummary,
 		DeclineEvidenceMismatches: end.DeclineEvidenceMismatches - start.DeclineEvidenceMismatches,
 		BudgetEvidenceAbsences:    end.BudgetEvidenceAbsences - start.BudgetEvidenceAbsences,
 		AgentRequestRejections:    end.AgentRequestRejections - start.AgentRequestRejections,
+		Admission:                 admissionSince(start.Admission, end.Admission),
 		CapacityExhaustions:       end.CapacityExhaustions - start.CapacityExhaustions,
 		RecoveryWaits:             end.RecoveryWaits - start.RecoveryWaits,
 		RecoveryExhaustions:       end.RecoveryExhaustions - start.RecoveryExhaustions,
@@ -941,8 +946,90 @@ func relaySandboxFailurePrefix(failure *store.Failure) string {
 	return "harness exhausted its inference allowance: "
 }
 
+type admissionBucket struct {
+	Count      int    `json:"count"`
+	HTTPStatus int    `json:"http_status"`
+	First      string `json:"first"`
+	Last       string `json:"last"`
+}
+
+func admissionCode(status int, detail string) string {
+	lower := strings.ToLower(detail)
+	switch status {
+	case http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case http.StatusBadRequest:
+		if strings.Contains(lower, "invalid json") {
+			return "invalid_json"
+		}
+		return "invalid_schema"
+	case http.StatusConflict:
+		if strings.Contains(lower, "stale") {
+			return "stale_session"
+		}
+		return "grant_not_servable"
+	case http.StatusForbidden:
+		return "model_not_allowed"
+	case http.StatusTooManyRequests:
+		return "grant_rate_denied"
+	case http.StatusServiceUnavailable:
+		return "platform_capacity"
+	case http.StatusBadGateway, http.StatusGatewayTimeout:
+		return "provider_failure"
+	default:
+		if status >= 500 {
+			return "provider_failure"
+		}
+		return ""
+	}
+}
+
+func admissionSince(start, end map[string]admissionBucket) map[string]admissionBucket {
+	if len(end) == 0 {
+		return nil
+	}
+	out := map[string]admissionBucket{}
+	for code, after := range end {
+		before := start[code]
+		if after.Count <= before.Count {
+			continue
+		}
+		first := after.First
+		if before.Count > 0 && before.First != "" {
+			first = before.First
+		}
+		out[code] = admissionBucket{
+			Count:      after.Count - before.Count,
+			HTTPStatus: after.HTTPStatus,
+			First:      first,
+			Last:       after.Last,
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func attachAdmissionTaxonomy(failure *store.Failure, admission map[string]admissionBucket) {
+	if failure == nil || len(admission) == 0 {
+		return
+	}
+	if failure.Diagnostics == nil {
+		failure.Diagnostics = map[string]any{}
+	}
+	failure.Diagnostics["admission_taxonomy"] = admission
+}
+
 func (s *server) failRelayUnavailable(runID string, err error) {
+	s.failRelayUnavailableWithAdmission(runID, err, nil)
+}
+
+func (s *server) failRelayUnavailableWithAdmission(
+	runID string, err error, admission map[string]admissionBucket,
+) {
 	failure := relayFinalizeFailure(err)
+	attachAdmissionTaxonomy(failure, admission)
 	// The prose has to follow the classification. "locked model relay
 	// unavailable" was the only sentence this path could produce, and it was a
 	// false statement for every agent-caused finalize failure -- which is how a
