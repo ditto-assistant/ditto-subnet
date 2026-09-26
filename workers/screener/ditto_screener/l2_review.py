@@ -2512,7 +2512,7 @@ def _signed_runtime_lease_matches(
     max_age_seconds: int = 300,
 ) -> bool:
     if lease is None:
-        return not (policy_version == 13 and required)
+        return not (policy_version >= 13 and required)
     age_seconds = int(time.time()) - lease.observed_at
     return (
         policy_version == 13
@@ -2652,7 +2652,7 @@ class TerraSolSourceReviewAgent:
             artifact_sha256=artifact_sha256,
             policy_version=policy_version,
             required=self._require_signed_runtime_lease
-            or (policy_version == 13 and not self._l3_enabled),
+            or (policy_version >= 13 and not self._l3_enabled),
             max_age_seconds=self._signed_runtime_lease_max_age_seconds,
         ):
             result = L2RunResult(
@@ -5434,7 +5434,7 @@ class LayeredSourceReviewAgent:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> SourceReviewObservation:
         requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False) or (
-            policy_version == 13 and getattr(self._l2, "_l3_enabled", True) is False
+            policy_version >= 13 and getattr(self._l2, "_l3_enabled", True) is False
         )
         lease_matches = _signed_runtime_lease_matches(
             scored_runtime_evidence,
@@ -5500,7 +5500,7 @@ class LayeredSourceReviewAgent:
     ) -> SourceReviewObservation:
         """Resolve a precomputed, artifact-bound L1 lead without rerunning L1."""
         requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False) or (
-            policy_version == 13 and getattr(self._l2, "_l3_enabled", True) is False
+            policy_version >= 13 and getattr(self._l2, "_l3_enabled", True) is False
         )
         lease_matches = _signed_runtime_lease_matches(
             scored_runtime_evidence,

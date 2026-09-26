@@ -945,6 +945,23 @@ async def test_v13_l3_off_requires_matching_signed_lease_even_without_env_flag()
     assert l1.calls == l2.calls == 1
 
 
+async def test_future_policy_l3_off_does_not_certify_without_runtime_contract() -> None:
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        policy_version=14,
+        scored_runtime_evidence=None,
+    )
+    assert result.error_code == "l2-runtime-evidence-unavailable"
+    assert l1.calls == l2.calls == 0
+
+
 async def test_v13_disabled_review_reports_preflight_cause() -> None:
     l1 = _FakeL1(_l1("low", clearance_certified=True))
     l2 = _FakeL2(_model_result(_safe()))
