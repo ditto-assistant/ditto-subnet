@@ -443,7 +443,9 @@ async def schedule_l2_report_canary(
                     session, payload.historical_ruling_id
                 )
                 if action is None or action.action != "clear":
-                    raise HTTPException(status_code=409, detail="ATH clear action missing")
+                    raise HTTPException(
+                        status_code=409, detail="ATH clear action missing"
+                    )
                 row.source_attestation["action_id"] = str(action.action_id)
             if not await _historical_ruling_matches(session, row):
                 raise HTTPException(status_code=409, detail="historical ruling changed")
