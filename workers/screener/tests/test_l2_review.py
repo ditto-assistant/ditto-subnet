@@ -70,7 +70,10 @@ from ditto_screener.l2_review import (
     l2_safety_prompt_revision,
 )
 from ditto_screener.policy import SourceReviewObservation
-from ditto_screener.source_review import TarSourceRepository
+from ditto_screener.source_review import (
+    OpenRouterSourceReviewAgent,
+    TarSourceRepository,
+)
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScoredRuntimeEvidenceLease,
@@ -6619,6 +6622,131 @@ async def test_long_report_lease_preserves_separate_l1_and_l2_windows() -> None:
     assert l1.deadline == pytest.approx(started + 3_600, abs=0.1)
     assert l2.deadline == deadline
     assert l2.deadline - l1.deadline >= 1_800
+
+
+async def test_slow_real_l1_transport_leaves_l2_time_under_report_lease(
+    tmp_path: Path,
+) -> None:
+    from tests.test_source_review import _BENIGN_REVIEW, _tool
+
+    archive, sha = _tar(tmp_path, "fn main() {}")
+    key = tmp_path / "review-key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    transport_calls = 0
+
+    async def slow_transport(_request: httpx.Request) -> httpx.Response:
+        nonlocal transport_calls
+        transport_calls += 1
+        await asyncio.sleep(0.12)
+        tool = (
+            _tool("read", "read_file", {"path": "src/main.rs"})
+            if transport_calls == 1
+            else _tool("submit", "submit_review", _BENIGN_REVIEW)
+        )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "tool_calls": [tool]}}]
+            },
+        )
+
+    l1 = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=0.5,
+        max_steps=2,
+        transport=httpx.MockTransport(slow_transport),
+        transport_retry_delays=(),
+        max_completion_request_seconds=0.25,
+    )
+
+    class SlowL2(_FakeL2):
+        async def review(self, *_args: Any, **kwargs: Any) -> L2RunResult:
+            result = await super().review(*_args, **kwargs)
+            assert self.deadline is not None
+            await asyncio.sleep(0.1)
+            assert asyncio.get_running_loop().time() < self.deadline
+            return result
+
+    l2 = SlowL2(_model_result(_safe()))
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=l1, l2=l2, mode="enforce"
+    )
+    started = asyncio.get_running_loop().time()
+    parent_deadline = started + 1.0
+    await layered.review(
+        str(archive),
+        artifact_sha256=sha,
+        attempt_id=ATTEMPT,
+        deadline=parent_deadline,
+    )
+
+    assert transport_calls == 2
+    assert l2.calls == 1
+    assert l2.deadline == parent_deadline
+    assert asyncio.get_running_loop().time() - started >= 0.34
+
+
+async def test_short_parent_deadline_caps_l1_even_with_large_local_timeout() -> None:
+    l1 = _FakeL1(_l1("medium"))
+    l1._timeout_seconds = 3_600
+    l2 = _FakeL2(_model_result(_safe()))
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=l1, l2=l2, mode="enforce"
+    )
+    deadline = asyncio.get_running_loop().time() + 0.1
+    await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        deadline=deadline,
+    )
+    assert l1.deadline == deadline
+    assert l2.deadline == deadline
+
+
+async def test_short_parent_deadline_cancels_slow_l1_transport(
+    tmp_path: Path,
+) -> None:
+    archive, sha = _tar(tmp_path, "fn main() {}")
+    key = tmp_path / "review-key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    cancelled = asyncio.Event()
+
+    async def blocked_transport(_request: httpx.Request) -> httpx.Response:
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return httpx.Response(500)
+
+    l1 = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=3_600,
+        max_steps=1,
+        transport=httpx.MockTransport(blocked_transport),
+        transport_retry_delays=(),
+    )
+    l2 = _FakeL2(_model_result(_safe()))
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=l1, l2=l2, mode="enforce"
+    )
+    started = asyncio.get_running_loop().time()
+    await layered.review(
+        str(archive),
+        artifact_sha256=sha,
+        attempt_id=ATTEMPT,
+        deadline=started + 0.1,
+    )
+    assert cancelled.is_set()
+    assert l2.calls == 0
+    assert asyncio.get_running_loop().time() - started < 0.5
 
 
 async def test_exploration_reserves_the_terminal_adjudicator_deadline() -> None:
