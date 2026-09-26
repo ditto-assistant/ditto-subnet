@@ -2518,6 +2518,7 @@ class TerraSolSourceReviewAgent:
         max_completion_request_seconds: float | None = None,
         independent_analyst: bool = False,
         terminal_verdict_required: bool = False,
+        turn_shape_audit: bool = False,
         retry_provider_body_fault_once: bool = False,
         analyst_provider: str | None = None,
         compact_review_packet: bool = False,
@@ -2561,6 +2562,7 @@ class TerraSolSourceReviewAgent:
         if terminal_verdict_required and l3_enabled:
             raise ValueError("terminal-only comparator cannot enable L3")
         self._terminal_verdict_required = terminal_verdict_required
+        self._turn_shape_audit = turn_shape_audit
         self._retry_provider_body_fault_once = retry_provider_body_fault_once
         self._analyst_provider = analyst_provider
         if compact_review_packet and not terminal_verdict_required:
@@ -4379,6 +4381,67 @@ class TerraSolSourceReviewAgent:
                 _compact_consumed_tool_outputs(items)
             items.extend(output)
             calls = [item for item in output if item.get("type") == "function_call"]
+            if self._turn_shape_audit:
+                output_types = {
+                    "function_call": 0,
+                    "message": 0,
+                    "reasoning": 0,
+                    "other": 0,
+                }
+                for item in output:
+                    kind = item.get("type")
+                    output_types[
+                        kind
+                        if isinstance(kind, str) and kind in output_types
+                        else "other"
+                    ] += 1
+                response_body = payload if isinstance(payload, dict) else {}
+                response_status = response_body.get("status")
+                ditto_provider = response.headers.get("x-ditto-provider")
+                ditto_route = response.headers.get("x-ditto-route")
+                request_id = (
+                    response.headers.get("x-ditto-request-id")
+                    or response.headers.get("x-request-id")
+                    or response_body.get("id")
+                )
+                self._audit.record(
+                    {
+                        "recorded_at": time.time(),
+                        "event_type": "report_only_turn_shape",
+                        "artifact_sha256": artifact_sha256,
+                        "role": role,
+                        "step": steps_used,
+                        "configured_provider": self._inference_provider,
+                        "model": response_model
+                        if isinstance(response_model, str)
+                        and re.fullmatch(r"[A-Za-z0-9_./:-]{1,96}", response_model)
+                        else None,
+                        "selected_provider": response_provider
+                        if isinstance(response_provider, str)
+                        and re.fullmatch(r"[A-Za-z0-9_ .:-]{1,80}", response_provider)
+                        else None,
+                        "ditto_provider": ditto_provider
+                        if ditto_provider
+                        and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", ditto_provider)
+                        else None,
+                        "ditto_route": ditto_route
+                        if ditto_route
+                        and re.fullmatch(r"[A-Za-z0-9_.;:-]{1,96}", ditto_route)
+                        else None,
+                        "http_status": response.status_code,
+                        "response_status": response_status
+                        if isinstance(response_status, str)
+                        and response_status
+                        in {"completed", "failed", "cancelled", "incomplete"}
+                        else "other",
+                        "response_id_digest": hashlib.sha256(
+                            request_id.encode()
+                        ).hexdigest()[:16]
+                        if isinstance(request_id, str)
+                        else None,
+                        "output_types": output_types,
+                    }
+                )
             if self._terminal_verdict_required:
                 allowed_tool_names = {
                     str(tool["name"]) for tool in _l2_tools_for_policy(policy_version)

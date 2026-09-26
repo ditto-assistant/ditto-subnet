@@ -1032,11 +1032,13 @@ class BuildGate:
         *,
         policy: PolicyEngine,
         journal: ReviewJournal,
+        turn_shape_audit: bool = False,
     ) -> None:
         self._config = config
         self._client = client
         self._policy = policy
         self._journal = journal
+        self._turn_shape_audit = turn_shape_audit
         self._static_preflight_audit = StaticPreflightAuditJournal(
             config.static_preflight_audit_file
         )
@@ -1076,6 +1078,7 @@ class BuildGate:
                 config.l2_audit_journal_file,
                 retention_days=config.l2_audit_retention_days,
             ),
+            turn_shape_audit=self._turn_shape_audit,
             timeout_seconds=config.l2_timeout_seconds,
             max_steps=config.l2_max_steps,
             max_input_tokens=config.l2_max_input_tokens,

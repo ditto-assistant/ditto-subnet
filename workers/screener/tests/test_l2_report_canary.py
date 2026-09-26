@@ -78,7 +78,8 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
             raise AssertionError("report-only lane posted a screening verdict")
 
     class Gate:
-        def __init__(self, canary_config, *_args, **_kwargs):
+        def __init__(self, canary_config, *_args, **kwargs):
+            assert kwargs["turn_shape_audit"] is True
             assert canary_config.l2_review_mode == "shadow"
             assert canary_config.l2_always_escalate
             assert canary_config.require_signed_runtime_lease
