@@ -19,6 +19,15 @@ def _impact_bps(received_rao: int, lost_rao: int) -> int:
     return 10_000 * lost_rao // total if total > 0 else 10_000
 
 
+def _combined_impact_bps(first_bps: int, second_bps: int) -> int:
+    """Price impact of two sequential swaps, as ditto.treasury.quote reports it.
+
+    The GM-alpha route sells DITTO alpha for TAO and then buys SN28 alpha with
+    that TAO, so its impact compounds both hops rather than only the second.
+    """
+    return 10_000 - (10_000 - first_bps) * (10_000 - second_bps) // 10_000
+
+
 async def _read_quote(source_alpha_rao: int) -> dict:
     async with asyncio.timeout(15):
         async with bt.AsyncSubtensor(network="finney") as chain:
@@ -32,6 +41,7 @@ async def _read_quote(source_alpha_rao: int) -> dict:
                 bt.Balance.from_rao(source_alpha_rao).set_unit(118)
             )
             gm_alpha, gm_slippage = gm.tao_to_alpha_with_slippage(tao)
+            ditto_impact = _impact_bps(tao.rao, ditto_slippage.rao)
             return {
                 "block": block,
                 "block_hash": block_hash,
@@ -39,12 +49,14 @@ async def _read_quote(source_alpha_rao: int) -> dict:
                 "tao_path": {
                     "deposit_asset": "TAO",
                     "amount_rao": tao.rao,
-                    "price_impact_bps": _impact_bps(tao.rao, ditto_slippage.rao),
+                    "price_impact_bps": ditto_impact,
                 },
                 "gm_alpha_path": {
                     "deposit_asset": "SN28_ALPHA",
                     "amount_rao": gm_alpha.rao,
-                    "price_impact_bps": _impact_bps(gm_alpha.rao, gm_slippage.rao),
+                    "price_impact_bps": _combined_impact_bps(
+                        ditto_impact, _impact_bps(gm_alpha.rao, gm_slippage.rao)
+                    ),
                 },
                 "gm_credit_usd": None,
                 "execution_enabled": False,

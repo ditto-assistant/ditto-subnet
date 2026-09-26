@@ -38,6 +38,8 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     AttestationRejectedError,
     HotkeyAgentNotFoundError,
+    LoginRejectedError,
+    LoginRequiredError,
     PaymentAmountMismatchError,
     PaymentRecoveryExpiredError,
     PreCheckRejectedError,
@@ -512,3 +514,33 @@ class TestTransportErrors:
             client.get_agent_status(agent_id=UUID(int=0))
 
         assert isinstance(e.value.__cause__, httpx.ConnectError)
+
+
+class TestRevokeMinerSession:
+    def test_invalid_or_expired_session_is_login_required(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                401, json={"detail": "miner session is invalid or expired"}
+            )
+
+        with make_client(handler) as client, pytest.raises(LoginRequiredError):
+            client.revoke_miner_session("ditto_ms_" + "ab" * 32)
+
+    def test_other_failures_stay_login_rejected(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, json={"detail": "unavailable"})
+
+        with make_client(handler) as client, pytest.raises(LoginRejectedError):
+            client.revoke_miner_session("ditto_ms_" + "ab" * 32)
+
+    def test_success_revokes_without_error(self) -> None:
+        paths: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            paths.append(request.url.path)
+            return httpx.Response(204)
+
+        with make_client(handler) as client:
+            client.revoke_miner_session("ditto_ms_" + "ab" * 32)
+
+        assert paths == ["/api/v1/miner-auth/session/revoke"]

@@ -10,10 +10,11 @@ from uuid import uuid4
 
 import bittensor
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from ditto.api_models.weight_receipt import (
     FinalizedWeightReceipt,
+    weight_receipt_digest,
     weight_receipt_signing_message,
     weight_vector_digest,
 )
@@ -192,29 +193,75 @@ async def test_unsigned_tampering_and_stale_signature_rejected(
     assert response.status_code == 401, response.text
 
 
+async def test_exact_replay_acknowledged_without_mutable_rechecks(
+    app, client, session_maker
+):
+    raw = await _setup(app, session_maker)
+    first = await _post(client, _signed(raw))
+    assert first.status_code == 200, first.text
+    assert first.json()["receipt_digest"] == weight_receipt_digest(
+        FinalizedWeightReceipt.model_validate(raw)
+    )
+    # Pins are append-only; losing this one proves the replay does not
+    # re-run provenance checks against state outside the stored claim.
+    async with session_maker() as session, session.begin():
+        await session.execute(delete(LedgerEpochSnapshot))
+    again = await _post(client, _signed(raw))
+    assert again.status_code == 200, again.text
+    assert again.json() == first.json()
+    forged = _signed(raw)
+    forged["signature"] = "00" * 64
+    assert (await _post(client, forged)).status_code == 401
+    raw["attempt"]["reveal_round"] += 1
+    conflict = await _post(client, _signed(raw))
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["message"].startswith("attempt_rebound: ")
+
+
 async def test_same_job_or_attempt_cannot_be_rebound(app, client, session_maker):
     raw = await _setup(app, session_maker)
     first = await _post(client, _signed(raw))
     assert first.status_code == 200, first.text
     raw["attempt"]["commit_block"] += 1
-    assert (await _post(client, _signed(raw))).status_code == 409
+    response = await _post(client, _signed(raw))
+    assert response.status_code == 409, response.text
+    assert response.json()["message"].startswith("attempt_rebound: ")
     raw["attempt"]["attempt_id"] = str(uuid4())
     raw["task_id"] += 1
-    assert (await _post(client, _signed(raw))).status_code == 409
+    response = await _post(client, _signed(raw))
+    assert response.status_code == 409, response.text
+    assert response.json()["message"].startswith("request_rebound: ")
+
+
+async def test_commit_at_its_ledger_pin_is_rejected(app, client, session_maker):
+    raw = await _setup(app, session_maker)
+    raw["attempt"]["commit_block"] = 101
+    response = await _post(client, _signed(raw))
+    assert response.status_code == 409, response.text
+    assert response.json()["message"].startswith("commit_before_pin: ")
 
 
 @pytest.mark.parametrize(
-    "field,value",
+    "field,value,code",
     [
-        ("champion_agent_id", "11111111-2222-4333-8444-555555555555"),
-        ("champion_artifact_sha256", "ff" * 32),
-        ("epoch_index", 124),
-        ("ledger_digest", "ef" * 32),
-        ("bench_version", 14),
+        (
+            "ledger_snapshot_id",
+            "11111111-2222-4333-8444-555555555555",
+            "unknown_ledger_snapshot",
+        ),
+        (
+            "champion_agent_id",
+            "11111111-2222-4333-8444-555555555555",
+            "ledger_pin_mismatch",
+        ),
+        ("champion_artifact_sha256", "ff" * 32, "artifact_pin_mismatch"),
+        ("epoch_index", 124, "ledger_pin_mismatch"),
+        ("ledger_digest", "ef" * 32, "ledger_pin_mismatch"),
+        ("bench_version", 14, "ledger_pin_mismatch"),
     ],
 )
 async def test_same_hotkey_and_vector_cannot_name_another_artifact_or_pin(
-    app, client, session_maker, field, value
+    app, client, session_maker, field, value, code
 ):
     raw = await _setup(app, session_maker)
     raw["provenance"][field] = value
@@ -226,6 +273,7 @@ async def test_same_hotkey_and_vector_cannot_name_another_artifact_or_pin(
     )
     response = await _post(client, _signed(raw))
     assert response.status_code == 409, response.text
+    assert response.json()["message"].startswith(f"{code}: ")
     async with session_maker() as session:
         assert (
             await session.scalar(

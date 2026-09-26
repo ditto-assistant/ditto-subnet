@@ -1581,6 +1581,7 @@ describe('Backroom MCP tools', () => {
       ticket_status: 'scored',
       ticket_deadline: '2026-07-20T04:00:00Z',
       replacement_pending: false,
+      replacement_queued: false,
       replacement_request_id: null,
       replacement_reason: null,
       replacement_actor: null,

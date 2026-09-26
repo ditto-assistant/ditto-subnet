@@ -379,20 +379,24 @@ async def claim_l2_report_canary(
         )
         if active:
             return None
-        row = await session.scalar(
-            select(ScreenerL2ReportCanary)
-            .where(
-                ScreenerL2ReportCanary.target_node_id == node_id,
-                ScreenerL2ReportCanary.status == "queued",
-            )
-            .order_by(ScreenerL2ReportCanary.created_at)
-            .with_for_update(skip_locked=True)
+        queued = select(ScreenerL2ReportCanary).where(
+            ScreenerL2ReportCanary.target_node_id == node_id,
+            ScreenerL2ReportCanary.status == "queued",
         )
-        if row is None:
-            return None
-        if row.run_mode == "full_runtime" and not await _full_runtime_worker_ready(
+        if not await _full_runtime_worker_ready(
             session, node=node, now=now, instance_id=payload.instance_id
         ):
+            # Leave full-runtime rows for an adopted worker rather than
+            # returning nothing: scheduling accepts any adopted worker on the
+            # node, so the oldest row may be one this caller can never take,
+            # and it must not block the source-only rows queued behind it.
+            queued = queued.where(ScreenerL2ReportCanary.run_mode != "full_runtime")
+        row = await session.scalar(
+            queued.order_by(ScreenerL2ReportCanary.created_at).with_for_update(
+                skip_locked=True
+            )
+        )
+        if row is None:
             return None
         try:
             agent, _ = await _exact_source(session, row)
