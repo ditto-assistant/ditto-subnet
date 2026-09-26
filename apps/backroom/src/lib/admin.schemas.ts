@@ -491,6 +491,7 @@ export const scheduleL2ReportCanaryInputSchema = z.object({
   expectedScoreCount: z.number().int().nonnegative(),
   targetNodeId: z.string().min(1).max(63),
   reviewLabel: z.enum(['candidate_clear', 'known_reject']),
+  runMode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   confirmation: z.literal('QUEUE REPORT ONLY L2 CANARY'),
 })
 
@@ -504,6 +505,7 @@ export const l2ReportCanaryViewSchema = z.object({
   expected_agent_status: z.string(),
   expected_score_count: z.number().int().nonnegative(),
   review_label: z.string(),
+  run_mode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   status: z.string(),
   claimed_instance_id: z.string().nullable(),
   lease_expires_at: z.string().nullable().optional(),

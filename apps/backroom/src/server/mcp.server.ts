@@ -715,7 +715,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   rotate_v13_scorer_cohort:
     'Rotate the exact pinned V13 cohort to a unanimously signed packet after all V13 tickets drain; preserves pin history.',
   schedule_l2_report_canary:
-    'Queue one isolated L2 report on an enrolled Hetzner node; never changes screening, scoring, or quarantine.',
+    'Queue one isolated exact-artifact report on an enrolled Hetzner node. source_only is the default; full_runtime additionally runs private challenges in a separate Docker namespace. Neither mode changes screening, scoring, or quarantine.',
   get_copy_court_settings:
     'Read the copy-hold triage court posture and revision history.',
   get_confirmation_seed_anchors:
