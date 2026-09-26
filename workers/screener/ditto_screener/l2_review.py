@@ -5701,10 +5701,7 @@ def _qualifies_l2_only_clear(
         and analyst.dossier_complete
         and (
             analyst.direct_clear_graph_complete
-            or (
-                not _l1_evidence(l1)
-                and _clean_l1_graph_complete(dossier)
-            )
+            or (not _l1_evidence(l1) and _clean_l1_graph_complete(dossier))
         )
         and "read_file" in analyst.tools
         and bool(analyst.analyzed_files)

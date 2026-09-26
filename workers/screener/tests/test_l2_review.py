@@ -1175,9 +1175,7 @@ def test_v13_l3_off_certifies_only_complete_clean_l1_l2_agreement() -> None:
             **{
                 **kwargs,
                 "dossier": {
-                    "deterministic": {
-                        "main_call_graph": {**clean_graph, **changed}
-                    }
+                    "deterministic": {"main_call_graph": {**clean_graph, **changed}}
                 },
             },
         )
