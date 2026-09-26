@@ -51,6 +51,8 @@ jobs:
         root:
           - infra/terraform/stacks/gcp-platform
           - infra/terraform/stacks/gcp-preview
+          - infra/terraform/stacks/gcp-v13-private-verifier
+          - infra/terraform/stacks/gcp-v13-private-bootstrap
           - infra/terraform/stacks/cloudflare-dittobench
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,9 +99,12 @@ jobs:
 
       - name: Syntax-check subnet playbooks
         run: |
-          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml; do
+          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-v13-private-verifier-stage.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml; do
             uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml "$playbook"
           done
+
+      - name: Check V13 private inventory preflight rejects missing hosts
+        run: uvx --from pytest==8.4.2 pytest tests/test_v13_private_inventory.py -q
 
       - name: Prove the screener BuildKit cache cleanup stays bounded and tunable
         run: |
