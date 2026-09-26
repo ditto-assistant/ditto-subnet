@@ -91,27 +91,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v41-policy-v13"
+        return "l2-terra-source-review-v43-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
+    if policy_version == 13:
+        return "l3-sol-adversarial-critic-v22-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
+    if policy_version == 13:
+        return "l3-sol-violation-cause-v28-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
+    if policy_version == 13:
+        return "l3-sol-cause-disagreement-v8-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
+    if policy_version == 13:
+        return "l3-sol-safety-adjudicator-v26-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -140,10 +148,10 @@ def l2_prompt_cache_key(policy_version: int) -> str:
 
 
 L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v3"
-L2_DOSSIER_REVISION = "l1-compressed-dossier-v11"
+L2_DOSSIER_REVISION = "l1-compressed-dossier-v12"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
-L2_HARNESS_REVISION = "l2-isolated-coding-harness-v19"
+L2_HARNESS_REVISION = "l2-isolated-coding-harness-v20"
 L2_PRICING_REVISION = "openrouter-catalog-2026-08-31-terra-glm-5-2-sol-reported-cost-v3"
 L2_STARTER_MANIFESTS = tuple(
     sorted((Path(__file__).parent / "data").glob("starter-kit-provenance-*.json"))
@@ -267,6 +275,15 @@ _SUBMISSION_VALIDATION_HINTS = {
         "Bind the trigger, authority decision, and observed effect to exact "
         "source locations and satisfy the required causal roles."
     ),
+    "slot_rewrite_invariant": (
+        "For a scorer_field_rewritten transition under policy V12 or later, "
+        "mark I4 derived-value authority as breach with a null pass_clause "
+        "and bind its evidence indices to the authority-bypass source line."
+    ),
+    "invariant_binding": (
+        "Mark the invariant required by the authority transition and resolution "
+        "basis as breach, with evidence indices bound to the authority line."
+    ),
     "causal_path": (
         "For a violation, causal_path needs at least two exact artifact "
         "path/line entries, including one trigger and one effect role."
@@ -296,6 +313,12 @@ _SUBMISSION_VALIDATION_HINTS = {
 def _submission_validation_subcode(error: ValueError) -> str:
     """Reduce fixed host validation failures to source-free correction codes."""
     message = str(error)
+    if "L2 scorer field rewrite requires I4 breach" in message:
+        return "slot_rewrite_invariant"
+    if "L2 causal mechanism lacks its required invariant breach" in message:
+        return "invariant_binding"
+    if "L2 invariant breach is not bound to authority evidence" in message:
+        return "invariant_binding"
     if "L2 violation lacks a causal trigger/effect path" in message:
         return "causal_path"
     if any(
@@ -603,6 +626,7 @@ class L2TrajectoryError(ValueError):
         steps_used: int,
         read_bytes_used: int,
         read_files_used: int,
+        failure_subcode: str | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
@@ -614,6 +638,7 @@ class L2TrajectoryError(ValueError):
         self.steps_used = steps_used
         self.read_bytes_used = read_bytes_used
         self.read_files_used = read_files_used
+        self.failure_subcode = failure_subcode
 
 
 def _bounded_tail_lines(path: Path, *, max_bytes: int) -> list[bytes]:
@@ -1240,6 +1265,18 @@ For I7, reject unjustified removal of an applicable,
 authorized and available capability, including errors caused by quoted titles,
 compound requests, negation scope, setting-and-remember requests, or duplicate
 handling that removes unrelated pending tools.
+Judge tool guards against the identity and argument schema of the offered tool,
+then trace the model-selected call to its actual local implementation or
+request-supplied endpoint. A local memory tool may check ownership of its own
+record IDs. An unrelated external tool may use an identically named argument
+for an external object: a host-wide check that treats that argument as a local
+record ID and blocks the call before endpoint dispatch removes an applicable
+capability (I7), even if the complete tool catalog reached the model. Do not
+accept a generic privacy or ownership explanation as a clearance without
+showing that the guarded ID belongs to the selected tool's own namespace.
+Keep I6 separate: an empty execution self-report does not prove a fabricated
+call, while a valid model-selected external call blocked before its endpoint
+is a capability-fidelity problem even when no false success is reported.
 
 For opaque components, combine submission evidence with platform-supplied
 exact path-and-digest provenance. An official starter-kit match satisfies only
@@ -1281,9 +1318,13 @@ def _l2_review_system_prompt(policy_version: int) -> str:
         ) from None
     prompt = _L2_SYSTEM_PROMPT_HEAD + tail + _L2_SYSTEM_PROMPT_TAIL
     if policy_version >= 13:
-        prompt = prompt.replace(
-            "exactly one decision for I1 through I7.",
-            "exactly one decision for I1 through I8.",
+        prompt = (
+            prompt.replace("every I1-I7 invariant", "every I1-I8 invariant")
+            .replace("replaces I1-I7.", "replaces I1-I8.")
+            .replace(
+                "exactly one decision for I1 through I7.",
+                "exactly one decision for I1 through I8.",
+            )
         )
     return prompt
 
@@ -1581,6 +1622,13 @@ Before returning safe, inspect every changed function that contains those
 locations and close the pre-assignment case where a score-derived decision
 discards a genuine candidate before response construction.
 """
+
+_V13_SAFETY_ADJUDICATOR_TASK = _SAFETY_ADJUDICATOR_TASK.replace(
+    "Use at most four targeted analyzer\ncalls; do not page through whole files.",
+    "Read every original challenge file and the adjacent served-path files "
+    "needed to verify its authority and sink. Use targeted analyzer calls "
+    "within the review budget, without paging through whole files.",
+)
 
 _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK = """\
 For an ordinary scorer-only lead, an optional answer/abstain slot set to None
@@ -2108,6 +2156,7 @@ class L2RunResult:
     direct_clear_graph_complete: bool = True
     analyst_cache_hit: bool = False
     critic_cache_hit: bool = False
+    failure_subcode: str | None = None
 
 
 def _finalize_without_l3(
@@ -2115,14 +2164,47 @@ def _finalize_without_l3(
     *,
     dossier_tools: tuple[str, ...],
     analyst_cache_hit: bool,
+    policy_version: int = 12,
+    l1_observation: SourceReviewObservation | None = None,
+    static_attention: L2RunResult | None = None,
+    dossier: Mapping[str, object] | None = None,
+    expected_model: str = L2_MODEL,
 ) -> L2RunResult:
-    """Make the paid L2 analyst authoritative when L3 is disabled."""
+    """Use the analyst alone only when v13 has independent clean coverage."""
+    if policy_version >= 13 and static_attention is not None:
+        return static_attention
+    observation = analyst.observation
+    clearance_path = "l2_only_l3_disabled"
+    clearance_gaps: tuple[str, ...] = ()
+    if policy_version >= 13 and observation.ok and observation.risk_level == "low":
+        clearance_gaps = _l2_only_clearance_gaps(
+            l1_observation, analyst, dossier, expected_model=expected_model
+        )
+        if not clearance_gaps:
+            observation = replace(observation, clearance_certified=True)
+            clearance_path = "l2_only_certified_low"
+        else:
+            observation = (
+                _carry_l1_notes(
+                    _failure("l2-only-clearance-unproven", "inconclusive"),
+                    l1_observation,
+                )
+                if l1_observation is not None
+                else _failure("l2-only-clearance-unproven", "inconclusive")
+            )
+            clearance_path = "l2_only_clearance_hold"
     return replace(
         analyst,
+        observation=observation,
         tools=dossier_tools + analyst.tools,
         critic_disposition="disabled",
-        clearance_path="l2_only_l3_disabled",
+        clearance_path=clearance_path,
         analyst_cache_hit=analyst_cache_hit,
+        failure_subcode=(
+            "+".join(clearance_gaps)
+            if clearance_path == "l2_only_clearance_hold"
+            else analyst.failure_subcode
+        ),
     )
 
 
@@ -2437,7 +2519,7 @@ def _signed_runtime_lease_matches(
     max_age_seconds: int = 300,
 ) -> bool:
     if lease is None:
-        return not (policy_version == 13 and required)
+        return not (policy_version >= 13 and required)
     age_seconds = int(time.time()) - lease.observed_at
     return (
         policy_version == 13
@@ -2576,7 +2658,8 @@ class TerraSolSourceReviewAgent:
             attempt_id=attempt_id,
             artifact_sha256=artifact_sha256,
             policy_version=policy_version,
-            required=self._require_signed_runtime_lease,
+            required=self._require_signed_runtime_lease
+            or (policy_version >= 13 and not self._l3_enabled),
             max_age_seconds=self._signed_runtime_lease_max_age_seconds,
         ):
             result = L2RunResult(
@@ -2615,7 +2698,8 @@ class TerraSolSourceReviewAgent:
                     "This describes the eligible scorer cohort at the signed "
                     "heartbeat observation time, not a selected future scorer. "
                     "Only scorer-injected variables are covered. Check image ENV, "
-                    "source defaults, runtime writes, and I1-I7 independently."
+                    "source defaults, runtime writes, and "
+                    f"I1-I{'8' if policy_version >= 13 else '7'} independently."
                 ),
             }
         elif policy_version == 13 and (
@@ -2745,6 +2829,37 @@ class TerraSolSourceReviewAgent:
                 or result.observation.failure_disposition == "inconclusive"
             ):
                 self._store_cache(cache_key, result)
+            if (
+                result.observation.error_code == "l3-adjudicator-model-tool-contract"
+                and result.failure_subcode
+                in {
+                    "invalid_submit_call_id",
+                    "no_tool_call_after_corrections",
+                    "malformed_tool_arguments_json",
+                    "invalid_tool_call_shape",
+                }
+            ):
+                # Preserve only the host's fixed contract-failure label in the
+                # existing signed audit. The private model response stays local.
+                audit = ScreenReviewAudit(
+                    stage="l2",
+                    reason_code=result.observation.error_code,
+                    prompt_revision=l2_safety_prompt_revision(policy_version),
+                    harness_revision=L2_HARNESS_REVISION,
+                    max_steps=self._max_steps,
+                    steps_used=min(len(result.response_models), self._max_steps),
+                    model_steps_observed=len(result.response_models),
+                    tool_calls_observed=len(result.tools),
+                    final_stage="adjudicator",
+                    model_tool_failure_subcode=result.failure_subcode,
+                )
+                result = replace(
+                    result,
+                    observation=replace(
+                        result.observation,
+                        review_audit=audit.model_dump(mode="json"),
+                    ),
+                )
             if result.observation.error_code == "l2-model-inconclusive":
                 # The model's bounded disposition is operational evidence, not
                 # a policy verdict. Carry only fixed labels and observed counts
@@ -2983,6 +3098,7 @@ class TerraSolSourceReviewAgent:
                     }
                 )
             integrity_attention = False
+            static_attention: L2RunResult | None = None
             if analyst.observation.ok and analyst.observation.risk_level == "low":
                 static_attention = _served_generator_hold(
                     dossier=dossier,
@@ -3014,6 +3130,11 @@ class TerraSolSourceReviewAgent:
                     analyst,
                     dossier_tools=dossier_tools,
                     analyst_cache_hit=analyst_cache_hit,
+                    policy_version=policy_version,
+                    l1_observation=l1_observation,
+                    static_attention=static_attention,
+                    dossier=dossier,
+                    expected_model=self._model,
                 )
             # The L2 analyst has settled; every path below is L3. This is the
             # only public progress boundary inside the deep review, and it is
@@ -3650,6 +3771,7 @@ class TerraSolSourceReviewAgent:
                 dossier_complete=error.dossier_complete,
                 analyst_cache_hit=analyst_cache_hit,
                 critic_cache_hit=critic_cache_hit,
+                failure_subcode=error.failure_subcode,
             )
         except (L2InconclusiveError, OSError, ValueError, httpx.HTTPError) as error:
             inconclusive = isinstance(error, L2InconclusiveError)
@@ -3937,7 +4059,8 @@ class TerraSolSourceReviewAgent:
         if role == "analyst":
             task = (
                 "No L1 finding is supplied. Independently review the entire served "
-                "artifact against I1-I7 using the dossier and targeted tools. "
+                f"artifact against I1-I{'8' if policy_version >= 13 else '7'} "
+                "using the dossier and targeted tools. "
                 "Reach a grounded terminal safe or violation verdict when the "
                 "evidence permits; return inconclusive only for a specific "
                 "unresolved causal link."
@@ -3993,7 +4116,11 @@ class TerraSolSourceReviewAgent:
                 "benchmark_emulation",
                 "scorer_contract_manipulation",
             } <= set(raw_categories)
-            task = _SAFETY_ADJUDICATOR_TASK + (
+            task = (
+                _V13_SAFETY_ADJUDICATOR_TASK
+                if policy_version == 13
+                else _SAFETY_ADJUDICATOR_TASK
+            ) + (
                 _MIXED_SCORER_SAFETY_TASK
                 if mixed_scorer
                 else _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK
@@ -4068,7 +4195,9 @@ class TerraSolSourceReviewAgent:
                 call_id = _call_id_value(call)
             except ValueError as error:
                 logger.warning("L2 model-tool-contract: invalid submit call id")
-                raise failure("model-tool-contract") from error
+                raise failure(
+                    "model-tool-contract", "invalid_submit_call_id"
+                ) from error
             proposed_disposition = "unknown"
             if isinstance(call, Mapping):
                 raw_arguments = call.get("arguments")
@@ -4142,7 +4271,7 @@ class TerraSolSourceReviewAgent:
                 }
             )
 
-        def failure(code: str) -> L2TrajectoryError:
+        def failure(code: str, subcode: str | None = None) -> L2TrajectoryError:
             return L2TrajectoryError(
                 code,
                 usage=usage,
@@ -4153,6 +4282,7 @@ class TerraSolSourceReviewAgent:
                 steps_used=steps_used,
                 read_bytes_used=read_bytes_used,
                 read_files_used=len(read_files),
+                failure_subcode=subcode,
             )
 
         for _step in range(max_steps or self._max_steps):
@@ -4311,7 +4441,7 @@ class TerraSolSourceReviewAgent:
                     }
                 )
             if not calls:
-                if role == "analyst" and no_call_corrections < 2:
+                if role in {"analyst", "adjudicator"} and no_call_corrections < 2:
                     no_call_corrections += 1
                     logger.warning(
                         "L2 model returned no tool call; correction %d/2",
@@ -4336,7 +4466,7 @@ class TerraSolSourceReviewAgent:
                     )
                     continue
                 logger.warning("L2 model-tool-contract: no tool call after corrections")
-                raise failure("model-tool-contract")
+                raise failure("model-tool-contract", "no_tool_call_after_corrections")
             submitted = [
                 item for item in calls if item.get("name") == "submit_l2_review"
             ]
@@ -4462,10 +4592,14 @@ class TerraSolSourceReviewAgent:
                     logger.warning(
                         "L2 model-tool-contract: malformed tool arguments JSON"
                     )
-                    raise failure("model-tool-contract") from error
+                    raise failure(
+                        "model-tool-contract", "malformed_tool_arguments_json"
+                    ) from error
                 except ValueError as error:
                     logger.warning("L2 model-tool-contract: invalid tool call shape")
-                    raise failure("model-tool-contract") from error
+                    raise failure(
+                        "model-tool-contract", "invalid_tool_call_shape"
+                    ) from error
                 analyzer_calls += 1
                 if analyzer_calls > 2 * (max_steps or self._max_steps):
                     raise failure("model-tool-budget")
@@ -4792,6 +4926,10 @@ class TerraSolSourceReviewAgent:
             runtime_evidence_digest=runtime_evidence_digest,
         )
         value["cause_prompt_revision"] = l2_cause_prompt_revision(policy_version)
+        # Final results from an older L3-off posture must never bypass the
+        # v13 clearance guard. Keep the separately cached analyst reusable.
+        value["l3_enabled"] = self._l3_enabled
+        value["l3_off_clearance_revision"] = 2
         value["cause_tiebreaker_prompt_revision"] = l2_cause_tiebreaker_prompt_revision(
             policy_version
         )
@@ -4952,6 +5090,7 @@ class TerraSolSourceReviewAgent:
                 "failure_disposition": result.observation.failure_disposition,
                 "clearance_certified": result.observation.clearance_certified,
                 "review_audit": result.observation.review_audit,
+                "inconclusive_model_audit": result.observation.inconclusive_model_audit,
             },
             "analyzed_files": list(result.analyzed_files),
             "causal_path": list(result.causal_path),
@@ -5122,10 +5261,12 @@ class LayeredSourceReviewAgent:
         adjudicator: SourceReviewAdjudicator | None = None,
         adjudicator_reserve_seconds: float = 0.0,
         always_escalate: bool = False,
+        capture_enforce_result: bool = False,
     ) -> None:
         if mode not in {"off", "shadow", "enforce"}:
             raise ValueError("invalid L2 mode")
         self._always_escalate = always_escalate
+        self._capture_enforce_result = capture_enforce_result
         self._l1 = l1
         self._l2 = l2
         self._mode = mode
@@ -5134,6 +5275,7 @@ class LayeredSourceReviewAgent:
         self._adjudicator = adjudicator
         self._adjudicator_reserve_seconds = max(0.0, float(adjudicator_reserve_seconds))
         self._shadow_results: dict[UUID, L2RunResult] = {}
+        self._preview_l1_results: dict[UUID, SourceReviewObservation] = {}
 
     def _runtime_evidence_hold(
         self, *, policy_version: int, review_disabled: bool
@@ -5199,8 +5341,12 @@ class LayeredSourceReviewAgent:
         return min(deadline, asyncio.get_running_loop().time() + reserve)
 
     def pop_shadow_result(self, attempt_id: UUID) -> L2RunResult | None:
-        """Consume non-authoritative shadow telemetry for one attempt."""
+        """Consume shadow telemetry or an isolated enforce-preview result."""
         return self._shadow_results.pop(attempt_id, None)
+
+    def pop_preview_l1_result(self, attempt_id: UUID) -> SourceReviewObservation | None:
+        """Consume the broad-review lead retained for an isolated preview."""
+        return self._preview_l1_results.pop(attempt_id, None)
 
     async def _adjudicate(
         self,
@@ -5302,7 +5448,9 @@ class LayeredSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> SourceReviewObservation:
-        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False)
+        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False) or (
+            policy_version >= 13 and getattr(self._l2, "_l3_enabled", True) is False
+        )
         lease_matches = _signed_runtime_lease_matches(
             scored_runtime_evidence,
             attempt_id=attempt_id,
@@ -5366,7 +5514,9 @@ class LayeredSourceReviewAgent:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> SourceReviewObservation:
         """Resolve a precomputed, artifact-bound L1 lead without rerunning L1."""
-        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False)
+        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False) or (
+            policy_version >= 13 and getattr(self._l2, "_l3_enabled", True) is False
+        )
         lease_matches = _signed_runtime_lease_matches(
             scored_runtime_evidence,
             attempt_id=attempt_id,
@@ -5387,6 +5537,8 @@ class LayeredSourceReviewAgent:
                 and self._mode == "off",
             )
         l1 = l1_observation
+        if self._capture_enforce_result:
+            self._preview_l1_results[attempt_id] = l1
         if review_deadline is None and deadline is not None and self._adjudicator:
             review_deadline = self._exploration_deadline(deadline)
         court_deadline = self._court_deadline(deadline, review_deadline)
@@ -5441,6 +5593,8 @@ class LayeredSourceReviewAgent:
             scored_runtime_evidence=scored_runtime_evidence,
         )
         report(9)
+        if self._capture_enforce_result:
+            self._shadow_results[attempt_id] = result
         if self._mode == "shadow":
             self._shadow_results[attempt_id] = result
             report(10)
@@ -5541,6 +5695,97 @@ def _dossier_has_scorer_attention(dossier: Mapping[str, object]) -> bool:
             "same_function_candidates",
         )
     )
+
+
+def _l1_concerns_resolved(notes: tuple[Mapping[str, object], ...]) -> bool:
+    """Retire a concern only with its own later, exact-location clear."""
+    consumed_clears: set[int] = set()
+    for index, note in enumerate(notes):
+        if note.get("kind") != "concern":
+            continue
+        path = note.get("path")
+        area = note.get("area")
+        line = note.get("line")
+        confidence = note.get("confidence")
+        if (
+            not isinstance(path, str)
+            or not path
+            or not isinstance(area, str)
+            or not area
+            or not isinstance(line, int)
+            or isinstance(line, bool)
+            or line < 1
+            or not isinstance(confidence, (int, float))
+            or isinstance(confidence, bool)
+        ):
+            return False
+        resolved = False
+        for later_index in range(index + 1, len(notes)):
+            if later_index in consumed_clears:
+                continue
+            later = notes[later_index]
+            later_confidence = later.get("confidence")
+            if (
+                later.get("kind") == "cleared"
+                and later.get("path") == path
+                and later.get("area") == area
+                and later.get("line") == line
+                and isinstance(later_confidence, (int, float))
+                and not isinstance(later_confidence, bool)
+                and float(later_confidence) >= float(confidence)
+            ):
+                consumed_clears.add(later_index)
+                resolved = True
+                break
+        if not resolved:
+            return False
+    return True
+
+
+def _l2_only_clearance_gaps(
+    l1: SourceReviewObservation | None,
+    analyst: L2RunResult,
+    dossier: Mapping[str, object] | None,
+    *,
+    expected_model: str,
+) -> tuple[str, ...]:
+    """Return bounded mechanical reasons a v13 L3-off safe claim cannot clear."""
+    finding = analyst.observation.finding
+    gaps: list[str] = []
+    if l1 is None or not (
+        l1.ok
+        and l1.risk_level == "low"
+        and l1.clearance_certified
+        and set(l1.categories) <= {"none"}
+    ):
+        gaps.append("l1-not-certified-low")
+    elif not _l1_concerns_resolved(l1.notes):
+        gaps.append("l1-concern-unresolved")
+    if not analyst.observation.ok or analyst.observation.risk_level != "low":
+        gaps.append("l2-not-low")
+    if analyst.observation.categories != ("none",):
+        gaps.append("l2-categories")
+    if analyst.resolution_basis not in _SAFE_RESOLUTION_BASES:
+        gaps.append("l2-resolution-basis")
+    if not analyst.dossier_complete:
+        gaps.append("dossier-incomplete")
+    if "read_file" not in analyst.tools or not analyst.analyzed_files:
+        gaps.append("source-not-read")
+    if not analyst.response_models or any(
+        model != expected_model and not model.startswith(f"{expected_model}-")
+        for model in analyst.response_models
+    ):
+        gaps.append("model-mismatch")
+    if (
+        not isinstance(finding, Mapping)
+        or _finding_confidence(finding) < _DIRECT_CLEAR_CONFIDENCE
+    ):
+        gaps.append("finding-confidence")
+    if not isinstance(finding, Mapping) or finding.get("evidence") != []:
+        gaps.append("finding-evidence")
+    if dossier is None or _dossier_has_scorer_attention(dossier):
+        gaps.append("scorer-attention")
+    return tuple(gaps)
 
 
 def _qualifies_for_direct_clear(
@@ -5705,6 +5950,7 @@ def _validate_violation_invariant_binding(
     resolution_basis: str,
     causal_evidence: SourceReviewCausalEvidence | None,
     evidence: list[SourceReviewEvidenceItem],
+    policy_version: int,
 ) -> None:
     """Bind a model-authored v10 breach to the host-validated causal mechanism."""
 
@@ -5713,8 +5959,17 @@ def _validate_violation_invariant_binding(
     transition_invariant = _INVARIANT_BY_AUTHORITY_TRANSITION[
         causal_evidence.authority_transition
     ]
+    scorer_slot_rewrite = (
+        policy_version >= 12
+        and causal_evidence.authority_transition
+        == SourceReviewAuthorityTransition.SCORER_FIELD_REWRITTEN
+    )
+    if scorer_slot_rewrite:
+        transition_invariant = SourceReviewInvariant.DERIVED_VALUE_AUTHORITY
     expected = {transition_invariant}
     basis_invariant = _INVARIANT_BY_RESOLUTION_BASIS.get(resolution_basis)
+    if scorer_slot_rewrite and resolution_basis == "scorer_field_manipulation":
+        basis_invariant = SourceReviewInvariant.DERIVED_VALUE_AUTHORITY
     if basis_invariant is not None:
         expected.add(basis_invariant)
     authority_locations = {
@@ -5732,12 +5987,98 @@ def _validate_violation_invariant_binding(
         decisions[invariant].disposition != SourceReviewInvariantDisposition.BREACH
         for invariant in expected
     ):
+        if scorer_slot_rewrite:
+            raise ValueError("L2 scorer field rewrite requires I4 breach")
         raise ValueError("L2 causal mechanism lacks its required invariant breach")
     transition_decision = decisions[transition_invariant]
     if authority_indices and not authority_indices.intersection(
         transition_decision.evidence_indices
     ):
         raise ValueError("L2 invariant breach is not bound to authority evidence")
+
+
+def _inconclusive_model_audit(
+    *,
+    artifact_sha256: str,
+    prompt_revision: str,
+    policy_version: int,
+    risk: str,
+    categories: list[str],
+    summary: str,
+    evidence: list[Mapping[str, object]],
+    causal: list[Mapping[str, object]],
+    invariants: object,
+) -> Mapping[str, object]:
+    """Keep bounded, artifact-bound model choices without source or free text."""
+    allowed_invariants = {item.value for item in SourceReviewInvariant}
+    allowed_dispositions = {item.value for item in SourceReviewInvariantDisposition}
+    allowed_pass_clauses = {item.value for item in SourceReviewPassClause}
+    decisions: list[dict[str, object]] = []
+    if isinstance(invariants, list):
+        for item in invariants[:8]:
+            if not isinstance(item, dict):
+                continue
+            invariant = item.get("invariant")
+            disposition = item.get("disposition")
+            pass_clause = item.get("pass_clause")
+            indices = item.get("evidence_indices")
+            if (
+                not isinstance(invariant, str)
+                or invariant not in allowed_invariants
+                or not isinstance(disposition, str)
+                or disposition not in allowed_dispositions
+                or (
+                    pass_clause is not None
+                    and (
+                        not isinstance(pass_clause, str)
+                        or pass_clause not in allowed_pass_clauses
+                    )
+                )
+                or not isinstance(indices, list)
+            ):
+                continue
+            item_summary = item.get("summary")
+            decisions.append(
+                {
+                    "invariant": invariant,
+                    "disposition": disposition,
+                    "pass_clause": pass_clause,
+                    "evidence_indices": [
+                        index
+                        for index in indices[:16]
+                        if isinstance(index, int)
+                        and not isinstance(index, bool)
+                        and 0 <= index < len(evidence)
+                    ],
+                    "summary_sha256": hashlib.sha256(
+                        (item_summary if isinstance(item_summary, str) else "").encode()
+                    ).hexdigest(),
+                }
+            )
+    return {
+        "artifact_sha256": artifact_sha256,
+        "prompt_revision": prompt_revision,
+        "policy_version": policy_version,
+        "disposition": "inconclusive",
+        "risk_level": risk,
+        "categories": list(categories),
+        "summary_sha256": hashlib.sha256(summary.encode()).hexdigest(),
+        "evidence": [
+            {
+                "path": item["path"],
+                "line": item["line"],
+                "file_sha256": item["file_sha256"],
+                "category": item["category"],
+                "role": item["role"],
+            }
+            for item in evidence
+        ],
+        "causal_path": list(causal),
+        "invariants": decisions,
+        "submitted_invariant_count": (
+            len(invariants) if isinstance(invariants, list) else None
+        ),
+    }
 
 
 def _parse_l2_review(
@@ -5985,7 +6326,20 @@ def _parse_l2_review(
             raise ValueError("L2 causal evidence has no elevated causal category")
     else:
         return (
-            _failure("l2-model-inconclusive", "inconclusive"),
+            replace(
+                _failure("l2-model-inconclusive", "inconclusive"),
+                inconclusive_model_audit=_inconclusive_model_audit(
+                    artifact_sha256=artifact_sha256,
+                    prompt_revision=prompt_revision,
+                    policy_version=policy_version,
+                    risk=risk,
+                    categories=categories,
+                    summary=submitted_summary,
+                    evidence=normalized_evidence,
+                    causal=normalized_causal,
+                    invariants=invariants,
+                ),
+            ),
             normalized_analyzed,
             tuple(normalized_causal),
             "insufficient_static_evidence",
@@ -6010,6 +6364,7 @@ def _parse_l2_review(
             resolution_basis=str(resolution_basis),
             causal_evidence=causal_evidence,
             evidence=public_evidence,
+            policy_version=policy_version,
         )
     summary = (
         "Level-2 review found no causally established policy violation."
@@ -6750,6 +7105,7 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 causal evidence is invalid": "inconsistent-verdict",
     "L2 causal evidence schema version is invalid": "inconsistent-verdict",
     "L2 causal mechanism lacks its required invariant breach": "inconsistent-verdict",
+    "L2 scorer field rewrite requires I4 breach": "inconsistent-verdict",
     "L2 causal path is invalid": "inconsistent-verdict",
     "L2 causal role binding is invalid": "inconsistent-verdict",
     "L2 causal role bindings are invalid": "inconsistent-verdict",

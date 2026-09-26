@@ -11,6 +11,8 @@ import {
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
+import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
+import { fetchTreasuryQuote, fetchTreasurySettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
   cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema } from '../lib/benchmark-canary.schemas'
@@ -114,6 +116,7 @@ import {
   applyScreenerReviewSettingsInputSchema,
   screenerFanoutShadowInputSchema,
   l2ReportCanaryLookupInputSchema,
+  l2ReportCanaryPreflightInputSchema,
   scheduleL2ReportCanaryInputSchema,
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
@@ -244,6 +247,7 @@ import {
   fetchInferenceConcurrencySettings,
   fetchInferenceRuntimeMetrics,
   fetchSourceReviewQueueSlo,
+  fetchOutlierEscalation,
   fetchInferenceFailureTaxonomy,
   fetchInferenceTraceObjects,
   createInferenceTraceDownloadUrl,
@@ -270,6 +274,7 @@ import {
   fetchScreenerReviewControl,
   fetchScreenerFanoutShadow,
   fetchL2ReportCanary,
+  fetchL2ReportCanaryPreflight,
   scheduleL2ReportCanary,
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
@@ -694,6 +699,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read bounded baseline/fan-out shadow comparisons, coverage, disagreements, latency, and spend.',
   get_l2_report_canary:
     'Read one exact-attempt non-authoritative L2 canary report and lease outcome.',
+  get_l2_report_canary_preflight:
+    'Read current exact-source canary guards; scheduling rechecks them.',
   get_v13_scorer_cohort:
     'Read the immutable three-validator V13 scorer pin, including exact signed runtime packet.',
   get_v13_scorer_cohort_preflight:
@@ -707,7 +714,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   rotate_v13_scorer_cohort:
     'Rotate the exact pinned V13 cohort to a unanimously signed packet after all V13 tickets drain; preserves pin history.',
   schedule_l2_report_canary:
-    'Queue one isolated L2 report on an enrolled Hetzner node; never changes screening, scoring, or quarantine.',
+    'Queue one isolated exact-artifact report on an enrolled Hetzner node. source_only is the default; full_runtime additionally runs private challenges in a separate Docker namespace. Neither mode changes screening, scoring, or quarantine.',
   get_copy_court_settings:
     'Read the copy-hold triage court posture and revision history.',
   get_confirmation_seed_anchors:
@@ -736,6 +743,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read inference load and relay health.',
   get_source_review_queue_slo:
     'Read ordinary source-review queue age, throughput, and reconciliation ghosts.',
+  get_outlier_escalation:
+    'Read outlier escalation mode, each setting\'s env source, and audit-chain holds.',
   get_inference_failure_taxonomy:
     'Group recent chat and embedding outcomes by model, lane, gateway, upstream route, and error code. route_basis says how much of a route is known; an unknown route never names one.',
   start_runtime_profile:
@@ -2376,6 +2385,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_l2_report_canary_preflight',
+    {
+      title: 'Get L2 canary preflight',
+      description: 'Read agent/attempt SHA, status, policy/bench version and raw Score count. Advisory snapshot; scheduling rechecks. Requires backroom:read.',
+      inputSchema: l2ReportCanaryPreflightInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchL2ReportCanaryPreflight(input)),
+  )
+
+  registerTool(
     'schedule_l2_report_canary',
     {
       title: 'Schedule report-only L2 canary',
@@ -3012,6 +3032,20 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_outlier_escalation',
+    {
+      title: 'Get outlier escalation posture',
+      description:
+        'Read the anomalous-score outlier escalation (issue #476), which can open ATH holds (review_kind anomalous_score) on an out-of-band high composite. It is configured ONLY by environment variables read once per Platform API process at startup (env_vars lists the names; settings_loaded_at is when this process read them), so this is the one place to see what scoring is actually using. ' +
+        'settings is the effective policy: mode off (never computed), observe (would-be holds recorded, nobody held) or enforce (holds opened), plus min_bench_version, min_cohort_size, modified_z_threshold and min_composite_floor; defaults is the shipped policy. sources gives each field\'s origin: env (set and parsed), default (unset) or default_invalid_env (SET BUT REJECTED, so the shipped default is silently in force -- e.g. a mistyped mode leaves the gate off). invalid_env_fields lists those fields; the rejected text is never echoed. A null threshold means the env set nan/inf, which scoring is using. ' +
+        'activity reads the append-only score audit chain: observed_total / enforced_total over all time, the same counts inside window_hours (168), and the recent_limit (20) newest entries with agent_id, recorded_at, enforced, bench_version and the recorded cohort evidence (composite, cohort median/MAD, modified_z, thresholds). recent_truncated means older entries exist beyond the page; the counts are exact. pending_review_count is pending ATH reviews of kind anomalous_score; open them with get_ath_review. ' +
+        'Not /admin/score-outliers (validator disagreement inside one quorum). Changing a value needs an env change and a Platform restart; this tool changes nothing. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchOutlierEscalation()),
+  )
+
+  registerTool(
     'get_inference_failure_taxonomy',
     {
       title: 'Get hosted inference failure taxonomy',
@@ -3119,6 +3153,49 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           REVISION_LISTS,
         ),
       ),
+  )
+
+  registerTool(
+    'get_treasury_settings',
+    {
+      title: 'Get SN118 treasury shadow policy',
+      description: 'Read separate maintenance-bounty and GM inference-credit allocation proposals, destinations, bounds, revision history, and the explicit none weight effect. This is shadow-only and changes neither weights nor funds. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchTreasurySettings()),
+  )
+
+  registerTool(
+    'record_treasury_settings',
+    {
+      title: 'Record SN118 treasury shadow policy',
+      description: 'Append a reviewed shadow allocation revision with expectedRevision, reason, and exact confirmation RECORD TREASURY SHADOW POLICY. Combined proposed share is at most 500 basis points. This records policy only; it cannot change validator weights or send funds. Requires backroom:write.',
+      inputSchema: recordTreasurySettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => recordTreasurySettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'quote_treasury_topup',
+    {
+      title: 'Quote both GM credit funding routes',
+      description: 'Read the finalized Finney SN118 and SN28 pools at one block and quote DITTO alpha to TAO versus DITTO alpha to TAO to GM alpha. Reports pool price impact but no USD credit estimate; GM sets credits when its deposit confirms. Does not sign, trade, or move funds. Requires backroom:read.',
+      inputSchema: treasuryQuoteInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchTreasuryQuote(input)),
+  )
+
+  registerTool(
+    'preview_treasury_topup',
+    {
+      title: 'Dry run one GM top-up route',
+      description: 'Read a fresh finalized two-pool quote and the current shadow treasury policy, then check proposed GM share, single top-up limit and price impact for TAO or SN28 alpha. Wallet linking, current GM instructions and daily spending remain unverified, so execution_enabled is always false. Requires backroom:read.',
+      inputSchema: treasuryPreviewInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await previewTreasuryTopup(input)),
   )
 
   registerTool(

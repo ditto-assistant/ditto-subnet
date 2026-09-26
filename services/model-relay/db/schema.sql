@@ -931,6 +931,28 @@ CREATE FUNCTION public.reject_screening_review_event_mutation() RETURNS trigger
 
 
 --
+-- Name: reject_treasury_public_event_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_treasury_public_event_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+          RAISE EXCEPTION 'treasury public receipt history is append only';
+        END $$;
+
+
+--
+-- Name: reject_treasury_settings_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_treasury_settings_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+          RAISE EXCEPTION 'treasury policy history is append only';
+        END $$;
+
+
+--
 -- Name: reject_v13_private_generation_mutation(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1010,6 +1032,46 @@ CREATE FUNCTION public.stamp_review_deadline_activation_created_at() RETURNS tri
             RETURN NEW;
         END;
         $$;
+
+
+--
+-- Name: verify_treasury_public_reconciliation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.verify_treasury_public_reconciliation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+          IF NEW.state = 'reconciled' THEN
+            PERFORM 1 FROM treasury_public_events finalized
+            WHERE finalized.id = NEW.finalized_event_id
+              AND finalized.payment_id = NEW.payment_id
+              AND finalized.event_kind = 'gm_token_deposit'
+              AND finalized.state = 'chain_finalized'
+              AND finalized.block_hash = NEW.block_hash
+              AND finalized.extrinsic_index = NEW.extrinsic_index
+              AND finalized.event_index = NEW.event_index
+              AND finalized.policy_revision = NEW.policy_revision
+              AND finalized.burn_revision = NEW.burn_revision
+              AND finalized.burn_share_micros = NEW.burn_share_micros
+              AND finalized.denominator = NEW.denominator
+              AND finalized.maintenance_bps = NEW.maintenance_bps
+              AND finalized.gm_bps = NEW.gm_bps
+              AND finalized.allocation_bps = NEW.allocation_bps
+              AND finalized.allocated_alpha_rao = NEW.allocated_alpha_rao
+              AND finalized.source_alpha_rao = NEW.source_alpha_rao
+              AND finalized.route = NEW.route
+              AND finalized.deposit_asset = NEW.deposit_asset
+              AND finalized.deposit_amount_atomic = NEW.deposit_amount_atomic
+              AND finalized.public_sender = NEW.public_sender
+              AND finalized.public_recipient = NEW.public_recipient
+              AND finalized.event_at <= NEW.event_at;
+            IF NOT FOUND THEN
+              RAISE EXCEPTION
+                'GM credit reconciliation lacks matching finalized deposit';
+            END IF;
+          END IF;
+          RETURN NEW;
+        END $$;
 
 
 SET default_tablespace = '';
@@ -4006,6 +4068,8 @@ CREATE TABLE public.screener_l2_report_canaries (
     error_code text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     completed_at timestamp with time zone,
+    run_mode text DEFAULT 'source_only'::text NOT NULL,
+    CONSTRAINT ck_screener_l2_report_canaries_run_mode_check CHECK ((run_mode = ANY (ARRAY['source_only'::text, 'full_runtime'::text]))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_label_check CHECK ((review_label = ANY (ARRAY['candidate_clear'::text, 'known_reject'::text]))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_runtime_check CHECK (((runtime_evidence_sha256 IS NULL) OR (runtime_evidence_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_scores_check CHECK ((expected_score_count >= 0)),
@@ -4968,6 +5032,107 @@ CREATE TABLE public.submission_source_reviews (
 
 
 --
+-- Name: treasury_public_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_public_events (
+    id bigint NOT NULL,
+    payment_id text NOT NULL,
+    event_kind text NOT NULL,
+    state text NOT NULL,
+    finalized_event_id bigint,
+    event_at timestamp with time zone NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    policy_revision integer NOT NULL,
+    burn_revision integer NOT NULL,
+    burn_share_micros integer NOT NULL,
+    denominator text NOT NULL,
+    maintenance_bps integer NOT NULL,
+    gm_bps integer NOT NULL,
+    allocation_bps integer NOT NULL,
+    allocated_alpha_rao bigint NOT NULL,
+    source_alpha_rao bigint NOT NULL,
+    route text NOT NULL,
+    deposit_asset text NOT NULL,
+    deposit_amount_atomic bigint NOT NULL,
+    credited_usd_nano bigint,
+    bounty_award_id text,
+    accepted_work_ref text,
+    public_sender text NOT NULL,
+    public_recipient text NOT NULL,
+    block_hash text NOT NULL,
+    extrinsic_index integer NOT NULL,
+    event_index integer NOT NULL,
+    actor_provenance text NOT NULL,
+    actor_public_id text NOT NULL,
+    verification_source text NOT NULL,
+    CONSTRAINT ck_treasury_public_events_treasury_public_actor_id CHECK (((length(actor_public_id) >= 3) AND (length(actor_public_id) <= 120))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_actor_provenance CHECK ((actor_provenance = ANY (ARRAY['treasury_signer'::text, 'gm_reconciler'::text, 'bounty_executor'::text]))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_allocation CHECK ((((maintenance_bps >= 0) AND (maintenance_bps <= 10000)) AND ((gm_bps >= 0) AND (gm_bps <= 10000)) AND ((allocation_bps >= 0) AND (allocation_bps <= 10000)) AND (allocated_alpha_rao >= 0) AND (source_alpha_rao > 0) AND (burn_revision >= 0) AND ((burn_share_micros >= 0) AND (burn_share_micros <= 1000000)))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_amounts CHECK (((deposit_amount_atomic > 0) AND (deposit_asset = ANY (ARRAY['TAO'::text, 'SN28_ALPHA'::text, 'SN118_ALPHA'::text])))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_denominator CHECK ((denominator = ANY (ARRAY['miner_emission'::text, 'released_miner_emission'::text]))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_indexes CHECK (((extrinsic_index >= 0) AND (event_index >= 0))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_kind CHECK ((((event_kind = 'gm_token_deposit'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'gm_credit_purchase'::text) AND (state = 'reconciled'::text) AND (finalized_event_id IS NOT NULL) AND (credited_usd_nano IS NOT NULL) AND (credited_usd_nano > 0) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'maintenance_bounty'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NOT NULL) AND (accepted_work_ref IS NOT NULL) AND ((length(bounty_award_id) >= 8) AND (length(bounty_award_id) <= 120)) AND ((length(accepted_work_ref) >= 8) AND (length(accepted_work_ref) <= 240))))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_purpose_allocation CHECK ((((event_kind = 'maintenance_bounty'::text) AND (allocation_bps = maintenance_bps)) OR ((event_kind <> 'maintenance_bounty'::text) AND (allocation_bps = gm_bps)))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_route CHECK ((route = ANY (ARRAY['alpha_to_tao'::text, 'alpha_to_gm_alpha'::text, 'alpha_transfer'::text, 'alpha_to_tao_bounty'::text]))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_state CHECK ((state = ANY (ARRAY['chain_finalized'::text, 'reconciled'::text]))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_verification_source CHECK ((verification_source = ANY (ARRAY['finalized_chain_rpc'::text, 'chain_and_provider_reconciliation'::text])))
+);
+
+
+--
+-- Name: treasury_public_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.treasury_public_events ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.treasury_public_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: treasury_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_treasury_settings_revisions_treasury_settings_checksum_check CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_treasury_settings_revisions_treasury_settings_parent_check CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_treasury_settings_revisions_treasury_settings_reason_check CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: treasury_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.treasury_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: treasury_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.treasury_settings_revisions_revision_seq OWNED BY public.treasury_settings_revisions.revision;
+
+
+--
 -- Name: trusted_image_builds; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5685,6 +5850,13 @@ ALTER TABLE ONLY public.submission_deposit_address_revisions ALTER COLUMN revisi
 --
 
 ALTER TABLE ONLY public.submission_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.submission_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: treasury_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.treasury_settings_revisions_revision_seq'::regclass);
 
 
 --
@@ -7462,6 +7634,22 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 
 --
+-- Name: treasury_public_events pk_treasury_public_events; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_public_events
+    ADD CONSTRAINT pk_treasury_public_events PRIMARY KEY (id);
+
+
+--
+-- Name: treasury_settings_revisions pk_treasury_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_settings_revisions
+    ADD CONSTRAINT pk_treasury_settings_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: trusted_image_builds pk_trusted_image_builds; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7875,6 +8063,30 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 ALTER TABLE ONLY public.screening_verification_replays
     ADD CONSTRAINT svrp_request_id_key UNIQUE (request_id);
+
+
+--
+-- Name: treasury_public_events treasury_public_chain_event_state; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_public_events
+    ADD CONSTRAINT treasury_public_chain_event_state UNIQUE (block_hash, extrinsic_index, event_index, state);
+
+
+--
+-- Name: treasury_public_events treasury_public_payment_state; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_public_events
+    ADD CONSTRAINT treasury_public_payment_state UNIQUE (payment_id, state);
+
+
+--
+-- Name: treasury_settings_revisions treasury_settings_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_settings_revisions
+    ADD CONSTRAINT treasury_settings_parent_key UNIQUE (parent_revision);
 
 
 --
@@ -9113,6 +9325,13 @@ CREATE UNIQUE INDEX svrso_replay_check_idx ON public.screening_verification_repl
 
 
 --
+-- Name: treasury_public_event_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX treasury_public_event_at_idx ON public.treasury_public_events USING btree (event_at, id);
+
+
+--
 -- Name: trusted_image_builds_queue_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9558,6 +9777,27 @@ CREATE TRIGGER screening_review_events_immutable BEFORE DELETE OR UPDATE ON publ
 --
 
 CREATE TRIGGER screening_verification_replay_private_receipts_immutable BEFORE DELETE OR UPDATE ON public.screening_verification_replay_private_receipts FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: treasury_public_events treasury_public_events_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_public_events_immutable BEFORE DELETE OR UPDATE ON public.treasury_public_events FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_public_event_mutation();
+
+
+--
+-- Name: treasury_public_events treasury_public_reconciliation_verified; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_public_reconciliation_verified BEFORE INSERT ON public.treasury_public_events FOR EACH ROW EXECUTE FUNCTION public.verify_treasury_public_reconciliation();
+
+
+--
+-- Name: treasury_settings_revisions treasury_settings_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_settings_immutable BEFORE DELETE OR UPDATE ON public.treasury_settings_revisions FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_settings_mutation();
 
 
 --
@@ -10538,6 +10778,14 @@ ALTER TABLE ONLY public.screening_verification_replays
 
 ALTER TABLE ONLY public.screening_verification_replays
     ADD CONSTRAINT fk_screening_verification_replays_source_attempt_id_scr_729c FOREIGN KEY (source_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: treasury_public_events fk_treasury_public_events_finalized_event_id_treasury_p_3f2e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_public_events
+    ADD CONSTRAINT fk_treasury_public_events_finalized_event_id_treasury_p_3f2e FOREIGN KEY (finalized_event_id) REFERENCES public.treasury_public_events(id);
 
 
 --

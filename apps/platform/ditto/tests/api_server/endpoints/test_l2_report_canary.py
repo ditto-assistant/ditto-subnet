@@ -23,7 +23,7 @@ from ditto.api_models.l2_report_canary import (
 from ditto.api_server.endpoints import l2_report_canary as endpoints
 from ditto.api_server.storage import S3StorageClient
 from ditto.db.models import ScreenerL2ReportCanary, ScreenerNode, ScreeningAttempt
-from ditto.tests.api_server.endpoints.test_screener import _seed_agent
+from ditto.tests.api_server.endpoints.test_screener import _seed_agent, _seed_score
 from ditto_screening_protocol import ScoredRuntimeEvidenceLease
 
 
@@ -72,8 +72,98 @@ def _packet(attempt_id, sha: str) -> ScoredRuntimeEvidenceLease:
 
 
 @pytest.mark.asyncio
+async def test_full_runtime_claim_requires_exact_adopted_worker() -> None:
+    node = cast(
+        ScreenerNode,
+        SimpleNamespace(node_id="subnet-screener-1", screener_hotkey="hotkey"),
+    )
+    current = datetime.now(UTC)
+    release = {
+        "builtin_policy_version": 13,
+        "revision": "a" * 40,
+        "version": "v0.317.2",
+        "activated_at": int(current.timestamp()),
+    }
+    heartbeat = SimpleNamespace(
+        instance_id="subnet-screener-1-worker-1",
+        system_metrics={"release": release},
+    )
+    session = cast(
+        AsyncSession, SimpleNamespace(scalars=AsyncMock(return_value=[heartbeat]))
+    )
+    assert await endpoints._full_runtime_worker_ready(
+        session, node=node, now=current, instance_id=heartbeat.instance_id
+    )
+    assert not await endpoints._full_runtime_worker_ready(
+        session, node=node, now=current, instance_id="subnet-screener-1-worker-2"
+    )
+    heartbeat.system_metrics = {"release": {**release, "version": "v0.317.1"}}
+    assert not await endpoints._full_runtime_worker_ready(
+        session, node=node, now=current, instance_id=heartbeat.instance_id
+    )
+
+
+@pytest.mark.asyncio
+async def test_canary_preflight_exposes_scheduler_guard_values_without_mutation(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_sha, attempt_sha = "a" * 64, "b" * 64
+    agent_id = await _seed_agent(
+        session_maker, status=AgentStatus.EVALUATING, sha256=agent_sha
+    )
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                artifact_sha256=attempt_sha,
+                screener_hotkey="preflight-test-hotkey",
+                policy_version=13,
+                status="passed",
+                started_at=now - timedelta(minutes=1),
+                deadline=now,
+                finished_at=now,
+            )
+        )
+    await _seed_score(session_maker, agent_id=agent_id)
+    response = Response()
+    async with session_maker() as session:
+        view = await endpoints.get_l2_report_canary_preflight(
+            agent_id, attempt_id, response, None, session
+        )
+    assert response.headers["Cache-Control"] == "no-store"
+    assert view.agent_id == agent_id
+    assert view.source_attempt_id == attempt_id
+    assert view.agent_artifact_sha256 == agent_sha
+    assert view.source_attempt_artifact_sha256 == attempt_sha
+    assert view.agent_status == "evaluating"
+    assert view.attempt_policy_version == 13
+    assert view.score_row_count == 1
+    assert view.arrival_bench_version >= 1
+    async with session_maker() as session:
+        with pytest.raises(HTTPException) as error:
+            await endpoints.get_l2_report_canary_preflight(
+                uuid4(), attempt_id, Response(), None, session
+            )
+    assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("run_mode", "review_mode"),
+    [
+        ("source_only", "shadow"),
+        ("full_runtime", "shadow"),  # An already leased older worker can finish.
+        ("full_runtime", "enforce_preview"),
+    ],
+)
 async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
-    session_maker: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    run_mode: str,
+    review_mode: str,
 ) -> None:
     sha = "a" * 64
     agent_id = await _seed_agent(session_maker, status=AgentStatus.REJECTED, sha256=sha)
@@ -121,10 +211,15 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
                 expected_agent_status="rejected",
                 expected_score_count=0,
                 review_label="known_reject",
+                run_mode=run_mode,
                 status="queued",
             )
         )
     packet = _packet(attempt_id, sha)
+    if run_mode == "full_runtime":
+        monkeypatch.setattr(
+            endpoints, "_full_runtime_worker_ready", AsyncMock(return_value=True)
+        )
     evidence_lookup = AsyncMock(return_value=packet)
     monkeypatch.setattr(endpoints, "scored_runtime_evidence_for_lease", evidence_lookup)
     monkeypatch.setattr(
@@ -158,6 +253,7 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
     assert evidence_lookup.await_args is not None
     assert evidence_lookup.await_args.kwargs["report_only_current_packet"] is True
     assert claim.source_attempt_id == attempt_id
+    assert claim.run_mode == run_mode
     assert claim.scored_runtime_evidence == packet
     async with session_maker() as session:
         view = await endpoints.get_l2_report_canary(claim.canary_id, None, session)
@@ -179,17 +275,25 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
     report = {
         "kind": "l2_report_canary_v1",
         "authority": "none",
-        "review_mode": "shadow",
+        "review_mode": review_mode,
         "canary_id": str(canary_id),
         "agent_id": str(agent_id),
         "source_attempt_id": str(attempt_id),
         "artifact_sha256": sha,
         "policy_version": 13,
+        "run_mode": run_mode,
         "settings_revision": 124,
         "settings_checksum": "d" * 64,
         "scored_runtime_evidence": packet.model_dump(mode="json"),
         "l2": {"ok": True, "risk_level": "low"},
     }
+    if run_mode == "full_runtime":
+        report["challenge_status"] = "completed"
+        report["challenge_evidence_codes"] = ["behavioral-oracle-passed"]
+        report["decision_evidence_codes"] = ["behavioral-oracle-passed"]
+    else:
+        # A rolling old worker may still complete an already leased source-only run.
+        del report["run_mode"]
     body = L2CanaryCompleteRequest(
         lease_token=claim.lease_token, status="succeeded", report=report
     )
@@ -205,6 +309,44 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
                 session,
             )
     assert bad_identity.value.status_code == 409
+    if run_mode == "source_only":
+        async with session_maker() as session:
+            with pytest.raises(HTTPException) as wrong_review_mode:
+                await endpoints.complete_l2_report_canary(
+                    canary_id,
+                    body.model_copy(
+                        update={"report": {**report, "review_mode": "enforce_preview"}}
+                    ),
+                    request,
+                    "hotkey",
+                    session,
+                )
+        assert wrong_review_mode.value.status_code == 409
+    if run_mode == "full_runtime":
+        async with session_maker() as session:
+            with pytest.raises(HTTPException) as wrong_mode:
+                await endpoints.complete_l2_report_canary(
+                    canary_id,
+                    body.model_copy(
+                        update={"report": {**report, "run_mode": "source_only"}}
+                    ),
+                    request,
+                    "hotkey",
+                    session,
+                )
+        assert wrong_mode.value.status_code == 409
+        async with session_maker() as session:
+            with pytest.raises(HTTPException) as false_challenge:
+                await endpoints.complete_l2_report_canary(
+                    canary_id,
+                    body.model_copy(
+                        update={"report": {**report, "challenge_status": "not_run"}}
+                    ),
+                    request,
+                    "hotkey",
+                    session,
+                )
+        assert false_challenge.value.status_code == 409
     async with session_maker() as session:
         await endpoints.complete_l2_report_canary(
             canary_id, body, request, "hotkey", session
