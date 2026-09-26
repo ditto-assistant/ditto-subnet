@@ -62,6 +62,7 @@ from ditto.validator.signing import (
     sign_top5_confirmation_job_request,
     top5_confirmation_job_signing_message,
     top5_confirmation_score_signing_message,
+    transcript_signing_message,
     verify_ledger_entry,
     verify_score_proof,
     verify_v9_confirmation_receipt,
@@ -621,6 +622,41 @@ def test_artifact_signature_binds_agent_nonce_and_timestamp() -> None:
         requested_at=requested_at,
     )
     assert not keypair.verify(other_agent, signature)
+
+
+def test_transcript_signature_binds_run_digest_nonce_and_timestamp() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    nonce = uuid4()
+    requested_at = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+
+    def message(
+        agent_id: UUID,
+        run_id: str,
+        digest: str,
+        request_nonce: UUID,
+        timestamp: datetime,
+    ) -> bytes:
+        return transcript_signing_message(
+            validator_hotkey=keypair.ss58_address,
+            agent_id=agent_id,
+            run_id=run_id,
+            transcript_sha256=digest,
+            nonce=request_nonce,
+            requested_at=timestamp,
+        )
+
+    original = message(_AGENT, "run_1", "ab" * 32, nonce, requested_at)
+    signature = keypair.sign(original)
+    assert keypair.verify(original, signature)
+    changed_proofs = (
+        (uuid4(), "run_1", "ab" * 32, nonce, requested_at),
+        (_AGENT, "run_2", "ab" * 32, nonce, requested_at),
+        (_AGENT, "run_1", "cd" * 32, nonce, requested_at),
+        (_AGENT, "run_1", "ab" * 32, uuid4(), requested_at),
+        (_AGENT, "run_1", "ab" * 32, nonce, requested_at + timedelta(seconds=1)),
+    )
+    for changed in changed_proofs:
+        assert not keypair.verify(message(*changed), signature)
 
 
 def test_ledger_signature_binds_nonce_and_timestamp() -> None:

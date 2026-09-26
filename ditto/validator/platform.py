@@ -144,6 +144,7 @@ from ditto.validator.signing import (
     sign_ledger_request,
     sign_top5_confirmation_job_request,
     sign_top5_confirmation_score,
+    sign_transcript_request,
     sign_v9_confirmation_artifact_request,
     sign_v9_confirmation_claim,
     sign_v9_confirmation_fail,
@@ -2708,8 +2709,26 @@ class PlatformClient:
         :class:`PlatformError` on rejection so the caller can log it; callers
         treat failure as best-effort (the score already stands)."""
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/transcript/{run_id}"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        digest = hashlib.sha256(body).hexdigest()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Transcript-Sha256": digest,
+            "X-Validator-Transcript-Nonce": str(nonce),
+            "X-Validator-Transcript-Requested-At": requested_at.isoformat(),
+            "X-Validator-Transcript-Signature": sign_transcript_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                agent_id=agent_id,
+                run_id=run_id,
+                transcript_sha256=digest,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
         try:
-            resp = await self._client.put(url, content=body, headers=self._headers)
+            resp = await self._client.put(url, content=body, headers=proof_headers)
         except httpx.HTTPError as e:
             raise PlatformError(f"transcript submit failed: {e}") from e
         if resp.status_code != 200:

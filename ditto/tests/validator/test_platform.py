@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -74,6 +75,7 @@ from ditto.validator.signing import (
     ledger_signing_message,
     sign_coding_certification,
     sign_score,
+    transcript_signing_message,
 )
 
 _SELECTION_VECTOR_PATH = (
@@ -2508,7 +2510,7 @@ async def test_submit_score_4xx_stays_a_scoring_error() -> None:
     assert type(caught.value) is PlatformError
 
 
-async def test_submit_transcript_puts_raw_bytes_with_hotkey_header() -> None:
+async def test_submit_transcript_puts_raw_bytes_with_signed_proof() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
     body = b'{"run_id":"run_1","cases":[]}'
@@ -2520,6 +2522,23 @@ async def test_submit_transcript_puts_raw_bytes_with_hotkey_header() -> None:
         )
         assert request.headers["X-Validator-Hotkey"] == keypair.ss58_address
         assert request.content == body
+        digest = hashlib.sha256(body).hexdigest()
+        nonce = UUID(request.headers["X-Validator-Transcript-Nonce"])
+        requested_at = datetime.fromisoformat(
+            request.headers["X-Validator-Transcript-Requested-At"]
+        )
+        assert request.headers["X-Validator-Transcript-Sha256"] == digest
+        assert keypair.verify(
+            transcript_signing_message(
+                validator_hotkey=keypair.ss58_address,
+                agent_id=agent_id,
+                run_id="run_1",
+                transcript_sha256=digest,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+            bytes.fromhex(request.headers["X-Validator-Transcript-Signature"]),
+        )
         return httpx.Response(
             200,
             json={

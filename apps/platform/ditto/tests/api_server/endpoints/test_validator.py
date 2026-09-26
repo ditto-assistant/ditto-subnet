@@ -9567,6 +9567,36 @@ class TestTranscriptPublication:
     _TRANSCRIPT = b'{"run_id":"run_t_0","cases":[{"case_id":"a","response":{}}]}'
     _digest = hashlib.sha256(_TRANSCRIPT).hexdigest()
 
+    def _signed_headers(
+        self,
+        agent_id: UUID,
+        *,
+        run_id: str = "run_t_0",
+        digest: str | None = None,
+        nonce: UUID | None = None,
+        requested_at: datetime | None = None,
+    ) -> dict[str, str]:
+        digest = digest or self._digest
+        nonce = nonce or uuid4()
+        requested_at = requested_at or datetime.now(UTC)
+        signature = _KEYPAIR.sign(
+            validator_endpoint._transcript_signing_message(
+                _VALIDATOR_HOTKEY,
+                agent_id,
+                run_id,
+                digest,
+                nonce,
+                requested_at,
+            )
+        ).hex()
+        return {
+            "X-Validator-Hotkey": _VALIDATOR_HOTKEY,
+            "X-Validator-Transcript-Sha256": digest,
+            "X-Validator-Transcript-Nonce": str(nonce),
+            "X-Validator-Transcript-Requested-At": requested_at.isoformat(),
+            "X-Validator-Transcript-Signature": signature,
+        }
+
     async def test_score_signature_binds_transcript_digest(
         self,
         app: FastAPI,
@@ -9643,7 +9673,7 @@ class TestTranscriptPublication:
         response = await client.put(
             f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
             content=self._TRANSCRIPT,
-            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+            headers=self._signed_headers(agent_id),
         )
         assert response.status_code == 200, response.text
         body = response.json()
@@ -9665,10 +9695,96 @@ class TestTranscriptPublication:
         response = await client.put(
             f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
             content=self._TRANSCRIPT,
-            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+            headers=self._signed_headers(agent_id),
         )
         assert response.status_code == 200
         assert storage.put_object.await_count == 2  # still exactly two writes
+
+    async def test_transcript_rejects_unsigned_replayed_or_unbound_requests(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        storage = _install_storage(app)
+        storage.public_bucket = None
+        storage.put_object = AsyncMock()
+        storage.object_exists = AsyncMock(return_value=False)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._record_score_with_transcript(client, session_maker, agent_id)
+        url = f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0"
+
+        unsigned = await client.put(
+            url,
+            content=self._TRANSCRIPT,
+            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+        )
+        assert unsigned.status_code == 401
+        wrong_run = await client.put(
+            url,
+            content=self._TRANSCRIPT,
+            headers=self._signed_headers(agent_id, run_id="other_run"),
+        )
+        assert wrong_run.status_code == 401
+        wrong_agent = await client.put(
+            url,
+            content=self._TRANSCRIPT,
+            headers=self._signed_headers(uuid4()),
+        )
+        assert wrong_agent.status_code == 401
+        wrong_digest = await client.put(
+            url,
+            content=self._TRANSCRIPT,
+            headers=self._signed_headers(agent_id, digest="ab" * 32),
+        )
+        assert wrong_digest.status_code == 409
+        stale = await client.put(
+            url,
+            content=self._TRANSCRIPT,
+            headers=self._signed_headers(
+                agent_id, requested_at=datetime.now(UTC) - timedelta(minutes=3)
+            ),
+        )
+        assert stale.status_code == 409
+        storage.put_object.assert_not_awaited()
+
+        headers = self._signed_headers(agent_id)
+        accepted = await client.put(url, content=self._TRANSCRIPT, headers=headers)
+        replay = await client.put(url, content=self._TRANSCRIPT, headers=headers)
+        assert accepted.status_code == 200, accepted.text
+        assert replay.status_code == 409
+        storage.put_object.assert_awaited_once()
+
+    async def test_future_dated_transcript_nonce_outlives_signature_window(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        storage = _install_storage(app)
+        storage.public_bucket = None
+        storage.put_object = AsyncMock()
+        storage.object_exists = AsyncMock(return_value=False)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._record_score_with_transcript(client, session_maker, agent_id)
+        nonce = uuid4()
+        requested_at = datetime.now(UTC) + timedelta(seconds=110)
+        response = await client.put(
+            f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
+            content=self._TRANSCRIPT,
+            headers=self._signed_headers(
+                agent_id, nonce=nonce, requested_at=requested_at
+            ),
+        )
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            consumed = await session.get(ValidatorRequestNonce, nonce)
+        assert consumed is not None
+        assert consumed.expires_at >= requested_at + timedelta(minutes=2)
 
     async def test_v13_transcript_is_private_even_without_dataset_metadata(
         self,
@@ -9693,7 +9809,7 @@ class TestTranscriptPublication:
         response = await client.put(
             f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
             content=self._TRANSCRIPT,
-            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+            headers=self._signed_headers(agent_id),
         )
         assert response.status_code == 200, response.text
         storage.put_object.assert_awaited_once_with(
@@ -9720,7 +9836,7 @@ class TestTranscriptPublication:
         response = await client.put(
             f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
             content=self._TRANSCRIPT,
-            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+            headers=self._signed_headers(agent_id),
         )
 
         assert response.status_code == 200
@@ -9749,7 +9865,7 @@ class TestTranscriptPublication:
         response = await client.put(
             f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
             content=b'{"tampered": true}',
-            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+            headers=self._signed_headers(agent_id),
         )
         assert response.status_code == 409
         storage.put_object.assert_not_awaited()
@@ -9770,7 +9886,7 @@ class TestTranscriptPublication:
         response = await client.put(
             f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
             content=self._TRANSCRIPT,
-            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+            headers=self._signed_headers(agent_id),
         )
         assert response.status_code == 409
         storage.put_object.assert_not_awaited()
