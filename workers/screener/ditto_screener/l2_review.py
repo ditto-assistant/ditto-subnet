@@ -4370,7 +4370,7 @@ class TerraSolSourceReviewAgent:
                     }
                 )
             if not calls:
-                if role == "analyst" and no_call_corrections < 2:
+                if role in {"analyst", "adjudicator"} and no_call_corrections < 2:
                     no_call_corrections += 1
                     logger.warning(
                         "L2 model returned no tool call; correction %d/2",

@@ -2719,7 +2719,10 @@ async def test_partial_dossier_safe_consensus_cannot_clear(tmp_path: Path) -> No
     assert not result.dossier_complete
 
 
-async def test_l3_no_tool_failure_reports_bounded_subcode(tmp_path: Path) -> None:
+@pytest.mark.parametrize("recovers", [False, True])
+async def test_l3_no_tool_failure_reports_bounded_subcode(
+    tmp_path: Path, recovers: bool
+) -> None:
     source = "fn main() { serve(); }\nfn serve() {}"
     archive, artifact_sha = _tar(tmp_path, source)
     digest = hashlib.sha256(source.encode()).hexdigest()
@@ -2740,7 +2743,7 @@ async def test_l3_no_tool_failure_reports_bounded_subcode(tmp_path: Path) -> Non
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal requests
         requests += 1
-        if requests >= 3:
+        if requests >= 3 and (not recovers or requests == 3):
             return _response([])
         return _response([_tool_call(str(requests), "submit_l2_review", safe)])
 
@@ -2752,7 +2755,12 @@ async def test_l3_no_tool_failure_reports_bounded_subcode(tmp_path: Path) -> Non
         deadline=None,
     )
 
-    assert requests == 3
+    if recovers:
+        assert requests == 4
+        assert result.observation.error_code == "l3-adjudicator-incomplete"
+        assert result.failure_subcode is None
+        return
+    assert requests == 5
     assert result.observation.error_code == "l3-adjudicator-model-tool-contract"
     assert result.observation.failure_disposition == "retryable_infra"
     assert result.failure_subcode == "no_tool_call_after_corrections"
@@ -4174,17 +4182,17 @@ async def test_adjudicator_retry_reuses_analyst_and_critic_stage_caches(
             return _response([_tool_call("1", "submit_l2_review", safe)])
         if requests == 2:
             return _response([_tool_call("2", "submit_l2_review", challenge)])
-        if requests == 3:
+        if requests in {3, 4, 5}:
             return _response([])
-        if requests == 4:
+        if requests == 6:
             return _response(
-                [_tool_call("4", "read_file", {"path": "src/main.rs"})],
+                [_tool_call("6", "read_file", {"path": "src/main.rs"})],
                 input_tokens=0,
                 output_tokens=0,
                 reasoning_tokens=0,
                 cost=0,
             )
-        return _response([_tool_call("5", "submit_l2_review", adjudicated_safe)])
+        return _response([_tool_call("7", "submit_l2_review", adjudicated_safe)])
 
     agent = _sol_agent(tmp_path, _FakeHarness(), handler)
     first = await agent.review(
@@ -4207,7 +4215,7 @@ async def test_adjudicator_retry_reuses_analyst_and_critic_stage_caches(
     assert second.analyst_cache_hit
     assert second.critic_cache_hit
     assert second.adjudicator_disposition == "overturn_to_safe"
-    assert requests == 5, "the manual retry must rerun only the SOL adjudicator"
+    assert requests == 7, "the manual retry must rerun only the SOL adjudicator"
     assert second.usage.input_tokens == 1_000, "only adjudicator usage is new"
 
 
