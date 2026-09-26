@@ -6622,7 +6622,7 @@ export interface paths {
          *
          *     1. Form fields auto-validated by FastAPI regex (already done by
          *        the time this body runs; malformed input returns 422).
-         *     2. Signature over ``f"{hotkey}:{sha256}"`` (CPU only, no I/O; 400).
+         *     2. Fresh domain-separated upload signature (CPU only, no I/O; 400).
          *     3. Hotkey registered on the configured netuid (1 Pylon call;
          *        400 if absent, 503 if chain unreachable).
          *     4. Stream tar bytes: size cap (413) + sha256 re-verify (400).
@@ -14056,6 +14056,13 @@ export interface components {
             sha256: string;
             /** Signature */
             signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid4
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
         };
         /**
          * BurnSettings
@@ -31893,8 +31900,8 @@ export interface components {
          * UploadCheckRequest
          * @description Body of ``POST /upload/check``.
          *
-         *     The signature is over the UTF-8 bytes of ``f"{hotkey}:{sha256}"``,
-         *     produced by the hotkey's keypair (sr25519 by default).
+         *     The hotkey signs the domain-separated upload v2 payload containing the
+         *     digest, Unix timestamp, and random request nonce.
          */
         UploadCheckRequest: {
             /**
@@ -31921,6 +31928,13 @@ export interface components {
             sha256: string;
             /** Signature */
             signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid4
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
         };
         /**
          * UploadCheckResponse

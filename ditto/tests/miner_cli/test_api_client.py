@@ -117,6 +117,8 @@ class TestUploadCheck:
             sha256="ab" * 32,
             file_size_bytes=1024,
             signature="cd" * 64,
+            signature_timestamp=1_798_000_000,
+            signature_nonce=UUID("123e4567-e89b-42d3-a456-426614174000"),
         )
 
     def test_happy_path_returns_response_with_ok_false_payload(self) -> None:
@@ -178,6 +180,8 @@ class TestUploadAgent:
             "sha256": "ab" * 32,
             "name": "smoke-agent",
             "signature": "cd" * 64,
+            "signature_timestamp": 1_798_000_000,
+            "signature_nonce": UUID("123e4567-e89b-42d3-a456-426614174000"),
             "payment": PaymentReceipt(
                 block_hash="0x" + "ef" * 32,
                 block_number=42,
@@ -218,6 +222,8 @@ class TestUploadAgent:
             "sha256",
             "name",
             "signature",
+            "signature_timestamp",
+            "signature_nonce",
             "payment_block_hash",
             "payment_block_number",
             "payment_extrinsic_index",

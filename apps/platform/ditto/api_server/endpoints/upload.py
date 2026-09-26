@@ -19,12 +19,14 @@ import hashlib
 import inspect
 import logging
 import os
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated
 
 import bittensor
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from pydantic import UUID4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import (
@@ -93,6 +95,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/upload", tags=["upload"])
+
+UPLOAD_SIGNATURE_MAX_SKEW_SECONDS = 300
 
 # `/upload/check` + `/upload/agent` failure codes live in the 1xxx
 # agent-side range per CODE-REVIEW-CHECKLIST.md. New codes added here
@@ -197,9 +201,14 @@ async def check(
     codes: list[int] = []
     messages: list[str] = []
 
-    # 1. Signature over UTF-8 bytes of "{hotkey}:{sha256}".
-    payload = f"{body.hotkey}:{body.sha256}".encode()
-    signature_valid = _verify_signature(body.hotkey, payload, body.signature)
+    # 1. Verify the short-lived, request-specific hotkey signature.
+    signature_valid = _verify_upload_signature(
+        body.hotkey,
+        body.sha256,
+        body.signature,
+        body.signature_timestamp,
+        body.signature_nonce,
+    )
     if not signature_valid:
         codes.append(ERROR_CODE_BAD_SIGNATURE)
         messages.append("signature did not verify against the hotkey")
@@ -431,6 +440,8 @@ async def upload_agent(
     # defense against pathological values polluting logs / dashboards.
     name: Annotated[str, Form(min_length=1, max_length=64)],
     signature: Annotated[str, Form(pattern=_SIGNATURE_HEX_PATTERN)],
+    signature_timestamp: Annotated[int, Form(ge=1, le=2**63 - 1)],
+    signature_nonce: Annotated[UUID4, Form()],
     payment_block_hash: Annotated[str, Form(pattern=_BLOCK_HASH_PATTERN)],
     payment_block_number: Annotated[int, Form(ge=1)],
     payment_extrinsic_index: Annotated[int, Form(ge=0)],
@@ -450,7 +461,7 @@ async def upload_agent(
 
     1. Form fields auto-validated by FastAPI regex (already done by
        the time this body runs; malformed input returns 422).
-    2. Signature over ``f"{hotkey}:{sha256}"`` (CPU only, no I/O; 400).
+    2. Fresh domain-separated upload signature (CPU only, no I/O; 400).
     3. Hotkey registered on the configured netuid (1 Pylon call;
        400 if absent, 503 if chain unreachable).
     4. Stream tar bytes: size cap (413) + sha256 re-verify (400).
@@ -472,9 +483,10 @@ async def upload_agent(
     """
     netuid = request.app.state.config.chain.netuid
 
-    # 2. Signature verify against the claimed hotkey + sha.
-    payload = f"{hotkey}:{sha256}".encode()
-    if not _verify_signature(hotkey, payload, signature):
+    # 2. Signature verify against the claimed hotkey, sha, time, and nonce.
+    if not _verify_upload_signature(
+        hotkey, sha256, signature, signature_timestamp, signature_nonce
+    ):
         raise HTTPException(
             status_code=400, detail="signature did not verify against the hotkey"
         )
@@ -822,6 +834,25 @@ async def upload_agent(
         status=AgentStatus.UPLOADED,
         payment_disposition="credit_consumed" if using_credit else "consumed",
     )
+
+
+def _verify_upload_signature(
+    hotkey: str,
+    sha256: str,
+    signature_hex: str,
+    signature_timestamp: int,
+    signature_nonce: uuid.UUID,
+) -> bool:
+    """Reject stale or future upload proofs before verifying their signature."""
+    if (
+        signature_nonce.version != 4
+        or abs(time.time() - signature_timestamp) > UPLOAD_SIGNATURE_MAX_SKEW_SECONDS
+    ):
+        return False
+    payload = (
+        f"ditto-upload-v2:{hotkey}:{sha256}:{signature_timestamp}:{signature_nonce}"
+    ).encode("ascii")
+    return _verify_signature(hotkey, payload, signature_hex)
 
 
 def _verify_signature(hotkey: str, payload: bytes, signature_hex: str) -> bool:

@@ -4,7 +4,7 @@ Glues every other module together. Walk:
 
 1. Load wallet (coldkey + hotkey)
 2. Run tar pre-flight; abort on any real check failing
-3. Sign ``f"{hotkey}:{sha256}"``
+3. Sign a fresh domain-separated upload request
 4. POST /upload/check; abort on a definitive rejection. When the sole
    rejection is 1101 (hotkey not registered), offer to recycle the live
    registration cost, then re-check and continue
@@ -33,7 +33,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from ditto.api_models import (
     EvalPricingResponse,
@@ -324,9 +324,19 @@ def _run_upload(
     if not preflight.passed:
         raise TarStructureError("pre-flight failed; see report above")
 
-    signature_hex = sign_upload_payload(
-        handle=handle, live_wallet=live_wallet, sha256_hex=preflight.sha256
-    )
+    def _fresh_signature() -> tuple[str, int, UUID]:
+        # Registration waits, payment finality, and upload retries can exceed
+        # the server's five-minute signature window. Sign each HTTP request.
+        timestamp = int(time.time())
+        nonce = uuid4()
+        signature = sign_upload_payload(
+            handle=handle,
+            live_wallet=live_wallet,
+            sha256_hex=preflight.sha256,
+            signature_timestamp=timestamp,
+            signature_nonce=nonce,
+        )
+        return signature, timestamp, nonce
 
     # A finalized receipt is written locally before the first upload attempt.
     # On a later identical command, reuse it automatically instead of sending a
@@ -362,12 +372,15 @@ def _run_upload(
     with ApiClient(base_url=network_api_url) as client:
 
         def _check(candidate_receipt: PaymentReceipt | None):
+            signature, signature_timestamp, signature_nonce = _fresh_signature()
             return client.post_upload_check(
                 UploadCheckRequest(
                     hotkey=handle.hotkey_ss58,
                     sha256=preflight.sha256,
                     file_size_bytes=preflight.file_size_bytes,
-                    signature=signature_hex,
+                    signature=signature,
+                    signature_timestamp=signature_timestamp,
+                    signature_nonce=signature_nonce,
                     allow_identical_rescore=allow_identical_rescore,
                     reserve_submission_slot=True,
                     payment_block_hash=(
@@ -562,7 +575,7 @@ def _run_upload(
                 hotkey=handle.hotkey_ss58,
                 sha256=preflight.sha256,
                 name=agent_name,
-                signature=signature_hex,
+                sign_request=_fresh_signature,
                 payment=receipt,
                 admission_token=admission_token,
                 allow_identical_rescore=allow_identical_rescore,
@@ -1119,7 +1132,7 @@ def _post_upload_with_retries(
     hotkey: str,
     sha256: str,
     name: str,
-    signature: str,
+    sign_request: Callable[[], tuple[str, int, UUID]],
     payment: PaymentReceipt,
     admission_token: UUID,
     allow_identical_rescore: bool = False,
@@ -1127,6 +1140,7 @@ def _post_upload_with_retries(
     """Retry transient post-payment failures with the same proof and archive."""
     for attempt in range(len(_UPLOAD_RETRY_DELAYS_S) + 1):
         try:
+            signature, signature_timestamp, signature_nonce = sign_request()
             with tar_path.open("rb") as tar_fh:
                 return client.post_upload_agent(
                     agent_tar=tar_fh,
@@ -1135,6 +1149,8 @@ def _post_upload_with_retries(
                     sha256=sha256,
                     name=name,
                     signature=signature,
+                    signature_timestamp=signature_timestamp,
+                    signature_nonce=signature_nonce,
                     payment=payment,
                     admission_token=admission_token,
                     allow_identical_rescore=allow_identical_rescore,

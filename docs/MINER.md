@@ -215,6 +215,12 @@ uv run ditto --network finney upload \
   --hotkey default
 ```
 
+The CLI signs each `/upload/check` and `/upload/agent` request with a fresh
+UUID nonce and the current Unix time. Platform accepts the signature for five
+minutes. Keep the machine clock synchronized and update an older CLI before
+submitting; a saved finalized payment proof can still be recovered with the
+updated CLI without paying again.
+
 The CLI runs preflight and obtains a platform admission reservation before it
 displays pricing or sends payment. An unpaid reservation gives that coldkey an
 exclusive submission slot for 15 minutes, preventing concurrent attempts from

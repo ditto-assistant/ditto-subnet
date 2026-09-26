@@ -589,6 +589,10 @@ class TestUploadHappyPath:
         assert {
             call.kwargs["payment"] for call in client.post_upload_agent.call_args_list
         } == {receipt}
+        assert (
+            client.post_upload_agent.call_args_list[0].kwargs["signature_nonce"]
+            != client.post_upload_agent.call_args_list[1].kwargs["signature_nonce"]
+        )
         sleep.assert_called_once_with(2.0)
         assert "retrying in 2s" in capsys.readouterr().err
 
@@ -608,7 +612,11 @@ class TestUploadHappyPath:
                 hotkey=HOTKEY,
                 sha256="ab" * 32,
                 name="alpha",
-                signature="cd" * 64,
+                sign_request=lambda: (
+                    "cd" * 64,
+                    1_798_000_000,
+                    uuid4(),
+                ),
                 payment=_payment_receipt(),
                 admission_token=uuid4(),
             )

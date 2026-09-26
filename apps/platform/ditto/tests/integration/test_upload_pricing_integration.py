@@ -9,10 +9,12 @@ Run via ``make test-integration`` (excluded from the default suite).
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import bittensor
 import httpx
@@ -64,12 +66,19 @@ class TestUploadPricingIntegration:
         still verify."""
         keypair = bittensor.Keypair.create_from_uri("//Alice")
         sha256 = "1d8a3b6f04e2c7f9a51bd3e5c8f2a7b06d4e9c1f2a3b4c5d6e7f8a9b0c1d2e3f"
-        payload = f"{keypair.ss58_address}:{sha256}".encode()
+        signature_timestamp = int(time.time())
+        signature_nonce = uuid4()
+        payload = (
+            f"ditto-upload-v2:{keypair.ss58_address}:{sha256}:"
+            f"{signature_timestamp}:{signature_nonce}"
+        ).encode("ascii")
         body = {
             "hotkey": keypair.ss58_address,
             "sha256": sha256,
             "file_size_bytes": 1000,
             "signature": keypair.sign(payload).hex(),
+            "signature_timestamp": signature_timestamp,
+            "signature_nonce": str(signature_nonce),
         }
 
         async with (
