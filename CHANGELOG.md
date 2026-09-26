@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.319.1 (2026-09-26)
+
+### Bug Fixes
+
+- **platform**: Bound parallel report canary claims to healthy workers
+  ([`85a17fb`](https://github.com/ditto-assistant/ditto-subnet/commit/85a17fb558e2f9eaa227536182a99c8d7d729759))
+
+
 ## v0.319.0 (2026-09-26)
 
 ### Bug Fixes
