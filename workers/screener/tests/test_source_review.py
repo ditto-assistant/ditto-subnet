@@ -3418,7 +3418,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v27-policy-v13"
+    assert _prompt_revision(13) == "source-review-v28-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -3556,6 +3556,9 @@ def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
     assert "exact path-and-digest starter-kit provenance" in v13
     assert "README, metadata sidecar, or duplicate\nself-report" in v13
     assert "null score or leaderboard field" in v13
+    assert "validator supplies `inference_base_url`" in v13
+    assert "source-side allowlist" in v13
+    assert "validator supplies `inference_base_url`" not in v12
     assert "Decide I1 through I8 independently" not in v12
 
     legacy = _source_review_tools_for_policy(12, final_turn=True)[0]

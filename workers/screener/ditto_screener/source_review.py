@@ -84,7 +84,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v27-policy-v13"
+        return "source-review-v28-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -1861,6 +1861,14 @@ unfinished work, and identifiers available only through a supplied tool. A
 genuine authoritative model planner may produce an exact pinned plan; an
 advisory planner must remain rejectable and every valid deviation executable.
 Neither architecture bypasses authorization or safety.
+
+On a scored v13 `/run`, the validator supplies `inference_base_url` as a
+case-scoped broker URL. A harness may build a per-request model client from it
+and send its inference bearer to that broker. This is the published attribution
+path, not credential exfiltration or provider bypass by itself. Trace the
+field's actual origin and outbound destination: a URL derived from user text,
+retrieved data, or an unrelated host remains a security lead. Do not require a
+source-side allowlist for the validator-supplied field.
 
 Opaque files are not violations by presence. Establish each loaded component's
 actual role and apply the published role-specific verification requirement.
