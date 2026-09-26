@@ -39,7 +39,7 @@ else
   DRAIN_PY="$(dirname "$0")/screener-fleet-drain.py"
 fi
 HELD_WORKERS="$STATE_DIR/held-workers"
-UNIT_DROPIN_ROOT="${SCREENER_FLEET_UNIT_DROPIN_ROOT:-/etc/systemd/system}"
+DRAIN_POLL_SECONDS="${SCREENER_FLEET_DRAIN_POLL_SECONDS:-3}"
 
 log() { printf 'screener-fleet-auto-update: %s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
@@ -204,8 +204,37 @@ worker_indexes() {
 }
 
 lease_decision() {
-  local index="$1"
-  python3 "$DRAIN_PY" --lease "$FLEET_STATE_DIR/workers/$index/active-lease.json" --now "$(date +%s)"
+  local index="$1" decision
+  # A missing or crashing helper must not abort the drain after the fleet
+  # agent has stopped. Treat it as an open lease: the drain bound still ends
+  # the wait, and no worker is ever signalled beyond SIGTERM.
+  decision="$(python3 "$DRAIN_PY" \
+    --lease "$FLEET_STATE_DIR/workers/$index/active-lease.json" \
+    --now "$(date +%s)" 2>/dev/null)" || decision=wait
+  case "$decision" in
+    ready|wait|held) printf '%s' "$decision" ;;
+    *) printf 'wait' ;;
+  esac
+}
+
+# "active" means a worker process is running. Once that process exits,
+# Restart=always parks the unit in "activating" (auto-restart) for RestartSec
+# and then starts it again from whatever release is current at that moment.
+worker_state() {
+  "$SYSTEMCTL" show -p ActiveState --value \
+    "ditto-screener-worker@$1.service" 2>/dev/null || true
+}
+
+worker_main_pid() {
+  "$SYSTEMCTL" show -p MainPID --value \
+    "ditto-screener-worker@$1.service" 2>/dev/null || true
+}
+
+worker_process_running() {
+  case "$1" in
+    active|reloading|deactivating) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # Debian systemctl kill defaults to --kill-whom=all, which also signals Docker
@@ -216,50 +245,78 @@ signal_worker_main() {
     "ditto-screener-worker@$1.service" >/dev/null 2>&1 || true
 }
 
-prevent_restart_after_review() {
-  local index="$1" dropin
-  dropin="$UNIT_DROPIN_ROOT/ditto-screener-worker@${index}.service.d"
-  install -d -m 0755 "$dropin"
-  printf '[Service]\nRestart=no\n' >"$dropin/drain-no-restart.conf"
-  "$SYSTEMCTL" disable "ditto-screener-worker@$index.service"
+# SIGTERM alone does not stop a unit: Restart=always would start the worker
+# again on the old release before the symlink flips, and that fresh process
+# would claim new work. A stop job cancels the pending restart. The updater
+# runs under ProtectSystem=strict and cannot write a Restart=no drop-in, so
+# this is the only runtime control. Issue it only when no worker process is
+# running, so it can never signal an in-flight review.
+cancel_worker_restart() {
+  timeout 30 "$SYSTEMCTL" stop "ditto-screener-worker@$1.service" \
+    >/dev/null 2>&1 || true
+}
+
+held_worker_still_running() {
+  local index="$1" pid
+  pid="$(worker_main_pid "$index")"
+  [ -n "$pid" ] && [ "$pid" != 0 ] || return 1
+  grep -qx "$index $pid" "$HELD_WORKERS" 2>/dev/null
 }
 
 stop_fleet() {
-  local pids=() index decision bound
+  local index decision bound state waiting
   : >"$HELD_WORKERS"
   DRAIN_STARTED_AT="$(date +%s)"
   write_drain_status draining
-  "$SYSTEMCTL" kill -s SIGTERM ditto-screener-fleet-agent.service >/dev/null 2>&1 || true
+  # Stop claiming lane work. The stop job below follows the unit's KillMode;
+  # this signal itself must not reach the agent's Docker children.
+  "$SYSTEMCTL" kill --kill-whom=main -s SIGTERM \
+    ditto-screener-fleet-agent.service >/dev/null 2>&1 || true
   timeout 60 "$SYSTEMCTL" stop ditto-screener-fleet-agent.service || true
 
   for index in $(worker_indexes); do
     signal_worker_main "$index"
   done
   bound=$((DRAIN_STARTED_AT + DRAIN_BOUND_SECONDS))
-  while [ "$(date +%s)" -lt "$bound" ]; do
-    local waiting=0
+  while :; do
+    waiting=0
     for index in $(worker_indexes); do
-      "$SYSTEMCTL" is-active --quiet "ditto-screener-worker@$index.service" || continue
-      decision="$(lease_decision "$index")"
-      if [ "$decision" = "wait" ]; then
-        waiting=1
-        write_drain_status draining "worker $index lease still open"
+      state="$(worker_state "$index")"
+      if ! worker_process_running "$state"; then
+        cancel_worker_restart "$index"
+        continue
       fi
+      # Idempotent for a draining worker. It also stops a process that
+      # Restart=always started between polls from claiming a second review.
+      signal_worker_main "$index"
+      decision="$(lease_decision "$index")"
+      [ "$decision" != held ] || continue
+      waiting=1
+      write_drain_status draining "worker $index $decision"
     done
-    [ "$waiting" -eq 0 ] && break
-    sleep "${SCREENER_FLEET_DRAIN_POLL_SECONDS:-5}"
+    [ "$waiting" -eq 1 ] || break
+    [ "$(date +%s)" -lt "$bound" ] || break
+    sleep "$DRAIN_POLL_SECONDS"
   done
   for index in $(worker_indexes); do
-    "$SYSTEMCTL" is-active --quiet "ditto-screener-worker@$index.service" || continue
-    decision="$(lease_decision "$index")"
-    if [ "$decision" = "wait" ] || [ "$decision" = "held" ]; then
-      printf '%s\n' "$index" >>"$HELD_WORKERS"
-      write_drain_status held "worker $index kept without escalation"
-      log "worker $index still holds a signed review; leaving it running"
+    state="$(worker_state "$index")"
+    if ! worker_process_running "$state"; then
+      cancel_worker_restart "$index"
       continue
     fi
-    timeout 30 "$SYSTEMCTL" stop "ditto-screener-worker@$index.service" || \
-      printf '%s\n' "$index" >>"$HELD_WORKERS"
+    # Never escalate. The process already has SIGTERM, so it takes no new
+    # claim; Restart=always brings it back on the activated release once its
+    # review ends. start_fleet recognizes it by MainPID and leaves it alone.
+    printf '%s %s\n' "$index" "$(worker_main_pid "$index")" >>"$HELD_WORKERS"
+    write_drain_status held "worker $index kept without escalation"
+    log "worker $index still holds a signed review; leaving it running"
+    if [ "$index" -gt "$WORKER_PROCESSES" ]; then
+      # Outside the requested count: queue a stop so the review can finish
+      # but Restart=always cannot bring this worker back. KillMode=mixed
+      # sends that stop's SIGTERM to the main process only.
+      "$SYSTEMCTL" stop --no-block "ditto-screener-worker@$index.service" \
+        >/dev/null 2>&1 || true
+    fi
   done
   if [ -s "$HELD_WORKERS" ]; then
     write_drain_status held "active reviews kept"
@@ -272,16 +329,11 @@ stop_fleet() {
   # Ansible normally reconciles this at converge time. The self-updater must
   # enforce the same bound too: release delivery is deliberately pull-based,
   # and it must be safe even when no Ansible run follows the canary change.
-  # Restart=always survives disable, so an out-of-range worker that is still
-  # finishing a review must not be restarted when that process exits.
-  local reload=0
   for index in $(worker_indexes); do
     if [ "$index" -gt "$WORKER_PROCESSES" ]; then
-      prevent_restart_after_review "$index"
-      reload=1
+      "$SYSTEMCTL" disable "ditto-screener-worker@$index.service"
     fi
   done
-  [ "$reload" -eq 0 ] || "$SYSTEMCTL" daemon-reload
 }
 
 ensure_worker_state() {
@@ -299,25 +351,60 @@ ensure_worker_state() {
   done
 }
 
+# Callers test this function with `if !`, which disables `set -e` inside it,
+# so every failure must be counted explicitly.
 start_fleet() {
-  local index
-  ensure_worker_state
-  "$SYSTEMCTL" start ditto-screener-fleet-agent.service
+  local index failed=0
+  ensure_worker_state || return 1
+  "$SYSTEMCTL" start ditto-screener-fleet-agent.service || failed=1
   for index in $(seq 1 "$WORKER_PROCESSES"); do
-    if "$SYSTEMCTL" is-active --quiet "ditto-screener-worker@$index.service"; then
-      log "worker $index is finishing a signed review; not starting a second copy"
-      continue
-    fi
     # Re-enable the declared set too, so a previous smaller canary cannot
     # leave a later intentional scale-up stopped until an Ansible converge.
-    "$SYSTEMCTL" enable --now "ditto-screener-worker@$index.service"
+    "$SYSTEMCTL" enable "ditto-screener-worker@$index.service" || failed=1
+    if held_worker_still_running "$index"; then
+      log "worker $index is finishing a signed review; it restarts on this release when it exits"
+      continue
+    fi
+    # Restart, not start: any other process still running here was started
+    # before the symlink flipped and would keep serving the old release.
+    "$SYSTEMCTL" restart "ditto-screener-worker@$index.service" || failed=1
   done
-  sleep 5
-  "$SYSTEMCTL" is-active --quiet ditto-screener-fleet-agent.service
+  sleep "${SCREENER_FLEET_START_SETTLE_SECONDS:-5}"
+  "$SYSTEMCTL" is-active --quiet ditto-screener-fleet-agent.service || failed=1
   for index in $(seq 1 "$WORKER_PROCESSES"); do
-    "$SYSTEMCTL" is-active --quiet "ditto-screener-worker@$index.service"
+    held_worker_still_running "$index" && continue
+    "$SYSTEMCTL" is-active --quiet "ditto-screener-worker@$index.service" || failed=1
   done
+  [ "$failed" -eq 0 ] || return 1
   write_drain_status active
+}
+
+# Once the drain has begun the fleet agent is stopped and workers are
+# draining. Any abort before a fleet start succeeds (a failed command under
+# `set -e`, or systemd's TimeoutStartSec SIGTERM) must bring the node back on
+# whatever release is current rather than leave it down until the next timer.
+restore_fleet_after_abort() {
+  local status=$? index
+  trap - EXIT TERM INT
+  set +e
+  log "update aborted after the drain began (exit $status); restarting the fleet on the current release"
+  "$SYSTEMCTL" start --no-block ditto-screener-fleet-agent.service
+  for index in $(seq 1 "$WORKER_PROCESSES"); do
+    # start, never restart: a held worker keeps finishing its review.
+    "$SYSTEMCTL" start --no-block "ditto-screener-worker@$index.service"
+  done
+  write_drain_status aborted "exit $status"
+  exit "$status"
+}
+
+arm_fleet_restore() {
+  trap restore_fleet_after_abort EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+}
+
+disarm_fleet_restore() {
+  trap - EXIT TERM INT
 }
 
 activate_release() {
@@ -342,6 +429,7 @@ activate_release() {
     "$(dirname "$SELF_PATH")/screener-fleet-release-hold"
   ln -s "releases/$revision" "$new_link"
   TARGET_REVISION="$revision"
+  arm_fleet_restore
   stop_fleet
   run_rootless_as_service docker tag "$l2_candidate" "$L2_ANALYZER_ACTIVE"
   mv -Tf "$new_link" "$CURRENT_LINK"
@@ -363,9 +451,11 @@ activate_release() {
     [ -z "$old_builder" ] || write_release_env "$RELEASE_ENV" "$old_builder" \
       "$old_revision" "$old_version"
     start_fleet || die "candidate and rollback release both failed to start"
+    disarm_fleet_restore
     printf '%s\n' "$exact" >"$FAILED_CANDIDATE_FILE"
     return 1
   fi
+  disarm_fleet_restore
   umask 077
   printf 'DESCRIPTOR=%s\nREVISION=%s\nVERSION=%s\nBUILDER_IMAGE=%s\nUPDATED_AT=%s\n' \
     "$exact" "$revision" "$(manifest_value "$STATE_DIR/candidate.env" FLEET_VERSION)" \
@@ -375,10 +465,22 @@ activate_release() {
   log "activated $revision from authenticated descriptor $exact"
 }
 
-if [ "${SCREENER_FLEET_TEST_STOP_FLEET:-}" = 1 ]; then
-  stop_fleet
-  exit 0
-fi
+# Test-only entrypoints: exercise the real drain and start logic against a
+# fake systemctl. Production units never set this variable.
+case "${SCREENER_FLEET_TEST_ENTRYPOINT:-}" in
+  '') ;;
+  stop_fleet)
+    arm_fleet_restore
+    stop_fleet
+    disarm_fleet_restore
+    exit 0
+    ;;
+  start_fleet)
+    start_fleet || exit 1
+    exit 0
+    ;;
+  *) die "unknown test entrypoint" ;;
+esac
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [[ "$SELF_PATH" = "$STATE_DIR/"* ]] || \
   die "self-update path must stay inside the updater state directory"

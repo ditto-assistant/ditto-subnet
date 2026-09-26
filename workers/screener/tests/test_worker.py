@@ -1400,6 +1400,75 @@ async def test_stop_during_review_finishes_the_signed_verdict(
     assert [verdict["agent_id"] for verdict in platform.verdicts] == [first]
 
 
+async def test_local_drain_lease_follows_heartbeat_renewal_and_clears(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Any
+) -> None:
+    """The updater's lease view tracks Platform renewals, then disappears.
+
+    Renewable leases are 10 minutes. Without following the renewal a live
+    review would look expired to the release drain after one TTL.
+    """
+    journal = tmp_path / "workers" / "1" / "review.jsonl"
+    lease = journal.with_name("active-lease.json")
+    platform = _FakePlatform([])
+    initial = datetime.now(UTC) + timedelta(minutes=10)
+    renewed = initial + timedelta(minutes=30)
+    platform.heartbeat_lease_deadline = renewed
+    seen: list[dict[str, Any]] = []
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(review_journal_file=str(journal)), platform, gate)
+    original = gate.screen
+
+    async def screen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(json.loads(lease.read_text()))
+        await worker._report_heartbeat("screening", force=True)
+        seen.append(json.loads(lease.read_text()))
+        return await original(*args, **kwargs)
+
+    gate.screen = screen  # type: ignore[method-assign]
+    item = _item(uuid4(), lease_deadline=initial)
+    await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
+
+    assert seen[0]["lease_deadline"] == int(initial.timestamp())
+    assert seen[0]["attempt_id"] == str(item.attempt_id)
+    assert seen[1]["lease_deadline"] == int(renewed.timestamp())
+    assert not lease.exists()
+
+
+async def test_unwritable_drain_lease_never_aborts_a_review(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Any
+) -> None:
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("")
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(
+        make_config(review_journal_file=str(blocker / "1" / "review.jsonl")),
+        platform,
+        gate,
+    )
+    agent = uuid4()
+    await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
+    assert [verdict["agent_id"] for verdict in platform.verdicts] == [agent]
+
+
+async def test_worker_start_clears_a_lease_left_by_a_dead_process(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Any
+) -> None:
+    journal = tmp_path / "review.jsonl"
+    lease = journal.with_name("active-lease.json")
+    lease.write_text('{"lease_deadline": 1, "progress_at": 1}')
+    stop = asyncio.Event()
+    stop.set()
+    worker = _worker(
+        make_config(review_journal_file=str(journal)),
+        _FakePlatform([]),
+        _FakeGate(_decision(ScreeningOutcome.PASS)),
+    )
+    await worker.run_forever(stop)
+    assert not lease.exists()
+
+
 async def test_run_forever_exits_immediately_when_stopped(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

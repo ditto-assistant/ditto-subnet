@@ -66,14 +66,12 @@ def test_deployed_layout_reads_the_worker_journal_directory(tmp_path: Path) -> N
         Path(__file__).parents[2] / "scripts/screener-fleet-auto-update.sh"
     ).read_text()
     assert (
-        "SCREENER_REVIEW_JOURNAL_FILE={{ screener_fleet_state_dir }}/workers/%i/review.jsonl"
-        in worker_unit
+        "SCREENER_REVIEW_JOURNAL_FILE="
+        "{{ screener_fleet_state_dir }}/workers/%i/review.jsonl" in worker_unit
     )
     assert "SCREENER_FLEET_STATE_DIR={{ screener_fleet_state_dir }}" in updater_unit
     assert "screener-fleet-drain.py" in tasks
-    assert (
-        '"$FLEET_STATE_DIR/workers/$index/active-lease.json"' in updater
-    )
+    assert '"$FLEET_STATE_DIR/workers/$index/active-lease.json"' in updater
 
     fleet_state = tmp_path / "var/lib/ditto-screener-fleet"
     updater_dir = fleet_state / "updater"

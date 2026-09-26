@@ -24,7 +24,8 @@ Environment=SCREENER_FLEET_L2_WORKSPACE_ROOT={{ screener_fleet_l2_workspace_root
 Environment=SCREENER_FLEET_EXECUTOR_GROUP={{ screener_fleet_executor_group }}
 Environment=HOME={{ screener_fleet_update_state_dir }}
 ExecStart={{ screener_fleet_updater_path }}
-TimeoutStartSec=70min
+# Preparation + the 70 min lease-bound drain + a rollback drain must fit.
+TimeoutStartSec=180min
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

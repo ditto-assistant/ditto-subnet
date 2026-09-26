@@ -8,6 +8,9 @@
     state: directory
     mode: '0755'
   loop: "{{ ['ditto-screener-fleet-agent.service', 'ditto-screener-fleet-auto-update.service'] + screener_partition_worker_units }}"
+# A stop must outlast the longest legitimate review: build 40 min + runtime
+# smoke 5 min + source-review lane 30 min + L2 30 min + L1 10 min = 115 min.
+# SendSIGKILL=no still means a timeout never kills a review.
 - name: Signal only primary parent processes and never escalate to SIGKILL
   ansible.builtin.copy:
     dest: '/etc/systemd/system/{{ item }}.d/drain-safety.conf'
@@ -16,15 +19,17 @@
       [Service]
       KillMode=mixed
       SendSIGKILL=no
-      TimeoutStopSec=70min
+      TimeoutStopSec=120min
   loop: "{{ ['ditto-screener-fleet-agent.service'] + screener_partition_worker_units }}"
-- name: Let the updater wait for graceful job completion without a separate deadline
+# Release preparation (~20 min) + the 70 min lease-bound drain + a rollback
+# drain of the same bound must fit. An abort still restarts the fleet.
+- name: Let the updater finish a bounded drain and its rollback
   ansible.builtin.copy:
     dest: /etc/systemd/system/ditto-screener-fleet-auto-update.service.d/drain-safety.conf
     mode: '0644'
     content: |
       [Service]
-      TimeoutStartSec=120min
+      TimeoutStartSec=180min
 - name: Load drain policy without restarting any primary process
   ansible.builtin.systemd:
     daemon_reload: true
@@ -90,7 +95,7 @@
     content: |
       [Service]
       Slice={{ 'user-1005.slice' if item == 'user@1005.service' else 'dittoscreener.slice' }}
-      TimeoutStopSec=70min
+      TimeoutStopSec=120min
       SendSIGKILL=no
       {{ 'KillMode=mixed' if item != 'user@1005.service' else '' }}
   loop: "{{ ['user@1005.service'] + screener_partition_worker_units }}"
@@ -119,7 +124,7 @@
     content: |
       [Service]
       Slice=dittoscreener.slice
-      TimeoutStopSec=70min
+      TimeoutStopSec=120min
       SendSIGKILL=no
       KillMode=mixed
       ExecStart=

@@ -296,6 +296,7 @@ class ScreenerWorker:
         self._active_lease_deadline: LeaseDeadline | None = None
         self._active_lease_wall: datetime | None = None
         self._active_attempt_id: Any = None
+        self._active_progress_at: int | None = None
         self._job_started_at: int | None = None
         self._last_heartbeat_timestamp = 0
         self._last_heartbeat_monotonic = float("-inf")
@@ -329,42 +330,50 @@ class ScreenerWorker:
             return None
         return Path(journal).with_name("active-lease.json")
 
-    def _publish_active_lease(self, *, agent_id: object, attempt_id: object) -> None:
-        """Local lease the release updater reads. It is not a verdict."""
+    def _publish_active_lease(self) -> None:
+        """Local lease the release updater reads. It is not a verdict.
+
+        Best effort: a local file error must never abort a claimed review, so
+        failures are logged and the updater falls back to its drain bound.
+        """
         path = self._active_lease_path()
-        if path is None:
+        if path is None or self._active_attempt_id is None:
             return
         deadline = self._active_lease_wall
         # An open lease has no platform deadline. The updater must not invent one.
         if deadline is None:
             return
-        expires = int(deadline.timestamp())
         body = {
-            "agent_id": str(agent_id),
-            "attempt_id": str(attempt_id),
-            "lease_deadline": expires,
-            "progress_at": int(time.time()),
+            "agent_id": str(self._active_agent_id),
+            "attempt_id": str(self._active_attempt_id),
+            "lease_deadline": int(deadline.timestamp()),
+            "progress_at": self._active_progress_at or int(time.time()),
             "revision": self._fleet_release.revision,
         }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(body, sort_keys=True), encoding="utf-8")
-        os.replace(temporary, path)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(body, sort_keys=True), encoding="utf-8")
+            os.replace(temporary, path)
+        except OSError as error:
+            logger.warning("could not publish the local drain lease: %s", error)
 
     def _clear_active_lease(self) -> None:
         path = self._active_lease_path()
-        if path is not None:
+        if path is None:
+            return
+        try:
             path.unlink(missing_ok=True)
+        except OSError as error:
+            logger.warning("could not clear the local drain lease: %s", error)
 
     def _set_progress(self, stage: ScreenerProgressStage) -> None:
         """Advance public-safe progress without waiting on telemetry I/O."""
         if self._active_agent_id is None or self._job_started_at is None:
             return
         self._active_progress_stage = stage
-        if self._active_attempt_id is not None:
-            self._publish_active_lease(
-                agent_id=self._active_agent_id, attempt_id=self._active_attempt_id
-            )
+        self._active_progress_at = int(time.time())
+        self._publish_active_lease()
         progress = ScreenerProgress(stage=stage, started_at=self._job_started_at)
         task = asyncio.create_task(
             self._report_heartbeat("screening", force=True, progress_override=progress)
@@ -395,6 +404,9 @@ class ScreenerWorker:
             self._config.netuid,
             self._config.platform_api_url,
         )
+        # A lease file left by a process that died mid-review describes no live
+        # work in this process; the updater must not wait on it.
+        self._clear_active_lease()
         while not stop.is_set():
             await self._report_heartbeat("polling")
             try:
@@ -491,6 +503,10 @@ class ScreenerWorker:
                 renewed = self._screen_deadline(response.lease_deadline)
                 if renewed is not None:
                     self._active_lease_deadline.renew(renewed.expires_at)
+                    # Keep the updater's local view on the renewed Platform
+                    # lease, or a live review looks expired after one TTL.
+                    self._active_lease_wall = response.lease_deadline
+                    self._publish_active_lease()
         except Exception as error:  # noqa: BLE001 - observability is best effort
             logger.warning("screener heartbeat failed (screening continues): %s", error)
         finally:
@@ -663,7 +679,6 @@ class ScreenerWorker:
         self._active_lease_wall = item.lease_deadline
         self._active_attempt_id = attempt_id
         self._job_started_at = int(time.time())
-        self._publish_active_lease(agent_id=agent_id, attempt_id=attempt_id)
         self._set_progress("preparing")
         heartbeat_stop = asyncio.Event()
         heartbeat_task = asyncio.create_task(
@@ -1246,6 +1261,7 @@ class ScreenerWorker:
             self._active_agent_id = None
             self._active_attempt_id = None
             self._active_lease_wall = None
+            self._active_progress_at = None
             self._active_progress_stage = None
             self._active_lease_deadline = None
             self._job_started_at = None
