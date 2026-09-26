@@ -231,6 +231,7 @@ async def consume(
             rotation_id=settings.settings.policy_manifest_rotation_id,
         ),
         journal=ReviewJournal(canary_config.review_journal_file),
+        turn_shape_audit=True,
     )
     try:
         decision = await gate.screen(

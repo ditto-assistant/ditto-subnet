@@ -2202,6 +2202,10 @@ def _sol_agent(
     tmp_path: Path,
     harness: _FakeHarness,
     handler: Any,
+    *,
+    audit_path: Path | None = None,
+    turn_shape_audit: bool = False,
+    inference_provider: str = "openrouter",
 ) -> SolL2SourceReviewAgent:
     key = tmp_path / "openrouter.key"
     key.write_text("sk-test-" + "x" * 40)
@@ -2211,7 +2215,11 @@ def _sol_agent(
         base_url="https://openrouter.test/api/v1",
         harness=harness,  # type: ignore[arg-type]
         cache_dir=str(tmp_path / "cache"),
-        audit_journal=L2AuditJournal(None, retention_days=30),
+        audit_journal=L2AuditJournal(
+            str(audit_path) if audit_path else None, retention_days=30
+        ),
+        turn_shape_audit=turn_shape_audit,
+        inference_provider=inference_provider,
         timeout_seconds=30,
         max_steps=12,
         max_input_tokens=80_000,
@@ -2774,6 +2782,99 @@ async def test_l3_no_tool_failure_reports_bounded_subcode(
             update={"model_tool_failure_subcode": None}
         ).canonical_digest()
     )
+
+
+async def test_report_canary_records_only_response_shapes_on_l3_no_tool(
+    tmp_path: Path,
+) -> None:
+    source = "fn main() { serve(); }\nfn serve() {}"
+    archive, artifact_sha = _tar(tmp_path, source)
+    safe = _clearance_certificate(
+        {
+            "disposition": "safe",
+            "risk_level": "low",
+            "confidence": 1.0,
+            "resolution_basis": "authoritative_model_tool_path",
+            "categories": ["none"],
+            "analyzed_files": [
+                {
+                    "path": "src/main.rs",
+                    "sha256": hashlib.sha256(source.encode()).hexdigest(),
+                }
+            ],
+            "evidence": [],
+            "summary": "sanitized",
+        }
+    )
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        assert json.loads(request.content)["tool_choice"] == "required"
+        output = (
+            [_tool_call(str(requests), "submit_l2_review", safe)]
+            if requests < 3
+            else [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "private-source-marker"}
+                    ],
+                }
+            ]
+        )
+        payload = _response(output, model="openai/gpt-6-sol").json()
+        payload.update({"status": "completed", "id": "private-response-id"})
+        return httpx.Response(
+            200,
+            json=payload,
+            headers={
+                "x-request-id": "private-request-id",
+                "x-ditto-provider": "openai",
+                "x-ditto-route": "openai;default",
+            },
+        )
+
+    audit_path = tmp_path / "canary-audit.jsonl"
+    result = await _sol_agent(
+        tmp_path,
+        _PartialHarness(),
+        handler,
+        audit_path=audit_path,
+        turn_shape_audit=True,
+        inference_provider="ditto",
+    ).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert requests == 5
+    assert result.failure_subcode == "no_tool_call_after_corrections"
+    events = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    turns = [
+        event for event in events if event.get("event_type") == "report_only_turn_shape"
+    ]
+    assert len(turns) == 5
+    assert all(turn["configured_provider"] == "ditto" for turn in turns)
+    assert all(turn["ditto_provider"] == "openai" for turn in turns)
+    assert all(turn["ditto_route"] == "openai;default" for turn in turns)
+    assert all(turn["response_status"] == "completed" for turn in turns)
+    assert all(
+        turn["response_id_digest"]
+        == hashlib.sha256(b"private-request-id").hexdigest()[:16]
+        for turn in turns
+    )
+    assert all(turn["output_types"]["function_call"] == 1 for turn in turns[:2])
+    assert all(turn["output_types"]["function_call"] == 0 for turn in turns[2:])
+    assert all(turn["output_types"]["message"] == 1 for turn in turns[2:])
+    assert "private-source-marker" not in audit_path.read_text()
+    assert "private-request-id" not in audit_path.read_text()
+    assert "private-response-id" not in audit_path.read_text()
 
 
 async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
