@@ -213,6 +213,9 @@ def test_inconclusive_model_audit_is_report_only() -> None:
     ("code", "expected"),
     [
         ("challenge-inconclusive", "inconclusive"),
+        ("challenge-compatibility-timeout", "inconclusive"),
+        ("behavioral-oracle-insufficient-round-trips", "inconclusive"),
+        ("challenge-observed", "completed"),
         ("source-review-inconclusive", "not_run"),
     ],
 )

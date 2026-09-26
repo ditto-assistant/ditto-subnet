@@ -100,9 +100,16 @@ def _valid_report(row: ScreenerL2ReportCanary, report: dict) -> bool:
         if not challenge_codes:
             expected_challenge_status = "not_run"
         elif any(
-            code in {"challenge-inconclusive", "challenge-pack-unavailable"}
-            or code.startswith(("challenge-http-", "challenge-transport-"))
-            or code == "behavioral-oracle-inconclusive"
+            code
+            not in {
+                "challenge-observed",
+                "challenge-model-call-missing",
+                "challenge-gateway-token-missing",
+                "challenge-shape-anomaly",
+                "behavioral-oracle-passed",
+                "behavioral-oracle-wrong-answer",
+                "behavioral-oracle-implausibly-fast",
+            }
             for code in challenge_codes
         ):
             expected_challenge_status = "inconclusive"
