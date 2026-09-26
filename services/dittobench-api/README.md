@@ -307,7 +307,7 @@ locked model:
 ```sh
 curl -X POST localhost:8000/v1/submit \
   -H 'Content-Type: application/json' \
-  -d '{"git_url":"https://github.com/<you>/<harness>","git_ref":"main","n":30}'
+  -d '{"git_url":"https://github.com/<you>/<harness>","git_ref":"<40-character-commit-sha>","n":30}'
 # {"run_id":"...","status":"queued","poll":"/v1/runs/..."}
 ```
 
@@ -318,11 +318,16 @@ rejected after clone:
 ```json
 {
   "git_url": "https://github.com/ditto-assistant/ditto-subnet",
-  "git_ref": "main",
+  "git_ref": "<40-character-commit-sha>",
   "git_subdir": "miners/dittobench-starter-kit",
   "run_size": "small"
 }
 ```
+
+The Git source path requires the full lowercase commit SHA (`git rev-parse HEAD`)
+after the commit has been pushed. Branches, tags, abbreviated SHAs, and an
+omitted `git_ref` are rejected. The sandbox fetches that object and verifies
+the checked-out `HEAD` before the Docker build begins.
 
 **Full pipeline (`run_size`)**: the complete SN118 evaluation. Generate a fresh
 anti-cheat dataset, push the haystack to the harness's `POST /seed`, run every

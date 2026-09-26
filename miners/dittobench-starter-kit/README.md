@@ -327,6 +327,11 @@ The hosted practice service is available. The playground's Submit tab drives it:
   This harness continues to use its own local model and embedding configuration;
   the playground sends no provider key.
 
+The optional Git crate target requires a pushed commit and
+`DITTOBENCH_CRATE_REF` set to its full lowercase SHA (`git rev-parse HEAD`). It
+never builds a moving branch or uncommitted local changes. The default local
+harness target needs no Git ref.
+
 The hosted service intentionally does not advertise its loopback tool endpoint
 to a remote `harness_url`. Its report can therefore show many
 `capped_tool_cases` even when the harness self-reports tool calls. That result
