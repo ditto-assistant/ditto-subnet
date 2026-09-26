@@ -687,6 +687,8 @@ export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
       target_node_id: input.targetNodeId,
       review_label: input.reviewLabel,
       run_mode: input.runMode,
+      historical_ruling_kind: input.historicalRulingKind,
+      historical_ruling_id: input.historicalRulingId,
       confirm_report_only: true,
     },
   })

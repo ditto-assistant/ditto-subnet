@@ -27,7 +27,21 @@ class L2CanaryScheduleRequest(BaseModel):
     target_node_id: str
     review_label: Literal["candidate_clear", "known_reject"]
     run_mode: Literal["source_only", "full_runtime"] = "source_only"
+    historical_ruling_kind: Literal["ath_clear", "screening_reject"] | None = None
+    historical_ruling_id: Annotated[UUID | None, Field(strict=False)] = None
     confirm_report_only: Literal[True]
+
+    @model_validator(mode="after")
+    def historical_ruling_is_explicit_and_source_only(self) -> L2CanaryScheduleRequest:
+        if (self.historical_ruling_kind is None) != (self.historical_ruling_id is None):
+            raise ValueError("historical ruling kind and id must be supplied together")
+        if self.historical_ruling_kind is not None and (
+            self.run_mode != "source_only"
+            or (self.historical_ruling_kind == "ath_clear")
+            != (self.review_label == "candidate_clear")
+        ):
+            raise ValueError("historical ruling must match source-only review label")
+        return self
 
 
 class L2CanaryView(BaseModel):
@@ -43,6 +57,7 @@ class L2CanaryView(BaseModel):
     expected_score_count: int
     review_label: str
     run_mode: Literal["source_only", "full_runtime"]
+    source_attestation: dict | None = None
     status: str
     claimed_instance_id: str | None
     lease_expires_at: datetime | None

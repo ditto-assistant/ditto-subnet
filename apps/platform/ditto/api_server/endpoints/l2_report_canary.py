@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,14 +32,17 @@ from ditto.api_server.endpoints.screener import (
     require_screener,
 )
 from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
-from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.source_inspect import MAX_TARBALL_BYTES
+from ditto.api_server.storage import S3StorageClient, StorageError
 from ditto.db.models import (
     Agent,
+    AthReview,
     Score,
     ScreenerHeartbeat,
     ScreenerL2ReportCanary,
     ScreenerNode,
     ScreeningAttempt,
+    ScreeningReviewEvent,
 )
 from ditto.db.queries.benchmark_rollout import arrival_bench_version
 
@@ -87,6 +90,7 @@ def _view(row: ScreenerL2ReportCanary) -> L2CanaryView:
         expected_score_count=row.expected_score_count,
         review_label=row.review_label,
         run_mode=cast(Literal["source_only", "full_runtime"], row.run_mode),
+        source_attestation=row.source_attestation,
         status=row.status,
         claimed_instance_id=row.claimed_instance_id,
         lease_expires_at=row.lease_expires_at,
@@ -210,14 +214,84 @@ async def _exact_source(
         agent is None
         or attempt is None
         or attempt.agent_id != row.agent_id
-        or (attempt.artifact_sha256 or "").lower() != row.artifact_sha256
         or agent.sha256.lower() != row.artifact_sha256
         or attempt.policy_version != row.policy_version
         or agent.status.value != row.expected_agent_status
         or await _score_count(session, row.agent_id) != row.expected_score_count
     ):
         raise HTTPException(status_code=409, detail="canary exact-source guard changed")
+    if row.source_attestation is None:
+        if (attempt.artifact_sha256 or "").lower() != row.artifact_sha256:
+            raise HTTPException(
+                status_code=409, detail="canary exact-source guard changed"
+            )
+    elif (
+        not isinstance(row.source_attestation, dict)
+        or not row.source_attestation.get("verified_at")
+        or attempt.artifact_sha256 is not None
+        or row.run_mode != "source_only"
+        or row.source_attestation.get("artifact_sha256") != row.artifact_sha256
+        or not await _historical_ruling_matches(session, row)
+    ):
+        raise HTTPException(status_code=409, detail="canary source attestation changed")
     return agent, attempt
+
+
+async def _historical_ruling_matches(
+    session: AsyncSession, row: ScreenerL2ReportCanary
+) -> bool:
+    """A historical ruling labels this current-object replay, not past execution."""
+    attestation = row.source_attestation
+    if not isinstance(attestation, dict):
+        return False
+    try:
+        ruling_id = UUID(attestation["ruling_id"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if attestation.get("kind") == "ath_clear" and row.review_label == "candidate_clear":
+        ruling = await session.get(AthReview, ruling_id)
+        return bool(
+            ruling is not None
+            and ruling.agent_id == row.agent_id
+            and ruling.original_policy_version == row.policy_version
+            and ruling.status == "resolved"
+            and ruling.resolution == "clear"
+            and ruling.original_evidence.get("sha256") == row.artifact_sha256
+        )
+    if (
+        attestation.get("kind") == "screening_reject"
+        and row.review_label == "known_reject"
+    ):
+        ruling = await session.get(ScreeningReviewEvent, ruling_id)
+        return bool(
+            ruling is not None
+            and ruling.agent_id == row.agent_id
+            and ruling.attempt_id == row.source_attempt_id
+            and ruling.policy_version == row.policy_version
+            and ruling.event_kind == "manual"
+            and ruling.outcome == "reject"
+            and ruling.effective_decision == "reject"
+            and ruling.artifact_sha256 == row.artifact_sha256
+        )
+    return False
+
+
+async def _current_object_matches(
+    storage: S3StorageClient, agent: Agent, artifact_sha256: str
+) -> tuple[bool, int]:
+    expected_size = agent.size_bytes
+    if expected_size is not None and not (0 < expected_size <= MAX_TARBALL_BYTES):
+        return False, 0
+    verified = await storage.verify_object_sha256(
+        key=_artifact_key(agent.agent_id),
+        expected_size_bytes=expected_size or MAX_TARBALL_BYTES,
+    )
+    return (
+        verified.sha256 == artifact_sha256
+        and 0 < verified.size_bytes <= MAX_TARBALL_BYTES
+        and (expected_size is None or verified.size_bytes == expected_size),
+        verified.size_bytes,
+    )
 
 
 @admin_router.get(
@@ -255,6 +329,8 @@ async def schedule_l2_report_canary(
     payload: L2CanaryScheduleRequest,
     _admin: AdminDep,
     session: SessionDep,
+    storage: Annotated[S3StorageClient, Depends(get_storage_client)],
+    x_admin_actor: Annotated[str | None, Header()] = None,
 ) -> L2CanaryView:
     """Queue one exact source once; this never reopens a screening attempt."""
     async with session.begin():
@@ -274,6 +350,14 @@ async def schedule_l2_report_canary(
                 or existing.policy_version != payload.policy_version
                 or existing.expected_agent_status != payload.expected_agent_status
                 or existing.expected_score_count != payload.expected_score_count
+                or (existing.source_attestation or {}).get("kind")
+                != payload.historical_ruling_kind
+                or (existing.source_attestation or {}).get("ruling_id")
+                != (
+                    str(payload.historical_ruling_id)
+                    if payload.historical_ruling_id is not None
+                    else None
+                )
             ):
                 raise HTTPException(
                     status_code=409, detail="canary already scheduled differently"
@@ -320,6 +404,34 @@ async def schedule_l2_report_canary(
             run_mode=payload.run_mode,
             status="queued",
         )
+        if payload.historical_ruling_id is not None:
+            if not x_admin_actor or not x_admin_actor.strip():
+                raise HTTPException(status_code=400, detail="operator actor required")
+            row.source_attestation = {
+                "kind": payload.historical_ruling_kind,
+                "ruling_id": str(payload.historical_ruling_id),
+                "artifact_sha256": payload.artifact_sha256,
+                "scope": "current-object-only; historical execution unverified",
+                "actor": x_admin_actor.strip(),
+            }
+        agent = await session.get(Agent, row.agent_id, with_for_update=True)
+        if agent is None:
+            raise HTTPException(status_code=409, detail="canary source not found")
+        if row.source_attestation is not None:
+            if not await _historical_ruling_matches(session, row):
+                raise HTTPException(status_code=409, detail="historical ruling changed")
+            try:
+                matches, size_bytes = await _current_object_matches(
+                    storage, agent, row.artifact_sha256
+                )
+            except StorageError:
+                raise HTTPException(
+                    503, "source object verification unavailable"
+                ) from None
+            if not matches:
+                raise HTTPException(409, "current source object differs from ruling")
+            row.source_attestation["verified_size_bytes"] = size_bytes
+            row.source_attestation["verified_at"] = datetime.now(UTC).isoformat()
         agent, _ = await _exact_source(session, row)
         if await arrival_bench_version(session, agent=agent) != 13:
             raise HTTPException(status_code=409, detail="source is not benchmark v13")
@@ -424,6 +536,18 @@ async def claim_l2_report_canary(
             row.error_code = "exact-source-changed"
             row.completed_at = now
             return None
+        if row.source_attestation is not None:
+            try:
+                matches, _ = await _current_object_matches(
+                    storage, agent, row.artifact_sha256
+                )
+            except StorageError:
+                return None
+            if not matches:
+                row.status = "incomplete"
+                row.error_code = "source-object-drift"
+                row.completed_at = now
+                return None
         evidence = await scored_runtime_evidence_for_lease(
             session,
             attempt_id=row.source_attempt_id,

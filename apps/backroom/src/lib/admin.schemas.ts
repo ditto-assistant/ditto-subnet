@@ -508,7 +508,19 @@ export const scheduleL2ReportCanaryInputSchema = z.object({
   targetNodeId: z.string().min(1).max(63),
   reviewLabel: z.enum(['candidate_clear', 'known_reject']),
   runMode: z.enum(['source_only', 'full_runtime']).default('source_only'),
+  historicalRulingKind: z.enum(['ath_clear', 'screening_reject']).optional(),
+  historicalRulingId: z.string().uuid().optional(),
   confirmation: z.literal('QUEUE REPORT ONLY L2 CANARY'),
+}).superRefine((input, ctx) => {
+  if ((input.historicalRulingKind === undefined) !== (input.historicalRulingId === undefined)) {
+    ctx.addIssue({ code: 'custom', message: 'historical ruling kind and id must be supplied together' })
+  }
+  if (input.historicalRulingKind !== undefined && (
+    input.runMode !== 'source_only' ||
+    (input.historicalRulingKind === 'ath_clear') !== (input.reviewLabel === 'candidate_clear')
+  )) {
+    ctx.addIssue({ code: 'custom', message: 'historical ruling must match source-only review label' })
+  }
 })
 
 export const l2ReportCanaryViewSchema = z.object({
@@ -522,6 +534,7 @@ export const l2ReportCanaryViewSchema = z.object({
   expected_score_count: z.number().int().nonnegative(),
   review_label: z.string(),
   run_mode: z.enum(['source_only', 'full_runtime']).default('source_only'),
+  source_attestation: z.record(z.string(), z.unknown()).nullable().optional(),
   status: z.string(),
   claimed_instance_id: z.string().nullable(),
   lease_expires_at: z.string().nullable().optional(),

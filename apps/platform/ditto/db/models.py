@@ -7064,6 +7064,9 @@ class ScreenerL2ReportCanary(Base):
     run_mode: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="source_only"
     )
+    # A newly verified current object for an older null-SHA attempt. This does
+    # not claim what the historical attempt executed and never changes it.
+    source_attestation: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     claimed_instance_id: Mapped[str | None] = mapped_column(Text)
     settings_revision: Mapped[int | None] = mapped_column(Integer)
