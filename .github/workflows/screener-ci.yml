@@ -71,3 +71,10 @@ jobs:
       - run: uv run pytest -m "not integration"
       - run: docker build -f workers/screener/Dockerfile -t ditto-screener:${{ github.sha }} .
         working-directory: .
+      - name: Verify the screener image runs without root
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
+            ditto-screener:${{ github.sha }} \
+            /app/workers/screener/.venv/bin/python -c \
+            'import os; import ditto_screener.health; assert os.getuid() == os.getgid() == 65532'
