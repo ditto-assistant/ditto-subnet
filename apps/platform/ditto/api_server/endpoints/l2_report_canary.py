@@ -37,6 +37,7 @@ from ditto.api_server.storage import S3StorageClient, StorageError
 from ditto.db.models import (
     Agent,
     AthReview,
+    AthReviewAction,
     Score,
     ScreenerHeartbeat,
     ScreenerL2ReportCanary,
@@ -250,13 +251,20 @@ async def _historical_ruling_matches(
         return False
     if attestation.get("kind") == "ath_clear" and row.review_label == "candidate_clear":
         ath_review = await session.get(AthReview, ruling_id)
+        action = await _latest_ath_action(session, ruling_id)
         return bool(
             ath_review is not None
+            and action is not None
             and ath_review.agent_id == row.agent_id
             and ath_review.original_policy_version == row.policy_version
             and ath_review.status == "resolved"
             and ath_review.resolution == "clear"
             and ath_review.original_evidence.get("sha256") == row.artifact_sha256
+            and action.action == "clear"
+            and str(action.action_id) == attestation.get("action_id")
+            and ath_review.resolved_at == action.created_at
+            and ath_review.resolved_by == action.actor
+            and ath_review.resolution_reason == action.reason
         )
     if (
         attestation.get("kind") == "screening_reject"
@@ -274,6 +282,17 @@ async def _historical_ruling_matches(
             and event.artifact_sha256 == row.artifact_sha256
         )
     return False
+
+
+async def _latest_ath_action(
+    session: AsyncSession, review_id: UUID
+) -> AthReviewAction | None:
+    return await session.scalar(
+        select(AthReviewAction)
+        .where(AthReviewAction.review_id == review_id)
+        .order_by(AthReviewAction.created_at.desc(), AthReviewAction.action_id.desc())
+        .limit(1)
+    )
 
 
 async def _current_object_matches(
@@ -418,6 +437,14 @@ async def schedule_l2_report_canary(
         if agent is None:
             raise HTTPException(status_code=409, detail="canary source not found")
         if row.source_attestation is not None:
+            if payload.historical_ruling_kind == "ath_clear":
+                assert payload.historical_ruling_id is not None
+                action = await _latest_ath_action(
+                    session, payload.historical_ruling_id
+                )
+                if action is None or action.action != "clear":
+                    raise HTTPException(status_code=409, detail="ATH clear action missing")
+                row.source_attestation["action_id"] = str(action.action_id)
             if not await _historical_ruling_matches(session, row):
                 raise HTTPException(status_code=409, detail="historical ruling changed")
             try:

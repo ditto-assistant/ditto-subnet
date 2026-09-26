@@ -26,6 +26,7 @@ from ditto.api_server.storage.models import VerifiedObject
 from ditto.db.models import (
     Agent,
     AthReview,
+    AthReviewAction,
     ScreenerL2ReportCanary,
     ScreenerNode,
     ScreeningAttempt,
@@ -96,8 +97,9 @@ def test_historical_canary_request_requires_matching_source_only_ruling() -> Non
 
 @pytest.mark.asyncio
 async def test_historical_ruling_matches_exact_source() -> None:
-    ruling_id, agent_id, attempt_id = uuid4(), uuid4(), uuid4()
+    ruling_id, action_id, agent_id, attempt_id = uuid4(), uuid4(), uuid4(), uuid4()
     sha = "a" * 64
+    now = datetime.now(UTC)
     row = cast(
         ScreenerL2ReportCanary,
         SimpleNamespace(
@@ -106,7 +108,11 @@ async def test_historical_ruling_matches_exact_source() -> None:
             artifact_sha256=sha,
             policy_version=13,
             review_label="candidate_clear",
-            source_attestation={"kind": "ath_clear", "ruling_id": str(ruling_id)},
+            source_attestation={
+                "kind": "ath_clear",
+                "ruling_id": str(ruling_id),
+                "action_id": str(action_id),
+            },
         ),
     )
     ruling = SimpleNamespace(
@@ -114,11 +120,30 @@ async def test_historical_ruling_matches_exact_source() -> None:
         original_policy_version=13,
         status="resolved",
         resolution="clear",
+        resolved_at=now,
+        resolved_by="human-reviewer",
+        resolution_reason="Exact artifact independently cleared",
         original_evidence={"sha256": sha},
     )
-    session = cast(AsyncSession, SimpleNamespace(get=AsyncMock(return_value=ruling)))
+    action = SimpleNamespace(
+        action_id=action_id,
+        action="clear",
+        created_at=now,
+        actor="human-reviewer",
+        reason="Exact artifact independently cleared",
+    )
+    session = cast(
+        AsyncSession,
+        SimpleNamespace(
+            get=AsyncMock(return_value=ruling),
+            scalar=AsyncMock(return_value=action),
+        ),
+    )
     assert await endpoints._historical_ruling_matches(session, row)
     session.get.assert_awaited_with(AthReview, ruling_id)  # type: ignore[attr-defined]
+    action.action_id = uuid4()  # Same review was reopened and cleared again.
+    assert not await endpoints._historical_ruling_matches(session, row)
+    action.action_id = action_id
     ruling.original_evidence["sha256"] = "b" * 64
     assert not await endpoints._historical_ruling_matches(session, row)
     ruling.original_evidence["sha256"] = sha
@@ -173,11 +198,11 @@ async def test_current_object_attestation_rejects_replacement() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("object_drift", [False, True])
+@pytest.mark.parametrize("change", ["none", "object_drift", "ruling_replaced"])
 async def test_null_sha_historical_clear_replay_rehashes_at_claim(
     session_maker: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
-    object_drift: bool,
+    change: str,
 ) -> None:
     sha = "a" * 64
     agent_id = await _seed_agent(session_maker, status=AgentStatus.SCORED, sha256=sha)
@@ -222,6 +247,15 @@ async def test_null_sha_historical_clear_replay_rehashes_at_claim(
                     original_evidence={"sha256": sha},
                     algorithm_provenance={},
                 ),
+                AthReviewAction(
+                    action_id=uuid4(),
+                    review_id=ruling_id,
+                    action="clear",
+                    reason="Exact artifact independently cleared",
+                    actor="human-reviewer",
+                    evidence={},
+                    created_at=now,
+                ),
             ]
         )
     monkeypatch.setattr(endpoints, "arrival_bench_version", AsyncMock(return_value=13))
@@ -256,10 +290,29 @@ async def test_null_sha_historical_clear_replay_rehashes_at_claim(
     assert scheduled.source_attestation["scope"].startswith("current-object-only")
     assert scheduled.source_attestation["actor"] == "operator@example.com"
     assert storage.verify_object_sha256.await_count == 1  # type: ignore[attr-defined]
-    if object_drift:
+    if change == "object_drift":
         storage.verify_object_sha256.return_value = VerifiedObject(  # type: ignore[attr-defined]
             size_bytes=123, sha256="b" * 64
         )
+    elif change == "ruling_replaced":
+        later = now + timedelta(seconds=1)
+        async with session_maker() as session, session.begin():
+            review = await session.get(AthReview, ruling_id, with_for_update=True)
+            assert review is not None
+            review.resolved_at = later
+            review.resolved_by = "second-reviewer"
+            review.resolution_reason = "A newer independent clear ruling"
+            session.add(
+                AthReviewAction(
+                    action_id=uuid4(),
+                    review_id=ruling_id,
+                    action="clear",
+                    reason="A newer independent clear ruling",
+                    actor="second-reviewer",
+                    evidence={},
+                    created_at=later,
+                )
+            )
     monkeypatch.setattr(
         endpoints,
         "_resolve_effective_review_settings",
@@ -294,18 +347,22 @@ async def test_null_sha_historical_clear_replay_rehashes_at_claim(
             session,
             storage,
         )
-    assert (claimed is None) == object_drift
+    assert (claimed is None) == (change != "none")
     async with session_maker() as session:
         row = await session.get(ScreenerL2ReportCanary, scheduled.canary_id)
         agent = await session.get(Agent, agent_id)
         attempt = await session.get(ScreeningAttempt, attempt_id)
     assert row is not None
-    assert row.status == ("incomplete" if object_drift else "leased")
-    assert row.error_code == ("source-object-drift" if object_drift else None)
+    assert row.status == ("leased" if change == "none" else "incomplete")
+    assert row.error_code == {
+        "none": None,
+        "object_drift": "source-object-drift",
+        "ruling_replaced": "exact-source-changed",
+    }[change]
     assert row.report is None
     assert agent is not None and agent.status == AgentStatus.SCORED
     assert attempt is not None and attempt.artifact_sha256 is None
-    if not object_drift:
+    if change == "none":
         assert claimed is not None
         assert claimed.artifact_sha256 == sha
         assert storage.verify_object_sha256.await_count == 2  # type: ignore[attr-defined]
