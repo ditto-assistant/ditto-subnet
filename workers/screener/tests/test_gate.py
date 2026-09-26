@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -636,6 +636,7 @@ async def _screen(  # type: ignore[no-untyped-def]
     policy_only=False,
     policy_version=SCREENING_POLICY_VERSION,
     record_archive_verification=None,
+    execution_namespace=None,
 ):
     return await gate.screen(
         agent_id=_AGENT,
@@ -649,6 +650,7 @@ async def _screen(  # type: ignore[no-untyped-def]
         policy_only=policy_only,
         policy_version=policy_version,
         record_archive_verification=record_archive_verification,
+        execution_namespace=execution_namespace,
     )
 
 
@@ -1212,6 +1214,39 @@ async def test_default_v6_builds_and_health_checks_without_run(
     assert result.manifest_digest == CORE_ONLY_MANIFEST.digest
     assert any("http://harness:8080/health" in arg for call in calls for arg in call)
     assert not any("http://harness:8080/run" in arg for call in calls for arg in call)
+
+
+async def test_canary_execution_uses_separate_docker_names_and_cannot_publish(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    namespace = uuid4()
+    async with gate._client:
+        result = await _screen(
+            gate,
+            hashlib.sha256(tarball).hexdigest(),
+            execution_namespace=namespace,
+        )
+
+        async def publish(_image: BuiltImageArtifact) -> None:
+            raise AssertionError("isolated canary cannot publish")
+
+        with pytest.raises(ValueError, match="isolated execution"):
+            await gate.screen(
+                agent_id=_AGENT,
+                attempt_id=_ATTEMPT,
+                bench_version=13,
+                miner_hotkey=_MINER,
+                sha256=hashlib.sha256(tarball).hexdigest(),
+                download_url=_URL,
+                execution_namespace=namespace,
+                publish_image=publish,
+            )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert any(namespace.hex in arg for call in calls for arg in call)
 
 
 async def test_archive_receipt_follows_verified_contract_only(

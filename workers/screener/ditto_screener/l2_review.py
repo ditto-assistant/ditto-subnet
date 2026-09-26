@@ -91,27 +91,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v41-policy-v13"
+        return "l2-terra-source-review-v42-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
+    if policy_version == 13:
+        return "l3-sol-adversarial-critic-v22-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
+    if policy_version == 13:
+        return "l3-sol-violation-cause-v28-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
+    if policy_version == 13:
+        return "l3-sol-cause-disagreement-v8-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
+    if policy_version == 13:
+        return "l3-sol-safety-adjudicator-v26-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -1257,6 +1265,18 @@ For I7, reject unjustified removal of an applicable,
 authorized and available capability, including errors caused by quoted titles,
 compound requests, negation scope, setting-and-remember requests, or duplicate
 handling that removes unrelated pending tools.
+Judge tool guards against the identity and argument schema of the offered tool,
+then trace the model-selected call to its actual local implementation or
+request-supplied endpoint. A local memory tool may check ownership of its own
+record IDs. An unrelated external tool may use an identically named argument
+for an external object: a host-wide check that treats that argument as a local
+record ID and blocks the call before endpoint dispatch removes an applicable
+capability (I7), even if the complete tool catalog reached the model. Do not
+accept a generic privacy or ownership explanation as a clearance without
+showing that the guarded ID belongs to the selected tool's own namespace.
+Keep I6 separate: an empty execution self-report does not prove a fabricated
+call, while a valid model-selected external call blocked before its endpoint
+is a capability-fidelity problem even when no false success is reported.
 
 For opaque components, combine submission evidence with platform-supplied
 exact path-and-digest provenance. An official starter-kit match satisfies only
@@ -1598,6 +1618,13 @@ Before returning safe, inspect every changed function that contains those
 locations and close the pre-assignment case where a score-derived decision
 discards a genuine candidate before response construction.
 """
+
+_V13_SAFETY_ADJUDICATOR_TASK = _SAFETY_ADJUDICATOR_TASK.replace(
+    "Use at most four targeted analyzer\ncalls; do not page through whole files.",
+    "Read every original challenge file and the adjacent served-path files "
+    "needed to verify its authority and sink. Use targeted analyzer calls "
+    "within the review budget, without paging through whole files.",
+)
 
 _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK = """\
 For an ordinary scorer-only lead, an optional answer/abstain slot set to None
@@ -4012,7 +4039,11 @@ class TerraSolSourceReviewAgent:
                 "benchmark_emulation",
                 "scorer_contract_manipulation",
             } <= set(raw_categories)
-            task = _SAFETY_ADJUDICATOR_TASK + (
+            task = (
+                _V13_SAFETY_ADJUDICATOR_TASK
+                if policy_version == 13
+                else _SAFETY_ADJUDICATOR_TASK
+            ) + (
                 _MIXED_SCORER_SAFETY_TASK
                 if mixed_scorer
                 else _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK

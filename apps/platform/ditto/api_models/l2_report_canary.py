@@ -26,6 +26,7 @@ class L2CanaryScheduleRequest(BaseModel):
     expected_score_count: Annotated[int, Field(ge=0)]
     target_node_id: str
     review_label: Literal["candidate_clear", "known_reject"]
+    run_mode: Literal["source_only", "full_runtime"] = "source_only"
     confirm_report_only: Literal[True]
 
 
@@ -41,6 +42,7 @@ class L2CanaryView(BaseModel):
     expected_agent_status: str
     expected_score_count: int
     review_label: str
+    run_mode: Literal["source_only", "full_runtime"]
     status: str
     claimed_instance_id: str | None
     lease_expires_at: datetime | None
@@ -67,6 +69,7 @@ class L2CanaryClaimResponse(BaseModel):
     artifact_sha256: str
     bench_version: int
     policy_version: int
+    run_mode: Literal["source_only", "full_runtime"] = "source_only"
     miner_hotkey: str
     lease_token: str
     lease_expires_at: datetime
