@@ -148,7 +148,7 @@ def l2_prompt_cache_key(policy_version: int) -> str:
 
 
 L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v3"
-L2_DOSSIER_REVISION = "l1-compressed-dossier-v11"
+L2_DOSSIER_REVISION = "l1-compressed-dossier-v12"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
 L2_HARNESS_REVISION = "l2-isolated-coding-harness-v19"
@@ -2175,10 +2175,12 @@ def _finalize_without_l3(
         return static_attention
     observation = analyst.observation
     clearance_path = "l2_only_l3_disabled"
+    clearance_gaps: tuple[str, ...] = ()
     if policy_version >= 13 and observation.ok and observation.risk_level == "low":
-        if _qualifies_l2_only_clear(
+        clearance_gaps = _l2_only_clearance_gaps(
             l1_observation, analyst, dossier, expected_model=expected_model
-        ):
+        )
+        if not clearance_gaps:
             observation = replace(observation, clearance_certified=True)
             clearance_path = "l2_only_certified_low"
         else:
@@ -2198,6 +2200,11 @@ def _finalize_without_l3(
         critic_disposition="disabled",
         clearance_path=clearance_path,
         analyst_cache_hit=analyst_cache_hit,
+        failure_subcode=(
+            "+".join(clearance_gaps)
+            if clearance_path == "l2_only_clearance_hold"
+            else analyst.failure_subcode
+        ),
     )
 
 
@@ -3091,6 +3098,7 @@ class TerraSolSourceReviewAgent:
                     }
                 )
             integrity_attention = False
+            static_attention: L2RunResult | None = None
             if analyst.observation.ok and analyst.observation.risk_level == "low":
                 static_attention = _served_generator_hold(
                     dossier=dossier,
@@ -4921,7 +4929,7 @@ class TerraSolSourceReviewAgent:
         # Final results from an older L3-off posture must never bypass the
         # v13 clearance guard. Keep the separately cached analyst reusable.
         value["l3_enabled"] = self._l3_enabled
-        value["l3_off_clearance_revision"] = 1
+        value["l3_off_clearance_revision"] = 2
         value["cause_tiebreaker_prompt_revision"] = l2_cause_tiebreaker_prompt_revision(
             policy_version
         )
@@ -5689,40 +5697,95 @@ def _dossier_has_scorer_attention(dossier: Mapping[str, object]) -> bool:
     )
 
 
-def _qualifies_l2_only_clear(
+def _l1_concerns_resolved(notes: tuple[Mapping[str, object], ...]) -> bool:
+    """Retire a concern only with its own later, exact-location clear."""
+    consumed_clears: set[int] = set()
+    for index, note in enumerate(notes):
+        if note.get("kind") != "concern":
+            continue
+        path = note.get("path")
+        area = note.get("area")
+        line = note.get("line")
+        confidence = note.get("confidence")
+        if (
+            not isinstance(path, str)
+            or not path
+            or not isinstance(area, str)
+            or not area
+            or not isinstance(line, int)
+            or isinstance(line, bool)
+            or line < 1
+            or not isinstance(confidence, (int, float))
+            or isinstance(confidence, bool)
+        ):
+            return False
+        resolved = False
+        for later_index in range(index + 1, len(notes)):
+            if later_index in consumed_clears:
+                continue
+            later = notes[later_index]
+            later_confidence = later.get("confidence")
+            if (
+                later.get("kind") == "cleared"
+                and later.get("path") == path
+                and later.get("area") == area
+                and later.get("line") == line
+                and isinstance(later_confidence, (int, float))
+                and not isinstance(later_confidence, bool)
+                and float(later_confidence) >= float(confidence)
+            ):
+                consumed_clears.add(later_index)
+                resolved = True
+                break
+        if not resolved:
+            return False
+    return True
+
+
+def _l2_only_clearance_gaps(
     l1: SourceReviewObservation | None,
     analyst: L2RunResult,
     dossier: Mapping[str, object] | None,
     *,
     expected_model: str,
-) -> bool:
-    """Certify only an independent, fully read clean L1/L2 agreement."""
+) -> tuple[str, ...]:
+    """Return bounded mechanical reasons a v13 L3-off safe claim cannot clear."""
     finding = analyst.observation.finding
-    return bool(
-        l1 is not None
-        and l1.ok
+    gaps: list[str] = []
+    if l1 is None or not (
+        l1.ok
         and l1.risk_level == "low"
         and l1.clearance_certified
-        and not any(note.get("kind") == "concern" for note in l1.notes)
         and set(l1.categories) <= {"none"}
-        and analyst.observation.ok
-        and analyst.observation.risk_level == "low"
-        and analyst.observation.categories == ("none",)
-        and analyst.resolution_basis in _SAFE_RESOLUTION_BASES
-        and analyst.dossier_complete
-        and "read_file" in analyst.tools
-        and bool(analyst.analyzed_files)
-        and bool(analyst.response_models)
-        and all(
-            model == expected_model or model.startswith(f"{expected_model}-")
-            for model in analyst.response_models
-        )
-        and isinstance(finding, Mapping)
-        and _finding_confidence(finding) >= _DIRECT_CLEAR_CONFIDENCE
-        and finding.get("evidence") == []
-        and dossier is not None
-        and not _dossier_has_scorer_attention(dossier)
-    )
+    ):
+        gaps.append("l1-not-certified-low")
+    elif not _l1_concerns_resolved(l1.notes):
+        gaps.append("l1-concern-unresolved")
+    if not analyst.observation.ok or analyst.observation.risk_level != "low":
+        gaps.append("l2-not-low")
+    if analyst.observation.categories != ("none",):
+        gaps.append("l2-categories")
+    if analyst.resolution_basis not in _SAFE_RESOLUTION_BASES:
+        gaps.append("l2-resolution-basis")
+    if not analyst.dossier_complete:
+        gaps.append("dossier-incomplete")
+    if "read_file" not in analyst.tools or not analyst.analyzed_files:
+        gaps.append("source-not-read")
+    if not analyst.response_models or any(
+        model != expected_model and not model.startswith(f"{expected_model}-")
+        for model in analyst.response_models
+    ):
+        gaps.append("model-mismatch")
+    if (
+        not isinstance(finding, Mapping)
+        or _finding_confidence(finding) < _DIRECT_CLEAR_CONFIDENCE
+    ):
+        gaps.append("finding-confidence")
+    if not isinstance(finding, Mapping) or finding.get("evidence") != []:
+        gaps.append("finding-evidence")
+    if dossier is None or _dossier_has_scorer_attention(dossier):
+        gaps.append("scorer-attention")
+    return tuple(gaps)
 
 
 def _qualifies_for_direct_clear(

@@ -212,7 +212,7 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
     assert l2_prompt_revision(11) == "l2-terra-source-review-v37-policy-v11"
     assert l2_prompt_revision(10) == "l2-terra-source-review-v37-policy-v10"
-    assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v11"
+    assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v12"
     assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v27-policy-v11"
     assert l2_cause_tiebreaker_prompt_revision(11) == (
         "l3-sol-cause-disagreement-v7-policy-v11"
@@ -1151,6 +1151,31 @@ def test_v13_l3_off_certifies_only_complete_clean_l1_l2_agreement() -> None:
     assert clear.observation.clearance_certified
     assert clear.clearance_path == "l2_only_certified_low"
 
+    resolved_l1 = SourceReviewObservation(
+        **{
+            **_l1("low").__dict__,
+            "notes": (
+                {
+                    "kind": "concern",
+                    "path": "src/app.rs",
+                    "area": "served_entrypoint",
+                    "line": 84,
+                    "confidence": 0.87,
+                },
+                {
+                    "kind": "cleared",
+                    "path": "src/app.rs",
+                    "area": "served_entrypoint",
+                    "line": 84,
+                    "confidence": 0.91,
+                },
+            ),
+        }
+    )
+    resolved = _finalize_without_l3(analyst, l1_observation=resolved_l1, **kwargs)
+    assert resolved.observation.clearance_certified
+    assert resolved.failure_subcode is None
+
     python_graph = {
         **starter_graph,
         "unresolved": True,
@@ -1192,6 +1217,100 @@ def test_v13_l3_off_certifies_only_complete_clean_l1_l2_agreement() -> None:
         assert not result.observation.ok
         assert result.observation.error_code == "l2-only-clearance-unproven"
         assert result.clearance_path == "l2_only_clearance_hold"
+        assert result.failure_subcode
+
+    for notes in (
+        (
+            {
+                "kind": "concern",
+                "path": "src/app.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.9,
+            },
+            {
+                "kind": "cleared",
+                "path": "src/other.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.95,
+            },
+        ),
+        (
+            {
+                "kind": "concern",
+                "path": "src/app.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.9,
+            },
+            {
+                "kind": "cleared",
+                "path": "src/app.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.89,
+            },
+        ),
+        (
+            {
+                "kind": "cleared",
+                "path": "src/app.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.95,
+            },
+            {
+                "kind": "concern",
+                "path": "src/app.rs",
+                "area": "served_entrypoint",
+                "line": 84,
+                "confidence": 0.9,
+            },
+        ),
+    ):
+        unresolved_l1 = SourceReviewObservation(
+            **{**_l1("low").__dict__, "notes": notes}
+        )
+        unresolved = _finalize_without_l3(
+            analyst, l1_observation=unresolved_l1, **kwargs
+        )
+        assert not unresolved.observation.ok
+        assert "l1-concern-unresolved" in (unresolved.failure_subcode or "")
+
+    two_concerns_one_clear = SourceReviewObservation(
+        **{
+            **_l1("low").__dict__,
+            "notes": (
+                {
+                    "kind": "concern",
+                    "path": "src/app.rs",
+                    "area": "served_entrypoint",
+                    "line": 79,
+                    "confidence": 0.86,
+                },
+                {
+                    "kind": "concern",
+                    "path": "src/app.rs",
+                    "area": "served_entrypoint",
+                    "line": 84,
+                    "confidence": 0.87,
+                },
+                {
+                    "kind": "cleared",
+                    "path": "src/app.rs",
+                    "area": "served_entrypoint",
+                    "line": 84,
+                    "confidence": 0.91,
+                },
+            ),
+        }
+    )
+    unresolved_pair = _finalize_without_l3(
+        analyst, l1_observation=two_concerns_one_clear, **kwargs
+    )
+    assert not unresolved_pair.observation.ok
+    assert "l1-concern-unresolved" in (unresolved_pair.failure_subcode or "")
 
     scorer_attention = _finalize_without_l3(
         analyst,
@@ -1211,6 +1330,42 @@ def test_v13_l3_off_certifies_only_complete_clean_l1_l2_agreement() -> None:
         **{**kwargs, "dossier": None},
     )
     assert missing_dossier.observation.error_code == "l2-only-clearance-unproven"
+
+
+@pytest.mark.parametrize("risk", ["medium", "high"])
+async def test_l3_off_preserves_elevated_analyst_result_without_static_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, risk: str
+) -> None:
+    archive, artifact_sha256 = _tar(tmp_path, "fn main() {}")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (tmp_path / "cache").mkdir()
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _: httpx.Response(500))
+    agent._l3_enabled = False
+    elevated = _model_result(
+        SourceReviewObservation(
+            ok=True,
+            risk_level=risk,
+            finding_digest="b" * 64,
+            categories=("model_tool_planning_bypass",),
+        )
+    )
+
+    async def analyst(*_args: object, **_kwargs: object) -> L2RunResult:
+        return elevated
+
+    monkeypatch.setattr(agent, "_run_trajectory", analyst)
+    result = await agent._run_model(
+        workspace,
+        TarSourceRepository(str(archive)),
+        analyst_cache_key="elevated-analyst",
+        artifact_sha256=artifact_sha256,
+        l1_observation=_l1("high"),
+        deadline=None,
+        policy_version=13,
+    )
+    assert result.observation.risk_level == risk
+    assert result.clearance_path == "l2_only_l3_disabled"
 
 
 def test_direct_clear_graph_requires_unique_resolved_l1_slice() -> None:
@@ -5907,6 +6062,24 @@ def test_cache_lock_excludes_another_worker_process(tmp_path: Path) -> None:
     assert fd is not None
     fcntl.flock(fd, fcntl.LOCK_UN)
     os.close(fd)
+
+
+async def test_function_diff_covers_bounded_nonstarter_rust_artifact(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "src").mkdir()
+    (source / "src/agent.rs").write_text(
+        "\n".join(f"fn distinct_{index}() {{}}" for index in range(328))
+    )
+    result = json.loads(
+        await InProcessAnalyzerHarness().run(source, "starter_function_diff", {})
+    )
+    assert result["added_count"] == 328
+    assert len(result["added"]) == 328
+    assert not result["truncated"]
+    assert len(json.dumps(result, separators=(",", ":"))) < 256_000
 
 
 @pytest.mark.integration
