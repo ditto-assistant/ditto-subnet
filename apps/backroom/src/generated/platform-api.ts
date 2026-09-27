@@ -5564,85 +5564,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/screener/agent/{agent_id}/submission-image-builds": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Queue Submission Image Build
-         * @description Queue a provider build only after the owning screener validated source.
-         */
-        post: operations["queue_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/agent/{agent_id}/submission-image-builds/{build_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Submission Image Build */
-        get: operations["get_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds__build_id__get"];
-        put?: never;
-        post?: never;
-        /**
-         * Consume Submission Image Build
-         * @description Delete the temporary remote archive after the GCE daemon imported it.
-         */
-        delete: operations["consume_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds__build_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/agent/{agent_id}/submission-source-reviews": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Queue Submission Source Review
-         * @description Queue a bounded read-only review alongside the mechanical lane.
-         */
-        post: operations["queue_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/agent/{agent_id}/submission-source-reviews/{review_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Submission Source Review */
-        get: operations["get_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__get"];
-        put?: never;
-        post?: never;
-        /** Consume Submission Source Review */
-        delete: operations["consume_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/screener/agent/{agent_id}/verification-receipts": {
         parameters: {
             query?: never;
@@ -5829,167 +5750,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/screener/controller/submission-image-builds/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Claim Submission Image Build
-         * @description Lease one miner build and mint only its short-lived job capability.
-         */
-        post: operations["claim_submission_image_build_api_v1_screener_controller_submission_image_builds_claim_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-image-builds/{build_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Controller Submission Image Build */
-        get: operations["get_controller_submission_image_build_api_v1_screener_controller_submission_image_builds__build_id__get"];
-        /** Update Submission Image Build */
-        put: operations["update_submission_image_build_api_v1_screener_controller_submission_image_builds__build_id__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-image-builds/{build_id}/cleanup-required": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record Submission Image Build Cleanup
-         * @description Keep provider deletion failures visible after zero-replica suspension.
-         */
-        post: operations["record_submission_image_build_cleanup_api_v1_screener_controller_submission_image_builds__build_id__cleanup_required_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-cleanup-required": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Mark Submission Runtime Cleanup Required */
-        post: operations["mark_submission_runtime_cleanup_required_api_v1_screener_controller_submission_image_builds__build_id__runtime_cleanup_required_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-result": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Complete Submission Runtime Smoke */
-        post: operations["complete_submission_runtime_smoke_api_v1_screener_controller_submission_image_builds__build_id__runtime_result_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-runtime-smokes/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Claim Submission Runtime Smoke */
-        post: operations["claim_submission_runtime_smoke_api_v1_screener_controller_submission_runtime_smokes_claim_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-source-reviews/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Claim Submission Source Review */
-        post: operations["claim_submission_source_review_api_v1_screener_controller_submission_source_reviews_claim_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-source-reviews/{review_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Controller Submission Source Review */
-        get: operations["get_controller_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__get"];
-        /** Update Submission Source Review */
-        put: operations["update_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-source-reviews/{review_id}/cleanup-required": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Mark Submission Source Review Cleanup Required */
-        post: operations["mark_submission_source_review_cleanup_required_api_v1_screener_controller_submission_source_reviews__review_id__cleanup_required_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/screener/controller/trusted-image-builds": {
         parameters: {
             query?: never;
@@ -6001,29 +5761,9 @@ export interface paths {
         put?: never;
         /**
          * Queue Release Image Build
-         * @description Idempotently queue the fixed release image contract for an exact SHA.
+         * @description Register the fixed release image contract for a trusted runner build.
          */
         post: operations["queue_release_image_build_api_v1_screener_controller_trusted_image_builds_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/trusted-image-builds/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Claim Trusted Image Build
-         * @description Lease one allowlisted trusted build under the current controller epoch.
-         */
-        post: operations["claim_trusted_image_build_api_v1_screener_controller_trusted_image_builds_claim_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6061,30 +5801,10 @@ export interface paths {
         get: operations["get_release_image_build_api_v1_screener_controller_trusted_image_builds__build_id__get"];
         /**
          * Update Trusted Image Build
-         * @description Record redacted provider progress and the immutable output digest.
+         * @description Record the immutable image digest from the trusted release runner.
          */
         put: operations["update_trusted_image_build_api_v1_screener_controller_trusted_image_builds__build_id__put"];
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/trusted-image-builds/{build_id}/cleanup-required": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record Trusted Image Build Cleanup
-         * @description Keep trusted Kaniko deletion failures visible after zero-replica suspension.
-         */
-        post: operations["record_trusted_image_build_cleanup_api_v1_screener_controller_trusted_image_builds__build_id__cleanup_required_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6437,57 +6157,6 @@ export interface paths {
         get: operations["review_settings_revision_api_v1_screener_review_settings_revisions__revision__get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/submission-image-builds/{build_id}/complete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Complete Submission Build Upload */
-        post: operations["complete_submission_build_upload_api_v1_screener_submission_image_builds__build_id__complete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/submission-image-builds/{build_id}/source": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Submission Build Source */
-        get: operations["get_submission_build_source_api_v1_screener_submission_image_builds__build_id__source_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/submission-image-builds/{build_id}/upload": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Mint Submission Build Upload */
-        post: operations["mint_submission_build_upload_api_v1_screener_submission_image_builds__build_id__upload_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -30224,8 +29893,8 @@ export interface components {
             /**
              * Build Provider Priority
              * @default [
-             *       "gcp",
-             *       "targon"
+             *       "hetzner",
+             *       "gcp"
              *     ]
              */
             build_provider_priority: ("hetzner" | "targon" | "gcp")[];
@@ -30254,16 +29923,16 @@ export interface components {
             /**
              * Runtime Provider Priority
              * @default [
-             *       "gcp",
-             *       "targon"
+             *       "hetzner",
+             *       "gcp"
              *     ]
              */
             runtime_provider_priority: ("hetzner" | "targon" | "gcp")[];
             /**
              * Source Review Provider Priority
              * @default [
-             *       "gcp",
-             *       "targon"
+             *       "hetzner",
+             *       "gcp"
              *     ]
              */
             source_review_provider_priority: ("hetzner" | "targon" | "gcp")[];
@@ -31352,55 +31021,6 @@ export interface components {
          * @enum {string}
          */
         SourceReviewScorerVisibleEffect: "final_text" | "answer" | "abstain" | "tool_calls" | "validator_observed_trajectory" | "graded_outcome";
-        /** SubmissionBuildCompleteRequest */
-        SubmissionBuildCompleteRequest: {
-            /** Image Id */
-            image_id: string;
-            /** Output Sha256 */
-            output_sha256: string;
-            /** Output Size Bytes */
-            output_size_bytes: number;
-        };
-        /** SubmissionBuildCompleteResponse */
-        SubmissionBuildCompleteResponse: {
-            /**
-             * Verified
-             * @constant
-             */
-            verified: true;
-        };
-        /** SubmissionBuildSourceResponse */
-        SubmissionBuildSourceResponse: {
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /** Image Ref */
-            image_ref: string;
-            /** Source Url B64 */
-            source_url_b64: string;
-        };
-        /** SubmissionBuildUploadRequest */
-        SubmissionBuildUploadRequest: {
-            /** Image Id */
-            image_id: string;
-            /** Output Sha256 */
-            output_sha256: string;
-            /** Output Size Bytes */
-            output_size_bytes: number;
-        };
-        /** SubmissionBuildUploadResponse */
-        SubmissionBuildUploadResponse: {
-            /**
-             * Expires At
-             * Format: date-time
-             */
-            expires_at: string;
-            /** Required Headers */
-            required_headers: {
-                [key: string]: string;
-            };
-            /** Upload Url B64 */
-            upload_url_b64: string;
-        };
         /** SubmissionDepositAddressRevision */
         SubmissionDepositAddressRevision: {
             /** Actor */
@@ -31453,18 +31073,6 @@ export interface components {
             job_token_expires_at: string;
         };
         /**
-         * SubmissionImageBuildCleanupRequest
-         * @description Durable notice that a suspended provider rental still needs deletion.
-         */
-        SubmissionImageBuildCleanupRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
-            /** Provider Resource Id */
-            provider_resource_id: string;
-        };
-        /**
          * SubmissionImageBuildControllerStatusResponse
          * @description Authority-free completion state used by the provider controller.
          */
@@ -31474,80 +31082,6 @@ export interface components {
              * Format: uuid
              */
             build_id: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "leased" | "running" | "succeeded" | "fallback_required" | "canceled" | "consumed";
-        };
-        /** SubmissionImageBuildControllerUpdateRequest */
-        SubmissionImageBuildControllerUpdateRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
-            /** Error Code */
-            error_code?: string | null;
-            /** Provider Resource Id */
-            provider_resource_id?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "running" | "fallback_required";
-        };
-        /**
-         * SubmissionImageBuildRequest
-         * @description Queue one attempt-bound remote image build after local source validation.
-         */
-        SubmissionImageBuildRequest: {
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-        };
-        /**
-         * SubmissionImageBuildResponse
-         * @description Public-safe status and, when ready, the verified image archive.
-         */
-        SubmissionImageBuildResponse: {
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-            /**
-             * Build Id
-             * Format: uuid
-             */
-            build_id: string;
-            /** Download Url */
-            download_url?: string | null;
-            /** Error Code */
-            error_code?: string | null;
-            /** Image Ref */
-            image_ref: string;
-            /** Output Sha256 */
-            output_sha256?: string | null;
-            /** Output Size Bytes */
-            output_size_bytes?: number | null;
-            /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
-            /** Runtime Error Code */
-            runtime_error_code?: string | null;
-            /** Runtime Image Reference */
-            runtime_image_reference?: string | null;
-            /** Runtime Provider */
-            runtime_provider?: ("targon" | "gcp" | "hetzner") | null;
-            /**
-             * Runtime Status
-             * @default skipped
-             * @enum {string}
-             */
-            runtime_status: "pending" | "running" | "succeeded" | "fallback_required" | "skipped";
             /**
              * Status
              * @enum {string}
@@ -31576,27 +31110,6 @@ export interface components {
             output_sha256: string;
             /** Output Size Bytes */
             output_size_bytes: number;
-        };
-        /**
-         * SubmissionRuntimeResultRequest
-         * @description Terminal direct-image Rental result, fenced to one build/controller.
-         */
-        SubmissionRuntimeResultRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
-            /** Error Code */
-            error_code?: string | null;
-            /** Image Reference */
-            image_reference?: string | null;
-            /** Provider Resource Id */
-            provider_resource_id?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "running" | "succeeded" | "fallback_required";
         };
         /** SubmissionSettingsRevision */
         SubmissionSettingsRevision: {
@@ -31656,18 +31169,6 @@ export interface components {
             /** Review Settings Revision */
             review_settings_revision?: number | null;
         };
-        /**
-         * SubmissionSourceReviewCleanupRequest
-         * @description Durable notice that a provider Rental still needs deletion.
-         */
-        SubmissionSourceReviewCleanupRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
-            /** Provider Resource Id */
-            provider_resource_id: string;
-        };
         /** SubmissionSourceReviewCompleteRequest */
         SubmissionSourceReviewCompleteRequest: {
             observation: components["schemas"]["SourceReviewObservationPayload"];
@@ -31682,61 +31183,6 @@ export interface components {
         };
         /** SubmissionSourceReviewControllerStatusResponse */
         SubmissionSourceReviewControllerStatusResponse: {
-            /**
-             * Review Id
-             * Format: uuid
-             */
-            review_id: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "leased" | "running" | "succeeded" | "fallback_required" | "canceled" | "consumed";
-        };
-        /** SubmissionSourceReviewControllerUpdateRequest */
-        SubmissionSourceReviewControllerUpdateRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
-            /** Error Code */
-            error_code?: string | null;
-            /** Provider Resource Id */
-            provider_resource_id?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "running" | "fallback_required";
-        };
-        /**
-         * SubmissionSourceReviewRequest
-         * @description Queue one attempt-bound remote, read-only source review.
-         */
-        SubmissionSourceReviewRequest: {
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-        };
-        /**
-         * SubmissionSourceReviewResponse
-         * @description Status and terminal observation for an attempt-bound remote review.
-         */
-        SubmissionSourceReviewResponse: {
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-            /** Error Code */
-            error_code?: string | null;
-            observation?: components["schemas"]["SourceReviewObservationPayload"] | null;
-            /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
             /**
              * Review Id
              * Format: uuid
@@ -32420,17 +31866,6 @@ export interface components {
             /** Revision */
             revision: number;
             settings: components["schemas"]["TreasurySettings"];
-        };
-        /** TrustedImageBuildClaimRequest */
-        TrustedImageBuildClaimRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
-        };
-        /** TrustedImageBuildClaimResponse */
-        TrustedImageBuildClaimResponse: {
-            build: components["schemas"]["TrustedImageBuildView"] | null;
         };
         /** TrustedImageBuildCreateRequest */
         TrustedImageBuildCreateRequest: {
@@ -45020,226 +44455,6 @@ export interface operations {
             };
         };
     };
-    queue_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionImageBuildRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionImageBuildResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds__build_id__get: {
-        parameters: {
-            query: {
-                attempt_id: string;
-            };
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionImageBuildResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    consume_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds__build_id__delete: {
-        parameters: {
-            query: {
-                attempt_id: string;
-            };
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    queue_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionSourceReviewRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionSourceReviewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__get: {
-        parameters: {
-            query: {
-                attempt_id: string;
-            };
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-                review_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionSourceReviewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    consume_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__delete: {
-        parameters: {
-            query: {
-                attempt_id: string;
-            };
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-                review_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     record_screening_verification_receipt_api_v1_screener_agent__agent_id__verification_receipts_post: {
         parameters: {
             query?: never;
@@ -45559,393 +44774,6 @@ export interface operations {
             };
         };
     };
-    claim_submission_image_build_api_v1_screener_controller_submission_image_builds_claim_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TrustedImageBuildClaimRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionImageBuildClaimResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_controller_submission_image_build_api_v1_screener_controller_submission_image_builds__build_id__get: {
-        parameters: {
-            query: {
-                environment: string;
-                controller_epoch: string;
-            };
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionImageBuildControllerStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_submission_image_build_api_v1_screener_controller_submission_image_builds__build_id__put: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionImageBuildControllerUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_submission_image_build_cleanup_api_v1_screener_controller_submission_image_builds__build_id__cleanup_required_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionImageBuildCleanupRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    mark_submission_runtime_cleanup_required_api_v1_screener_controller_submission_image_builds__build_id__runtime_cleanup_required_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionImageBuildCleanupRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    complete_submission_runtime_smoke_api_v1_screener_controller_submission_image_builds__build_id__runtime_result_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionRuntimeResultRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    claim_submission_runtime_smoke_api_v1_screener_controller_submission_runtime_smokes_claim_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TrustedImageBuildClaimRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionRuntimeArtifactClaimResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    claim_submission_source_review_api_v1_screener_controller_submission_source_reviews_claim_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TrustedImageBuildClaimRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionSourceReviewClaimResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_controller_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__get: {
-        parameters: {
-            query: {
-                environment: string;
-                controller_epoch: string;
-            };
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                review_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionSourceReviewControllerStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__put: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                review_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionSourceReviewControllerUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    mark_submission_source_review_cleanup_required_api_v1_screener_controller_submission_source_reviews__review_id__cleanup_required_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                review_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionSourceReviewCleanupRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     queue_release_image_build_api_v1_screener_controller_trusted_image_builds_post: {
         parameters: {
             query?: never;
@@ -45968,41 +44796,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustedImageBuildView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    claim_trusted_image_build_api_v1_screener_controller_trusted_image_builds_claim_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TrustedImageBuildClaimRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TrustedImageBuildClaimResponse"];
                 };
             };
             /** @description Validation Error */
@@ -46107,41 +44900,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TrustedImageBuildView"];
                 };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_trusted_image_build_cleanup_api_v1_screener_controller_trusted_image_builds__build_id__cleanup_required_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionImageBuildCleanupRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -46905,113 +45663,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EffectiveScreenerReviewSettings"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    complete_submission_build_upload_api_v1_screener_submission_image_builds__build_id__complete_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionBuildCompleteRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionBuildCompleteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_submission_build_source_api_v1_screener_submission_image_builds__build_id__source_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionBuildSourceResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    mint_submission_build_upload_api_v1_screener_submission_image_builds__build_id__upload_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionBuildUploadRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionBuildUploadResponse"];
                 };
             };
             /** @description Validation Error */

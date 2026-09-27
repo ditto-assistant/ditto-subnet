@@ -37,15 +37,6 @@ _IMAGE_REFERENCE = (
 )
 
 
-async def test_only_targon_platform_callback_is_terminal() -> None:
-    """Keep node-review completion on the same terminal-authority rule."""
-    from ditto.api_server.endpoints.screener import _platform_finalizes_remote_lane
-
-    assert _platform_finalizes_remote_lane("targon")
-    assert not _platform_finalizes_remote_lane("hetzner")
-    assert not _platform_finalizes_remote_lane("gcp")
-
-
 def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
     app.state.config = replace(app.state.config, admin_api_token=_ADMIN_TOKEN)
 
@@ -1093,11 +1084,7 @@ async def test_unknown_fields_ignored_and_gcp_first_keeps_targon_fallback() -> N
         }
     )
     assert settings.runtime_provider_priority == ("gcp", "targon")
-    assert settings.targon_runtime_enabled() is True
-    assert settings.targon_source_review_enabled() is False
-    assert settings.targon_builders_enabled() is True
     assert settings.all_lanes_gcp_only() is False
-    assert settings.all_lanes_targon_first() is False
 
     payload = ScreenerProviderSettingsWriteRequest.model_validate(
         {
@@ -1118,9 +1105,9 @@ async def test_unknown_fields_ignored_and_gcp_first_keeps_targon_fallback() -> N
         source_review_provider_priority=("targon", "gcp"),
         build_provider_priority=("targon", "gcp"),
     )
-    assert targon_first.all_lanes_targon_first() is True
+    assert targon_first.runtime_provider_priority[0] == "targon"
     assert targon_first.all_lanes_gcp_only() is False
-    assert ScreenerProviderSettings().all_lanes_targon_first() is False
+    assert ScreenerProviderSettings().all_lanes_hetzner_first() is True
 
 
 async def test_all_lanes_gcp_only_keep_submission_work_on_gce_fleet(

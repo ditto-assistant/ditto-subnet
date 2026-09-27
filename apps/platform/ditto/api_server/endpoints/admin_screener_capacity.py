@@ -368,7 +368,7 @@ def _default_provider_revision(environment: str) -> ProviderSettingsRevisionMode
         revision=0,
         parent_revision=0,
         settings=DEFAULT_SCREENER_PROVIDER_SETTINGS,
-        reason="Built-in single-shot Targon settings",
+        reason="Built-in Hetzner primary and GCE fallback settings",
         actor="platform",
         created_at=None,
     )
