@@ -1,8 +1,8 @@
 # Public subnet infrastructure
 
 This directory is the source of truth for infrastructure that operates SN118:
-the Platform API and database, validator/screener hosts, Targon-first capacity
-controller, trusted Kaniko builder, Artifact Registry repositories, and the
+the Platform API and database, validator/screener hosts, Hetzner-first capacity
+controller, trusted screener image builds, Artifact Registry repositories, and the
 public Backroom custom domain.
 
 Ditto product infrastructure stays private. In particular, this tree must not

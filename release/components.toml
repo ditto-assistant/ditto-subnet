@@ -275,7 +275,7 @@ paths = [
 ]
 
 [components.screener_orchestrator]
-description = "Targon-first screener capacity and build controller"
+description = "Hetzner-first screener capacity controller and trusted build support"
 depends_on = ["screener"]
 paths = [
   "Dockerfile.screener-fleet-release",

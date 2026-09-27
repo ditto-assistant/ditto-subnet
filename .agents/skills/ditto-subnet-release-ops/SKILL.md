@@ -31,7 +31,7 @@ Read [`references/release-ops-index.md`](references/release-ops-index.md), then 
 
 - Automatic application deploys may follow a semantic release from `main`.
 - Terraform always uses reviewed plan and protected apply; application workflows do not apply infrastructure.
-- Never read or print `TARGON_API_KEY` or other provider secrets. Use Secret Manager indirection and tests that consume values without returning them.
+- Never read or print provider secrets. Use Secret Manager indirection and tests that consume values without returning them.
 - Never place cloud, GitHub, Platform, or provider credentials in untrusted build/runtime environments.
 - Do not create service accounts or IAM bindings out of band merely to bypass an unapplied Terraform bootstrap.
 
