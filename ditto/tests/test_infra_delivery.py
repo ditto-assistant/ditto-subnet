@@ -211,7 +211,7 @@ def test_capacity_controller_retires_targon_builder_and_credential() -> None:
     updater = (
         ROOT / "services" / "screener-orchestrator" / "scripts" / "update-controller.sh"
     ).read_text()
-    assert "BUILDER_UNIT" not in updater
+    assert 'systemctl start "$BUILDER_UNIT"' not in updater
     assert 'systemctl stop "$RETIRED_BUILDER_UNIT" || return 1' in updater
     assert 'systemctl disable "$RETIRED_BUILDER_UNIT"' in updater
     assert 'rm -f -- "$RETIRED_BUILDER_UNIT_FILE" "$RETIRED_TARGON_KEY_FILE"' in updater
