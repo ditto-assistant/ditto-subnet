@@ -113,7 +113,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v45-policy-v13"
+        return "l2-terra-source-review-v46-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -1111,6 +1111,19 @@ If trusted_scored_runtime_env is present, it is a live scorer claim bound to a
 compiled source revision and digest. It covers only variables the scorer injects
 for Bench v13. Check the image's Docker ENV and source defaults separately;
 absence from injected_keys does not prove a feature or output sink is disabled.
+The public V13 scorer contract locks DITTOBENCH_PROVIDER to platform for
+canonical scored sandbox launches and supplies its host inference gateway as
+DITTOBENCH_INFERENCE_BASE_URL; an inference-session launch uses the ticket-bound
+broker. After a zero-broker-call route probe, a bounded compatibility restart
+may instead use the chutes selector with the same broker URL; that selector
+alone does not name a direct provider. The injected key names alone do not
+establish those values. A valid bound packet identifies an eligible current
+scorer cohort, not the scorer or
+environment of a historical execution. Apply the source-revision-bound scorer
+contract only to the current prospective scored path, then trace whether the
+miner's served model construction honors the selector and URL or reaches a
+different provider after boot. A standalone default, dead alternative, or
+comment about direct OpenRouter use is not scored-path bypass by itself.
 If this packet is absent, do not infer the scored environment from source alone.
 The packet never overrides a reachable source violation or replaces I1-I7.
 
