@@ -5890,9 +5890,7 @@ def _l1_concerns_resolved(notes: tuple[Mapping[str, object], ...]) -> bool:
     return True
 
 
-def _l2_resolves_l1_concerns(
-    l1: SourceReviewObservation, analyst: L2RunResult
-) -> bool:
+def _l2_resolves_l1_concerns(l1: SourceReviewObservation, analyst: L2RunResult) -> bool:
     """Accept cited analyst dispositions for every located L1 concern lead.
 
     The analyst submission parser already binds each citation to a file digest
@@ -5963,10 +5961,7 @@ def _l2_only_clearance_gaps(
         and set(l1.categories) <= {"none"}
     ):
         gaps.append("l1-not-certified-low")
-    elif not (
-        _l1_concerns_resolved(l1.notes)
-        or _l2_resolves_l1_concerns(l1, analyst)
-    ):
+    elif not (_l1_concerns_resolved(l1.notes) or _l2_resolves_l1_concerns(l1, analyst)):
         gaps.append("l1-concern-unresolved")
     if not analyst.observation.ok or analyst.observation.risk_level != "low":
         gaps.append("l2-not-low")
