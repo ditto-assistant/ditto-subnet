@@ -155,7 +155,7 @@ def _note_from_arguments(arguments: Mapping[str, object]) -> dict[str, object] |
 
 
 def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> None:
-    """Bounded append; a concern evicts the oldest non-concern when full."""
+    """Keep a distinct concern location when a full ledger repeats others."""
     if len(notes) < _MAX_REVIEW_NOTES:
         notes.append(note)
         return
@@ -166,6 +166,18 @@ def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> Non
             del notes[index]
             notes.append(note)
             return
+    fields = ("category", "path", "line")
+    sites = [tuple(existing.get(field) for field in fields) for existing in notes]
+    new_site = tuple(note.get(field) for field in fields)
+    if new_site in sites:
+        return
+    seen: set[tuple[object, ...]] = set()
+    for index, site in enumerate(sites):
+        if site in seen:
+            del notes[index]
+            notes.append(note)
+            return
+        seen.add(site)
 
 
 def ledger_disposition(

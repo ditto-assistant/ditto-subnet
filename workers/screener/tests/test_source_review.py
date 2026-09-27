@@ -5833,6 +5833,34 @@ def test_a_hold_threshold_above_one_is_not_inert() -> None:
     )
 
 
+def test_full_concern_ledger_keeps_new_source_location() -> None:
+    template: dict[str, object] = {
+        "kind": "concern",
+        "category": "benchmark_emulation",
+        "path": "app/service.py",
+        "line": 85,
+    }
+    cap = source_review_module._MAX_REVIEW_NOTES
+    notes = [template.copy() for _ in range(cap)]
+    tool_gate = {
+        "kind": "concern",
+        "category": "mandatory_contract_failure",
+        "path": "app/service.py",
+        "line": 355,
+    }
+
+    source_review_module._append_note(notes, tool_gate)
+
+    assert len(notes) == cap
+    assert notes[-1] is tool_gate
+    assert notes[0]["line"] == 85
+
+    distinct = [{**template, "line": line} for line in range(1, cap + 1)]
+    source_review_module._append_note(distinct, tool_gate)
+    assert len(distinct) == cap
+    assert tool_gate not in distinct
+
+
 def test_single_site_multi_location_concerns_cannot_hold() -> None:
     """A one-site benchmark_emulation note could never become a finding.
 
