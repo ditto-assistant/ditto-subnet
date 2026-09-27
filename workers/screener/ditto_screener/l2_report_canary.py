@@ -251,7 +251,8 @@ async def consume(
             rotation_id=settings.settings.policy_manifest_rotation_id,
         ),
         journal=ReviewJournal(canary_config.review_journal_file),
-        capture_enforce_result=claim.run_mode == "full_runtime",
+        # Both isolated modes need the exact L1 lead paired with the L2 audit.
+        capture_enforce_result=True,
     )
     try:
         decision = await gate.screen(
@@ -271,11 +272,7 @@ async def consume(
             policy_only=claim.run_mode == "source_only",
         )
         l2_result = gate.pop_shadow_review(claim.source_attempt_id)
-        l1_observation = (
-            gate.pop_preview_l1_review(claim.source_attempt_id)
-            if claim.run_mode == "full_runtime"
-            else None
-        )
+        l1_observation = gate.pop_preview_l1_review(claim.source_attempt_id)
         report = _report(
             claim=claim,
             decision=decision,

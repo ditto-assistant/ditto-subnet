@@ -89,7 +89,7 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
             assert canary_config.l2_review_mode == (
                 "enforce" if run_mode == "full_runtime" else "shadow"
             )
-            assert kwargs["capture_enforce_result"] is (run_mode == "full_runtime")
+            assert kwargs["capture_enforce_result"] is True
             assert canary_config.l2_always_escalate
             assert canary_config.require_signed_runtime_lease
             assert canary_config.signed_runtime_lease_max_age_seconds == math.ceil(
@@ -151,7 +151,6 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
             )
 
         def pop_preview_l1_review(self, _attempt_id):
-            assert run_mode == "full_runtime"
             return SourceReviewObservation(
                 ok=True,
                 risk_level="low",
@@ -195,11 +194,8 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
     assert report["source_attempt_id"] == str(attempt_id)
     assert report["l2"]["risk_level"] == "low"
     assert report["l2"]["failure_subcode"] == "no_tool_call_after_corrections"
-    if run_mode == "full_runtime":
-        assert report["l1"]["clearance_certified"] is True
-        assert report["l1"]["finding"]["summary"] == "clean L1"
-    else:
-        assert "l1" not in report
+    assert report["l1"]["clearance_certified"] is True
+    assert report["l1"]["finding"]["summary"] == "clean L1"
 
 
 def test_inconclusive_model_audit_is_report_only() -> None:
