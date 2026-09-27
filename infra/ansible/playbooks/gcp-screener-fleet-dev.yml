@@ -19,7 +19,7 @@
 
     - name: Verify rehearsal mode installed no screener systemd units
       ansible.builtin.stat:
-        path: /etc/systemd/system/ditto-screener-fleet-agent.service
+        path: /etc/systemd/system/ditto-screener-worker@.service
       register: screener_dev_runtime_unit
       failed_when: screener_dev_runtime_unit.stat.exists
 

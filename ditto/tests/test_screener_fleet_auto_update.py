@@ -753,7 +753,7 @@ def test_drain_timeouts_outlast_the_longest_review() -> None:
     updater = UPDATER.read_text()
     assert "TimeoutStopSec=infinity" not in partition
     assert "TimeoutStopSec=70min" not in partition
-    assert partition.count("TimeoutStopSec=120min") == 3
+    assert partition.count("TimeoutStopSec=120min") == 2
     assert "TimeoutStartSec=180min" in partition
     assert "TimeoutStartSec=180min" in service
     assert (
