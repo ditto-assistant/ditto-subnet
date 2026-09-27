@@ -212,6 +212,12 @@ def test_capacity_controller_retires_targon_builder_and_credential() -> None:
         ROOT / "services" / "screener-orchestrator" / "scripts" / "update-controller.sh"
     ).read_text()
     assert "BUILDER_UNIT" not in updater
+    assert 'systemctl stop "$RETIRED_BUILDER_UNIT" || return 1' in updater
+    assert 'systemctl disable "$RETIRED_BUILDER_UNIT"' in updater
+    assert 'rm -f -- "$RETIRED_BUILDER_UNIT_FILE" "$RETIRED_TARGON_KEY_FILE"' in updater
+    assert updater.index("retire_builder\n") < updater.index(
+        'if [[ "$previous_sha" == "$CONTROLLER_EXPECTED_SHA" ]]'
+    )
 
     platform_prod = (
         ROOT / "infra" / "ansible" / "host_vars" / "ditto-platform-prod.yml"

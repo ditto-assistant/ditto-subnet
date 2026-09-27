@@ -14,6 +14,9 @@ CONTROLLER_HEALTH_URL="${SCREENER_CONTROLLER_HEALTH_URL:-https://platform-api.he
 CONTROLLER_PLATFORM_URL="${SCREENER_CONTROLLER_PLATFORM_URL:-https://platform-api.heyditto.ai}"
 CONTROLLER_TOKEN_FILE="${SCREENER_CONTROLLER_TOKEN_FILE:-/etc/ditto-screener-capacity/platform-controller-token}"
 CONTROLLER_ENVIRONMENT="${SCREENER_CONTROLLER_ENVIRONMENT:-prod}"
+RETIRED_BUILDER_UNIT="ditto-image-builder.service"
+RETIRED_BUILDER_UNIT_FILE="/etc/systemd/system/ditto-image-builder.service"
+RETIRED_TARGON_KEY_FILE="/etc/ditto-screener-capacity/targon-api-key"
 
 service_dir="$CONTROLLER_ROOT/services/screener-orchestrator"
 venv="$service_dir/.venv"
@@ -166,6 +169,21 @@ activate_revision() {
     || return 1
 }
 
+retire_builder() {
+  # This transition also runs when the requested revision is already deployed.
+  # Keep the old rental poller stopped even if a controller rollback is needed.
+  if systemctl is-active --quiet "$RETIRED_BUILDER_UNIT"; then
+    systemctl stop "$RETIRED_BUILDER_UNIT" || return 1
+  fi
+  systemctl disable "$RETIRED_BUILDER_UNIT" >/dev/null 2>&1 || true
+  rm -f -- "$RETIRED_BUILDER_UNIT_FILE" "$RETIRED_TARGON_KEY_FILE"
+  systemctl daemon-reload
+  if systemctl is-active --quiet "$RETIRED_BUILDER_UNIT"; then
+    echo "retired builder remains active; refusing controller deploy" >&2
+    return 1
+  fi
+}
+
 install -d -o "$CONTROLLER_USER" -g "$CONTROLLER_GROUP" -m 0700 "$state_dir"
 as_deploy git -C "$CONTROLLER_ROOT" fetch --force --prune origin \
   refs/heads/main:refs/remotes/origin/main
@@ -175,6 +193,8 @@ if ! as_deploy git -C "$CONTROLLER_ROOT" merge-base --is-ancestor \
   echo "refusing to deploy a revision that is not on origin/main" >&2
   exit 1
 fi
+
+retire_builder
 
 previous_sha="$(as_deploy git -C "$CONTROLLER_ROOT" rev-parse HEAD)"
 if [[ -s "$deployed_marker" ]]; then

@@ -1451,6 +1451,19 @@ class TestFederatedScreenerNodes:
         )
         assert latest.status_code == 200, latest.text
         assert latest.json()["build_id"] == build["build_id"]
+        retry = await client.post(
+            "/api/v1/screener/controller/trusted-image-builds",
+            headers=headers,
+            json={
+                "component": "screener",
+                "source_sha": "d" * 40,
+                "reason": "retry the same release",
+            },
+        )
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["build_id"] == build["build_id"]
+        assert retry.json()["status"] == "succeeded"
+        assert retry.json()["image_digest"] == "sha256:" + "a" * 64
 
     async def test_controller_lease_fences_other_epochs_and_bootstraps_node(
         self,

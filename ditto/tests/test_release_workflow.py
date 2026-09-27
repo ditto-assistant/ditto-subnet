@@ -777,10 +777,14 @@ def test_screener_release_build_registers_exact_digest_with_platform() -> None:
 
     assert "trusted-image-builds" in request["run"]
     assert "SOURCE_SHA" in request["env"]
+    assert "status=$(jq -er .status" in request["run"]
+    assert build["if"] == "steps.image_build.outputs.status != 'succeeded'"
     assert "docker build" in build["run"]
     assert "reusing immutable release image" in build["run"]
     assert "gcloud artifacts docker images describe" in record["run"]
     assert '"$digest" =~ ^sha256:' in record["run"]
+    assert '"$BUILD_DIGEST" == "$digest"' in record["run"]
+    assert '"$BUILD_STATUS" == "fallback_required"' in record["run"]
     assert "--retry-all-errors" in record["run"]
     assert job["needs"] == ["plan", "release", "deploy_platform"]
 

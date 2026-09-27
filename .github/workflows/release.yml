@@ -1038,8 +1038,11 @@ jobs:
             https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds)"
           echo "build_id=$(jq -er .build_id <<<"$response")" >>"$GITHUB_OUTPUT"
           echo "epoch=$(jq -er .controller_epoch <<<"$response")" >>"$GITHUB_OUTPUT"
+          echo "status=$(jq -er .status <<<"$response")" >>"$GITHUB_OUTPUT"
+          echo "digest=$(jq -r '.image_digest // ""' <<<"$response")" >>"$GITHUB_OUTPUT"
 
       - name: Build the screener image on the trusted runner
+        if: steps.image_build.outputs.status != 'succeeded'
         env:
           SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
         run: |
@@ -1063,12 +1066,20 @@ jobs:
           SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
           BUILD_ID: ${{ steps.image_build.outputs.build_id }}
           BUILD_EPOCH: ${{ steps.image_build.outputs.epoch }}
+          BUILD_STATUS: ${{ steps.image_build.outputs.status }}
+          BUILD_DIGEST: ${{ steps.image_build.outputs.digest }}
         run: |
           set -euo pipefail
           digest="$(gcloud artifacts docker images describe \
             "$SCREENER_REPOSITORY:sha-$SOURCE_SHA" \
             --format='value(image_summary.digest)')"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          if [[ "$BUILD_STATUS" == "succeeded" ]]; then
+            [[ "$BUILD_DIGEST" == "$digest" ]]
+            echo "reusing Platform-registered screener image: $SCREENER_REPOSITORY@$digest"
+            exit 0
+          fi
+          [[ "$BUILD_STATUS" == "fallback_required" ]]
           payload="$(jq -cn \
             --arg epoch "$BUILD_EPOCH" \
             --arg digest "$digest" \
