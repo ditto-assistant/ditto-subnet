@@ -877,6 +877,28 @@ async def test_hetzner_job_claim_does_not_preclaim_signed_worker_attempt(
         "Authorization": f"Bearer {_NODE_TOKEN}",
         "X-Screener-Hotkey": _SCREENER_HOTKEY,
     }
+    limits = await client.post(
+        "/api/v1/admin/screener-nodes/subnet-screener-1/channel-settings",
+        headers=_HEADERS,
+        json={
+            "environment": "prod",
+            "expected_revision": 0,
+            "settings": {
+                "screening_concurrency": 1,
+                "sandbox_slots": 0,
+                "build_concurrency": 0,
+                "runtime_concurrency": 0,
+                "source_review_concurrency": 0,
+            },
+            "reason": "Permit the signed screener worker to claim work",
+            "actor": "operator@example.com",
+            "confirmation": (
+                "APPLY SCREENER NODE subnet-screener-1 SCREENING=1 "
+                "SANDBOX=0 BUILD=0 RUNTIME=0 SOURCE_REVIEW=0"
+            ),
+        },
+    )
+    assert limits.status_code == 200, limits.text
     agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
     idle_job = await client.post(
         "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
