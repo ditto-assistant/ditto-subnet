@@ -39,9 +39,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
     if args.once:
-        return 0
+        parser.error("retired fleet jobs cannot run")
     stop = threading.Event()
     for handled in (signal.SIGTERM, signal.SIGINT):
         signal.signal(handled, lambda _signum, _frame: stop.set())

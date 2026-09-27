@@ -8,7 +8,9 @@ import subprocess
 import sys
 import time
 
-from screener_capacity.fleet_node import build_parser
+import pytest
+
+from screener_capacity.fleet_node import build_parser, main
 
 
 def test_old_installed_unit_argv_remains_accepted() -> None:
@@ -84,3 +86,30 @@ def test_compat_entrypoint_stays_active_until_sigterm() -> None:
     finally:
         if process.poll() is None:
             process.kill()
+
+
+def test_retired_one_shot_job_never_reports_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "fleet_node",
+            "--platform-url",
+            "https://platform.example",
+            "--credential-file",
+            "/not-read/node.json",
+            "--base-image",
+            "/not-read/base.qcow2",
+            "--builder-image",
+            "registry.example/builder@sha256:" + "a" * 64,
+            "--source-review-api-key-file",
+            "/not-read/key",
+            "--jobs-root",
+            "/not-created/jobs",
+            "--once",
+        ],
+    )
+    with pytest.raises(SystemExit, match="2"):
+        main()
