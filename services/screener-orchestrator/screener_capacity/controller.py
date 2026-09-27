@@ -911,6 +911,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lock-file", default="/run/lock/ditto-screener-capacity.lock")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once", action="store_true")
+    # Installed systemd units may predate the Ansible template that removed
+    # these options. Accept their inert argv until those hosts are converged.
+    for retired_flag in (
+        "--targon-api-key-file",
+        "--targon-org-slug",
+        "--targon-prefix",
+        "--targon-platform-url",
+        "--targon-capability-file",
+        "--targon-resource",
+        "--targon-worker-env-file",
+        "--gcp-bootstrap-service-account",
+        "--gcp-bootstrap-delegate-service-account",
+        "--source-review-secret-resource",
+        "--targon-provisioning-timeout-seconds",
+    ):
+        parser.add_argument(retired_flag, help=argparse.SUPPRESS)
     return parser
 
 

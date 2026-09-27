@@ -17,11 +17,13 @@ from screener_capacity.controller import (
     ProviderCounts,
     ProviderRouting,
     Settings,
+    build_parser,
     desired_slots,
     gce_capacity_target,
     gce_overflow_target,
     reconcile,
 )
+from screener_capacity.controller import _settings as controller_settings
 
 
 def _settings(root: Path) -> Settings:
@@ -576,6 +578,43 @@ class CapacityDecisionTests(unittest.TestCase):
                     reconcile(settings)
                 # No snapshot (and so no fresh success timestamp) is sent.
                 self.assertEqual(platform.renewed, [])
+
+
+def test_retired_installed_unit_flags_are_inert() -> None:
+    retired = {
+        "targon-api-key-file": "/old/key",
+        "targon-org-slug": "old",
+        "targon-prefix": "old",
+        "targon-platform-url": "https://old.invalid",
+        "targon-capability-file": "/old/capability",
+        "targon-resource": "old",
+        "targon-worker-env-file": "/old/env",
+        "gcp-bootstrap-service-account": "old@invalid",
+        "gcp-bootstrap-delegate-service-account": "old@invalid",
+        "source-review-secret-resource": "old",
+        "targon-provisioning-timeout-seconds": "60",
+    }
+    argv = [
+        "--platform-url",
+        "https://platform.invalid",
+        "--platform-token-file",
+        "/tmp/token",
+        "--gce-project",
+        "project",
+        "--gce-region",
+        "region",
+        "--gce-mig",
+        "mig",
+    ]
+    for flag, value in retired.items():
+        argv.extend((f"--{flag}", value))
+
+    args = build_parser().parse_args(argv)
+    with patch("screener_capacity.controller._source_sha", return_value="a" * 40):
+        settings = controller_settings(args)
+    assert settings.gce_mig == "mig"
+    for flag in retired:
+        assert not hasattr(settings, flag.replace("-", "_"))
 
 
 if __name__ == "__main__":
