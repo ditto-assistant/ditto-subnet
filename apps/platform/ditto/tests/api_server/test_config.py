@@ -7,7 +7,6 @@ from dataclasses import replace
 import pytest
 
 from ditto.api_models.inference_concurrency_settings import (
-    DEFAULT_CHAT_REQUEST_BUDGET,
     MAX_CHAT_REQUEST_BUDGET,
     MAX_CHAT_TOKEN_BUDGET,
 )
