@@ -1,11 +1,7 @@
 """Append-only authenticated human attestations for V13 benign controls.
 
 Revision ID: c8e4b1a97d20
-<<<<<<< HEAD:apps/platform/alembic/versions/2026_09_25_add_v13_benign_attestations.py
-Revises: a40f7d9c621e
-=======
-Revises: f9c3a2b671d4
->>>>>>> 8777f0cdf (fix(platform): order benign attestations after full-runtime canaries):apps/platform/alembic/versions/2026_09_26_add_v13_benign_attestations.py
+Revises: a2f4d9c51e60
 """
 
 from collections.abc import Sequence
@@ -16,11 +12,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "c8e4b1a97d20"
-<<<<<<< HEAD:apps/platform/alembic/versions/2026_09_25_add_v13_benign_attestations.py
-down_revision: str | Sequence[str] | None = "a40f7d9c621e"
-=======
-down_revision: str | Sequence[str] | None = "f9c3a2b671d4"
->>>>>>> 8777f0cdf (fix(platform): order benign attestations after full-runtime canaries):apps/platform/alembic/versions/2026_09_26_add_v13_benign_attestations.py
+down_revision: str | Sequence[str] | None = "a2f4d9c51e60"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
