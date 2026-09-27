@@ -1,0 +1,39 @@
+---
+# Before any role-internal name is created, refuse a preset of any of them: only
+# the three documented inputs may carry the prefix. A registered result, the
+# frozen gate or a capture preset through -e (which outranks register and
+# set_fact) would otherwise stand in for a real probe. The message is constant.
+- name: Refuse a preset gate, capture or registered result
+  ansible.builtin.assert:
+    that:
+      - >-
+        lookup('ansible.builtin.varnames', '^coding_hosted_unit_uninstall_', wantlist=True)
+        | sort == ['coding_hosted_unit_uninstall_confirmation',
+        'coding_hosted_unit_uninstall_enabled',
+        'coding_hosted_unit_uninstall_source_revision']
+    fail_msg: >-
+      Only the enabled, confirmation and source_revision inputs are accepted; a registered
+      result, a capture, the gate or an undocumented coding_hosted_unit_uninstall_ variable is
+      set. Nothing was removed.
+    quiet: true
+
+# Freeze the enabled gate exactly once. `is sameas true` opens the gate only for
+# a real boolean true and prints nothing (the bool filter prints a coerced value
+# in a deprecation warning on ansible-core 2.21, even under no_log);
+# default(false, true) turns an undefined-class template error into false; and
+# no_log censors whatever the flag rendered. The removal runs through a dynamic
+# include_tasks that --start-at-task cannot jump into.
+- name: Freeze the enabled gate once
+  ansible.builtin.set_fact:
+    coding_hosted_unit_uninstall_gate: >-
+      {{ (coding_hosted_unit_uninstall_enabled | default(false, true)) is sameas true }}
+  no_log: true
+
+- name: Explain the dormant native unit uninstall
+  ansible.builtin.debug:
+    msg: Native Coding worker and custody unit uninstall is disabled; no unit file is removed.
+  when: not (coding_hosted_unit_uninstall_gate is sameas true)
+
+- name: Uninstall the worker unit and custody template behind the enabled gate
+  ansible.builtin.include_tasks: remove.yml
+  when: coding_hosted_unit_uninstall_gate is sameas true

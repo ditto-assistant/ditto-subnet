@@ -1,0 +1,8 @@
+---
+- name: Prove the native worker and custody unit uninstall stays disabled by default
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  roles:
+    - coding_hosted_unit_uninstall
