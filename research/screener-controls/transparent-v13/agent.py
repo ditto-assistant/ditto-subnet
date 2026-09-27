@@ -1,4 +1,4 @@
-"""Minimal V13 source-review control: full user records, model decisions, faithful tools.
+"""V13 source-review control with full records and faithful model/tool behavior.
 
 This is a calibration artifact, not a miner baseline. It intentionally has no
 opaque model, answer template, retrieval selector, or benchmark-specific policy.
@@ -14,7 +14,6 @@ import urllib.error
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
 
 _records: dict[str, dict[str, dict]] = {}
 _subjects: dict[str, dict[str, dict]] = {}
@@ -92,10 +91,18 @@ def _local_memory_tool(user_id: str, name: str, args: dict) -> dict:
         subjects = _subjects.setdefault(user_id, {})
         links = _links.setdefault(user_id, {})
         if name == "fetch_memories":
-            return {"memories": [pairs[key] for key in args.get("pairIds", []) if key in pairs]}
+            return {
+                "memories": [
+                    pairs[key] for key in args.get("pairIds", []) if key in pairs
+                ]
+            }
         if name == "save_memory":
             identifier = str(uuid.uuid4())
-            pairs[identifier] = {"pair_id": identifier, "prompt": args["content"], "response": ""}
+            pairs[identifier] = {
+                "pair_id": identifier,
+                "prompt": args["content"],
+                "response": "",
+            }
             return {"pair_id": identifier, "saved": True}
         if name == "update_memory":
             identifier = args["pair_id"]
@@ -117,18 +124,24 @@ def _local_memory_tool(user_id: str, name: str, args: dict) -> dict:
                 "subjects": [
                     item
                     for item in subjects.values()
-                    if not queries or any(query in json.dumps(item).casefold() for query in queries)
+                    if not queries
+                    or any(query in json.dumps(item).casefold() for query in queries)
                 ]
             }
         scope = pairs.values()
         if name == "search_memories_in_subjects":
-            ids = {pair_id for subject_id, pair_id in links if subject_id == args["subject_id"]}
+            ids = {
+                pair_id
+                for subject_id, pair_id in links
+                if subject_id == args["subject_id"]
+            }
             scope = [pairs[key] for key in sorted(ids) if key in pairs]
         return {
             "memories": [
                 item
                 for item in scope
-                if not queries or any(query in json.dumps(item).casefold() for query in queries)
+                if not queries
+                or any(query in json.dumps(item).casefold() for query in queries)
             ]
         }
 
@@ -216,7 +229,9 @@ def run(request: dict) -> dict:
             else:
                 endpoint = request.get("tool_endpoint")
                 if not isinstance(endpoint, str) or not endpoint:
-                    raise ValueError("model selected an external tool without a tool endpoint")
+                    raise ValueError(
+                        "model selected an external tool without a tool endpoint"
+                    )
                 outcome = _post_json(
                     endpoint,
                     {
@@ -267,7 +282,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             body = json.dumps(result, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
-        except (IndexError, KeyError, TypeError, ValueError, urllib.error.URLError) as error:
+        except (
+            IndexError,
+            KeyError,
+            TypeError,
+            ValueError,
+            urllib.error.URLError,
+        ) as error:
             body = json.dumps({"error": str(error)}).encode("utf-8")
             self.send_response(503)
         self.send_header("Content-Type", "application/json")

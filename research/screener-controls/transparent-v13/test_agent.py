@@ -33,7 +33,12 @@ class ControlContractTest(unittest.TestCase):
             self.assertNotIn("tools", payload)
             return {
                 "choices": [
-                    {"message": {"role": "assistant", "content": "Paris, per your record."}}
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Paris, per your record.",
+                        }
+                    }
                 ],
                 "usage": {"prompt_tokens": 12, "completion_tokens": 5},
             }
@@ -116,7 +121,9 @@ class ControlContractTest(unittest.TestCase):
 
     def test_local_memory_tool_is_scoped_to_request_user(self) -> None:
         self.assertEqual(
-            agent._local_memory_tool("alice", "fetch_memories", {"pairIds": ["a", "b"]}),
+            agent._local_memory_tool(
+                "alice", "fetch_memories", {"pairIds": ["a", "b"]}
+            ),
             {"memories": [{"pair_id": "a", "prompt": "Where?", "response": "Paris"}]},
         )
         self.assertEqual(
