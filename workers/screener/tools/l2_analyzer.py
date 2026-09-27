@@ -23,6 +23,7 @@ MAX_FILES = 512
 MAX_WALK_ENTRIES = 1_024
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_DIGEST_BYTES = 20 * 1024 * 1024
+MAX_INTEGRITY_SCAN_BYTES = 64 * 1024 * 1024
 MAX_OUTPUT = 256_000
 MAX_INTEGRITY_HITS_PER_SURFACE = 32
 INTEGRITY_SURFACES = {
@@ -380,6 +381,7 @@ def integrity_surfaces(_: dict[str, object]) -> object:
 
     These locations are routing hints, never policy evidence. The model must read
     and causally trace any relevant locations before reaching a disposition.
+    Nontext digests prove byte identity, not a component's runtime role.
     """
     grouped: dict[str, list[dict[str, object]]] = {
         name: [] for name in INTEGRITY_SURFACES
@@ -387,17 +389,35 @@ def integrity_surfaces(_: dict[str, object]) -> object:
     counts: dict[str, int] = dict.fromkeys(INTEGRITY_SURFACES, 0)
     files, workspace_truncated = _files_with_truncation()
     omitted: list[dict[str, object]] = []
+    nontext: list[dict[str, object]] = []
+    read_bytes = 0
     for path in files:
         relative = _relative(path)
-        if path.stat().st_size > MAX_FILE_BYTES:
-            omitted.append({"path": relative, "reason": "read_cap"})
+        size = path.stat().st_size
+        if size > MAX_DIGEST_BYTES:
+            omitted.append({"path": relative, "reason": "digest_cap"})
+            continue
+        if read_bytes + size > MAX_INTEGRITY_SCAN_BYTES:
+            omitted.append({"path": relative, "reason": "scan_budget"})
             continue
         try:
-            raw = _bytes(path)
+            raw = path.read_bytes()
+            read_bytes += len(raw)
             if not _is_text(raw):
+                nontext.append(
+                    {
+                        "path": relative,
+                        "bytes": size,
+                        "sha256": hashlib.sha256(raw).hexdigest(),
+                    }
+                )
+                continue
+            if size > MAX_FILE_BYTES:
+                omitted.append({"path": relative, "reason": "read_cap"})
                 continue
             lines = raw.decode("utf-8").splitlines()
-        except (UnicodeDecodeError, ValueError):
+        except (OSError, UnicodeDecodeError, ValueError):
+            omitted.append({"path": relative, "reason": "read_error"})
             continue
         for number, line in enumerate(lines, 1):
             for name, pattern in INTEGRITY_SURFACES.items():
@@ -422,7 +442,9 @@ def integrity_surfaces(_: dict[str, object]) -> object:
         },
         "omitted": omitted[:32],
         "omitted_count": len(omitted),
-        "truncated": workspace_truncated or bool(omitted),
+        "nontext": nontext[:32],
+        "nontext_count": len(nontext),
+        "truncated": workspace_truncated or bool(omitted) or len(nontext) > 32,
     }
 
 
