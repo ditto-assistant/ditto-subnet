@@ -82,9 +82,14 @@ def _report(
             "ok": l1_observation.ok,
             "risk_level": l1_observation.risk_level,
             "categories": list(l1_observation.categories),
+            "error_code": l1_observation.error_code,
+            "failure_disposition": l1_observation.failure_disposition,
             "clearance_certified": l1_observation.clearance_certified,
             "finding_digest": l1_observation.finding_digest,
             "finding": l1_observation.finding,
+            "review_audit": l1_observation.review_audit,
+            "notes": list(l1_observation.notes),
+            "inconclusive_model_audit": l1_observation.inconclusive_model_audit,
         }
     report["decision_outcome"] = str(decision.outcome)
     codes = [item.code for item in decision.evidence]

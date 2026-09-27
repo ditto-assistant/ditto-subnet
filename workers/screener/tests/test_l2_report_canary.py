@@ -240,6 +240,41 @@ def test_inconclusive_model_audit_is_report_only() -> None:
     assert report["l2"]["inconclusive_model_audit"] == audit
 
 
+def test_l1_failure_audit_is_visible_without_an_l2_result() -> None:
+    claim = SimpleNamespace(
+        canary_id=uuid4(),
+        agent_id=uuid4(),
+        source_attempt_id=uuid4(),
+        artifact_sha256="b" * 64,
+        policy_version=13,
+        run_mode="source_only",
+        scored_runtime_evidence=SimpleNamespace(model_dump=lambda **_: {}),
+    )
+    l1 = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-inconsistent-verdict",
+        failure_disposition="retryable_infra",
+        review_audit={"reason": "schema_validation"},
+        notes=({"kind": "observation", "summary": "inspected served entrypoint"},),
+    )
+    report = l2_report_canary._report(
+        claim=claim,
+        decision=SimpleNamespace(outcome="retryable_infra", evidence=()),
+        l2_result=None,
+        settings=SimpleNamespace(revision=137, checksum="c" * 64),
+        l1_observation=l1,
+    )
+    assert report["l1"]["error_code"] == "source-review-inconsistent-verdict"
+    assert report["l1"]["failure_disposition"] == "retryable_infra"
+    assert report["l1"]["review_audit"] == {"reason": "schema_validation"}
+    assert report["l1"]["notes"] == list(l1.notes)
+    assert report["l2"] is None
+    assert report["decision_outcome"] == "retryable_infra"
+
+
 @pytest.mark.parametrize(
     ("code", "expected"),
     [
