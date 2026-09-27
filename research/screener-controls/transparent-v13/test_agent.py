@@ -86,10 +86,14 @@ class ControlContractTest(unittest.TestCase):
                                 ],
                             }
                         }
-                    ]
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 3},
                 }
             self.assertEqual(payload["messages"][-1]["content"], '{"result": "dark"}')
-            return {"choices": [{"message": {"role": "assistant", "content": "Done."}}]}
+            return {
+                "choices": [{"message": {"role": "assistant", "content": "Done."}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 4},
+            }
 
         with patch.object(agent, "_post_json", side_effect=fake_post):
             result = agent.run(
@@ -118,6 +122,30 @@ class ControlContractTest(unittest.TestCase):
             [{"name": "set_theme", "args": {"theme": "dark"}, "hop": 0}],
         )
         self.assertEqual(calls[1][1]["args"], {"theme": "dark"})
+        self.assertEqual(result["prompt_tokens"], 22)
+        self.assertEqual(result["output_tokens"], 7)
+
+    def test_missing_gateway_usage_fails_closed(self) -> None:
+        with (
+            patch.object(
+                agent,
+                "_post_json",
+                return_value={
+                    "choices": [{"message": {"role": "assistant", "content": "Paris"}}]
+                },
+            ),
+            self.assertRaisesRegex(ValueError, "omitted valid token usage"),
+        ):
+            agent.run(
+                {
+                    "case_id": "case-3",
+                    "user_id": "alice",
+                    "system_prompt": "Use the records.",
+                    "user_input": "Where?",
+                    "tools": [],
+                    "inference_base_url": "http://broker/run/case-3",
+                }
+            )
 
     def test_local_memory_tool_is_scoped_to_request_user(self) -> None:
         self.assertEqual(

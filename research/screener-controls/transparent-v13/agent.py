@@ -200,9 +200,14 @@ def run(request: dict) -> dict:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
         completion = _post_json(f"{base_url}/chat/completions", payload, broker=True)
-        usage = completion.get("usage") or {}
-        input_tokens += int(usage.get("prompt_tokens") or 0)
-        output_tokens += int(usage.get("completion_tokens") or 0)
+        usage = completion.get("usage")
+        if not isinstance(usage, dict) or any(
+            type(usage.get(key)) is not int or usage[key] < 0
+            for key in ("prompt_tokens", "completion_tokens")
+        ):
+            raise ValueError("model response omitted valid token usage")
+        input_tokens += usage["prompt_tokens"]
+        output_tokens += usage["completion_tokens"]
         choice = completion["choices"][0]
         message = choice["message"]
         calls = message.get("tool_calls") or []
