@@ -17,7 +17,6 @@ from screener_capacity.controller import (
     ProviderCounts,
     ProviderRouting,
     Settings,
-    build_parser,
     desired_slots,
     gce_capacity_target,
     gce_overflow_target,
