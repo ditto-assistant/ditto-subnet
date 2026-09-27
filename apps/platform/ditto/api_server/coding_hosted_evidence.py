@@ -34,7 +34,10 @@ from ditto.api_server.coding_hippius_evidence import (
     HippiusSealedEvidenceNotFound,
     HippiusSealedEvidenceTransport,
 )
-from ditto.api_server.coding_hippius_probe import load_hippius_probe_receipt
+from ditto.api_server.coding_hippius_probe import (
+    PROBE_RECEIPT_MAX_AGE_SECONDS,
+    load_hippius_probe_receipt,
+)
 from ditto.api_server.coding_hosted_budget import ProfiledBudgetEstimator
 from ditto.api_server.coding_hosted_evidence_spool import (
     HostedEvidenceError,
@@ -374,7 +377,7 @@ class HostedInferenceEvidencePublisher:
         now = datetime.now(UTC)
         checked = datetime.fromisoformat(self._probe.checked_at.replace("Z", "+00:00"))
         if (
-            not 0 <= (now - checked).total_seconds() < 86400
+            not 0 <= (now - checked).total_seconds() < PROBE_RECEIPT_MAX_AGE_SECONDS
             or now.timestamp() >= identity.publication_deadline_unix
             or identity.storage_domain_sha256 != self._domain
         ):

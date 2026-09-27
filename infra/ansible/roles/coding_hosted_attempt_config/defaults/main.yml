@@ -1,0 +1,13 @@
+---
+coding_hosted_attempt_config_enabled: false
+coding_hosted_attempt_config_confirmation: ""
+# Installed coding_hosted_runtime revision whose interpreter runs the materializer.
+coding_hosted_attempt_config_runtime_revision: ""
+# Pinned from the admin create response and the reviewed evidence key; never derived here.
+coding_hosted_attempt_config_evaluation_id: ""
+coding_hosted_attempt_config_assignment_sha256: ""
+coding_hosted_attempt_config_evidence_wrapping_key_sha256: ""
+# Nonsecret per-attempt inputs only, each {src: <absolute controller path>, sha256: <reviewed file SHA-256>}:
+# probe_receipt, execution_profile, grading_profile, inference_policy, budget_profile.
+# Credentials are never inputs: the config references existing owner-only host files.
+coding_hosted_attempt_config_inputs: {}

@@ -29,7 +29,10 @@ from ditto.api_server.coding_hippius_evidence import (
     HippiusSealedEvidenceNotFound,
     HippiusSealedEvidenceTransport,
 )
-from ditto.api_server.coding_hippius_probe import load_hippius_probe_receipt
+from ditto.api_server.coding_hippius_probe import (
+    PROBE_RECEIPT_MAX_AGE_SECONDS,
+    load_hippius_probe_receipt,
+)
 from ditto.api_server.coding_hosted_evidence import _envelope
 from ditto.api_server.coding_hosted_evidence_spool import (
     HostedEvidenceError,
@@ -209,7 +212,9 @@ class HostedAuthoringEvidencePublisher:
     def _fresh(self, identity: AuthoringIdentity) -> None:
         checked = datetime.fromisoformat(self._probe.checked_at.replace("Z", "+00:00"))
         if (
-            not 0 <= (datetime.now(UTC) - checked).total_seconds() < 86400
+            not 0
+            <= (datetime.now(UTC) - checked).total_seconds()
+            < PROBE_RECEIPT_MAX_AGE_SECONDS
             or time.time() >= identity.publication_deadline_unix
             or identity.manifest.storage_domain_sha256 != self._domain
         ):
