@@ -148,6 +148,18 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
                 usage=L2Usage(estimated_cost_usd=0.05),
                 cache_hit=False,
                 failure_subcode="no_tool_call_after_corrections",
+                scorer_attention={
+                    "counts": {"score_controls": 1},
+                    "locations": [
+                        {
+                            "kind": "score_controls",
+                            "path": "src/bin/miner.rs",
+                            "line": 388,
+                            "function": "evaluate",
+                        }
+                    ],
+                    "truncated": False,
+                },
             )
 
         def pop_preview_l1_review(self, _attempt_id):
@@ -194,6 +206,9 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
     assert report["source_attempt_id"] == str(attempt_id)
     assert report["l2"]["risk_level"] == "low"
     assert report["l2"]["failure_subcode"] == "no_tool_call_after_corrections"
+    assert (
+        report["l2"]["scorer_attention"]["locations"][0]["path"] == "src/bin/miner.rs"
+    )
     assert report["l1"]["clearance_certified"] is True
     assert report["l1"]["finding"]["summary"] == "clean L1"
 

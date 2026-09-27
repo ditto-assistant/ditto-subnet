@@ -62,6 +62,7 @@ from ditto_screener.l2_review import (
     _response_output_and_usage,
     _review_adaptation_hold,
     _safety_clearance_gaps,
+    _scorer_attention_projection,
     _served_generator_hold,
     _validate_lead_dispositions,
     _write_all,
@@ -314,6 +315,61 @@ def test_scorer_attention_is_independent_of_l1_category() -> None:
     assert not _dossier_has_scorer_attention(
         {"deterministic": {"scorer_field_flow": {"score_controls": []}}}
     )
+
+
+def test_scorer_attention_projection_shows_bounded_locations_without_source() -> None:
+    dossier = {
+        "deterministic": {
+            "scorer_field_flow": {
+                "score_controls": [
+                    {
+                        "path": "src/bin/miner.rs",
+                        "function": "evaluate",
+                        "condition_line": 388,
+                        "condition_terms": ["private score expression"],
+                    }
+                ]
+                * 20,
+                "field_clears": [],
+                "field_populations": [],
+                "same_function_candidates": [],
+            }
+        }
+    }
+    projection = _scorer_attention_projection(dossier)
+    assert projection is not None
+    assert projection["counts"]["score_controls"] == 20
+    assert len(projection["locations"]) == 16
+    assert projection["locations"][0] == {
+        "kind": "score_controls",
+        "path": "src/bin/miner.rs",
+        "line": 388,
+        "function": "evaluate",
+    }
+    assert projection["truncated"] is True
+    assert "private score expression" not in str(projection)
+
+    analyst = L2RunResult(
+        observation=SourceReviewObservation(
+            ok=True, risk_level="low", finding_digest=None, categories=("none",)
+        ),
+        analyzed_files=(),
+        causal_path=(),
+        tools=(),
+        usage=L2Usage(),
+        cache_hit=False,
+    )
+    held = _finalize_without_l3(
+        analyst,
+        dossier_tools=(),
+        analyst_cache_hit=False,
+        policy_version=13,
+        l1_observation=_l1("low"),
+        dossier=dossier,
+        expected_model="openai/gpt-6-sol",
+    )
+    assert held.scorer_attention == projection
+    assert "scorer-attention" in (held.failure_subcode or "")
 
 
 def test_l1_mechanism_narrowed_away_by_kimi_still_requires_sol() -> None:

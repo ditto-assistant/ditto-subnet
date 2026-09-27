@@ -2218,6 +2218,7 @@ class L2RunResult:
     l1_lead_dispositions: tuple[Mapping[str, object], ...] = ()
     analyst_finding: Mapping[str, object] | None = None
     analyst_summary: str | None = None
+    scorer_attention: Mapping[str, object] | None = None
 
 
 def _finalize_without_l3(
@@ -2232,6 +2233,7 @@ def _finalize_without_l3(
     expected_model: str = L2_MODEL,
 ) -> L2RunResult:
     """Use the analyst alone only when v13 has independent clean coverage."""
+    scorer_attention = _scorer_attention_projection(dossier)
     if policy_version >= 13 and static_attention is not None:
         return replace(
             static_attention,
@@ -2242,6 +2244,7 @@ def _finalize_without_l3(
             ),
             analyst_summary=analyst.analyst_summary,
             l1_lead_dispositions=analyst.l1_lead_dispositions,
+            scorer_attention=scorer_attention,
         )
     observation = analyst.observation
     analyst_finding = (
@@ -2274,6 +2277,7 @@ def _finalize_without_l3(
         critic_disposition="disabled",
         clearance_path=clearance_path,
         analyst_cache_hit=analyst_cache_hit,
+        scorer_attention=scorer_attention,
         failure_subcode=(
             "+".join(clearance_gaps)
             if clearance_path == "l2_only_clearance_hold"
@@ -5843,6 +5847,63 @@ def _dossier_has_scorer_attention(dossier: Mapping[str, object]) -> bool:
             "same_function_candidates",
         )
     )
+
+
+def _scorer_attention_projection(
+    dossier: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
+    """Expose bounded locations behind a scorer hold, never source or conditions."""
+    if dossier is None or not _dossier_has_scorer_attention(dossier):
+        return None
+    deterministic = dossier.get("deterministic")
+    scorer_flow = (
+        deterministic.get("scorer_field_flow")
+        if isinstance(deterministic, Mapping)
+        else None
+    )
+    if not isinstance(scorer_flow, Mapping):
+        return None
+    kinds = (
+        "same_function_candidates",
+        "score_controls",
+        "field_clears",
+        "field_populations",
+    )
+    counts: dict[str, int] = {}
+    locations: list[dict[str, object]] = []
+    for kind in kinds:
+        rows = scorer_flow.get(kind)
+        if not isinstance(rows, list):
+            continue
+        counts[kind] = len(rows)
+        for row in rows:
+            if len(locations) >= 16 or not isinstance(row, Mapping):
+                continue
+            path = row.get("path")
+            if not isinstance(path, str) or not path:
+                continue
+            location: dict[str, object] = {"kind": kind, "path": path[:256]}
+            line = row.get("condition_line", row.get("line"))
+            if kind == "same_function_candidates" and not isinstance(line, int):
+                controls = row.get("score_controls")
+                if (
+                    isinstance(controls, list)
+                    and controls
+                    and isinstance(controls[0], Mapping)
+                ):
+                    line = controls[0].get("condition_line")
+            if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+                location["line"] = line
+            for field in ("function", "field"):
+                value = row.get(field)
+                if isinstance(value, str) and value:
+                    location[field] = value[:120]
+            locations.append(location)
+    return {
+        "counts": counts,
+        "locations": locations,
+        "truncated": sum(counts.values()) > len(locations),
+    }
 
 
 def _l1_concerns_resolved(notes: tuple[Mapping[str, object], ...]) -> bool:
