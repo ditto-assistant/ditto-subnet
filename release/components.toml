@@ -5,6 +5,7 @@
 ignored_paths = [
   "localstack/**",
   "preview/**",
+  "research/screener-controls/**", # Operator-owned calibration artifacts; no deployed component
   "scripts/preview",
   "scripts/hippius-probe/**", # Operator-only probe dependencies; no service release
   "ditto/treasury/**", # Manual operator package includes signer; not imported by service runtime
