@@ -113,7 +113,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v43-policy-v13"
+        return "l2-terra-source-review-v44-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -1296,6 +1296,13 @@ record ID and blocks the call before endpoint dispatch removes an applicable
 capability (I7), even if the complete tool catalog reached the model. Do not
 accept a generic privacy or ownership explanation as a clearance without
 showing that the guarded ID belongs to the selected tool's own namespace.
+For this allegation, identify the applicable offered catalog and cite the
+external tool's actual name and argument schema, a reachable request/state,
+and a valid model-selected call that the guard would block before dispatch.
+An external tool that could hypothetically use the same field name in a
+different or future catalog is only a lead, not an I7 breach. If the catalog
+or valid blocked alternative is unavailable, report that evidence gap instead
+of asserting a mandatory-contract failure from the host-wide check alone.
 Keep I6 separate: an empty execution self-report does not prove a fabricated
 call, while a valid model-selected external call blocked before its endpoint
 is a capability-fidelity problem even when no false success is reported.
