@@ -49,9 +49,7 @@ def _identity_report(
     return {
         "kind": "l2_report_canary_v1",
         "authority": "none",
-        "review_mode": (
-            "enforce_preview" if claim.run_mode == "full_runtime" else "shadow"
-        ),
+        "review_mode": "enforce_preview",
         "canary_id": str(claim.canary_id),
         "agent_id": str(claim.agent_id),
         "source_attempt_id": str(claim.source_attempt_id),
@@ -231,7 +229,9 @@ async def consume(
     )
     canary_config = replace(
         effective,
-        l2_review_mode=("enforce" if claim.run_mode == "full_runtime" else "shadow"),
+        # Both isolated modes preview the same source decision as enforcement.
+        # source_only still skips runtime challenges and never posts a verdict.
+        l2_review_mode="enforce",
         l2_always_escalate=True,
         require_signed_runtime_lease=True,
         # This report-only packet was fresh when Platform issued the lease.
