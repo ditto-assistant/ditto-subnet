@@ -402,7 +402,10 @@ def integrity_surfaces(_: dict[str, object]) -> object:
         relative = _relative(path)
         size = path.stat().st_size
         if size > MAX_FILE_BYTES:
-            if size <= MAX_DIGEST_BYTES and relative == "fixtures/models/cross-encoder.onnx":
+            if (
+                size <= MAX_DIGEST_BYTES
+                and relative == "fixtures/models/cross-encoder.onnx"
+            ):
                 try:
                     digest = _file_sha256(path)
                 except OSError:
@@ -418,7 +421,10 @@ def integrity_surfaces(_: dict[str, object]) -> object:
                     )
                     continue
             omitted.append(
-                {"path": relative, "reason": "digest_cap" if size > MAX_DIGEST_BYTES else "read_cap"}
+                {
+                    "path": relative,
+                    "reason": "digest_cap" if size > MAX_DIGEST_BYTES else "read_cap",
+                }
             )
             continue
         try:

@@ -6331,8 +6331,13 @@ async def test_integrity_scan_keeps_unknown_large_binary_incomplete(
     assert result["surfaces"]["model_authority"]["hits"][0]["path"] == "agent.py"
 
 
-async def test_integrity_scan_accepts_exact_starter_model_digest(tmp_path: Path) -> None:
-    stock = ROOT.parent.parent / "miners/dittobench-starter-kit/fixtures/models/cross-encoder.onnx"
+async def test_integrity_scan_accepts_exact_starter_model_digest(
+    tmp_path: Path,
+) -> None:
+    stock = (
+        ROOT.parent.parent
+        / "miners/dittobench-starter-kit/fixtures/models/cross-encoder.onnx"
+    )
     payload = stock.read_bytes()
     target = tmp_path / "fixtures/models/cross-encoder.onnx"
     target.parent.mkdir(parents=True)
@@ -6353,8 +6358,12 @@ async def test_integrity_scan_accepts_exact_starter_model_digest(tmp_path: Path)
     ]
 
 
-async def test_integrity_scan_keeps_nul_bearing_large_source_incomplete(tmp_path: Path) -> None:
-    (tmp_path / "agent.py").write_bytes(b"model_answer\n\x00" + b"x" * (2 * 1024 * 1024))
+async def test_integrity_scan_keeps_nul_bearing_large_source_incomplete(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "agent.py").write_bytes(
+        b"model_answer\n\x00" + b"x" * (2 * 1024 * 1024)
+    )
     result = json.loads(
         await InProcessAnalyzerHarness().run(tmp_path, "integrity_surfaces", {})
     )
