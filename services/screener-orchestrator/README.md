@@ -1,7 +1,7 @@
 # Screener fleet and capacity
 
-The enrolled Hetzner workers run submission builds, runtime checks, and source
-reviews. They claim fenced jobs from Platform and return attempt-bound results.
+The enrolled Hetzner workers claim screening attempts, run builds, runtime
+checks, and source reviews, then send signed terminal verdicts to Platform.
 The separate capacity controller owns only the GCE managed instance group's
 bounded backlog and outage fallback. Platform remains the queue and audit
 store; the controller never reads miner artifacts or model credentials.
@@ -15,7 +15,7 @@ revision. New routing writes cannot select that provider.
 
 Release images are built on the trusted GitHub runner from the exact release
 commit, pushed under a SHA tag, and registered with Platform by digest. The
-Hetzner source-review claims use that registered immutable image. Submission
+Platform records that immutable image for compatibility and audit. Submission
 builds remain inside the enrolled worker's isolated build environment.
 
 For focused tests, run

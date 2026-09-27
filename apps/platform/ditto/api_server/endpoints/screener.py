@@ -157,9 +157,6 @@ from ditto.api_server.screener_policy_activation import (
     EffectiveScreenerPolicy,
     resolve_screener_policy_activation,
 )
-from ditto.api_server.screening_pipeline import (
-    admit_screening_work,
-)
 from ditto.api_server.storage import (
     ObjectDownloadFailedError,
     ObjectNotFoundError,
@@ -1408,7 +1405,6 @@ async def claim_node_submission_image_build(
     request: Request,
     _screener: ScreenerDep,
     session: SessionDep,
-    storage: StorageDep,
 ) -> SubmissionImageBuildClaimResponse:
     """Atomically enforce node and shared-VM limits before minting a job token."""
     now = datetime.now(UTC)
@@ -1423,15 +1419,6 @@ async def claim_node_submission_image_build(
             provider_settings.build_provider_priority[0] != node.provider
         ):
             return SubmissionImageBuildClaimResponse(build=None)
-        attester = request.app.state.config.screener_auth.hotkey
-        if node.provider == "hetzner" and attester is not None:
-            await admit_screening_work(
-                session,
-                screener_hotkey=attester,
-                environment=payload.environment,
-                now=now,
-                archive_exists=storage.object_exists,
-            )
         _, limits = await resolve_screener_node_channel_settings(
             session, node_id=node.node_id
         )

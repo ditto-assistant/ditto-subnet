@@ -62,13 +62,15 @@ retry/deadline, transition, opaque-component verification, and exact-artifact
 emission rules in `workers/screener/docs/policy-v13.md` are satisfied for the
 next version.
 
-## Provider-routed screening jobs
+## Provider-routed screening
 
-Platform leases attempt-bound build, runtime, and source-review jobs to the
-enrolled Hetzner fleet. The GCE managed instance group is a bounded outage
-and backlog fallback. Provider routing and per-node concurrency are revisioned
-and audited through Backroom. New routing writes cannot select the retired
-provider; historical provider values remain readable in existing audit rows.
+Enrolled Hetzner workers claim attempts and return signed terminal verdicts.
+The GCE managed instance group is a bounded outage and backlog fallback.
+Provider routing and per-node concurrency are revisioned and audited through
+Backroom. New routing writes cannot select the retired provider; historical
+provider values remain readable in existing audit rows. The separate node-job
+APIs can settle previously queued build, runtime, and source-review rows, but
+they do not open new screening attempts.
 
 The signed screener worker remains the terminal verdict writer. Platform
 verifies source and image identities and records each job result without
