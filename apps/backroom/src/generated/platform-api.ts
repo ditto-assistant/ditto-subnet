@@ -29893,7 +29893,6 @@ export interface components {
             /**
              * Build Provider Priority
              * @default [
-             *       "hetzner",
              *       "gcp"
              *     ]
              */
@@ -29923,7 +29922,6 @@ export interface components {
             /**
              * Runtime Provider Priority
              * @default [
-             *       "hetzner",
              *       "gcp"
              *     ]
              */
@@ -29931,7 +29929,6 @@ export interface components {
             /**
              * Source Review Provider Priority
              * @default [
-             *       "hetzner",
              *       "gcp"
              *     ]
              */
