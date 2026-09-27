@@ -5849,16 +5849,111 @@ def test_full_concern_ledger_keeps_new_source_location() -> None:
         "line": 355,
     }
 
-    source_review_module._append_note(notes, tool_gate)
+    assert source_review_module._append_note(notes, tool_gate)
 
     assert len(notes) == cap
     assert notes[-1] is tool_gate
     assert notes[0]["line"] == 85
 
     distinct = [{**template, "line": line} for line in range(1, cap + 1)]
-    source_review_module._append_note(distinct, tool_gate)
+    assert not source_review_module._append_note(distinct, tool_gate)
     assert len(distinct) == cap
     assert tool_gate not in distinct
+
+
+def test_repeated_concern_feedback_reports_storage_and_new_evidence_guidance() -> None:
+    concern = {
+        "kind": "concern",
+        "category": "benchmark_emulation",
+        "path": "app/service.py",
+        "line": 65,
+    }
+    notes = [concern.copy() for _ in range(source_review_module._MAX_REVIEW_NOTES)]
+
+    feedback = source_review_module._record_note_feedback(notes, concern.copy())
+
+    assert feedback["recorded"] is False
+    assert feedback["notes"] == source_review_module._MAX_REVIEW_NOTES
+    assert "different served-path location" in str(feedback["guidance"])
+    assert (
+        source_review_module._record_note_feedback(
+            notes, {**concern, "category": "mandatory_contract_failure", "line": 355}
+        )["recorded"]
+        is True
+    )
+    assert notes[-1]["line"] == 355
+
+
+async def test_dropped_repeated_note_keeps_the_inspection_reminder(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    final = _with_policy_v10_invariants(_BENIGN_REVIEW)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        if len(seen) == 1:
+            tool_calls = [
+                _note_call(
+                    f"note-{index}",
+                    "concern",
+                    "Repeated source concern.",
+                    category="benchmark_emulation",
+                    area="answer_construction",
+                    path="src/main.rs",
+                    line=1,
+                )
+                for index in range(source_review_module._MAX_REVIEW_NOTES)
+            ]
+            tool_calls.extend(
+                _tool(
+                    f"read-{index}",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 1},
+                )
+                for index in range(source_review_module._NOTELESS_NUDGE_EVERY)
+            )
+            tool_calls.append(
+                _note_call(
+                    "dropped-duplicate",
+                    "concern",
+                    "Repeated source concern.",
+                    category="benchmark_emulation",
+                    area="answer_construction",
+                    path="src/main.rs",
+                    line=1,
+                )
+            )
+        else:
+            tool_calls = [_tool("submit", "submit_review", final)]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+        policy_version=10,
+    )
+
+    assert len(seen) >= 2
+    messages = seen[1]["messages"]
+    assert any(source_review_module._NOTE_NUDGE in str(row) for row in messages)
+    assert any('"recorded": false' in str(row) for row in messages)
 
 
 def test_single_site_multi_location_concerns_cannot_hold() -> None:

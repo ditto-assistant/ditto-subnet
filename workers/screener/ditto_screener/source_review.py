@@ -154,30 +154,58 @@ def _note_from_arguments(arguments: Mapping[str, object]) -> dict[str, object] |
     return note
 
 
-def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> None:
+def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> bool:
     """Keep a distinct concern location when a full ledger repeats others."""
     if len(notes) < _MAX_REVIEW_NOTES:
         notes.append(note)
-        return
+        return True
     if note.get("kind") != "concern":
-        return
+        return False
     for index, existing in enumerate(notes):
         if existing.get("kind") != "concern":
             del notes[index]
             notes.append(note)
-            return
+            return True
     fields = ("category", "path", "line")
     sites = [tuple(existing.get(field) for field in fields) for existing in notes]
     new_site = tuple(note.get(field) for field in fields)
     if new_site in sites:
-        return
+        return False
     seen: set[tuple[object, ...]] = set()
     for index, site in enumerate(sites):
         if site in seen:
             del notes[index]
             notes.append(note)
-            return
+            return True
         seen.add(site)
+    return False
+
+
+def _record_note_feedback(
+    notes: list[dict[str, object]], note: dict[str, object] | None
+) -> dict[str, object]:
+    """Report storage truthfully and steer repeated concerns toward new evidence."""
+    if note is None:
+        return {"recorded": False, "notes": len(notes)}
+    site_fields = ("category", "path", "line")
+    repeated_site = (
+        note.get("kind") == "concern"
+        and isinstance(note.get("path"), str)
+        and isinstance(note.get("line"), int)
+        and any(
+            existing.get("kind") == "concern"
+            and all(existing.get(field) == note.get(field) for field in site_fields)
+            for existing in notes
+        )
+    )
+    recorded = _append_note(notes, note)
+    feedback: dict[str, object] = {"recorded": recorded, "notes": len(notes)}
+    if repeated_site:
+        feedback["guidance"] = (
+            "This location already has a concern note. If this adds no distinct "
+            "causal evidence, inspect a different served-path location."
+        )
+    return feedback
 
 
 def ledger_disposition(
@@ -3721,19 +3749,14 @@ class OpenRouterSourceReviewAgent:
                         )
                     if name == "record_note":
                         note = _note_from_arguments(arguments)
-                        if note is not None:
-                            _append_note(notes, note)
+                        feedback = _record_note_feedback(notes, note)
+                        if feedback["recorded"]:
                             noteless_calls = 0
                         messages.append(
                             {
                                 "role": "tool",
                                 "tool_call_id": call_id,
-                                "content": json.dumps(
-                                    {
-                                        "recorded": note is not None,
-                                        "notes": len(notes),
-                                    }
-                                ),
+                                "content": json.dumps(feedback),
                             }
                         )
                         continue
