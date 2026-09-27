@@ -664,6 +664,7 @@ async def test_canary_preflight_exposes_scheduler_guard_values_without_mutation(
     ("run_mode", "review_mode"),
     [
         ("source_only", "shadow"),
+        ("source_only", "enforce_preview"),
         ("full_runtime", "shadow"),  # An already leased older worker can finish.
         ("full_runtime", "enforce_preview"),
     ],
@@ -893,7 +894,7 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
                 await endpoints.complete_l2_report_canary(
                     canary_id,
                     body.model_copy(
-                        update={"report": {**report, "review_mode": "enforce_preview"}}
+                        update={"report": {**report, "review_mode": "invalid"}}
                     ),
                     request,
                     "hotkey",
