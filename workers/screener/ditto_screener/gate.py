@@ -11,12 +11,10 @@ Flow for one agent:
 2. **Contract check.** Reject unsafe archive entries and require a root
    ``Dockerfile`` before any build is attempted. The implementation language is
    deliberately unconstrained; the image must satisfy the HTTP harness contract.
-3. **Build.** Prefer the attempt-bound Targon Kaniko archive. When its runtime
-   smoke already succeeded, the worker never docker-loads or rebuilds. Local
-   ``docker build`` is residual fallback for ``prefer``/``off`` only.
-4. **Serve smoke.** Reuse the Targon rental ``GET /health`` when that lane
-   succeeded. Otherwise run the image detached with a memory + pids cap and
-   poll ``GET /health`` until it returns 2xx, then prove the harness can ingest
+3. **Build.** Load an exact preverified image for a guarded replay, or build the
+   submitted Dockerfile in the worker's isolated Docker executor.
+4. **Serve smoke.** Run the image detached with a memory + pids cap and poll
+   ``GET /health`` until it returns 2xx, then prove the harness can ingest
    with one bounded ``POST /seed`` wave (``SCREENER_SEED_PROBE_MODE``:
    ``shadow`` records the signal, ``enforce`` makes it a contract failure,
    ``off`` skips it). The probe is served by the same isolated fake gateway, so
