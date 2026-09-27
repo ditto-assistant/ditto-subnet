@@ -15,18 +15,11 @@ class ScreenerProviderSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    runtime_provider_priority: tuple[ScreenerCapacityProvider, ...] = (
-        "hetzner",
-        "gcp",
-    )
-    source_review_provider_priority: tuple[ScreenerCapacityProvider, ...] = (
-        "hetzner",
-        "gcp",
-    )
-    build_provider_priority: tuple[ScreenerCapacityProvider, ...] = (
-        "hetzner",
-        "gcp",
-    )
+    # An unconfigured installation has no enrolled Hetzner node. The audited
+    # production revision selects Hetzner primary with GCE fallback explicitly.
+    runtime_provider_priority: tuple[ScreenerCapacityProvider, ...] = ("gcp",)
+    source_review_provider_priority: tuple[ScreenerCapacityProvider, ...] = ("gcp",)
+    build_provider_priority: tuple[ScreenerCapacityProvider, ...] = ("gcp",)
     gce_overflow_enabled: bool = False
     primary_node_id: Annotated[
         str | None, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")

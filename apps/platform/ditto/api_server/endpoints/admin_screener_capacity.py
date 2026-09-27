@@ -368,7 +368,7 @@ def _default_provider_revision(environment: str) -> ProviderSettingsRevisionMode
         revision=0,
         parent_revision=0,
         settings=DEFAULT_SCREENER_PROVIDER_SETTINGS,
-        reason="Built-in Hetzner primary and GCE fallback settings",
+        reason="Built-in GCE safety route until a provider revision is configured",
         actor="platform",
         created_at=None,
     )
@@ -407,6 +407,8 @@ async def create_screener_bootstrap_grant(
     session: SessionDep,
 ) -> ScreenerBootstrapGrantResponse:
     """Mint one audited, node-bound grant against the live controller fence."""
+    if payload.provider == "targon":
+        raise HTTPException(status_code=422, detail="Targon screening is retired")
     expected_confirmation = screener_bootstrap_grant_confirmation(payload)
     if payload.confirmation != expected_confirmation:
         raise HTTPException(

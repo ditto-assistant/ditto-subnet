@@ -830,6 +830,8 @@ async def create_bootstrap_grant(
     request: Request,
 ) -> ScreenerBootstrapGrantResponse:
     """Mint one node-bound, single-use registration capability."""
+    if payload.provider == "targon":
+        raise HTTPException(status_code=422, detail="Targon screening is retired")
     now = datetime.now(UTC)
     expires_at = now + timedelta(
         seconds=request.app.state.config.screener_auth.bootstrap_ttl_seconds
@@ -869,6 +871,8 @@ async def register_screener_node(
     authorization: Annotated[str | None, Header()] = None,
 ) -> ScreenerNodeCredentialResponse:
     """Exchange a one-time capability and hotkey proof for short-lived authority."""
+    if payload.provider == "targon":
+        raise HTTPException(status_code=422, detail="Targon screening is retired")
     prefix = "Bootstrap "
     if authorization is None or not authorization.startswith(prefix):
         raise ScreenerAuthError("missing screener bootstrap token")
