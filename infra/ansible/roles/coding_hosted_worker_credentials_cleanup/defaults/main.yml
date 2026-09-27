@@ -1,0 +1,6 @@
+---
+coding_hosted_worker_credentials_cleanup_enabled: false
+coding_hosted_worker_credentials_cleanup_confirmation: ""
+coding_hosted_worker_credentials_cleanup_source_revision: ""
+# No path, owner or unit input exists. The three removal targets are literals in
+# tasks/main.yml, and the role never reads a credential or file contents.

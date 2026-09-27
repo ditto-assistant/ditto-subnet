@@ -1,0 +1,11 @@
+---
+coding_hosted_worker_credentials_enabled: false
+coding_hosted_worker_credentials_confirmation: ""
+coding_hosted_worker_credentials_source_revision: ""
+# No credential is a variable. Tasks read the eight DITTO_CODING_WORKER_* values
+# only from the controller's local environment, inside no_log tasks, so
+# inventory, Git and command-line extra vars never carry one. Destinations,
+# owners, endpoints, buckets and regions are literals in tasks/main.yml.
+# These three are the only accepted inputs: any other variable named
+# coding_hosted_worker_credentials_*, including a registered result or a
+# document variable, is refused before anything is inspected or written.
