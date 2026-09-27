@@ -363,18 +363,17 @@ class PolicyManifest:
 
 
 CORE_ONLY_MANIFEST = PolicyManifest(rotation_id="v8-core-build-health-no-run")
+# Preserve the stored Backroom rotation identifiers during the rollout. The
+# manifest digest commits the changed module list; the historical identifier
+# alone must never be treated as proof that an oracle ran.
 DEFAULT_V8_MANIFEST = PolicyManifest(
     rotation_id="v8-luna-source-review-behavioral-oracle",
-    module_specs=(
-        {"kind": "agentic_source_review", "id": "luna-source-review"},
-        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
-    ),
+    module_specs=({"kind": "agentic_source_review", "id": "luna-source-review"},),
 )
 DEFAULT_L2_MANIFEST = PolicyManifest(
     rotation_id="v8-luna-terra-sol-l2-source-review-behavioral-oracle",
     module_specs=(
         {"kind": "agentic_source_review", "id": "luna-terra-sol-source-review"},
-        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
     ),
 )
 
@@ -631,27 +630,6 @@ class AgenticSourceReviewModule(_BaseModule):
                     "final source-review adjudication completed",
                 ),
             )
-            if (
-                context.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
-                and decision in {"clear", "reject"}
-            ):
-                # Source citations alone do not certify v13 runtime/private
-                # verification. Retain the court result for operator review
-                # without granting it terminal admission or rejection authority.
-                return ModuleResult(
-                    ModuleDisposition.QUARANTINE,
-                    (
-                        *evidence,
-                        PolicyEvidence(
-                            self.module_id,
-                            "source-review-awaiting-v13-verification",
-                            "source adjudication held pending v13 verification",
-                        ),
-                    ),
-                    finding=observation.finding,
-                    adjudication=adjudication,
-                    review_notes=review_notes,
-                )
             if decision == "clear":
                 return ModuleResult(
                     ModuleDisposition.CLEAR,
@@ -1213,26 +1191,19 @@ class PolicyEngine:
                 policy_version=context.policy_version,
             )
 
-        # Challenge-phase modules run on every full review, decoupled from the
-        # selector tripwire. The always-on behavioral oracle lives here so a
-        # harness cannot behave only during a ~5% audit. It still runs for a
-        # qualifying submission's deferred review; mechanical admission above
-        # only establishes that an image is ready for validator scoring.
-        # Targon runtime smoke has no isolated fake-gateway sidecar, so the
-        # oracle is skipped until a screener-to-rental prompt tool exists.
+        # A challenge runs only when an operator explicitly includes one in a
+        # private manifest. The built-in admission profiles are source-only;
+        # an absent challenge must not turn a completed source review into an
+        # inconclusive outcome.
         configured_challenges = tuple(
             module for module in self.modules if module.phase == "challenge"
         )
-        if (
-            skip_challenges
-            and configured_challenges
-            and context.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
-        ):
+        if skip_challenges and configured_challenges:
             evidence.append(
                 PolicyEvidence(
                     "policy-engine",
                     "challenge-inconclusive",
-                    "mandatory v13 behavioral verification was unavailable",
+                    "explicitly configured behavioral audit was unavailable",
                 )
             )
             return self._decision(
@@ -1257,8 +1228,8 @@ class PolicyEngine:
             if terminal is not None:
                 # Historical policy allowed an evidence-bound source-review L4
                 # clearance to settle an auxiliary oracle transport failure.
-                # V13 makes runtime verification mandatory, so a source-only
-                # decision cannot clear its missing runtime observation.
+                # Explicit challenge manifests retain their own result; a
+                # source clearance never silently overrides an observed fault.
                 #
                 # Keep the legacy exception narrow: a usable oracle response with
                 # insufficient calls, a wrong token, or an implausibly fast
@@ -1307,9 +1278,8 @@ class PolicyEngine:
                 evidence.append(
                     PolicyEvidence(
                         "policy-engine",
-                        "audit-awaiting-private-challenge",
-                        "tripwire selected quarantine until a private challenge "
-                        "is available",
+                        "source-finding-held",
+                        "source finding held for evidence-bound review",
                     )
                 )
             return self._decision(
@@ -1441,26 +1411,6 @@ class PolicyEngine:
                     "final source-review adjudication completed",
                 ),
             )
-            if (
-                policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
-                and court_decision in {"clear", "reject"}
-            ):
-                return self._decision(
-                    ScreeningOutcome.QUARANTINE,
-                    (
-                        *evidence,
-                        PolicyEvidence(
-                            "agentic-preexecution-review",
-                            "source-review-awaiting-v13-verification",
-                            "source adjudication held pending v13 verification",
-                        ),
-                    ),
-                    observation.finding,
-                    review_audit=observation.review_audit,
-                    adjudication=adjudication,
-                    review_notes=observation.notes,
-                    policy_version=policy_version,
-                )
             if court_decision not in {"clear", "reject"}:
                 evidence = (
                     *evidence,
@@ -1554,7 +1504,7 @@ def load_policy_engine(
     manifest_profile: str | None = None,
     rotation_id: str | None = None,
 ) -> PolicyEngine:
-    """Load a strict private manifest, or production v8 Luna source review."""
+    """Load a strict private manifest, or the built-in source review."""
     if manifest_path is None:
         profile = manifest_profile or ("l1_l2" if l2_mode == "enforce" else "l1")
         if profile == "core":
@@ -1577,7 +1527,6 @@ def load_policy_engine(
                         else "luna-source-review"
                     )
                 ),
-                BehavioralOracleModule(module_id="v8-behavioral-oracle"),
             ),
         )
     raw = _read_json(Path(manifest_path), max_bytes=_MAX_MANIFEST_BYTES)

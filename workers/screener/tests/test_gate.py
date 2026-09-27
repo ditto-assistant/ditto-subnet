@@ -1484,10 +1484,10 @@ async def test_v13_uncertified_static_preflight_low_holds_before_build(
     assert not any(call[0] == "build" for call in calls)
 
 
-async def test_v13_l4_cleared_static_lead_holds_before_build(
+async def test_v13_l4_cleared_static_lead_continues_to_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    """A source-only L4 clear cannot authorize v13 build or admission."""
+    """A source L4 clear still requires mechanical build and health gates."""
     tarball = _valid_tar(
         **{
             "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
@@ -1505,12 +1505,12 @@ async def test_v13_l4_cleared_static_lead_holds_before_build(
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
-    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert result.outcome == ScreeningOutcome.PASS
     assert result.adjudication is not None
     assert result.adjudication["decision"] == "clear"
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
-    assert not any(call[0] == "build" for call in calls)
+    assert any(call[0] == "build" for call in calls)
 
 
 async def test_reports_only_coarse_pipeline_stages(
@@ -1675,17 +1675,17 @@ async def test_policy_only_rescreen_starts_source_review_without_runtime(
 @pytest.mark.parametrize(
     ("policy_version", "expected", "settle_calls"),
     [
-        (12, ScreeningOutcome.PASS, 1),
-        (13, ScreeningOutcome.INCONCLUSIVE, 0),
+        (12, ScreeningOutcome.PASS, 0),
+        (13, ScreeningOutcome.PASS, 0),
     ],
 )
-async def test_oracle_transport_failure_is_fail_closed_for_v13(
+async def test_unrequested_oracle_transport_cannot_block_source_certificate(
     make_config: Callable[..., ScreenerConfig],
     policy_version: int,
     expected: ScreeningOutcome,
     settle_calls: int,
 ) -> None:
-    """A source-only settlement cannot clear v13 mandatory runtime verification."""
+    """The built-in source profile does not depend on a runtime oracle."""
     events: list[str] = []
     tarball = _valid_tar()
     gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
@@ -1709,16 +1709,10 @@ async def test_oracle_transport_failure_is_fail_closed_for_v13(
     assert result.outcome == expected
     assert result.policy_version == policy_version
     assert reviewer.settle_calls == settle_calls
-    if policy_version == 12:
-        assert result.adjudication is not None
-        assert result.adjudication["decision"] == "clear"
-        assert [evidence.code for evidence in result.evidence][-2:] == [
-            "challenge-transport-failure",
-            "source-review-adjudicated",
-        ]
-    else:
-        assert result.adjudication is None
-        assert result.evidence[-1].code == "challenge-transport-failure"
+    assert result.adjudication is None
+    assert not any(
+        evidence.code == "challenge-transport-failure" for evidence in result.evidence
+    )
 
 
 async def test_source_review_is_not_started_when_the_build_fails(

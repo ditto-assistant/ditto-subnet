@@ -1387,12 +1387,11 @@ class BuildGate:
                     ):
                         preflight_clearance = resolved_preflight
                     elif (
-                        policy_version < 13
-                        and resolved_preflight.adjudication is not None
+                        resolved_preflight.adjudication is not None
                         and resolved_preflight.adjudication.get("decision") == "clear"
                     ):
-                        # A legacy L4 clear settles the static lead, but a full
-                        # screen still owes Platform a verified runtime image.
+                        # An L4 clear settles the static lead, but a full
+                        # screen still owes Platform a verified built image.
                         # Returning PASS here bypasses build/export and makes
                         # the worker correctly reject the incomplete result.
                         # Carry this exact cleared observation into the normal
