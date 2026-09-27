@@ -20,7 +20,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Protocol, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -785,9 +785,10 @@ bounded file ranges, search, compare against a canonical starter when one
 matches, and inspect static Docker and package-manager build metadata. Rust-only
 structure tools are optional aids when Rust is actually present; use generic
 workspace tools for Python, TypeScript/JavaScript, Go, and other languages. The
-analyzer has no network, secrets, shell, package
-manager, compiler, Docker socket, or code-execution facility. Do not ask to
-build or execute the harness. Do not infer runtime behavior from filenames or
+static analyzer has no network, secrets, compiler, or Docker socket. If a shell
+tool is offered, use it only for source navigation; each command runs in a
+separate no-network container with read-only source and no reviewer secrets.
+Do not build or execute the harness. Do not infer runtime behavior from filenames or
 terminology; trace the effective /run, /seed, model, memory, tool, and answer
 paths through reachable definitions and call sites.
 Treat ambiguous or unresolved call-graph edges as non-evidence: they never prove
@@ -2063,10 +2064,32 @@ _TOOLS: list[dict[str, object]] = [
 ]
 
 
-def _l2_tools_for_policy(policy_version: int) -> list[dict[str, object]]:
+def _l2_tools_for_policy(
+    policy_version: int, *, shell_enabled: bool = False
+) -> list[dict[str, object]]:
     """Return an exact-version verdict schema without mutating frozen policies."""
 
     tools = copy.deepcopy(_TOOLS)
+    if shell_enabled:
+        tools.insert(
+            -1,
+            {
+                "type": "function",
+                "name": "shell",
+                "description": (
+                    "Run bounded bash for source navigation in a fresh no-network, "
+                    "credential-free container with the exact source read-only. "
+                    "Use rg, find, sed, and coreutils; do not execute candidate code."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"script": {"type": "string", "maxLength": 4096}},
+                    "required": ["script"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+        )
     submit = tools[-1]
     parameters = submit["parameters"]
     assert isinstance(parameters, dict)
@@ -2306,8 +2329,41 @@ class AnalyzerHarness(Protocol):
     ) -> str: ...
 
 
+async def _read_bounded_stream(
+    stream: asyncio.StreamReader | None, limit: int
+) -> bytes:
+    if stream is None:
+        raise ValueError("sandbox output pipe is unavailable")
+    output = bytearray()
+    while chunk := await stream.read(8_192):
+        if len(output) + len(chunk) > limit:
+            raise ValueError("sandbox output exceeded its bound")
+        output.extend(chunk)
+    return bytes(output)
+
+
+async def _remove_sandbox_container(
+    docker_bin: str, name: str, env: Mapping[str, str]
+) -> None:
+    try:
+        cleanup = await asyncio.create_subprocess_exec(
+            docker_bin,
+            "rm",
+            "-f",
+            name,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=dict(env),
+        )
+        await asyncio.wait_for(cleanup.wait(), timeout=10)
+    except (OSError, TimeoutError):
+        pass
+
+
 class IsolatedCodingHarness:
     """Run only repository-owned analyzers inside a disposable Docker sandbox."""
+
+    supports_shell = True
 
     def __init__(
         self,
@@ -2347,8 +2403,16 @@ class IsolatedCodingHarness:
             "build_structure",
             "integrity_surfaces",
             "scorer_field_flow",
+            "shell",
         }:
             raise ValueError("L2 requested a non-allowlisted analyzer")
+        shell_script = arguments.get("script") if command == "shell" else None
+        if command == "shell" and (
+            set(arguments) != {"script"}
+            or not isinstance(shell_script, str)
+            or not 0 < len(shell_script.encode()) <= 4_096
+        ):
+            raise ValueError("shell requires one bounded script")
         timeout = self._timeout_seconds
         if deadline is not None:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -2356,6 +2420,9 @@ class IsolatedCodingHarness:
                 raise ValueError("L2 analyzer exceeded lease budget")
             timeout = min(timeout, remaining)
         source = str(workspace.resolve())
+        container_name = (
+            f"ditto-l2-shell-{uuid4().hex[:20]}" if command == "shell" else None
+        )
         container_user = f"{os.getuid()}:{os.getgid()}"
         process_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
         if self._rootless_docker_host is not None:
@@ -2375,6 +2442,7 @@ class IsolatedCodingHarness:
             "run",
             "-i",
             "--rm",
+            *(["--name", container_name] if container_name else []),
             "--network",
             "none",
             "--read-only",
@@ -2394,9 +2462,23 @@ class IsolatedCodingHarness:
             f"type=bind,src={source},dst=/workspace,readonly",
             "--tmpfs",
             "/scratch:rw,noexec,nosuid,nodev,size=33554432,mode=1777",
-            self._image,
-            command,
         ]
+        if command == "shell":
+            args.extend(
+                [
+                    "--workdir",
+                    "/workspace",
+                    "--entrypoint",
+                    "/bin/bash",
+                    self._image,
+                    "--noprofile",
+                    "--norc",
+                    "-c",
+                    str(shell_script),
+                ]
+            )
+        else:
+            args.extend([self._image, command])
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdin=asyncio.subprocess.PIPE,
@@ -2404,21 +2486,68 @@ class IsolatedCodingHarness:
             stderr=asyncio.subprocess.PIPE,
             env=process_env,
         )
-        encoded = json.dumps(arguments, sort_keys=True, separators=(",", ":")).encode()
+        encoded = (
+            b""
+            if command == "shell"
+            else json.dumps(arguments, sort_keys=True, separators=(",", ":")).encode()
+        )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(encoded), timeout=timeout
-            )
+            if command == "shell":
+                assert proc.stdin is not None
+                proc.stdin.close()
+                stdout, stderr = await asyncio.wait_for(
+                    asyncio.gather(
+                        _read_bounded_stream(proc.stdout, 64_000),
+                        _read_bounded_stream(proc.stderr, 4_096),
+                    ),
+                    timeout=timeout,
+                )
+                await asyncio.wait_for(proc.wait(), timeout=timeout)
+            else:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(encoded), timeout=timeout
+                )
         except asyncio.CancelledError:
-            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
             with contextlib.suppress(Exception):
                 await proc.wait()
+            if container_name is not None:
+                await _remove_sandbox_container(
+                    self._docker_bin, container_name, process_env
+                )
             raise
         except TimeoutError:
-            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
             with contextlib.suppress(Exception):
                 await proc.wait()
+            if container_name is not None:
+                await _remove_sandbox_container(
+                    self._docker_bin, container_name, process_env
+                )
             raise ValueError("L2 analyzer timed out") from None
+        except ValueError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
+            if container_name is not None:
+                await _remove_sandbox_container(
+                    self._docker_bin, container_name, process_env
+                )
+            raise
+        if command == "shell":
+            return json.dumps(
+                {
+                    "exit_code": proc.returncode,
+                    "stdout": stdout.decode("utf-8", errors="replace"),
+                    "stderr": stderr.decode("utf-8", errors="replace"),
+                    "truncated": False,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         if len(stdout) > _MAX_TOOL_BYTES or len(stderr) > 4_096:
             raise ValueError("L2 analyzer exceeded output budget")
         if proc.returncode == 2:
@@ -2660,6 +2789,7 @@ class TerraSolSourceReviewAgent:
         self._base_url = base_url.rstrip("/")
         self._inference_provider = inference_provider
         self._harness = harness
+        self._shell_enabled = bool(getattr(harness, "supports_shell", False))
         self._workspace_root = Path(workspace_root) if workspace_root else None
         self._cache_dir = Path(cache_dir)
         self._audit = audit_journal
@@ -4527,7 +4657,10 @@ class TerraSolSourceReviewAgent:
             calls = [item for item in output if item.get("type") == "function_call"]
             if self._terminal_verdict_required:
                 allowed_tool_names = {
-                    str(tool["name"]) for tool in _l2_tools_for_policy(policy_version)
+                    str(tool["name"])
+                    for tool in _l2_tools_for_policy(
+                        policy_version, shell_enabled=self._shell_enabled
+                    )
                 }
                 if self._compact_review_packet:
                     allowed_tool_names.add("dossier_section")
@@ -4823,7 +4956,7 @@ class TerraSolSourceReviewAgent:
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> httpx.Response:
-        tools = _l2_tools_for_policy(policy_version)
+        tools = _l2_tools_for_policy(policy_version, shell_enabled=self._shell_enabled)
         if self._compact_review_packet:
             tools.insert(-1, _compact_dossier_tool())
         if self._terminal_verdict_required:
@@ -7340,6 +7473,15 @@ def _served_generator_hold(
 # giving Platform/Backroom a cause instead of collapsing everything into
 # ``l2-valueerror``. Unmapped messages still degrade to the historical shape.
 _L2_FAILURE_CODES: Mapping[str, str] = {
+    "sandbox output exceeded its bound": "sandbox-output-bounded",
+    "sandbox output pipe is unavailable": "sandbox-unavailable",
+    "shell broker response was incomplete": "sandbox-response-incomplete",
+    "shell broker response was invalid": "sandbox-response-invalid",
+    "shell exceeded review deadline": "lease-budget-exhausted",
+    "shell requires one bounded script": "sandbox-request-invalid",
+    "shell requires one script": "sandbox-request-invalid",
+    "shell script is outside the bounded size": "sandbox-request-invalid",
+    "shell workspace is outside the review root": "evidence-not-bound",
     "scorer evidence requires URL and expected revision": (
         "runtime-evidence-config-invalid"
     ),

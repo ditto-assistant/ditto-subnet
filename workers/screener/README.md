@@ -187,6 +187,11 @@ Required values are supplied through the production host's protected
   OpenRouter ZDR routing and deny data collection.
 - `SCREENER_L2_ANALYZER_IMAGE`: locked to the updater-built
   `ditto-screener-l2-analyzer:active` image.
+- The signed screener worker runs each bounded reviewer `bash`, `rg`, or
+  coreutils command in a disposable analyzer container. The submitted source
+  is mounted read-only; the container has no network, secrets, or Docker socket.
+  Model calls and API credentials stay in the worker process outside that
+  container. Candidate build and execution remain separate screening stages.
 - `SCREENER_L2_CACHE_DIR` and `SCREENER_L2_AUDIT_JOURNAL_FILE`: protected
   sanitized cache/audit locations. Raw source and transcripts are never stored.
 - `SCREENER_SCORER_CAPABILITIES_URL` and `SCREENER_EXPECTED_SCORER_REVISION`:
