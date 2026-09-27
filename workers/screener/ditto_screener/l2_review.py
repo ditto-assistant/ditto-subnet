@@ -5055,7 +5055,7 @@ class TerraSolSourceReviewAgent:
         # Final results from an older L3-off posture must never bypass the
         # v13 clearance guard. Keep the separately cached analyst reusable.
         value["l3_enabled"] = self._l3_enabled
-        value["l3_off_clearance_revision"] = 3
+        value["l3_off_clearance_revision"] = 4
         value["cause_tiebreaker_prompt_revision"] = l2_cause_tiebreaker_prompt_revision(
             policy_version
         )
@@ -5890,6 +5890,39 @@ def _l1_concerns_resolved(notes: tuple[Mapping[str, object], ...]) -> bool:
     return True
 
 
+def _l2_resolves_l1_concerns(
+    l1: SourceReviewObservation, analyst: L2RunResult
+) -> bool:
+    """Accept cited analyst dispositions for every located L1 concern lead.
+
+    The analyst submission parser already binds each citation to a file digest
+    and valid line in the reviewed archive. This final guard also requires the
+    complete, unique lead packet; an absent or unlocated concern cannot clear.
+    """
+    leads = _l1_lead_packet(l1)
+    dispositions = analyst.l1_lead_dispositions
+    if (
+        not leads
+        or len(dispositions) != len(leads)
+        or any(lead.get("location_complete") is not True for lead in leads)
+    ):
+        return False
+    if any(
+        not isinstance(item, Mapping) or not isinstance(item.get("lead_id"), str)
+        for item in dispositions
+    ):
+        return False
+    by_id = {item["lead_id"]: item for item in dispositions}
+    return len(by_id) == len(leads) and all(
+        (item := by_id.get(lead["lead_id"])) is not None
+        and item.get("disposition") == "resolved"
+        and isinstance(item.get("reason"), str)
+        and bool(str(item["reason"]).strip())
+        and isinstance(item.get("citation"), Mapping)
+        for lead in leads
+    )
+
+
 def _l2_only_clearance_gaps(
     l1: SourceReviewObservation | None,
     analyst: L2RunResult,
@@ -5930,7 +5963,10 @@ def _l2_only_clearance_gaps(
         and set(l1.categories) <= {"none"}
     ):
         gaps.append("l1-not-certified-low")
-    elif not _l1_concerns_resolved(l1.notes):
+    elif not (
+        _l1_concerns_resolved(l1.notes)
+        or _l2_resolves_l1_concerns(l1, analyst)
+    ):
         gaps.append("l1-concern-unresolved")
     if not analyst.observation.ok or analyst.observation.risk_level != "low":
         gaps.append("l2-not-low")

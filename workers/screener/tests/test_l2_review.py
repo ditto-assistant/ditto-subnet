@@ -1517,6 +1517,77 @@ def test_v13_l3_off_certifies_only_complete_clean_l1_l2_agreement() -> None:
     assert missing_dossier.observation.error_code == "l2-only-clearance-unproven"
 
 
+def test_v13_low_l1_concerns_require_complete_cited_l2_resolution() -> None:
+    l1 = replace(
+        _l1("low"),
+        notes=(
+            {
+                "kind": "concern",
+                "path": "src/main.rs",
+                "line": 1,
+                "area": "model_call",
+                "category": "data_exfiltration",
+                "confidence": 0.99,
+            },
+        ),
+    )
+    lead = _l1_lead_packet(l1)[0]
+    disposition = {
+        "lead_id": lead["lead_id"],
+        "disposition": "resolved",
+        "reason": "The cited target is the validator's case-scoped broker.",
+        "citation": {"path": "src/main.rs", "line": 1, "file_sha256": "e" * 64},
+    }
+    candidate = replace(
+        _clearance_candidate(response_models=("openai/gpt-6-sol",)),
+        l1_lead_dispositions=(disposition,),
+    )
+    kwargs = {
+        "dossier_tools": (),
+        "analyst_cache_hit": False,
+        "policy_version": 13,
+        "l1_observation": l1,
+        "dossier": {"deterministic": {}},
+        "expected_model": "openai/gpt-6-sol",
+    }
+    clear = _finalize_without_l3(candidate, **kwargs)
+    assert clear.observation.clearance_certified
+    assert clear.clearance_path == "l2_only_certified_low"
+
+    for changed in (
+        {"l1_lead_dispositions": ()},
+        {"l1_lead_dispositions": ({**disposition, "disposition": "unresolved"},)},
+        {"l1_lead_dispositions": ({**disposition, "lead_id": "wrong"},)},
+        {"l1_lead_dispositions": ({**disposition, "citation": None},)},
+    ):
+        held = _finalize_without_l3(replace(candidate, **changed), **kwargs)
+        assert not held.observation.clearance_certified
+        assert "l1-concern-unresolved" in (held.failure_subcode or "")
+
+    unlocated = replace(
+        l1, notes=({"kind": "concern", "category": "data_exfiltration"},)
+    )
+    unlocated_lead = _l1_lead_packet(unlocated)[0]
+    unlocated_disposition = {
+        **disposition,
+        "lead_id": unlocated_lead["lead_id"],
+    }
+    held_unlocated = _finalize_without_l3(
+        replace(candidate, l1_lead_dispositions=(unlocated_disposition,)),
+        **{**kwargs, "l1_observation": unlocated},
+    )
+    assert "l1-concern-unresolved" in (held_unlocated.failure_subcode or "")
+
+    low_confidence = replace(
+        candidate,
+        observation=replace(
+            candidate.observation, finding={"confidence": 0.97, "evidence": []}
+        ),
+    )
+    held_confidence = _finalize_without_l3(low_confidence, **kwargs)
+    assert "finding-confidence" in (held_confidence.failure_subcode or "")
+
+
 @pytest.mark.parametrize("risk", ["medium", "high"])
 async def test_l3_off_preserves_elevated_analyst_result_without_static_attention(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, risk: str
