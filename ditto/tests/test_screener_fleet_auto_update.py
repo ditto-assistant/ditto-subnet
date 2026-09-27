@@ -96,8 +96,8 @@ def test_updater_authenticates_before_fetch_or_drain() -> None:
     assert 'env HOME="$FLEET_ROOT"' in updater
     assert "runuser" not in updater
     assert "trap cleanup_staging RETURN" in updater
-    assert updater.count("venv --relocatable") == 2
-    assert updater.count("sync --frozen --no-editable") == 2
+    assert updater.count("venv --relocatable") == 1
+    assert updater.count("sync --frozen --no-editable") == 1
     activation = updater[updater.index("activate_release()") :]
     assert activation.index(
         '"$release_dir/src/scripts/screener-fleet-auto-update.sh"'
@@ -308,7 +308,7 @@ def test_self_updater_provisions_worker_state_before_scale_up() -> None:
         updater.index("start_fleet()") : updater.index("activate_release()")
     ]
     assert start_fleet.index("ensure_worker_state") < start_fleet.index(
-        '"$SYSTEMCTL" start ditto-screener-fleet-agent.service'
+        '"$SYSTEMCTL" enable "ditto-screener-worker@$index.service"'
     )
     assert (
         "Environment=SCREENER_FLEET_L2_WORKSPACE_ROOT="
@@ -456,8 +456,12 @@ elif command in {"start", "restart"}:
         write(unit, "behavior", "idle")
 elif command == "is-active":
     sys.exit(0 if read(unit, "state", "inactive") == "active" else 3)
-elif command == "disable" and os.environ.get("FAKE_FAIL_DISABLE"):
-    sys.exit(1)
+elif command == "is-enabled":
+    sys.exit(0 if read(unit, "enabled", "disabled") == "enabled" else 1)
+elif command == "disable":
+    if os.environ.get("FAKE_FAIL_DISABLE"):
+        sys.exit(1)
+    write(unit, "enabled", "disabled")
 sys.exit(0)
 """
 
@@ -607,7 +611,7 @@ def test_start_restarts_every_worker_except_a_still_held_review(
 
     assert result.returncode == 0, result.stderr
     recorded = log.read_text().splitlines()
-    assert "start ditto-screener-fleet-agent.service" in recorded
+    assert "start ditto-screener-fleet-agent.service" not in recorded
     for index in (1, 2, 3):
         assert f"enable ditto-screener-worker@{index}.service" in recorded
     assert "restart ditto-screener-worker@1.service" not in recorded
@@ -615,6 +619,42 @@ def test_start_restarts_every_worker_except_a_still_held_review(
     assert "restart ditto-screener-worker@2.service" in recorded
     assert "restart ditto-screener-worker@3.service" in recorded
     assert "PHASE=active" in (state / "updater/drain-status.env").read_text()
+
+
+def test_release_retires_installed_lane_agent_without_restarting_it(
+    tmp_path: Path,
+) -> None:
+    env, units, state, log = _fleet_harness(tmp_path)
+    unit = "ditto-screener-fleet-agent.service"
+    (units / f"{unit}.state").write_text("active")
+    (units / f"{unit}.enabled").write_text("enabled")
+    _worker_unit(units, state, 1, behavior="idle", pid=101)
+
+    assert _run(env, "stop_fleet").returncode == 0
+    assert (units / f"{unit}.state").read_text() == "inactive"
+    assert (units / f"{unit}.enabled").read_text() == "disabled"
+    assert _run(env, "start_fleet").returncode == 0
+    recorded = log.read_text()
+    assert f"stop {unit}" in recorded
+    assert f"disable {unit}" in recorded
+    assert f"start {unit}" not in recorded
+    assert f"restart {unit}" not in recorded
+
+
+def test_retirement_fails_closed_when_installed_lane_agent_cannot_be_disabled(
+    tmp_path: Path,
+) -> None:
+    env, units, state, log = _fleet_harness(tmp_path)
+    unit = "ditto-screener-fleet-agent.service"
+    (units / f"{unit}.state").write_text("active")
+    (units / f"{unit}.enabled").write_text("enabled")
+    env["FAKE_FAIL_DISABLE"] = "1"
+
+    result = _run(env, "stop_fleet")
+
+    assert result.returncode != 0
+    assert "retired fleet agent could not be disabled" in result.stderr
+    assert (units / f"{unit}.state").read_text() == "inactive"
 
 
 def test_start_failure_is_reported_to_the_rollback_caller(tmp_path: Path) -> None:
@@ -651,8 +691,8 @@ def test_failed_lease_check_does_not_abort_the_drain(tmp_path: Path) -> None:
     assert "interrupted-review" not in log.read_text()
 
 
-def test_aborted_drain_restores_the_fleet_agent(tmp_path: Path) -> None:
-    """A failure after the agent stopped must not leave the node down."""
+def test_aborted_drain_restores_signed_workers(tmp_path: Path) -> None:
+    """A failure after drain starts must not leave signed workers down."""
     env, units, state, log = _fleet_harness(tmp_path)
     env["FAKE_FAIL_DISABLE"] = "1"
     env["SCREENER_FLEET_WORKER_PROCESSES"] = "1"
@@ -663,12 +703,12 @@ def test_aborted_drain_restores_the_fleet_agent(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     recorded = log.read_text().splitlines()
-    assert "start --no-block ditto-screener-fleet-agent.service" in recorded
+    assert "start --no-block ditto-screener-fleet-agent.service" not in recorded
     assert "start --no-block ditto-screener-worker@1.service" in recorded
     assert "PHASE=aborted" in (state / "updater/drain-status.env").read_text()
 
 
-def test_timeout_sigterm_during_drain_restores_the_fleet_agent(
+def test_timeout_sigterm_during_drain_restores_signed_workers(
     tmp_path: Path,
 ) -> None:
     """systemd's TimeoutStartSec SIGTERM runs the same restore path."""
@@ -698,7 +738,7 @@ def test_timeout_sigterm_during_drain_restores_the_fleet_agent(
             process.kill()
     assert process.returncode == 143
     recorded = log.read_text().splitlines()
-    assert "start --no-block ditto-screener-fleet-agent.service" in recorded
+    assert "start --no-block ditto-screener-fleet-agent.service" not in recorded
     assert "interrupted-review" not in log.read_text()
 
 
@@ -719,5 +759,5 @@ def test_drain_timeouts_outlast_the_longest_review() -> None:
     assert (
         'DRAIN_BOUND_SECONDS="${SCREENER_FLEET_DRAIN_BOUND_SECONDS:-4200}"' in updater
     )
-    # 115 min worst-case review < 120 min stop; prep + 2 x 70 min drain < 180.
+    # Worker stop exceeds a review; prep + 2 x 70 min drain < 180.
     assert 4200 * 2 + 20 * 60 < 180 * 60

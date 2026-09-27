@@ -172,7 +172,7 @@ Required values are supplied through the production host's protected
   model cannot establish actual tool choice, memory correctness, or user
   isolation. The mode has no influence on the screening outcome and should
   remain off until its overhead and evidence profile have been calibrated.
-  Targon-only smoke and pre-build source holds leave these checks `not_recorded`.
+  A source hold before runtime leaves these checks `not_recorded`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
 - `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; legacy
   `moonshotai/kimi-k3` remains accepted only for a deliberate rollback.
@@ -201,7 +201,7 @@ Required values are supplied through the production host's protected
 - `SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE=true`: V13 canary gate that holds L2
   inconclusive before any model call unless Platform supplied a fresh signed
   cohort lease for the exact attempt and artifact. Set on the Platform process
-  (which forwards it to Targon source-review rentals) and on local screeners.
+  and on the signed screener workers.
   Leave it off for legacy screening; never treat an absent lease as CLEAR.
 - `SCREENER_STATIC_PREFLIGHT_V2_MODE`: `off` (default), `shadow`, or `enforce`.
   `off` and `shadow` preserve the v1 decisive result; `shadow` additionally
