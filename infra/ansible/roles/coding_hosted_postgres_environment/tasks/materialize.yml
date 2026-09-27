@@ -1,0 +1,331 @@
+---
+# Reached only through the single, loop-item-free gate in main.yml, so every
+# guard below runs exactly once, before any copy is written, and reads only
+# values this run produced.
+
+# The gate main.yml captured could be preset while --start-at-task skips the
+# capture, opening the include with enabled=false. Re-assert the raw flag here,
+# with the same default(false, true) and no_log as the capture, so the include
+# writes nothing unless enabled is genuinely a boolean true.
+- name: Require the raw enabled flag to be a boolean true inside the include
+  ansible.builtin.assert:
+    that:
+      - (coding_hosted_postgres_environment_enabled | default(false, true)) is sameas true
+    fail_msg: Materialization runs only when enabled is set to a boolean true. Nothing was written.
+    quiet: true
+  no_log: true
+
+# Accident guard only. The supported entry point,
+# infra/scripts/coding-hosted-guarded-run.py, verifies the reviewed checkout,
+# validates the controller inputs before ansible parses anything, builds the
+# enabled flag, confirmation and revision itself, and sets this marker in
+# ansible's environment. Anyone able to run ansible-playbook can set the same
+# variable, so the marker proves nothing about the caller: it only stops an
+# accidental direct run, which is unsupported. It sits inside the dynamic
+# include so --start-at-task cannot skip it, and reads the controller
+# environment, never an operator template.
+- name: Require the guarded entry point marker, an accident guard only
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.env', 'DITTO_CODING_HOSTED_GUARDED_RUN') == 'postgres-environment-materialize'
+    fail_msg: >-
+      Run this only through uv run --locked --script infra/scripts/coding-hosted-guarded-run.py
+      postgres-environment-materialize REVIEWED_REVISION; direct ansible-playbook runs are
+      unsupported. Nothing was written.
+    quiet: true
+
+# This role only writes files; it never previews. --check would skip the write
+# module and the unit re-checks but still run the probes, so it is refused up
+# front with a constant, accurate message. The dormant fixture stays the check
+# path: main.yml never includes this file when the gate is closed.
+- name: Refuse check mode, which cannot verify the write
+  ansible.builtin.assert:
+    that:
+      - not ansible_check_mode
+    fail_msg: This role writes credential files and does not support check mode. Nothing was written.
+    quiet: true
+
+# Extra vars outrank role defaults, registered results and set_facts alike, so
+# the only defence against a preset internal name is to refuse it before that
+# name is created. varnames lists names without rendering any value and is
+# checked here, before any register or set_fact in this file, so at this point
+# only the four documented inputs and the gate main.yml captured may carry the
+# role's prefix: a preset registered result, captured input or document variable
+# would show up and is refused. Presetting the captured gate itself only enables
+# materialization, which every guard below still decides. The separate removal
+# role's coding_hosted_postgres_environment_cleanup_* names are excluded so its
+# presence never produces a misleading refusal here. The loops' item is the only
+# other name these tasks read that extra vars could supply; loop values win over
+# extra vars today, but a preset item is refused rather than trusted. Every
+# other variable read below is a non-overridable magic variable (groups,
+# ansible_play_hosts_all). Both guards test names with varnames, which lists
+# variables without rendering them: 'is defined' renders the value first, so a
+# variable templated to raise an error would print that error.
+- name: Refuse a password supplied as an Ansible variable
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.varnames', '^coding_hosted_postgres_environment_password$', wantlist=True) == []
+    fail_msg: >-
+      Never pass the PostgreSQL password with -e, inventory or vars files. Export
+      DITTO_CODING_PG_PASSWORD in the controller's local environment instead.
+    quiet: true
+
+- name: Refuse preset registered results and undocumented role inputs
+  ansible.builtin.assert:
+    that:
+      - >-
+        lookup('ansible.builtin.varnames', '^coding_hosted_postgres_environment_', wantlist=True)
+        | reject('match', '^coding_hosted_postgres_environment_cleanup_')
+        | sort == ['coding_hosted_postgres_environment_captured_enabled',
+        'coding_hosted_postgres_environment_confirmation',
+        'coding_hosted_postgres_environment_enabled',
+        'coding_hosted_postgres_environment_host',
+        'coding_hosted_postgres_environment_source_revision']
+      - lookup('ansible.builtin.varnames', '^item$', wantlist=True) == []
+    fail_msg: >-
+      Only the enabled, confirmation, source_revision and host inputs are accepted; a
+      registered result name, a captured or document variable, a loop item, or another
+      coding_hosted_postgres_environment_ variable is preset. Nothing was written.
+    quiet: true
+
+# A -e ansible_facts value replaces gathered facts, so identity and the reader
+# accounts come only from these registered probes, whose names the guard above
+# keeps unforgeable.
+- name: Probe this machine's identity into a result extra vars cannot preset
+  ansible.builtin.setup:
+    gather_subset: ['!all', '!min', platform, distribution]
+  register: coding_hosted_postgres_environment_identity
+
+- name: Inspect host accounts once
+  ansible.builtin.getent:
+    database: passwd
+  register: coding_hosted_postgres_environment_accounts
+
+# Capture every operator input exactly once, with no loop item in scope, so a
+# lazily templated value cannot render one thing here and another inside a
+# later loop. default(..., true) turns any template error, including one that
+# reads the password, into an empty string that then fails validation, instead
+# of surfacing the value in a fatal error message. no_log keeps a value that
+# resolved to a secret off the wire. Every later task uses only these captures.
+- name: Capture the operator inputs once, neutralising templates and loops
+  ansible.builtin.set_fact:
+    coding_hosted_postgres_environment_captured_host: "{{ coding_hosted_postgres_environment_host | default('', true) }}"
+    coding_hosted_postgres_environment_captured_confirmation: "{{ coding_hosted_postgres_environment_confirmation | default('', true) }}"
+    coding_hosted_postgres_environment_captured_revision: "{{ coding_hosted_postgres_environment_source_revision | default('', true) }}"
+  no_log: true
+
+# inventory_hostname and group_names are host variables that extra vars
+# override, so group membership is proved from magic variables they cannot:
+# every host in this play must belong to role_coding_hosted, and the play must
+# target exactly the reviewed host. ansible_play_hosts_all and
+# ansible_play_batch carry real inventory names, so hostname/arch/distribution
+# reported by the target's own setup can no longer route the password to a
+# labelled rogue VM run without --limit. Both are pinned: with serial: 1 the
+# batch alone would be the reviewed host while a rogue host is still in the play.
+# A single trailing newline satisfies a '$' anchor, so the revision also needs
+# its exact length and the host must survive trimming unchanged. The captured
+# values are inert strings by now, so this assert cannot render an operator
+# template and quiet keeps the conditions, which name only variables, terse.
+- name: Require the exact host, source, database address and confirmation
+  ansible.builtin.assert:
+    that:
+      - ansible_play_hosts_all | difference(groups.get('role_coding_hosted', [])) | length == 0
+      - ansible_play_hosts_all == ['ditto-coding-hosted-v2']
+      - ansible_play_batch == ['ditto-coding-hosted-v2']
+      - coding_hosted_postgres_environment_identity.ansible_facts.ansible_hostname == 'ditto-coding-hosted-v2'
+      - coding_hosted_postgres_environment_identity.ansible_facts.ansible_architecture == 'x86_64'
+      - coding_hosted_postgres_environment_identity.ansible_facts.ansible_distribution == 'Debian'
+      - coding_hosted_postgres_environment_identity.ansible_facts.ansible_distribution_major_version == '13'
+      - coding_hosted_postgres_environment_captured_revision is string
+      - coding_hosted_postgres_environment_captured_revision is match('^[0-9a-f]{40}$')
+      - coding_hosted_postgres_environment_captured_revision | length == 40
+      - coding_hosted_postgres_environment_captured_confirmation == 'MATERIALIZE NATIVE CODING POSTGRES ENVIRONMENT'
+      - coding_hosted_postgres_environment_captured_host is string
+      - coding_hosted_postgres_environment_captured_host == coding_hosted_postgres_environment_captured_host | trim
+      - coding_hosted_postgres_environment_captured_host is match('^10[.]30[.]0[.]([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-3])$')
+    fail_msg: Require the reviewed source, dedicated host, exact PostgreSQL private IP and confirmation.
+    quiet: true
+
+# Without pipelining ansible-core writes the module, including its arguments, to
+# a temp file under the ssh user's ~/.ansible/tmp on the target, and with
+# keep_remote_files on it leaves it there; the password would persist even on a
+# dropped connection. Refuse before the password is read unless pipelining is
+# genuinely on. The playbook sets ansible_pipelining: true in its play vars. On
+# ansible-core 2.21.2 the ssh plugin reads ansible_pipelining and then
+# ansible_ssh_pipelining, and the later one wins, so -e ansible_ssh_pipelining=false
+# disables pipelining while ansible_pipelining still reads true: both must be a
+# real boolean true. Variables outrank the ANSIBLE_PIPELINING environment and
+# ini settings, so when both are true pipelining is on. keep_remote_files has no
+# variable form and disables pipelining on its own, so it must be false.
+# sameas is used instead of the bool filter, which would print a coerced
+# non-boolean value in a deprecation warning.
+- name: Require pipelining on and remote files not kept before reading the password
+  ansible.builtin.assert:
+    that:
+      - ansible_pipelining is sameas true
+      - ansible_ssh_pipelining | default(true) is sameas true
+      - lookup('ansible.builtin.config', 'DEFAULT_KEEP_REMOTE_FILES') is sameas false
+    fail_msg: >-
+      Run the materialization playbook as written, which enables pipelining, without
+      overriding ansible_pipelining or ansible_ssh_pipelining and with
+      keep_remote_files off, so the password is never written to a temp file on the
+      target. Nothing was written.
+    quiet: true
+
+- name: Require one bounded single-line password from the controller environment
+  ansible.builtin.assert:
+    that:
+      - lookup('env', 'DITTO_CODING_PG_PASSWORD') | length > 0
+      - lookup('env', 'DITTO_CODING_PG_PASSWORD') | length <= 1024
+      - lookup('env', 'DITTO_CODING_PG_PASSWORD') == lookup('env', 'DITTO_CODING_PG_PASSWORD') | trim
+      - lookup('env', 'DITTO_CODING_PG_PASSWORD') is not search('[\x00-\x1f\x7f]')
+    fail_msg: >-
+      Export DITTO_CODING_PG_PASSWORD from the platform-db-password secret in the
+      controller's local environment and re-run. The value is never printed.
+    quiet: true
+  no_log: true
+
+- name: Require the distinct worker and custodian identities
+  ansible.builtin.assert:
+    that:
+      - coding_hosted_postgres_environment_accounts.ansible_facts.getent_passwd.get('ditto-coding-hosted') is not none
+      - coding_hosted_postgres_environment_accounts.ansible_facts.getent_passwd.get('ditto-coding-custody') is not none
+      - coding_hosted_postgres_environment_accounts.ansible_facts.getent_passwd['ditto-coding-hosted'][1] != coding_hosted_postgres_environment_accounts.ansible_facts.getent_passwd['ditto-coding-custody'][1]
+      - coding_hosted_postgres_environment_accounts.ansible_facts.getent_passwd['ditto-coding-hosted'][4] == '/var/lib/ditto-coding-hosted'
+      - coding_hosted_postgres_environment_accounts.ansible_facts.getent_passwd['ditto-coding-custody'][4] == '/var/lib/ditto-coding-custody'
+    fail_msg: Run the native daemon and custody-key bootstraps before materializing credentials.
+    quiet: true
+
+- name: List live worker and custody units
+  ansible.builtin.command:
+    argv: [/usr/bin/systemctl, list-units, --all, --plain, --no-legend, --full, ditto-coding-hosted-worker.service, "ditto-coding-custody@*.service"]
+  register: coding_hosted_postgres_environment_units
+  changed_when: false
+  check_mode: false
+
+# Allow-list, not deny-list: every listed line must be an expected unit whose
+# ACTIVE column is inactive or failed. Any other state, including refreshing
+# (systemd 256+), maintenance, a future state or an unparseable line, refuses.
+# An empty listing means no such unit is loaded and is allowed.
+- name: Refuse to replace credentials unless every listed unit is inactive or failed
+  ansible.builtin.assert:
+    that:
+      - >-
+        coding_hosted_postgres_environment_units.stdout_lines
+        | reject('match', '^(ditto-coding-hosted-worker[.]service|ditto-coding-custody@\\S+[.]service)\\s+\\S+\\s+(inactive|failed)(\\s|$)')
+        | list | length == 0
+    fail_msg: >-
+      Stop the hosted worker and every custody instance before materializing credentials;
+      each listed unit must be inactive or failed and this role stops nothing.
+    quiet: true
+
+# Render the entries and the password-bearing document once, from the captured,
+# validated host, so the bytes written and the digest verified are built from
+# the same single render and no operator template reaches this point.
+- name: Assemble the fixed environment entries from the captured host
+  ansible.builtin.set_fact:
+    coding_hosted_postgres_environment_entries:
+      - "POSTGRES_HOST={{ coding_hosted_postgres_environment_captured_host }}"
+      - "POSTGRES_PORT=5432"
+      - "POSTGRES_USER=ditto"
+      - "POSTGRES_DB=ditto_platform_prod"
+      - "POSTGRES_COMMAND_TIMEOUT=30"
+      - "POSTGRES_POOL_MIN_SIZE=1"
+      - "POSTGRES_POOL_MAX_SIZE=4"
+  no_log: true
+
+- name: Render the environment document once with the controller-only password
+  ansible.builtin.set_fact:
+    coding_hosted_postgres_environment_document: >-
+      {{ (coding_hosted_postgres_environment_entries
+      + ['POSTGRES_PASSWORD=' ~ lookup('env', 'DITTO_CODING_PG_PASSWORD')])
+      | to_json }}
+  no_log: true
+
+# A path-based file/copy run as root follows a symlink the reader account can
+# swap in for private or the copy itself, even mid-run: it would chown and chmod
+# the link target to the account and write the password inside it, and a
+# follow=false stat of the final path would still pass. The role-local module
+# instead opens every component from / with O_NOFOLLOW, verifies the reader-owned
+# home and private directories on the descriptors (creating private if absent),
+# writes an O_CREAT|O_EXCL temp with fchown/fchmod/fsync and renames it into the
+# pinned directory, and re-verifies the parents after the write. The document is
+# a no_log module argument, so it never reaches the target's journal, and the
+# task is no_log. It returns the on-disk sha256 for the digest check below.
+- name: Write each reader's own PostgreSQL environment copy through pinned directories
+  coding_hosted_postgres_environment_write:
+    path: "{{ item.path }}"
+    owner: "{{ item.owner }}"
+    content: "{{ coding_hosted_postgres_environment_document }}"
+  loop:
+    - {path: /var/lib/ditto-coding-custody/private/postgres-environment.json, owner: ditto-coding-custody}
+    - {path: /var/lib/ditto-coding-hosted/private/postgres-environment.json, owner: ditto-coding-hosted}
+  loop_control:
+    label: "{{ item.path }}"
+  register: coding_hosted_postgres_environment_written
+  no_log: true
+
+# A unit could start between the pre-write listing and now, so a copy may have
+# been written and read mid-rotation. Re-list and refuse loudly if so; the role
+# stops nothing and does not roll the copy back.
+- name: Re-list live worker and custody units after writing
+  ansible.builtin.command:
+    argv: [/usr/bin/systemctl, list-units, --all, --plain, --no-legend, --full, ditto-coding-hosted-worker.service, "ditto-coding-custody@*.service"]
+  register: coding_hosted_postgres_environment_units_after_write
+  changed_when: false
+  check_mode: false
+
+- name: Refuse if any unit became active during the write
+  ansible.builtin.assert:
+    that:
+      - >-
+        coding_hosted_postgres_environment_units_after_write.stdout_lines
+        | reject('match', '^(ditto-coding-hosted-worker[.]service|ditto-coding-custody@\\S+[.]service)\\s+\\S+\\s+(inactive|failed)(\\s|$)')
+        | list | length == 0
+    fail_msg: >-
+      A worker or custody unit became active during the write; a copy may have been read
+      mid-rotation. Stop every unit, reconcile by hand and re-run.
+    quiet: true
+
+# The module already re-opened each copy through the pinned directory and
+# verified it is a regular, single-link, reader-owned 0600 file holding exactly
+# the document before returning. This independent digest check confirms the
+# sha256 it returned matches the rendered document, catching a module bug. The
+# whole write result carries that digest, so this stays no_log.
+- name: Require both copies to hold exactly the rendered document
+  ansible.builtin.assert:
+    that:
+      - item.state == 'written'
+      - item.checksum == coding_hosted_postgres_environment_document | hash('sha256')
+    fail_msg: A PostgreSQL environment copy does not match the rendered document.
+    quiet: true
+  loop: "{{ coding_hosted_postgres_environment_written.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+  no_log: true
+
+- name: Re-list live worker and custody units after verifying
+  ansible.builtin.command:
+    argv: [/usr/bin/systemctl, list-units, --all, --plain, --no-legend, --full, ditto-coding-hosted-worker.service, "ditto-coding-custody@*.service"]
+  register: coding_hosted_postgres_environment_units_after_verify
+  changed_when: false
+  check_mode: false
+
+- name: Refuse if any unit became active during verification
+  ansible.builtin.assert:
+    that:
+      - >-
+        coding_hosted_postgres_environment_units_after_verify.stdout_lines
+        | reject('match', '^(ditto-coding-hosted-worker[.]service|ditto-coding-custody@\\S+[.]service)\\s+\\S+\\s+(inactive|failed)(\\s|$)')
+        | list | length == 0
+    fail_msg: >-
+      A worker or custody unit became active while verifying the copies; a copy may have
+      been read mid-rotation. Stop every unit, reconcile by hand and re-run.
+    quiet: true
+
+- name: Report only that the copies exist
+  ansible.builtin.debug:
+    msg: >-
+      Native Coding PostgreSQL environment materialized for the custodian and
+      worker; owner, mode and digest verified; values and digest not shown;
+      shadow_only=true; weight_eligible=false; services_started=false.

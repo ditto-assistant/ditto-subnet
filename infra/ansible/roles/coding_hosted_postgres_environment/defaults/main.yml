@@ -7,3 +7,6 @@ coding_hosted_postgres_environment_host: ""
 # The password is deliberately not a variable. Tasks read DITTO_CODING_PG_PASSWORD
 # only from the controller's local environment, so inventory, Git and
 # command-line extra vars can never carry it.
+# These four are the only accepted inputs: any other variable named
+# coding_hosted_postgres_environment_*, including a registered result or the
+# document variables, is refused before anything is inspected or written.
