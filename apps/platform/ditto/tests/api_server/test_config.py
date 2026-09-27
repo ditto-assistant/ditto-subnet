@@ -677,8 +677,6 @@ class TestInferenceRequestBudgetBound:
         check_config(replace(config, inference_proxy=at_bound))
 
 
-
-
 def test_ditto_link_config_is_off_by_default_and_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
