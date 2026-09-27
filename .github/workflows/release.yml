@@ -990,17 +990,14 @@ jobs:
     secrets: inherit
 
   build-screener:
-    # A controller deploy restarts the single-writer image-builder service.
-    # Finish that rollout before queuing a trusted Targon build so the restart
-    # cannot orphan the rental behind its 45-minute Platform lease.
-    needs: [plan, release, deploy_platform, deploy-screener-controller]
+    # Build the exact release checkout on the trusted GitHub runner.
+    needs: [plan, release, deploy_platform]
     if: >-
       always() &&
       needs.plan.result == 'success' &&
       needs.release.result == 'success' &&
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.screener == 'true' &&
-      (needs.deploy-screener-controller.result == 'success' || needs.deploy-screener-controller.result == 'skipped') &&
       (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -1022,68 +1019,27 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - name: Ask Platform for a Targon Kaniko build
-        id: targon
+      - name: Register the trusted release image build
+        id: image_build
         env:
           SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
         run: |
           set -euo pipefail
           token_file="$RUNNER_TEMP/screener-controller-token"
           umask 077
-          if ! gcloud secrets versions access latest \
+          gcloud secrets versions access latest \
             --secret=screener-controller-api-token-prod \
-            --project=ditto-app-dev >"$token_file"; then
-            echo "::error::controller token unavailable; no provider authorized a fallback"
-            exit 1
-          fi
+            --project=ditto-app-dev >"$token_file"
           payload="$(jq -cn --arg sha "$SOURCE_SHA" '{component:"screener",source_sha:$sha,reason:"Build the reviewed monorepo release image"}')"
-          if ! response="$(curl -fsS \
+          response="$(curl -fsS \
             -H "Authorization: Bearer $(<"$token_file")" \
             -H 'Content-Type: application/json' \
             --data "$payload" \
-            https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds)"; then
-            echo "::error::Platform build queue unavailable; no provider authorized a fallback"
-            exit 1
-          fi
-          build_id="$(jq -er .build_id <<<"$response")"
-          echo "build_id=$build_id" >>"$GITHUB_OUTPUT"
-          for _ in $(seq 1 200); do
-            if ! response="$(curl -fsS \
-              -H "Authorization: Bearer $(<"$token_file")" \
-              "https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds/$build_id")"; then
-              echo "::warning::Platform build poll unavailable; retrying without authorizing a fallback"
-              sleep 15
-              continue
-            fi
-            if ! status="$(jq -er .status <<<"$response")"; then
-              echo "::warning::Platform build poll returned an invalid response; retrying"
-              sleep 15
-              continue
-            fi
-            case "$status" in
-              succeeded)
-                echo "mode=targon" >>"$GITHUB_OUTPUT"
-                echo "digest=$(jq -er .image_digest <<<"$response")" >>"$GITHUB_OUTPUT"
-                exit 0
-                ;;
-              fallback_required)
-                echo "mode=fallback" >>"$GITHUB_OUTPUT"
-                echo "reason=$(jq -r '.error_code // "TARGON_BUILD_FAILED"' <<<"$response")" >>"$GITHUB_OUTPUT"
-                echo "controller_epoch=$(jq -er .controller_epoch <<<"$response")" >>"$GITHUB_OUTPUT"
-                exit 0
-                ;;
-              failed|canceled)
-                echo "::error::Platform ended trusted build with terminal status $status"
-                exit 1
-                ;;
-            esac
-            sleep 15
-          done
-          echo "::error::Targon build timed out without a Platform-issued fallback"
-          exit 1
+            https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds)"
+          echo "build_id=$(jq -er .build_id <<<"$response")" >>"$GITHUB_OUTPUT"
+          echo "epoch=$(jq -er .controller_epoch <<<"$response")" >>"$GITHUB_OUTPUT"
 
-      - name: Build on the existing runner when Targon is unavailable
-        if: steps.targon.outputs.mode == 'fallback'
+      - name: Build the screener image on the trusted runner
         env:
           SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
         run: |
@@ -1093,7 +1049,7 @@ jobs:
           existing_digest="$(gcloud artifacts docker images describe "$image" \
             --format='value(image_summary.digest)' 2>/dev/null || true)"
           if [[ "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "reusing immutable fallback image: $SCREENER_REPOSITORY@$existing_digest"
+            echo "reusing immutable release image: $SCREENER_REPOSITORY@$existing_digest"
           else
             docker build \
               --file workers/screener/Dockerfile \
@@ -1105,34 +1061,26 @@ jobs:
       - name: Record immutable screener image identity
         env:
           SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
-          TARGON_DIGEST: ${{ steps.targon.outputs.digest }}
-          BUILD_ID: ${{ steps.targon.outputs.build_id }}
-          BUILD_EPOCH: ${{ steps.targon.outputs.controller_epoch }}
+          BUILD_ID: ${{ steps.image_build.outputs.build_id }}
+          BUILD_EPOCH: ${{ steps.image_build.outputs.epoch }}
         run: |
           set -euo pipefail
           digest="$(gcloud artifacts docker images describe \
             "$SCREENER_REPOSITORY:sha-$SOURCE_SHA" \
             --format='value(image_summary.digest)')"
-          if [ -n "$TARGON_DIGEST" ] && [ "$digest" != "$TARGON_DIGEST" ]; then
-            echo "::error::Targon-reported digest does not match Artifact Registry"
-            exit 1
-          fi
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          if [ -n "$BUILD_ID" ] && [ -z "$TARGON_DIGEST" ]; then
-            token_file="$RUNNER_TEMP/screener-controller-token"
-            payload="$(jq -cn \
-              --arg epoch "$BUILD_EPOCH" \
-              --arg digest "$digest" \
-              --arg resource "github-run-${GITHUB_RUN_ID}" \
-              '{environment:"prod",controller_epoch:$epoch,status:"succeeded",provider:"gcp",provider_resource_id:$resource,image_digest:$digest,error_code:null}')"
-            curl -fsS --retry 5 --retry-all-errors --retry-delay 2 \
-              -H "Authorization: Bearer $(<"$token_file")" \
-              -H 'Content-Type: application/json' \
-              --request PUT \
-              --data "$payload" \
-              "https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds/$BUILD_ID" \
-              >/dev/null
-          fi
+          payload="$(jq -cn \
+            --arg epoch "$BUILD_EPOCH" \
+            --arg digest "$digest" \
+            --arg resource "github-run-${GITHUB_RUN_ID}" \
+            '{environment:"prod",controller_epoch:$epoch,status:"succeeded",provider:"gcp",provider_resource_id:$resource,image_digest:$digest,error_code:null}')"
+          curl -fsS --retry 5 --retry-all-errors --retry-delay 2 \
+            -H "Authorization: Bearer $(<"$RUNNER_TEMP/screener-controller-token")" \
+            -H 'Content-Type: application/json' \
+            --request PUT \
+            --data "$payload" \
+            "https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds/$BUILD_ID" \
+            >/dev/null
           echo "screener image: $SCREENER_REPOSITORY@$digest"
 
   assemble-screener-fleet-release:

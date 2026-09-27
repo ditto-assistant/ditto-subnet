@@ -16,16 +16,16 @@ class ScreenerProviderSettings(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     runtime_provider_priority: tuple[ScreenerCapacityProvider, ...] = (
+        "hetzner",
         "gcp",
-        "targon",
     )
     source_review_provider_priority: tuple[ScreenerCapacityProvider, ...] = (
+        "hetzner",
         "gcp",
-        "targon",
     )
     build_provider_priority: tuple[ScreenerCapacityProvider, ...] = (
+        "hetzner",
         "gcp",
-        "targon",
     )
     gce_overflow_enabled: bool = False
     primary_node_id: Annotated[
@@ -68,22 +68,6 @@ class ScreenerProviderSettings(BaseModel):
                         "when overflow is enabled"
                     )
         return self
-
-    def targon_runtime_enabled(self) -> bool:
-        return "targon" in self.runtime_provider_priority
-
-    def targon_source_review_enabled(self) -> bool:
-        return "targon" in self.source_review_provider_priority
-
-    def targon_builders_enabled(self) -> bool:
-        return "targon" in self.build_provider_priority
-
-    def all_lanes_targon_first(self) -> bool:
-        return (
-            self.runtime_provider_priority[0] == "targon"
-            and self.source_review_provider_priority[0] == "targon"
-            and self.build_provider_priority[0] == "targon"
-        )
 
     def all_lanes_gcp_only(self) -> bool:
         return (

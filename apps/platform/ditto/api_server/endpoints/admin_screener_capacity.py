@@ -512,6 +512,15 @@ async def set_screener_provider_settings(
     _admin: AdminDep,
     session: SessionDep,
 ) -> ProviderSettingsRevisionModel:
+    if any(
+        "targon" in providers
+        for providers in (
+            payload.settings.build_provider_priority,
+            payload.settings.runtime_provider_priority,
+            payload.settings.source_review_provider_priority,
+        )
+    ):
+        raise HTTPException(status_code=422, detail="Targon screening is retired")
     expected_confirmation = provider_settings_confirmation(payload.settings)
     if payload.confirmation != expected_confirmation:
         raise HTTPException(

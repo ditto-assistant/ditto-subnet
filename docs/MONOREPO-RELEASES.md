@@ -52,16 +52,14 @@ consume the resulting immutable release commit:
 - datagen publishes an immutable component digest, stages it on a zero-traffic
   Cloud Run revision, verifies an authenticated v8 generation, and only then
   promotes it to 100% traffic;
-- screener image publication queues a dedicated Targon Kaniko rental first,
-  and parks on failure; the existing GitHub/GCP build runner is used only when
-  an operator selects that provider before a manual Backroom retry;
+- screener image publication builds the exact release on a trusted GitHub
+  runner and registers its immutable digest with Platform;
 - an assembled, signed validator-stack descriptor advances the non-activating
   `candidate-compat-2` channel while remaining smoke tests continue, allowing
   opted-in validators to authenticate and pre-pull its exact component images;
   only the later `compat-2` promotion authorizes a transactional update;
-- the capacity controller and its trusted-builder sibling deploy together from
-  the exact release commit over IAP whenever either orchestrator or screener
-  source changes;
+- the capacity controller deploys from the exact release commit over IAP
+  whenever orchestrator or screener source changes;
 - release publication advances one keyless-signed screener-fleet descriptor;
   both Hetzner and live GCE overflow workers authenticate and pull that stable
   channel themselves. A zero-sized GCE fleet is a successful no-op and creates
@@ -204,10 +202,7 @@ values. Infra outputs the service-account emails and exact WIF provider. No
 static GCP key is used.
 
 The release job reads `screener-controller-api-token-prod` through its dedicated
-WIF identity into a mode-0600 runner file. The Targon key is never a GitHub
-secret: only the Platform API identity (and the leftover capacity VM, while it
-exists) may read `TARGON_API_KEY` from Secret Manager, and the build rental
-receives a 30-minute registry-only token.
+WIF identity into a mode-0600 runner file to register the trusted image digest.
 
 Backroom application secrets are not Terraform values. Bootstrap them once
 with `apps/backroom/scripts/bootstrap-worker-secrets.sh`; the script consumes
@@ -220,16 +215,13 @@ Only the scoped Cloudflare deployment token belongs in the GitHub environment.
 1. Merge and apply the infra stack, but leave the capacity-controller flag off.
 2. Configure the protected GitHub environments and populate the controller
    bearer secret version out of band.
-3. Publish the pinned maintained Kaniko executor.
-4. Deploy Platform from a reviewed release so the trusted-build queue migration
+3. Deploy Platform from a reviewed release so the trusted-build queue migration
    and controller API exist.
-5. Enable and converge the capacity controller and separate image-builder unit.
-   Later semantic releases deploy both units automatically; Ansible remains the
+4. Enable and converge the capacity controller. Later semantic releases deploy
+   the unit automatically; Ansible remains the
    first-boot/configuration path.
-6. Queue one screener build. Verify a Targon immutable digest; if it fails,
-   verify the parked attempt in Backroom before selecting GCP and manually
-   retrying it.
-7. Exercise GCE worker scale `0 -> 1 -> 0` before retiring the pet screener.
+5. Publish one screener image and verify the immutable digest registered in Platform.
+6. Exercise GCE worker scale `0 -> 1 -> 0` before retiring the pet screener.
 
 Merging application source performs semantic release and automatic runtime
 deployment. Infrastructure remains separate: Terraform apply, first-boot

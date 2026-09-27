@@ -52,12 +52,12 @@ class _Platform:
         self,
         demand: Demand,
         nodes: dict[str, dict[str, object]] | None = None,
-        screening_priority: tuple[Literal["targon", "gcp"], ...] = (
-            "targon",
+        screening_priority: tuple[Literal["hetzner", "targon", "gcp"], ...] = (
+            "hetzner",
             "gcp",
         ),
-        build_priority: tuple[Literal["targon", "gcp"], ...] = (
-            "targon",
+        build_priority: tuple[Literal["hetzner", "targon", "gcp"], ...] = (
+            "hetzner",
             "gcp",
         ),
     ) -> None:
@@ -480,7 +480,7 @@ class CapacityDecisionTests(unittest.TestCase):
             settings = _settings(Path(directory))
             platform = _Platform(
                 Demand(runnable=4, active=0, desired=2),
-                screening_priority=("gcp", "targon"),
+                screening_priority=("gcp", "hetzner"),
             )
             gce = _GCE()
             with (
@@ -578,61 +578,8 @@ class CapacityDecisionTests(unittest.TestCase):
                 # No snapshot (and so no fresh success timestamp) is sent.
                 self.assertEqual(platform.renewed, [])
 
-    def test_targon_first_decomposed_lanes_use_gce_workers(self) -> None:
-        with TemporaryDirectory() as directory:
-            settings = _settings(Path(directory))
-            platform = _Platform(Demand(runnable=4, active=0, desired=2))
-            gce = _GCE()
-            with (
-                patch(
-                    "screener_capacity.controller.PlatformControl",
-                    return_value=platform,
-                ),
-                patch("screener_capacity.controller.GCEFleet", return_value=gce),
-            ):
-                snapshot = reconcile(settings)
-            self.assertEqual(gce.resized, [2])
-            self.assertEqual(snapshot["targon_capability"], "nogo")
-            self.assertEqual(snapshot["targon_available"], 0)
-            self.assertEqual(
-                snapshot["fallback_reason"], "TARGON_NESTED_DOCKER_WORKER_LANE_RETIRED"
-            )
 
 
-class RetiredUnitFlagTests(unittest.TestCase):
-    def test_parser_accepts_retired_nested_docker_unit_flags(self) -> None:
-        args = build_parser().parse_args(
-            [
-                "--platform-url",
-                "https://platform.invalid",
-                "--targon-platform-url",
-                "https://platform.invalid",
-                "--platform-token-file",
-                "/token",
-                "--targon-org-slug",
-                "ditto",
-                "--gce-project",
-                "test-project",
-                "--gce-region",
-                "test-region",
-                "--gce-mig",
-                "test-mig",
-                "--targon-capability-file",
-                "/capability.json",
-                "--targon-resource",
-                "cpu-medium",
-                "--targon-worker-env-file",
-                "/worker-env.json",
-                "--gcp-bootstrap-service-account",
-                "bootstrap@example.iam.gserviceaccount.com",
-                "--source-review-secret-resource",
-                "projects/test/secrets/key",
-                "--targon-provisioning-timeout-seconds",
-                "600",
-            ]
-        )
-        self.assertEqual(args.targon_org_slug, "ditto")
-        self.assertEqual(args.targon_resource, "cpu-medium")
 
 
 if __name__ == "__main__":

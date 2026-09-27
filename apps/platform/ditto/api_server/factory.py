@@ -6,7 +6,6 @@ Per-test instantiation (no module-level ``app =`` global) keeps
 
 from __future__ import annotations
 
-import asyncio
 import html
 import logging
 import os
@@ -14,9 +13,7 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -490,105 +487,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await validator_names.start(app.state.session_maker)
 
-            targon_loop = None
-            if (
-                _process_role() == PLATFORM_ROLE
-                and config.targon is not None
-                and config.targon.enabled
-                and config.screener_auth.hotkey
-            ):
-                from ditto.api_server.targon_client import AsyncTargonClient
-                from ditto.api_server.targon_promote import (
-                    mint_access_token,
-                    promote_runtime_archive,
-                )
-                from ditto.api_server.targon_rental_loop import TargonRentalLoop
-
-                targon_client = AsyncTargonClient(
-                    api_key=config.targon.api_key,
-                    org_slug=config.targon.org_slug,
-                )
-                stack.push_async_callback(targon_client.aclose)
-
-                async def mint_token(service_account: str) -> str:
-                    return await asyncio.to_thread(mint_access_token, service_account)
-
-                async def promote_archive(
-                    source_key: str, destination: str, writer_token: str
-                ) -> str:
-                    return await promote_runtime_archive(
-                        storage=storage,
-                        source_key=source_key,
-                        destination=destination,
-                        access_token=writer_token,
-                    )
-
-                from ditto.api_server.cloudrun_client import AsyncCloudRunClient
-                from ditto.api_server.cloudrun_provider import CloudRunComputeProvider
-                from ditto.api_server.screening_provider import ScreeningComputeProvider
-                from ditto.api_server.targon_provider import TargonComputeProvider
-
-                providers: list[ScreeningComputeProvider] = [
-                    TargonComputeProvider(targon_client, config.targon)
-                ]
-                if config.cloudrun is not None and config.cloudrun.enabled:
-                    cloudrun_client = AsyncCloudRunClient(
-                        project=config.cloudrun.project,
-                        region=config.cloudrun.region,
-                    )
-                    stack.push_async_callback(cloudrun_client.aclose)
-                    providers.append(
-                        CloudRunComputeProvider(
-                            cloudrun_client,
-                            config.cloudrun,
-                            config.targon,
-                        )
-                    )
-                from ditto.api_server.builder_image import (
-                    resolve_submission_builder_image,
-                )
-                from ditto.api_server.targon_screening import (
-                    finalize_targon_screen_and_pin_dataset,
-                )
-
-                attester = config.screener_auth.hotkey
-                assert attester is not None
-
-                async def complete_screen(attempt_id: UUID) -> None:
-                    async with app.state.session_maker() as session:
-                        await finalize_targon_screen_and_pin_dataset(
-                            session,
-                            storage=storage,
-                            screener_hotkey=attester,
-                            attempt_id=attempt_id,
-                            now=datetime.now(UTC),
-                            generator=generator,
-                            chain=chain,
-                        )
-
-                async def traces_put(key: str, body: bytes, content_type: str) -> str:
-                    if traces_hippius is None:
-                        return ""
-                    return await traces_hippius.put_object(
-                        key=key, body=body, content_type=content_type
-                    )
-
-                targon_loop = TargonRentalLoop(
-                    session_maker=app.state.session_maker,
-                    config=config.targon,
-                    targon=targon_client,
-                    screener_hotkey=attester,
-                    promote_archive=promote_archive,
-                    mint_token=mint_token,
-                    providers=providers,
-                    complete_screen=complete_screen,
-                    resolve_builder_image=resolve_submission_builder_image,
-                    storage=storage,
-                    traces_put=traces_put if traces_hippius is not None else None,
-                )
-                stack.push_async_callback(targon_loop.aclose)
-                await targon_loop.start()
-            app.state.targon_rental_loop = targon_loop
         except Exception as e:
             raise ApiServerLifespanError(
                 f"failed to open dependencies during startup: {e}"
