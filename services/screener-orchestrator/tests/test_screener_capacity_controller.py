@@ -579,8 +579,5 @@ class CapacityDecisionTests(unittest.TestCase):
                 self.assertEqual(platform.renewed, [])
 
 
-
-
-
 if __name__ == "__main__":
     unittest.main()
