@@ -4998,6 +4998,10 @@ def test_source_review_budget_exhaustion_has_public_safe_exact_accounting() -> N
             ValueError("source review evidence fields are invalid"),
             "source-review-inconsistent-verdict-evidence-fields",
         ),
+        (
+            ValueError("source review category future check failed"),
+            "source-review-inconsistent-verdict",
+        ),
         # Anything unrecognized must degrade to the historical shape rather
         # than lose the failure.
         (ValueError("brand new unmapped failure"), "source-review-valueerror"),

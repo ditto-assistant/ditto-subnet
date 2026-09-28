@@ -3986,12 +3986,12 @@ def _source_review_failure_code(error: BaseException) -> str:
         return f"source-review-http-{error.response.status_code}"
     message = str(error).strip()
     suffix = _SOURCE_REVIEW_FAILURE_CODES.get(message)
-    if (
-        suffix is None
-        and message.startswith("source review category ")
-        and message.endswith(" requires two source locations")
-    ):
-        suffix = "inconsistent-verdict-category-locations"
+    if suffix is None and message.startswith("source review category "):
+        suffix = (
+            "inconsistent-verdict-category-locations"
+            if message.endswith(" requires two source locations")
+            else "inconsistent-verdict"
+        )
     if suffix is None and ("policy v10" in message or "invariant" in message):
         suffix = "inconsistent-verdict-invariant"
     if suffix is None:
