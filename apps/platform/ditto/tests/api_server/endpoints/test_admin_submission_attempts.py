@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
@@ -228,13 +228,14 @@ async def test_appeal_is_audited_idempotent_and_does_not_change_agent_verdict(
     session: AsyncSession,
 ):
     install(app, session_maker)
+    now = datetime.now(UTC)
     async with session.begin():
-        anchor = await paid_attempt(session)
+        anchor = await paid_attempt(session, submitted_at=now - timedelta(minutes=10))
         await paid_attempt(
-            session, lineage=anchor, submitted_at=NOW - timedelta(minutes=9)
+            session, lineage=anchor, submitted_at=now - timedelta(minutes=9)
         )
         previous = await paid_attempt(
-            session, lineage=anchor, submitted_at=NOW - timedelta(minutes=8)
+            session, lineage=anchor, submitted_at=now - timedelta(minutes=8)
         )
     before = await compare_attempt(
         session,
@@ -244,7 +245,7 @@ async def test_appeal_is_audited_idempotent_and_does_not_change_agent_verdict(
         netuid=118,
         settings=AttemptControlSettings(),
         revision=0,
-        now=NOW,
+        now=now,
     )
     assert before.retry_at is not None
     original_status = await session.scalar(
@@ -262,6 +263,7 @@ async def test_appeal_is_audited_idempotent_and_does_not_change_agent_verdict(
     second = await client.post(PATH + "/appeal", headers=HEADERS, json=payload)
     assert first.status_code == second.status_code == 200, first.text
     assert first.json() == second.json()
+    now = datetime.now(UTC)
     after = await compare_attempt(
         session,
         profile=profile(),
@@ -270,7 +272,7 @@ async def test_appeal_is_audited_idempotent_and_does_not_change_agent_verdict(
         netuid=118,
         settings=AttemptControlSettings(),
         revision=0,
-        now=NOW,
+        now=now,
     )
     assert after.retry_at is None
     record = await client.get(PATH + "/" + str(previous), headers=HEADERS)
@@ -292,7 +294,7 @@ async def test_appeal_is_audited_idempotent_and_does_not_change_agent_verdict(
         netuid=118,
         settings=AttemptControlSettings(),
         revision=0,
-        now=NOW,
+        now=now,
     )
     assert quoted.appeal_id is not None
     await session.rollback()
@@ -301,7 +303,7 @@ async def test_appeal_is_audited_idempotent_and_does_not_change_agent_verdict(
             session,
             source=repair,
             decision=quoted,
-            submitted_at=NOW + timedelta(seconds=1),
+            submitted_at=now + timedelta(seconds=1),
         )
     reused = await compare_attempt(
         session,
@@ -311,7 +313,7 @@ async def test_appeal_is_audited_idempotent_and_does_not_change_agent_verdict(
         netuid=118,
         settings=AttemptControlSettings(),
         revision=0,
-        now=NOW + timedelta(seconds=2),
+        now=now + timedelta(seconds=2),
     )
     assert reused.reference_agent_id == previous
     assert reused.appeal_id is None
