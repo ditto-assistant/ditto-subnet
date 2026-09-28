@@ -271,9 +271,11 @@ rule, with its case note and vector test, is
 (*bench_version 13* sections). This is the harness-side summary — the one
 Bench v13 section of this document; the architecture guide that shows how
 honest designs pass is the README's *Bench v13: how to stay inside the gates*.
-The stock kit is the reference honest architecture: `src/v13.rs` holds each
-piece (`answer_slot_from_prose`, `preload_catalog` / `semantic_top_k`,
-`HARNESS_POLICY_PROMPT`, the completion log) and `src/baseline.rs` wires them.
+The stock kit illustrates an honest architecture: `src/v13.rs` holds the local
+gate helpers (`answer_slot_from_prose`, `preload_catalog` / `semantic_top_k`,
+the completion log), and `src/baseline.rs` wires them. By default the served
+system prompt is the wire prompt unchanged; the optional answer-slot rehearsal
+adds only its output-format instruction.
 The `answer` slot is **off unless `DITTOBENCH_ANSWER_SLOT` is set**
 (`v13::ANSWER_SLOT_ENV`; the `--gates` rehearsal sets it): the wire stays at
 bench 9, so the slot cannot be gated on the contract version, and under the
