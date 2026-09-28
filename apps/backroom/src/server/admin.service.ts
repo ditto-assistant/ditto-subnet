@@ -1,4 +1,48 @@
 import '@tanstack/react-start/server-only'
+import {
+  attemptPolicyInputSchema, attemptReplayInputSchema, attemptAppealInputSchema,
+  attemptPolicySchema, attemptRevisionSchema, attemptRecordSchema,
+  attemptReplaySchema, attemptCalibrationSchema, attemptAppealSchema,
+} from '../lib/submission-attempt.schemas'
+
+const ATTEMPT_PATH = '/api/v1/admin/submission-attempts'
+
+export async function fetchSubmissionAttemptPolicy() {
+  return attemptPolicySchema.parse(await platformAdminRequest(ATTEMPT_PATH))
+}
+
+export async function fetchSubmissionAttempt(agentId: string) {
+  return attemptRecordSchema.parse(await platformAdminRequest(
+    `${ATTEMPT_PATH}/${encodeURIComponent(agentId)}`,
+  ))
+}
+
+export async function fetchSubmissionAttemptCalibration(calibrationId: string) {
+  return attemptCalibrationSchema.parse(await platformAdminRequest(
+    `${ATTEMPT_PATH}/replay/${encodeURIComponent(calibrationId)}`,
+  ))
+}
+
+export async function setSubmissionAttemptPolicy(rawInput: unknown, actor: string) {
+  const input = attemptPolicyInputSchema.parse(rawInput)
+  return attemptRevisionSchema.parse(await platformAdminRequest(ATTEMPT_PATH, {
+    method: 'POST', actor, body: { ...input, actor },
+  }))
+}
+
+export async function replaySubmissionAttempts(rawInput: unknown, actor: string) {
+  const input = attemptReplayInputSchema.parse(rawInput)
+  return attemptReplaySchema.parse(await platformAdminRequest(`${ATTEMPT_PATH}/replay`, {
+    method: 'POST', actor, body: { ...input, actor },
+  }))
+}
+
+export async function appealSubmissionAttempt(rawInput: unknown, actor: string) {
+  const input = attemptAppealInputSchema.parse(rawInput)
+  return attemptAppealSchema.parse(await platformAdminRequest(`${ATTEMPT_PATH}/appeal`, {
+    method: 'POST', actor, body: { ...input, actor },
+  }))
+}
 import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
 
 export async function previewTreasuryTopup(rawInput: unknown) {

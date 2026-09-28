@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import tarfile
 import time
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,7 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.submission_attempts import AttemptControlSettings, AttemptGuidance
 from ditto.api_server.endpoints.upload import (
     ERROR_CODE_BAD_SIGNATURE,
     ERROR_CODE_HOTKEY_NOT_REGISTERED,
@@ -73,6 +75,21 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
     ``ditto.tests.db.queries.test_bans``; here we stub it so the endpoint
     tests need no bans row. Ban-specific tests re-stub this to ``True``.
     """
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.attempt_settings",
+        AsyncMock(return_value=(AttemptControlSettings(), 0)),
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.compare_attempt",
+        AsyncMock(
+            return_value=AttemptGuidance(
+                policy_revision=0,
+                mode="shadow",
+                classification="first_submission",
+                reason="No proven owner predecessor is available.",
+            )
+        ),
+    )
     monkeypatch.setattr(
         "ditto.api_server.endpoints.upload.is_hotkey_banned",
         AsyncMock(return_value=False),
@@ -206,6 +223,185 @@ class TestEvalPricing:
 
 
 class TestUploadCheck:
+    async def test_existing_legacy_quote_remains_recoverable_after_enforcement(
+        self,
+        app,
+        client,
+        monkeypatch,
+    ):
+        override_get_chain_client(app)
+        body = _signed_request_body()
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.attempt_settings",
+            AsyncMock(return_value=(AttemptControlSettings(mode="enforce"), 1)),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission_for_coldkey",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    miner_hotkey=body["hotkey"],
+                    sha256=body["sha256"],
+                    expires_at=datetime.now(UTC) + timedelta(hours=24),
+                    fee_amount_rao=40_000_000,
+                    legacy_payment_cutoff_at=None,
+                    payment_send_address=_make_keypair().ss58_address,
+                    attempt_context=None,
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **body,
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 42,
+                "payment_extrinsic_index": 7,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["ok"]
+        assert response.json()["payment_required"] is False
+
+    async def test_enforce_requires_verified_archive_before_payment(
+        self,
+        app,
+        client,
+        monkeypatch,
+    ):
+        override_get_chain_client(app)
+        verifier = _override_payment_verifier(app)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.attempt_settings",
+            AsyncMock(return_value=(AttemptControlSettings(mode="enforce"), 1)),
+        )
+        response = await client.post(
+            "/api/v1/upload/check", json=_signed_request_body()
+        )
+        assert response.status_code == 200
+        assert response.json()["error_codes"] == [1107]
+        assert response.json()["payment_required"] is False
+        verifier.verify_payment.assert_not_called()
+
+    @pytest.mark.parametrize("mutation", ["sha", "size"])
+    async def test_artifact_precheck_binds_actual_bytes_before_payment(
+        self,
+        app,
+        client,
+        monkeypatch,
+        mutation,
+    ):
+        override_get_chain_client(app)
+        verifier = _override_payment_verifier(app)
+        archive = _real_source_tar()
+        body = _signed_request_body(
+            sha256=hashlib.sha256(archive).hexdigest(), file_size_bytes=len(archive)
+        )
+        if mutation == "sha":
+            archive += b"altered bytes"
+        else:
+            body["file_size_bytes"] += 1
+        compare = AsyncMock()
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.compare_attempt", compare
+        )
+        response = await client.post(
+            "/api/v1/upload/check-artifact",
+            data={"payload": json.dumps(body)},
+            files={"agent_tar": ("agent.tar.gz", archive, "application/gzip")},
+        )
+        assert response.status_code == 400
+        compare.assert_not_called()
+        verifier.verify_payment.assert_not_called()
+
+    async def test_shadow_reports_delta_wait_without_new_enforcement(
+        self,
+        app,
+        client,
+        monkeypatch,
+    ):
+        override_get_chain_client(app)
+        archive = _real_source_tar()
+        guidance = AttemptGuidance(
+            policy_revision=0,
+            mode="shadow",
+            classification="small_source_delta",
+            retry_at=datetime.now(UTC) + timedelta(hours=1),
+            reason="Repeated low-information work after feedback",
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.compare_attempt",
+            AsyncMock(return_value=guidance),
+        )
+        response = await client.post(
+            "/api/v1/upload/check-artifact",
+            data={
+                "payload": json.dumps(
+                    _signed_request_body(
+                        sha256=hashlib.sha256(archive).hexdigest(),
+                        file_size_bytes=len(archive),
+                    )
+                )
+            },
+            files={"agent_tar": ("agent.tar.gz", archive, "application/gzip")},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["ok"] and response.json()["payment_required"]
+        assert response.json()["attempt_guidance"]["retry_at"] is not None
+
+    @pytest.mark.parametrize("wait", [True, False])
+    async def test_enforce_uses_delta_guidance_instead_of_baseline_cooldown(
+        self,
+        app,
+        client,
+        monkeypatch,
+        wait,
+    ):
+        override_get_chain_client(app)
+        archive = _real_source_tar()
+        baseline = AsyncMock(return_value=datetime.now(UTC) + timedelta(hours=1))
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_submission_retry_at", baseline
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.attempt_settings",
+            AsyncMock(return_value=(AttemptControlSettings(mode="enforce"), 1)),
+        )
+        guidance = AttemptGuidance(
+            policy_revision=1,
+            mode="enforce",
+            classification="small_source_delta" if wait else "packaging_only_repair",
+            fast_repair=not wait,
+            retry_at=datetime.now(UTC) + timedelta(hours=1) if wait else None,
+            reason="Completed feedback requires a wait"
+            if wait
+            else "A bounded repair retry is available",
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.compare_attempt",
+            AsyncMock(return_value=guidance),
+        )
+        response = await client.post(
+            "/api/v1/upload/check-artifact",
+            data={
+                "payload": json.dumps(
+                    _signed_request_body(
+                        sha256=hashlib.sha256(archive).hexdigest(),
+                        file_size_bytes=len(archive),
+                    )
+                )
+            },
+            files={"agent_tar": ("agent.tar.gz", archive, "application/gzip")},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["ok"] is (not wait)
+        assert response.json()["payment_required"] is (not wait)
+        assert response.json()["error_codes"] == ([1106] if wait else [])
+        baseline.assert_not_called()
+
     @pytest.fixture(autouse=True)
     def _session(self, app: FastAPI) -> None:
         # /upload/check now reads the ban list, so it needs a session dep.
@@ -421,6 +617,8 @@ class TestUploadCheck:
 
         class Reservation:
             expires_at = datetime.now(UTC) + timedelta(hours=1)
+            miner_hotkey = _make_keypair().ss58_address
+            sha256 = _GOOD_SHA256
             fee_amount_rao = 40_000_000
             payment_send_address = _make_keypair().ss58_address
 
@@ -1003,6 +1201,22 @@ class TestUploadAgentHappyPath:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         deps = _wire_full_stack(app)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.attempt_settings",
+            AsyncMock(return_value=(AttemptControlSettings(mode="enforce"), 1)),
+        )
+        compare = AsyncMock(
+            return_value=AttemptGuidance(
+                policy_revision=1,
+                mode="shadow",
+                classification="small_source_delta",
+                retry_at=datetime.now(UTC) + timedelta(hours=1),
+                reason="Shadow proposal",
+            )
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.compare_attempt", compare
+        )
         kp = bittensor.Keypair.create_from_uri("//Alice")
         verifier = _override_payment_verifier(
             app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
@@ -1043,6 +1257,8 @@ class TestUploadAgentHappyPath:
 
         assert response.status_code == 200, response.text
         assert rollback_count >= 2
+        assert compare.await_args is not None
+        assert compare.await_args.kwargs["settings"].mode == "shadow"
         assert verifier.verify_payment.await_args is not None
         assert (
             verifier.verify_payment.await_args.kwargs["legacy_amount_cutoff_at"]

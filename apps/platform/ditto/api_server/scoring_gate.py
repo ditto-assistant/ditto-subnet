@@ -539,6 +539,7 @@ def evaluate_duplicate_signals(
     prompt_fingerprint: dict | None = None,
     miner_coldkey: str | None = None,
     linked_owner_hotkeys: frozenset[str] = frozenset(),
+    linked_owner_coldkeys: frozenset[str] = frozenset(),
     public_source_releases: Sequence[PublicSourceRelease] = (),
     score_tol: float = _DEFAULT_SCORE_TOL,
     size_tol: int = _DEFAULT_SIZE_TOL,
@@ -697,6 +698,7 @@ def evaluate_duplicate_signals(
         if e.agent_id != agent_id
         and e.miner_hotkey != miner_hotkey
         and not (miner_coldkey is not None and e.miner_coldkey == miner_coldkey)
+        and e.miner_coldkey not in linked_owner_coldkeys
     ]
     submitted_key = (_utc(submitted_at), agent_id.int)
     earlier_others = sorted(
@@ -778,6 +780,7 @@ def evaluate_duplicate_signals(
             e.miner_hotkey == miner_hotkey
             or (miner_coldkey is not None and e.miner_coldkey == miner_coldkey)
             or e.miner_hotkey in linked_owner_hotkeys
+            or e.miner_coldkey in linked_owner_coldkeys
         )
 
     # This owner's earlier generations. These are the rows the copy rules

@@ -6664,6 +6664,10 @@ class UploadAdmissionReservation(Base):
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     fee_amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
     payment_send_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_context: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Verified artifact profile and policy terms pinned before payment."""
 
     legacy_payment_cutoff_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
@@ -6690,6 +6694,76 @@ class UploadAdmissionReservation(Base):
             name="upload_admission_sha256_length_check",
         ),
         Index("upload_admission_expires_at_idx", "expires_at"),
+    )
+
+
+class SubmissionAttempt(Base):
+    """Immutable source comparison for one paid artifact; no inherited verdict."""
+
+    __tablename__ = "submission_attempts"
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    lineage_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    reference_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    profile: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    guidance: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    runtime_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    classification: Mapped[str] = mapped_column(Text, nullable=False)
+    fast_repair: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["lineage_agent_id"], ["agents.agent_id"]),
+        ForeignKeyConstraint(["reference_agent_id"], ["agents.agent_id"]),
+        CheckConstraint("length(runtime_hash) = 64", name="runtime_hash"),
+        Index("submission_attempts_runtime_idx", "runtime_hash"),
+        Index("submission_attempts_lineage_idx", "lineage_agent_id", "created_at"),
+    )
+
+
+class SubmissionAttemptSettingsRevision(Base):
+    __tablename__ = "submission_attempt_settings_revisions"
+    revision: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    calibration_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class SubmissionAttemptCalibration(Base):
+    __tablename__ = "submission_attempt_calibrations"
+    calibration_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    settings_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    report: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class SubmissionAttemptAppeal(Base):
+    __tablename__ = "submission_attempt_appeals"
+    appeal_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        UniqueConstraint("agent_id", "policy_revision"),
     )
 
 

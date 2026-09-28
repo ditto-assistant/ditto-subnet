@@ -266,8 +266,12 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
         return envelope_response(
             429,
-            ERROR_CODE_SUBMISSION_COOLDOWN,
-            submission_cooldown_message(exc.retry_at),
+            1106 if exc.attempt_reason else ERROR_CODE_SUBMISSION_COOLDOWN,
+            (
+                f"{exc.attempt_reason} {submission_cooldown_message(exc.retry_at)}"
+                if exc.attempt_reason
+                else submission_cooldown_message(exc.retry_at)
+            ),
             headers={"Retry-After": str(retry_after)},
         )
 

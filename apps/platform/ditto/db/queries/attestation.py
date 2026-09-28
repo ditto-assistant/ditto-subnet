@@ -43,7 +43,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from sqlalchemy import and_, desc, or_, select
+from sqlalchemy import and_, case, desc, or_, select
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm import aliased
 
@@ -65,6 +65,48 @@ if TYPE_CHECKING:
 
 class AttestationReplayedError(Exception):
     """The nonce on this attestation has already been recorded."""
+
+
+async def signed_coldkey_peers(
+    session: AsyncSession,
+    *,
+    coldkey: str | None,
+    netuid: int,
+    at: datetime | None = None,
+) -> set[str]:
+    """Direct payer identities with both paid-bound coldkey signatures.
+
+    Hotkey control can transfer without transferring its previous payer's
+    history. All signature grades still exempt the attested hotkeys from copy
+    accusations; only both coldkey signatures extend historical payer scope.
+    Never infer a transitive link or expand through a historically shared payer.
+    """
+    if coldkey is None:
+        return set()
+    current = at or datetime.now(UTC)
+    return set(
+        await session.scalars(
+            select(
+                case(
+                    (OwnerAttestation.lo_signer == coldkey, OwnerAttestation.hi_signer),
+                    else_=OwnerAttestation.lo_signer,
+                )
+            ).where(
+                OwnerAttestation.netuid == netuid,
+                OwnerAttestation.lo_key_kind == "coldkey",
+                OwnerAttestation.hi_key_kind == "coldkey",
+                OwnerAttestation.created_at <= current,
+                or_(
+                    OwnerAttestation.revoked_at.is_(None),
+                    OwnerAttestation.revoked_at > current,
+                ),
+                or_(
+                    OwnerAttestation.lo_signer == coldkey,
+                    OwnerAttestation.hi_signer == coldkey,
+                ),
+            )
+        )
+    )
 
 
 @dataclass(frozen=True)

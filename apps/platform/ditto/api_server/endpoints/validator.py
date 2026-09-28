@@ -256,7 +256,7 @@ from ditto.db.queries.artifact_fetch_audit import (
 )
 from ditto.db.queries.artifact_release import list_public_source_releases
 from ditto.db.queries.artifact_release_settings import artifact_release_policy_as_of
-from ditto.db.queries.attestation import list_linked_hotkeys
+from ditto.db.queries.attestation import list_linked_hotkeys, signed_coldkey_peers
 from ditto.db.queries.audit import (
     EVENT_AUDIT,
     EVENT_COPY_NO_OPPORTUNITY,
@@ -7195,6 +7195,13 @@ async def submit_score(
                         netuid=expected_netuid(),
                     )
                 )
+                linked_coldkeys = frozenset(
+                    await signed_coldkey_peers(
+                        session,
+                        coldkey=miner_coldkey,
+                        netuid=expected_netuid(),
+                    )
+                )
                 # Which earlier artifacts the subnet had itself published by the
                 # time this one was uploaded. Read against the release policy as
                 # it stood *then*, not as it stands now: judging a past upload
@@ -7220,6 +7227,7 @@ async def submit_score(
                     miner_hotkey=agent.miner_hotkey,
                     miner_coldkey=miner_coldkey,
                     linked_owner_hotkeys=linked_hotkeys,
+                    linked_owner_coldkeys=linked_coldkeys,
                     public_source_releases=[
                         PublicSourceRelease(
                             agent_id=released_id, available_at=available_at

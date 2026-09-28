@@ -110,6 +110,8 @@ async def reserve_upload_admission(
     settings: EffectiveSubmissionSettings,
     replace_existing: bool = False,
     now: datetime | None = None,
+    attempt_context: dict | None = None,
+    skip_owner_cooldown: bool = False,
 ) -> UploadAdmission:
     """Reserve one eligible coldkey slot so payment cannot lose a later race."""
     current = _utc(now or datetime.now(UTC))
@@ -140,6 +142,7 @@ async def reserve_upload_admission(
             # after reassignment.
             existing.token = uuid.uuid4()
             existing.sha256 = sha256
+            existing.attempt_context = attempt_context
             if existing.legacy_payment_cutoff_at is None:
                 existing.created_at = current
                 existing.expires_at = current + UPLOAD_ADMISSION_TTL
@@ -161,7 +164,7 @@ async def reserve_upload_admission(
         await session.flush()
         existing = None
 
-    if not replace_existing:
+    if not replace_existing and not skip_owner_cooldown:
         retry_at = await get_submission_retry_at(
             session,
             miner_coldkey=miner_coldkey,
@@ -183,6 +186,7 @@ async def reserve_upload_admission(
         legacy_payment_cutoff_at=None,
         created_at=current,
         expires_at=current + UPLOAD_ADMISSION_TTL,
+        attempt_context=attempt_context,
     )
     session.add(row)
     await session.flush()
@@ -238,6 +242,7 @@ async def consume_or_enforce_upload_admission(
     admission_token: uuid.UUID | None,
     settings: EffectiveSubmissionSettings,
     now: datetime | None = None,
+    skip_owner_cooldown: bool = False,
 ) -> None:
     """Consume a matching reservation, or enforce cooldown for a legacy client."""
     current = _utc(now or datetime.now(UTC))
@@ -275,6 +280,9 @@ async def consume_or_enforce_upload_admission(
             raise SubmissionCooldownError(block_until)
         await session.delete(existing)
         await session.flush()
+
+    if skip_owner_cooldown:
+        return
 
     submission_retry_at = await get_submission_retry_at(
         session,

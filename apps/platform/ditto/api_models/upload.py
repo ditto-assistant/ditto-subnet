@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import UUID4, BaseModel, Field, model_validator
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.submission_attempts import AttemptGuidance
 
 # SS58 addresses are 47-48 chars from the base58 alphabet (no 0, O, I, l).
 _SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
@@ -104,6 +105,9 @@ class UploadCheckResponse(BaseModel):
 
     payment_required: bool = True
     """False when an existing same-owner artifact makes payment unnecessary."""
+
+    attempt_guidance: AttemptGuidance | None = None
+    """Source-safe comparison and proposed timing; shadow never changes admission."""
 
     identical_agent_id: UUID | None = None
     """Existing same-owner submission when identical bytes were detected."""

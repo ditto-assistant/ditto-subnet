@@ -1059,6 +1059,42 @@ class TestAttestedOwnerLink:
         assert decision.held is True
         assert decision.duplicate_of == incumbent.agent_id
 
+    def test_signed_payer_peer_exempts_repair_after_hotkey_rotation(self) -> None:
+        previous = _entry(
+            composite=0.70,
+            miner="old-peer-hotkey",
+            coldkey="peer-payer",
+            normalized_source_hash="same-source",
+        )
+        kwargs = {
+            "agent_id": uuid4(),
+            "miner_hotkey": "rotated-hotkey",
+            "miner_coldkey": "current-payer",
+            "sha256": "bb" * 32,
+            "composite": 0.70,
+            "size_bytes": 524288,
+            "normalized_source_hash": "same-source",
+            "eligible": [previous],
+        }
+        assert evaluate_duplicate_signals(**kwargs).held
+        assert not evaluate_duplicate_signals(
+            **kwargs, linked_owner_coldkeys=frozenset({"peer-payer"})
+        ).held
+
+    def test_signed_payer_peer_does_not_exempt_unrelated_work(self) -> None:
+        previous = _entry(composite=0.70, coldkey="unrelated-payer", sha256="bb" * 32)
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="candidate",
+            miner_coldkey="current-payer",
+            sha256="bb" * 32,
+            composite=0.70,
+            size_bytes=524288,
+            eligible=[previous],
+            linked_owner_coldkeys=frozenset({"peer-payer"}),
+        )
+        assert decision.held
+
     def test_attestation_exempts_byte_identical_resubmission(self) -> None:
         """Exact generations within a proven owner pair are not plagiarism."""
         incumbent = _entry(

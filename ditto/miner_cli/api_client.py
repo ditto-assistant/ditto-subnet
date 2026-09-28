@@ -21,6 +21,7 @@ Error mapping:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import IO, Any
 from uuid import UUID
 
@@ -192,7 +193,9 @@ class ApiClient:
 
     # ---- /upload/check --------------------------------------------------
 
-    def post_upload_check(self, body: UploadCheckRequest) -> UploadCheckResponse:
+    def post_upload_check(
+        self, body: UploadCheckRequest, *, tar_path: Path | None = None
+    ) -> UploadCheckResponse:
         """Run pre-payment validation. Returns the raw response body.
 
         A response with ``ok=False`` is NOT raised here: the server
@@ -203,11 +206,22 @@ class ApiClient:
         Non-2xx HTTP responses (server-side failures, validation errors)
         still raise :class:`ApiResponseError`.
         """
-        response = self._request(
-            "POST",
-            "/api/v1/upload/check",
-            json=body.model_dump(mode="json", exclude_none=True),
-        )
+        if tar_path is not None:
+            with tar_path.open("rb") as archive:
+                response = self._request(
+                    "POST",
+                    "/api/v1/upload/check-artifact",
+                    data={"payload": body.model_dump_json(exclude_none=True)},
+                    files={"agent_tar": (tar_path.name, archive, "application/gzip")},
+                )
+        if tar_path is None or response.status_code == 404:
+            # Rolling upgrade: only absence of the new route permits fallback.
+            # A policy rejection or a network failure never does.
+            response = self._request(
+                "POST",
+                "/api/v1/upload/check",
+                json=body.model_dump(mode="json", exclude_none=True),
+            )
         envelope = _safe_envelope(response)
         if (
             response.status_code == 402
