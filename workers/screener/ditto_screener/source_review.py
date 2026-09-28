@@ -3339,7 +3339,7 @@ class TarSourceRepository:
                 member = archive.getmember(member_info.archive_name)
                 extracted = archive.extractfile(member)
                 if extracted is None:
-                    raise ValueError("file-unavailable")
+                    raise OSError("file-unavailable")
                 sample = sample_stream(extracted, size=member_info.size)
             result = analyze_binary(sample, path=normalized)
         except Exception as error:  # noqa: BLE001
