@@ -1,7 +1,7 @@
 """Add shadow-first, auditable submission attempt controls.
 
 Revision ID: 9ec438fa12b7
-Revises: a2f4d9c51e60
+Revises: b6f3d0c7a915
 """
 
 from collections.abc import Sequence
@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "9ec438fa12b7"
-down_revision: str | Sequence[str] | None = "a2f4d9c51e60"
+down_revision: str | Sequence[str] | None = "b6f3d0c7a915"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
