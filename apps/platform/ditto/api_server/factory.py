@@ -178,6 +178,7 @@ from ditto.api_server.inference_routing import ProviderRouteRefresher
 from ditto.api_server.ledger_pin import LedgerPinLoop, LedgerPinMaterializer
 from ditto.api_server.middleware import (
     PublicCacheMiddleware,
+    PublicRateLimitMiddleware,
     RequestIDMiddleware,
     SizedGZipMiddleware,
     register_exception_handlers,
@@ -590,6 +591,13 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # built once and cached independently, so a 200KB operations cache HIT
     # does not burn CPU recompressing the same user-agnostic bytes.
     app.add_middleware(SizedGZipMiddleware, minimum_size=1000, compresslevel=6)
+    # Opt-in per-client-IP limit on the unauthenticated expensive routes. Inside
+    # the public cache so cache hits never spend a client's budget; absent
+    # entirely at the default of 0.
+    if config.public_rate_limit_per_minute > 0:
+        app.add_middleware(
+            PublicRateLimitMiddleware, per_minute=config.public_rate_limit_per_minute
+        )
     # PublicCacheMiddleware wraps gzip. Cache hits skip both endpoint/DB work
     # and compression while request-id logging still records every request.
     app.add_middleware(PublicCacheMiddleware)

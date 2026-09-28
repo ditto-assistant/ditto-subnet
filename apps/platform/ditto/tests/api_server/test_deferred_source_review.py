@@ -942,6 +942,7 @@ def test_public_deferred_review_triggers_are_coarse(
         ("l3-critic-model-budget-exhausted", False),
         ("source-safety-malicious-risk", False),
         ("agentic-source-review-tripwire", False),
+        ("behavioral-oracle-passed", False),
         ("adjudicated-source-review-escalate", False),
         ("some-future-finding", False),
         (None, False),

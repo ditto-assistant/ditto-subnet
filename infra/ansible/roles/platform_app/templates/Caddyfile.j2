@@ -40,9 +40,11 @@
     #
     # Mutually exclusive `handle` blocks make routing independent of Caddy's
     # directive-ordering rules. The two cheap upload admission
-    # endpoints move to Go; multipart /upload/agent and all other platform
-    # routes remain on Python. Finalized-payment /upload/check recovery is
-    # forwarded by Go to Python until the historical proof verifier is ported.
+    # endpoints move to Go only while the Python public rate limit is off.
+    # With the limit on, all upload routes must reach Python or the Go routes
+    # bypass that limit. Multipart /upload/agent stays on Python in either case.
+    # Finalized-payment /upload/check recovery is forwarded by Go to Python
+    # until the historical proof verifier is ported.
     #
     # The matcher covers all three inference routes (/chat/completions,
     # /embeddings, /exchange). There is no bare /api/v1/inference route, so
@@ -52,7 +54,7 @@
     # skipped for fail_duration rather than 502'ing the caller. Caddy only
     # retries a different upstream on a DIAL failure -- never once bytes have
     # gone downstream -- so streaming completions are never replayed.
-{% if platform_upload_admission_relay_enabled | bool %}
+{% if platform_upload_admission_relay_enabled | bool and platform_public_rate_limit_per_minute | int == 0 %}
     @goUploadAdmission path /api/v1/upload/eval-pricing /api/v1/upload/check
     handle @goUploadAdmission {
         reverse_proxy {% for port in platform_inference_relay_ports %}localhost:{{ port }} {% endfor %}{

@@ -12,6 +12,7 @@ from sqlalchemy import (
     ColumnElement,
     and_,
     case,
+    distinct,
     exists,
     false,
     func,
@@ -449,7 +450,9 @@ async def fail_orphaned_screening_attempts(
     ``failed`` so they do not consume the five-expiry adjudication budget. They
     park for an operator retry and are never retried automatically: a worker
     also stops reporting an attempt after Platform rejected its verdict or the
-    worker died mid-screen, both of which the artifact can provoke.
+    worker died mid-screen, both of which the artifact can provoke. Overdue
+    leases are included when positive orphan evidence exists; otherwise they
+    are left for ``expire_screening_attempts``.
     """
     candidates = list(
         (
@@ -462,7 +465,6 @@ async def fail_orphaned_screening_attempts(
                     ScreeningAttempt.screener_hotkey == screener_hotkey,
                     ScreeningAttempt.status == "running",
                     ScreeningAttempt.started_at <= now - _ORPHANED_ATTEMPT_GRACE,
-                    ScreeningAttempt.deadline > now,
                 )
             )
         )
@@ -525,7 +527,6 @@ async def fail_orphaned_screening_attempts(
                 ScreeningAttempt.screener_hotkey == screener_hotkey,
                 ScreeningAttempt.status == "running",
                 ScreeningAttempt.started_at <= now - _ORPHANED_ATTEMPT_GRACE,
-                ScreeningAttempt.deadline > now,
             )
             .with_for_update(skip_locked=True)
             .execution_options(populate_existing=True)
@@ -591,6 +592,36 @@ async def fail_orphaned_screening_attempts(
             agent.screening_reason_code = _ORPHANED_ATTEMPT_REASON_CODE
         failed += 1
     return failed
+
+
+async def sweep_screening_leases(
+    session: AsyncSession, *, now: datetime, screener_hotkey: str | None = None
+) -> tuple[int, int]:
+    """Retire orphaned, then overdue, running leases; return both counts.
+
+    The orphan sweep runs first so an overdue attempt with positive orphan
+    evidence records an infrastructure failure instead of an expiry.
+    ``screener_hotkey`` limits the orphan sweep to that fleet; ``None``
+    sweeps every hotkey holding a running attempt. Both sweeps skip or re-read
+    locked rows, so callers need not hold the screening claim lock.
+    """
+    if screener_hotkey is None:
+        hotkeys = list(
+            await session.scalars(
+                select(distinct(ScreeningAttempt.screener_hotkey)).where(
+                    ScreeningAttempt.status == "running"
+                )
+            )
+        )
+    else:
+        hotkeys = [screener_hotkey]
+    orphaned = 0
+    for hotkey in hotkeys:
+        orphaned += await fail_orphaned_screening_attempts(
+            session, screener_hotkey=hotkey, now=now
+        )
+    expired = await expire_screening_attempts(session, now=now)
+    return orphaned, expired
 
 
 async def _fresh_heartbeat_instance_count(
@@ -876,12 +907,7 @@ async def claim_screening_attempts(
     # resurrected every past rejection fleet-wide and cleared the operator's
     # stated reason, so a refused artifact could return under a newer policy that
     # never re-derived the original finding.
-    await expire_screening_attempts(session, now=now)
-    await fail_orphaned_screening_attempts(
-        session,
-        screener_hotkey=screener_hotkey,
-        now=now,
-    )
+    await sweep_screening_leases(session, now=now, screener_hotkey=screener_hotkey)
     claim_budget = await _shared_hotkey_claim_budget(
         session,
         screener_hotkey=screener_hotkey,

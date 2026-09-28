@@ -95,6 +95,12 @@ platform_inference_relay_ports: []
 # uploads back to Python without disturbing the already-live inference plane.
 platform_upload_admission_relay_enabled: false
 
+# Defense-in-depth limit for unauthenticated Platform reads and uploads. The
+# Python API owns this limiter; when positive, Caddy keeps the two Go upload
+# admission routes on Python as well so they cannot bypass the same setting.
+# Deliberate operator activation only, after sizing for legitimate shared IPs.
+platform_public_rate_limit_per_minute: 0
+
 # Additional public hostnames served by the same Caddy vhost. Keep aliases in
 # host_vars so each environment explicitly owns its certificate/SNI surface.
 platform_alias_domains: []

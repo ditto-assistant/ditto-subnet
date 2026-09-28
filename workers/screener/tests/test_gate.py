@@ -1513,6 +1513,40 @@ async def test_v13_l4_cleared_static_lead_continues_to_build(
     assert any(call[0] == "build" for call in calls)
 
 
+async def test_static_preflight_reports_source_review_before_build(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """Platform renews ``building`` after these source-review stages."""
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
+            "scripts/local-only.sh": (
+                b'path="/var/run/docker.sock"\nconnect_control_socket "$path"\n'
+            ),
+        }
+    )
+
+    class ProgressReportingReviewer(_SafeStaticLeadReviewer):
+        async def resolve_lead(
+            self, *args: Any, **kwargs: Any
+        ) -> SourceReviewObservation:
+            kwargs["progress"](9, 10)
+            return await super().resolve_lead(*args, **kwargs)
+
+    stages: list[str] = []
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+    gate._source_reviewer = ProgressReportingReviewer()  # type: ignore[assignment]
+    async with gate._client:
+        result = await _screen(
+            gate,
+            hashlib.sha256(tarball).hexdigest(),
+            progress=stages.append,
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert stages.index("source_review_90") < stages.index("building")
+
+
 async def test_reports_only_coarse_pipeline_stages(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

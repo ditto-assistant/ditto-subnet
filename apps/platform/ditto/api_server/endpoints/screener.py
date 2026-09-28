@@ -38,6 +38,8 @@ import logging
 import re
 import secrets
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, cast
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -54,6 +56,7 @@ from fastapi import (
 )
 from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import (
@@ -218,6 +221,7 @@ from ditto.db.queries.screening import (
     infra_retry_agent_admitted,
     prerequisite_screening_predicates,
     screening_priority_order,
+    sweep_screening_leases,
     try_acquire_screening_claim_lock,
 )
 from ditto.db.queries.screening_infra_retry import INFRA_AUTO_RETRY_REASON_CODES
@@ -319,13 +323,20 @@ _SCREENED_IMAGE_UPLOAD_TTL = timedelta(minutes=15)
 _SCREENED_IMAGE_PART_SIZE = 64 * 1024**2
 # One screening attempt: download + Docker build + serve/health + bounded source
 # review + image export + multipart upload. Renewable workers carry only a short
-# liveness window; accepted signed progress keeps that window ahead of active
-# work instead of pre-granting the full worst-case pipeline duration.
+# liveness window; every accepted signed heartbeat from the job holding the
+# attempt keeps that window ahead of active work, even while one long stage
+# (build, L2, the court) does not advance. Renewal never extends an attempt past
+# a hard lifetime derived from its bound review budgets, so a live but stuck
+# worker still expires instead of holding the agent forever.
 # Legacy workers derive a fixed local deadline and cannot consume renewals.
 # Keep their old lease until the fleet rolls, while new workers explicitly opt
 # into a short lease extended by accepted signed progress heartbeats.
 _LEGACY_SCREENING_LEASE_TTL = timedelta(minutes=70)
 _RENEWABLE_SCREENING_LEASE_TTL = timedelta(minutes=10)
+# Hard attempt lifetime = source review + L2 (+ court when enabled) budgets plus
+# this allowance for build, runtime, image export, and upload.
+_SCREENING_NON_REVIEW_ALLOWANCE = timedelta(minutes=45)
+_UNBOUND_SCREENING_LIFETIME_CAP = timedelta(minutes=150)
 _SCREENER_PROGRESS_RANK = {
     stage: rank
     for rank, stage in enumerate(
@@ -351,6 +362,12 @@ _SCREENER_PROGRESS_RANK = {
         )
     )
 }
+_SOURCE_REVIEW_PROGRESS_STAGES = frozenset(
+    stage for stage in _SCREENER_PROGRESS_RANK if stage.startswith("source_review_")
+)
+# A static preflight lead is reviewed before the build, so these stages may
+# legitimately follow a source-review stage within one job.
+_POST_PREFLIGHT_PROGRESS_STAGES = frozenset({"building", "starting", "health_check"})
 _HEARTBEAT_MAX_SKEW_SECONDS = 300
 _HEARTBEAT_MAX_BYTES = 4096
 _INSTANCE_ID_PATTERN = r"^[a-zA-Z0-9._-]{1,63}$"
@@ -452,6 +469,50 @@ class AgentNotScreenableError(Exception):
     ``scored`` / ``live`` / ``banned`` agent (or flipping a decided verdict) is
     a conflict the worker should not retry: HTTP 409 (code 5001).
     """
+
+
+class ScreenResultConstraintError(Exception):
+    """Raised when applying a verified verdict violates a database constraint.
+
+    The verdict transaction rolled back, so nothing was applied and the attempt
+    stays ``running``. The envelope handler maps this to HTTP 409 (code 5002,
+    ``result-constraint-violation``): a definitive not-applied signal, unlike a
+    bare 5xx that may have landed.
+    """
+
+
+@asynccontextmanager
+async def _verdict_constraint_guard(
+    *,
+    agent_id: UUID,
+    attempt_id: UUID,
+    reason_code: str | None,
+    outcome: str | None,
+) -> AsyncIterator[None]:
+    """Turn an ``IntegrityError`` from the verdict transaction into a 409.
+
+    Enter it outside ``session.begin()``, which has already rolled back by the
+    time the error reaches here. The rejected row can hold the signed review
+    audit, so only the violated constraint's name is logged, never the driver
+    detail.
+    """
+    try:
+        yield
+    except IntegrityError as error:
+        # SA's asyncpg dialect carries ``constraint_name`` on ``orig.__cause__``.
+        cause = error.orig.__cause__ if error.orig is not None else None
+        logger.error(
+            "screen verdict not applied agent_id=%s attempt_id=%s reason_code=%s "
+            "outcome=%s constraint=%s",
+            agent_id,
+            attempt_id,
+            reason_code,
+            outcome,
+            getattr(cause, "constraint_name", None),
+        )
+        raise ScreenResultConstraintError(
+            "verdict violated a database constraint"
+        ) from error
 
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -1069,6 +1130,25 @@ async def refresh_screener_node(
     )
 
 
+async def _sweep_screening_leases(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    source: str,
+    screener_hotkey: str | None = None,
+) -> None:
+    orphaned, expired = await sweep_screening_leases(
+        session, now=now, screener_hotkey=screener_hotkey
+    )
+    if orphaned or expired:
+        logger.info(
+            "screening lease sweep source=%s orphaned=%d expired=%d",
+            source,
+            orphaned,
+            expired,
+        )
+
+
 @router.put(
     "/controller/capacity",
     response_model=ScreenerCapacitySnapshotResponse,
@@ -1123,6 +1203,13 @@ async def update_screener_capacity(
                     created_at=now,
                 )
             )
+    # Backstop for a fleet that is not polling claim at all. The heartbeat
+    # above is fenced lease state, so a sweep failure must not fail it.
+    try:
+        async with session.begin():
+            await _sweep_screening_leases(session, now=now, source="controller")
+    except Exception:
+        logger.exception("screening lease sweep source=controller failed")
     return ScreenerCapacitySnapshotResponse(
         **payload.model_dump(mode="python"),
         controller_heartbeat_at=now,
@@ -2895,6 +2982,24 @@ def _heartbeat_signing_message(payload: ScreenerHeartbeatRequest) -> bytes:
     ).encode()
 
 
+async def _screening_attempt_lifetime_cap(
+    session: AsyncSession, attempt: ScreeningAttempt
+) -> timedelta:
+    """Return how long renewals may keep one attempt alive after its claim."""
+    if attempt.review_settings_revision is None:
+        return _UNBOUND_SCREENING_LIFETIME_CAP
+    revision = await session.get(
+        ScreenerReviewSettingsRevision, attempt.review_settings_revision
+    )
+    if revision is None:
+        return _UNBOUND_SCREENING_LIFETIME_CAP
+    settings = ScreenerReviewSettings.model_validate(revision.settings)
+    review_seconds = settings.source_review_timeout_seconds + settings.timeout_seconds
+    if settings.adjudicator_mode != "off":
+        review_seconds += settings.adjudicator_timeout_seconds
+    return timedelta(seconds=review_seconds) + _SCREENING_NON_REVIEW_ALLOWANCE
+
+
 @router.post(
     "/heartbeat",
     response_model=ScreenerHeartbeatResponse,
@@ -3022,14 +3127,19 @@ async def heartbeat(
             if isinstance(current_stage, str)
             else None
         )
-        progress_advanced = (
-            previous_heartbeat is None
-            or previous_active_agent_id != request_body.active_agent_id
-            or previous_started_at != current_started_at
-            or (
-                previous_stage_rank is not None
-                and current_stage_rank is not None
-                and current_stage_rank > previous_stage_rank
+        # A job continues the previous row only while it screens the same
+        # agent; the first heartbeat after a claim starts a new job.
+        same_job = (
+            previous_heartbeat is not None
+            and previous_active_agent_id == request_body.active_agent_id
+        )
+        stage_regressed = (
+            previous_stage_rank is not None
+            and current_stage_rank is not None
+            and current_stage_rank < previous_stage_rank
+            and not (
+                previous_stage in _SOURCE_REVIEW_PROGRESS_STAGES
+                and current_stage in _POST_PREFLIGHT_PROGRESS_STAGES
             )
         )
         row, accepted = await upsert_screener_heartbeat(
@@ -3080,7 +3190,6 @@ async def heartbeat(
         )
         if (
             accepted
-            and progress_advanced
             and request_body.state == "screening"
             and request_body.active_agent_id is not None
             and request_body.progress is not None
@@ -3097,9 +3206,53 @@ async def heartbeat(
                 .with_for_update()
                 .limit(1)
             )
-            if attempt is not None:
-                renewed_lease_deadline = now + _RENEWABLE_SCREENING_LEASE_TTL
-                attempt.deadline = renewed_lease_deadline
+            refusal: str | None = None
+            if attempt is None:
+                refusal = "no-running-attempt"
+            elif attempt.review_settings_instance_id not in (None, instance_id):
+                refusal = "instance-mismatch"
+            elif same_job and previous_started_at != current_started_at:
+                refusal = "started-at-changed"
+            elif same_job and stage_regressed:
+                refusal = "stage-regressed"
+            else:
+                attempt_started_at = attempt.started_at
+                if attempt_started_at.tzinfo is None:
+                    attempt_started_at = attempt_started_at.replace(tzinfo=UTC)
+                current_deadline = attempt.deadline
+                if current_deadline.tzinfo is None:
+                    current_deadline = current_deadline.replace(tzinfo=UTC)
+                cap_deadline = attempt_started_at + (
+                    await _screening_attempt_lifetime_cap(session, attempt)
+                )
+                new_deadline = min(now + _RENEWABLE_SCREENING_LEASE_TTL, cap_deadline)
+                # Never shorten a lease: a legacy claim already runs further
+                # ahead than one renewal would.
+                if cap_deadline <= current_deadline:
+                    refusal = "capped"
+                elif new_deadline > current_deadline:
+                    renewed_lease_deadline = new_deadline
+                    attempt.deadline = new_deadline
+                    logger.info(
+                        "renewed screening lease agent_id=%s attempt_id=%s "
+                        "instance_id=%s stage=%s deadline=%s",
+                        request_body.active_agent_id,
+                        attempt.attempt_id,
+                        instance_id,
+                        current_stage,
+                        new_deadline.isoformat(),
+                    )
+            if refusal is not None:
+                logger.warning(
+                    "refused screening lease renewal reason=%s agent_id=%s "
+                    "attempt_id=%s instance_id=%s stage=%s deadline=%s",
+                    refusal,
+                    request_body.active_agent_id,
+                    attempt.attempt_id if attempt is not None else None,
+                    instance_id,
+                    current_stage,
+                    attempt.deadline.isoformat() if attempt is not None else None,
+                )
         # Reap heartbeats from long-gone instances (scaled-in fleet workers)
         # so the per-instance list stays bounded. Cheap indexed delete.
         await prune_stale_screener_heartbeats(
@@ -3316,6 +3469,19 @@ async def claim(
 ) -> ScreenerQueueResponse:
     """Lease pending work and make its active screening state public."""
     response.headers["Cache-Control"] = "no-store"
+    # Sweep in its own transaction before any refusal or early return below,
+    # so draining, held and zero-admission claimers still retire dead leases.
+    now = datetime.now(UTC)
+    if session.get_bind().dialect.name == "postgresql":
+        async with session.begin():
+            await _sweep_screening_leases(
+                session, now=now, source="claim", screener_hotkey=screener_hotkey
+            )
+    else:
+        async with _CLAIM_FALLBACK_LOCK, session.begin():
+            await _sweep_screening_leases(
+                session, now=now, source="claim", screener_hotkey=screener_hotkey
+            )
     node_status = getattr(request.state, "screener_node_status", "active")
     if node_status != "active":
         raise AgentNotScreenableError(
@@ -3327,7 +3493,6 @@ async def claim(
             "screening policy mismatch before claim: platform requires "
             f"{required_policy}, worker declared {policy_version}"
         )
-    now = datetime.now(UTC)
     lease_ttl = (
         _RENEWABLE_SCREENING_LEASE_TTL
         if renewable_lease
@@ -4561,7 +4726,12 @@ def _require_claimed_attempt_owner(
     responses={
         401: {"description": "Invalid screener credentials or signature."},
         404: {"description": "No agent with the given id."},
-        409: {"description": "Agent is past the screening stage."},
+        409: {
+            "description": (
+                "Agent is past the screening stage, or the verdict violated a "
+                "database constraint and was not applied."
+            )
+        },
         422: {"description": "Malformed request body or UUID path parameter."},
     },
 )
@@ -4999,7 +5169,15 @@ async def submit_result(
 
     # 4. Atomic: apply the verdict + pin the dataset. The row lock serializes
     #    concurrent verdicts so the status guard + transition can't be lost-updated.
-    async with session.begin():
+    async with (
+        _verdict_constraint_guard(
+            agent_id=agent_id,
+            attempt_id=claimed_attempt_id,
+            reason_code=stored_reason_code,
+            outcome=outcome_value,
+        ),
+        session.begin(),
+    ):
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
         if agent is None:
             raise AgentNotFoundError(f"no agent with id={agent_id}")

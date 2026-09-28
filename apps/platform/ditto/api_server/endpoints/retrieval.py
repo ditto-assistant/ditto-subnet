@@ -1,8 +1,9 @@
 """Read-only retrieval endpoints.
 
 Public, unauthed reads. Status + hotkey are chain-public-equivalent;
-rate-limit + TLS deferred to a reverse proxy in front of the API
-(threat-model G6 known gap). ``Cache-Control: no-store`` on every
+TLS is terminated by the reverse proxy in front of the API, and the
+opt-in ``DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE`` limit covers these routes
+(threat-model G6). ``Cache-Control: no-store`` on every
 response because these are state-machine status queries — polling
 exists exactly to detect transitions, and any intermediate cache
 defeats that.

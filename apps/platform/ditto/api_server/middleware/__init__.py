@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ditto.api_server.middleware.error_envelope import register_exception_handlers
 from ditto.api_server.middleware.public_cache import PublicCacheMiddleware
+from ditto.api_server.middleware.public_rate_limit import PublicRateLimitMiddleware
 from ditto.api_server.middleware.request_id import (
     REQUEST_ID_HEADER,
     RequestIdFilter,
@@ -14,6 +15,7 @@ from ditto.api_server.middleware.sized_gzip import SizedGZipMiddleware
 
 __all__ = [
     "PublicCacheMiddleware",
+    "PublicRateLimitMiddleware",
     "REQUEST_ID_HEADER",
     "RequestIdFilter",
     "RequestIDMiddleware",

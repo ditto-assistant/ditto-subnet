@@ -1346,6 +1346,30 @@ async def test_accepted_progress_heartbeat_renews_active_local_deadline(
     )
 
 
+async def test_same_stage_heartbeat_follows_platform_lease_renewal(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    worker = _worker(
+        make_config(), platform, _FakeGate(_decision(ScreeningOutcome.PASS))
+    )
+    worker._active_agent_id = uuid4()
+    worker._active_progress_stage = "source_review_60"
+    worker._job_started_at = int(datetime.now(UTC).timestamp())
+    worker._active_lease_deadline = LeaseDeadline(asyncio.get_running_loop().time() + 1)
+    for minutes in (10, 20):
+        renewed = datetime.now(UTC) + timedelta(minutes=minutes)
+        platform.heartbeat_lease_deadline = renewed
+
+        await worker._report_heartbeat("screening", force=True)
+
+        assert worker._active_progress_stage == "source_review_60"
+        assert worker._active_lease_wall == renewed
+        assert worker._active_lease_deadline.expires_at > (
+            asyncio.get_running_loop().time() + (minutes - 1) * 60
+        )
+
+
 async def test_near_expired_lease_skips_build_and_reports_retryable(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

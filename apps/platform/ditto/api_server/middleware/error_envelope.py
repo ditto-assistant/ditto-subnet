@@ -20,6 +20,7 @@ from ditto.api_server.endpoints.retrieval import (
 from ditto.api_server.endpoints.screener import (
     AgentNotScreenableError,
     ScreenerAuthError,
+    ScreenResultConstraintError,
 )
 from ditto.api_server.endpoints.validator import (
     AgentNotEvaluatableError,
@@ -64,6 +65,9 @@ ERROR_CODE_SUBMISSION_COOLDOWN = 1105
 ERROR_CODE_UNHANDLED = 3000
 ERROR_CODE_VALIDATION = 3001
 ERROR_CODE_HTTP_EXCEPTION = 3002
+# 429 + Retry-After from the opt-in per-client-IP limit on unauthenticated
+# routes (middleware/public_rate_limit.py). Retryable once the wait elapses.
+ERROR_CODE_RATE_LIMITED = 3003
 ERROR_CODE_PRICING = 3100
 ERROR_CODE_ORACLE_UNREACHABLE = 3101
 ERROR_CODE_MALFORMED_PRICE = 3102
@@ -149,6 +153,9 @@ ERROR_CODE_INFERENCE_RESERVATION_TOO_LARGE = 4109
 # driving the uploaded -> evaluating promotion gate.
 ERROR_CODE_SCREENER_AUTH = 5000
 ERROR_CODE_AGENT_NOT_SCREENABLE = 5001
+# 5002 -> 409. The verified verdict violated a database constraint and its
+# transaction rolled back: definitively not applied, the attempt still running.
+ERROR_CODE_SCREEN_RESULT_CONSTRAINT_VIOLATION = 5002
 
 
 # Every terminal decline, in one table rather than a ladder of ifs. A ladder
@@ -202,7 +209,7 @@ def _envelope(error_code: int, message: str) -> dict[str, Any]:
     }
 
 
-def _envelope_response(
+def envelope_response(
     status_code: int,
     error_code: int,
     message: str,
@@ -232,7 +239,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: StarletteHTTPException
     ) -> JSONResponse:
         message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-        return _envelope_response(
+        return envelope_response(
             exc.status_code,
             ERROR_CODE_HTTP_EXCEPTION,
             message,
@@ -246,7 +253,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         # Full validation details land in server logs; the public body
         # stays generic so user-supplied input never echoes back.
         logger.warning(f"request validation failed: {exc.errors()}")
-        return _envelope_response(
+        return envelope_response(
             422, ERROR_CODE_VALIDATION, "request validation failed"
         )
 
@@ -257,7 +264,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         retry_after = max(
             1, int((exc.retry_at - datetime.now(UTC)).total_seconds()) + 1
         )
-        return _envelope_response(
+        return envelope_response(
             429,
             ERROR_CODE_SUBMISSION_COOLDOWN,
             submission_cooldown_message(exc.retry_at),
@@ -276,7 +283,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         case is the only one that moved off ``429``.
         """
         if exc.decline is InferenceDecline.AT_CAPACITY:
-            return _envelope_response(
+            return envelope_response(
                 503,
                 ERROR_CODE_INFERENCE_AT_CAPACITY,
                 f"{exc.lane} lane is at capacity",
@@ -285,12 +292,12 @@ def register_exception_handlers(app: FastAPI) -> None:
         terminal = _TERMINAL_DECLINE_RESPONSES.get(exc.decline)
         if terminal is not None:
             error_code, message = terminal
-            return _envelope_response(429, error_code, f"{exc.lane} {message}")
+            return envelope_response(429, error_code, f"{exc.lane} {message}")
         # The deliberate remainder. The message says so rather than implying the
         # platform merely failed to have an opinion: an unnamed refusal that
         # reads like an oversight invites exactly the "retry until it works"
         # behaviour that turned a spent token budget into a dead run.
-        return _envelope_response(
+        return envelope_response(
             429,
             ERROR_CODE_INFERENCE_DECLINED,
             f"{exc.lane} grant unavailable, and the reason is deliberately not "
@@ -302,7 +309,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: OracleUnreachableError
     ) -> JSONResponse:
         logger.warning(f"pricing oracle unreachable: {exc}")
-        return _envelope_response(
+        return envelope_response(
             503, ERROR_CODE_ORACLE_UNREACHABLE, "pricing oracle unavailable"
         )
 
@@ -311,7 +318,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: PriceTooStaleError
     ) -> JSONResponse:
         logger.warning(f"pricing cache past max-stale window: {exc}")
-        return _envelope_response(
+        return envelope_response(
             503, ERROR_CODE_PRICE_TOO_STALE, "pricing oracle unavailable"
         )
 
@@ -320,7 +327,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: MalformedPriceError
     ) -> JSONResponse:
         logger.error(f"pricing oracle returned malformed price: {exc}")
-        return _envelope_response(
+        return envelope_response(
             503, ERROR_CODE_MALFORMED_PRICE, "pricing data is invalid"
         )
 
@@ -331,14 +338,14 @@ def register_exception_handlers(app: FastAPI) -> None:
         # Catch-all for any future PricingError subclass that the specific
         # handlers above don't cover.
         logger.warning(f"pricing error: {exc}")
-        return _envelope_response(503, ERROR_CODE_PRICING, "pricing failure")
+        return envelope_response(503, ERROR_CODE_PRICING, "pricing failure")
 
     @app.exception_handler(PaymentNotFoundOnChain)
     async def _payment_not_found_handler(
         _request: Request, exc: PaymentNotFoundOnChain
     ) -> JSONResponse:
         logger.info(f"payment not found on chain: {exc}")
-        return _envelope_response(
+        return envelope_response(
             402, ERROR_CODE_PAYMENT_NOT_FOUND, "payment extrinsic not found on chain"
         )
 
@@ -347,7 +354,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: PaymentExtrinsicFailed
     ) -> JSONResponse:
         logger.info(f"payment extrinsic failed: {exc}")
-        return _envelope_response(
+        return envelope_response(
             402,
             ERROR_CODE_PAYMENT_EXTRINSIC_FAILED,
             "payment extrinsic failed on chain",
@@ -358,7 +365,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: PaymentAmountMismatch
     ) -> JSONResponse:
         logger.info(f"payment amount mismatch: {exc}")
-        return _envelope_response(
+        return envelope_response(
             402, ERROR_CODE_PAYMENT_AMOUNT_MISMATCH, "payment amount mismatch"
         )
 
@@ -367,7 +374,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: PaymentRecoveryExpired
     ) -> JSONResponse:
         logger.info(f"payment recovery window expired: {exc}")
-        return _envelope_response(
+        return envelope_response(
             402,
             ERROR_CODE_PAYMENT_RECOVERY_EXPIRED,
             "payment recovery window expired",
@@ -378,7 +385,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: PaymentDestinationMismatch
     ) -> JSONResponse:
         logger.info(f"payment destination mismatch: {exc}")
-        return _envelope_response(
+        return envelope_response(
             402,
             ERROR_CODE_PAYMENT_DESTINATION_MISMATCH,
             "payment destination mismatch",
@@ -389,7 +396,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: PaymentSignerMismatch
     ) -> JSONResponse:
         logger.info(f"payment signer mismatch: {exc}")
-        return _envelope_response(
+        return envelope_response(
             402, ERROR_CODE_PAYMENT_SIGNER_MISMATCH, "payment signer mismatch"
         )
 
@@ -398,7 +405,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: PaymentCallTypeMismatch
     ) -> JSONResponse:
         logger.info(f"payment call type mismatch: {exc}")
-        return _envelope_response(
+        return envelope_response(
             402,
             ERROR_CODE_PAYMENT_CALL_TYPE_MISMATCH,
             "payment call type mismatch",
@@ -414,7 +421,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         # before the PaymentVerifierError base; without this handler a
         # replay would fall through to the 3200 catch-all below.
         logger.info(f"payment replay rejected: {exc}")
-        return _envelope_response(
+        return envelope_response(
             402, ERROR_CODE_PAYMENT_REPLAYED, "payment proof already used"
         )
 
@@ -425,7 +432,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         # Catch-all for any future PaymentVerifierError subclass that the
         # specific handlers above don't cover.
         logger.warning(f"payment verifier error: {exc}")
-        return _envelope_response(
+        return envelope_response(
             402, ERROR_CODE_PAYMENT_VERIFIER, "payment verification failed"
         )
 
@@ -434,14 +441,14 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: AgentNotFoundError
     ) -> JSONResponse:
         logger.info(f"agent not found: {exc}")
-        return _envelope_response(404, ERROR_CODE_AGENT_NOT_FOUND, "agent not found")
+        return envelope_response(404, ERROR_CODE_AGENT_NOT_FOUND, "agent not found")
 
     @app.exception_handler(HotkeyAgentNotFoundError)
     async def _hotkey_agent_not_found_handler(
         _request: Request, exc: HotkeyAgentNotFoundError
     ) -> JSONResponse:
         logger.info(f"no agent for hotkey: {exc}")
-        return _envelope_response(
+        return envelope_response(
             404, ERROR_CODE_HOTKEY_AGENT_NOT_FOUND, "no agent for hotkey"
         )
 
@@ -450,7 +457,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: ValidatorAuthError
     ) -> JSONResponse:
         logger.info(f"validator auth rejected: {exc}")
-        return _envelope_response(
+        return envelope_response(
             401, ERROR_CODE_VALIDATOR_AUTH, "validator authentication failed"
         )
 
@@ -459,7 +466,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: AgentNotEvaluatableError
     ) -> JSONResponse:
         logger.info(f"agent not in evaluatable state: {exc}")
-        return _envelope_response(
+        return envelope_response(
             409, ERROR_CODE_AGENT_NOT_EVALUATABLE, "agent is not evaluatable"
         )
 
@@ -468,7 +475,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: RetiredBenchVersionError
     ) -> JSONResponse:
         logger.info(f"score rejected for a retired benchmark era: {exc}")
-        return _envelope_response(
+        return envelope_response(
             410,
             ERROR_CODE_BENCH_VERSION_RETIRED,
             "benchmark version is retired and can no longer be scored",
@@ -479,7 +486,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: ScreenerAuthError
     ) -> JSONResponse:
         logger.info(f"screener auth rejected: {exc}")
-        return _envelope_response(
+        return envelope_response(
             401, ERROR_CODE_SCREENER_AUTH, "screener authentication failed"
         )
 
@@ -488,8 +495,19 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: AgentNotScreenableError
     ) -> JSONResponse:
         logger.info(f"agent not in screenable state: {exc}")
-        return _envelope_response(
+        return envelope_response(
             409, ERROR_CODE_AGENT_NOT_SCREENABLE, "agent is not screenable"
+        )
+
+    @app.exception_handler(ScreenResultConstraintError)
+    async def _screen_result_constraint_handler(
+        _request: Request, _exc: ScreenResultConstraintError
+    ) -> JSONResponse:
+        # Logged with its attempt and constraint where the verdict was refused.
+        return envelope_response(
+            409,
+            ERROR_CODE_SCREEN_RESULT_CONSTRAINT_VIOLATION,
+            "result-constraint-violation: verdict was not applied",
         )
 
     @app.exception_handler(Exception)
@@ -497,4 +515,4 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, _exc: Exception
     ) -> JSONResponse:
         logger.exception("unhandled exception in request handler")
-        return _envelope_response(500, ERROR_CODE_UNHANDLED, "internal server error")
+        return envelope_response(500, ERROR_CODE_UNHANDLED, "internal server error")

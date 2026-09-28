@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v0.323.0 (2026-09-28)
+
+### Bug Fixes
+
+- **platform**: Admit signed v13 inconclusive audits under any reason code and 409 verdict
+  constraint violations ([#2482](https://github.com/ditto-assistant/ditto-subnet/pull/2482),
+  [`aa7cc2d`](https://github.com/ditto-assistant/ditto-subnet/commit/aa7cc2d25c8089684daeaeb4cfcd9e5c424aa43b))
+
+- **platform**: Renew screening leases on same-stage heartbeats up to a hard attempt lifetime
+  ([#2486](https://github.com/ditto-assistant/ditto-subnet/pull/2486),
+  [`02bd007`](https://github.com/ditto-assistant/ditto-subnet/commit/02bd0074c89e79f9c4b525986e86f9901d929c46))
+
+- **platform**: Run screening lease sweeps before claim short-circuits and on controller capacity
+  heartbeats ([#2487](https://github.com/ditto-assistant/ditto-subnet/pull/2487),
+  [`fd2f35a`](https://github.com/ditto-assistant/ditto-subnet/commit/fd2f35a917738058220223a477f01e9d834c5833))
+
+### Features
+
+- **platform**: Add opt-in public rate limit
+  ([#2412](https://github.com/ditto-assistant/ditto-subnet/pull/2412),
+  [`f603032`](https://github.com/ditto-assistant/ditto-subnet/commit/f603032dc3798ecf6eb25af87f29ee21be5180c4))
+
+
 ## v0.322.1 (2026-09-28)
 
 ### Bug Fixes

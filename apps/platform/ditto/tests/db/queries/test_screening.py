@@ -46,6 +46,7 @@ from ditto.db.queries.screening import (
     claim_screening_attempts,
     expire_screening_attempts,
     fail_orphaned_screening_attempts,
+    sweep_screening_leases,
     try_acquire_screening_claim_lock,
 )
 from ditto.db.queries.screening_infra_retry import plan_infra_retries
@@ -577,9 +578,10 @@ def _heartbeat(
     now: datetime,
     state: str = "polling",
     active_agent_id=None,
+    screener_hotkey: str = _SCREENER,
 ) -> ScreenerHeartbeat:
     return ScreenerHeartbeat(
-        screener_hotkey=_SCREENER,
+        screener_hotkey=screener_hotkey,
         instance_id=instance_id,
         software_version="0.21.0",
         protocol_version=4,
@@ -741,6 +743,112 @@ async def test_lease_expiry_still_parks_after_max_expiries(
     assert (
         agent.agent_id not in (await plan_infra_retries(session, now=later)).decisions
     )
+
+
+def _sweep_candidate(
+    *, name: str, now: datetime, deadline: datetime, screener_hotkey: str = _SCREENER
+) -> tuple[Agent, ScreeningAttempt]:
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey=f"5HK-{name}",
+        name=name,
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.SCREENING,
+    )
+    attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=agent.agent_id,
+        screener_hotkey=screener_hotkey,
+        policy_version=SCREENING_POLICY_VERSION,
+        status="running",
+        started_at=now - timedelta(minutes=20),
+        deadline=deadline,
+    )
+    return agent, attempt
+
+
+async def test_lease_sweep_fails_overdue_orphans_before_expiring_the_rest(
+    session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC)
+    orphan_agent, orphan = _sweep_candidate(
+        name="overdue-orphan", now=now, deadline=now - timedelta(minutes=1)
+    )
+    active_agent, active = _sweep_candidate(
+        name="overdue-active", now=now, deadline=now - timedelta(minutes=1)
+    )
+    async with session.begin():
+        session.add_all(
+            [
+                orphan_agent,
+                active_agent,
+                orphan,
+                active,
+                _heartbeat(instance_id="idle-worker", now=now),
+                _heartbeat(
+                    instance_id="busy-worker",
+                    now=now,
+                    state="screening",
+                    active_agent_id=active_agent.agent_id,
+                ),
+            ]
+        )
+
+    async with session.begin():
+        assert await sweep_screening_leases(
+            session, now=now, screener_hotkey=_SCREENER
+        ) == (1, 1)
+
+    assert orphan.status == "failed"
+    assert orphan.reason_code == "worker-lease-orphaned"
+    # Positive liveness evidence never orphans an attempt; once overdue it
+    # still fails closed as an expiry.
+    assert active.status == "expired"
+    assert orphan_agent.status == AgentStatus.SCREENING_FAILED
+    assert active_agent.status == AgentStatus.SCREENING_FAILED
+
+
+@pytest.mark.parametrize(
+    ("screener_hotkey", "expected"), [(_SCREENER, (1, 0)), (None, (2, 0))]
+)
+async def test_lease_sweep_orphans_one_hotkey_or_every_running_hotkey(
+    session: AsyncSession,
+    screener_hotkey: str | None,
+    expected: tuple[int, int],
+) -> None:
+    now = datetime.now(UTC)
+    other = "5GOtherScreenerHotkeyForSweepTests000000000000000"
+    own_agent, own = _sweep_candidate(
+        name="own-orphan", now=now, deadline=now + timedelta(minutes=30)
+    )
+    other_agent, foreign = _sweep_candidate(
+        name="other-orphan",
+        now=now,
+        deadline=now + timedelta(minutes=30),
+        screener_hotkey=other,
+    )
+    async with session.begin():
+        session.add_all(
+            [
+                own_agent,
+                other_agent,
+                own,
+                foreign,
+                _heartbeat(instance_id="own-worker", now=now),
+                _heartbeat(instance_id="other-worker", now=now, screener_hotkey=other),
+            ]
+        )
+
+    async with session.begin():
+        assert (
+            await sweep_screening_leases(
+                session, now=now, screener_hotkey=screener_hotkey
+            )
+            == expected
+        )
+
+    assert own.status == "failed"
+    assert foreign.status == ("failed" if screener_hotkey is None else "running")
 
 
 async def test_claim_preserves_attempt_reported_active_by_a_fresh_worker(

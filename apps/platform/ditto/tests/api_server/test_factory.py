@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 
 from ditto.api_server import create_api_server
 from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
-from ditto.api_server.middleware import RequestIDMiddleware
+from ditto.api_server.middleware import (
+    PublicCacheMiddleware,
+    PublicRateLimitMiddleware,
+    RequestIDMiddleware,
+)
+from ditto.api_server.middleware.error_envelope import ERROR_CODE_RATE_LIMITED
 from ditto.tests.api_server.conftest import make_api_server_config
 
 
@@ -36,6 +42,36 @@ class TestCreateApiServer:
         app = create_api_server(make_api_server_config())
         classes = [m.cls for m in app.user_middleware]
         assert classes[0] is RequestIDMiddleware
+
+    def test_public_rate_limit_is_absent_by_default(self):
+        app = create_api_server(make_api_server_config())
+        classes = [m.cls for m in app.user_middleware]
+        assert PublicRateLimitMiddleware not in classes
+
+    def test_public_rate_limit_sits_inside_the_public_cache(self):
+        """Cache hits must not spend a client's budget, so the limiter has to be
+        inner to (listed after) PublicCacheMiddleware."""
+        app = create_api_server(make_api_server_config(public_rate_limit_per_minute=5))
+        classes = [m.cls for m in app.user_middleware]
+        assert classes.index(PublicRateLimitMiddleware) > classes.index(
+            PublicCacheMiddleware
+        )
+
+    async def test_public_rate_limit_spares_authenticated_routes(self):
+        app = create_api_server(make_api_server_config(public_rate_limit_per_minute=1))
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            for method, path in (
+                ("POST", "/api/v1/validator/job"),
+                ("POST", "/api/v1/screener/nodes/register"),
+                ("GET", "/api/v1/admin/leaderboard"),
+            ):
+                for _ in range(3):
+                    assert (await c.request(method, path)).status_code != 429
+            await c.post("/api/v1/upload/check", json={})
+            refused = await c.post("/api/v1/upload/check", json={})
+        assert refused.status_code == 429
+        assert refused.json()["error_code"] == ERROR_CODE_RATE_LIMITED
 
     def test_no_middleware_poses_as_an_auth_gate(self):
         """Auth is enforced per endpoint. A no-op stack entry named for auth

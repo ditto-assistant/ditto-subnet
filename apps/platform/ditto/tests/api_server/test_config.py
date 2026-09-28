@@ -161,6 +161,36 @@ class TestParseApiServerConfigFromEnv:
         with pytest.raises(ApiServerConfigError):
             parse_api_server_config_from_env(commit_hash="abc")
 
+    def test_public_rate_limit_is_off_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.delenv("DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE", raising=False)
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert config.public_rate_limit_per_minute == 0
+
+    def test_public_rate_limit_env_picked_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE", "120")
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert config.public_rate_limit_per_minute == 120
+
+    @pytest.mark.parametrize("raw", ["-1", "lots", ""])
+    def test_public_rate_limit_rejects_invalid_values(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE", raw)
+
+        with pytest.raises(ApiServerConfigError):
+            parse_api_server_config_from_env(commit_hash="abc")
+
     def test_private_coding_catalog_config_is_optional_and_separate(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

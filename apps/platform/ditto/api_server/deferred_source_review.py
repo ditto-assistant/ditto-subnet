@@ -236,13 +236,12 @@ BUDGET_EXHAUSTED_REASON_CODES = frozenset(
     }
 )
 # V13 L2 reviewer codes that carry no verdict: the model's bounded
-# "inconclusive" disposition and its trajectory budgets (the no-verdict codes
-# ``screening_quarantines_review_audit_reason_check`` admits alongside
-# ``source-review-inconclusive``), plus the signed-runtime preflight hold
-# (``l2-runtime-evidence-unavailable``: lease unavailable or review disabled),
-# which a strict V13 INCONCLUSIVE verdict can carry as its reason code. Only a
-# proving audit softens any of them, and a preflight audit never proves a
-# review ran, so the preflight code can reach ``not_completed`` at most.
+# "inconclusive" disposition and its trajectory budgets, plus the signed-runtime
+# preflight hold (``l2-runtime-evidence-unavailable``: lease unavailable or
+# review disabled), which a strict V13 INCONCLUSIVE verdict can carry as its
+# reason code. Only a proving audit softens any of them, and a preflight audit
+# never proves a review ran, so the preflight code can reach ``not_completed``
+# at most.
 L2_NO_VERDICT_REASON_CODES = frozenset(
     {
         "l2-runtime-evidence-unavailable",

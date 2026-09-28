@@ -1618,13 +1618,6 @@ class ScreeningQuarantine(Base):
             name="screening_quarantines_review_notes_pair_check",
         ),
         CheckConstraint(
-            "review_audit IS NULL OR reason_code IN "
-            "('source-review-inconclusive', 'agentic-source-review-tripwire', "
-            "'l2-model-inconclusive', 'l2-model-total-budget', "
-            "'l2-model-tool-budget', 'l2-model-step-budget')",
-            name="screening_quarantines_review_audit_reason_check",
-        ),
-        CheckConstraint(
             "reason_code ~ '^[a-z0-9][a-z0-9-]{0,63}$'",
             name="screening_quarantines_reason_code_check",
         ),
