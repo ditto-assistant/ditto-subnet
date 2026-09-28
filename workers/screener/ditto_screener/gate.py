@@ -569,6 +569,11 @@ def _with_image_binding_advisory(
         adjudication=decision.adjudication,
         review_notes=decision.review_notes,
         policy_version=decision.policy_version,
+        reason_code=(
+            decision.reason_code
+            if decision.outcome == ScreeningOutcome.QUARANTINE
+            else "image-binding-heuristic"
+        ),
     )
 
 
@@ -1522,6 +1527,7 @@ class BuildGate:
                         adjudication=deferred.adjudication,
                         review_notes=deferred.review_notes,
                         policy_version=policy_version,
+                        reason_code=deferred.reason_code,
                     )
                 decision = _with_image_binding_advisory(
                     decision, self._image_binding_advisory(tmp_path)
@@ -1791,6 +1797,7 @@ class BuildGate:
                             source_decision.review_notes or decision.review_notes
                         ),
                         policy_version=policy_version,
+                        reason_code=source_decision.reason_code,
                     )
             if (
                 decision.outcome == ScreeningOutcome.PASS
@@ -1811,6 +1818,7 @@ class BuildGate:
                     adjudication=deferred.adjudication,
                     review_notes=deferred.review_notes,
                     policy_version=policy_version,
+                    reason_code=deferred.reason_code,
                 )
             # The image-binding advisory can only escalate a PASS to an
             # operator-reviewed QUARANTINE. The mechanical lane collected no

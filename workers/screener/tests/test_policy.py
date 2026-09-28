@@ -20,6 +20,7 @@ from ditto_screener.policy import (
     PolicyEngine,
     PolicyManifest,
     ReviewJournal,
+    ScreeningDecision,
     ScreeningOutcome,
     SourceFingerprintTriageModule,
     SourceReviewObservation,
@@ -133,6 +134,123 @@ async def test_v13_terminal_l2_inconclusive_preserves_bounded_audit() -> None:
     decision = await engine.evaluate(_context(challenge, review))
     assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
     assert decision.review_audit == audit
+    assert decision.reason_code == "l2-model-inconclusive"
+
+
+@pytest.mark.parametrize(
+    ("exhausted", "expected_outcome", "expected_reason"),
+    [
+        (True, ScreeningOutcome.INCONCLUSIVE, "source-review-inconclusive"),
+        (False, ScreeningOutcome.QUARANTINE, "source-safety-private-challenge-risk"),
+    ],
+)
+async def test_deciding_selector_reason_survives_a_passing_oracle(
+    exhausted: bool, expected_outcome: ScreeningOutcome, expected_reason: str
+) -> None:
+    async def review() -> SourceReviewObservation:
+        if exhausted:
+            return SourceReviewObservation(
+                ok=False,
+                risk_level=None,
+                finding_digest=None,
+                categories=(),
+                error_code="source-review-step-budget-exhausted",
+                failure_disposition="pass_inconclusive",
+                review_audit={"stage": "l1", "steps_used": 20},
+            )
+        return SourceReviewObservation(
+            ok=True,
+            risk_level="high",
+            finding_digest="ab" * 32,
+            categories=("provider_bypass",),
+        )
+
+    async def challenge(*_args: object) -> ChallengeObservation:
+        return ChallengeObservation(
+            "v8-behavioral-oracle",
+            True,
+            "ab" * 32,
+            elapsed_ms=1200,
+            gateway_calls=3,
+            gateway_token_observed=True,
+        )
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="selector-and-oracle",
+            module_specs=(
+                {"kind": "agentic_source_review"},
+                {"kind": "behavioral_oracle"},
+            ),
+        ),
+        (
+            AgenticSourceReviewModule(module_id="private-source-review"),
+            BehavioralOracleModule(module_id="oracle"),
+        ),
+    )
+    decision = await engine.evaluate(_context(challenge, review, policy_version=13))
+    assert decision.outcome == expected_outcome
+    assert decision.evidence[-1].code == "behavioral-oracle-passed"
+    assert decision.reason_code == expected_reason
+
+
+async def test_challenge_pack_reason_is_the_failed_challenge_after_success(
+    tmp_path: Path,
+) -> None:
+    pack = tmp_path / "pack.json"
+    pack.write_text(
+        json.dumps(
+            {
+                "challenges": [
+                    {
+                        "id": challenge_id,
+                        "request": {"case_id": challenge_id},
+                        "timeout_seconds": 10,
+                        "required_response_keys": ["final_text"],
+                    }
+                    for challenge_id in ("first", "second")
+                ]
+            }
+        )
+    )
+
+    async def challenge(
+        challenge_id: str, _request: object, _timeout: float
+    ) -> ChallengeObservation:
+        return ChallengeObservation(
+            challenge_id,
+            challenge_id == "first",
+            "ab" * 32,
+            elapsed_ms=1000,
+            json_keys=("final_text",),
+            error_code=None if challenge_id == "first" else "challenge-http-503",
+        )
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="multi-challenge-reason",
+            module_specs=({"kind": "behavioral_challenge_pack"},),
+        ),
+        (BehavioralChallengePackModule(module_id="pack", pack_path=pack),),
+    )
+    decision = await engine.evaluate(_context(challenge))
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert [item.code for item in decision.evidence] == [
+        "challenge-observed",
+        "challenge-http-503",
+    ]
+    assert decision.reason_code == "challenge-http-503"
+
+
+@pytest.mark.parametrize("reason", ["", "A", "bad/code", "a" * 65, "valid-code\n"])
+def test_decision_reason_code_rejects_invalid_wire_codes(reason: str) -> None:
+    with pytest.raises(ValueError, match="reason_code"):
+        ScreeningDecision(
+            outcome=ScreeningOutcome.INCONCLUSIVE,
+            detail="",
+            manifest_digest=CORE_ONLY_MANIFEST.digest,
+            reason_code=reason,
+        )
 
 
 async def test_core_only_pass_never_calls_run() -> None:
@@ -147,6 +265,7 @@ async def test_core_only_pass_never_calls_run() -> None:
     assert decision.outcome == ScreeningOutcome.PASS
     assert decision.submits_verdict and decision.passed
     assert calls == 0
+    assert decision.reason_code is None
 
 
 async def test_default_source_review_passes_without_private_oracle() -> None:
@@ -350,6 +469,7 @@ async def test_l2_failure_disposition_fails_closed_without_rejection(
 
     assert decision.outcome == expected
     assert decision.outcome != ScreeningOutcome.DETERMINISTIC_REJECT
+    assert decision.reason_code == "l2-review-unavailable"
 
 
 @pytest.mark.parametrize(
@@ -424,6 +544,7 @@ def test_preexecution_budget_exhaustion_is_fail_closed_for_v13(
         policy_version=policy_version,
     )
 
+    assert decision.reason_code == "source-review-step-budget-exhausted"
     assert decision.outcome == expected
     assert decision.policy_version == policy_version
     assert decision.review_audit == {"stage": "l1", "steps_used": 20}

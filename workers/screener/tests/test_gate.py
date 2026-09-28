@@ -46,6 +46,8 @@ from ditto_screener.gate import (
 from ditto_screener.policy import (
     CORE_ONLY_MANIFEST,
     AgenticSourceReviewModule,
+    BehavioralOracleModule,
+    PolicyContext,
     PolicyEngine,
     PolicyEvidence,
     PolicyManifest,
@@ -53,6 +55,7 @@ from ditto_screener.policy import (
     ScreeningDecision,
     ScreeningOutcome,
     SourceReviewObservation,
+    core_decision,
     load_policy_engine,
 )
 from ditto_screener.runtime_verification import runtime_evidence_sha256
@@ -1576,6 +1579,62 @@ class _AdjudicatedStaticLeadReviewer(_SafeStaticLeadReviewer):
         )
 
 
+@pytest.mark.parametrize("policy_only", [False, True])
+async def test_deferred_preflight_reason_survives_post_build_pass(
+    make_config: Callable[..., ScreenerConfig], policy_only: bool
+) -> None:
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
+            "scripts/local-only.sh": (
+                b'path="/var/run/docker.sock"\nconnect_control_socket "$path"\n'
+            ),
+        }
+    )
+
+    class ExhaustedReviewer(_SafeStaticLeadReviewer):
+        async def resolve_lead(
+            self, *_args: Any, **_kwargs: Any
+        ) -> SourceReviewObservation:
+            return SourceReviewObservation(
+                ok=False,
+                risk_level=None,
+                finding_digest=None,
+                categories=(),
+                error_code="source-review-step-budget-exhausted",
+                failure_disposition="pass_inconclusive",
+                review_audit={"stage": "l1", "steps_used": 20},
+            )
+
+    gate = _gate_with(make_config(), _ok_run([]), tarball=tarball)
+    gate._source_reviewer = ExhaustedReviewer()  # type: ignore[assignment]
+
+    async def post_build_pass(
+        context: PolicyContext, **_kwargs: Any
+    ) -> ScreeningDecision:
+        return core_decision(
+            ScreeningOutcome.PASS,
+            code="health-ok",
+            summary="image passed the health check",
+            detail="",
+            policy_version=context.policy_version,
+        )
+
+    gate._policy.evaluate = post_build_pass  # type: ignore[method-assign]
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), policy_only=policy_only
+        )
+    assert result.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert [item.code for item in result.evidence[:2]] == [
+        "source-review-step-budget-exhausted",
+        "health-ok",
+    ]
+    if not policy_only:
+        assert result.evidence[-1].code == "seed-ack-invalid"
+    assert result.reason_code == "source-review-step-budget-exhausted"
+
+
 async def test_l3_cleared_static_lead_can_continue_to_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1661,6 +1720,7 @@ async def test_v13_l4_cleared_static_lead_continues_to_build(
         item.code == "source-review-awaiting-v13-verification"
         for item in result.evidence
     )
+    assert result.reason_code == "source-review-adjudicated"
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
     assert any(call[0] == "build" for call in calls)
@@ -1900,6 +1960,44 @@ async def test_unrequested_oracle_transport_cannot_block_source_certificate(
     assert not any(
         evidence.code == "challenge-transport-failure" for evidence in result.evidence
     )
+
+
+async def test_legacy_transport_settlement_preserves_the_court_reason(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+    gate._policy = PolicyEngine(
+        PolicyManifest(
+            rotation_id="legacy-court-settlement",
+            module_specs=(
+                {"kind": "agentic_source_review"},
+                {"kind": "behavioral_oracle"},
+            ),
+        ),
+        (
+            AgenticSourceReviewModule(module_id="source-review"),
+            BehavioralOracleModule(module_id="oracle"),
+        ),
+    )
+    reviewer = _TransportSettlingReviewer([])
+    gate._source_reviewer = reviewer  # type: ignore[assignment]
+
+    async def no_response(_container: str, url: str, **_kwargs: Any) -> tuple[int, str]:
+        if url.endswith("/health"):
+            return 0, ""
+        return 24, "transport request failed"
+
+    gate._request_from_sidecar = no_response  # type: ignore[method-assign]
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), policy_version=12
+        )
+    assert result.outcome == ScreeningOutcome.PASS
+    assert reviewer.settle_calls == 1
+    assert result.adjudication is not None
+    assert result.reason_code == "source-review-adjudicated"
+    assert "challenge-transport-failure" in [item.code for item in result.evidence]
 
 
 async def test_source_review_is_not_started_when_the_build_fails(
@@ -2455,6 +2553,21 @@ def test_image_binding_escalation_preserves_review_and_policy_identity() -> None
     assert escalated.policy_version == 12
     assert escalated.adjudication == adjudication
     assert escalated.review_notes == notes
+    assert escalated.reason_code == "image-binding-heuristic"
+
+
+def test_image_binding_advisory_preserves_an_existing_quarantine_reason() -> None:
+    decision = core_decision(
+        ScreeningOutcome.QUARANTINE,
+        code="source-finding-held",
+        summary="source finding requires operator review",
+        detail="private policy quarantine pending operator review",
+    )
+    result = gate_module._with_image_binding_advisory(
+        decision, "prebuilt entrypoint requires provenance review"
+    )
+    assert result.reason_code == "source-finding-held"
+    assert result.evidence[-1].code == "image-binding-heuristic"
 
 
 async def test_build_only_skips_image_binding_advisory_and_passes(
@@ -3370,6 +3483,7 @@ def test_seed_evidence_never_exceeds_the_decision_bound() -> None:
         outcome=ScreeningOutcome.PASS,
         detail="",
         manifest_digest=CORE_ONLY_MANIFEST.digest,
+        reason_code="health-ok",
         evidence=tuple(
             PolicyEvidence("stable-core", f"filler-{index}", "x") for index in range(16)
         ),
@@ -3386,6 +3500,7 @@ def test_seed_evidence_never_exceeds_the_decision_bound() -> None:
     assert len(result.evidence) == 16
     codes = [item.code for item in result.evidence]
     assert codes[-2:] == ["seed-memory-cap", "seed-envelope-usage"]
+    assert result.reason_code == "health-ok"
 
 
 def test_screening_locks_the_same_persistence_paths_as_scoring() -> None:

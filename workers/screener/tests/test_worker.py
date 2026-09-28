@@ -33,7 +33,7 @@ from ditto_screener.policy import (
     SourceReviewObservation,
     core_decision,
 )
-from ditto_screener.worker import ScreenerWorker
+from ditto_screener.worker import ScreenerWorker, _verdict_reason_code
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
@@ -1160,6 +1160,87 @@ def _signed_request(verdict: dict[str, Any]) -> ScreenResultRequest:
         screener_hotkey=_MINER,
         **{key: value for key, value in verdict.items() if key != "agent_id"},
     )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reason"),
+    [
+        (ScreenResultOutcome.PASS, "health-ok"),
+        (ScreenResultOutcome.PASS_INCONCLUSIVE, "source-review-inconclusive"),
+        (ScreenResultOutcome.QUARANTINE, "source-finding-held"),
+        (ScreenResultOutcome.INCONCLUSIVE, "source-review-inconclusive"),
+        (ScreenResultOutcome.RETRYABLE_INFRA, "source-review-unavailable"),
+    ],
+)
+def test_legacy_reason_ignores_shadow_seed_for_every_non_rejection(
+    outcome: ScreenResultOutcome, reason: str
+) -> None:
+    evidence = (
+        PolicyEvidence("review", reason, "deciding result"),
+        PolicyEvidence("stable-core", "seed-http-error", "shadow seed failed"),
+        PolicyEvidence("stable-core", "seed-envelope-usage", "sandbox headroom"),
+    )
+    assert _verdict_reason_code(outcome, evidence) == reason
+
+
+@pytest.mark.parametrize(
+    "outcome", [ScreenResultOutcome.INCONCLUSIVE, ScreenResultOutcome.QUARANTINE]
+)
+def test_legacy_reason_ignores_trailing_successful_challenge_observations(
+    outcome: ScreenResultOutcome,
+) -> None:
+    evidence = (
+        PolicyEvidence("review", "source-review-inconclusive", "deciding result"),
+        PolicyEvidence("oracle", "behavioral-oracle-passed", "oracle passed"),
+        PolicyEvidence("pack", "challenge-observed", "challenge completed"),
+    )
+    assert _verdict_reason_code(outcome, evidence) == "source-review-inconclusive"
+
+
+def test_legacy_reason_does_not_reintroduce_a_filtered_seed_observation() -> None:
+    evidence = (PolicyEvidence("stable-core", "seed-http-error", "shadow seed failed"),)
+    assert _verdict_reason_code(ScreenResultOutcome.RETRYABLE_INFRA, evidence) is None
+    assert (
+        _verdict_reason_code(ScreenResultOutcome.DETERMINISTIC_REJECT, evidence)
+        == "seed-http-error"
+    )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reason"),
+    [
+        (ScreeningOutcome.INCONCLUSIVE, "source-review-inconclusive"),
+        (ScreeningOutcome.RETRYABLE_INFRA, "source-review-unavailable"),
+        (ScreeningOutcome.QUARANTINE, "source-finding-held"),
+    ],
+)
+async def test_worker_prefers_the_deciding_reason_in_signed_verdicts(
+    make_config: Callable[..., ScreenerConfig], outcome: ScreeningOutcome, reason: str
+) -> None:
+    decision = core_decision(
+        outcome,
+        code=reason,
+        summary="source review did not resolve the submission",
+        detail="private policy review did not complete",
+    )
+    decision = _shadow_seed_evidence(decision)
+    decision = replace(
+        decision,
+        evidence=(
+            *decision.evidence,
+            PolicyEvidence("another-module", "module-cleared", "module cleared"),
+        ),
+    )
+    platform = _FakePlatform([])
+    worker = _worker(make_config(), platform, _FakeGate(decision))
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+    assert len(platform.verdicts) == 1
+    request = _signed_request(platform.verdicts[0])
+    assert request.outcome == ScreenResultOutcome(outcome.value)
+    assert request.reason_code == reason
+    if outcome != ScreeningOutcome.RETRYABLE_INFRA:
+        assert request.evidence is not None
+        assert request.evidence[-1].code == "module-cleared"
 
 
 async def test_shadow_seed_observation_keeps_quarantine_verdict_signed(

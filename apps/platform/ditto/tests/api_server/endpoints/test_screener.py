@@ -11695,6 +11695,7 @@ class TestSubmitResult:
             "source-review-lease-budget-exhausted",
             "behavioral-oracle-passed",
             "l2-model-inconclusive",
+            "source-review-inconclusive",
         ],
     )
     async def test_v13_inconclusive_with_review_audit_persists(
@@ -11713,20 +11714,34 @@ class TestSubmitResult:
         _install_db(app, session_maker)
         _install_chain(app)
         audit = _bounded_review_audit(reason_code=reason_code)
-
+        payload = _result_payload(
+            agent_id,
+            passed=False,
+            policy_version=13,
+            attempt_id=attempt_id,
+            outcome="inconclusive",
+            manifest_digest="12" * 32,
+            reason_code=reason_code,
+            review_audit_digest=audit.canonical_digest(),
+            review_audit=audit.model_dump(mode="json"),
+        )
+        if reason_code == "source-review-inconclusive":
+            # The worker retains later oracle observations while signing the
+            # reason from the source reviewer that decided INCONCLUSIVE.
+            payload["evidence"] = [
+                {
+                    "module_id": "private-source-review",
+                    "code": reason_code,
+                    "summary": "bounded source review exhausted",
+                },
+                {
+                    "module_id": "oracle",
+                    "code": "behavioral-oracle-passed",
+                    "summary": "behavioral oracle completed",
+                },
+            ]
         response = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/result",
-            json=_result_payload(
-                agent_id,
-                passed=False,
-                policy_version=13,
-                attempt_id=attempt_id,
-                outcome="inconclusive",
-                manifest_digest="12" * 32,
-                reason_code=reason_code,
-                review_audit_digest=audit.canonical_digest(),
-                review_audit=audit.model_dump(mode="json"),
-            ),
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
         )
 
         assert response.status_code == 200, response.text
@@ -11741,6 +11756,7 @@ class TestSubmitResult:
             )
             assert agent is not None and agent.status == AgentStatus.SCREENING_FAILED
             assert attempt is not None and attempt.status == "expired"
+            assert attempt.reason_code == reason_code
             assert quarantine is not None
             assert quarantine.reason_code == reason_code
             assert quarantine.review_audit_digest == audit.canonical_digest()

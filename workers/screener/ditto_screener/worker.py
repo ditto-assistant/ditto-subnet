@@ -110,35 +110,30 @@ def _verdict_reason_code(
     outcome: ScreenResultOutcome,
     evidence: tuple[PolicyEvidence, ...],
 ) -> str | None:
-    """Pick the public reason from evidence that actually decided the outcome.
+    """Infer a reason for legacy decisions without an explicit deciding code.
 
     Seed observations are appended last so they survive the evidence cap.
     Treating that tail as the reason relabels a quarantine or pass as a seed
-    failure and, when private feedback is attached, makes ``ScreenResultRequest``
-    reject the verdict.
+    failure. Seed probes decide only deterministic rejections; successful
+    oracle observations cannot explain a quarantine or inconclusive outcome.
     """
     if outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
         return "source-review-inconclusive"
     if not evidence:
         return None
-    shadow_seed = outcome not in {
-        ScreenResultOutcome.DETERMINISTIC_REJECT,
-        ScreenResultOutcome.RETRYABLE_INFRA,
-        ScreenResultOutcome.INCONCLUSIVE,
-    }
+    shadow_seed = outcome != ScreenResultOutcome.DETERMINISTIC_REJECT
     for item in reversed(evidence):
         if item.code == _SEED_ENVELOPE_OBSERVATION:
             continue
         if shadow_seed and item.code.startswith("seed-"):
             continue
+        if outcome in {
+            ScreenResultOutcome.QUARANTINE,
+            ScreenResultOutcome.INCONCLUSIVE,
+        } and item.code in {"behavioral-oracle-passed", "challenge-observed"}:
+            continue
         return item.code
-    if outcome in {
-        ScreenResultOutcome.QUARANTINE,
-        ScreenResultOutcome.INCONCLUSIVE,
-        ScreenResultOutcome.DETERMINISTIC_REJECT,
-        ScreenResultOutcome.RETRYABLE_INFRA,
-    }:
-        return evidence[-1].code
+    # No deciding evidence remains; do not reintroduce an observation as a reason.
     return None
 
 
@@ -941,7 +936,9 @@ class ScreenerWorker:
                     "build-only screen produced a quarantine outcome for "
                     f"agent_id={agent_id}"
                 )
-            reason_code = _verdict_reason_code(typed_outcome, result.evidence)
+            reason_code = result.reason_code or _verdict_reason_code(
+                typed_outcome, result.evidence
+            )
             private_failure_detail: str | None = None
             private_failure_log_tail: str | None = None
             if _attach_private_failure_feedback(typed_outcome, reason_code):
