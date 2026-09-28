@@ -7446,24 +7446,70 @@ def _classified_suffix(error: BaseException) -> str | None:
 def _error_code(prefix: str, error: BaseException) -> str:
     if isinstance(error, httpx.HTTPStatusError):
         response = error.response
-        upstream = ""
-        with contextlib.suppress(ValueError, TypeError):
-            payload = response.json()
-            metadata = payload.get("error", {}).get("metadata", {})
-            if isinstance(metadata, Mapping):
-                value = metadata.get("provider_error_code")
-                if isinstance(value, str):
-                    upstream = (
-                        "-"
-                        + "".join(
-                            char if char.isalnum() else "-" for char in value.casefold()
-                        ).strip("-")[:48]
-                    )
-        return f"{prefix}-http-{response.status_code}{upstream}"
+        code = f"{prefix}-http-{response.status_code}{_http_failure_hint(response)}"
+        return code[:64]
     classified = _classified_suffix(error)
     if classified is not None:
         return f"{prefix}-{classified}"[:64]
     return f"{prefix}-{type(error).__name__.lower()}"
+
+
+def _http_failure_hint(response: httpx.Response) -> str:
+    """Expose only a bounded error class, never the provider's source-bearing text."""
+    if len(response.content) > 16_384:
+        return ""
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(payload, Mapping):
+        return ""
+    error = payload.get("error")
+    if not isinstance(error, Mapping):
+        error = {}
+    metadata = error.get("metadata")
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    if response.status_code not in {400, 413, 422}:
+        return ""
+    values = (
+        metadata.get("provider_error_code"),
+        error.get("code"),
+        payload.get("error_code"),
+        error.get("type"),
+        error.get("message"),
+        payload.get("message"),
+        metadata.get("raw"),
+    )
+    detail = " ".join(
+        re.sub(r"[_-]+", " ", value[:2048]).casefold()
+        for value in values
+        if isinstance(value, str)
+    )
+    if any(
+        phrase in detail
+        for phrase in (
+            "context length",
+            "context window",
+            "prompt is too long",
+            "too many tokens",
+            "maximum input tokens",
+            "input token limit",
+        )
+    ):
+        return "-context-limit"
+    if "request body too large" in detail or "payload too large" in detail:
+        return "-request-too-large"
+    if "tool schema" in detail or "invalid tool" in detail:
+        return "-tool-schema"
+    if "unsupported parameter" in detail or "unknown parameter" in detail:
+        return "-unsupported-parameter"
+    if any(
+        phrase in detail
+        for phrase in ("model not found", "invalid model", "unsupported model")
+    ):
+        return "-model-unavailable"
+    return ""
 
 
 def _l1_evidence(observation: SourceReviewObservation) -> list[dict[str, object]]:
