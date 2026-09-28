@@ -679,6 +679,8 @@ async def test_shadow_review_failure_preserves_signed_verdict(
     assert f"attempt_id={item.attempt_id}" in caplog.text
     assert f"error_type={error_type}" in caplog.text
     assert private_text not in caplog.text
+    assert worker._active_attempt_id is None
+    assert worker._progress_heartbeat_tasks == set()
 
 
 async def test_shadow_review_not_built_in_enforce_mode(

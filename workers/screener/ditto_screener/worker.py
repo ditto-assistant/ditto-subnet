@@ -1192,7 +1192,14 @@ class ScreenerWorker:
         finally:
             # A review can finish before a later build/image step raises. Do not
             # retain that attempt's private result in the long-lived worker.
-            self._gate.pop_shadow_review(attempt_id)
+            try:
+                self._gate.pop_shadow_review(attempt_id)
+            except Exception as error:
+                logger.warning(
+                    "shadow review cleanup failed attempt_id=%s error_type=%s",
+                    attempt_id,
+                    type(error).__name__,
+                )
             heartbeat_stop.set()
             await heartbeat_task
             progress_tasks = tuple(self._progress_heartbeat_tasks)
