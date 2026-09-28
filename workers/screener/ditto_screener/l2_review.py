@@ -170,7 +170,7 @@ def l2_prompt_cache_key(policy_version: int) -> str:
 
 
 L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v4"
-L2_DOSSIER_REVISION = "language-neutral-source-v14"
+L2_DOSSIER_REVISION = "language-neutral-source-v15"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
 L2_HARNESS_REVISION = "l2-isolated-coding-harness-v22"
@@ -721,7 +721,9 @@ def _analysis_requires_correction(output: str) -> bool:
 def _contains_truncation(value: object) -> bool:
     if isinstance(value, dict):
         for key, item in value.items():
-            if (key == "truncated" or key.endswith("_truncated")) and item is True:
+            if (
+                key in {"truncated", "analysis_failed"} or key.endswith("_truncated")
+            ) and item is True:
                 return True
             if _contains_truncation(item):
                 return True
@@ -4151,6 +4153,10 @@ class TerraSolSourceReviewAgent:
             deterministic[command] = analysis
             tools.append(command)
         inventory = json.loads(repository.inventory())
+        # Binary failures and inventory omissions remain reviewable evidence
+        # gaps, even when every separate dossier analyzer completed.
+        if _contains_truncation(inventory):
+            dossier_complete = False
         starter_diff = deterministic.get("starter_diff")
         selected_starter_revision = (
             str(starter_diff.get("revision"))

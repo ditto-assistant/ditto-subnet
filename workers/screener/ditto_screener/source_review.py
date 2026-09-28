@@ -3334,13 +3334,26 @@ class TarSourceRepository:
         if cached is not None:
             return cached
         member_info = self._members[normalized]
-        with tarfile.open(self._archive_path, mode="r:gz") as archive:
-            member = archive.getmember(member_info.archive_name)
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                return {"error": "file-unavailable"}
-            sample = sample_stream(extracted, size=member_info.size)
-        result = analyze_binary(sample, path=normalized)
+        try:
+            with tarfile.open(self._archive_path, mode="r:gz") as archive:
+                member = archive.getmember(member_info.archive_name)
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise ValueError("file-unavailable")
+                sample = sample_stream(extracted, size=member_info.size)
+            result = analyze_binary(sample, path=normalized)
+        except Exception as error:  # noqa: BLE001
+            # One hostile blob must not abort review. Never log payload-derived
+            # exception text or a traceback, and cache failures just like facts.
+            logger.warning("Binary analysis failed: %s", type(error).__name__)
+            result = {
+                "path": normalized,
+                "bytes": member_info.size,
+                "format": "unknown",
+                "analysis_failed": True,
+                "analysis_truncated": True,
+                "error": "analysis-failed",
+            }
         self._binary_analysis_cache[normalized] = result
         return result
 

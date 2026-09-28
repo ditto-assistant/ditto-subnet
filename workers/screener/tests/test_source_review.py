@@ -603,6 +603,92 @@ def test_analyze_binary_reports_safetensors_without_loading_weights(
     assert analysis["safety"]["external_data_loaded"] is False
 
 
+@pytest.mark.parametrize(
+    "header",
+    [
+        pytest.param(b"[" * 1_000_000 + b"]" * 1_000_000, id="deep-nesting"),
+        pytest.param(
+            b'{"weight":{"dtype":"U8","shape":[16],"data_offsets":[0,'
+            + b"9" * 5000
+            + b"]}}",
+            id="huge-integer",
+        ),
+        pytest.param(b'{"weight":invalid}', id="invalid-json"),
+        pytest.param(b"{\xff}", id="invalid-utf8"),
+    ],
+)
+def test_safetensors_header_failure_is_contained(
+    tmp_path: Path, header: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = len(header).to_bytes(8, "little") + header + b"\xff" * 16
+    marker = {
+        "parse_status": "analysis-failed",
+        "reason": "header-unparseable",
+        "details_truncated": True,
+    }
+    assert binary_analysis_module._safetensors_details(model, False) == marker
+    repo = TarSourceRepository(
+        str(_archive_with(tmp_path, {"models/hostile.weights": model}))
+    )
+    inventory = json.loads(repo.inventory())
+    entry = inventory["binary_analysis"][0]
+    assert entry["format"] == "safetensors"
+    assert entry["format_confidence"] == "low"
+    assert entry["analysis_failed"] is True
+    assert entry["analysis_truncated"] is True
+    assert entry["details"] == marker
+
+    def unexpected_reparse(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("cached failure must not be parsed again")
+
+    monkeypatch.setattr(source_review_module, "analyze_binary", unexpected_reparse)
+    analysis = json.loads(repo.analyze_binary("models/hostile.weights"))
+    assert analysis == repo._binary_analysis_cache["models/hostile.weights"]
+    assert analysis["details"] == marker
+    assert json.loads(repo.inventory()) == inventory
+
+
+@pytest.mark.parametrize("failing_step", ["sample_stream", "analyze_binary"])
+def test_inventory_survives_binary_analysis_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failing_step: str,
+) -> None:
+    calls = 0
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("attacker-controlled-exception-text")
+
+    monkeypatch.setattr(source_review_module, failing_step, fail)
+    repo = TarSourceRepository(
+        str(_archive_with(tmp_path, {"data/blob.bin": b"\xff" * 16}))
+    )
+    inventory = repo.inventory()
+    entry = json.loads(inventory)["binary_analysis"][0]
+    assert entry["analysis_failed"] is True
+    assert entry["analysis_truncated"] is True
+    analysis = repo.analyze_binary("data/blob.bin")
+    assert json.loads(analysis) == {
+        "path": "data/blob.bin",
+        "bytes": 16,
+        "format": "unknown",
+        "analysis_failed": True,
+        "analysis_truncated": True,
+        "error": "analysis-failed",
+    }
+    assert repo.inventory() == inventory
+    assert repo.analyze_binary("data/blob.bin") == analysis
+    assert calls == 1
+    assert "RuntimeError" in caplog.text
+    assert (
+        "attacker-controlled-exception-text" not in inventory + analysis + caplog.text
+    )
+    assert all(record.exc_info is None for record in caplog.records)
+
+
 def test_safetensors_rejects_invalid_and_overlapping_payload_ranges(
     tmp_path: Path,
 ) -> None:
