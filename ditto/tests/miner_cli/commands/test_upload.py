@@ -1569,6 +1569,10 @@ class TestPaymentDisposition:
         assert "upload succeeded" not in err
         assert "submission v2" not in err
         assert "byte-identical" in err
+        assert (
+            "The previous submission cannot be resubmitted. "
+            "Please try again after updating."
+        ) in err
         assert "NOT spent" in err
         assert "reusable credit" in err
         # Names the flag that actually buys another seed, and the existing agent.

@@ -286,6 +286,18 @@ submission until the platform's exact UTC retry time. Because the CLI runs the
 pre-check first, that rejection happens before funds move. It does not delay
 recovery of the already-paid upload described above.
 
+The cooldown rejection keeps that scheduled timestamp and also reports
+`Please try again in X hours and Y minutes.` The countdown uses Platform's
+clock and rounds a positive wait up to the next minute.
+
+An ordinary upload with the same tarball SHA-256 as a paid submission owned
+by your coldkey is rejected before payment, even from another hotkey. It
+reports: `The previous submission cannot be resubmitted. Please try again
+after updating.` Update and repackage the harness before submitting again.
+The existing explicit `--allow-identical-rescore` option still permits buying
+another seeded evaluation after the owner cooldown. Exact recovery of a
+previously paid upload continues to return its original submission identity.
+
 ## Track your submission
 
 ```sh

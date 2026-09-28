@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 from uuid import uuid4
 
 import bittensor
@@ -78,6 +78,10 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(
         "ditto.api_server.endpoints.upload.get_submission_retry_at",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
@@ -296,7 +300,7 @@ class TestUploadCheck:
         token = uuid4()
         duplicate_lookup = AsyncMock(return_value=None)
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_same_hotkey_agent_by_sha",
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
             duplicate_lookup,
         )
         monkeypatch.setattr(
@@ -428,7 +432,7 @@ class TestUploadCheck:
             AsyncMock(return_value=None),
         )
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_same_hotkey_agent_by_sha",
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
             AsyncMock(return_value=None),
         )
         verifier = _override_payment_verifier(app)
@@ -476,7 +480,7 @@ class TestUploadCheck:
         override_get_chain_client(app)
         duplicate_id = uuid4()
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_same_hotkey_agent_by_sha",
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
             AsyncMock(
                 return_value=SimpleNamespace(
                     agent_id=duplicate_id,
@@ -498,8 +502,61 @@ class TestUploadCheck:
         assert ERROR_CODE_IDENTICAL_SUBMISSION in blocked_body["error_codes"]
         assert blocked_body["payment_required"] is False
         assert blocked_body["identical_agent_id"] == str(duplicate_id)
+        assert blocked_body["messages"] == [
+            "The previous submission cannot be resubmitted. "
+            "Please try again after updating."
+        ]
         assert allowed.json()["ok"] is True
         assert allowed.json()["payment_required"] is True
+
+    async def test_duplicate_from_another_owner_hotkey_precedes_cooldown(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        previous_id = uuid4()
+        lookup = AsyncMock(
+            return_value=SimpleNamespace(
+                agent_id=previous_id,
+                status=AgentStatus.SCORED,
+                miner_hotkey=_make_keypair().ss58_address,
+            )
+        )
+        cooldown = AsyncMock(return_value=datetime.now(UTC) + timedelta(hours=1))
+        reserve = AsyncMock()
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha", lookup
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_submission_retry_at", cooldown
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.reserve_upload_admission", reserve
+        )
+        new_hotkey = bittensor.Keypair.create_from_uri("//Bob")
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(keypair=new_hotkey),
+                "reserve_submission_slot": True,
+            },
+        )
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result["error_codes"] == [ERROR_CODE_IDENTICAL_SUBMISSION]
+        assert result["identical_agent_id"] == str(previous_id)
+        assert result["payment_required"] is False
+        assert result["admission_token"] is None
+        assert result["retry_at"] is None
+        lookup.assert_awaited_once_with(
+            ANY, miner_coldkey="5Coldkey", sha256=_GOOD_SHA256
+        )
+        cooldown.assert_not_awaited()
+        reserve.assert_not_awaited()
 
     async def test_banned_hotkey_returns_1103(
         self,
@@ -528,7 +585,9 @@ class TestUploadCheck:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         override_get_chain_client(app)
-        retry_at = datetime(2026, 7, 24, 12, 30, tzinfo=UTC)
+        retry_at = datetime.now(UTC).replace(microsecond=0) + timedelta(
+            hours=2, minutes=30
+        )
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_submission_retry_at",
             AsyncMock(return_value=retry_at),
@@ -542,7 +601,39 @@ class TestUploadCheck:
         assert result["ok"] is False
         assert result["payment_required"] is False
         assert ERROR_CODE_SUBMISSION_COOLDOWN in result["error_codes"]
-        assert result["retry_at"] == "2026-07-24T12:30:00Z"
+        assert result["retry_at"] == retry_at.isoformat().replace("+00:00", "Z")
+        assert result["messages"] == [
+            f"owner coldkey may submit again at {retry_at.isoformat()}. "
+            "Please try again in 2 hours and 30 minutes."
+        ]
+
+    async def test_reservation_race_includes_the_cooldown_countdown(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        retry_at = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=2)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.reserve_upload_admission",
+            AsyncMock(side_effect=SubmissionCooldownError(retry_at)),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={**_signed_request_body(), "reserve_submission_slot": True},
+        )
+
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["error_codes"] == [ERROR_CODE_SUBMISSION_COOLDOWN]
+        assert result["payment_required"] is False
+        assert result["admission_token"] is None
+        assert retry_at.isoformat() in result["messages"][0]
+        assert result["messages"][0].endswith(
+            "Please try again in 2 hours and 0 minutes."
+        )
 
     async def test_bad_signature_returns_1100(
         self, app: FastAPI, client: httpx.AsyncClient
@@ -1144,6 +1235,9 @@ class TestUploadAgentValidationFailures:
         assert response.status_code == 429
         assert int(response.headers["Retry-After"]) in range(1798, 1801)
         assert retry_at.isoformat() in response.json()["message"]
+        assert response.json()["message"].endswith(
+            "Please try again in 0 hours and 30 minutes."
+        )
 
     async def test_bad_signature_returns_400(
         self, app: FastAPI, client: httpx.AsyncClient

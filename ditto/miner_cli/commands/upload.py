@@ -621,7 +621,9 @@ def _run_upload(
         # payment is banked as a credit. Reporting the ordinary success line
         # here would tell the miner they bought a run they did not.
         print(
-            f"\nno new submission was created: {agent_name} is byte-identical "
+            "\nThe previous submission cannot be resubmitted. "
+            "Please try again after updating.\n"
+            f"no new submission was created: {agent_name} is byte-identical "
             f"to an artifact you already submitted"
             + (
                 f" (agent {result.credit_for_agent_id})"
