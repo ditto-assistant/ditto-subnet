@@ -109,6 +109,31 @@ the VM:
 Never place any secret value, private challenge, private risk rule, or raw
 artifact evidence in source, workflow arguments, logs, or PR text.
 
+## Report-only v13 canaries
+
+Backroom's `schedule_l2_report_canary` accepts an exact agent UUID, source
+attempt UUID, artifact SHA, expected status and score count, and target Hetzner
+node. `runMode: source_only` remains the default: it runs L1/L2/L3 on a
+separate lease with L2 in shadow mode and intentionally skips runtime
+challenges. Its top-level decision follows L1, so judge the paid review from
+the persisted `l2` finding and clearance fields.
+
+`runMode: full_runtime` additionally builds and serves the exact artifact in an
+isolated Docker namespace and runs the private behavioral checks through the
+same gate. It applies L2 in an isolated `enforce_preview`: the reported decision
+now exercises the same source-clearance path as an authoritative attempt,
+while the report retains the applied L2 result. Platform admits this mode only
+after a capable worker release is reported on a fresh heartbeat. The report
+records `challenge_status` as
+`not_run`, `inconclusive`, or `completed`, plus bounded challenge evidence codes
+and the gate's decision. The full-runtime report also includes the bounded L1
+finding so an L1/L2 disagreement can be reviewed. Neither mode publishes an
+image, posts a screening verdict, changes scores, or clears a quarantine. A
+completed challenge is an
+observation; inspect its codes and the source finding before concluding that
+either labeled control passed. Keep adjudicator authority off until the paired
+full-runtime controls and their exact identities are reviewed.
+
 ## Policy v7 rollout
 
 1. Merge and deploy the platform protocol pin first. Existing v6 workers stop

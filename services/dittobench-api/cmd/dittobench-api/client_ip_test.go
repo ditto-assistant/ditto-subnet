@@ -57,6 +57,41 @@ func TestRotatingSpoofedForwardedForStaysInOneLimiterBucket(t *testing.T) {
 	}
 }
 
+func TestRateLimitKeyGroupsIPv6By64(t *testing.T) {
+	cases := map[string]string{
+		"203.0.113.7":                   "203.0.113.7",
+		"::ffff:203.0.113.7":            "203.0.113.7",
+		"2001:db8:1:2:aaaa::1":          "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff:ffff:ffff:1": "2001:db8:1:2::/64",
+		"2001:db8:1:3::1":               "2001:db8:1:3::/64",
+		"fe80::1%eth0":                  "fe80::/64",
+		"not-an-ip":                     "not-an-ip",
+	}
+	for ip, want := range cases {
+		if got := rateLimitKey(ip); got != want {
+			t.Fatalf("rateLimitKey(%q) = %q, want %q", ip, got, want)
+		}
+	}
+}
+
+// Rotating the interface identifier inside one IPv6 /64 must not mint a fresh
+// rate-limit bucket.
+func TestRotatingIPv6WithinOne64StaysInOneLimiterBucket(t *testing.T) {
+	limiter := ratelimit.New(3, time.Hour)
+	allowed := 0
+	for i := 0; i < 20; i++ {
+		r := httptest.NewRequest("POST", "/v1/submit", nil)
+		r.RemoteAddr = "192.0.2.10:44321"
+		r.Header.Set("X-Forwarded-For", fmt.Sprintf("2001:db8:1:2::%x", i+1))
+		if limiter.Allow(rateLimitKey(clientIPFromHops(r, 1))) {
+			allowed++
+		}
+	}
+	if allowed != 3 {
+		t.Fatalf("20 requests from one IPv6 /64: %d allowed, want the limit of 3", allowed)
+	}
+}
+
 func TestParseTrustedProxyHops(t *testing.T) {
 	cases := map[string]int{
 		"":    1,

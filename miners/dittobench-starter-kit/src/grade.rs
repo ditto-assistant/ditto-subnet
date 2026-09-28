@@ -100,7 +100,10 @@ fn find_bounded(text: &str, needle: &str, attached: fn(u8) -> bool) -> Option<us
         if before && after {
             return Some(j);
         }
-        from = j + 1;
+        // Step past the whole first character: `j + 1` lands inside a
+        // multi-byte one (e.g. "é") and slicing there panics. A match can only
+        // start on a character boundary, so this skips no candidate.
+        from = j + text[j..].chars().next().map_or(1, char::len_utf8);
     }
     None
 }
@@ -134,6 +137,11 @@ mod tests {
             ("5", "temperature dropped to -5 today", false),
             ("100", "you owe -100 dollars", false),
             ("42", "see ticket order-42-x for details", false),
+            // A multi-byte first character after an attached earlier match
+            // must not restart the search inside that character.
+            ("Émile", "xémile wrote, then émile called", true),
+            ("Émile", "xémile only", false),
+            ("Ōsaka", "kyōsaka is not ōsaka", true),
         ];
         for (exp, resp, want) in cases {
             assert_eq!(hit(exp, resp), *want, "hit({exp:?}, {resp:?})");

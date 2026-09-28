@@ -19,11 +19,13 @@ Construction and reads are synchronous CPU work; endpoint callers run them via
 
 from __future__ import annotations
 
+import codecs
 import fnmatch
 import io
 import re
 import tarfile
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 MAX_LISTING_FILES = 512
 MAX_OPAQUE_BLOBS = 128
@@ -46,6 +48,15 @@ SEARCH_LINE_CHARS = 500
 MAX_TARBALL_BYTES = 64 * 1024 * 1024
 MAX_MEMBERS = 4096
 MAX_UNPACKED_BYTES = 256 * 1024 * 1024
+# Upload-time archive limits mirror the screener's archive contract
+# (workers/screener/ditto_screener/gate.py: _MAX_ARCHIVE_MEMBERS,
+# _MAX_UNPACKED_BYTES). Upload rejects a gzip bomb or junk archive before it
+# reaches object storage, but it must never be stricter than the screener: an
+# archive the screener accepts must upload. ``test_upload_archive`` pins both
+# values to the screener's source.
+UPLOAD_MAX_MEMBERS = 20_000
+UPLOAD_MAX_UNPACKED_BYTES = 64 * 1024 * 1024
+_DOCKERFILE_READ_CHUNK = 64 * 1024
 
 
 class SourceInspectError(Exception):
@@ -519,6 +530,104 @@ class TarSourceInspector:
             return extracted.read(TEXT_SIZE_LIMIT + 1).decode("utf-8")
 
 
+def validate_upload_archive(tar_bytes: bytes) -> None:
+    """Reject an upload that is not a bounded gzip tar with a root Dockerfile.
+
+    One sequential pass mirroring the screener's archive contract. Member
+    count and unpacked size use the screener's caps. Unsafe paths, links, and
+    special files are rejected rather than skipped. Import allowlisting stays
+    with the screener: there is no upload-time crate allowlist yet.
+    """
+    if not tar_bytes.startswith(b"\x1f\x8b"):
+        raise SourceInspectError("archive-not-gzip", "archive is not gzip-compressed")
+    count = 0
+    unpacked = 0
+    seen: set[str] = set()
+    saw_dockerfile = False
+    try:
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r|gz") as archive:
+            for member in archive:
+                count += 1
+                if count > UPLOAD_MAX_MEMBERS:
+                    raise SourceInspectError(
+                        "artifact-too-many-members",
+                        f"archive exceeds {UPLOAD_MAX_MEMBERS} members",
+                    )
+                name = member.name.removeprefix("./")
+                if not name and member.isdir():
+                    continue
+                # Tar directories conventionally end in one slash. Normalize
+                # that separator before both canonical-path and duplicate checks.
+                canonical_name = name.removesuffix("/") if member.isdir() else name
+                path = PurePosixPath(canonical_name)
+                if (
+                    not canonical_name
+                    or name.startswith("/")
+                    or "\\" in name
+                    or (path.parts and path.parts[0].endswith(":"))
+                    or ".." in path.parts
+                ):
+                    raise SourceInspectError(
+                        "archive-unsafe-path", "archive contains an unsafe path"
+                    )
+                if str(path) != canonical_name:
+                    raise SourceInspectError(
+                        "archive-unsafe-path", "archive contains a non-canonical path"
+                    )
+                if canonical_name in seen:
+                    raise SourceInspectError(
+                        "archive-duplicate-path", "archive contains a duplicate path"
+                    )
+                if not (member.isfile() or member.isdir()):
+                    raise SourceInspectError(
+                        "archive-special-file",
+                        "archive contains a link or special file",
+                    )
+                if member.size < 0:
+                    raise SourceInspectError(
+                        "artifact-too-large", "archive member size is invalid"
+                    )
+                unpacked += member.size
+                if unpacked > UPLOAD_MAX_UNPACKED_BYTES:
+                    raise SourceInspectError(
+                        "artifact-too-large",
+                        f"archive exceeds {UPLOAD_MAX_UNPACKED_BYTES} unpacked bytes",
+                    )
+                seen.add(canonical_name)
+                if canonical_name != "Dockerfile" or not member.isfile():
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise SourceInspectError(
+                        "archive-dockerfile-unreadable",
+                        "Dockerfile could not be read",
+                    )
+                # The screener decodes the whole Dockerfile; do the same in
+                # bounded chunks (the unpacked-size cap already bounds it).
+                decoder = codecs.getincrementaldecoder("utf-8")()
+                try:
+                    while chunk := extracted.read(_DOCKERFILE_READ_CHUNK):
+                        decoder.decode(chunk)
+                    decoder.decode(b"", final=True)
+                except UnicodeDecodeError as error:
+                    raise SourceInspectError(
+                        "archive-dockerfile-unreadable",
+                        "Dockerfile is not valid UTF-8 text",
+                    ) from error
+                saw_dockerfile = True
+    except SourceInspectError:
+        raise
+    except (tarfile.TarError, OSError, EOFError) as error:
+        raise SourceInspectError(
+            "archive-unreadable", "archive is not a readable gzip-compressed tar"
+        ) from error
+    if not saw_dockerfile:
+        raise SourceInspectError(
+            "archive-missing-dockerfile",
+            "Dockerfile is missing from the archive root",
+        )
+
+
 __all__ = [
     "MAX_LISTING_FILES",
     "MAX_MEMBERS",
@@ -532,9 +641,12 @@ __all__ = [
     "OMIT_REASON_BYTE_BUDGET",
     "OMIT_REASON_FILE_LIMIT",
     "OMIT_REASON_UNREADABLE",
+    "UPLOAD_MAX_MEMBERS",
+    "UPLOAD_MAX_UNPACKED_BYTES",
     "SEARCH_LINE_CHARS",
     "OmittedTextFile",
     "SourceInspectError",
     "TarSourceInspector",
     "TextSnapshot",
+    "validate_upload_archive",
 ]

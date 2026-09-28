@@ -155,6 +155,21 @@ describe('StuckSubmissionFleetPanel', () => {
     expect(screen.getByText('Select all 1 recoverable')).toBeTruthy()
   })
 
+  it('keeps a recently closed provider-parked slot waiting through the quiet window', () => {
+    const recovering = {
+      ...providerParked,
+      provider_outage: {
+        ...providerParked.provider_outage,
+        state: 'closed' as const,
+        closed_at: '2026-09-21T22:54:00Z',
+      },
+    }
+    render(<StuckSubmissionFleetPanel initial={response([recovering])} readOnly={false} />)
+
+    expect(screen.getByText('wait for provider · upstream_http_503')).toBeTruthy()
+    expect((screen.getByLabelText('Select provider-parked-agent') as HTMLInputElement).disabled).toBe(true)
+  })
+
   it('shows withdraw, not wait for provider, for an agent-attributable row during an outage', () => {
     render(
       <StuckSubmissionFleetPanel

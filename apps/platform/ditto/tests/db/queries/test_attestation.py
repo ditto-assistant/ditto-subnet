@@ -7,7 +7,8 @@ the linked hotkeys one emission position while preserving their rows.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from unittest.mock import AsyncMock
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +46,7 @@ async def _attest(
     netuid: int = _NETUID,
     lo_kind: str = "hotkey",
     hi_kind: str = "hotkey",
+    nonce: UUID | None = None,
 ):
     """Record a link. Signature verification is covered separately; these tests
     exercise the relational invariants."""
@@ -55,7 +57,7 @@ async def _attest(
             netuid=netuid,
             hotkey_lo=lo,
             hotkey_hi=hi,
-            nonce=uuid4(),
+            nonce=nonce or uuid4(),
             issued_at=_ISSUED,
             lo_key_kind=lo_kind,
             lo_signer=lo,
@@ -120,6 +122,25 @@ class TestRecordAttestation:
         await _attest(session, a=_A, b=_B)
         with pytest.raises(AttestationReplayedError, match="already links"):
             await _attest(session, a=_A, b=_B)
+
+    async def test_lost_race_on_active_pair_is_a_replay(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A concurrent duplicate passes both pre-insert SELECTs, then loses at
+        the partial unique index; it must surface as a replay (409), not 500."""
+        await _attest(session, a=_A, b=_B)
+        monkeypatch.setattr(session, "scalar", AsyncMock(return_value=None))
+        with pytest.raises(AttestationReplayedError, match="already links"):
+            await _attest(session, a=_A, b=_B)
+
+    async def test_lost_race_on_nonce_is_a_replay(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        nonce = uuid4()
+        await _attest(session, a=_A, b=_B, nonce=nonce)
+        monkeypatch.setattr(session, "scalar", AsyncMock(return_value=None))
+        with pytest.raises(AttestationReplayedError, match="nonce"):
+            await _attest(session, a=_A, b=_C, nonce=nonce)
 
     async def test_reversed_pair_is_the_same_link(self, session: AsyncSession) -> None:
         """Canonical ordering means a pair cannot be linked twice by swapping."""

@@ -90,7 +90,6 @@ class _FakeGate:
         self.build_only_calls: list[bool] = []
         self.policy_only_calls: list[bool] = []
         self.deferred_source_review_calls: list[bool] = []
-        self.remote_source_reviews: list[Any] = []
         self.policy_versions: list[int] = []
         self.bench_versions: list[int] = []
         self.shadow_result: Any = None
@@ -117,7 +116,6 @@ class _FakeGate:
         deferred_source_review: bool = False,
         policy_version: int | None = None,
         bench_version: int | None = None,
-        remote_source_review: Any = None,
         **_: Any,
     ) -> ScreeningDecision:
         self.calls.append(agent_id)
@@ -125,7 +123,6 @@ class _FakeGate:
         self.build_only_calls.append(build_only)
         self.policy_only_calls.append(policy_only)
         self.deferred_source_review_calls.append(deferred_source_review)
-        self.remote_source_reviews.append(remote_source_review)
         if policy_version is not None:
             self.policy_versions.append(policy_version)
         if bench_version is not None:
@@ -678,61 +675,6 @@ async def test_policy_only_item_reuses_image_without_upload(
     assert verdict["policy_only"] is True
     assert verdict["image_sha256"] is None
     assert verdict["image_upload_id"] is None
-
-
-async def test_remote_build_gets_full_timeout_despite_stale_local_override(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    """A legacy 20-minute local cap must not reduce Targon to one minute."""
-    agent = uuid4()
-    platform = _FakePlatform([])
-    observed_timeouts: list[float] = []
-
-    async def build_submission_image(  # type: ignore[no-untyped-def]
-        _agent_id,
-        *,
-        attempt_id: UUID,
-        timeout,
-    ):
-        assert attempt_id is not None
-        observed_timeouts.append(timeout)
-        return None
-
-    platform.build_submission_image = build_submission_image  # type: ignore[attr-defined]
-    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
-    original_screen = gate.screen
-
-    async def invoke_remote_build(*, remote_build, **kwargs):  # type: ignore[no-untyped-def]
-        await remote_build()
-        return await original_screen(**kwargs)
-
-    gate.screen = invoke_remote_build  # type: ignore[method-assign]
-    worker = _worker(
-        make_config(
-            build_timeout_seconds=1200,
-            remote_build_mode="prefer",
-            remote_build_timeout_seconds=1500,
-        ),
-        platform,
-        gate,
-    )
-
-    await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
-
-    assert observed_timeouts == [1500]
-
-
-async def test_local_build_mode_keeps_source_review_in_the_worker(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    """A local image cannot satisfy the fleet review job's build prerequisite."""
-    platform = _FakePlatform([])
-    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
-    worker = _worker(make_config(remote_build_mode="off"), platform, gate)
-
-    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
-
-    assert gate.remote_source_reviews == [None]
 
 
 async def test_build_only_quarantine_is_rejected_as_retryable_worker_failure(
@@ -1379,6 +1321,94 @@ async def test_run_forever_drains_queue_then_stops(
     await asyncio.wait_for(worker.run_forever(stop), timeout=2.0)
     assert gate.calls == [a1, a2]
     assert {v["agent_id"] for v in platform.verdicts} == {a1, a2}
+
+
+async def test_stop_during_review_finishes_the_signed_verdict(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    first, second = uuid4(), uuid4()
+    platform = _FakePlatform([[_item(first), _item(second)]])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    stop = asyncio.Event()
+    original = gate.screen
+
+    async def screen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        stop.set()
+        return await original(*args, **kwargs)
+
+    gate.screen = screen  # type: ignore[method-assign]
+    worker = _worker(make_config(), platform, gate)
+    await asyncio.wait_for(worker.run_forever(stop), timeout=2.0)
+    assert [verdict["agent_id"] for verdict in platform.verdicts] == [first]
+
+
+async def test_local_drain_lease_follows_heartbeat_renewal_and_clears(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Any
+) -> None:
+    """The updater's lease view tracks Platform renewals, then disappears.
+
+    Renewable leases are 10 minutes. Without following the renewal a live
+    review would look expired to the release drain after one TTL.
+    """
+    journal = tmp_path / "workers" / "1" / "review.jsonl"
+    lease = journal.with_name("active-lease.json")
+    platform = _FakePlatform([])
+    initial = datetime.now(UTC) + timedelta(minutes=10)
+    renewed = initial + timedelta(minutes=30)
+    platform.heartbeat_lease_deadline = renewed
+    seen: list[dict[str, Any]] = []
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(review_journal_file=str(journal)), platform, gate)
+    original = gate.screen
+
+    async def screen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(json.loads(lease.read_text()))
+        await worker._report_heartbeat("screening", force=True)
+        seen.append(json.loads(lease.read_text()))
+        return await original(*args, **kwargs)
+
+    gate.screen = screen  # type: ignore[method-assign]
+    item = _item(uuid4(), lease_deadline=initial)
+    await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
+
+    assert seen[0]["lease_deadline"] == int(initial.timestamp())
+    assert seen[0]["attempt_id"] == str(item.attempt_id)
+    assert seen[1]["lease_deadline"] == int(renewed.timestamp())
+    assert not lease.exists()
+
+
+async def test_unwritable_drain_lease_never_aborts_a_review(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Any
+) -> None:
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("")
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(
+        make_config(review_journal_file=str(blocker / "1" / "review.jsonl")),
+        platform,
+        gate,
+    )
+    agent = uuid4()
+    await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
+    assert [verdict["agent_id"] for verdict in platform.verdicts] == [agent]
+
+
+async def test_worker_start_clears_a_lease_left_by_a_dead_process(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Any
+) -> None:
+    journal = tmp_path / "review.jsonl"
+    lease = journal.with_name("active-lease.json")
+    lease.write_text('{"lease_deadline": 1, "progress_at": 1}')
+    stop = asyncio.Event()
+    stop.set()
+    worker = _worker(
+        make_config(review_journal_file=str(journal)),
+        _FakePlatform([]),
+        _FakeGate(_decision(ScreeningOutcome.PASS)),
+    )
+    await worker.run_forever(stop)
+    assert not lease.exists()
 
 
 async def test_run_forever_exits_immediately_when_stopped(

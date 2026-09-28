@@ -172,6 +172,7 @@ describe('Backroom MCP tools', () => {
         'get_inference_runtime_metrics',
         'get_source_review_queue_slo',
         'get_outlier_escalation',
+        'get_outlier_escalation_dry_run',
         'get_inference_failure_taxonomy',
         'list_inference_traces',
         'download_inference_trace',
@@ -190,6 +191,7 @@ describe('Backroom MCP tools', () => {
         'get_screener_review_settings',
         'get_screener_fanout_shadow',
         'get_l2_report_canary',
+        'get_l2_report_canary_preflight',
         'get_conversation_assessments',
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
@@ -236,6 +238,9 @@ describe('Backroom MCP tools', () => {
         'get_source_release_policy',
         'get_owner_attestations',
         'get_submission_cooldown',
+        'get_treasury_settings',
+        'quote_treasury_topup',
+        'preview_treasury_topup',
         'get_validation_retry',
         'list_stuck_submissions',
         'list_lease_revocations',
@@ -252,6 +257,7 @@ describe('Backroom MCP tools', () => {
         'issue_coding_shadow_ticket_set',
         'get_validator_weight_diagnostics',
         'get_agent_core_qualification',
+        'get_claim_provenance_cases',
         'get_agent_scores',
         'get_leaderboard',
         'get_ledger_epoch_snapshots',
@@ -269,9 +275,11 @@ describe('Backroom MCP tools', () => {
         'list_screening_disputes',
         'list_screening_source_files',
         'list_screening_submissions',
+        'search_submissions',
         'summarize_screening_failures',
         'read_screening_source_file',
         'record_v13_benign_approval',
+        'record_treasury_settings',
         'record_v13_replay_private_group',
         'search_screening_source',
         'rebuild_screened_image',
@@ -390,8 +398,17 @@ describe('Backroom MCP tools', () => {
     // measured 163,528 bytes together.
     // The no-input outlier-escalation read adds about 360 bytes; its bounds
     // live on the Platform endpoint. With later main tools the catalog measured
-    // 164,066 bytes, so the bound keeps the same ~0.5 KB headroom as before.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(164_500)
+    // 164,066 bytes. Four treasury policy, quote and preview tools bring the
+    // measured catalog to 167,798 bytes. The exact-source canary preflight
+    // adds one bounded read; retain about 0.5 KB headroom at 169,300 bytes.
+    // The taxonomy's report-only rate_limit_bursts note adds about 80 bytes.
+    // The bounded outlier-escalation dry-run read measures 169,755 bytes;
+    // retain about 0.5 KB headroom.
+    // The search_submissions lookup (server-side filters, #560) brings the
+    // measured catalog to 171,685 bytes. The exact-key per-case
+    // claim-provenance read (#1852) adds a seven-field input; measured
+    // 172,734 bytes together. Keep the same ~0.5 KB headroom.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(173_250)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -417,8 +434,12 @@ describe('Backroom MCP tools', () => {
       // reopened-hold reason, three process-key summaries, and current V13
       // provenance reads plus scorer pin rotation and history; measured at 29,121.
       // The one-line outlier-escalation read (79 chars; detail in tool help)
-      // plus later main summaries measured 29,329.
-      29_450,
+      // plus later main summaries measured 29,329. Two short treasury
+      // shadow-policy descriptions bring the measured total to 29,850.
+      // The taxonomy's rate_limit_bursts catalog note measured 30,520; the
+      // one-line outlier-escalation dry-run read brings it to 30,794, and the
+      // claim-provenance read summary to 30,878.
+      31_300,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -1191,6 +1212,7 @@ describe('Backroom MCP tools', () => {
       list_screening_disputes: { maxLimit: 200, maxDefault: 50 },
       list_screening_source_files: { maxLimit: 512, maxDefault: 512 },
       list_screening_submissions: { maxLimit: 200, maxDefault: 50 },
+      search_submissions: { maxLimit: 200, maxDefault: 20 },
       search_screening_source: { maxLimit: 200, maxDefault: 50 },
       list_stuck_submissions: { maxLimit: 200, maxDefault: 10 },
       list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
@@ -1277,6 +1299,20 @@ describe('Backroom MCP tools', () => {
         })
       }
     }
+    // Search is for finding a named row, so it defaults to the narrow
+    // identity projection and to every generation.
+    const search = response.tools.find((candidate) => candidate.name === 'search_submissions')
+    const searchProperties = search?.inputSchema?.properties as
+      | Record<string, { default?: unknown; enum?: Array<string> }>
+      | undefined
+    expect(searchProperties?.detail).toMatchObject({
+      default: 'identity',
+      enum: ['identity', 'summary', 'full'],
+    })
+    expect(searchProperties?.generation).toMatchObject({
+      default: 'all',
+      enum: ['active', 'all'],
+    })
 
     await client.close()
     await server.close()
@@ -1555,6 +1591,7 @@ describe('Backroom MCP tools', () => {
       ticket_status: 'scored',
       ticket_deadline: '2026-07-20T04:00:00Z',
       replacement_pending: false,
+      replacement_queued: false,
       replacement_request_id: null,
       replacement_reason: null,
       replacement_actor: null,
@@ -3615,6 +3652,235 @@ describe('Backroom MCP tools', () => {
     }
   })
 
+  const outlierDryRunPayload = () => ({
+    generated_at: '2026-09-25T12:00:00Z',
+    bench_version: 12,
+    bench_version_in_scope: true,
+    settings: {
+      mode: 'observe',
+      min_bench_version: 12,
+      min_cohort_size: 8,
+      modified_z_threshold: 4.5,
+      min_composite_floor: 0.9,
+    },
+    overridden_fields: ['modified_z_threshold'],
+    ledger_size: 40,
+    cohort_size: 39,
+    cohort_too_small: false,
+    ledger_median: 0.61,
+    ledger_mad: 0.02,
+    would_trigger_count: 3,
+    limit: 2,
+    would_trigger: [
+      {
+        agent_id: '11111111-1111-4111-8111-111111111111',
+        miner_hotkey: '5Miner',
+        evidence: {
+          composite: 0.99,
+          cohort_size: 39,
+          cohort_median: 0.61,
+          cohort_mad: 0.02,
+          modified_z: 12.8,
+          min_cohort_size: 8,
+          modified_z_threshold: 4.5,
+          min_composite_floor: 0.9,
+          upward: true,
+          above_floor: true,
+          raw_cohort: [0.6, 0.61],
+        },
+        source_path: 'must-not-escape',
+      },
+    ],
+    truncated: true,
+  })
+
+  it('dry-runs the outlier escalation with overrides and bounded rows', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(outlierDryRunPayload()))
+      .mockResolvedValueOnce(Response.json(outlierDryRunPayload()))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_outlier_escalation_dry_run',
+        arguments: { benchVersion: 12, modifiedZThreshold: 4.5, limit: 2 },
+      })
+
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as ReturnType<typeof outlierDryRunPayload>
+      expect(body).toMatchObject({
+        bench_version: 12,
+        overridden_fields: ['modified_z_threshold'],
+        would_trigger_count: 3,
+        truncated: true,
+      })
+      expect(body.would_trigger[0].evidence.modified_z).toBe(12.8)
+      expect(JSON.stringify(body)).not.toContain('must-not-escape')
+      expect(JSON.stringify(body)).not.toContain('raw_cohort')
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/outlier-escalation/dry-run?limit=2&bench_version=12&modified_z_threshold=4.5',
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+
+      await client.callTool({ name: 'get_outlier_escalation_dry_run', arguments: {} })
+      expect(String(fetchMock.mock.calls[1][0])).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/outlier-escalation/dry-run?limit=20',
+      )
+
+      const invalid = await client.callTool({
+        name: 'get_outlier_escalation_dry_run',
+        arguments: { minCompositeFloor: 1.5 },
+      })
+      expect(invalid.isError).toBe(true)
+
+      const help = await client.callTool({
+        name: 'get_backroom_tool_help',
+        arguments: { tool: 'get_outlier_escalation_dry_run' },
+      })
+      const guidance = (readJsonResult(help) as { guidance: string }).guidance
+      expect(guidance).toContain('mode is reported but not applied')
+      expect(guidance).toContain('writes nothing')
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  const claimProvenancePayload = () => ({
+    agent_id: '11111111-2222-4333-8444-555555555555',
+    artifact_sha256: 'ae'.repeat(32),
+    agent_status: 'scored',
+    validator_hotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY',
+    run_id: 'run_gate_1',
+    bench_version: 13,
+    composite: 0.7,
+    generated_at: '2026-09-23T00:19:00Z',
+    posture: 'shadow',
+    claim_provenance: { posture: 'shadow', settled_cases: 153, not_model_emitted_cases: 4 },
+    case_id: null,
+    finding: 'served_text_not_model_emitted',
+    include_unflagged: false,
+    per_case_available: true,
+    total_cases: 250,
+    matched_cases: 4,
+    malformed_cases: 0,
+    limit: 50,
+    truncated: false,
+    cases: [
+      {
+        case_index: 17,
+        case_id: 'memory-9f3a-0017',
+        category: 'temporal_reasoning',
+        kind: 'memory',
+        score: 1,
+        correct: true,
+        expected: ['must-not-escape'],
+        gate_notes: [
+          { gate: 'served_text_not_model_emitted', zeroing: true, note_id: '0123456789abcdef' },
+        ],
+        claim_provenance: {
+          posture: 'shadow',
+          findings: ['served_text_not_model_emitted'],
+          completions: 2,
+          unattributed_calls: 0,
+          tool_results: 0,
+          claim_tokens: 3,
+          complete: true,
+          model_emitted: false,
+          answer_in_prompt: false,
+        },
+        catalog: null,
+        relation: null,
+        twin_group: null,
+        cost_factor: null,
+        scorer_notes: [
+          'v13 claim provenance flagged (served_text_not_model_emitted); shadow posture, score unchanged',
+        ],
+      },
+    ],
+    not_persisted: [
+      'credited_response_field',
+      'claim_token_comparison',
+      'attributed_completion_ids',
+      'normalization_explanation',
+    ],
+    not_persisted_reason: 'absence here is not evidence either way.',
+  })
+
+  it('reads per-case claim provenance for an exact agent, artifact and run', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(claimProvenancePayload()))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_claim_provenance_cases',
+        arguments: {
+          agentId: '11111111-2222-4333-8444-555555555555',
+          artifactSha256: 'ae'.repeat(32),
+          runId: 'run_gate_1',
+          finding: 'served_text_not_model_emitted',
+        },
+      })
+
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as ReturnType<typeof claimProvenancePayload>
+      expect(body).toMatchObject({ matched_cases: 4, total_cases: 250, truncated: false })
+      expect(body.cases[0].claim_provenance).toMatchObject({
+        model_emitted: false,
+        claim_tokens: 3,
+      })
+      expect(body.cases[0].gate_notes[0].note_id).toBe('0123456789abcdef')
+      expect(body.not_persisted).toContain('claim_token_comparison')
+      // The answer key never survives the Backroom schema, even if sent.
+      expect(JSON.stringify(body)).not.toContain('must-not-escape')
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/agents/11111111-2222-4333-8444-555555555555/claim-provenance?' +
+          `artifact_sha256=${'ae'.repeat(32)}&run_id=run_gate_1&include_unflagged=false&limit=50&finding=served_text_not_model_emitted`,
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+
+      const help = await client.callTool({
+        name: 'get_backroom_tool_help',
+        arguments: { tool: 'get_claim_provenance_cases' },
+      })
+      const guidance = (readJsonResult(help) as { guidance: string }).guidance
+      expect(guidance).toContain('not_persisted')
+      expect(guidance).toContain('flagged_case_count')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('refuses a non-exact artifact key before calling the Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_claim_provenance_cases',
+        arguments: {
+          agentId: '11111111-2222-4333-8444-555555555555',
+          artifactSha256: 'AE'.repeat(32),
+          runId: 'run_gate_1',
+        },
+      })
+      expect(response.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('reads the failure taxonomy and keeps an unknown route unknown', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const fetchMock = vi.fn().mockResolvedValueOnce(
@@ -3676,6 +3942,29 @@ describe('Backroom MCP tools', () => {
             share_of_settled_calls: 0.0321,
           },
         ],
+        rate_limit_bursts: [
+          {
+            request_kind: 'chat',
+            window_seconds: 300,
+            rate_limited_failures: 209,
+            threshold: 100,
+            peak_global_concurrency: 31,
+            global_concurrency_limit: 96,
+            active: true,
+            tickets_total: 1,
+            tickets_truncated: false,
+            tickets: [
+              {
+                agent_id: '22222222-2222-4222-8222-222222222222',
+                bench_version: 13,
+                validator_hotkey: '5validator',
+                slot_id: 'slot-0',
+                ticket_deadline: '2026-09-22T19:00:00Z',
+                rate_limited_failures: 209,
+              },
+            ],
+          },
+        ],
       }),
     )
     vi.stubGlobal('fetch', fetchMock)
@@ -3693,6 +3982,7 @@ describe('Backroom MCP tools', () => {
     const taxonomy = readJsonResult(response) as {
       lanes: { rate_limited_failures: number }[]
       groups: { upstream_route: string | null; route_basis: string }[]
+      rate_limit_bursts: { active: boolean; tickets: { slot_id: string }[] }[]
     }
     expect(taxonomy.lanes[0]).toMatchObject({
       failed: 209,
@@ -3709,6 +3999,10 @@ describe('Backroom MCP tools', () => {
     expect(
       taxonomy.groups.some((group) => group.route_basis === 'confirmed_selected'),
     ).toBe(false)
+    expect(taxonomy.rate_limit_bursts[0]).toMatchObject({
+      active: true,
+      tickets: [{ slot_id: 'slot-0' }],
+    })
 
     await client.close()
     await server.close()
@@ -5753,6 +6047,112 @@ describe('Backroom MCP tools', () => {
       'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?generation=active&limit=17&offset=34',
       expect.any(Object),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('searches screening submissions server-side with the identity projection', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const row = {
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      miner_hotkey: '5Miner',
+      miner_coldkey: '5Cold',
+      agent_name: 'moonlight_v1',
+      agent_version: 2,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'scored',
+      screening_policy_version: 9,
+      screening_reason: null,
+      screening_reason_code: null,
+      submitted_at: '2026-07-19T12:00:00Z',
+      attempts: [
+        {
+          attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          policy_version: 9,
+          status: 'passed',
+          screener_hotkey: '5Screener',
+          started_at: '2026-07-19T12:01:00Z',
+          deadline: '2026-07-19T13:11:00Z',
+          finished_at: '2026-07-19T12:05:00Z',
+          reason: null,
+          reason_code: 'behavioral-oracle-passed',
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ items: [row], count: 1, generation: 'all', active_bench_version: 12 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'search_submissions',
+      arguments: {
+        agentNamePrefix: 'moon_light%',
+        minerColdkey: '5Cold',
+        agentStatus: ['scored', 'banned'],
+        screeningReasonCode: ['docker-build'],
+        submittedAfter: '2026-07-01T00:00:00Z',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toEqual({
+      items: [
+        {
+          agent_id: row.agent_id,
+          agent_name: 'moonlight_v1',
+          agent_version: 2,
+          agent_status: 'scored',
+          submitted_at: '2026-07-19T12:00:00Z',
+          artifact_sha256: 'ab'.repeat(32),
+        },
+      ],
+      count: 1,
+      generation: 'all',
+      active_bench_version: 12,
+      detail: 'identity',
+      limit: 20,
+      offset: 0,
+    })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    const query = new URL(url).searchParams
+    expect(new URL(url).pathname).toBe('/api/v1/admin/screening-submissions')
+    expect(query.get('generation')).toBe('all')
+    expect(query.get('limit')).toBe('20')
+    // Metacharacters travel literally; Platform owns LIKE escaping.
+    expect(query.get('agent_name_prefix')).toBe('moon_light%')
+    expect(query.get('miner_coldkey')).toBe('5Cold')
+    expect(query.getAll('agent_status')).toEqual(['scored', 'banned'])
+    expect(query.getAll('screening_reason_code')).toEqual(['docker-build'])
+    expect(query.get('submitted_after')).toBe('2026-07-01T00:00:00Z')
+    expect(query.has('agent_name')).toBe(false)
+    expect(readTextResult(response)).not.toContain('attempts')
+
+    await client.close()
+    await server.close()
+  })
+
+  it('refuses an unfiltered or malformed submission search without calling Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const unfiltered = await client.callTool({ name: 'search_submissions', arguments: {} })
+    expect(unfiltered.isError).toBe(true)
+    expect(readTextResult(unfiltered)).toContain('list_screening_submissions')
+
+    for (const args of [
+      { artifactSha256: 'ab'.repeat(31) },
+      { agentStatus: ['not-a-status'] },
+      { agentName: 'x'.repeat(65) },
+      { submittedAfter: '2026-07-01T00:00:00' },
+    ]) {
+      const response = await client.callTool({ name: 'search_submissions', arguments: args })
+      expect(response.isError, JSON.stringify(args)).toBe(true)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
 
     await client.close()
     await server.close()

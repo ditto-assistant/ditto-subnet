@@ -202,6 +202,10 @@ function deniedRedirect(pending: PendingAuthorization) {
   return redirect.toString()
 }
 
+function invalidAuthorizationRequest(description: string) {
+  return noStoreJson({ error: 'invalid_request', error_description: description }, 400)
+}
+
 export async function completeMcpAuthorization(
   request: Request,
   env: BackroomEnv & { OAUTH_PROVIDER: OAuthHelpers },
@@ -214,15 +218,39 @@ export async function completeMcpAuthorization(
     return noStoreJson({ error: 'Content-Type must be application/json' }, 415)
   }
 
-  const input = z
+  // Client-side problems answer 400 with a message the consent page shows,
+  // like the authorize step does; a throw here would surface only as a
+  // generic 500 "Unable to complete MCP authorization".
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return invalidAuthorizationRequest('The authorization request body is not valid JSON')
+  }
+  const parsed = z
     .object({
       requestToken: z.string().min(32).max(32_768),
       csrf: z.string().min(16).max(256),
       decision: z.enum(['allow', 'deny']),
       accessLevel: z.enum(['read', 'artifact', 'write', 'full']).default('read'),
     })
-    .parse(await request.json())
-  const pending = await decodePendingAuthorization(input.requestToken, env.SESSION_SECRET, origin)
+    .safeParse(body)
+  if (!parsed.success) {
+    return invalidAuthorizationRequest(
+      'The authorization request is malformed. Start connecting again.',
+    )
+  }
+  const input = parsed.data
+  let pending: Awaited<ReturnType<typeof decodePendingAuthorization>>
+  try {
+    pending = await decodePendingAuthorization(input.requestToken, env.SESSION_SECRET, origin)
+  } catch (cause) {
+    // decodePendingAuthorization raises one fixed, client-safe message for an
+    // expired, tampered, or foreign-origin request.
+    return invalidAuthorizationRequest(
+      cause instanceof Error ? cause.message : 'Invalid MCP authorization request',
+    )
+  }
   if (!constantTimeEqual(input.csrf, pending.csrf)) {
     return noStoreJson({ error: 'Invalid consent token' }, 403)
   }

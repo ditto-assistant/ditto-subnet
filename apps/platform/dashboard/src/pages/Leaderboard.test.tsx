@@ -1261,6 +1261,41 @@ describe("board view controls (row 1 slice)", () => {
     expect(document.querySelector(".run-cost-cell")?.textContent).toContain("7 completed");
   });
 
+  it("labels latency as a per-case median over the run's own case count", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, i) => ({
+            ...entry,
+            median_ms: 51_000,
+            n: i === 0 ? 351 : 250,
+          })),
+        };
+      },
+    });
+    await waitForBoard();
+    const th = document.querySelector('th[data-sort="latency"]') as HTMLElement;
+    expect(th).toHaveTextContent("Median case latency");
+    const tip = th.querySelector(".tip")?.getAttribute("data-tooltip") ?? "";
+    expect(tip).toContain("not total run time");
+    expect(tip).not.toMatch(/\d+ cases/);
+    await waitFor(() =>
+      expect(document.querySelector("#rows tr[data-i] td.lat")).toHaveTextContent("51 s"),
+    );
+    const counts = document.querySelectorAll("#rows tr[data-i] td.lat .cases");
+    expect(counts[0]).toHaveTextContent("median/case · 351 cases");
+    expect(counts[1]).toHaveTextContent("median/case · 250 cases");
+    const cell = document.querySelector("#rows tr[data-i] td.lat") as HTMLElement;
+    expect(cell).toHaveAttribute(
+      "title",
+      "51 s median per case across the run's 351 scored cases. Advisory: latency does not enter the score.",
+    );
+    expect(cssNorm).toContain('.board #board td.lat::before { content: "Median case latency"; }');
+  });
+
   it("opens a row's miner drill-down route on click (plain tabbable tr, no role=button)", async () => {
     renderPage();
     await waitForBoard();

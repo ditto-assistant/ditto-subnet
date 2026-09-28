@@ -128,7 +128,6 @@ async def _amain() -> int:
     if (
         config.node_id != _NODE
         or config.instance_id != _INSTANCE
-        or config.remote_build_mode != "off"
         or config.v13_runtime_receipts_mode != "shadow"
         or not config.require_rootless_docker
     ):

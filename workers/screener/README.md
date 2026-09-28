@@ -172,7 +172,7 @@ Required values are supplied through the production host's protected
   model cannot establish actual tool choice, memory correctness, or user
   isolation. The mode has no influence on the screening outcome and should
   remain off until its overhead and evidence profile have been calibrated.
-  Targon-only smoke and pre-build source holds leave these checks `not_recorded`.
+  A source hold before runtime leaves these checks `not_recorded`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
 - `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; legacy
   `moonshotai/kimi-k3` remains accepted only for a deliberate rollback.
@@ -187,6 +187,11 @@ Required values are supplied through the production host's protected
   OpenRouter ZDR routing and deny data collection.
 - `SCREENER_L2_ANALYZER_IMAGE`: locked to the updater-built
   `ditto-screener-l2-analyzer:active` image.
+- The signed screener worker runs each bounded reviewer `bash`, `rg`, or
+  coreutils command in a disposable analyzer container. The submitted source
+  is mounted read-only; the container has no network, secrets, or Docker socket.
+  Model calls and API credentials stay in the worker process outside that
+  container. Candidate build and execution remain separate screening stages.
 - `SCREENER_L2_CACHE_DIR` and `SCREENER_L2_AUDIT_JOURNAL_FILE`: protected
   sanitized cache/audit locations. Raw source and transcripts are never stored.
 - `SCREENER_SCORER_CAPABILITIES_URL` and `SCREENER_EXPECTED_SCORER_REVISION`:
@@ -201,7 +206,7 @@ Required values are supplied through the production host's protected
 - `SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE=true`: V13 canary gate that holds L2
   inconclusive before any model call unless Platform supplied a fresh signed
   cohort lease for the exact attempt and artifact. Set on the Platform process
-  (which forwards it to Targon source-review rentals) and on local screeners.
+  and on the signed screener workers.
   Leave it off for legacy screening; never treat an absent lease as CLEAR.
 - `SCREENER_STATIC_PREFLIGHT_V2_MODE`: `off` (default), `shadow`, or `enforce`.
   `off` and `shadow` preserve the v1 decisive result; `shadow` additionally

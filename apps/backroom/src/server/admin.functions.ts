@@ -2,6 +2,7 @@ import { createServerFn } from '@tanstack/react-start'
 import { setResponseHeader } from '@tanstack/react-start/server'
 import { z } from 'zod'
 import {
+  screeningSubmissionFiltersSchema,
   startBenchmarkRolloutInputSchema,
   supersedeBenchmarkRolloutInputSchema,
   selectActiveBenchmarkInputSchema,
@@ -707,7 +708,7 @@ export const openAthReview = createServerFn({ method: 'POST' })
 export const listScreeningSubmissions = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
   .validator(
-    z.object({
+    screeningSubmissionFiltersSchema.extend({
       generation: z.enum(['active', 'all']).default('active'),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
@@ -716,7 +717,8 @@ export const listScreeningSubmissions = createServerFn({ method: 'GET' })
   .handler(({ data }) => {
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
-    return fetchScreeningSubmissions(data.limit, data.offset, data.generation)
+    const { generation, limit, offset, ...filters } = data
+    return fetchScreeningSubmissions(limit, offset, generation, filters)
   })
 
 export const getScreeningArtifact = createServerFn({ method: 'GET' })

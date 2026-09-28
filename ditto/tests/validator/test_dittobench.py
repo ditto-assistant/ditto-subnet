@@ -212,6 +212,86 @@ async def test_unconfigured_control_token_is_rejected_by_the_scorer() -> None:
     assert seen == [("POST", "/v1/inference/session", None)]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [("stack-control-token", "Bearer stack-control-token"), ("", None)],
+    ids=["configured", "unconfigured"],
+)
+async def test_scoring_calls_present_the_control_token_when_configured(
+    token: str, expected: str | None
+) -> None:
+    """The scorer protects every route but ``/health``, not just the broker.
+
+    Capability, submit, poll, transcript, and cancel must carry the same bearer
+    as the inference-session calls, or ``DITTOBENCH_CONTROL_AUTH_MODE=enforce``
+    would 401 the scoring path. An unconfigured validator sends no header at
+    all, exactly as before.
+    """
+    seen: list[tuple[str, str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(
+            (request.method, request.url.path, request.headers.get("Authorization"))
+        )
+        path = request.url.path
+        if path == "/v1/capabilities":
+            return httpx.Response(
+                200,
+                json={
+                    "software_version": "1.2.3",
+                    "source_revision": _REVISION,
+                    "supported_bench_versions": [8],
+                },
+            )
+        if path == "/v2/score":
+            return httpx.Response(202, json={"run_id": "run-1"})
+        if path.endswith("/transcript"):
+            return httpx.Response(200, content=_TRANSCRIPT)
+        if request.method == "DELETE":
+            return httpx.Response(202, json={"status": "failed"})
+        return httpx.Response(
+            200,
+            json=_done_job_with_transcript(hashlib.sha256(_TRANSCRIPT).hexdigest()),
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_control_token=token,
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+        dittobench_timeout_seconds=1.0,
+        dittobench_poll_seconds=0.0,
+        run_size="full",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        await client.scorer_benchmark_capability(_stack())
+        run_id = await client._submit(
+            tarball_url="https://example.test/agent.tgz",
+            dataset_sha256="12" * 32,
+            bench_version=8,
+            screened_image_url="https://example.test/image.tar",
+            screened_image_sha256="34" * 32,
+            screened_image_size_bytes=123,
+            screened_image_id="sha256:" + "56" * 32,
+            screened_image_ref=(
+                "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+            ),
+        )
+        await client._poll(run_id, expected_bench_version=8)
+        await client._cancel(run_id)
+
+    assert [(method, path) for method, path, _ in seen] == [
+        ("GET", "/v1/capabilities"),
+        ("POST", "/v2/score"),
+        ("GET", "/v1/runs/run-1"),
+        ("GET", "/v1/runs/run-1/transcript"),
+        ("DELETE", "/v1/runs/run-1"),
+    ]
+    assert {authorization for _, _, authorization in seen} == {expected}
+
+
 def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
     component = lambda rev=None: ValidatorComponentIdentity(  # noqa: E731
         source_revision=rev or _REVISION,

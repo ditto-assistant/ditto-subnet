@@ -3,7 +3,8 @@
 The escalation is configured only by ``DITTO_OUTLIER_ESCALATION_*`` environment
 variables read once per API process. This model reports the settings scoring is
 actually using, where each value came from, and what the gate has recorded on
-the append-only audit chain. It is read-only.
+the append-only audit chain. The dry run replays the gate over the current
+scored ledger. Both are read-only.
 
 Not to be confused with ``/admin/score-outliers``, which is validator
 disagreement inside one quorum.
@@ -150,3 +151,78 @@ class AdminOutlierEscalationResponse(BaseModel):
         Field(ge=0, description="Pending ATH reviews opened as anomalous_score."),
     ]
     activity: OutlierEscalationActivityView
+
+
+class OutlierEscalationDryRunEntryView(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    agent_id: UUID
+    miner_hotkey: str
+    evidence: OutlierEscalationEvidence
+
+
+class AdminOutlierEscalationDryRunResponse(BaseModel):
+    """Would-trigger replay of the escalation over the current scored ledger.
+
+    Mode-independent and read-only: it opens no hold, writes no audit entry,
+    and changes no setting.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    generated_at: datetime
+    bench_version: int
+    bench_version_in_scope: Annotated[
+        bool,
+        Field(
+            description=(
+                "bench_version >= settings.min_bench_version. When false the "
+                "live gate never runs at this version; counts are still replayed."
+            )
+        ),
+    ]
+    settings: Annotated[
+        OutlierEscalationSettingsView,
+        Field(
+            description=(
+                "The policy replayed: the effective settings with any override "
+                "applied. mode is reported, not applied."
+            )
+        ),
+    ]
+    overridden_fields: list[OutlierSettingField]
+    ledger_size: Annotated[
+        int,
+        Field(ge=0, description="Candidates replayed: one per ledger owner."),
+    ]
+    cohort_size: Annotated[
+        int,
+        Field(
+            ge=0,
+            description="Peers per candidate: the ledger without the candidate.",
+        ),
+    ]
+    cohort_too_small: Annotated[
+        bool,
+        Field(description="cohort_size < min_cohort_size, so nothing can trigger."),
+    ]
+    ledger_median: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Median of all ledger composites (null when empty). Each "
+                "entry's evidence carries its own leave-one-out median/MAD."
+            )
+        ),
+    ] = None
+    ledger_mad: float | None = None
+    would_trigger_count: Annotated[int, Field(ge=0)]
+    limit: Annotated[int, Field(ge=1)]
+    would_trigger: Annotated[
+        list[OutlierEscalationDryRunEntryView],
+        Field(description="Highest composite first, at most limit rows."),
+    ]
+    truncated: Annotated[
+        bool,
+        Field(description="would_trigger_count exceeds the returned rows."),
+    ]

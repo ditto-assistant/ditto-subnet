@@ -106,6 +106,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/claim-provenance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Claim Provenance Cases */
+        get: operations["get_claim_provenance_cases_api_v1_admin_agents__agent_id__claim_provenance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/coding-certifications": {
         parameters: {
             query?: never;
@@ -1266,6 +1283,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/inference-admission-rejections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Admission Rejections
+         * @description Counts and recent rows. Bodies, prompts, and credentials are not stored.
+         */
+        get: operations["list_admission_rejections_api_v1_admin_inference_admission_rejections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/inference-concurrency-settings": {
         parameters: {
             query?: never;
@@ -1308,7 +1345,9 @@ export interface paths {
          *
          *     ``/admin/inference-runtime-metrics`` already reports failures per lane per
          *     window; this splits the same bounded windows by the dimensions an upstream
-         *     rate-limit burst actually moves. Counts and identifiers only.
+         *     rate-limit burst actually moves, and flags a report-only five-minute
+         *     ``upstream_http_429`` burst per lane with the tickets it touched. Counts
+         *     and identifiers only.
          */
         get: operations["get_inference_failure_taxonomy_api_v1_admin_inference_failure_taxonomy_get"];
         put?: never;
@@ -1505,6 +1544,40 @@ export interface paths {
          * @description Effective escalation settings with sources, plus recent activity.
          */
         get: operations["get_outlier_escalation_api_v1_admin_outlier_escalation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/outlier-escalation/dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Outlier Escalation Dry Run
+         * @description Which current ledger rows the escalation would hold, whatever the mode.
+         *
+         *     Replays :func:`evaluate_score_outlier` -- the exact decision scoring calls
+         *     -- over the ledger scoring reads at finalization
+         *     (``list_eligible_ledger(bench_version=...)``, one ``scored`` row per owner,
+         *     median-row composite). Each row is judged against the other rows, as the
+         *     finalizing candidate is judged against a ledger it is not yet in. Agents
+         *     already held are outside that ledger and are not replayed.
+         *
+         *     Where it differs from each row's own finalization: the cohort is today's
+         *     ledger, not the ledger at that time; only an owner's representative row is
+         *     replayed, and its cohort omits that owner, whose earlier best was a peer at
+         *     finalization; and the candidate composite is the median score row, equal
+         *     to the finalization ``statistics.median`` for an odd score count such as
+         *     the three-validator quorum.
+         */
+        get: operations["get_outlier_escalation_dry_run_api_v1_admin_outlier_escalation_dry_run_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1816,6 +1889,26 @@ export interface paths {
          * @description Queue one exact source once; this never reopens a screening attempt.
          */
         post: operations["schedule_l2_report_canary_api_v1_admin_screener_l2_report_canaries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screener-l2-report-canaries/preflight/{agent_id}/{source_attempt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get L2 Report Canary Preflight
+         * @description Expose exact guard inputs; scheduling still rechecks them under a lock.
+         */
+        get: operations["get_l2_report_canary_preflight_api_v1_admin_screener_l2_report_canaries_preflight__agent_id___source_attempt_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2319,6 +2412,13 @@ export interface paths {
         /**
          * List Screening Submissions
          * @description Return current-benchmark screening rows unless history is requested.
+         *
+         *     Every filter is optional and AND-combined with the generation boundary, and
+         *     ``count`` is the filtered total so offsets page the match set. ``agent_name``
+         *     is exact, ``agent_name_prefix`` is a literal prefix, ``miner_coldkey`` is the
+         *     immutable payment-time owner, ``agent_status`` and ``screening_reason_code``
+         *     are repeatable any-of lists, and ``submitted_after`` (inclusive) /
+         *     ``submitted_before`` (exclusive) bound ``created_at``, the sort key.
          */
         get: operations["list_screening_submissions_api_v1_admin_screening_submissions_get"];
         put?: never;
@@ -3031,6 +3131,62 @@ export interface paths {
          *     with ``record_omitted="too_large"``.
          */
         post: operations["peek_trace_object_api_v1_admin_traces_peek_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/transcript-mirror-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_api_v1_admin_transcript_mirror_settings_get"];
+        put?: never;
+        /**
+         * Create Settings Revision
+         * @description Append one audited revision. The mirror stays off until this says otherwise.
+         */
+        post: operations["create_settings_revision_api_v1_admin_transcript_mirror_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/treasury-quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Treasury Quote */
+        get: operations["get_treasury_quote_api_v1_admin_treasury_quote_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/treasury-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Treasury Settings */
+        get: operations["get_treasury_settings_api_v1_admin_treasury_settings_get"];
+        put?: never;
+        /** Record Treasury Settings */
+        post: operations["record_treasury_settings_api_v1_admin_treasury_settings_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4213,6 +4369,9 @@ export interface paths {
         /**
          * Accept Link Decide
          * @description Consume the single-use accept token: accept → authenticated, else failed.
+         *
+         *     The token is read only from the form body, so the answering request's
+         *     URL (and the history entry it leaves) carries just ``attempt``.
          */
         post: operations["accept_link_decide_api_v1_miner_auth_ditto_accept_post"];
         delete?: never;
@@ -5017,6 +5176,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/treasury-activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Treasury Activity */
+        get: operations["list_treasury_activity_api_v1_public_treasury_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/v13-review-clock": {
         parameters: {
             query?: never;
@@ -5388,85 +5564,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/screener/agent/{agent_id}/submission-image-builds": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Queue Submission Image Build
-         * @description Queue a provider build only after the owning screener validated source.
-         */
-        post: operations["queue_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/agent/{agent_id}/submission-image-builds/{build_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Submission Image Build */
-        get: operations["get_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds__build_id__get"];
-        put?: never;
-        post?: never;
-        /**
-         * Consume Submission Image Build
-         * @description Delete the temporary remote archive after the GCE daemon imported it.
-         */
-        delete: operations["consume_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds__build_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/agent/{agent_id}/submission-source-reviews": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Queue Submission Source Review
-         * @description Queue a bounded read-only review alongside the mechanical lane.
-         */
-        post: operations["queue_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/agent/{agent_id}/submission-source-reviews/{review_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Submission Source Review */
-        get: operations["get_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__get"];
-        put?: never;
-        post?: never;
-        /** Consume Submission Source Review */
-        delete: operations["consume_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/screener/agent/{agent_id}/verification-receipts": {
         parameters: {
             query?: never;
@@ -5653,167 +5750,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/screener/controller/submission-image-builds/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Claim Submission Image Build
-         * @description Lease one miner build and mint only its short-lived job capability.
-         */
-        post: operations["claim_submission_image_build_api_v1_screener_controller_submission_image_builds_claim_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-image-builds/{build_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Controller Submission Image Build */
-        get: operations["get_controller_submission_image_build_api_v1_screener_controller_submission_image_builds__build_id__get"];
-        /** Update Submission Image Build */
-        put: operations["update_submission_image_build_api_v1_screener_controller_submission_image_builds__build_id__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-image-builds/{build_id}/cleanup-required": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record Submission Image Build Cleanup
-         * @description Keep provider deletion failures visible after zero-replica suspension.
-         */
-        post: operations["record_submission_image_build_cleanup_api_v1_screener_controller_submission_image_builds__build_id__cleanup_required_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-cleanup-required": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Mark Submission Runtime Cleanup Required */
-        post: operations["mark_submission_runtime_cleanup_required_api_v1_screener_controller_submission_image_builds__build_id__runtime_cleanup_required_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-result": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Complete Submission Runtime Smoke */
-        post: operations["complete_submission_runtime_smoke_api_v1_screener_controller_submission_image_builds__build_id__runtime_result_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-runtime-smokes/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Claim Submission Runtime Smoke */
-        post: operations["claim_submission_runtime_smoke_api_v1_screener_controller_submission_runtime_smokes_claim_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-source-reviews/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Claim Submission Source Review */
-        post: operations["claim_submission_source_review_api_v1_screener_controller_submission_source_reviews_claim_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-source-reviews/{review_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Controller Submission Source Review */
-        get: operations["get_controller_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__get"];
-        /** Update Submission Source Review */
-        put: operations["update_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/submission-source-reviews/{review_id}/cleanup-required": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Mark Submission Source Review Cleanup Required */
-        post: operations["mark_submission_source_review_cleanup_required_api_v1_screener_controller_submission_source_reviews__review_id__cleanup_required_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/screener/controller/trusted-image-builds": {
         parameters: {
             query?: never;
@@ -5825,29 +5761,9 @@ export interface paths {
         put?: never;
         /**
          * Queue Release Image Build
-         * @description Idempotently queue the fixed release image contract for an exact SHA.
+         * @description Register the fixed release image contract for a trusted runner build.
          */
         post: operations["queue_release_image_build_api_v1_screener_controller_trusted_image_builds_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/trusted-image-builds/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Claim Trusted Image Build
-         * @description Lease one allowlisted trusted build under the current controller epoch.
-         */
-        post: operations["claim_trusted_image_build_api_v1_screener_controller_trusted_image_builds_claim_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5885,30 +5801,10 @@ export interface paths {
         get: operations["get_release_image_build_api_v1_screener_controller_trusted_image_builds__build_id__get"];
         /**
          * Update Trusted Image Build
-         * @description Record redacted provider progress and the immutable output digest.
+         * @description Record the immutable image digest from the trusted release runner.
          */
         put: operations["update_trusted_image_build_api_v1_screener_controller_trusted_image_builds__build_id__put"];
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/controller/trusted-image-builds/{build_id}/cleanup-required": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record Trusted Image Build Cleanup
-         * @description Keep trusted Kaniko deletion failures visible after zero-replica suspension.
-         */
-        post: operations["record_trusted_image_build_cleanup_api_v1_screener_controller_trusted_image_builds__build_id__cleanup_required_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6261,57 +6157,6 @@ export interface paths {
         get: operations["review_settings_revision_api_v1_screener_review_settings_revisions__revision__get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/submission-image-builds/{build_id}/complete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Complete Submission Build Upload */
-        post: operations["complete_submission_build_upload_api_v1_screener_submission_image_builds__build_id__complete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/submission-image-builds/{build_id}/source": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Submission Build Source */
-        get: operations["get_submission_build_source_api_v1_screener_submission_image_builds__build_id__source_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/submission-image-builds/{build_id}/upload": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Mint Submission Build Upload */
-        post: operations["mint_submission_build_upload_api_v1_screener_submission_image_builds__build_id__upload_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6786,10 +6631,14 @@ export interface paths {
          *     graded per-case inputs whose digest the validator declared under
          *     ``details["transcript_sha256"]`` and bound into its score signature. The
          *     platform accepts the bytes only when their SHA-256 equals that declared
-         *     digest, then stores them content-addressed in authoritative storage and
-         *     mirrors them publicly when configured. The fresh, one-time request proof
-         *     binds the validator, agent, run and digest before any body bytes are read.
-         *     Idempotent: re-uploading an existing digest with a fresh proof is a no-op.
+         *     digest, then stores them content-addressed in authoritative storage.
+         *     The fresh, one-time request proof binds the validator, agent, run and
+         *     digest before any body bytes are read. Re-uploading an existing digest
+         *     with a fresh proof does not rewrite the primary object.
+         *     The anonymous public mirror is a separate audited setting and, when
+         *     enabled, runs at quorum or on a later upload after quorum. A retry can
+         *     complete a missing public mirror once quorum and the operator setting
+         *     allow it.
          */
         put: operations["submit_transcript_api_v1_validator_agent__agent_id__transcript__run_id__put"];
         post?: never;
@@ -8673,6 +8522,75 @@ export interface components {
             /** History */
             history: components["schemas"]["BurnSettingsRevision"][];
         };
+        /**
+         * AdminClaimProvenanceCases
+         * @description Per-case claim provenance for one exact agent, artifact and accepted run.
+         */
+        AdminClaimProvenanceCases: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Case Id */
+            case_id?: string | null;
+            /** Cases */
+            cases?: components["schemas"]["ClaimProvenanceCase"][];
+            /** @description The run-level aggregate this per-case view explains. */
+            claim_provenance?: components["schemas"]["ClaimProvenanceSummary"] | null;
+            /** Composite */
+            composite: number;
+            /** Finding */
+            finding?: string | null;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Include Unflagged
+             * @default false
+             */
+            include_unflagged: boolean;
+            /** Limit */
+            limit: number;
+            /**
+             * Malformed Cases
+             * @description Stored cases that no longer parse; skipped.
+             * @default 0
+             */
+            malformed_cases: number;
+            /** Matched Cases */
+            matched_cases: number;
+            /** Not Persisted */
+            not_persisted?: ("credited_response_field" | "claim_token_comparison" | "attributed_completion_ids" | "normalization_explanation")[];
+            /**
+             * Not Persisted Reason
+             * @default The scorer computes the credited span/field and the per-token claim comparison while grading, but its ClaimProvenanceEvidence wire record carries only verdicts and counts, the claim-span ledger keeps no per-completion identifiers, and no normalization trace is recorded. Showing them needs a scorer and wire change; their absence here is not evidence either way.
+             */
+            not_persisted_reason: string;
+            /**
+             * Per Case Available
+             * @description False when the accepted row stored no per-case breakdown.
+             */
+            per_case_available: boolean;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /** Run Id */
+            run_id: string;
+            /** Total Cases */
+            total_cases: number;
+            /** Truncated */
+            truncated: boolean;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
         /** AdminCodingCatalogResponse */
         AdminCodingCatalogResponse: {
             /** Releases */
@@ -10228,6 +10146,67 @@ export interface components {
             reason: "oversized" | "non_utf8";
         };
         /**
+         * AdminOutlierEscalationDryRunResponse
+         * @description Would-trigger replay of the escalation over the current scored ledger.
+         *
+         *     Mode-independent and read-only: it opens no hold, writes no audit entry,
+         *     and changes no setting.
+         */
+        AdminOutlierEscalationDryRunResponse: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Bench Version In Scope
+             * @description bench_version >= settings.min_bench_version. When false the live gate never runs at this version; counts are still replayed.
+             */
+            bench_version_in_scope: boolean;
+            /**
+             * Cohort Size
+             * @description Peers per candidate: the ledger without the candidate.
+             */
+            cohort_size: number;
+            /**
+             * Cohort Too Small
+             * @description cohort_size < min_cohort_size, so nothing can trigger.
+             */
+            cohort_too_small: boolean;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Ledger Mad */
+            ledger_mad?: number | null;
+            /**
+             * Ledger Median
+             * @description Median of all ledger composites (null when empty). Each entry's evidence carries its own leave-one-out median/MAD.
+             */
+            ledger_median?: number | null;
+            /**
+             * Ledger Size
+             * @description Candidates replayed: one per ledger owner.
+             */
+            ledger_size: number;
+            /** Limit */
+            limit: number;
+            /** Overridden Fields */
+            overridden_fields: ("mode" | "min_bench_version" | "min_cohort_size" | "modified_z_threshold" | "min_composite_floor")[];
+            /** @description The policy replayed: the effective settings with any override applied. mode is reported, not applied. */
+            settings: components["schemas"]["OutlierEscalationSettingsView"];
+            /**
+             * Truncated
+             * @description would_trigger_count exceeds the returned rows.
+             */
+            truncated: boolean;
+            /**
+             * Would Trigger
+             * @description Highest composite first, at most limit rows.
+             */
+            would_trigger: components["schemas"]["OutlierEscalationDryRunEntryView"][];
+            /** Would Trigger Count */
+            would_trigger_count: number;
+        };
+        /**
          * AdminOutlierEscalationResponse
          * @description Effective posture, per-field sources, and audit-chain activity.
          */
@@ -10577,6 +10556,10 @@ export interface components {
             disposition: "ready" | "already_applied" | "conflict" | "not_found";
             /** Message */
             message: string;
+            /** Public Reason Code */
+            public_reason_code?: string | null;
+            /** Public Record Hash */
+            public_record_hash?: string | null;
             /**
              * Quarantine Id
              * Format: uuid
@@ -12450,6 +12433,28 @@ export interface components {
             /** Replacement Signature */
             replacement_signature: string;
         };
+        /** AdminTranscriptMirrorSettingsRequest */
+        AdminTranscriptMirrorSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminTranscriptMirrorSettingsResponse */
+        AdminTranscriptMirrorSettingsResponse: {
+            current: components["schemas"]["TranscriptMirrorSettingsRevision"];
+            /** History */
+            history: components["schemas"]["TranscriptMirrorSettingsRevision"][];
+        };
         /** AdminTransitionCodingPrivateV2ReleaseRequest */
         AdminTransitionCodingPrivateV2ReleaseRequest: {
             /**
@@ -12465,6 +12470,24 @@ export interface components {
             expected_registration_sha256: string;
             /** Reason */
             reason: string;
+        };
+        /** AdminTreasurySettingsRequest */
+        AdminTreasurySettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "RECORD TREASURY SHADOW POLICY";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            settings: components["schemas"]["TreasurySettings"];
         };
         /**
          * AdminV13PrivatePackageReadiness
@@ -13081,6 +13104,8 @@ export interface components {
             replacement_allowed: boolean;
             /** Replacement Pending */
             replacement_pending: boolean;
+            /** Replacement Queued */
+            replacement_queued: boolean;
             /** Replacement Reason */
             replacement_reason: string | null;
             /** Replacement Request Id */
@@ -13944,6 +13969,13 @@ export interface components {
              */
             relay_delay_fingerprint_mode: "off" | "shadow";
         };
+        /** Body_accept_link_decide_api_v1_miner_auth_ditto_accept_post */
+        Body_accept_link_decide_api_v1_miner_auth_ditto_accept_post: {
+            /** Decision */
+            decision: string;
+            /** T */
+            t: string;
+        };
         /** Body_set_miner_avatar_api_v1_miner_avatars_post */
         Body_set_miner_avatar_api_v1_miner_avatars_post: {
             /** File */
@@ -14016,6 +14048,171 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["BurnSettings"];
+        };
+        /**
+         * CaseCatalog
+         * @description The persisted per-case ``catalog`` record, bounded.
+         */
+        CaseCatalog: {
+            /**
+             * Catalog Present
+             * @default false
+             */
+            catalog_present: boolean;
+            /**
+             * Catalog Present Lower Bound
+             * @default false
+             */
+            catalog_present_lower_bound: boolean;
+            /**
+             * Claim Attributed Completions
+             * @default 0
+             */
+            claim_attributed_completions: number;
+            /**
+             * Claim Corroborated Completions
+             * @default 0
+             */
+            claim_corroborated_completions: number;
+            /**
+             * Complete
+             * @default false
+             */
+            complete: boolean;
+            /** Completions */
+            completions?: components["schemas"]["CaseCatalogCompletion"][];
+            /** Completions Total */
+            completions_total?: number | null;
+            /**
+             * Completions Truncated
+             * @default false
+             */
+            completions_truncated: boolean;
+            /**
+             * Completions With Catalog
+             * @default 0
+             */
+            completions_with_catalog: number;
+            /** Findings */
+            findings?: string[];
+            /**
+             * Tools Offered
+             * @default 0
+             */
+            tools_offered: number;
+        };
+        /**
+         * CaseCatalogCompletion
+         * @description Relay metadata for one attributed completion (digests, no text).
+         */
+        CaseCatalogCompletion: {
+            /**
+             * After Last Tool Result
+             * @default false
+             */
+            after_last_tool_result: boolean;
+            /**
+             * Attribution Source
+             * @default
+             */
+            attribution_source: string;
+            /**
+             * Catalog Sha256
+             * @default
+             */
+            catalog_sha256: string;
+            /**
+             * Claim Corroborated
+             * @default false
+             */
+            claim_corroborated: boolean;
+            /** Model Emitted Tool Calls */
+            model_emitted_tool_calls?: string[];
+            /**
+             * System Span Sha256
+             * @default
+             */
+            system_span_sha256: string;
+            /**
+             * Tool Choice
+             * @default
+             */
+            tool_choice: string;
+            /**
+             * Tools Choosable
+             * @default 0
+             */
+            tools_choosable: number;
+            /**
+             * Tools Offered
+             * @default 0
+             */
+            tools_offered: number;
+        };
+        /**
+         * CaseClaimProvenance
+         * @description The persisted per-case ``claim_provenance`` record.
+         */
+        CaseClaimProvenance: {
+            /**
+             * Answer In Prompt
+             * @description Claim tokens already present in harness-sent input.
+             */
+            answer_in_prompt?: boolean | null;
+            /**
+             * Claim Tokens
+             * @description Tokens in the credited claim span (count only).
+             * @default 0
+             */
+            claim_tokens: number;
+            /**
+             * Complete
+             * @description Whether the case's completion attribution was complete.
+             * @default false
+             */
+            complete: boolean;
+            /**
+             * Completions
+             * @description Model completions attributed to the case; null if unknown.
+             */
+            completions?: number | null;
+            /** Findings */
+            findings?: string[];
+            /**
+             * Model Emitted
+             * @description Claim tokens found in a model completion; null if unsettled.
+             */
+            model_emitted?: boolean | null;
+            /** Posture */
+            posture: string;
+            /**
+             * Tool Results
+             * @default 0
+             */
+            tool_results: number;
+            /**
+             * Unattributed Calls
+             * @default 0
+             */
+            unattributed_calls: number;
+        };
+        /**
+         * CaseGateNote
+         * @description One closed-vocabulary finding on the case, with its dispute id.
+         */
+        CaseGateNote: {
+            /** Gate */
+            gate: string;
+            /**
+             * Note Id
+             * @description The id an owner dispute cites for this note (same derivation as the miner gate-notes read).
+             */
+            note_id: string;
+            /**
+             * Zeroing
+             * @description Whether this finding zeroes the case under enforce.
+             */
+            zeroing: boolean;
         };
         /**
          * CaseScore
@@ -14380,6 +14577,42 @@ export interface components {
              * @default 0
              */
             std_err: number;
+        };
+        /**
+         * ClaimProvenanceCase
+         * @description One case's persisted gate evidence, as an operator reads it.
+         */
+        ClaimProvenanceCase: {
+            /** Case Id */
+            case_id: string;
+            /** Case Index */
+            case_index: number;
+            catalog?: components["schemas"]["CaseCatalog"] | null;
+            /** Category */
+            category: string;
+            claim_provenance?: components["schemas"]["CaseClaimProvenance"] | null;
+            /** Correct */
+            correct: boolean;
+            /**
+             * Cost Factor
+             * @description Shadow inference-cost factor (1.0 = no discount).
+             */
+            cost_factor?: number | null;
+            /** Gate Notes */
+            gate_notes?: components["schemas"]["CaseGateNote"][];
+            /** Kind */
+            kind: string;
+            /** Relation */
+            relation?: string | null;
+            /** Score */
+            score: number;
+            /**
+             * Scorer Notes
+             * @description The scorer's own per-case notes, bounded. A note that quotes a case value (forbidden argument, bait tool, distractor) is replaced by a fixed withheld marker.
+             */
+            scorer_notes?: string[];
+            /** Twin Group */
+            twin_group?: string | null;
         };
         /**
          * ClaimProvenanceEvidence
@@ -19598,6 +19831,54 @@ export interface components {
              */
             weight_eligible: false;
         };
+        /** InferenceAdmissionRejectionRow */
+        InferenceAdmissionRejectionRow: {
+            /** Admission Code */
+            admission_code: string;
+            /** Byte Limit */
+            byte_limit: number | null;
+            /**
+             * Correlation Id
+             * Format: uuid
+             */
+            correlation_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Grant Id */
+            grant_id: string | null;
+            /** Http Status */
+            http_status: number;
+            /** Lane */
+            lane: string;
+            /** Platform Revision */
+            platform_revision: string;
+            /**
+             * Rejection Id
+             * Format: uuid
+             */
+            rejection_id: string;
+            /** Request Bytes */
+            request_bytes: number;
+            /** Validator Hotkey */
+            validator_hotkey: string | null;
+        };
+        /** InferenceAdmissionRejectionSummary */
+        InferenceAdmissionRejectionSummary: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Rows */
+            rows: components["schemas"]["InferenceAdmissionRejectionRow"][];
+        };
         /** InferenceCalibrationRoute */
         InferenceCalibrationRoute: {
             /** Model */
@@ -19974,6 +20255,8 @@ export interface components {
              * Format: date-time
              */
             observed_at: string;
+            /** Rate Limit Bursts */
+            rate_limit_bursts: components["schemas"]["InferenceRateLimitBurst"][];
             /** Window Seconds */
             window_seconds: number[];
         };
@@ -20069,6 +20352,64 @@ export interface components {
             tokens_per_second: number;
             /** Window Seconds */
             window_seconds: number;
+        };
+        /**
+         * InferenceRateLimitBurst
+         * @description Report-only five-minute upstream rate-limit signal for one lane.
+         *
+         *     ``active`` means the lane's ``upstream_http_429`` count reached the
+         *     provisional ``threshold`` while the local global in-flight peak stayed below
+         *     the configured limit -- the upstream pool, not Ditto's own admission, was
+         *     the bottleneck. Nothing is enforced, rerouted, or retried on it.
+         */
+        InferenceRateLimitBurst: {
+            /** Active */
+            active: boolean;
+            /** Global Concurrency Limit */
+            global_concurrency_limit: number;
+            /** Peak Global Concurrency */
+            peak_global_concurrency: number;
+            /** Rate Limited Failures */
+            rate_limited_failures: number;
+            /**
+             * Request Kind
+             * @enum {string}
+             */
+            request_kind: "chat" | "embedding";
+            /** Threshold */
+            threshold: number;
+            /** Tickets */
+            tickets: components["schemas"]["InferenceRateLimitedTicket"][];
+            /** Tickets Total */
+            tickets_total: number;
+            /** Tickets Truncated */
+            tickets_truncated: boolean;
+            /** Window Seconds */
+            window_seconds: number;
+        };
+        /**
+         * InferenceRateLimitedTicket
+         * @description One validator ticket whose calls hit ``upstream_http_429`` in the window.
+         */
+        InferenceRateLimitedTicket: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Rate Limited Failures */
+            rate_limited_failures: number;
+            /** Slot Id */
+            slot_id: string;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /** InferenceRouteView */
         InferenceRouteView: {
@@ -20495,6 +20836,12 @@ export interface components {
             miner_hotkey: string;
             /** Policy Version */
             policy_version: number;
+            /**
+             * Run Mode
+             * @default source_only
+             * @enum {string}
+             */
+            run_mode: "source_only" | "full_runtime";
             scored_runtime_evidence: components["schemas"]["ScoredRuntimeEvidenceLease"];
             /**
              * Source Attempt Id
@@ -20523,6 +20870,34 @@ export interface components {
             /** Accepted */
             accepted: boolean;
         };
+        /**
+         * L2CanaryPreflightView
+         * @description Current values of the scheduler's exact-source guards, before its recheck.
+         */
+        L2CanaryPreflightView: {
+            /** Agent Artifact Sha256 */
+            agent_artifact_sha256: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Arrival Bench Version */
+            arrival_bench_version: number;
+            /** Attempt Policy Version */
+            attempt_policy_version: number;
+            /** Score Row Count */
+            score_row_count: number;
+            /** Source Attempt Artifact Sha256 */
+            source_attempt_artifact_sha256: string | null;
+            /**
+             * Source Attempt Id
+             * Format: uuid
+             */
+            source_attempt_id: string;
+        };
         /** L2CanaryScheduleRequest */
         L2CanaryScheduleRequest: {
             /**
@@ -20541,6 +20916,10 @@ export interface components {
             expected_agent_status: string;
             /** Expected Score Count */
             expected_score_count: number;
+            /** Historical Ruling Id */
+            historical_ruling_id?: string | null;
+            /** Historical Ruling Kind */
+            historical_ruling_kind?: ("ath_clear" | "screening_reject") | null;
             /**
              * Policy Version
              * @constant
@@ -20556,6 +20935,12 @@ export interface components {
              * @enum {string}
              */
             review_label: "candidate_clear" | "known_reject";
+            /**
+             * Run Mode
+             * @default source_only
+             * @enum {string}
+             */
+            run_mode: "source_only" | "full_runtime";
             /**
              * Source Attempt Id
              * Format: uuid
@@ -20607,10 +20992,19 @@ export interface components {
             /** Review Label */
             review_label: string;
             /**
+             * Run Mode
+             * @enum {string}
+             */
+            run_mode: "source_only" | "full_runtime";
+            /**
              * Source Attempt Id
              * Format: uuid
              */
             source_attempt_id: string;
+            /** Source Attestation */
+            source_attestation?: {
+                [key: string]: unknown;
+            } | null;
             /** Status */
             status: string;
             /** Target Node Id */
@@ -21876,6 +22270,17 @@ export interface components {
              */
             window_started_at: string;
         };
+        /** OutlierEscalationDryRunEntryView */
+        OutlierEscalationDryRunEntryView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            evidence: components["schemas"]["OutlierEscalationEvidence"];
+            /** Miner Hotkey */
+            miner_hotkey: string;
+        };
         /** OutlierEscalationEntryView */
         OutlierEscalationEntryView: {
             /**
@@ -22375,6 +22780,11 @@ export interface components {
              */
             duplicate_version?: number | null;
             /**
+             * Hold Failure Code
+             * @description The agreed machine cause behind an 'operator_hold', when every remaining slot reports the same one, drawn from the same allowlist as a validation attempt's failure_code. Null is the ordinary case and means the cause is mixed, unnamed or stale: the row is unattributed rather than proven to be a fleet failure, and must not be described as one.
+             */
+            hold_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "provider_outage_parked") | null;
+            /**
              * Last Scored At
              * @description When the platform most recently recorded a score (UTC).
              */
@@ -22427,6 +22837,11 @@ export interface components {
              * @description Earliest time an expired ticket becomes eligible to retry (UTC); set while cooling_down.
              */
             retry_after?: string | null;
+            /**
+             * Retry Disposition
+             * @description How to read a parked submission. 'operator_hold' means the platform will not attribute this row to the submission and an operator has to act before it can advance; it is not by itself a claim that the fleet failed. 'terminal_artifact_failure' means every remaining slot died on one named agent-attributable code, so no further lease of this artifact can finish scoring. Null while the submission is still advancing. Fail-closed: a mixed, unnamed, stale or unnameable cause reads as 'operator_hold'. Read 'hold_failure_code' before describing a hold as anyone's fault.
+             */
+            retry_disposition?: ("operator_hold" | "terminal_artifact_failure") | null;
             /**
              * Retry State
              * @description Why a below-quorum submission is or isn't advancing: running, retry_available, cooling_down, exhausted (needs operator recovery), or queued. Null once finalized or not yet evaluating.
@@ -22508,6 +22923,11 @@ export interface components {
              * @description When the platform accepted the upload (UTC).
              */
             submitted_at: string;
+            /**
+             * Terminal Failure Code
+             * @description The agreed machine cause behind a 'terminal_artifact_failure', drawn from the same allowlist as a validation attempt's failure_code. Null for every other disposition. Raw validator diagnostics are never published here.
+             */
+            terminal_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "provider_outage_parked") | null;
             /**
              * Validator Queue Gate
              * @description Why this submission cannot be leased on the next poll despite its rank, or null when nothing holds it. 'previous_generation' is retired-era work the fleet serves only once the current era drains; 'owner_serialized' means another submission from the same paid owner is using the owner's validator slot, so this one waits while any other owner has eligible work -- rotating hotkeys does not buy a second slot, though a validator that finds nothing else eligible anywhere may still lease it rather than idle, up to the operator's per-owner limit; 'similarity_serialized' means a near-identical submission is already using this one's share of fleet capacity, whichever key paid for it -- a queue-fairness wait and nothing more, carrying no claim that either submission is illegitimate, and it clears on its own when the other lease ends; 'not_leasable' means the allocator's candidate filter excludes it (no versioned dataset, no eligible screened image, withdrawn, not admitted to this era, or every quorum slot already occupied).
@@ -22631,10 +23051,17 @@ export interface components {
          *     infrastructure failure is retried automatically with backoff, no earlier than
          *     that time. After too many consecutive failures, or a long park, it reports
          *     ``stuck`` and needs a guarded retry like any other.
+         *
+         *     ``lane`` names the admission lane (image build, runtime smoke, or source
+         *     review) the latest attempt is in or stopped in, and is null whenever
+         *     Platform holds no evidence for it (no attempt yet, a worker-local lane, or
+         *     a failure that names no lane).
          */
         PublicAdmissionRetry: {
             /** Attempt Count */
             attempt_count: number;
+            /** Lane */
+            lane?: ("build" | "runtime_smoke" | "source_review") | null;
             /**
              * Last Failure Infrastructure
              * @default false
@@ -22918,6 +23345,11 @@ export interface components {
              * @description entry_hash of the last entry in this page.
              */
             head_hash?: string | null;
+            /**
+             * Moderation Signer Public Keys
+             * @description Ed25519 role public keys (hex) trusted to sign moderation events on this chain. The current key is first.
+             */
+            moderation_signer_public_keys?: string[];
         };
         /**
          * PublicBenchConfigResponse
@@ -23763,7 +24195,7 @@ export interface components {
             quality_factors?: components["schemas"]["PublicBenchmarkQualityFactor"][];
             /**
              * Token Efficiency Multiplier
-             * @description Benchmark-v5 token multiplier; null when token efficiency does not apply or was unavailable.
+             * @description Signed token multiplier (a neutral 1.0 under the bench v7+ quality-only contract); null when it was unavailable.
              */
             token_efficiency_multiplier?: number | null;
             /**
@@ -25621,6 +26053,8 @@ export interface components {
             agent_id: string;
             /** Bench Version */
             bench_version: number;
+            /** Hold Failure Code */
+            hold_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "provider_outage_parked") | null;
             /**
              * Miner Hotkey
              * @description Submitting miner's SS58 hotkey.
@@ -25640,6 +26074,8 @@ export interface components {
             quorum: number;
             /** Retry After */
             retry_after?: string | null;
+            /** Retry Disposition */
+            retry_disposition?: ("operator_hold" | "terminal_artifact_failure") | null;
             /** Retry State */
             retry_state?: ("running" | "retry_available" | "cooling_down" | "exhausted" | "queued") | null;
             /** Score Count */
@@ -25654,6 +26090,8 @@ export interface components {
              * Format: date-time
              */
             submitted_at: string;
+            /** Terminal Failure Code */
+            terminal_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "provider_outage_parked") | null;
             /** Version */
             version?: number | null;
         };
@@ -26173,6 +26611,8 @@ export interface components {
             submission_family?: components["schemas"]["PublicSubmissionFamily"] | null;
             /** Validation Attempts */
             validation_attempts?: components["schemas"]["PublicValidationAttempt"][];
+            /** @description Live validator-retry state while the submission is below quorum; null once it finalizes, and before any validator work exists. */
+            validator_retry?: components["schemas"]["PublicValidatorRetry"] | null;
         };
         /**
          * PublicSubmissionScores
@@ -26363,7 +26803,8 @@ export interface components {
         };
         /**
          * PublicTokenEfficiency
-         * @description Auditable v5 relay-token waste penalty.
+         * @description Auditable relay-token decision: the v5 waste penalty, or the neutral
+         *     bench v7+ quality-only record that meters usage without scoring it.
          */
         PublicTokenEfficiency: {
             /** Adjusted Composite */
@@ -26438,6 +26879,94 @@ export interface components {
             usage_available: number;
             /** Usage Unavailable */
             usage_unavailable: number;
+        };
+        /** PublicTreasuryEvent */
+        PublicTreasuryEvent: {
+            /** Accepted Work Ref */
+            accepted_work_ref: string | null;
+            /** Actor Provenance */
+            actor_provenance: string;
+            /** Actor Public Id */
+            actor_public_id: string;
+            /** Allocated Alpha Rao */
+            allocated_alpha_rao: string;
+            /** Allocation Bps */
+            allocation_bps: number;
+            /** Block Hash */
+            block_hash: string;
+            /** Bounty Award Id */
+            bounty_award_id: string | null;
+            /** Burn Revision */
+            burn_revision: number;
+            /** Burn Share Micros */
+            burn_share_micros: number;
+            /** Credited Usd Nano */
+            credited_usd_nano: string | null;
+            /**
+             * Denominator
+             * @enum {string}
+             */
+            denominator: "miner_emission" | "released_miner_emission";
+            /** Deposit Amount Atomic */
+            deposit_amount_atomic: string;
+            /**
+             * Deposit Asset
+             * @enum {string}
+             */
+            deposit_asset: "TAO" | "SN28_ALPHA" | "SN118_ALPHA";
+            /**
+             * Event At
+             * Format: date-time
+             */
+            event_at: string;
+            /** Event Index */
+            event_index: number;
+            /**
+             * Event Kind
+             * @enum {string}
+             */
+            event_kind: "gm_token_deposit" | "gm_credit_purchase" | "maintenance_bounty";
+            /** Extrinsic Index */
+            extrinsic_index: number;
+            /** Finalized Event Id */
+            finalized_event_id: number | null;
+            /** Gm Bps */
+            gm_bps: number;
+            /** Id */
+            id: number;
+            /** Maintenance Bps */
+            maintenance_bps: number;
+            /** Payment Id */
+            payment_id: string;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Public Recipient */
+            public_recipient: string;
+            /** Public Sender */
+            public_sender: string;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Route */
+            route: string;
+            /** Source Alpha Rao */
+            source_alpha_rao: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "chain_finalized" | "reconciled";
+            /** Verification Source */
+            verification_source: string;
+        };
+        /** PublicTreasuryEventPage */
+        PublicTreasuryEventPage: {
+            /** Items */
+            items: components["schemas"]["PublicTreasuryEvent"][];
+            /** Next Before */
+            next_before: number | null;
         };
         /**
          * PublicV13ReviewClockRevision
@@ -26621,7 +27150,7 @@ export interface components {
             /** Failed At */
             failed_at?: string | null;
             /** Failure Code */
-            failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent") | null;
+            failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "provider_outage_parked") | null;
             /** Failure Reason */
             failure_reason?: ("infrastructure" | "scoring_error" | "sandbox_oom") | null;
             /**
@@ -26828,6 +27357,44 @@ export interface components {
             status: "disabled" | "fresh" | "stale" | "unavailable";
             /** Validators */
             validators?: components["schemas"]["PublicValidatorName"][];
+        };
+        /**
+         * PublicValidatorRetry
+         * @description Why a below-quorum submission is or is not advancing through scoring.
+         *
+         *     The validator-side counterpart to :class:`PublicAdmissionRetry`. Admission
+         *     already tells a miner when a screening failure was Ditto's; without this a
+         *     submission loses that distinction the moment it reaches the validator queue,
+         *     where the platform's confidence in the classification is higher rather than
+         *     lower.
+         */
+        PublicValidatorRetry: {
+            /**
+             * Disposition
+             * @description 'operator_hold' when the platform will not attribute this row to the submission and an operator has to act, 'terminal_artifact_failure' when no further lease of this artifact can finish scoring. Null while it is advancing. Fail-closed: a mixed, unnamed, stale or unnameable cause reads as 'operator_hold', which on its own asserts no fault.
+             */
+            disposition?: ("operator_hold" | "terminal_artifact_failure") | null;
+            /**
+             * Hold Failure Code
+             * @description Allowlisted machine cause behind an operator hold, when every remaining slot agrees on one. Null means the hold is unattributed, not that the fleet is at fault.
+             */
+            hold_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "provider_outage_parked") | null;
+            /**
+             * Retry After
+             * @description Earliest UTC time an expired ticket may be re-leased.
+             */
+            retry_after?: string | null;
+            /**
+             * State
+             * @description running, retry_available, cooling_down, exhausted, or queued. Read ``disposition`` before showing an exhausted row to a miner: the state alone does not say whose failure it was.
+             * @enum {string}
+             */
+            state: "running" | "retry_available" | "cooling_down" | "exhausted" | "queued";
+            /**
+             * Terminal Failure Code
+             * @description Allowlisted machine cause behind a terminal disposition, from the same set as a validation attempt's ``failure_code``.
+             */
+            terminal_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "provider_outage_parked") | null;
         };
         /**
          * PublicValidatorScore
@@ -28275,6 +28842,8 @@ export interface components {
             model_disposition?: "inconclusive" | null;
             /** Model Steps Observed */
             model_steps_observed?: number | null;
+            /** Model Tool Failure Subcode */
+            model_tool_failure_subcode?: ("invalid_submit_call_id" | "no_tool_call_after_corrections" | "malformed_tool_arguments_json" | "invalid_tool_call_shape") | null;
             /** Output Tokens Used */
             output_tokens_used?: number | null;
             /** Prompt Revision */
@@ -29324,8 +29893,7 @@ export interface components {
             /**
              * Build Provider Priority
              * @default [
-             *       "gcp",
-             *       "targon"
+             *       "gcp"
              *     ]
              */
             build_provider_priority: ("hetzner" | "targon" | "gcp")[];
@@ -29354,16 +29922,14 @@ export interface components {
             /**
              * Runtime Provider Priority
              * @default [
-             *       "gcp",
-             *       "targon"
+             *       "gcp"
              *     ]
              */
             runtime_provider_priority: ("hetzner" | "targon" | "gcp")[];
             /**
              * Source Review Provider Priority
              * @default [
-             *       "gcp",
-             *       "targon"
+             *       "gcp"
              *     ]
              */
             source_review_provider_priority: ("hetzner" | "targon" | "gcp")[];
@@ -30452,55 +31018,6 @@ export interface components {
          * @enum {string}
          */
         SourceReviewScorerVisibleEffect: "final_text" | "answer" | "abstain" | "tool_calls" | "validator_observed_trajectory" | "graded_outcome";
-        /** SubmissionBuildCompleteRequest */
-        SubmissionBuildCompleteRequest: {
-            /** Image Id */
-            image_id: string;
-            /** Output Sha256 */
-            output_sha256: string;
-            /** Output Size Bytes */
-            output_size_bytes: number;
-        };
-        /** SubmissionBuildCompleteResponse */
-        SubmissionBuildCompleteResponse: {
-            /**
-             * Verified
-             * @constant
-             */
-            verified: true;
-        };
-        /** SubmissionBuildSourceResponse */
-        SubmissionBuildSourceResponse: {
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /** Image Ref */
-            image_ref: string;
-            /** Source Url B64 */
-            source_url_b64: string;
-        };
-        /** SubmissionBuildUploadRequest */
-        SubmissionBuildUploadRequest: {
-            /** Image Id */
-            image_id: string;
-            /** Output Sha256 */
-            output_sha256: string;
-            /** Output Size Bytes */
-            output_size_bytes: number;
-        };
-        /** SubmissionBuildUploadResponse */
-        SubmissionBuildUploadResponse: {
-            /**
-             * Expires At
-             * Format: date-time
-             */
-            expires_at: string;
-            /** Required Headers */
-            required_headers: {
-                [key: string]: string;
-            };
-            /** Upload Url B64 */
-            upload_url_b64: string;
-        };
         /** SubmissionDepositAddressRevision */
         SubmissionDepositAddressRevision: {
             /** Actor */
@@ -30553,18 +31070,6 @@ export interface components {
             job_token_expires_at: string;
         };
         /**
-         * SubmissionImageBuildCleanupRequest
-         * @description Durable notice that a suspended provider rental still needs deletion.
-         */
-        SubmissionImageBuildCleanupRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
-            /** Provider Resource Id */
-            provider_resource_id: string;
-        };
-        /**
          * SubmissionImageBuildControllerStatusResponse
          * @description Authority-free completion state used by the provider controller.
          */
@@ -30574,80 +31079,6 @@ export interface components {
              * Format: uuid
              */
             build_id: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "leased" | "running" | "succeeded" | "fallback_required" | "canceled" | "consumed";
-        };
-        /** SubmissionImageBuildControllerUpdateRequest */
-        SubmissionImageBuildControllerUpdateRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
-            /** Error Code */
-            error_code?: string | null;
-            /** Provider Resource Id */
-            provider_resource_id?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "running" | "fallback_required";
-        };
-        /**
-         * SubmissionImageBuildRequest
-         * @description Queue one attempt-bound remote image build after local source validation.
-         */
-        SubmissionImageBuildRequest: {
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-        };
-        /**
-         * SubmissionImageBuildResponse
-         * @description Public-safe status and, when ready, the verified image archive.
-         */
-        SubmissionImageBuildResponse: {
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-            /**
-             * Build Id
-             * Format: uuid
-             */
-            build_id: string;
-            /** Download Url */
-            download_url?: string | null;
-            /** Error Code */
-            error_code?: string | null;
-            /** Image Ref */
-            image_ref: string;
-            /** Output Sha256 */
-            output_sha256?: string | null;
-            /** Output Size Bytes */
-            output_size_bytes?: number | null;
-            /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
-            /** Runtime Error Code */
-            runtime_error_code?: string | null;
-            /** Runtime Image Reference */
-            runtime_image_reference?: string | null;
-            /** Runtime Provider */
-            runtime_provider?: ("targon" | "gcp" | "hetzner") | null;
-            /**
-             * Runtime Status
-             * @default skipped
-             * @enum {string}
-             */
-            runtime_status: "pending" | "running" | "succeeded" | "fallback_required" | "skipped";
             /**
              * Status
              * @enum {string}
@@ -30676,27 +31107,6 @@ export interface components {
             output_sha256: string;
             /** Output Size Bytes */
             output_size_bytes: number;
-        };
-        /**
-         * SubmissionRuntimeResultRequest
-         * @description Terminal direct-image Rental result, fenced to one build/controller.
-         */
-        SubmissionRuntimeResultRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
-            /** Error Code */
-            error_code?: string | null;
-            /** Image Reference */
-            image_reference?: string | null;
-            /** Provider Resource Id */
-            provider_resource_id?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "running" | "succeeded" | "fallback_required";
         };
         /** SubmissionSettingsRevision */
         SubmissionSettingsRevision: {
@@ -30756,18 +31166,6 @@ export interface components {
             /** Review Settings Revision */
             review_settings_revision?: number | null;
         };
-        /**
-         * SubmissionSourceReviewCleanupRequest
-         * @description Durable notice that a provider Rental still needs deletion.
-         */
-        SubmissionSourceReviewCleanupRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
-            /** Provider Resource Id */
-            provider_resource_id: string;
-        };
         /** SubmissionSourceReviewCompleteRequest */
         SubmissionSourceReviewCompleteRequest: {
             observation: components["schemas"]["SourceReviewObservationPayload"];
@@ -30782,61 +31180,6 @@ export interface components {
         };
         /** SubmissionSourceReviewControllerStatusResponse */
         SubmissionSourceReviewControllerStatusResponse: {
-            /**
-             * Review Id
-             * Format: uuid
-             */
-            review_id: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "leased" | "running" | "succeeded" | "fallback_required" | "canceled" | "consumed";
-        };
-        /** SubmissionSourceReviewControllerUpdateRequest */
-        SubmissionSourceReviewControllerUpdateRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
-            /** Error Code */
-            error_code?: string | null;
-            /** Provider Resource Id */
-            provider_resource_id?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "running" | "fallback_required";
-        };
-        /**
-         * SubmissionSourceReviewRequest
-         * @description Queue one attempt-bound remote, read-only source review.
-         */
-        SubmissionSourceReviewRequest: {
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-        };
-        /**
-         * SubmissionSourceReviewResponse
-         * @description Status and terminal observation for an attempt-bound remote review.
-         */
-        SubmissionSourceReviewResponse: {
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-            /** Error Code */
-            error_code?: string | null;
-            observation?: components["schemas"]["SourceReviewObservationPayload"] | null;
-            /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
             /**
              * Review Id
              * Format: uuid
@@ -31431,16 +31774,95 @@ export interface components {
             /** Validator Hotkey */
             validator_hotkey?: string | null;
         };
-        /** TrustedImageBuildClaimRequest */
-        TrustedImageBuildClaimRequest: {
-            /** Controller Epoch */
-            controller_epoch: string;
-            /** Environment */
-            environment: string;
+        /** TranscriptMirrorSettingsRevision */
+        TranscriptMirrorSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Created At */
+            created_at: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
         };
-        /** TrustedImageBuildClaimResponse */
-        TrustedImageBuildClaimResponse: {
-            build: components["schemas"]["TrustedImageBuildView"] | null;
+        /** TreasurySettings */
+        TreasurySettings: {
+            /** Gm Account Ref */
+            gm_account_ref?: string | null;
+            /**
+             * Gm Bps
+             * @default 0
+             */
+            gm_bps: number;
+            /**
+             * Maintenance Bps
+             * @default 0
+             */
+            maintenance_bps: number;
+            /**
+             * Max Daily Outflow Rao
+             * @default 0
+             */
+            max_daily_outflow_rao: number;
+            /**
+             * Max Single Topup Rao
+             * @default 0
+             */
+            max_single_topup_rao: number;
+            /**
+             * Max Slippage Bps
+             * @default 0
+             */
+            max_slippage_bps: number;
+            /**
+             * Mode
+             * @default shadow
+             * @constant
+             */
+            mode: "shadow";
+            /** Treasury Coldkey */
+            treasury_coldkey?: string | null;
+            /** Treasury Hotkey */
+            treasury_hotkey?: string | null;
+        };
+        /** TreasurySettingsControl */
+        TreasurySettingsControl: {
+            effective: components["schemas"]["TreasurySettings"];
+            /** History */
+            history: components["schemas"]["TreasurySettingsRevision"][];
+            /** Miner Bps */
+            miner_bps: number;
+            /** Revision */
+            revision: number;
+            /**
+             * Weight Effect
+             * @default none
+             * @constant
+             */
+            weight_effect: "none";
+        };
+        /** TreasurySettingsRevision */
+        TreasurySettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["TreasurySettings"];
         };
         /** TrustedImageBuildCreateRequest */
         TrustedImageBuildCreateRequest: {
@@ -34195,6 +34617,51 @@ export interface operations {
             };
         };
     };
+    get_claim_provenance_cases_api_v1_admin_agents__agent_id__claim_provenance_get: {
+        parameters: {
+            query: {
+                /** @description The agent's exact artifact SHA-256 (lowercase hex). */
+                artifact_sha256: string;
+                /** @description The accepted run id. */
+                run_id: string;
+                /** @description One exact case id. */
+                case_id?: string | null;
+                /** @description Only cases carrying this closed-vocabulary finding. */
+                finding?: string | null;
+                /** @description Also return cases no gate would zero or discount. Ignored when case_id or finding selects the cases. */
+                include_unflagged?: boolean;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminClaimProvenanceCases"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     agent_coding_certifications_api_v1_admin_agents__agent_id__coding_certifications_get: {
         parameters: {
             query?: {
@@ -36570,6 +37037,39 @@ export interface operations {
             };
         };
     };
+    list_admission_rejections_api_v1_admin_inference_admission_rejections_get: {
+        parameters: {
+            query: {
+                grant_id: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InferenceAdmissionRejectionSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_settings_api_v1_admin_inference_concurrency_settings_get: {
         parameters: {
             query?: never;
@@ -36969,6 +37469,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminOutlierEscalationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_outlier_escalation_dry_run_api_v1_admin_outlier_escalation_dry_run_get: {
+        parameters: {
+            query?: {
+                bench_version?: number | null;
+                min_cohort_size?: number | null;
+                modified_z_threshold?: number | null;
+                min_composite_floor?: number | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOutlierEscalationDryRunResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37468,6 +38005,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                "x-admin-actor"?: string | null;
                 authorization?: string | null;
             };
             path?: never;
@@ -37486,6 +38024,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["L2CanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_l2_report_canary_preflight_api_v1_admin_screener_l2_report_canaries_preflight__agent_id___source_attempt_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+                source_attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["L2CanaryPreflightView"];
                 };
             };
             /** @description Validation Error */
@@ -38503,6 +39075,15 @@ export interface operations {
                 generation?: "active" | "all";
                 limit?: number;
                 offset?: number;
+                agent_name?: string | null;
+                agent_name_prefix?: string | null;
+                miner_hotkey?: string | null;
+                miner_coldkey?: string | null;
+                artifact_sha256?: string | null;
+                agent_status?: components["schemas"]["AgentStatus"][] | null;
+                screening_reason_code?: string[] | null;
+                submitted_after?: string | null;
+                submitted_before?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -39897,6 +40478,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TracePeekResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_admin_transcript_mirror_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTranscriptMirrorSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_transcript_mirror_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTranscriptMirrorSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranscriptMirrorSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_treasury_quote_api_v1_admin_treasury_quote_get: {
+        parameters: {
+            query: {
+                source_alpha_rao: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_treasury_settings_api_v1_admin_treasury_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasurySettingsControl"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_treasury_settings_api_v1_admin_treasury_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTreasurySettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasurySettingsRevision"];
                 };
             };
             /** @description Validation Error */
@@ -42035,14 +42783,16 @@ export interface operations {
         parameters: {
             query: {
                 attempt: string;
-                t: string;
-                decision: string;
             };
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_accept_link_decide_api_v1_miner_auth_ditto_accept_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -43097,6 +43847,38 @@ export interface operations {
             };
         };
     };
+    list_treasury_activity_api_v1_public_treasury_activity_get: {
+        parameters: {
+            query?: {
+                before?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicTreasuryEventPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     public_v13_review_clock_api_v1_public_v13_review_clock_get: {
         parameters: {
             query?: never;
@@ -43670,226 +44452,6 @@ export interface operations {
             };
         };
     };
-    queue_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionImageBuildRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionImageBuildResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds__build_id__get: {
-        parameters: {
-            query: {
-                attempt_id: string;
-            };
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionImageBuildResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    consume_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds__build_id__delete: {
-        parameters: {
-            query: {
-                attempt_id: string;
-            };
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    queue_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionSourceReviewRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionSourceReviewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__get: {
-        parameters: {
-            query: {
-                attempt_id: string;
-            };
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-                review_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionSourceReviewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    consume_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__delete: {
-        parameters: {
-            query: {
-                attempt_id: string;
-            };
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-                review_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     record_screening_verification_receipt_api_v1_screener_agent__agent_id__verification_receipts_post: {
         parameters: {
             query?: never;
@@ -44209,393 +44771,6 @@ export interface operations {
             };
         };
     };
-    claim_submission_image_build_api_v1_screener_controller_submission_image_builds_claim_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TrustedImageBuildClaimRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionImageBuildClaimResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_controller_submission_image_build_api_v1_screener_controller_submission_image_builds__build_id__get: {
-        parameters: {
-            query: {
-                environment: string;
-                controller_epoch: string;
-            };
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionImageBuildControllerStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_submission_image_build_api_v1_screener_controller_submission_image_builds__build_id__put: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionImageBuildControllerUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_submission_image_build_cleanup_api_v1_screener_controller_submission_image_builds__build_id__cleanup_required_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionImageBuildCleanupRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    mark_submission_runtime_cleanup_required_api_v1_screener_controller_submission_image_builds__build_id__runtime_cleanup_required_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionImageBuildCleanupRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    complete_submission_runtime_smoke_api_v1_screener_controller_submission_image_builds__build_id__runtime_result_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionRuntimeResultRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    claim_submission_runtime_smoke_api_v1_screener_controller_submission_runtime_smokes_claim_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TrustedImageBuildClaimRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionRuntimeArtifactClaimResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    claim_submission_source_review_api_v1_screener_controller_submission_source_reviews_claim_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TrustedImageBuildClaimRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionSourceReviewClaimResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_controller_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__get: {
-        parameters: {
-            query: {
-                environment: string;
-                controller_epoch: string;
-            };
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                review_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionSourceReviewControllerStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__put: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                review_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionSourceReviewControllerUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    mark_submission_source_review_cleanup_required_api_v1_screener_controller_submission_source_reviews__review_id__cleanup_required_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                review_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionSourceReviewCleanupRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     queue_release_image_build_api_v1_screener_controller_trusted_image_builds_post: {
         parameters: {
             query?: never;
@@ -44618,41 +44793,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustedImageBuildView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    claim_trusted_image_build_api_v1_screener_controller_trusted_image_builds_claim_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TrustedImageBuildClaimRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TrustedImageBuildClaimResponse"];
                 };
             };
             /** @description Validation Error */
@@ -44757,41 +44897,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TrustedImageBuildView"];
                 };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_trusted_image_build_cleanup_api_v1_screener_controller_trusted_image_builds__build_id__cleanup_required_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionImageBuildCleanupRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -45555,113 +45660,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EffectiveScreenerReviewSettings"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    complete_submission_build_upload_api_v1_screener_submission_image_builds__build_id__complete_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionBuildCompleteRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionBuildCompleteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_submission_build_source_api_v1_screener_submission_image_builds__build_id__source_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionBuildSourceResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    mint_submission_build_upload_api_v1_screener_submission_image_builds__build_id__upload_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                build_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SubmissionBuildUploadRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SubmissionBuildUploadResponse"];
                 };
             };
             /** @description Validation Error */

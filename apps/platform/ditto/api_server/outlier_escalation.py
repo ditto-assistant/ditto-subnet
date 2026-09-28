@@ -245,7 +245,7 @@ class OutlierDecision:
     evidence: dict[str, object] = field(default_factory=dict)
 
 
-def _median_mad(values: Sequence[float]) -> tuple[float, float]:
+def median_mad(values: Sequence[float]) -> tuple[float, float]:
     """Median centre and median absolute deviation of ``values``.
 
     Both are robust to a single extreme member, which is the whole point: a
@@ -298,7 +298,7 @@ def evaluate_score_outlier(
         evidence["anomaly_unavailable"] = "cohort_too_small"
         return OutlierDecision(held=False, reason=None, evidence=evidence)
 
-    center, mad = _median_mad(peers)
+    center, mad = median_mad(peers)
     upward = composite > center
     above_floor = composite >= settings.min_composite_floor
 

@@ -63,8 +63,14 @@ into a long silent hang.
 """
 
 
-# Run logging config from alembic.ini (handlers + formatters).
-if context.config.config_file_name is not None:
+# Run logging config from alembic.ini (handlers + formatters). An in-process
+# caller that owns logging -- the test harness building its template database
+# -- sets ``configure_logger`` to False: fileConfig would otherwise replace the
+# root handlers and disable every ``ditto.*`` logger already imported, for the
+# rest of that process.
+if context.config.config_file_name is not None and context.config.attributes.get(
+    "configure_logger", True
+):
     fileConfig(context.config.config_file_name)
 
 

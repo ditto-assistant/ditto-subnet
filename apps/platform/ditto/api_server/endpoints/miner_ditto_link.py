@@ -13,9 +13,10 @@ import html
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
+from urllib.parse import urlsplit
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -163,7 +164,9 @@ async def start_link(
             binding,
             max_age=ATTEMPT_TTL_SECONDS,
             httponly=True,
-            secure=request.url.scheme == "https",
+            # The callback is served at the configured redirect URL; behind the
+            # TLS-terminating proxy request.url.scheme is http even then.
+            secure=urlsplit(client.config.redirect_url).scheme == "https",
             samesite="lax",
             path="/api/v1/miner-auth/ditto",
         )
@@ -233,7 +236,7 @@ async def confirm_link(
     async with session.begin():
         row, _token = await resolve_miner_session(request, session)
         require_scope(row, "profile")
-        attempt = await get_attempt(session, attempt_id=attempt_id)
+        attempt = await get_attempt(session, attempt_id=attempt_id, lock=True)
         if attempt is None or attempt.miner_hotkey != row.miner_hotkey:
             raise HTTPException(status_code=404, detail="unknown link attempt")
         attempt = await expire_stale_attempt(session, attempt=attempt, now=now)
@@ -394,7 +397,9 @@ async def oidc_callback(
 async def _load_acceptable_attempt(
     session: AsyncSession, *, attempt_id: UUID, token: str, now: datetime
 ) -> MinerDittoLinkAttempt | None:
-    attempt = await get_attempt(session, attempt_id=attempt_id)
+    # Locked so a concurrent accept and decline of one token serialize and
+    # the loser sees it already consumed.
+    attempt = await get_attempt(session, attempt_id=attempt_id, lock=True)
     if attempt is None:
         return None
     attempt = await expire_stale_attempt(session, attempt=attempt, now=now)
@@ -417,7 +422,6 @@ def _accept_page(
     )
     hotkey = html.escape(attempt.miner_hotkey)
     cold = html.escape(coldkey) if coldkey else "unknown"
-    q = f"attempt={attempt.attempt_id}&amp;t={html.escape(token)}"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <title>Link this hotkey to your Ditto account?</title>
@@ -438,13 +442,12 @@ DittoBench console or <code>ditto link-ditto</code> for a hotkey you control. If
 someone sent you this sign-in link, choose <em>Not me</em>: linking would let their
 miner attribute Router inference and Feedback Track credit to your account and, once
 user billing is enabled, spend your Ditto credits.</p>
-<form method="post" style="display:inline"
- action="{accept_base}?{q}&amp;decision=accept">
-<button class="ok" type="submit">Yes, link my Ditto account to this hotkey</button>
-</form>
-<form method="post" style="display:inline;margin-left:.75rem"
- action="{accept_base}?{q}&amp;decision=decline">
-<button class="no" type="submit">Not me</button></form>
+<form method="post" action="{accept_base}?attempt={attempt.attempt_id}">
+<input type="hidden" name="t" value="{html.escape(token)}">
+<button class="ok" type="submit" name="decision" value="accept">Yes, link my Ditto
+account to this hotkey</button>
+<button class="no" type="submit" name="decision" value="decline"
+ style="margin-left:.75rem">Not me</button></form>
 <p><small>Nothing is linked until you choose. After you accept, the miner still has to
 confirm the pairing from their own session.</small></p>
 </body></html>"""
@@ -481,9 +484,17 @@ async def accept_link_page(
 
 @router.post("/miner-auth/ditto/accept")
 async def accept_link_decide(
-    request: Request, session: SessionDep, attempt: UUID, t: str, decision: str
+    request: Request,
+    session: SessionDep,
+    attempt: UUID,
+    t: Annotated[str, Form()],
+    decision: Annotated[str, Form()],
 ) -> RedirectResponse:
-    """Consume the single-use accept token: accept → authenticated, else failed."""
+    """Consume the single-use accept token: accept → authenticated, else failed.
+
+    The token is read only from the form body, so the answering request's
+    URL (and the history entry it leaves) carries just ``attempt``.
+    """
     client = _client(request)
     now = datetime.now(UTC)
     async with session.begin():

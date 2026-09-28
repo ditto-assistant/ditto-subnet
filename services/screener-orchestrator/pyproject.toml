@@ -1,7 +1,7 @@
 [project]
 name = "ditto-screener-orchestrator"
 version = "0.1.0"
-description = "Targon-first, provider-neutral screener capacity controller"
+description = "Provider-neutral screener capacity controller"
 requires-python = ">=3.11"
 dependencies = []
 

@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
 import re
 import socket
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -42,7 +44,6 @@ from ditto_screener.heartbeat import (
 from ditto_screener.policy import (
     PolicyEvidence,
     ScreeningOutcome,
-    SourceReviewObservation,
     builtin_policy_manifest,
     core_decision,
 )
@@ -292,6 +293,9 @@ class ScreenerWorker:
         self._active_agent_id: UUID | None = None
         self._active_progress_stage: ScreenerProgressStage | None = None
         self._active_lease_deadline: LeaseDeadline | None = None
+        self._active_lease_wall: datetime | None = None
+        self._active_attempt_id: Any = None
+        self._active_progress_at: int | None = None
         self._job_started_at: int | None = None
         self._last_heartbeat_timestamp = 0
         self._last_heartbeat_monotonic = float("-inf")
@@ -319,11 +323,56 @@ class ScreenerWorker:
             policy_manifest_digest=bootstrap_manifest.digest,
         )
 
+    def _active_lease_path(self) -> Path | None:
+        journal = self._config.review_journal_file
+        if not journal:
+            return None
+        return Path(journal).with_name("active-lease.json")
+
+    def _publish_active_lease(self) -> None:
+        """Local lease the release updater reads. It is not a verdict.
+
+        Best effort: a local file error must never abort a claimed review, so
+        failures are logged and the updater falls back to its drain bound.
+        """
+        path = self._active_lease_path()
+        if path is None or self._active_attempt_id is None:
+            return
+        deadline = self._active_lease_wall
+        # An open lease has no platform deadline. The updater must not invent one.
+        if deadline is None:
+            return
+        body = {
+            "agent_id": str(self._active_agent_id),
+            "attempt_id": str(self._active_attempt_id),
+            "lease_deadline": int(deadline.timestamp()),
+            "progress_at": self._active_progress_at or int(time.time()),
+            "revision": self._fleet_release.revision,
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(body, sort_keys=True), encoding="utf-8")
+            os.replace(temporary, path)
+        except OSError as error:
+            logger.warning("could not publish the local drain lease: %s", error)
+
+    def _clear_active_lease(self) -> None:
+        path = self._active_lease_path()
+        if path is None:
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as error:
+            logger.warning("could not clear the local drain lease: %s", error)
+
     def _set_progress(self, stage: ScreenerProgressStage) -> None:
         """Advance public-safe progress without waiting on telemetry I/O."""
         if self._active_agent_id is None or self._job_started_at is None:
             return
         self._active_progress_stage = stage
+        self._active_progress_at = int(time.time())
+        self._publish_active_lease()
         progress = ScreenerProgress(stage=stage, started_at=self._job_started_at)
         task = asyncio.create_task(
             self._report_heartbeat("screening", force=True, progress_override=progress)
@@ -354,6 +403,9 @@ class ScreenerWorker:
             self._config.netuid,
             self._config.platform_api_url,
         )
+        # A lease file left by a process that died mid-review describes no live
+        # work in this process; the updater must not wait on it.
+        self._clear_active_lease()
         while not stop.is_set():
             await self._report_heartbeat("polling")
             try:
@@ -450,6 +502,10 @@ class ScreenerWorker:
                 renewed = self._screen_deadline(response.lease_deadline)
                 if renewed is not None:
                     self._active_lease_deadline.renew(renewed.expires_at)
+                    # Keep the updater's local view on the renewed Platform
+                    # lease, or a live review looks expired after one TTL.
+                    self._active_lease_wall = response.lease_deadline
+                    self._publish_active_lease()
         except Exception as error:  # noqa: BLE001 - observability is best effort
             logger.warning("screener heartbeat failed (screening continues): %s", error)
         finally:
@@ -619,6 +675,8 @@ class ScreenerWorker:
         attempt_id = item.attempt_id
         self._active_agent_id = agent_id
         self._active_lease_deadline = self._screen_deadline(item.lease_deadline)
+        self._active_lease_wall = item.lease_deadline
+        self._active_attempt_id = attempt_id
         self._job_started_at = int(time.time())
         self._set_progress("preparing")
         heartbeat_stop = asyncio.Event()
@@ -779,71 +837,6 @@ class ScreenerWorker:
                         agent_id, attempt_id=attempt_id
                     )
 
-                    async def remote_build():  # type: ignore[no-untyped-def]
-                        if self._config.remote_build_mode == "off":
-                            return None
-                        # The remote and local caps are separate on purpose.
-                        # A normal 70-minute lease budgets 25 minutes for
-                        # Targon, then up to 45 minutes for local Docker. Do not
-                        # derive this from the local cap: older hosts may carry
-                        # a stale local override, which previously collapsed
-                        # Targon to a one-minute attempt.
-                        return await self._platform.build_submission_image(
-                            agent_id,
-                            attempt_id=attempt_id,
-                            timeout=self._config.remote_build_timeout_seconds,
-                        )
-
-                    async def remote_build_consumed(build_id: UUID) -> None:
-                        await self._platform.discard_submission_image_build(
-                            agent_id,
-                            attempt_id=attempt_id,
-                            build_id=build_id,
-                        )
-
-                    # A local build has no provider-owned image-build record.
-                    # Its review must therefore stay in this gate: the fleet
-                    # source-review claim correctly requires a completed
-                    # provider build and runtime smoke, and queueing one here
-                    # would wait on a prerequisite that local mode can never
-                    # produce.
-                    remote_source_review: (
-                        Callable[[], Awaitable[SourceReviewObservation | None]] | None
-                    ) = None
-                    if self._config.remote_build_mode != "off":
-
-                        async def review_with_remote_provider() -> (
-                            SourceReviewObservation | None
-                        ):
-                            payload = await self._platform.review_submission_source(
-                                agent_id,
-                                attempt_id=attempt_id,
-                                timeout=self._config.source_review_timeout_seconds,
-                            )
-                            if payload is None:
-                                return None
-                            return SourceReviewObservation(
-                                ok=payload.ok,
-                                risk_level=payload.risk_level,
-                                finding_digest=payload.finding_digest,
-                                categories=tuple(payload.categories),
-                                error_code=payload.error_code,
-                                finding=(
-                                    payload.finding.model_dump(mode="json")
-                                    if payload.finding is not None
-                                    else None
-                                ),
-                                failure_disposition=payload.failure_disposition,
-                                clearance_certified=payload.clearance_certified,
-                                review_audit=(
-                                    payload.review_audit.model_dump(mode="json")
-                                    if payload.review_audit is not None
-                                    else None
-                                ),
-                            )
-
-                        remote_source_review = review_with_remote_provider
-
                     result = await self._gate.screen(
                         agent_id=agent_id,
                         attempt_id=attempt_id,
@@ -857,9 +850,6 @@ class ScreenerWorker:
                         publish_held_image=publish_held_image,
                         record_archive_verification=record_archive_verification,
                         record_runtime_verification=record_runtime_verification,
-                        remote_build=remote_build,
-                        remote_build_consumed=remote_build_consumed,
-                        remote_source_review=remote_source_review,
                         # A build-only item requests the mechanical lane. That
                         # lane is used both for an already-adjudicated rebuild
                         # and for score-first admission when the complete source
@@ -1198,7 +1188,11 @@ class ScreenerWorker:
                 task.cancel()
             await asyncio.gather(*progress_tasks, return_exceptions=True)
             self._progress_heartbeat_tasks.clear()
+            self._clear_active_lease()
             self._active_agent_id = None
+            self._active_attempt_id = None
+            self._active_lease_wall = None
+            self._active_progress_at = None
             self._active_progress_stage = None
             self._active_lease_deadline = None
             self._job_started_at = None

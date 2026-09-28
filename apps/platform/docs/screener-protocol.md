@@ -62,32 +62,19 @@ retry/deadline, transition, opaque-component verification, and exact-artifact
 emission rules in `workers/screener/docs/policy-v13.md` are satisfied for the
 next version.
 
-## Provider-routed screening jobs
+## Provider-routed screening
 
-Build, runtime smoke, and source review have independent revisioned provider
-lists. Targon is enabled for a lane only when that list starts with `targon`.
-Any other list, including `['gcp', 'targon']`, is the GCE-only cutover: queued
-Targon work is terminalized and GCE workers remain the authority. A remote
-build is attempt-bound and becomes consumable only after Platform verifies the
-complete image archive. When runtime starts with Targon, the trusted controller
-promotes that exact archive to a private ephemeral registry, launches it
-directly as a Rental, and records digest/workload provenance. When runtime smoke records `succeeded`, that Targon `/health` result is the
-mechanical admission. Platform copies the verified Kaniko archive to the
-screened-image key, creates the Targon rentals, and records the verdict.
-There is no screener sr25519, no GCE worker, and no capacity-controller host. Isolated fake-gateway oracle is
-skipped until a screener-to-rental prompt tool exists.
+Enrolled Hetzner workers claim attempts and return signed terminal verdicts.
+The GCE managed instance group is a bounded outage and backlog fallback.
+Provider routing and per-node concurrency are revisioned and audited through
+Backroom. New routing writes cannot select the retired provider; historical
+provider values remain readable in existing audit rows. The separate node-job
+APIs can settle previously queued build, runtime, and source-review rows, but
+they do not open new screening attempts.
 
-Source review is also attempt-bound. A pinned trusted worker may return a
-bounded L1 observation. Certified low-risk clearance is a pass without local
-L2. `require` mode uses the remote observation as-is (elevated findings
-quarantine). `prefer` mode follows the same single-provider rule: uncertified
-results quarantine, and provider failures park the attempt for a manual
-Backroom retry instead of falling back to GCE L2/L3. For full reviews, Platform
-queues source review at admission alongside the build so the independent lanes
-can run concurrently; finalization still waits for build, runtime smoke, and
-source review to finish. Job tokens are
-stored only as hashes and revoked at terminal completion; provider Rental
-identities and cleanup failures remain durable operator evidence.
+The signed screener worker remains the terminal verdict writer. Platform
+verifies source and image identities and records each job result without
+turning a source-review hold into an automatic reject.
 
 ## Quarantine management
 

@@ -135,7 +135,7 @@ def test_controller_deploy_releases_only_the_stopped_writer_epoch() -> None:
         ROOT / "services" / "screener-orchestrator" / "scripts" / "update-controller.sh"
     ).read_text()
 
-    stop = 'systemctl stop "$BUILDER_UNIT" "$CONTROLLER_UNIT"'
+    stop = 'systemctl stop "$CONTROLLER_UNIT"'
     release = 'release_lease "$prior_epoch"'
     start = 'systemctl start "$CONTROLLER_UNIT"'
     assert updater.index(stop) < updater.index(release) < updater.index(start)
@@ -194,29 +194,30 @@ def test_capacity_controller_cannot_administer_compute_project_wide() -> None:
     assert "only_ditto_screener_fleet" in terraform
 
 
-def test_capacity_controller_retires_targon_workers_but_release_builder_is_scoped() -> (
-    None
-):
+def test_capacity_controller_retires_targon_builder_and_credential() -> None:
     intent = (GCP_ROOT / "prod.auto.tfvars").read_text()
     assert re.search(
         r"^enable_screener_capacity_controller\s*=\s*true$", intent, re.MULTILINE
     )
     role = ROOT / "infra" / "ansible" / "roles" / "screener_capacity_controller"
-    defaults = (role / "defaults" / "main.yml").read_text()
+    tasks = (role / "tasks" / "main.yml").read_text()
     controller_unit = (
         role / "templates" / "ditto-screener-capacity.service.j2"
     ).read_text()
-    builder_unit = (role / "templates" / "ditto-image-builder.service.j2").read_text()
-    assert "screener_capacity_targon_org_slug: ditto" in defaults
-    assert "--targon-org-slug" not in controller_unit
-    assert "--targon-api-key-file" not in controller_unit
-    assert "--targon-org-slug {{ screener_capacity_targon_org_slug }}" in builder_unit
-
-    targon_client = (
-        ROOT / "services" / "screener-orchestrator" / "screener_capacity" / "targon.py"
+    assert not (role / "templates" / "ditto-image-builder.service.j2").exists()
+    assert "ditto-image-builder" in tasks
+    assert "targon-api-key" in tasks
+    assert "--targon-" not in controller_unit
+    updater = (
+        ROOT / "services" / "screener-orchestrator" / "scripts" / "update-controller.sh"
     ).read_text()
-    assert 'base_url: str = "https://api.targon.com/tha/v3"' in targon_client
-    assert 'return f"/orgs/{slug}/workloads{suffix}"' in targon_client
+    assert 'systemctl start "$BUILDER_UNIT"' not in updater
+    assert 'systemctl stop "$RETIRED_BUILDER_UNIT" || return 1' in updater
+    assert 'systemctl disable "$RETIRED_BUILDER_UNIT"' in updater
+    assert 'rm -f -- "$RETIRED_BUILDER_UNIT_FILE" "$RETIRED_TARGON_KEY_FILE"' in updater
+    assert updater.index("retire_builder\n") < updater.index(
+        'if [[ "$previous_sha" == "$CONTROLLER_EXPECTED_SHA" ]]'
+    )
 
     platform_prod = (
         ROOT / "infra" / "ansible" / "host_vars" / "ditto-platform-prod.yml"

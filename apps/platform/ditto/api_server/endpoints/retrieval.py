@@ -111,9 +111,14 @@ async def agent_status(
     agent = await get_agent_by_id(session, agent_id=agent_id)
     if agent is None:
         raise AgentNotFoundError(f"no agent with id={agent_id}")
+    # Same hotkey-level ban rule as ``agent_by_hotkey``: ``ditto status`` reads
+    # this endpoint, and a banned miner must not see a stale per-agent status.
+    status = agent.status
+    if await is_hotkey_banned(session, hotkey=agent.miner_hotkey):
+        status = AgentStatus.BANNED
     return AgentStatusResponse(
         agent_id=agent.agent_id,
-        status=agent.status,
+        status=status,
         screening_reason=agent.screening_reason,
         screening_reason_code=agent.screening_reason_code,
     )

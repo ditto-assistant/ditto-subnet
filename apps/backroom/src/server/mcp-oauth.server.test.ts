@@ -318,3 +318,59 @@ describe('Backroom MCP OAuth consent', () => {
     )
   })
 })
+
+describe('Backroom MCP OAuth consent completion errors', () => {
+  const env = {
+    SESSION_SECRET: secret,
+    BACKROOM_ADMIN_EMAILS: 'peyton@omniaura.ai',
+  } as BackroomEnv
+
+  function completion(body: string) {
+    return new Request(`${origin}/oauth/authorize/complete`, {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body,
+    })
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('tells the operator to start again when the consent page expired', async () => {
+    const oauth = oauthHelpers()
+    const begin = await beginMcpAuthorization(new Request(`${origin}/authorize`), oauth, secret)
+    const requestToken =
+      new URL(begin.headers.get('location') ?? '').searchParams.get('request') ?? ''
+    const { csrf } = await getMcpConsentDetails(requestToken, origin, secret)
+    vi.useFakeTimers({ now: Date.now() + 11 * 60_000 })
+
+    const response = await completeMcpAuthorization(
+      completion(JSON.stringify({ requestToken, csrf, decision: 'allow' })),
+      { ...env, OAUTH_PROVIDER: oauth },
+    )
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({
+      error: 'invalid_request',
+      error_description: 'This MCP authorization request expired. Start connecting again.',
+    })
+  })
+
+  it('answers malformed completion input with 400, not a server error', async () => {
+    const oauth = oauthHelpers()
+    const malformed = await completeMcpAuthorization(
+      completion(JSON.stringify({ decision: 'allow' })),
+      { ...env, OAUTH_PROVIDER: oauth },
+    )
+    const notJson = await completeMcpAuthorization(completion('{not json'), {
+      ...env,
+      OAUTH_PROVIDER: oauth,
+    })
+
+    expect(malformed.status).toBe(400)
+    await expect(malformed.json()).resolves.toMatchObject({ error: 'invalid_request' })
+    expect(notJson.status).toBe(400)
+    await expect(notJson.json()).resolves.toMatchObject({ error: 'invalid_request' })
+  })
+})

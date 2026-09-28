@@ -322,6 +322,7 @@ describe('CopyReviewPanel', () => {
             response_provider: null,
             final_stage: null,
             cause_detail: null,
+            model_tool_failure_subcode: null,
             max_elapsed_ms: null,
             elapsed_ms: null,
           },

@@ -7,6 +7,9 @@ enable_datapipeline   = true
 enable_embedder       = true
 enable_validator      = true
 enable_validator_prod = true
+# Treasury hosts remain physically absent until separately reviewed applies.
+enable_treasury_host         = false
+enable_treasury_planner_host = false
 # Shadow coding remains physically absent until a separately reviewed protected
 # apply creates the complete three-host executor cohort. No worker, daemon, or
 # provider route is activated by this default.
@@ -24,9 +27,8 @@ validator_hotkey_admin_phase = "absent"
 # independently managed GCE MIG remains the bounded overflow path.
 enable_screener_prod = false
 
-# The fleet and its secret/IAM phase already exist in production. The
-# Targon-first controller starts with its hostile-runtime capability pinned to
-# NOGO, so real submission demand continues to use the bounded GCE fallback.
+# The fleet and its secret/IAM phase already exist in production. Hetzner is
+# primary, with the independently managed GCE MIG as bounded overflow.
 enable_screener_fleet_secrets       = true
 enable_screener_fleet               = true
 enable_screener_capacity_controller = true

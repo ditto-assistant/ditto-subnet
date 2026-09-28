@@ -244,8 +244,9 @@ class ApiClient:
     ) -> UploadAgentResponse:
         """Submit the tarball + payment proof.
 
-        Multipart shape mirrors ``ditto/api_server/endpoints/upload.py``
-        lines 156-173 exactly. Any drift here breaks every upload.
+        Multipart shape mirrors ``upload_agent`` in
+        ``apps/platform/ditto/api_server/endpoints/upload.py`` exactly. Any
+        drift here breaks every upload.
         """
         files = {
             "agent_tar": (
@@ -435,6 +436,10 @@ class ApiClient:
             "/api/v1/miner-auth/session/revoke",
             headers={"authorization": f"Bearer {token}"},
         )
+        if response.status_code == 401:
+            # The server resolves the session before revoking it, so 401 means
+            # it is already invalid, expired, or revoked: nothing left to revoke.
+            raise LoginRequiredError("miner session is invalid or expired")
         if response.status_code not in (200, 204):
             raise LoginRejectedError(_format_error(response, prefix="miner-logout"))
 

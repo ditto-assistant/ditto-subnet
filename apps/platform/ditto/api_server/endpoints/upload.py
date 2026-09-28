@@ -7,9 +7,12 @@ proof on chain, stores the tarball in S3, and writes the matching
 ``agents`` + ``evaluation_payments`` rows in a single transaction.
 
 Deferred validations (added when their dependencies land):
-- tar manifest structure (needs Go-harness interface signatures)
-- Go-import allowlist scan (needs the allowlist file)
+- declared file/entrypoint manifest (needs the harness-interface spec)
+- import / dependency allowlist (needs the allowlist file)
 - schema diff against ``schema/initial_harness.sql`` (needs the file)
+
+Gzip magic, tar member safety, and a root ``Dockerfile`` are enforced on
+``/upload/agent`` before payment verification or object storage.
 """
 
 from __future__ import annotations
@@ -59,6 +62,10 @@ from ditto.api_server.payment_verifier import (
     PaymentReplayedError,
     PaymentVerifier,
 )
+from ditto.api_server.source_inspect import (
+    SourceInspectError,
+    validate_upload_archive,
+)
 from ditto.api_server.storage import S3StorageClient
 from ditto.chain import ChainError
 from ditto.db.models import AgentStatus
@@ -91,6 +98,18 @@ if TYPE_CHECKING:
     from ditto.chain import ChainClient
 
 logger = logging.getLogger(__name__)
+
+_UPLOAD_ARCHIVE_DETAILS = {
+    "archive-not-gzip": "archive is not a gzip-compressed tar",
+    "archive-unreadable": "archive is not a readable gzip-compressed tar",
+    "artifact-too-many-members": "archive contains too many members",
+    "artifact-too-large": "archive expands beyond the safety limit",
+    "archive-unsafe-path": "archive contains an unsafe path",
+    "archive-duplicate-path": "archive contains a duplicate path",
+    "archive-special-file": "archive contains a link or special file",
+    "archive-missing-dockerfile": "Dockerfile is missing from the archive root",
+    "archive-dockerfile-unreadable": "Dockerfile is not valid UTF-8 text",
+}
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
@@ -605,6 +624,16 @@ async def upload_agent(
         rollback_result = session.rollback()
         if inspect.isawaitable(rollback_result):
             await rollback_result
+
+    # Structural checks run before chain payment verification and storage, so a
+    # junk or hostile archive never occupies a screener slot or an object.
+    # Exact retries of an already accepted upload returned above.
+    try:
+        await asyncio.to_thread(validate_upload_archive, tar_bytes)
+    except SourceInspectError as exc:
+        raise HTTPException(
+            status_code=400, detail=_UPLOAD_ARCHIVE_DETAILS.get(exc.code, exc.code)
+        ) from exc
 
     # 6. Chain-side verification. Typed PaymentVerifierError subclasses
     # are mapped to 3201-3206 by the envelope handler; we re-raise them

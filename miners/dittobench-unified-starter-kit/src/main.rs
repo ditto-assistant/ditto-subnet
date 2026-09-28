@@ -24,9 +24,24 @@ const SOURCE_CRATES: [&str; 3] = [
     "dittobench-starter-kit",
     "dittobench-coding-starter-kit",
 ];
-const TAR_EXCLUDES: [&str; 12] = [
-    "target", "*/target", ".git", "*/.git", "*.tgz", "*.tar", "*.db", "*.db-*", ".env", ".env.*",
-    "*/.env", "*/.env.*",
+// Development skills contain repository symlinks; they are not runtime inputs.
+const TAR_EXCLUDES: [&str; 16] = [
+    "target",
+    "*/target",
+    ".git",
+    "*/.git",
+    "*.tgz",
+    "*.tar",
+    "*.db",
+    "*.db-*",
+    ".env",
+    ".env.*",
+    "*/.env",
+    "*/.env.*",
+    ".agents",
+    "*/.agents",
+    ".claude",
+    "*/.claude",
 ];
 
 #[derive(Debug, Parser)]
@@ -274,6 +289,48 @@ mod tests {
                 "case_scoped_inference_v2"
             ])
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn archive_excludes_development_skills_and_their_symlinks() {
+        let fixture = std::env::temp_dir().join(format!(
+            "unified-archive-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&fixture).unwrap();
+        for source in SOURCE_CRATES {
+            let root = fixture.join(source);
+            std::fs::create_dir_all(root.join("src")).unwrap();
+            std::fs::write(root.join("src/lib.rs"), "// runtime source").unwrap();
+            std::fs::create_dir_all(root.join(".agents/skills/mine")).unwrap();
+            std::fs::write(root.join(".agents/skills/mine/SKILL.md"), "dev only").unwrap();
+            std::fs::create_dir_all(root.join(".claude/skills")).unwrap();
+            std::os::unix::fs::symlink(
+                "../../.agents/skills/mine",
+                root.join(".claude/skills/mine"),
+            )
+            .unwrap();
+        }
+        let archive = fixture.join("submission.tar");
+        run_tar(&fixture, &archive, false, &SOURCE_CRATES, &TAR_EXCLUDES).unwrap();
+        let listing = std::process::Command::new("tar")
+            .arg("-tf")
+            .arg(&archive)
+            .output()
+            .unwrap();
+        assert!(listing.status.success());
+        let listing = String::from_utf8(listing.stdout).unwrap();
+        for source in SOURCE_CRATES {
+            assert!(listing.contains(&format!("{source}/src/lib.rs")));
+        }
+        assert!(!listing.contains(".agents"));
+        assert!(!listing.contains(".claude"));
+        std::fs::remove_dir_all(&fixture).unwrap();
     }
 
     #[test]

@@ -4,6 +4,20 @@ Status: published with partial screener support; activation pending. This policy
 takes effect only through the versioned activation control after every
 prerequisite at the end of this document is satisfied.
 
+## Source-review admission amendment
+
+The built-in admission profile uses exact-artifact source review and the
+mechanical build, image, and health gates. A private behavioral challenge is
+not a universal admission requirement. A completed, certified low-risk source
+review can clear without one; a supported source violation remains held for
+evidence-bound rejection review. Missing source evidence is never a clear.
+
+Operators may still request a bounded private behavioral audit for a specific
+unresolved runtime question. Such an audit has its own explicit manifest and
+does not silently become a prerequisite for every submission. The activation
+record must include the revised built-in manifest digest and release revision;
+historical decisions retain their original policy digest.
+
 Policy v13 is a strict two-outcome policy. Every completed review ends in
 `CLEAR` or `REJECT`. When verification cannot be completed the result is
 `REJECT` with `violation_proven: false` and an explicit failure domain; such a
@@ -473,8 +487,8 @@ published retry and remediation procedure.
 
 ### W16: evaluation independence
 
-- Artifact commitment precedes private challenge generation and private
-  challenge randomness.
+- When a private challenge is requested, artifact commitment precedes its
+  generation and randomness.
 - Active private seeds, expected outputs, and case identities remain hidden.
 - Active per-case results cannot influence a weight-eligible artifact.
 - Served behavior does not change according to evaluation identity, and served
@@ -908,8 +922,8 @@ may produce `CLEAR`, and none of them may submit a passing verdict:
 - `source-review-inconsistent-verdict` — the reviewer contradicted itself;
 - `adjudicated-source-review-escalate` — adjudication ended without a
   finalized, verified finding;
-- `behavioral-oracle-inconclusive` and `challenge-inconclusive` — a required
-  behavioral check produced no usable observation; and
+- `behavioral-oracle-inconclusive` and `challenge-inconclusive` — an explicitly
+  required targeted behavioral audit produced no usable observation; and
 - `source-review-unavailable` — review infrastructure was unreachable.
 
 Each resolves through the retry and deadline procedure and then terminates as:
@@ -925,8 +939,8 @@ An adjudicator that fails without a finding records only that adjudication did
 not complete. It is neither clearance evidence nor rejection evidence, and it
 may never be reported as cheating.
 
-A behavioral-oracle pass obtained after a mandatory check went undecided does
-not substitute for that check.
+A targeted behavioral-oracle pass does not substitute for an undecided source
+or build check.
 
 All `REJECT` outcomes remove current rank and emission eligibility while
 preserving scores, artifacts, evidence, and history. The decision records

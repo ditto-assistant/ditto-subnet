@@ -47,6 +47,7 @@ locals {
       "ADMIN_API_PASSWORD",
       google_secret_manager_secret.db_password.secret_id,
       google_secret_manager_secret.hmac_secret.secret_id,
+      google_secret_manager_secret.moderation_audit_signing_key.secret_id,
       google_secret_manager_secret.github_deploy_key.secret_id,
       google_secret_manager_secret.taostats_api_key.secret_id,
       google_secret_manager_secret.hippius_access_key_id.secret_id,
@@ -156,9 +157,9 @@ resource "google_storage_bucket" "agents" {
     }
   }
 
-  # Attempt-scoped Targon outputs are temporary transport objects. Normal GCE
-  # import deletes them immediately; this bounds the presigned-PUT race where a
-  # canceled builder finishes uploading after the screener's cleanup request.
+  # Retain cleanup for historical attempt-scoped remote build objects. This
+  # bounds late uploads from a canceled builder without affecting completed
+  # artifact objects.
   lifecycle_rule {
     condition {
       age            = 1
@@ -279,6 +280,16 @@ resource "google_secret_manager_secret_version" "db_password" {
 resource "google_secret_manager_secret" "hmac_secret" {
   project   = var.project
   secret_id = "platform-storage-hmac-secret"
+  replication {
+    auto {}
+  }
+}
+
+# Empty container only: an operator adds the Ed25519 seed version outside
+# Terraform state before enabling signed moderation audit on the app hosts.
+resource "google_secret_manager_secret" "moderation_audit_signing_key" {
+  project   = var.project
+  secret_id = "platform-moderation-audit-signing-key"
   replication {
     auto {}
   }

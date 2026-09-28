@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the pinned starter-kit file and Rust-function provenance index."""
+"""Generate the pinned starter-kit file provenance index."""
 
 from __future__ import annotations
 
@@ -7,15 +7,9 @@ import argparse
 import hashlib
 import json
 import subprocess
-from collections import defaultdict
 from pathlib import Path
-from typing import cast
 
-import tree_sitter_rust
-from tree_sitter import Language, Parser
-
-RUST_LANGUAGE = Language(tree_sitter_rust.language())
-ORIGIN = "ditto-assistant/dittobench-starter-kit"
+ORIGIN = "ditto-assistant/ditto-subnet/miners/dittobench-starter-kit"
 
 
 def _arguments() -> argparse.Namespace:
@@ -51,37 +45,6 @@ def _tracked_files(root: Path) -> list[Path]:
     return files
 
 
-def _rust_functions(path: Path, relative: str) -> list[dict[str, object]]:
-    raw = path.read_bytes()
-    tree = Parser(RUST_LANGUAGE).parse(raw)
-    if tree.root_node.has_error:
-        raise ValueError(f"canonical starter Rust parse failed: {relative}")
-    functions = []
-    stack = [tree.root_node]
-    ordinals: defaultdict[str, int] = defaultdict(int)
-    while stack:
-        node = stack.pop()
-        if node.type == "function_item":
-            name_node = node.child_by_field_name("name")
-            if name_node is None:
-                raise ValueError(f"unnamed canonical Rust function: {relative}")
-            name = raw[name_node.start_byte : name_node.end_byte].decode("utf-8")
-            ordinal = ordinals[name]
-            ordinals[name] += 1
-            functions.append(
-                {
-                    "path": relative,
-                    "name": name,
-                    "ordinal": ordinal,
-                    "sha256": hashlib.sha256(
-                        raw[node.start_byte : node.end_byte]
-                    ).hexdigest(),
-                }
-            )
-        stack.extend(reversed(node.named_children))
-    return functions
-
-
 def main() -> int:
     args = _arguments()
     root = args.starter_dir.resolve()
@@ -95,25 +58,14 @@ def main() -> int:
     if len(revision) != 40:
         raise ValueError("starter revision is not a full Git SHA")
     files: dict[str, str] = {}
-    functions: list[dict[str, object]] = []
     for path in _tracked_files(root):
         relative = path.relative_to(root).as_posix()
         files[relative] = _sha256(path)
-        if path.suffix == ".rs":
-            functions.extend(_rust_functions(path, relative))
     payload = {
         "files": files,
         "origin": ORIGIN,
         "revision": revision,
-        "rust_functions": sorted(
-            functions,
-            key=lambda item: (
-                str(item["path"]),
-                str(item["name"]),
-                cast(int, item["ordinal"]),
-            ),
-        ),
-        "version": 2,
+        "version": 1,
     }
     args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return 0

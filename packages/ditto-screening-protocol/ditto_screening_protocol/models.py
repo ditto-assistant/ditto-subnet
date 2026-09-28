@@ -1163,6 +1163,12 @@ class ScreenReviewAudit(BaseModel):
     ] = None
     final_stage: Literal["preflight", "analyst", "critic", "adjudicator"] | None = None
     cause_detail: Literal["lease_unavailable", "review_disabled"] | None = None
+    model_tool_failure_subcode: Literal[
+        "invalid_submit_call_id",
+        "no_tool_call_after_corrections",
+        "malformed_tool_arguments_json",
+        "invalid_tool_call_shape",
+    ] | None = None
     max_elapsed_ms: Annotated[int | None, Field(ge=1, le=3_600_000)] = None
     elapsed_ms: Annotated[int | None, Field(ge=0, le=3_600_000)] = None
 
@@ -1193,6 +1199,7 @@ class ScreenReviewAudit(BaseModel):
             "response_provider",
             "final_stage",
             "cause_detail",
+            "model_tool_failure_subcode",
             "max_elapsed_ms",
             "elapsed_ms",
         }

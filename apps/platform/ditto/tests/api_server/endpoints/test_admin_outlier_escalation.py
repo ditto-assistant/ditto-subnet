@@ -1,14 +1,15 @@
 """Operator read of the anomalous-score outlier escalation (issue #476).
 
 Covers the env loader's per-field source reporting, that the settings scoring
-consumes are unchanged by it, and the admin endpoint's posture and bounded
-audit-chain activity.
+consumes are unchanged by it, the admin endpoint's posture and bounded
+audit-chain activity, and the read-only dry-run replay over the scored ledger.
 """
 
 from __future__ import annotations
 
 import math
 import os
+import statistics
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -35,8 +36,9 @@ from ditto.api_server.outlier_escalation import (
     OutlierEscalationSettings,
     load_outlier_escalation_settings,
 )
-from ditto.db.models import Agent, AthReview, ScoreAuditEntry
+from ditto.db.models import Agent, AthReview, Score, ScoreAuditEntry
 from ditto.db.queries.audit import EVENT_AUDIT, append_audit_entry
+from ditto.db.queries.scores import list_eligible_ledger, list_scores_for_agent
 
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_ADMIN_TOKEN}"}
@@ -576,3 +578,316 @@ async def test_read_mutates_nothing(
     assert (await client.get(_URL, headers=_HEADERS)).status_code == 200
     assert await _snapshot() == before
     assert v.OUTLIER_ESCALATION_SETTINGS is settings_before
+
+
+# ---------------------------------------------------------------------------
+# Dry run
+# ---------------------------------------------------------------------------
+
+_DRY_RUN_URL = f"{_URL}/dry-run"
+
+
+async def _seed_scored(
+    session_maker: async_sessionmaker[AsyncSession],
+    *composites: float,
+    status: AgentStatus = AgentStatus.SCORED,
+    bench_version: int = 12,
+) -> Agent:
+    """One agent with one score row per composite (its quorum)."""
+    agent = _agent()
+    agent.status = status
+    async with session_maker() as session, session.begin():
+        session.add(agent)
+        await session.flush()
+        session.add_all(
+            Score(
+                agent_id=agent.agent_id,
+                validator_hotkey=f"validator-{index}",
+                bench_version=bench_version,
+                run_id=f"run-{agent.agent_id.hex[:8]}-{index}",
+                signature=None,
+                seed=7,
+                composite=composite,
+                tool_mean=composite,
+                memory_mean=composite,
+                median_ms=100,
+                n=114,
+                details={},
+                generated_at=datetime.now(UTC),
+            )
+            for index, composite in enumerate(composites)
+        )
+    return agent
+
+
+async def _seed_spread_ledger(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> tuple[Agent, Agent]:
+    """The spread cohort plus a 0.99 spike and a 0.70 row below the floor."""
+    for composite in _SPREAD_COHORT:
+        await _seed_scored(session_maker, composite, composite, composite)
+    spike = await _seed_scored(session_maker, 0.98, 0.99, 0.995)
+    high = await _seed_scored(session_maker, 0.70, 0.70, 0.70)
+    return spike, high
+
+
+@pytest.mark.asyncio
+async def test_dry_run_requires_the_admin_token(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    assert (await client.get(_DRY_RUN_URL)).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_dry_run_counts_would_trigger_rows_even_when_off(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    _load_env(monkeypatch, {})
+    spike, _high = await _seed_spread_ledger(session_maker)
+    # Outside the scoring-time ledger: a held agent, and another bench version.
+    await _seed_scored(session_maker, 0.99, status=AgentStatus.ATH_PENDING_REVIEW)
+    await _seed_scored(session_maker, 0.99, bench_version=11)
+
+    response = await client.get(
+        _DRY_RUN_URL, headers=_HEADERS, params={"bench_version": 12}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["bench_version"] == 12
+    assert body["bench_version_in_scope"] is True
+    assert body["settings"]["mode"] == "off"
+    assert body["overridden_fields"] == []
+    assert body["ledger_size"] == len(_SPREAD_COHORT) + 2
+    assert body["cohort_size"] == len(_SPREAD_COHORT) + 1
+    assert body["cohort_too_small"] is False
+    assert body["ledger_median"] == pytest.approx(0.605, abs=1e-9)
+    assert body["ledger_mad"] == pytest.approx(0.01, abs=1e-9)
+    # The 0.70 row is out-of-band by distance but below the 0.90 floor.
+    assert body["would_trigger_count"] == 1
+    assert body["truncated"] is False
+    [entry] = body["would_trigger"]
+    assert entry["agent_id"] == str(spike.agent_id)
+    assert entry["miner_hotkey"] == spike.miner_hotkey
+    evidence = entry["evidence"]
+    assert evidence["composite"] == pytest.approx(0.99)
+    assert evidence["cohort_size"] == len(_SPREAD_COHORT) + 1
+    assert evidence["modified_z"] > 6.0
+    assert evidence["upward"] is True
+    assert evidence["above_floor"] is True
+
+
+@pytest.mark.asyncio
+async def test_dry_run_matches_the_live_decision_on_the_same_cohort(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finalize a candidate the way scoring does, then replay the ledger.
+
+    The candidate's cohort at finalization is the ledger it is not yet in; in
+    the replay it is the ledger without it. Both must yield the same evidence.
+    """
+    _install(app, session_maker)
+    _load_env(monkeypatch, {})
+    for composite in [*_SPREAD_COHORT, 0.70]:
+        await _seed_scored(session_maker, composite, composite, composite)
+    candidate = await _seed_scored(
+        session_maker, 0.98, 0.99, 0.995, status=AgentStatus.EVALUATING
+    )
+
+    async with session_maker() as session, session.begin():
+        agent = await session.get(Agent, candidate.agent_id)
+        assert agent is not None
+        agent_scores = await list_scores_for_agent(
+            session, agent_id=agent.agent_id, bench_version=12
+        )
+        median_composite = statistics.median(s.composite for s in agent_scores)
+        eligible = await list_eligible_ledger(session, bench_version=12)
+        agent.status = AgentStatus.SCORED
+        await _evaluate_and_record_outlier_escalation(
+            session,
+            agent=agent,
+            bench_version=12,
+            composite=median_composite,
+            cohort=[row.composite for row in eligible],
+            settings=OutlierEscalationSettings(mode="observe"),
+            now=datetime.now(UTC),
+        )
+    async with session_maker() as session:
+        live = await session.scalar(
+            select(ScoreAuditEntry.payload).where(
+                ScoreAuditEntry.agent_id == candidate.agent_id,
+                ScoreAuditEntry.event == EVENT_AUDIT,
+            )
+        )
+    assert live is not None
+
+    body = (
+        await client.get(_DRY_RUN_URL, headers=_HEADERS, params={"bench_version": 12})
+    ).json()
+
+    [entry] = body["would_trigger"]
+    assert entry["agent_id"] == str(candidate.agent_id)
+    live_evidence = live["evidence"]
+    assert entry["evidence"] == {
+        key: live_evidence.get(key) for key in entry["evidence"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_dry_run_applies_overrides_over_effective_settings(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    _load_env(monkeypatch, {"DITTO_OUTLIER_ESCALATION_MODE": "observe"})
+    spike, high = await _seed_spread_ledger(session_maker)
+
+    body = (
+        await client.get(
+            _DRY_RUN_URL,
+            headers=_HEADERS,
+            params={"bench_version": 12, "min_composite_floor": 0.65, "limit": 1},
+        )
+    ).json()
+
+    assert body["overridden_fields"] == ["min_composite_floor"]
+    assert body["settings"] == {
+        "mode": "observe",
+        "min_bench_version": 12,
+        "min_cohort_size": 8,
+        "modified_z_threshold": 6.0,
+        "min_composite_floor": 0.65,
+    }
+    assert body["would_trigger_count"] == 2
+    assert body["limit"] == 1
+    assert body["truncated"] is True
+    assert [row["agent_id"] for row in body["would_trigger"]] == [str(spike.agent_id)]
+
+    both = (
+        await client.get(
+            _DRY_RUN_URL,
+            headers=_HEADERS,
+            params={"bench_version": 12, "min_composite_floor": 0.65},
+        )
+    ).json()
+    assert [row["agent_id"] for row in both["would_trigger"]] == [
+        str(spike.agent_id),
+        str(high.agent_id),
+    ]
+
+    thin = (
+        await client.get(
+            _DRY_RUN_URL,
+            headers=_HEADERS,
+            params={
+                "bench_version": 12,
+                "min_cohort_size": 20,
+                "modified_z_threshold": 2.5,
+            },
+        )
+    ).json()
+    assert thin["overridden_fields"] == ["min_cohort_size", "modified_z_threshold"]
+    assert thin["cohort_too_small"] is True
+    assert thin["would_trigger_count"] == 0
+    # The effective settings scoring uses are untouched by an override.
+    assert v.OUTLIER_ESCALATION_SETTINGS.min_composite_floor == 0.9
+
+
+@pytest.mark.asyncio
+async def test_dry_run_defaults_to_the_active_bench_version(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    _load_env(monkeypatch, {})
+
+    body = (await client.get(_DRY_RUN_URL, headers=_HEADERS)).json()
+
+    # No rollout on record resolves to the scoreable floor, below v12 scope.
+    assert body["bench_version"] == 7
+    assert body["bench_version_in_scope"] is False
+    assert body["ledger_size"] == 0
+    assert body["cohort_size"] == 0
+    assert body["cohort_too_small"] is True
+    assert body["ledger_median"] is None
+    assert body["ledger_mad"] is None
+    assert body["would_trigger"] == []
+
+
+@pytest.mark.asyncio
+async def test_dry_run_query_bounds_are_enforced(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    for params in (
+        {"limit": 0},
+        {"limit": 101},
+        {"bench_version": 0},
+        {"min_cohort_size": 0},
+        {"min_cohort_size": 1001},
+        {"modified_z_threshold": 0},
+        {"modified_z_threshold": "nan"},
+        {"modified_z_threshold": "inf"},
+        {"min_composite_floor": -0.1},
+        {"min_composite_floor": 1.5},
+        {"min_composite_floor": "nan"},
+    ):
+        response = await client.get(_DRY_RUN_URL, headers=_HEADERS, params=params)
+        assert response.status_code == 422, params
+
+
+@pytest.mark.asyncio
+async def test_dry_run_mutates_nothing_even_in_enforce(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    _load_env(monkeypatch, {"DITTO_OUTLIER_ESCALATION_MODE": "enforce"})
+    spike, _high = await _seed_spread_ledger(session_maker)
+
+    async def _snapshot() -> tuple[int, int, int]:
+        async with session_maker() as session:
+            audit = await session.scalar(
+                select(func.count()).select_from(ScoreAuditEntry)
+            )
+            reviews = await session.scalar(select(func.count()).select_from(AthReview))
+            scored = await session.scalar(
+                select(func.count())
+                .select_from(Agent)
+                .where(Agent.status == AgentStatus.SCORED)
+            )
+            return int(audit or 0), int(reviews or 0), int(scored or 0)
+
+    before = await _snapshot()
+    settings_before = v.OUTLIER_ESCALATION_SETTINGS
+    response = await client.get(
+        _DRY_RUN_URL,
+        headers=_HEADERS,
+        params={"bench_version": 12, "modified_z_threshold": 1.0},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["would_trigger_count"] >= 1
+    assert await _snapshot() == before
+    assert v.OUTLIER_ESCALATION_SETTINGS is settings_before
+    async with session_maker() as session:
+        held = await session.get(Agent, spike.agent_id)
+        assert held is not None
+        assert held.status == AgentStatus.SCORED
+        assert held.review_reason is None

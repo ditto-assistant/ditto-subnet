@@ -17,6 +17,7 @@ import {
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
   fetchScreeningFailureSummary,
+  fetchL2ReportCanaryPreflight,
   fetchOwnerAttestations,
   fetchScreeningDisputes,
   fetchValidatorAssignments,
@@ -690,6 +691,30 @@ describe('inference route administration', () => {
 })
 
 describe('screening submission admin service', () => {
+  it('reads the exact L2 canary guard snapshot through Platform admin', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const sourceAttemptId = '22222222-2222-4222-8222-222222222222'
+    const snapshot = {
+      agent_id: agentId,
+      source_attempt_id: sourceAttemptId,
+      agent_artifact_sha256: 'a'.repeat(64),
+      source_attempt_artifact_sha256: null,
+      agent_status: 'evaluating',
+      attempt_policy_version: 13,
+      arrival_bench_version: 13,
+      score_row_count: 2,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(snapshot))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchL2ReportCanaryPreflight({ agentId, sourceAttemptId })).resolves.toEqual(snapshot)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/preflight/${agentId}/${sourceAttemptId}`,
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
   it('forwards explicit pagination for screening history and disputes', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi
@@ -754,6 +779,61 @@ describe('screening submission admin service', () => {
       'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?generation=all&limit=25&offset=0',
       expect.objectContaining({ method: 'GET' }),
     )
+  })
+
+  it('forwards every screening-submission search filter as Platform query params', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ items: [], count: 0, generation: 'all', active_bench_version: 12 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchScreeningSubmissions(10, 20, 'all', {
+      agentName: 'moonlight_v1',
+      agentNamePrefix: 'moon',
+      minerHotkey: '5Hot',
+      minerColdkey: '5Cold',
+      artifactSha256: 'AB'.repeat(32),
+      agentStatus: ['scored', 'banned'],
+      screeningReasonCode: ['docker-build', 'policy-network-egress'],
+      submittedAfter: '2026-07-01T00:00:00Z',
+      submittedBefore: '2026-08-01T00:00:00+00:00',
+    })
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?' +
+        [
+          'generation=all',
+          'limit=10',
+          'offset=20',
+          'agent_name=moonlight_v1',
+          'agent_name_prefix=moon',
+          'miner_hotkey=5Hot',
+          'miner_coldkey=5Cold',
+          `artifact_sha256=${'AB'.repeat(32)}`,
+          'submitted_after=2026-07-01T00%3A00%3A00Z',
+          'submitted_before=2026-08-01T00%3A00%3A00%2B00%3A00',
+          'agent_status=scored',
+          'agent_status=banned',
+          'screening_reason_code=docker-build',
+          'screening_reason_code=policy-network-egress',
+        ].join('&'),
+    )
+  })
+
+  it('rejects malformed screening-submission filters before calling Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      fetchScreeningSubmissions(10, 0, 'all', { artifactSha256: 'not-hex' }),
+    ).rejects.toThrow()
+    await expect(
+      fetchScreeningSubmissions(10, 0, 'all', { agentStatus: ['nope'] }),
+    ).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('gets one exact submission without requesting artifact data', async () => {
@@ -3157,6 +3237,7 @@ describe('copy review admin service', () => {
       ticket_status: 'scored',
       ticket_deadline: '2026-07-20T04:00:00Z',
       replacement_pending: false,
+      replacement_queued: false,
       replacement_request_id: null,
       replacement_reason: null,
       replacement_actor: null,
@@ -3247,9 +3328,9 @@ describe('copy review admin service', () => {
         queue_position: null,
         replacement_deadline: deadline,
         replacement_allowed: false,
-        blocking_reason: 'replacement score is already pending',
+        blocking_reason: 'replacement ticket is already issued and pending a score',
         queue_allowed: false,
-        queue_blocking_reason: 'replacement score is already queued or pending',
+        queue_blocking_reason: 'replacement ticket is already issued and pending a score',
       }],
       count: 1,
       limit: 50,

@@ -327,6 +327,63 @@ async def test_last_source_review_turn_requires_the_final_verdict_tool(
     assert [tool["function"]["name"] for tool in seen[0]["tools"]] == ["submit_review"]
 
 
+async def test_invalid_final_pass_clause_is_corrected_in_same_review(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    valid = _with_policy_v10_invariants(_BENIGN_REVIEW)
+    invalid = json.loads(json.dumps(valid))
+    invalid["invariants"][0]["pass_clause"] = "no_tool_planning"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        if len(seen) == 1:
+            calls = [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 20},
+                ),
+                _tool("search-1", "search", {"query": "call_model"}),
+            ]
+        else:
+            calls = [
+                _tool(
+                    f"submit-{len(seen)}",
+                    "submit_review",
+                    invalid if len(seen) == 2 else valid,
+                )
+            ]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "tool_calls": calls}}]},
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=2,
+        transport=httpx.MockTransport(handler),
+    )
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok and observation.risk_level == "low"
+    assert len(seen) == 3  # One schema repair is available after the final turn.
+    feedback = json.loads(seen[2]["messages"][-2]["content"])
+    assert feedback["field"] == "invariants[0].pass_clause"
+    assert feedback["invariant"] == "i1_model_invocation"
+    assert feedback["correctable"] is True
+    assert "no_tool_planning" not in json.dumps(feedback)
+
+
 def _archive_with(tmp_path: Path, extra: dict[str, bytes]) -> Path:
     path = tmp_path / "agent.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
@@ -2485,6 +2542,44 @@ async def test_each_source_review_completion_has_a_short_hard_timeout(
     assert observation.error_code == "source-review-timeouterror"
 
 
+async def test_default_source_turn_allows_delayed_success_with_retry_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def delayed_success(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.02)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=None,
+        model="openai/gpt-6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=600,
+        max_steps=1,
+        transport=httpx.MockTransport(delayed_success),
+    )
+    request_timeouts: list[float] = []
+
+    def headers(_key: str, effective_timeout: float) -> dict[str, str]:
+        request_timeouts.append(effective_timeout)
+        return {}
+
+    monkeypatch.setattr(agent, "_completion_request_headers", headers)
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        message = await agent._completion_message(
+            client,
+            "test-key",
+            [{"role": "user", "content": "test"}],
+            timeout=600,
+            reasoning_effort="high",
+        )
+    assert message["content"] == "ok"
+    assert request_timeouts == [180.0]
+    assert request_timeouts[0] * 2 < agent._timeout_seconds
+
+
 async def test_completion_request_timeout_override_still_obeys_review_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3323,7 +3418,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v26-policy-v13"
+    assert _prompt_revision(13) == "source-review-v28-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -3449,6 +3544,9 @@ def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
 
     assert _POLICY_TAILS[13].startswith(_POLICY_TAILS[12])
     assert "Decide I1 through I8 independently" in v13
+    assert "all seven invariants below" not in v13
+    assert "one decision for each I1 through I7" not in v13
+    assert "all seven invariants below" in v12
     assert "EVALUATION INDEPENDENCE" in v13
     assert "always-on benchmark recipe is activated on every served request" in v13
     assert "unknown, none, or\nn/a" in v13
@@ -3458,6 +3556,9 @@ def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
     assert "exact path-and-digest starter-kit provenance" in v13
     assert "README, metadata sidecar, or duplicate\nself-report" in v13
     assert "null score or leaderboard field" in v13
+    assert "validator supplies `inference_base_url`" in v13
+    assert "source-side allowlist" in v13
+    assert "validator supplies `inference_base_url`" not in v12
     assert "Decide I1 through I8 independently" not in v12
 
     legacy = _source_review_tools_for_policy(12, final_turn=True)[0]
@@ -5730,6 +5831,129 @@ def test_a_hold_threshold_above_one_is_not_inert() -> None:
         ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
         == "pass_inconclusive"
     )
+
+
+def test_full_concern_ledger_keeps_new_source_location() -> None:
+    template: dict[str, object] = {
+        "kind": "concern",
+        "category": "benchmark_emulation",
+        "path": "app/service.py",
+        "line": 85,
+    }
+    cap = source_review_module._MAX_REVIEW_NOTES
+    notes = [template.copy() for _ in range(cap)]
+    tool_gate = {
+        "kind": "concern",
+        "category": "mandatory_contract_failure",
+        "path": "app/service.py",
+        "line": 355,
+    }
+
+    assert source_review_module._append_note(notes, tool_gate)
+
+    assert len(notes) == cap
+    assert notes[-1] is tool_gate
+    assert notes[0]["line"] == 85
+
+    distinct = [{**template, "line": line} for line in range(1, cap + 1)]
+    assert not source_review_module._append_note(distinct, tool_gate)
+    assert len(distinct) == cap
+    assert tool_gate not in distinct
+
+
+def test_repeated_concern_feedback_reports_storage_and_new_evidence_guidance() -> None:
+    concern = {
+        "kind": "concern",
+        "category": "benchmark_emulation",
+        "path": "app/service.py",
+        "line": 65,
+    }
+    notes = [concern.copy() for _ in range(source_review_module._MAX_REVIEW_NOTES)]
+
+    feedback = source_review_module._record_note_feedback(notes, concern.copy())
+
+    assert feedback["recorded"] is False
+    assert feedback["notes"] == source_review_module._MAX_REVIEW_NOTES
+    assert "different served-path location" in str(feedback["guidance"])
+    assert (
+        source_review_module._record_note_feedback(
+            notes, {**concern, "category": "mandatory_contract_failure", "line": 355}
+        )["recorded"]
+        is True
+    )
+    assert notes[-1]["line"] == 355
+
+
+async def test_dropped_repeated_note_keeps_the_inspection_reminder(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    final = _with_policy_v10_invariants(_BENIGN_REVIEW)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        if len(seen) == 1:
+            tool_calls = [
+                _note_call(
+                    f"note-{index}",
+                    "concern",
+                    "Repeated source concern.",
+                    category="benchmark_emulation",
+                    area="answer_construction",
+                    path="src/main.rs",
+                    line=1,
+                )
+                for index in range(source_review_module._MAX_REVIEW_NOTES)
+            ]
+            tool_calls.extend(
+                _tool(
+                    f"read-{index}",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 1},
+                )
+                for index in range(source_review_module._NOTELESS_NUDGE_EVERY)
+            )
+            tool_calls.append(
+                _note_call(
+                    "dropped-duplicate",
+                    "concern",
+                    "Repeated source concern.",
+                    category="benchmark_emulation",
+                    area="answer_construction",
+                    path="src/main.rs",
+                    line=1,
+                )
+            )
+        else:
+            tool_calls = [_tool("submit", "submit_review", final)]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+        policy_version=10,
+    )
+
+    assert len(seen) >= 2
+    messages = seen[1]["messages"]
+    assert any(source_review_module._NOTE_NUDGE in str(row) for row in messages)
+    assert any('"recorded": false' in str(row) for row in messages)
 
 
 def test_single_site_multi_location_concerns_cannot_hold() -> None:

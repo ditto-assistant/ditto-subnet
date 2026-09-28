@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -313,7 +314,7 @@ func main() {
 	routerBackend := routerbackend.NewOffloadedBackend(
 		strings.TrimSpace(os.Getenv("DITTOBENCH_ROUTER_OFFLOAD_URL")), allowPrivate,
 	)
-	routerGetClient := netguard.Client(allowPrivate)
+	routerGetClient := routerbackend.NewProbeClient(allowPrivate)
 	s.routerDispatcher = routerbackend.Dispatcher{
 		Backend: routerBackend,
 		Get:     routerGetClient.Get,
@@ -1022,7 +1023,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// Abuse guard: per-IP rate limit on the expensive submit endpoint. Skipped
 	// in local/dev mode (DITTOBENCH_ALLOW_PRIVATE_HARNESS), where a calibration
 	// loop legitimately submits in bulk from a single IP.
-	if !s.allowPrivate && !s.limiter.Allow(clientIP(r)) {
+	if !s.allowPrivate && !s.limiter.Allow(rateLimitKey(clientIP(r))) {
 		writeError(w, http.StatusTooManyRequests, "rate limit exceeded; slow down and retry shortly")
 		return
 	}
@@ -1128,7 +1129,7 @@ func (s *server) handleVersionedScore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
-	if !s.allowPrivate && !s.limiter.Allow(clientIP(r)) {
+	if !s.allowPrivate && !s.limiter.Allow(rateLimitKey(clientIP(r))) {
 		writeError(w, http.StatusTooManyRequests, "rate limit exceeded; slow down and retry shortly")
 		return
 	}
@@ -3394,4 +3395,21 @@ func clientIPFromHops(r *http.Request, hops int) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// rateLimitKey buckets a client address for the per-IP limiter. An IPv6
+// client is typically assigned a whole /64 and can rotate through it freely,
+// so IPv6 is keyed by its /64 prefix; IPv4, including IPv4-mapped IPv6, stays
+// keyed per address.
+func rateLimitKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	prefix, _ := addr.Prefix(64)
+	return prefix.String()
 }

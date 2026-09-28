@@ -23,12 +23,12 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SCREENER_WALLET_HOTKEY",
         "SCREENER_GH_TOKEN_FILE",
         "SCREENER_BUILD_TIMEOUT_SECONDS",
-        "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS",
         "SCREENER_REMOTE_BUILD_MODE",
         "SCREENER_BUILD_MEMORY",
         "SCREENER_IMAGE_BUILD_MEMORY",
         "SCREENER_V13_RUNTIME_RECEIPTS_MODE",
         "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE",
+        "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS",
         "NETUID",
     ):
         monkeypatch.delenv(k, raising=False)
@@ -45,8 +45,6 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not cfg.require_rootless_docker
     assert cfg.container_port == 8080
     assert cfg.image_build_memory == "8g"
-    assert cfg.remote_build_timeout_seconds == 1500
-    assert cfg.remote_build_mode == "off"
     assert cfg.v13_runtime_receipts_mode == "off"
     assert cfg.gh_token_file is None
     # Must default to (at least) the platform's 20 MiB upload cap, else the gate
@@ -73,6 +71,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.l2_max_input_tokens == 5_000_000
     assert cfg.l2_max_output_tokens == 1_000_000
     assert cfg.l2_max_completion_tokens == 16_000
+    assert cfg.l2_max_completion_request_seconds is None
     assert cfg.l2_max_cost_usd == 25.0
     assert cfg.l2_analyst_reasoning_effort == "model_default"
     assert cfg.l2_critic_reasoning_effort == "medium"
@@ -120,19 +119,6 @@ def test_v13_runtime_receipts_require_explicit_shadow_opt_in(
         parse_screener_config_from_env()
 
 
-def test_remote_build_timeout_is_independent_and_configurable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _base_env(monkeypatch)
-    monkeypatch.setenv("SCREENER_BUILD_TIMEOUT_SECONDS", "1200")
-    monkeypatch.setenv("SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS", "1800")
-
-    cfg = parse_screener_config_from_env()
-
-    assert cfg.build_timeout_seconds == 1200
-    assert cfg.remote_build_timeout_seconds == 1800
-
-
 @pytest.mark.parametrize(
     ("name", "value", "match"),
     [
@@ -165,14 +151,9 @@ def test_remote_build_timeout_is_independent_and_configurable(
         ("SCREENER_L2_ANALYST_REASONING_EFFORT", "high", "model_default"),
         ("SCREENER_L2_CRITIC_REASONING_EFFORT", "none", "low, medium, or high"),
         (
-            "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS",
-            "60",
-            "between 300 and 2400",
-        ),
-        (
             "SCREENER_REMOTE_BUILD_MODE",
-            "always",
-            "off, prefer, or require",
+            "require",
+            "is retired",
         ),
     ],
 )
@@ -360,6 +341,9 @@ def test_platform_review_budget_limits_are_accepted(monkeypatch):
         ("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000001"),
         ("SCREENER_L2_MAX_COST_USD", "25.01"),
         ("SCREENER_L2_TIMEOUT_SECONDS", "1801"),
+        ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "29"),
+        ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "601"),
+        ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "soon"),
     ],
 )
 def test_review_budgets_remain_bounded(monkeypatch, name, value):
@@ -367,3 +351,9 @@ def test_review_budgets_remain_bounded(monkeypatch, name, value):
     monkeypatch.setenv(name, value)
     with pytest.raises(ScreenerConfigError):
         parse_screener_config_from_env()
+
+
+def test_l2_turn_timeout_override_is_parsed(monkeypatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "240")
+    assert parse_screener_config_from_env().l2_max_completion_request_seconds == 240

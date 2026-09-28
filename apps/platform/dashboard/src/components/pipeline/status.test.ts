@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   ACTIVITY_FILTER_LABELS,
+  admissionLaneLine,
   admissionRetryLine,
   ACTIVITY_FILTERS,
   ACTIVITY_STATUSES,
@@ -436,5 +437,38 @@ describe("admissionRetryLine (#1215)", () => {
   it("renders nothing without the block or for unknown states", () => {
     expect(admissionRetryLine(null, now)).toBe("");
     expect(admissionRetryLine({ state: "finished" }, now)).toBe("");
+  });
+});
+
+describe("admissionLaneLine (#1215)", () => {
+  it("names the lane a running attempt is in", () => {
+    expect(admissionLaneLine({ state: "running", lane: "build" })).toBe(
+      "Current lane: image build.",
+    );
+    expect(admissionLaneLine({ state: "running", lane: "runtime_smoke" })).toBe(
+      "Current lane: runtime smoke test.",
+    );
+    expect(admissionLaneLine({ state: "running", lane: "source_review" })).toBe(
+      "Current lane: source review.",
+    );
+  });
+
+  it("names the lane a waiting attempt stopped in", () => {
+    expect(admissionLaneLine({ state: "stuck", lane: "runtime_smoke" })).toBe(
+      "Last attempt stopped in: runtime smoke test.",
+    );
+    expect(admissionLaneLine({ state: "retry_queued", lane: "build" })).toBe(
+      "Last attempt stopped in: image build.",
+    );
+    expect(admissionLaneLine({ state: "parked", lane: "source_review" })).toBe(
+      "Last attempt stopped in: source review.",
+    );
+  });
+
+  it("never guesses an unevidenced lane", () => {
+    expect(admissionLaneLine(null)).toBe("");
+    expect(admissionLaneLine({ state: "running", lane: null })).toBe("");
+    expect(admissionLaneLine({ state: "running", lane: "verdict" })).toBe("");
+    expect(admissionLaneLine({ state: "queued", lane: "build" })).toBe("");
   });
 });

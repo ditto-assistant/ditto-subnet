@@ -558,19 +558,22 @@ def _provider_outage_view(
     circuit: ProviderOutageCircuit | None,
     scores: list[Score],
     tickets: list[ValidatorTicket],
+    now: datetime,
 ) -> tuple[ProviderCircuitSnapshot | None, bool]:
     """``(circuit snapshot, blocks_retry)`` for one submission's remaining slots.
 
     The snapshot is shown in two cases: the circuit is open, so it is why a
     grant is blocked whatever the slots last failed on; or it is closed but a
-    remaining exhausted slot was parked by it, so ``closed_at`` (the last time
-    a provider request succeeded and closed the circuit) is the evidence for
-    granting now. Otherwise the circuit is unrelated to this submission and
+    remaining exhausted slot was parked by it, so ``last_failure_at`` and
+    ``closed_at`` explain whether the quiet window still blocks retry.
+    Otherwise the circuit is unrelated to this submission and
     reporting it would be noise.
     """
     if circuit is None:
         return None, False
-    blocked = provider_outage_blocks_retry(circuit=circuit)
+    blocked = provider_outage_blocks_retry(
+        circuit=circuit, scores=scores, tickets=tickets, now=now
+    )
     if not blocked and not provider_outage_parked_exhaustion(
         scores=scores, tickets=tickets
     ):
@@ -668,7 +671,7 @@ async def list_validation_retries(
         agent = agents_by_id[agent_id]
         scored_hotkeys = {s.validator_hotkey for s in retry.scores}
         provider_outage, provider_blocked = _provider_outage_view(
-            circuit=circuit, scores=retry.scores, tickets=retry.tickets
+            circuit=circuit, scores=retry.scores, tickets=retry.tickets, now=now
         )
         submissions.append(
             AdminStuckSubmission(
@@ -806,7 +809,10 @@ async def get_validation_retry(
         else eviction_reason
     )
     provider_outage, provider_blocked = _provider_outage_view(
-        circuit=await _provider_circuit(session), scores=scores, tickets=tickets
+        circuit=await _provider_circuit(session),
+        scores=scores,
+        tickets=tickets,
+        now=now,
     )
     grantable = allowed and withdrawal is None
     blocking_reason: str | None
@@ -934,11 +940,16 @@ async def _apply_recovery(
         return "skipped", gate_reason or "retry unavailable", None
     # Advisory read, deliberately unlocked: the lease path locks the circuit
     # before tickets, and this transaction already holds ticket locks.
-    if provider_outage_blocks_retry(circuit=await _provider_circuit(session)):
+    if provider_outage_blocks_retry(
+        circuit=await _provider_circuit(session),
+        scores=scores,
+        tickets=tickets,
+        now=now,
+    ):
         if not acknowledge_provider_outage:
             return "skipped", PROVIDER_OUTAGE_RETRY_BLOCKING_REASON, None
         logger.warning(
-            "validator retry granted into open provider outage agent_id=%s "
+            "validator retry granted during provider outage recovery agent_id=%s "
             "actor=%s request_id=%s",
             agent_id,
             actor,
@@ -1535,20 +1546,28 @@ async def _validator_busy_elsewhere(
     )
 
 
+def _open_retest_reason(entry: ScoreAuditEntry | None) -> str | None:
+    if retest_is_active(entry):
+        return "replacement ticket is already issued and pending a score"
+    if retest_is_queued(entry):
+        return "replacement re-test is already queued behind current validator work"
+    return None
+
+
 def _replacement_gate(
     *,
     agent: Agent,
     target: Score | None,
     ticket: ValidatorTicket | None,
     validator_busy: bool,
-    replacement_open: bool = False,
+    open_retest: ScoreAuditEntry | None,
 ) -> str | None:
     if agent.status not in _REPLACEABLE_STATUSES:
         return "submission is not in a scoreable state"
     if target is None:
         return "validator has no accepted score to replace"
-    if replacement_open:
-        return "replacement score is already queued or pending"
+    if (reason := _open_retest_reason(open_retest)) is not None:
+        return reason
     if ticket is None or ticket.status != TicketStatus.SCORED:
         return "accepted score is not backed by a consumed validator ticket"
     if validator_busy:
@@ -1561,14 +1580,14 @@ def _queue_gate(
     agent: Agent,
     target: Score | None,
     ticket: ValidatorTicket | None,
-    replacement_open: bool,
+    open_retest: ScoreAuditEntry | None,
 ) -> str | None:
     if agent.status not in _FINALIZED_STATUSES:
         return "submission is no longer finalized"
     if target is None:
         return "validator has no accepted score to replace"
-    if replacement_open:
-        return "replacement score is already queued or pending"
+    if (reason := _open_retest_reason(open_retest)) is not None:
+        return reason
     if ticket is None or ticket.status != TicketStatus.SCORED:
         return "accepted score is not backed by a consumed validator ticket"
     return None
@@ -1579,7 +1598,7 @@ def _contract_retest_queue_gate(
     agent: Agent,
     target: Score | None,
     ticket: ValidatorTicket | None,
-    replacement_open: bool,
+    open_retest: ScoreAuditEntry | None,
 ) -> str | None:
     if agent.status not in _CONTRACT_RETEST_STATUSES:
         return "submission is not in a scoreable state"
@@ -1587,8 +1606,8 @@ def _contract_retest_queue_gate(
         return "validator has no accepted score to replace"
     if not _is_v9_contract_mismatch(target):
         return "accepted score already uses the authoritative v9 contract"
-    if replacement_open:
-        return "replacement score is already queued or pending"
+    if (reason := _open_retest_reason(open_retest)) is not None:
+        return reason
     if ticket is None:
         return "accepted score has no validator ticket to reuse"
     return None
@@ -1737,13 +1756,13 @@ async def list_score_outliers(
             target=target,
             ticket=ticket,
             validator_busy=busy,
-            replacement_open=retest_is_open(latest),
+            open_retest=latest,
         )
         queue_blocking = _queue_gate(
             agent=agent,
             target=target,
             ticket=ticket,
-            replacement_open=retest_is_open(latest),
+            open_retest=latest,
         )
         queue_positions = position_cache[target.validator_hotkey]
         detected.append(
@@ -1878,7 +1897,7 @@ async def list_v9_contract_retests(
             agent=agent,
             target=target,
             ticket=target_ticket,
-            replacement_open=retest_is_open(latest),
+            open_retest=latest,
         )
         revision, manifest, rollout_mode, factor = _v9_contract_observation(target)
         items.append(
@@ -1946,7 +1965,7 @@ async def inspect_validator_score_replacement(
     latest = await get_latest_score_retest_event(
         session, agent_id=agent_id, validator_hotkey=validator_hotkey
     )
-    pending = retest_is_active(latest)
+    request = latest if retest_is_open(latest) else None
     reason = _replacement_gate(
         agent=agent,
         target=target,
@@ -1954,7 +1973,7 @@ async def inspect_validator_score_replacement(
         validator_busy=await _validator_busy_elsewhere(
             session, agent_id=agent_id, validator_hotkey=validator_hotkey
         ),
-        replacement_open=retest_is_open(latest),
+        open_retest=latest,
     )
     return AdminValidatorScoreReplacementDetail(
         agent_id=agent_id,
@@ -1968,17 +1987,16 @@ async def inspect_validator_score_replacement(
         composite=target.composite if target is not None else None,
         ticket_status=ticket.status.value if ticket is not None else None,
         ticket_deadline=ticket.deadline if ticket is not None else None,
-        replacement_pending=pending,
+        replacement_pending=retest_is_active(latest),
+        replacement_queued=retest_is_queued(latest),
         replacement_request_id=(
-            UUID(str(latest.payload["request_id"]))
-            if pending and latest is not None
-            else None
+            UUID(str(request.payload["request_id"])) if request is not None else None
         ),
         replacement_reason=(
-            str(latest.payload["reason"]) if pending and latest is not None else None
+            str(request.payload["reason"]) if request is not None else None
         ),
         replacement_actor=(
-            str(latest.payload["actor"]) if pending and latest is not None else None
+            str(request.payload["actor"]) if request is not None else None
         ),
         replacement_allowed=reason is None,
         blocking_reason=reason,
@@ -2115,7 +2133,7 @@ async def queue_validator_score_retests(
                 agent=agent,
                 target=target,
                 ticket=ticket,
-                replacement_open=retest_is_open(latest),
+                open_retest=latest,
             )
             if reason is not None:
                 preliminary[item.agent_id] = ("skipped", reason)
@@ -2305,7 +2323,7 @@ async def replace_validator_score_after_infrastructure_failure(
             validator_busy=await _validator_busy_elsewhere(
                 session, agent_id=agent_id, validator_hotkey=validator_hotkey
             ),
-            replacement_open=False,
+            open_retest=None,
         )
         if reason is not None:
             raise HTTPException(status_code=409, detail=reason)
