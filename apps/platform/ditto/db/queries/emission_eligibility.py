@@ -300,18 +300,26 @@ async def list_shadow_records(
 
 
 async def count_shadow_records_in_window(
-    session: AsyncSession, *, window_start: datetime
+    session: AsyncSession,
+    *,
+    window_start: datetime,
+    policy_revision: int,
+    policy_checksum: str,
 ) -> int:
-    """Distinct artifacts recorded as withheld in one window.
+    """Distinct artifacts withheld by this exact policy in one window.
 
     The number an operator reads before flipping ``shadow`` to ``enforce``: it
-    is exactly how many rows would leave the fold.
+    must not include exclusions from an earlier revision in the same window.
     """
     return int(
         await session.scalar(
             select(
                 func.count(func.distinct(EmissionEligibilityShadowRecord.agent_id))
-            ).where(EmissionEligibilityShadowRecord.window_start == window_start)
+            ).where(
+                EmissionEligibilityShadowRecord.window_start == window_start,
+                EmissionEligibilityShadowRecord.policy_revision == policy_revision,
+                EmissionEligibilityShadowRecord.policy_checksum == policy_checksum,
+            )
         )
         or 0
     )

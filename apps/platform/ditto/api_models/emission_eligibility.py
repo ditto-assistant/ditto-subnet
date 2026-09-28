@@ -339,9 +339,9 @@ class EffectiveEmissionEligibilitySettings(BaseModel):
     flipping to ``enforce``; ``None`` when unreadable."""
 
     effective_enforcement: EligibilityEnforcement = DEFAULT_ENFORCEMENT
-    """What the validator ledger is actually doing: ``settings.enforcement``,
-    except that ``enforce`` rehearses exactly like ``shadow`` until
-    ``fleet_protocol_ready``."""
+    """What the validator ledger currently folds. In epoch mode this is the
+    pinned posture until the next pin; in live mode it is the fleet-gated
+    settings posture."""
 
     fleet_protocol_ready: bool = False
     """Whether every recently-live weight setter reports ``required_protocol``,
@@ -399,9 +399,9 @@ class AdminAgentEmissionEligibilityResponse(BaseModel):
 
     eligibility: AgentEmissionEligibility
     in_ledger: bool
-    """Whether the agent is in the pool the validator currently folds. ``False``
-    with a terminal review means something other than this gate is holding it
-    (``agents.status``, the ranking floor, or a rollout version pin)."""
+    """Whether the agent is in the payable pool validators currently fold.
+    In epoch mode this reads the frozen pin; in live mode it applies the gate
+    to the current ledger row. A provisional incumbent is not payable."""
     effective: EffectiveEmissionEligibilitySettings
     shadow_records: list[AdminEmissionEligibilityShadowRecord]
 

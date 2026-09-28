@@ -359,6 +359,25 @@ def evaluate_ledger(
     return LedgerEligibility(policy=policy, window_start=window, records=records)
 
 
+def records_from_pin_context(context: object) -> dict[UUID, AgentEmissionEligibility]:
+    """Replay the review verdicts frozen with an epoch's payable pool.
+
+    Public and operator reads must not reclassify a pin with a review or policy
+    revision that landed after validators received that pin.
+    """
+    if not isinstance(context, dict):
+        return {}
+    raw = context.get("reward_eligibility_records")
+    if not isinstance(raw, list):
+        return {}
+    try:
+        records = [AgentEmissionEligibility.model_validate(item) for item in raw]
+    except ValidationError:
+        logger.warning("invalid reward eligibility records on ledger pin", exc_info=True)
+        return {}
+    return {record.agent_id: record for record in records}
+
+
 def shadow_rows(evaluation: LedgerEligibility) -> list[dict]:
     """The append-only rehearsal rows for one evaluation.
 

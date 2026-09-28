@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -666,6 +667,110 @@ class TestProvisionalIncumbent:
         await _hold(session, agent_id, kind="deferred_source_review")
         await _set_posture(session, enforcement="enforce")
         app.state.emission_eligibility.invalidate()
+
+    async def test_policy_change_waits_for_the_next_pin_on_every_surface(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await self._arm(app, session, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        await _seed(
+            session,
+            hotkey=_LEADER_HOTKEY,
+            name="leader",
+            composite=0.95,
+            sha256="ab" * 32,
+            agent_id=_HELD_ID,
+            created_at=_NOW - timedelta(days=4),
+        )
+        await _seed(
+            session,
+            hotkey=_RUNNER_UP_HOTKEY,
+            name="runner-up",
+            composite=0.80,
+            sha256="cd" * 32,
+            agent_id=_RUNNER_UP_ID,
+            created_at=_NOW - timedelta(days=3),
+        )
+        read = self._epochs(app)
+        first = await self._read(client)
+        assert [entry["agent_id"] for entry in first["entries"]] == [
+            str(_HELD_ID),
+            str(_RUNNER_UP_ID),
+        ]
+
+        # A review opens and policy becomes enforce inside the same chain epoch.
+        # Validators still receive the previous pin, so the public and operator
+        # reads must describe that pin rather than the next fold's candidate.
+        await self._hold_and_enforce(app, session, _HELD_ID)
+        same_epoch = await self._read(client)
+        assert same_epoch["ledger_digest"] == first["ledger_digest"]
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        by_id = {row["agent_id"]: row for row in board["entries"]}
+        assert by_id[str(_HELD_ID)].get("reward_eligibility") is None
+        assert board["emissions"].get("reward_eligibility_mode") is None
+        assert board["emissions"]["provisional_champion"] is False
+        pipeline = (
+            await client.get(f"/api/v1/public/agent/{_HELD_ID}/pipeline")
+        ).json()
+        assert pipeline.get("reward_eligibility") is None
+        operator = (
+            await client.get(
+                f"/api/v1/admin/agents/{_HELD_ID}/emission-eligibility",
+                headers={
+                    "Authorization": "Bearer test-admin-token-at-least-32-characters"
+                },
+            )
+        ).json()
+        assert operator["in_ledger"] is True
+        assert operator["eligibility"]["enforcement"] == "off"
+        assert operator["effective"]["effective_enforcement"] == "off"
+
+        read.return_value = _schedule(25_029, block=9_033_831)
+        next_epoch = await self._read(client)
+        assert [row["agent_id"] for row in next_epoch["entries"]] == [
+            str(_RUNNER_UP_ID)
+        ]
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        by_id = {row["agent_id"]: row for row in board["entries"]}
+        assert by_id[str(_HELD_ID)]["reward_eligibility"]["reward_eligible"] is False
+        assert board["emissions"]["provisional_champion"] is True
+        operator = (
+            await client.get(
+                f"/api/v1/admin/agents/{_HELD_ID}/emission-eligibility",
+                headers={
+                    "Authorization": "Bearer test-admin-token-at-least-32-characters"
+                },
+            )
+        ).json()
+        assert operator["in_ledger"] is False
+        assert operator["eligibility"]["enforcement"] == "enforce"
+        assert operator["effective"]["effective_enforcement"] == "enforce"
+
+        # A terminal clear inside this epoch likewise cannot rewrite the
+        # already served pin or claim that its unpaid crown is now paid.
+        async with session.begin():
+            review = await session.scalar(
+                select(AthReview).where(AthReview.agent_id == _HELD_ID)
+            )
+            assert review is not None
+            review.status = "resolved"
+            review.resolution = "clear"
+            review.resolved_by = "operator@example.com"
+            review.resolution_reason = "cleared after exact artifact review"
+            review.resolved_at = datetime.now(UTC)
+        still_pinned = await self._read(client)
+        assert still_pinned["ledger_digest"] == next_epoch["ledger_digest"]
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        by_id = {row["agent_id"]: row for row in board["entries"]}
+        assert by_id[str(_HELD_ID)]["reward_eligibility"]["reward_eligible"] is False
+        assert board["emissions"]["provisional_champion"] is True
 
     async def test_held_incumbent_keeps_the_crown_and_its_share_burns(
         self,

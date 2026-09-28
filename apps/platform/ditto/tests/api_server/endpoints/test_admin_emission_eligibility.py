@@ -275,7 +275,24 @@ class TestShadowRehearsal:
             )
             == 1
         )
-        assert await count_shadow_records_in_window(session, window_start=window) == 1
+        assert (
+            await count_shadow_records_in_window(
+                session,
+                window_start=window,
+                policy_revision=1,
+                policy_checksum="0" * 64,
+            )
+            == 1
+        )
+        assert (
+            await count_shadow_records_in_window(
+                session,
+                window_start=window,
+                policy_revision=2,
+                policy_checksum="1" * 64,
+            )
+            == 0
+        )
         records = await list_shadow_records(session, agent_id=agent_id)
         assert [record.state for record in records] == ["unresolved_review"]
 

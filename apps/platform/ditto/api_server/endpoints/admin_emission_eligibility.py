@@ -46,14 +46,16 @@ from ditto.api_models.emission_eligibility import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.emission_eligibility import (
+    DEFAULT_POLICY,
     EmissionEligibilityResolver,
     ResolvedEligibilityPolicy,
     classify,
     effective_policy,
     policy_from_row,
+    records_from_pin_context,
 )
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.db.models import Agent
+from ditto.db.models import Agent, LedgerEpochSnapshot
 from ditto.db.models import (
     EmissionEligibilitySettingsRevision as RevisionRow,
 )
@@ -75,6 +77,7 @@ from ditto.db.queries.heartbeats import (
     count_live_validators,
     live_validator_fleet_supports_protocol,
 )
+from ditto.db.queries.ledger_epochs import latest_pin
 from ditto.db.queries.scores import list_eligible_ledger
 
 logger = logging.getLogger(__name__)
@@ -126,6 +129,18 @@ def _resolver(request: Request) -> EmissionEligibilityResolver:
     return resolver
 
 
+async def _active_pin(
+    request: Request, session: AsyncSession
+) -> LedgerEpochSnapshot | None:
+    """Return the frozen epoch ledger, if validators are using pin mode."""
+    settings = await request.app.state.continual_retest_settings.resolve(
+        getattr(request.app.state, "session_maker", None)
+    )
+    if settings.ledger_pin_mode != "epoch":
+        return None
+    return await latest_pin(session, netuid=request.app.state.config.chain.netuid)
+
+
 async def _advisory_count(coroutine_factory: Callable) -> int | None:
     """Advisory only: the posture page still has to render when a side read
     fails. A failure here must never hide the posture itself."""
@@ -161,12 +176,18 @@ async def _effective(
     fleet_ready: bool,
     ttl_seconds: float,
     now: datetime,
+    pin: LedgerEpochSnapshot | None = None,
 ) -> EffectiveEmissionEligibilitySettings:
     settings = policy.settings
     window = window_start(now, window_seconds=settings.activation_window_seconds)
     live = await _advisory_count(lambda: count_live_validators(session, now=now))
     shadow = await _advisory_count(
-        lambda: count_shadow_records_in_window(session, window_start=window)
+        lambda: count_shadow_records_in_window(
+            session,
+            window_start=window,
+            policy_revision=policy.revision,
+            policy_checksum=policy.checksum,
+        )
     )
     return EffectiveEmissionEligibilitySettings(
         revision=policy.revision,
@@ -182,9 +203,11 @@ async def _effective(
         ),
         live_validator_count=live,
         shadow_excluded_count=shadow,
-        effective_enforcement=effective_policy(
-            policy, fleet_ready=fleet_ready
-        ).settings.enforcement,
+        effective_enforcement=(
+            ((pin.context or {}).get("reward_eligibility_enforcement") or "off")
+            if pin is not None
+            else effective_policy(policy, fleet_ready=fleet_ready).settings.enforcement
+        ),
         fleet_protocol_ready=fleet_ready,
         required_protocol=PROVISIONAL_INCUMBENT_PROTOCOL,
     )
@@ -200,6 +223,7 @@ async def get_settings(
     latest = await latest_eligibility_settings_revision(session)
     history = await list_eligibility_settings_revisions(session)
     shadow = await list_shadow_records(session, limit=_SHADOW_PREVIEW_LIMIT)
+    pin = await _active_pin(request, session)
     return AdminEmissionEligibilitySettingsResponse(
         current=_revision(latest) if latest is not None else None,
         history=[_revision(row) for row in history],
@@ -211,6 +235,7 @@ async def get_settings(
             fleet_ready=await _fleet_protocol_ready(session, now=now),
             ttl_seconds=_resolver(request).ttl_seconds,
             now=now,
+            pin=pin,
         ),
         confirmation_phrase=CONFIRMATION,
         recent_shadow_records=[_shadow_record(row) for row in shadow],
@@ -287,11 +312,9 @@ async def get_agent_eligibility(
 ) -> AdminAgentEmissionEligibilityResponse:
     """One exact artifact's eligibility record, plus why the fold sees it or not.
 
-    ``in_ledger`` is read from the same ``list_eligible_ledger`` the validator
-    reads. ``in_ledger`` false alongside a terminal review means the hold is
-    somewhere else entirely (``agents.status``, the ranked-run floor, or a
-    rollout version pin) -- which is the answer a miner appeal usually needs and
-    the one an operator otherwise has to guess at.
+    ``in_ledger`` reads the frozen payable entries in epoch mode. In live mode
+    it applies this gate to ``list_eligible_ledger``. A held provisional
+    incumbent remains a crown input but is never in the payable pool.
     """
     now = datetime.now(UTC)
     agent = await session.get(Agent, agent_id)
@@ -300,23 +323,39 @@ async def get_agent_eligibility(
     latest = await latest_eligibility_settings_revision(session)
     policy = policy_from_row(latest)
     fleet_ready = await _fleet_protocol_ready(session, now=now)
+    pin = await _active_pin(request, session)
     postures = await load_review_postures(session, [agent_id])
     ledger_rows = await list_eligible_ledger(
         session, include_fingerprints=False, include_details=False
     )
     ledger_row = next((row for row in ledger_rows if row.agent_id == agent_id), None)
-    eligibility = classify(
+    pinned_records = records_from_pin_context(pin.context) if pin is not None else {}
+    pin_entry_ids = (
+        {str(item.get("agent_id")) for item in pin.entries or []}
+        if pin is not None
+        else set()
+    )
+    pinned_member = pin is not None and str(agent_id) in pin_entry_ids
+    eligibility = pinned_records.get(agent_id) or classify(
         agent_id=agent_id,
         artifact_sha256=(ledger_row.sha256 if ledger_row is not None else agent.sha256),
         bench_version=(ledger_row.bench_version if ledger_row is not None else None),
         posture=postures.get(agent_id) or AgentReviewPosture(agent_id=agent_id),
-        policy=effective_policy(policy, fleet_ready=fleet_ready),
+        policy=(
+            DEFAULT_POLICY
+            if pinned_member and not pinned_records
+            else effective_policy(policy, fleet_ready=fleet_ready)
+        ),
         now=now,
     )
     shadow = await list_shadow_records(session, agent_id=agent_id, limit=shadow_limit)
     return AdminAgentEmissionEligibilityResponse(
         eligibility=eligibility,
-        in_ledger=ledger_row is not None,
+        in_ledger=(
+            pinned_member
+            if pin is not None
+            else ledger_row is not None and eligibility.reward_eligible
+        ),
         effective=await _effective(
             session,
             policy,
@@ -324,6 +363,7 @@ async def get_agent_eligibility(
             fleet_ready=fleet_ready,
             ttl_seconds=_resolver(request).ttl_seconds,
             now=now,
+            pin=pin,
         ),
         shadow_records=[_shadow_record(row) for row in shadow],
     )

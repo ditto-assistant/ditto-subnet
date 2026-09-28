@@ -575,6 +575,17 @@ def build_pin_draft(
             "block_timestamp": schedule.block_timestamp,
         },
     }
+    records = getattr(snapshot, "reward_eligibility_records", None)
+    if records is not None:
+        # Explanations are frozen with the pool, but do not alter the fold
+        # digest: validators consume only entries and the served markers.
+        context["reward_eligibility_records"] = [
+            record.model_dump(mode="json")
+            for _, record in sorted(records.items(), key=lambda item: str(item[0]))
+        ]
+        context["reward_eligibility_enforcement"] = (
+            snapshot.reward_eligibility_enforcement
+        )
     return LedgerPinDraft(
         netuid=schedule.netuid,
         epoch_index=schedule.subnet_epoch_index,

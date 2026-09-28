@@ -245,6 +245,7 @@ from ditto.api_server.emission_eligibility import (
     classify,
     effective_policy,
     evaluate_ledger,
+    records_from_pin_context,
 )
 from ditto.api_server.endpoints.scoring import (
     _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
@@ -2418,6 +2419,13 @@ async def _agent_reward_eligibility(
     if getattr(request.app.state, "emission_eligibility", None) is None:
         return None
     try:
+        continual = await request.app.state.continual_retest_settings.resolve(
+            getattr(request.app.state, "session_maker", None)
+        )
+        if continual.ledger_pin_mode == "epoch":
+            pin = await latest_pin(session, netuid=request.app.state.config.chain.netuid)
+            if pin is not None:
+                return records_from_pin_context(pin.context).get(agent_id)
         policy = await _effective_eligibility_policy(
             request, session, active_version=active_version, now=now
         )
@@ -2446,6 +2454,7 @@ async def _resolve_reward_eligibility(
     *,
     now: datetime,
     active_version: int,
+    pin: LedgerEpochSnapshot | None = None,
 ) -> dict:
     """Eligibility records for a set of board rows, keyed by agent id.
 
@@ -2456,6 +2465,8 @@ async def _resolve_reward_eligibility(
     keeps rendering with no eligibility annotation rather than 500ing, and the
     validator ledger is unaffected because it resolves this independently.
     """
+    if pin is not None:
+        return records_from_pin_context(pin.context)
     if getattr(request.app.state, "emission_eligibility", None) is None or not rows:
         return {}
     try:
@@ -3853,20 +3864,21 @@ async def build_public_leaderboard(
     # publish the score AND say whether it is earning. Only the emissions
     # projection drops anything, and only while the gate is enforcing, so the
     # visible board keeps a withheld artifact's score, rank and history.
+    ledger_pin, eligibility_pin = (
+        await _current_ledger_pin(request, session, continual_settings)
+        if bench_version is None
+        else (None, None)
+    )
     reward_eligibility = await _resolve_reward_eligibility(
         request,
         session,
         finalized_generations + [row for row, _count in provisional_rows],
         now=now,
         active_version=active_version,
+        pin=eligibility_pin,
     )
     enforcing_eligibility = any(
         record.enforcement == "enforce" for record in reward_eligibility.values()
-    )
-    ledger_pin = (
-        await _current_ledger_pin(request, session, continual_settings)
-        if bench_version is None
-        else None
     )
     emission_incumbent_id: UUID | None = None
     provisional_incumbent: LedgerRow | None = None
@@ -4211,18 +4223,18 @@ def _ledger_pin_model(
 
 async def _current_ledger_pin(
     request: Request, session: AsyncSession, settings: ContinualRetestSettings
-) -> PublicLedgerPin | None:
+) -> tuple[PublicLedgerPin | None, LedgerEpochSnapshot | None]:
     """The pin validators fold now; ``None`` in live mode or before the first pin."""
     if settings.ledger_pin_mode != "epoch":
-        return None
+        return None, None
     try:
         row = await latest_pin(session, netuid=request.app.state.config.chain.netuid)
     except SQLAlchemyError:
         logger.warning(
             "ledger pin read failed; board renders without it", exc_info=True
         )
-        return None
-    return None if row is None else _ledger_pin_model(row, mode="epoch")
+        return None, None
+    return (None, None) if row is None else (_ledger_pin_model(row, mode="epoch"), row)
 
 
 async def _ledger_actor_names(

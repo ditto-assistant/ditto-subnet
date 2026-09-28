@@ -42,6 +42,7 @@ from ditto.api_models.continual_retest_settings import (
     PROVISIONAL_INCUMBENT_PROTOCOL,
     ContinualRetestSettings,
 )
+from ditto.api_models.emission_eligibility import AgentEmissionEligibility
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.upload import _SS58_PATTERN
 from ditto.api_models.validator import (
@@ -203,6 +204,10 @@ class _LedgerSnapshot:
     """Each withheld owner's best generation under an enforcing eligibility
     gate, built exactly like ``entries``. Internal: the pin serves one only as
     ``provisional_incumbent``, when it is the crown incumbent."""
+    reward_eligibility_records: dict[UUID, AgentEmissionEligibility] | None = None
+    """The exact review verdicts used to filter this snapshot. Frozen with an
+    epoch pin for public and operator reads; absent while the gate is off."""
+    reward_eligibility_enforcement: str | None = None
     fleet_readiness: dict[str, bool] | None = None
     confirmation_seed_anchors: tuple[ConfirmationSeedAnchorPin, ...] = ()
     """Pinned finalized-block anchors of the active version's seed families.
@@ -993,6 +998,14 @@ async def materialize_ledger_snapshot(
             r.agent_id: r.emission_owner_root for r in (*rows, *withheld_rows)
         },
         withheld_entries=withheld_entries,
+        reward_eligibility_records=(
+            eligibility.records if eligibility_policy.evaluating else None
+        ),
+        reward_eligibility_enforcement=(
+            eligibility_policy.settings.enforcement
+            if eligibility_policy.evaluating
+            else None
+        ),
         fleet_readiness={
             "continual_mean": ledger_context.continual_fleet_ready,
             "tie_weighting": ledger_context.tie_weighting_fleet_ready,
