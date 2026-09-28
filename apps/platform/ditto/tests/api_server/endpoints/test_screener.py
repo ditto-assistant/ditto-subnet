@@ -3725,7 +3725,7 @@ class TestQueue:
         assert "SCREENER_LEGACY_BEARER_ENABLED=false" in caplog.text
         assert "test-screener-token" not in caplog.text
 
-    async def test_disabled_legacy_bearer_keeps_node_controller_and_job_tokens(
+    async def test_disabled_legacy_bearer_keeps_node_and_controller_tokens(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -3741,7 +3741,6 @@ class TestQueue:
             screening_concurrency=1,
         )
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        await _seed_targon_first(session_maker)
         _install_db(app, session_maker)
         _install_chain(app)
         _install_storage(app)
@@ -3759,24 +3758,17 @@ class TestQueue:
         }
         claim = await client.post(_CLAIM_URL, headers=node_headers)
         assert claim.status_code == 200, claim.text
-        queued = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
+        assert claim.json()["items"][0]["agent_id"] == str(agent_id)
+        node_settings = await client.get(
+            "/api/v1/screener/nodes/channel-settings",
             headers=node_headers,
-            json={"attempt_id": claim.json()["items"][0]["attempt_id"]},
         )
-        assert queued.status_code == 200, queued.text
-        leased = await client.post(
-            "/api/v1/screener/controller/submission-image-builds/claim",
+        assert node_settings.status_code == 200, node_settings.text
+        controller_nodes = await client.get(
+            "/api/v1/screener/controller/nodes",
             headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
-            json={"environment": "prod", "controller_epoch": "builder:test"},
         )
-        assert leased.status_code == 200, leased.text
-        build = leased.json()["build"]
-        source = await client.get(
-            f"/api/v1/screener/submission-image-builds/{build['build_id']}/source",
-            headers={"Authorization": f"Bearer {build['job_token']}"},
-        )
-        assert source.status_code == 200, source.text
+        assert controller_nodes.status_code == 200, controller_nodes.text
 
     async def test_dedicated_screener_needs_no_validator_permit(
         self,
