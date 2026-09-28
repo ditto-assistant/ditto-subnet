@@ -376,6 +376,7 @@ from ditto.db.queries.heartbeats import (
     list_screener_heartbeats,
     list_validator_heartbeats,
     live_validator_fleet_supports_protocol,
+    live_weight_setter_fleet_supports_protocol,
 )
 from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
@@ -2375,7 +2376,7 @@ def _public_reward_eligibility(
 
 
 async def _effective_eligibility_policy(
-    request: Request, session: AsyncSession, *, active_version: int, now: datetime
+    request: Request, session: AsyncSession, *, now: datetime
 ) -> ResolvedEligibilityPolicy:
     """The posture the validator ledger is folding right now.
 
@@ -2390,10 +2391,9 @@ async def _effective_eligibility_policy(
         return policy
     return effective_policy(
         policy,
-        fleet_ready=await live_validator_fleet_supports_protocol(
+        fleet_ready=await live_weight_setter_fleet_supports_protocol(
             session,
             minimum_protocol=_PROVISIONAL_INCUMBENT_PROTOCOL,
-            bench_version=active_version,
             now=now,
             freshness=_VALIDATOR_STALE_WINDOW,
         ),
@@ -2407,7 +2407,6 @@ async def _agent_reward_eligibility(
     agent_id: UUID,
     artifact_sha256: str,
     bench_version: int | None,
-    active_version: int,
     now: datetime,
 ) -> Any | None:
     """One artifact's eligibility record for the submission page.
@@ -2429,9 +2428,7 @@ async def _agent_reward_eligibility(
             )
             if pin is not None:
                 return records_from_pin_context(pin.context).get(agent_id)
-        policy = await _effective_eligibility_policy(
-            request, session, active_version=active_version, now=now
-        )
+        policy = await _effective_eligibility_policy(request, session, now=now)
         if not policy.evaluating:
             return None
         postures = await load_review_postures(session, [agent_id])
@@ -2456,7 +2453,6 @@ async def _resolve_reward_eligibility(
     rows: Sequence[LedgerRow],
     *,
     now: datetime,
-    active_version: int,
     pin: LedgerEpochSnapshot | None = None,
 ) -> dict:
     """Eligibility records for a set of board rows, keyed by agent id.
@@ -2473,9 +2469,7 @@ async def _resolve_reward_eligibility(
     if getattr(request.app.state, "emission_eligibility", None) is None or not rows:
         return {}
     try:
-        policy = await _effective_eligibility_policy(
-            request, session, active_version=active_version, now=now
-        )
+        policy = await _effective_eligibility_policy(request, session, now=now)
         if not policy.evaluating:
             return {}
         postures = await load_review_postures(session, [row.agent_id for row in rows])
@@ -3877,7 +3871,6 @@ async def build_public_leaderboard(
         session,
         finalized_generations + [row for row, _count in provisional_rows],
         now=now,
-        active_version=active_version,
         pin=eligibility_pin,
     )
     # Row annotations describe the pin validators fold now. Emissions project
@@ -3889,7 +3882,6 @@ async def build_public_leaderboard(
             session,
             finalized_generations + [row for row, _count in provisional_rows],
             now=now,
-            active_version=active_version,
         )
         if eligibility_pin is not None
         else reward_eligibility
@@ -8043,7 +8035,6 @@ async def agent_pipeline(
                 agent_id=agent_id,
                 artifact_sha256=agent.sha256,
                 bench_version=era_version,
-                active_version=canonical_version,
                 now=now,
             )
         ),

@@ -62,7 +62,6 @@ from ditto.db.models import (
 from ditto.db.models import (
     EmissionEligibilityShadowRecord as ShadowRow,
 )
-from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.emission_eligibility import (
     GLOBAL_SCOPE,
     AgentReviewPosture,
@@ -75,7 +74,7 @@ from ditto.db.queries.emission_eligibility import (
 )
 from ditto.db.queries.heartbeats import (
     count_live_validators,
-    live_validator_fleet_supports_protocol,
+    live_weight_setter_fleet_supports_protocol,
 )
 from ditto.db.queries.ledger_epochs import latest_pin
 from ditto.db.queries.scores import list_eligible_ledger
@@ -155,10 +154,9 @@ async def _fleet_protocol_ready(session: AsyncSession, *, now: datetime) -> bool
     """The ledger's own gate on ``enforce``, read the same way. Advisory here:
     unreadable reads as not ready, which is also what the ledger would fold."""
     try:
-        return await live_validator_fleet_supports_protocol(
+        return await live_weight_setter_fleet_supports_protocol(
             session,
             minimum_protocol=PROVISIONAL_INCUMBENT_PROTOCOL,
-            bench_version=await active_bench_version(session),
             now=now,
         )
     except SQLAlchemyError:

@@ -85,6 +85,7 @@ from ditto.db.queries.emission_eligibility import (
 )
 from ditto.db.queries.heartbeats import (
     live_validator_fleet_supports_protocol,
+    live_weight_setter_fleet_supports_protocol,
 )
 from ditto.db.queries.score_ranking import (
     VALIDATOR_STALE_WINDOW,
@@ -439,10 +440,10 @@ async def resolve_ledger_context(
         bench_version=bench_version,
         now=now,
     )
-    reward_eligibility_fleet_ready = await live_validator_fleet_supports_protocol(
+    # An unreachable scorer does not stop its validator from folding weights.
+    reward_eligibility_fleet_ready = await live_weight_setter_fleet_supports_protocol(
         session,
         minimum_protocol=_PROVISIONAL_INCUMBENT_PROTOCOL,
-        bench_version=bench_version,
         now=now,
     )
     return _LedgerContext(

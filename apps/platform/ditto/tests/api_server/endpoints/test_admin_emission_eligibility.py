@@ -35,7 +35,10 @@ from ditto.db.queries.emission_eligibility import (
     record_shadow_exclusions,
 )
 from ditto.db.queries.scores import list_scores_for_agent
-from ditto.tests.api_server.endpoints.test_emission_eligibility_ledger import _fleet
+from ditto.tests.api_server.endpoints.test_emission_eligibility_ledger import (
+    _fleet,
+    _unverified_weight_setter,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -393,6 +396,29 @@ class TestReviewFacts:
 
 
 class TestPerAgentRead:
+    async def test_policy_read_counts_unverified_weight_setter_in_protocol_gate(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        seen_at = datetime.now(UTC)
+        await _fleet(session, seen_at=seen_at)
+        await _unverified_weight_setter(session, seen_at=seen_at)
+        applied = await client.post(
+            _URL, headers=_HEADERS, json=_payload(enforcement="enforce")
+        )
+        assert applied.status_code == 200, applied.text
+        app.state.emission_eligibility.invalidate()
+
+        policy = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
+        assert policy["settings"]["enforcement"] == "enforce"
+        assert policy["effective_enforcement"] == "shadow"
+        assert policy["fleet_protocol_ready"] is False
+        assert policy["live_validator_count"] == 2
+
     async def test_the_appeal_read_names_the_state_and_the_pool_membership(
         self,
         app: FastAPI,

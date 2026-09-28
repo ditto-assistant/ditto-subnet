@@ -192,6 +192,31 @@ async def _fleet(
         )
 
 
+async def _unverified_weight_setter(
+    session: AsyncSession, *, seen_at: datetime = _NOW
+) -> None:
+    """A live validator still folds weights when its scorer is unreachable."""
+    async with session.begin():
+        session.add(
+            ValidatorHeartbeat(
+                validator_hotkey=_RUNNER_UP_HOTKEY,
+                software_version="0.321.4",
+                protocol_version=27,
+                code_digest="ef" * 32,
+                state="idle",
+                reported_at=seen_at,
+                seen_at=seen_at,
+                signature="ab" * 64,
+                capabilities={
+                    "scorer_benchmarks": {
+                        "status": "unreachable",
+                        "supported_bench_versions": [],
+                    }
+                },
+            )
+        )
+
+
 def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
     app.state.session_maker = maker
 
@@ -397,6 +422,32 @@ class TestValidatorLedger:
 
 
 class TestPublicBoard:
+    async def test_unverified_protocol_27_weight_setter_stays_payable_on_board(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        leader, _ = await _two_miners(session)
+        await _hold(session, leader, kind="deferred_source_review")
+        await _set_posture(session, enforcement="enforce")
+        seen_at = datetime.now(UTC)
+        await _fleet(session, seen_at=seen_at)
+        await _unverified_weight_setter(session, seen_at=seen_at)
+        app.state.emission_eligibility.invalidate()
+
+        response = await client.get("/api/v1/public/leaderboard")
+        assert response.status_code == 200, response.text
+        held = next(
+            entry
+            for entry in response.json()["entries"]
+            if entry["agent_id"] == str(leader)
+        )
+        assert held["reward_eligibility"]["enforcement"] == "shadow"
+        assert held["reward_eligibility"]["reward_eligible"] is True
+
     async def test_the_board_keeps_the_score_and_says_why_it_is_not_earning(
         self,
         app: FastAPI,
@@ -477,6 +528,26 @@ class TestPublicBoard:
 
 
 class TestFleetGate:
+    async def test_unverified_protocol_27_weight_setter_keeps_enforcement_in_shadow(
+        self,
+        app: FastAPI,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        leader, runner_up = await _two_miners(session)
+        await _hold(session, leader, kind="deferred_source_review")
+        await _fleet(session)
+        await _unverified_weight_setter(session)
+        await _set_posture(session, enforcement="enforce")
+        app.state.emission_eligibility.invalidate()
+
+        snapshot = await _snapshot(app, session)
+        assert [entry.agent_id for entry in snapshot.entries] == [leader, runner_up]
+        assert snapshot.reward_eligibility_mode is None
+        assert snapshot.fleet_readiness is not None
+        assert snapshot.fleet_readiness["reward_eligibility"] is False
+
     async def test_enforce_ahead_of_the_fleet_rehearses_exactly_like_shadow(
         self,
         app: FastAPI,
