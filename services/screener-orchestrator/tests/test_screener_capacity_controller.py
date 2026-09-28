@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from typing import Literal
+from typing import Any, Literal
 from unittest.mock import patch
 
 from screener_capacity.controller import (
@@ -23,6 +23,7 @@ from screener_capacity.controller import (
     gce_overflow_target,
     reconcile,
 )
+from screener_capacity.controller import _settings as controller_settings
 
 
 def _settings(root: Path) -> Settings:
@@ -52,12 +53,12 @@ class _Platform:
         self,
         demand: Demand,
         nodes: dict[str, dict[str, object]] | None = None,
-        screening_priority: tuple[Literal["targon", "gcp"], ...] = (
-            "targon",
+        screening_priority: tuple[Literal["hetzner", "targon", "gcp"], ...] = (
+            "hetzner",
             "gcp",
         ),
-        build_priority: tuple[Literal["targon", "gcp"], ...] = (
-            "targon",
+        build_priority: tuple[Literal["hetzner", "targon", "gcp"], ...] = (
+            "hetzner",
             "gcp",
         ),
     ) -> None:
@@ -122,6 +123,27 @@ class _GCE:
         self._target = target
 
 
+def _targon_routing() -> ProviderRouting:
+    """A stale revision still naming the retired Targon provider first."""
+    return ProviderRouting(
+        revision=0,
+        runtime_provider_priority=("targon", "gcp"),
+        source_review_provider_priority=("targon", "gcp"),
+        build_provider_priority=("targon", "gcp"),
+        overflow=OverflowPolicy(True, "subnet-screener-1", 3, 12, 6),
+    )
+
+
+def _overflow_routing(*, enabled: bool = True) -> ProviderRouting:
+    return ProviderRouting(
+        revision=1,
+        runtime_provider_priority=("hetzner", "gcp"),
+        source_review_provider_priority=("hetzner", "gcp"),
+        build_provider_priority=("hetzner", "gcp"),
+        overflow=OverflowPolicy(enabled, "subnet-screener-1", 3, 12, 6),
+    )
+
+
 class CapacityDecisionTests(unittest.TestCase):
     def test_healthy_hetzner_handles_normal_backlog_without_gce(self) -> None:
         routing = ProviderRouting(
@@ -183,13 +205,267 @@ class CapacityDecisionTests(unittest.TestCase):
         target, reason = gce_overflow_target(
             demand=Demand(runnable=7, active=0, desired=2),
             routing=routing,
-            primary_node={"status": "active", "ready": False},
+            primary_node={
+                "status": "active",
+                "ready": False,
+                "admission_open": True,
+                "screening_concurrency": 4,
+            },
             jobs_per_slot=6,
             global_cap=6,
         )
 
         self.assertEqual(target, 2)
         self.assertEqual(reason, "HETZNER_PRIMARY_UNAVAILABLE")
+
+    def test_admission_closed_primary_is_a_global_full_stop(self) -> None:
+        for enabled in (True, False):
+            with self.subTest(gce_overflow_enabled=enabled):
+                target, reason = gce_overflow_target(
+                    demand=Demand(runnable=24, active=0, desired=4),
+                    routing=_overflow_routing(enabled=enabled),
+                    primary_node={
+                        "status": "active",
+                        "ready": True,
+                        "admission_open": False,
+                        "screening_concurrency": 0,
+                    },
+                    jobs_per_slot=6,
+                    global_cap=6,
+                )
+
+                self.assertEqual(target, 0)
+                self.assertEqual(reason, "HETZNER_PRIMARY_ADMISSION_CLOSED")
+
+    def test_one_slot_activation_restores_backlog_threshold(self) -> None:
+        target, reason = gce_overflow_target(
+            demand=Demand(runnable=24, active=0, desired=4),
+            routing=_overflow_routing(),
+            primary_node={
+                "status": "active",
+                "ready": True,
+                "admission_open": True,
+                "screening_concurrency": 1,
+            },
+            jobs_per_slot=6,
+            global_cap=6,
+        )
+
+        # threshold = max(min_backlog=12, 1 * 3); (24 - 12) / 6 slots.
+        self.assertEqual(target, 2)
+        self.assertEqual(reason, "HETZNER_BACKLOG_OVERFLOW")
+
+    def test_known_closure_survives_a_host_health_failure(self) -> None:
+        # Recovery: the operator's zero admission must persist when the primary
+        # stops heartbeating; only GCP-first routing or a one-slot activation
+        # can reopen screening.
+        for primary in (
+            {
+                "status": "active",
+                "ready": False,
+                "admission_open": False,
+                "screening_concurrency": 0,
+            },
+            {"status": "offline", "ready": False, "screening_concurrency": 0},
+        ):
+            with self.subTest(primary=primary):
+                target, reason = gce_overflow_target(
+                    demand=Demand(runnable=24, active=0, desired=4),
+                    routing=_overflow_routing(),
+                    primary_node=primary,
+                    jobs_per_slot=6,
+                    global_cap=6,
+                )
+
+                self.assertEqual(target, 0)
+                self.assertEqual(reason, "HETZNER_PRIMARY_ADMISSION_CLOSED")
+
+    def test_unready_open_primary_is_a_host_failure(self) -> None:
+        target, reason = gce_overflow_target(
+            demand=Demand(runnable=24, active=0, desired=4),
+            routing=_overflow_routing(),
+            primary_node={
+                "status": "active",
+                "ready": False,
+                "admission_open": True,
+                "screening_concurrency": 4,
+            },
+            jobs_per_slot=6,
+            global_cap=6,
+        )
+
+        self.assertEqual(target, 4)
+        self.assertEqual(reason, "HETZNER_PRIMARY_UNAVAILABLE")
+
+    def test_unknown_primary_fails_closed(self) -> None:
+        # An omitted primary row (or a failed inventory read) and a row without
+        # its admission setting cannot rule out the operator stop.
+        for primary in (None, {"status": "active", "ready": False}):
+            with self.subTest(primary=primary):
+                target, reason = gce_overflow_target(
+                    demand=Demand(runnable=24, active=0, desired=4),
+                    routing=_overflow_routing(),
+                    primary_node=primary,
+                    jobs_per_slot=6,
+                    global_cap=6,
+                )
+
+                self.assertEqual(target, 0)
+                self.assertEqual(reason, "HETZNER_PRIMARY_UNKNOWN")
+
+    def test_reconcile_never_overflows_without_the_primary_inventory(self) -> None:
+        def failed_read() -> dict[str, Any]:
+            raise ControllerError("Platform node readiness response is invalid")
+
+        for label, node_states in (
+            ("inventory-read-failure", failed_read),
+            ("omitted-primary-row", lambda: {"other-node": {"status": "active"}}),
+        ):
+            with self.subTest(label), TemporaryDirectory() as directory:
+                platform = SimpleNamespace(
+                    demand=lambda **_kwargs: Demand(runnable=24, active=0, desired=4),
+                    provider_routing=_overflow_routing,
+                    node_states=node_states,
+                    renew=lambda snapshot: snapshot,
+                    fence=lambda **_kwargs: None,
+                )
+                gce = _GCE()
+                with (
+                    patch(
+                        "screener_capacity.controller.PlatformControl",
+                        return_value=platform,
+                    ),
+                    patch("screener_capacity.controller.GCEFleet", return_value=gce),
+                ):
+                    snapshot = reconcile(_settings(Path(directory)))
+
+                self.assertEqual(snapshot["gce_target"], 0)
+                self.assertEqual(snapshot["fallback_reason"], "HETZNER_PRIMARY_UNKNOWN")
+                self.assertEqual(gce.resized, [])
+
+    def test_admission_closed_falls_back_to_concurrency_when_field_missing(
+        self,
+    ) -> None:
+        for concurrency, expected in (
+            (0, (0, "HETZNER_PRIMARY_ADMISSION_CLOSED")),
+            (1, (2, "HETZNER_BACKLOG_OVERFLOW")),
+        ):
+            with self.subTest(screening_concurrency=concurrency):
+                result = gce_overflow_target(
+                    demand=Demand(runnable=24, active=0, desired=4),
+                    routing=_overflow_routing(),
+                    primary_node={
+                        "status": "active",
+                        "ready": True,
+                        "screening_concurrency": concurrency,
+                    },
+                    jobs_per_slot=6,
+                    global_cap=6,
+                )
+
+                self.assertEqual(result, expected)
+
+    def test_explicit_gcp_routing_precedes_admission_closure(self) -> None:
+        target, reason = gce_overflow_target(
+            demand=Demand(runnable=24, active=0, desired=4),
+            routing=ProviderRouting(
+                revision=1,
+                runtime_provider_priority=("gcp", "hetzner"),
+                source_review_provider_priority=("gcp", "hetzner"),
+                build_provider_priority=("gcp", "hetzner"),
+            ),
+            primary_node={
+                "status": "active",
+                "ready": True,
+                "admission_open": False,
+                "screening_concurrency": 0,
+            },
+            jobs_per_slot=6,
+            global_cap=6,
+        )
+
+        self.assertEqual(target, 4)
+        self.assertEqual(reason, "GCP_SCREENERS_PRIORITIZED_BY_POLICY")
+
+    def test_reconcile_records_each_fallback_reason_transition_once(self) -> None:
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            primary: dict[str, object] = {
+                "status": "active",
+                "ready": True,
+                "admission_open": True,
+                "screening_concurrency": 4,
+            }
+            renewed: list[dict[str, Any]] = []
+
+            def renew(snapshot: dict[str, Any]) -> dict[str, Any]:
+                renewed.append(snapshot)
+                return snapshot
+
+            platform = SimpleNamespace(
+                demand=lambda **_kwargs: Demand(runnable=2, active=0, desired=1),
+                provider_routing=_overflow_routing,
+                node_states=lambda: {"subnet-screener-1": primary},
+                renew=renew,
+                fence=lambda **_kwargs: None,
+            )
+            gce = _GCE()
+
+            def reason_events() -> list[dict[str, Any]]:
+                return [
+                    event
+                    for event in renewed[0]["events"]
+                    if event["event_type"] == "fallback_reason_changed"
+                ]
+
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+            ):
+                reconcile(settings)
+                self.assertEqual(reason_events(), [])
+
+                primary.update(admission_open=False, screening_concurrency=0)
+                renewed.clear()
+                snapshot = reconcile(settings)
+                self.assertEqual(
+                    snapshot["fallback_reason"], "HETZNER_PRIMARY_ADMISSION_CLOSED"
+                )
+                self.assertEqual(snapshot["gce_target"], 0)
+                self.assertEqual(gce.resized, [])
+                self.assertEqual(
+                    reason_events(),
+                    [
+                        {
+                            "event_type": "fallback_reason_changed",
+                            "provider": "hetzner",
+                            "detail": (
+                                "HETZNER_PRIMARY_HANDLING_BASE_LOAD -> "
+                                "HETZNER_PRIMARY_ADMISSION_CLOSED"
+                            ),
+                        }
+                    ],
+                )
+
+                renewed.clear()
+                reconcile(settings)
+                self.assertEqual(reason_events(), [])
+                self.assertEqual(gce.resized, [])
+
+                # The deliberate one-slot activation reopens the primary.
+                primary.update(admission_open=True, screening_concurrency=1)
+                renewed.clear()
+                reconcile(settings)
+                self.assertEqual(
+                    [event["detail"] for event in reason_events()],
+                    [
+                        "HETZNER_PRIMARY_ADMISSION_CLOSED -> "
+                        "HETZNER_PRIMARY_HANDLING_BASE_LOAD"
+                    ],
+                )
 
     @patch("screener_capacity.controller.subprocess.run")
     def test_gce_resize_pauses_and_leaves_watchdog_disabled_at_zero(
@@ -407,12 +683,15 @@ class CapacityDecisionTests(unittest.TestCase):
             settings = _settings(Path(directory))
             platform = SimpleNamespace(
                 demand=lambda **_kwargs: Demand(runnable=5, active=0, desired=3),
-                provider_routing=lambda: ProviderRouting(
-                    revision=0,
-                    runtime_provider_priority=("targon", "gcp"),
-                    source_review_provider_priority=("targon", "gcp"),
-                    build_provider_priority=("targon", "gcp"),
-                ),
+                provider_routing=_targon_routing,
+                node_states=lambda: {
+                    "subnet-screener-1": {
+                        "status": "active",
+                        "ready": True,
+                        "admission_open": True,
+                        "screening_concurrency": 4,
+                    }
+                },
                 renew=lambda snapshot: snapshot,
                 fence=lambda **_kwargs: None,
             )
@@ -447,6 +726,38 @@ class CapacityDecisionTests(unittest.TestCase):
             self.assertEqual(snapshot["gce_target"], 0)
             self.assertEqual(resized, [3, 0])
 
+    def test_targon_first_lanes_never_bypass_the_primary_stop(self) -> None:
+        # A stale routing revision that still names the retired provider must not
+        # reopen screening through GCE while the operator's stop holds or the
+        # primary's admission is unknown.
+        for primary, reason in (
+            (
+                {
+                    "status": "active",
+                    "ready": True,
+                    "admission_open": False,
+                    "screening_concurrency": 0,
+                },
+                "HETZNER_PRIMARY_ADMISSION_CLOSED",
+            ),
+            (
+                {"status": "offline", "ready": False, "screening_concurrency": 0},
+                "HETZNER_PRIMARY_ADMISSION_CLOSED",
+            ),
+            (None, "HETZNER_PRIMARY_UNKNOWN"),
+        ):
+            with self.subTest(primary=primary):
+                target, actual_reason = gce_overflow_target(
+                    demand=Demand(runnable=24, active=0, desired=4),
+                    routing=_targon_routing(),
+                    primary_node=primary,
+                    jobs_per_slot=6,
+                    global_cap=6,
+                )
+
+                self.assertEqual(target, 0)
+                self.assertEqual(actual_reason, reason)
+
     def test_missing_node_inventory_blocks_gce_scale_in_with_live_work(self) -> None:
         with TemporaryDirectory() as directory:
             settings = _settings(Path(directory))
@@ -480,7 +791,7 @@ class CapacityDecisionTests(unittest.TestCase):
             settings = _settings(Path(directory))
             platform = _Platform(
                 Demand(runnable=4, active=0, desired=2),
-                screening_priority=("gcp", "targon"),
+                screening_priority=("gcp", "hetzner"),
             )
             gce = _GCE()
             with (
@@ -578,61 +889,42 @@ class CapacityDecisionTests(unittest.TestCase):
                 # No snapshot (and so no fresh success timestamp) is sent.
                 self.assertEqual(platform.renewed, [])
 
-    def test_targon_first_decomposed_lanes_use_gce_workers(self) -> None:
-        with TemporaryDirectory() as directory:
-            settings = _settings(Path(directory))
-            platform = _Platform(Demand(runnable=4, active=0, desired=2))
-            gce = _GCE()
-            with (
-                patch(
-                    "screener_capacity.controller.PlatformControl",
-                    return_value=platform,
-                ),
-                patch("screener_capacity.controller.GCEFleet", return_value=gce),
-            ):
-                snapshot = reconcile(settings)
-            self.assertEqual(gce.resized, [2])
-            self.assertEqual(snapshot["targon_capability"], "nogo")
-            self.assertEqual(snapshot["targon_available"], 0)
-            self.assertEqual(
-                snapshot["fallback_reason"], "TARGON_NESTED_DOCKER_WORKER_LANE_RETIRED"
-            )
 
+def test_retired_installed_unit_flags_are_inert() -> None:
+    retired = {
+        "targon-api-key-file": "/old/key",
+        "targon-org-slug": "old",
+        "targon-prefix": "old",
+        "targon-platform-url": "https://old.invalid",
+        "targon-capability-file": "/old/capability",
+        "targon-resource": "old",
+        "targon-worker-env-file": "/old/env",
+        "gcp-bootstrap-service-account": "old@invalid",
+        "gcp-bootstrap-delegate-service-account": "old@invalid",
+        "source-review-secret-resource": "old",
+        "targon-provisioning-timeout-seconds": "60",
+    }
+    argv = [
+        "--platform-url",
+        "https://platform.invalid",
+        "--platform-token-file",
+        "/tmp/token",
+        "--gce-project",
+        "project",
+        "--gce-region",
+        "region",
+        "--gce-mig",
+        "mig",
+    ]
+    for flag, value in retired.items():
+        argv.extend((f"--{flag}", value))
 
-class RetiredUnitFlagTests(unittest.TestCase):
-    def test_parser_accepts_retired_nested_docker_unit_flags(self) -> None:
-        args = build_parser().parse_args(
-            [
-                "--platform-url",
-                "https://platform.invalid",
-                "--targon-platform-url",
-                "https://platform.invalid",
-                "--platform-token-file",
-                "/token",
-                "--targon-org-slug",
-                "ditto",
-                "--gce-project",
-                "test-project",
-                "--gce-region",
-                "test-region",
-                "--gce-mig",
-                "test-mig",
-                "--targon-capability-file",
-                "/capability.json",
-                "--targon-resource",
-                "cpu-medium",
-                "--targon-worker-env-file",
-                "/worker-env.json",
-                "--gcp-bootstrap-service-account",
-                "bootstrap@example.iam.gserviceaccount.com",
-                "--source-review-secret-resource",
-                "projects/test/secrets/key",
-                "--targon-provisioning-timeout-seconds",
-                "600",
-            ]
-        )
-        self.assertEqual(args.targon_org_slug, "ditto")
-        self.assertEqual(args.targon_resource, "cpu-medium")
+    args = build_parser().parse_args(argv)
+    with patch("screener_capacity.controller._source_sha", return_value="a" * 40):
+        settings = controller_settings(args)
+    assert settings.gce_mig == "mig"
+    for flag in retired:
+        assert not hasattr(settings, flag.replace("-", "_"))
 
 
 if __name__ == "__main__":

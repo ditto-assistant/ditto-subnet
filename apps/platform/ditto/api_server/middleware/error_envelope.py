@@ -47,6 +47,7 @@ from ditto.api_server.pricing import (
     PriceTooStaleError,
     PricingError,
 )
+from ditto.api_server.upload_feedback import submission_cooldown_message
 from ditto.db.queries.agents import SubmissionCooldownError
 from ditto.db.queries.inference import InferenceDecline
 
@@ -259,7 +260,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         return _envelope_response(
             429,
             ERROR_CODE_SUBMISSION_COOLDOWN,
-            f"owner coldkey may submit again at {exc.retry_at.isoformat()}",
+            submission_cooldown_message(exc.retry_at),
             headers={"Retry-After": str(retry_after)},
         )
 

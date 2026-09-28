@@ -5,7 +5,6 @@
 # --- GCP placement ---
 gcp_project: ditto-app-dev
 gcp_region: us-central1
-gcp_zone: us-central1-a
 
 # --- Connection over IAP (the VM has no public IP) ---
 # Set GCP_OSLOGIN_USER to your OS Login username, e.g. nick_anderson_omniaura_ai

@@ -10,7 +10,7 @@ cover the dispatch + the actual row write.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -35,6 +35,7 @@ from ditto.db.queries.payments import (
     consume_evaluation_credit,
     get_agent_for_payment_proof,
     get_evaluation_payment_for_proof,
+    get_same_owner_agent_by_sha,
     insert_evaluation_payment,
 )
 
@@ -91,6 +92,56 @@ def _mock_session(flush_side_effect: BaseException | None = None) -> MagicMock:
     else:
         session.flush = AsyncMock(return_value=None)
     return session
+
+
+async def test_owner_sha_lookup_crosses_hotkeys_without_crossing_owners(
+    session: AsyncSession,
+) -> None:
+    owner = "5CKAlphaColdkey"
+    other_owner = "5CKBetaColdkey"
+    agent_ids = [uuid4() for _ in range(3)]
+    sha256 = "ab" * 32
+    async with session.begin():
+        for index, coldkey in enumerate((other_owner, owner, owner)):
+            verified = _make_verified(
+                block_hash=f"0x{index + 1:064x}",
+                miner_hotkey=f"5HKHashScope{index}",
+                miner_coldkey=coldkey,
+            )
+            await insert_agent(
+                session,
+                agent_id=agent_ids[index],
+                miner_hotkey=verified.miner_hotkey,
+                name=f"sha-scope-{index}",
+                sha256=sha256,
+                size_bytes=10,
+            )
+            agent = await session.get(Agent, agent_ids[index])
+            assert agent is not None
+            agent.created_at = datetime(2026, 9, 28, 12, tzinfo=UTC) + timedelta(
+                minutes=index
+            )
+            await insert_evaluation_payment(
+                session, verified=verified, agent_id=agent_ids[index]
+            )
+
+    duplicate = await get_same_owner_agent_by_sha(
+        session, miner_coldkey=owner, sha256=sha256
+    )
+    assert duplicate is not None
+    assert duplicate.agent_id == agent_ids[1]
+    assert (
+        await get_same_owner_agent_by_sha(
+            session, miner_coldkey="5CKUnrelatedColdkey", sha256=sha256
+        )
+        is None
+    )
+    assert (
+        await get_same_owner_agent_by_sha(
+            session, miner_coldkey=owner, sha256="cd" * 32
+        )
+        is None
+    )
 
 
 class TestInsertEvaluationPaymentHappyPath:

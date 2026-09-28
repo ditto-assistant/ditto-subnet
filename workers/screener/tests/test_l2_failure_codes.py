@@ -83,3 +83,39 @@ def test_http_status_codes_stay_provider_specific() -> None:
     response = httpx.Response(429, request=request, json={"error": {}})
     error = httpx.HTTPStatusError("rate limited", request=request, response=response)
     assert l2_review_module._error_code("l2", error) == "l2-http-429"
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            {"error": {"metadata": {"provider_error_code": "context_length_exceeded"}}},
+            "l2-http-400-context-limit",
+        ),
+        (
+            {
+                "error": {
+                    "code": "invalid_request_error",
+                    "message": "This model's maximum context length is 128000 tokens",
+                }
+            },
+            "l2-http-400-context-limit",
+        ),
+        (
+            {"error": {"message": "Unsupported parameter: tool_choice"}},
+            "l2-http-400-unsupported-parameter",
+        ),
+        (
+            {"error": {"code": "bad/request", "message": "Source text: secret-value"}},
+            "l2-http-400",
+        ),
+        ({"error": "bad shape"}, "l2-http-400"),
+    ],
+)
+def test_http_400_exposes_only_a_bounded_error_class(
+    body: dict[str, object], expected: str
+) -> None:
+    request = httpx.Request("POST", "https://openrouter.example/api")
+    response = httpx.Response(400, request=request, json=body)
+    error = httpx.HTTPStatusError("bad request", request=request, response=response)
+    assert l2_review_module._error_code("l2", error) == expected

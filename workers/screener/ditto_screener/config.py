@@ -232,21 +232,6 @@ class ScreenerConfig:
     """L4-only output cap; None inherits the existing L2 completion cap."""
     l2_max_completion_request_seconds: float | None = None
     """Per-turn L2/L3 wall-clock cap; None derives it from the completion budget."""
-    remote_build_mode: str = "off"
-    """How the gate uses a prebuilt image archive.
-
-    Production workers use ``off`` so the leased screener performs the build
-    and smoke locally. ``prefer`` and ``require`` remain protocol-compatible
-    for explicit decomposed-lane tests, but must never be an implicit worker
-    default.
-    """
-    remote_build_timeout_seconds: float = 1500.0
-    """Maximum time to wait for a Targon Kaniko submission build.
-
-    This is intentionally independent of ``build_timeout_seconds``. The latter
-    caps the local Docker fallback, while the 70-minute screening lease budgets
-    both stages: 25 minutes for Targon followed by up to 45 minutes locally.
-    """
 
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured."""
@@ -515,10 +500,6 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         l2_max_completion_request_seconds=_parse_optional_float(
             "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS"
         ),
-        remote_build_mode=os.environ.get("SCREENER_REMOTE_BUILD_MODE", "off"),
-        remote_build_timeout_seconds=_parse_float(
-            "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS", "1500"
-        ),
     )
     if not config.signing_source_present():
         raise ScreenerConfigError(
@@ -699,12 +680,8 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_REVIEW_SETTINGS_MAX_STALE_SECONDS must be between 60 and 86400"
         )
-    if config.remote_build_mode not in {"off", "prefer", "require"}:
+    if os.environ.get("SCREENER_REMOTE_BUILD_MODE", "off") != "off":
         raise ScreenerConfigError(
-            "SCREENER_REMOTE_BUILD_MODE must be off, prefer, or require"
-        )
-    if not 300 <= config.remote_build_timeout_seconds <= 2400:
-        raise ScreenerConfigError(
-            "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS must be between 300 and 2400"
+            "SCREENER_REMOTE_BUILD_MODE is retired; only local screening is supported"
         )
     return config

@@ -603,6 +603,92 @@ def test_analyze_binary_reports_safetensors_without_loading_weights(
     assert analysis["safety"]["external_data_loaded"] is False
 
 
+@pytest.mark.parametrize(
+    "header",
+    [
+        pytest.param(b"[" * 1_000_000 + b"]" * 1_000_000, id="deep-nesting"),
+        pytest.param(
+            b'{"weight":{"dtype":"U8","shape":[16],"data_offsets":[0,'
+            + b"9" * 5000
+            + b"]}}",
+            id="huge-integer",
+        ),
+        pytest.param(b'{"weight":invalid}', id="invalid-json"),
+        pytest.param(b"{\xff}", id="invalid-utf8"),
+    ],
+)
+def test_safetensors_header_failure_is_contained(
+    tmp_path: Path, header: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = len(header).to_bytes(8, "little") + header + b"\xff" * 16
+    marker = {
+        "parse_status": "analysis-failed",
+        "reason": "header-unparseable",
+        "details_truncated": True,
+    }
+    assert binary_analysis_module._safetensors_details(model, False) == marker
+    repo = TarSourceRepository(
+        str(_archive_with(tmp_path, {"models/hostile.weights": model}))
+    )
+    inventory = json.loads(repo.inventory())
+    entry = inventory["binary_analysis"][0]
+    assert entry["format"] == "safetensors"
+    assert entry["format_confidence"] == "low"
+    assert entry["analysis_failed"] is True
+    assert entry["analysis_truncated"] is True
+    assert entry["details"] == marker
+
+    def unexpected_reparse(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("cached failure must not be parsed again")
+
+    monkeypatch.setattr(source_review_module, "analyze_binary", unexpected_reparse)
+    analysis = json.loads(repo.analyze_binary("models/hostile.weights"))
+    assert analysis == repo._binary_analysis_cache["models/hostile.weights"]
+    assert analysis["details"] == marker
+    assert json.loads(repo.inventory()) == inventory
+
+
+@pytest.mark.parametrize("failing_step", ["sample_stream", "analyze_binary"])
+def test_inventory_survives_binary_analysis_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failing_step: str,
+) -> None:
+    calls = 0
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("attacker-controlled-exception-text")
+
+    monkeypatch.setattr(source_review_module, failing_step, fail)
+    repo = TarSourceRepository(
+        str(_archive_with(tmp_path, {"data/blob.bin": b"\xff" * 16}))
+    )
+    inventory = repo.inventory()
+    entry = json.loads(inventory)["binary_analysis"][0]
+    assert entry["analysis_failed"] is True
+    assert entry["analysis_truncated"] is True
+    analysis = repo.analyze_binary("data/blob.bin")
+    assert json.loads(analysis) == {
+        "path": "data/blob.bin",
+        "bytes": 16,
+        "format": "unknown",
+        "analysis_failed": True,
+        "analysis_truncated": True,
+        "error": "analysis-failed",
+    }
+    assert repo.inventory() == inventory
+    assert repo.analyze_binary("data/blob.bin") == analysis
+    assert calls == 1
+    assert "RuntimeError" in caplog.text
+    assert (
+        "attacker-controlled-exception-text" not in inventory + analysis + caplog.text
+    )
+    assert all(record.exc_info is None for record in caplog.records)
+
+
 def test_safetensors_rejects_invalid_and_overlapping_payload_ranges(
     tmp_path: Path,
 ) -> None:
@@ -5831,6 +5917,129 @@ def test_a_hold_threshold_above_one_is_not_inert() -> None:
         ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
         == "pass_inconclusive"
     )
+
+
+def test_full_concern_ledger_keeps_new_source_location() -> None:
+    template: dict[str, object] = {
+        "kind": "concern",
+        "category": "benchmark_emulation",
+        "path": "app/service.py",
+        "line": 85,
+    }
+    cap = source_review_module._MAX_REVIEW_NOTES
+    notes = [template.copy() for _ in range(cap)]
+    tool_gate = {
+        "kind": "concern",
+        "category": "mandatory_contract_failure",
+        "path": "app/service.py",
+        "line": 355,
+    }
+
+    assert source_review_module._append_note(notes, tool_gate)
+
+    assert len(notes) == cap
+    assert notes[-1] is tool_gate
+    assert notes[0]["line"] == 85
+
+    distinct = [{**template, "line": line} for line in range(1, cap + 1)]
+    assert not source_review_module._append_note(distinct, tool_gate)
+    assert len(distinct) == cap
+    assert tool_gate not in distinct
+
+
+def test_repeated_concern_feedback_reports_storage_and_new_evidence_guidance() -> None:
+    concern = {
+        "kind": "concern",
+        "category": "benchmark_emulation",
+        "path": "app/service.py",
+        "line": 65,
+    }
+    notes = [concern.copy() for _ in range(source_review_module._MAX_REVIEW_NOTES)]
+
+    feedback = source_review_module._record_note_feedback(notes, concern.copy())
+
+    assert feedback["recorded"] is False
+    assert feedback["notes"] == source_review_module._MAX_REVIEW_NOTES
+    assert "different served-path location" in str(feedback["guidance"])
+    assert (
+        source_review_module._record_note_feedback(
+            notes, {**concern, "category": "mandatory_contract_failure", "line": 355}
+        )["recorded"]
+        is True
+    )
+    assert notes[-1]["line"] == 355
+
+
+async def test_dropped_repeated_note_keeps_the_inspection_reminder(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    final = _with_policy_v10_invariants(_BENIGN_REVIEW)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        if len(seen) == 1:
+            tool_calls = [
+                _note_call(
+                    f"note-{index}",
+                    "concern",
+                    "Repeated source concern.",
+                    category="benchmark_emulation",
+                    area="answer_construction",
+                    path="src/main.rs",
+                    line=1,
+                )
+                for index in range(source_review_module._MAX_REVIEW_NOTES)
+            ]
+            tool_calls.extend(
+                _tool(
+                    f"read-{index}",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 1},
+                )
+                for index in range(source_review_module._NOTELESS_NUDGE_EVERY)
+            )
+            tool_calls.append(
+                _note_call(
+                    "dropped-duplicate",
+                    "concern",
+                    "Repeated source concern.",
+                    category="benchmark_emulation",
+                    area="answer_construction",
+                    path="src/main.rs",
+                    line=1,
+                )
+            )
+        else:
+            tool_calls = [_tool("submit", "submit_review", final)]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+        policy_version=10,
+    )
+
+    assert len(seen) >= 2
+    messages = seen[1]["messages"]
+    assert any(source_review_module._NOTE_NUDGE in str(row) for row in messages)
+    assert any('"recorded": false' in str(row) for row in messages)
 
 
 def test_single_site_multi_location_concerns_cannot_hold() -> None:

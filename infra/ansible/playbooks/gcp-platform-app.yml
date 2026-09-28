@@ -43,6 +43,10 @@
 # a host that had them set SILENTLY TURNS THE FEATURE OFF: always export all
 # four for prod.
 # ---------------------------------------------------------------------------
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_platform_app
+
 - name: Converge ditto-platform app VMs
   hosts: role_platform_app
   become: true

@@ -61,6 +61,29 @@ _CODE = INFRA_AUTO_RETRY_REASON_CODES[0]
 _SECOND = timedelta(seconds=1)
 _PROVIDER = "gcp"
 _LANE = "buildkit"
+# Budget-exhaustion outcomes and outcomes an artifact can provoke stay on the
+# operator retry, or a hostile archive could loop the fleet. The last four were
+# proposed for automatic retry in #2449, but each has a producer the artifact can
+# reach: a worker drops an attempt whose verdict Platform rejected or dies
+# mid-screen (orphaned lease); the worker raises PlatformError on its own checks
+# of the gate's decision (Platform request failed); the L2 cache lock is keyed on
+# the artifact and held by another review of it, which may overrun its deadline;
+# reviewer and model failures (source-review retryable infra).
+_MANUAL_RETRY_CODES = (
+    "l2-late-result",
+    "lease-budget-exhausted",
+    "worker-verdict-rejected",
+    "worker-result-processing-failed",
+    "unexpected-infrastructure",
+    "l2-model-inconclusive",
+    "l2-model-total-budget",
+    "l2-model-step-budget",
+    "l2-model-tool-budget",
+    "worker-lease-orphaned",
+    "worker-platform-request-failed",
+    "l2-cache-lock-timeout",
+    "source-review-retryable-infra",
+)
 
 
 def _id_with_jitter_unit(*, at_most: float) -> UUID:
@@ -138,6 +161,7 @@ async def _infra_failure(
     attempt_id: UUID | None = None,
     provider: str | None = _PROVIDER,
     lane: str | None = _LANE,
+    reason_code: str = _CODE,
 ) -> UUID:
     return await _add_attempt(
         session_maker,
@@ -145,7 +169,7 @@ async def _infra_failure(
         status="failed",
         started_at=finished_at - timedelta(minutes=2),
         finished_at=finished_at,
-        reason_code=_CODE,
+        reason_code=reason_code,
         attempt_id=attempt_id,
         provider=provider,
         lane=lane,
@@ -159,6 +183,7 @@ async def _failing_agent(
     attempt_id: UUID | None = None,
     provider: str | None = _PROVIDER,
     lane: str | None = _LANE,
+    reason_code: str = _CODE,
 ) -> UUID:
     agent_id = await _seed_agent(session_maker)
     await _infra_failure(
@@ -168,6 +193,7 @@ async def _failing_agent(
         attempt_id=attempt_id,
         provider=provider,
         lane=lane,
+        reason_code=reason_code,
     )
     return agent_id
 
@@ -324,7 +350,8 @@ def test_jitter_does_not_depend_on_the_process_hash_seed() -> None:
 
 def test_infra_code_is_split_from_the_park_cap_tuple() -> None:
     assert _CODE == "docker-build-infrastructure"
-    assert _CODE not in PROVIDER_BACKOFF_REASON_CODES
+    assert not set(INFRA_AUTO_RETRY_REASON_CODES) & set(PROVIDER_BACKOFF_REASON_CODES)
+    assert not set(INFRA_AUTO_RETRY_REASON_CODES) & set(_MANUAL_RETRY_CODES)
 
 
 # --- per-artifact retry ---------------------------------------------------
@@ -349,6 +376,23 @@ async def test_infra_failure_is_held_for_its_backoff_then_retried(
         assert agent is not None
         assert agent.status == AgentStatus.SCREENING
     assert await _running(session_maker) == [agent_id]
+
+
+@pytest.mark.parametrize("reason_code", _MANUAL_RETRY_CODES)
+async def test_artifact_dependent_codes_stay_parked(
+    session_maker: async_sessionmaker[AsyncSession], reason_code: str
+) -> None:
+    now = datetime.now(UTC)
+    agent_id = await _failing_agent(
+        session_maker, finished_at=now - timedelta(hours=2), reason_code=reason_code
+    )
+
+    assert agent_id not in (await _plan(session_maker, now=now)).decisions
+    assert await _claim(session_maker, now=now) == []
+    async with session_maker() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        assert agent.status == AgentStatus.SCREENING_FAILED
 
 
 async def test_streak_doubles_per_consecutive_failure_and_caps(
@@ -845,6 +889,41 @@ async def test_long_parked_agent_is_not_retried_automatically(
             await session.scalar(select(func.count()).select_from(ScreeningQuarantine))
             == 0
         )
+
+
+async def test_deploy_does_not_bulk_retry_a_parked_cohort(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The first claim pass after a deploy retries nothing already parked.
+
+    Operator-retried codes stay parked however recent, and an automatic-retry
+    failure older than ``INFRA_AUTO_RETRY_MAX_AGE`` is past its window.
+    """
+    now = datetime.now(UTC)
+    cohort = [
+        await _failing_agent(
+            session_maker,
+            finished_at=now - timedelta(hours=2),
+            reason_code=reason_code,
+        )
+        for reason_code in _MANUAL_RETRY_CODES * 2
+    ] + [
+        await _failing_agent(
+            session_maker,
+            finished_at=now - INFRA_AUTO_RETRY_MAX_AGE - timedelta(minutes=index),
+        )
+        for index in range(1, 6)
+    ]
+
+    assert (await _plan(session_maker, now=now)).decisions == {}
+    assert await _claim(session_maker, now=now, limit=20) == []
+    async with session_maker() as session:
+        statuses = set(
+            await session.scalars(
+                select(Agent.status).where(Agent.agent_id.in_(cohort))
+            )
+        )
+    assert statuses == {AgentStatus.SCREENING_FAILED}
 
 
 async def _capped_agent(

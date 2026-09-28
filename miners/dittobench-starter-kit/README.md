@@ -908,15 +908,17 @@ why it passes.
 | **Plain ReAct with tool results quoted into the next prompt** | causal | Delivered records and tool results are hash-exempt from the harness-authored span set, so quoting them is fine; only a value *you* computed that appears in no record or result trips `answer_in_prompt`. |
 | **Grounded abstention and clarifying questions authored by the model** | `AnswerAbsence`, `AnswerClarify` | Let the model write the decline citing what it searched, or the question naming the missing slot. A templated "I don't have that" or "what would you like?" scores 0. |
 
-The stock kit is the reference honest architecture: `src/v13.rs` holds each
-piece and `src/baseline.rs` wires them. Each verified honest pattern beside the
-rewrite it must not become:
+The stock kit illustrates an honest architecture: `src/v13.rs` holds the local
+gate helpers and `src/baseline.rs` wires them. Its default served path preserves
+the wire system prompt, leaving case interpretation to the model. Review the
+served behavior before treating an agent as safe. Each honest pattern beside a
+rewrite the public gates can charge:
 
 | Honest pattern (passes) | Rewrite it must not become (charged) |
 | --- | --- |
 | Serve the model's value as written; the `answer` slot is a verbatim copy of the model's own `Answer:` line (`v13::answer_slot_from_prose`, on only when `DITTOBENCH_ANSWER_SLOT` is set; `--gates` sets it) or absent | `/100` rescale, direction-word map, `%.2f` reformat, composed slot, replaced draft (`served_text_not_model_emitted`, `slot_not_in_prose`) |
 | A formatter, JSON mode, or a `final_answer` tool that carries the model's number | Any value the model did not emit |
-| Values-free system prompt (`v13::HARNESS_POLICY_PROMPT`); retrieved memory injected as `/seed`-derived context | The answer computed on the host and placed in the prompt ("reply exactly: X") (`answer_in_prompt`) |
+| Pass through the wire system prompt; retrieved memory is injected as `/seed`-derived context | The answer computed on the host and placed in the prompt ("reply exactly: X") (`answer_in_prompt`) |
 | Full catalog on every turn, or a semantic top-k preloader that keeps the published top-3 (`DITTOBENCH_PRELOAD_TOP_K`, `v13::preload_catalog`) | A request-keyed empty or one-tool catalog (`restraint_without_offer`, `expected_tool_not_offered`) |
 | Every model-emitted call is executed through `tool_endpoint` | A host that swallows the model's call to look restrained (`swallowed_model_call`) |
 | The model asks a clarifying question that names the missing detail and cites what memory search found; declines say what was found | An always-ask or always-decline phrase rule (`twin_concordant`) |

@@ -74,10 +74,17 @@ from ditto.db.queries.screening_retry import latest_screening_attempt_id
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-# Retried automatically. Deliberately separate from PROVIDER_BACKOFF_REASON_CODES,
-# whose members are held on reclaim AND counted toward the inconclusive park cap.
-# Adding a code here means updating the partial index
-# ``screening_attempts_infra_failed_idx`` (models.py, its migration, and
+# Retried automatically, the one exception to #1201's operator-authorized retry.
+# Exact codes only, each one fleet-owned and provably independent of the
+# submitted artifact: every producer of the code must be reachable only from
+# fleet, transport, or lock state. A reviewer or model failure, a budget or lease
+# outcome, or a catch-all code a submission can reach (``worker-lease-orphaned``,
+# ``worker-platform-request-failed``, ``l2-cache-lock-timeout``,
+# ``source-review-retryable-infra``, see #2449) stays on the operator retry, or a
+# hostile archive could loop the fleet. Deliberately separate from
+# PROVIDER_BACKOFF_REASON_CODES, whose members are held on reclaim AND counted
+# toward the inconclusive park cap. Adding a code here means updating the partial
+# index ``screening_attempts_infra_failed_idx`` (models.py, its migration, and
 # ``_infra_failure_filters``) in the same change, or the breaker scan silently
 # goes back to a sequential scan under the claim lock.
 INFRA_AUTO_RETRY_REASON_CODES: tuple[str, ...] = ("docker-build-infrastructure",)
@@ -439,12 +446,18 @@ async def plan_infra_retries(
     """Decide, for every agent parked on an infrastructure failure, when it retries.
 
     A candidate is a ``screening_failed`` agent whose *latest* attempt failed with
-    one of ``INFRA_AUTO_RETRY_REASON_CODES`` and carries no operator retry
-    override (an override is the manual path and is never held here). Pass
-    ``agent_ids`` to restrict the decisions; breaker state is always derived from
-    the whole fleet's history. With no candidate there is nothing to hold, so the
-    fleet scan is skipped (the hot claim path) unless ``fleet_breakers`` asks for
-    every breaker, e.g. for an operator view. ``fleet_scan=False`` skips the
+    one of the exact fleet-owned ``INFRA_AUTO_RETRY_REASON_CODES`` and carries no
+    operator retry override (an override is the manual path and is never held
+    here). Every other failure, reviewer and model failures included, is retried
+    only by an operator. The plan issues nothing: a retry starts only when an
+    admitted claim takes it, bounded by that claim's open screener slots, so a
+    node at ``screening_concurrency`` 0 or a held legacy GCP route retries
+    nothing.
+
+    Pass ``agent_ids`` to restrict the decisions; breaker state is always derived
+    from the whole fleet's history. With no candidate there is nothing to hold, so
+    the fleet scan is skipped (the hot claim path) unless ``fleet_breakers`` asks
+    for every breaker, e.g. for an operator view. ``fleet_scan=False`` skips the
     fleet-wide history query altogether (per-agent backoff and streak only, no
     breaker), for callers such as the unauthenticated public endpoint.
 

@@ -593,7 +593,9 @@ def _run_upload(
             raise
 
     print(result.agent_id)
-    if not clear_pending_payment(
+    # A duplicate race banks the payment without spending it. Keep its receipt
+    # so the next upload can recover that credit instead of sending more TAO.
+    if result.payment_disposition != "reusable_credit" and not clear_pending_payment(
         network=network_name,
         hotkey=handle.hotkey_ss58,
         name=agent_name,
@@ -621,7 +623,9 @@ def _run_upload(
         # payment is banked as a credit. Reporting the ordinary success line
         # here would tell the miner they bought a run they did not.
         print(
-            f"\nno new submission was created: {agent_name} is byte-identical "
+            "\nThe previous submission cannot be resubmitted. "
+            "Please try again after updating.\n"
+            f"no new submission was created: {agent_name} is byte-identical "
             f"to an artifact you already submitted"
             + (
                 f" (agent {result.credit_for_agent_id})"

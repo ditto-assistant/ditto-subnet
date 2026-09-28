@@ -192,8 +192,9 @@ python3 miners/dittobench-starter-kit/scripts/rehearsal_gates.py \
 
 The notes are shadow in v13.0: nothing moves the local score. Treat a would-zero
 note as the same served-path finding the operator review bar reads; fix the
-path, do not tune the note away. The stock kit passes every rule by
-construction (`src/v13.rs`).
+path, do not tune the note away. The stock kit passes the wire system prompt
+through unchanged by default and retains model-authored output; it still needs
+a served-path review before anyone treats it as safe.
 
 ## Package and upload
 

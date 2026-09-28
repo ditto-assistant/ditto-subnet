@@ -30,7 +30,10 @@ from ditto.db.models import (
     ValidatorQueueWithdrawal,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version
-from ditto.db.queries.screening import PROVIDER_BACKOFF_REASON_CODES
+from ditto.db.queries.screening import (
+    PROVIDER_BACKOFF_REASON_CODES,
+    expire_screening_attempts,
+)
 from ditto.db.queries.screening_infra_retry import (
     INFRA_AUTO_RETRY_MAX_STREAK,
     INFRA_AUTO_RETRY_REASON_CODES,
@@ -506,6 +509,32 @@ async def test_failed_attempt_reports_the_lane_its_reason_names(
     response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
     assert response.status_code == 200, response.text
     assert response.json()["admission_retry"]["lane"] == lane
+
+
+async def test_expired_lease_reports_the_lane_its_build_reached(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name="lane-lease-expired", status=AgentStatus.SCREENING
+    )
+    await _seed_running_attempt(
+        maker, agent_id=agent_id, build=("succeeded", "pending")
+    )
+    async with maker() as session, session.begin():
+        assert (
+            await expire_screening_attempts(
+                session, now=datetime.now(UTC) + timedelta(hours=1)
+            )
+            == 1
+        )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    retry = response.json()["admission_retry"]
+    assert retry["state"] == "parked"
+    assert retry["last_failure_infrastructure"] is False
+    assert retry["lane"] == "runtime_smoke"
 
 
 def test_every_infrastructure_retry_code_names_a_lane() -> None:

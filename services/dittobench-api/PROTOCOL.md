@@ -98,6 +98,11 @@ reviewed identity, `openrouter-route-6a097486af3c178d-v1`; a v9 scorer rejects
 the fixed-medium v7/v8 profile `openrouter-route-a471cd87ae7df5b9-v1` even
 though both serve the same model.
 
+Every other chat request field is forwarded, pinned, dropped, or refused as
+listed in the miner guide's
+[inference request contract](../../docs/MINER.md#inference-request-contract)
+(machine-readable: `docs/inference-request-fields.json`).
+
 ### Seeded tool catalog (v13)
 
 From `bench_version: 13` the `tools` array on every `RunRequest` is a

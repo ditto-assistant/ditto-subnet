@@ -177,6 +177,27 @@ SELECT s.scope, p.request_kind, s.peak::bigint AS peak
 """
 
 
+async def load_inference_current_rows(
+    session: AsyncSession,
+    *,
+    stale_after_seconds: int,
+) -> Sequence[RowMapping]:
+    """Return the live per-lane load: a grant scan plus one partial-index count.
+
+    Split out so a read that only needs current saturation does not pay for the
+    hour-bounded sweeps below.
+    """
+    return (
+        (
+            await session.execute(
+                text(CURRENT_SQL), {"stale_after_seconds": stale_after_seconds}
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+
 async def load_inference_runtime_rows(
     session: AsyncSession,
     *,
@@ -188,14 +209,8 @@ async def load_inference_runtime_rows(
     unbounded stale count rides the partial ``inference_requests_inflight_idx``.
     Nothing here reconstructs concurrency from table birth.
     """
-    current = (
-        (
-            await session.execute(
-                text(CURRENT_SQL), {"stale_after_seconds": stale_after_seconds}
-            )
-        )
-        .mappings()
-        .all()
+    current = await load_inference_current_rows(
+        session, stale_after_seconds=stale_after_seconds
     )
     windows = (await session.execute(text(WINDOWS_SQL))).mappings().all()
     peaks = (await session.execute(text(PEAKS_SQL))).mappings().all()

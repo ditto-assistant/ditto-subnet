@@ -9,9 +9,11 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.errors import PlatformError
@@ -90,7 +92,6 @@ class _FakeGate:
         self.build_only_calls: list[bool] = []
         self.policy_only_calls: list[bool] = []
         self.deferred_source_review_calls: list[bool] = []
-        self.remote_source_reviews: list[Any] = []
         self.policy_versions: list[int] = []
         self.bench_versions: list[int] = []
         self.shadow_result: Any = None
@@ -117,7 +118,6 @@ class _FakeGate:
         deferred_source_review: bool = False,
         policy_version: int | None = None,
         bench_version: int | None = None,
-        remote_source_review: Any = None,
         **_: Any,
     ) -> ScreeningDecision:
         self.calls.append(agent_id)
@@ -125,7 +125,6 @@ class _FakeGate:
         self.build_only_calls.append(build_only)
         self.policy_only_calls.append(policy_only)
         self.deferred_source_review_calls.append(deferred_source_review)
-        self.remote_source_reviews.append(remote_source_review)
         if policy_version is not None:
             self.policy_versions.append(policy_version)
         if bench_version is not None:
@@ -504,9 +503,10 @@ async def test_attempt_bound_review_override_is_applied_then_restored(
     assert verdict["review_settings_checksum"] == checksum
 
 
-async def test_shadow_review_is_attempt_bound_and_does_not_change_verdict(
+@pytest.fixture
+def shadow_review_case(
     make_config: Callable[..., ScreenerConfig],
-) -> None:
+) -> tuple[ScreenerWorker, _FakePlatform, _FakeGate, ScreenerQueueItem]:
     item = _item(uuid4())
     platform = _FakePlatform([])
     gate = _FakeGate(_decision(ScreeningOutcome.PASS))
@@ -535,6 +535,15 @@ async def test_shadow_review_is_attempt_bound_and_does_not_change_verdict(
         checksum="cd" * 32,
         source="platform",
     )
+    return worker, platform, gate, item
+
+
+async def test_shadow_review_is_attempt_bound_and_does_not_change_verdict(
+    shadow_review_case: tuple[
+        ScreenerWorker, _FakePlatform, _FakeGate, ScreenerQueueItem
+    ],
+) -> None:
+    worker, platform, _, item = shadow_review_case
 
     await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
 
@@ -544,6 +553,165 @@ async def test_shadow_review_is_attempt_bound_and_does_not_change_verdict(
     assert shadow["artifact_sha256"] == item.sha256
     assert shadow["settings_revision"] == 4
     assert shadow["disposition"] == "safe"
+    assert len(platform.verdicts) == 1 and platform.verdicts[0]["passed"] is True
+
+
+@pytest.mark.parametrize("cost, expected_cost", [(30.0, 25.0), (-1.0, 0.0)])
+async def test_shadow_review_telemetry_overflow_does_not_drop_verdict(
+    shadow_review_case: tuple[
+        ScreenerWorker, _FakePlatform, _FakeGate, ScreenerQueueItem
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    cost: float,
+    expected_cost: float,
+) -> None:
+    worker, platform, gate, item = shadow_review_case
+    models = tuple(f"model-{i}" for i in range(120))
+    providers = tuple(f"provider-{i}" for i in range(120))
+    original = replace(
+        gate.shadow_result,
+        response_models=models,
+        response_providers=providers,
+        observation=replace(
+            gate.shadow_result.observation, categories=("x" * 70,) * 10
+        ),
+        usage=L2Usage(estimated_cost_usd=cost, reported_cost_usd=cost),
+        resolution_basis="r" * 90,
+        clearance_path="c" * 110,
+        critic_disposition="c" * 90,
+        adjudicator_disposition="a" * 90,
+    )
+    gate.shadow_result = original
+    claim_failure = AsyncMock()
+    monkeypatch.setattr(worker, "_submit_claim_failure", claim_failure)
+
+    with caplog.at_level("INFO"):
+        await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
+
+    assert len(platform.shadow_reviews) == 1
+    shadow = platform.shadow_reviews[0]["request"]
+    assert shadow["response_models"] == list(models[-50:])
+    assert shadow["response_providers"] == list(providers[-50:])
+    assert shadow["categories"] == ["x" * 64] * 8
+    assert shadow["usage"]["estimated_cost_usd"] == expected_cost
+    assert shadow["usage"]["reported_cost_usd"] == expected_cost
+    assert shadow["resolution_basis"] == "r" * 80
+    assert shadow["clearance_path"] == "c" * 100
+    assert shadow["critic_disposition"] == "c" * 80
+    assert shadow["adjudicator_disposition"] == "a" * 80
+    assert original.response_models == models
+    assert original.usage.estimated_cost_usd == cost
+    assert caplog.text.count("bounded shadow review telemetry") == 1
+    assert "original_model_stages=120 original_provider_stages=120" in caplog.text
+    assert len(platform.verdicts) == 1 and platform.verdicts[0]["passed"] is True
+    assert platform.verdicts[0]["attempt_id"] == item.attempt_id
+    assert platform.verdicts[0]["signature"]
+    claim_failure.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["validation", "usage", "value", "transport", "unexpected", "call_site", "pop"],
+)
+async def test_shadow_review_failure_preserves_signed_verdict(
+    shadow_review_case: tuple[
+        ScreenerWorker, _FakePlatform, _FakeGate, ScreenerQueueItem
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
+) -> None:
+    worker, platform, gate, item = shadow_review_case
+    claim_failure = AsyncMock()
+    monkeypatch.setattr(worker, "_submit_claim_failure", claim_failure)
+    private_text = "private finding or credential must not appear in logs"
+    error_type = "ValueError"
+
+    def fail_request(**_: Any) -> None:
+        raise ValueError(private_text)
+
+    if failure == "validation":
+        gate.shadow_result = replace(
+            gate.shadow_result,
+            observation=replace(
+                gate.shadow_result.observation, finding_digest=private_text
+            ),
+        )
+        error_type = ValidationError.__name__
+    elif failure == "usage":
+        gate.shadow_result = replace(gate.shadow_result, usage=L2Usage(input_tokens=-1))
+        error_type = ValidationError.__name__
+    elif failure == "value":
+        monkeypatch.setattr(
+            "ditto_screener.worker.ShadowReviewObservationRequest", fail_request
+        )
+    elif failure == "pop":
+
+        def fail_pop(_: UUID) -> None:
+            raise RuntimeError(private_text)
+
+        monkeypatch.setattr(gate, "pop_shadow_review", fail_pop)
+        error_type = "RuntimeError"
+    else:
+        error = (
+            PlatformError(private_text)
+            if failure == "transport"
+            else RuntimeError(private_text)
+        )
+        error_type = type(error).__name__
+        if failure == "call_site":
+            monkeypatch.setattr(
+                worker, "_submit_shadow_review", AsyncMock(side_effect=error)
+            )
+        else:
+            monkeypatch.setattr(
+                platform, "submit_shadow_review", AsyncMock(side_effect=error)
+            )
+
+    await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
+
+    assert platform.shadow_reviews == []
+    assert len(platform.verdicts) == 1 and platform.verdicts[0]["passed"] is True
+    assert platform.verdicts[0]["attempt_id"] == item.attempt_id
+    assert platform.verdicts[0]["signature"]
+    claim_failure.assert_not_called()
+    assert f"attempt_id={item.attempt_id}" in caplog.text
+    assert f"error_type={error_type}" in caplog.text
+    assert private_text not in caplog.text
+    assert worker._active_attempt_id is None
+    assert worker._progress_heartbeat_tasks == set()
+
+
+async def test_shadow_review_not_built_in_enforce_mode(
+    shadow_review_case: tuple[
+        ScreenerWorker, _FakePlatform, _FakeGate, ScreenerQueueItem
+    ],
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, platform, gate, item = shadow_review_case
+    worker = _worker(make_config(l2_review_mode="enforce"), platform, gate)
+    worker._review_settings_status = ReviewSettingsStatus(
+        revision=4,
+        scope="*",
+        mode="enforce",
+        checksum="cd" * 32,
+        source="platform",
+    )
+    built: list[bool] = []
+
+    def fail_request(**_: Any) -> None:
+        built.append(True)
+        raise AssertionError("enforce must not construct shadow telemetry")
+
+    monkeypatch.setattr(
+        "ditto_screener.worker.ShadowReviewObservationRequest", fail_request
+    )
+    await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
+
+    assert built == []
+    assert platform.shadow_reviews == []
     assert len(platform.verdicts) == 1 and platform.verdicts[0]["passed"] is True
 
 
@@ -678,61 +846,6 @@ async def test_policy_only_item_reuses_image_without_upload(
     assert verdict["policy_only"] is True
     assert verdict["image_sha256"] is None
     assert verdict["image_upload_id"] is None
-
-
-async def test_remote_build_gets_full_timeout_despite_stale_local_override(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    """A legacy 20-minute local cap must not reduce Targon to one minute."""
-    agent = uuid4()
-    platform = _FakePlatform([])
-    observed_timeouts: list[float] = []
-
-    async def build_submission_image(  # type: ignore[no-untyped-def]
-        _agent_id,
-        *,
-        attempt_id: UUID,
-        timeout,
-    ):
-        assert attempt_id is not None
-        observed_timeouts.append(timeout)
-        return None
-
-    platform.build_submission_image = build_submission_image  # type: ignore[attr-defined]
-    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
-    original_screen = gate.screen
-
-    async def invoke_remote_build(*, remote_build, **kwargs):  # type: ignore[no-untyped-def]
-        await remote_build()
-        return await original_screen(**kwargs)
-
-    gate.screen = invoke_remote_build  # type: ignore[method-assign]
-    worker = _worker(
-        make_config(
-            build_timeout_seconds=1200,
-            remote_build_mode="prefer",
-            remote_build_timeout_seconds=1500,
-        ),
-        platform,
-        gate,
-    )
-
-    await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
-
-    assert observed_timeouts == [1500]
-
-
-async def test_local_build_mode_keeps_source_review_in_the_worker(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    """A local image cannot satisfy the fleet review job's build prerequisite."""
-    platform = _FakePlatform([])
-    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
-    worker = _worker(make_config(remote_build_mode="off"), platform, gate)
-
-    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
-
-    assert gate.remote_source_reviews == [None]
 
 
 async def test_build_only_quarantine_is_rejected_as_retryable_worker_failure(

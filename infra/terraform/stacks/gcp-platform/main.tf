@@ -157,9 +157,9 @@ resource "google_storage_bucket" "agents" {
     }
   }
 
-  # Attempt-scoped Targon outputs are temporary transport objects. Normal GCE
-  # import deletes them immediately; this bounds the presigned-PUT race where a
-  # canceled builder finishes uploading after the screener's cleanup request.
+  # Retain cleanup for historical attempt-scoped remote build objects. This
+  # bounds late uploads from a canceled builder without affecting completed
+  # artifact objects.
   lifecycle_rule {
     condition {
       age            = 1

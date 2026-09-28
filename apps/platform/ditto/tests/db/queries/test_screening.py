@@ -39,13 +39,16 @@ from ditto.db.models import (
 )
 from ditto.db.queries.screening import (
     _EXHAUSTED_REASON_CODE,
+    LEASE_EXPIRED_REASON_CODE,
     MAX_SCREENING_EXPIRIES,
     POLICY_ONLY_RESCREEN_REASON,
+    _inconclusive_attempt_count,
     claim_screening_attempts,
     expire_screening_attempts,
     fail_orphaned_screening_attempts,
     try_acquire_screening_claim_lock,
 )
+from ditto.db.queries.screening_infra_retry import plan_infra_retries
 from ditto.screener_policy_state import update_effective_screener_policy
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 
@@ -658,6 +661,86 @@ async def test_claim_releases_heartbeat_proven_orphan_without_expiry_penalty(
     assert orphan.status == "failed"
     assert orphan.reason_code == "worker-lease-orphaned"
     assert agent.status == AgentStatus.SCREENING_FAILED
+
+
+async def test_orphaned_attempt_parks_for_an_operator_retry(
+    session: AsyncSession,
+) -> None:
+    """A worker can drop an attempt for artifact-reachable reasons (#2449)."""
+    now = datetime.now(UTC)
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-orphan-parks",
+        name="orphan-parks",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.SCREENING,
+    )
+    agent.screening_policy_version = SCREENING_POLICY_VERSION
+    orphan = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=agent.agent_id,
+        screener_hotkey=_SCREENER,
+        policy_version=SCREENING_POLICY_VERSION,
+        status="running",
+        started_at=now - timedelta(minutes=10),
+        deadline=now + timedelta(minutes=35),
+    )
+    async with session.begin():
+        session.add_all([agent, orphan, _heartbeat(instance_id="screener-a", now=now)])
+
+    assert await _claim(session, now=now) == []
+    assert orphan.status == "failed"
+    assert orphan.reason_code == "worker-lease-orphaned"
+    assert orphan.public_reason is not None
+    assert "manual retry required" in orphan.public_reason
+    assert agent.status == AgentStatus.SCREENING_FAILED
+
+    later = now + timedelta(hours=2)
+    assert await _claim(session, now=later) == []
+    assert agent.status == AgentStatus.SCREENING_FAILED
+    assert (
+        agent.agent_id not in (await plan_infra_retries(session, now=later)).decisions
+    )
+
+
+async def test_lease_expiry_still_parks_after_max_expiries(
+    session: AsyncSession,
+) -> None:
+    """Expiries stay on the inconclusive budget; they are never auto-retried."""
+    now = datetime.now(UTC)
+    agent = await _seed_failed_agent(session)
+    await _add_expired_attempts(
+        session,
+        agent,
+        MAX_SCREENING_EXPIRIES - 1,
+        base=now - timedelta(hours=6),
+    )
+    async with session.begin():
+        agent.status = AgentStatus.SCREENING
+        session.add(
+            ScreeningAttempt(
+                attempt_id=uuid4(),
+                agent_id=agent.agent_id,
+                screener_hotkey=_SCREENER,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="running",
+                started_at=now - timedelta(minutes=50),
+                deadline=now - timedelta(minutes=5),
+            )
+        )
+
+    assert await _claim(session, now=now) == []
+    assert agent.status == AgentStatus.SCREENING_FAILED
+    later = now + timedelta(hours=3)
+    assert await _claim(session, now=later) == []
+    assert agent.status == AgentStatus.SCREENING_FAILED
+    assert (
+        await _inconclusive_attempt_count(session, agent_id=agent.agent_id)
+        == MAX_SCREENING_EXPIRIES
+    )
+    assert (
+        agent.agent_id not in (await plan_infra_retries(session, now=later)).decisions
+    )
 
 
 async def test_claim_preserves_attempt_reported_active_by_a_fresh_worker(
@@ -2495,6 +2578,54 @@ async def test_expired_scored_policy_release_pauses_without_removing_the_score(
         )
     )
     assert release is not None and release.state == "paused"
+
+
+async def test_expired_lease_is_typed_without_changing_the_expiry_count(
+    session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC)
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-lease-expired",
+        name="lease-expired",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.SCREENING,
+    )
+    canary = _scored_agent(hotkey="5HK-canary-expired", name="canary-expired")
+    attempt, canary_attempt = (
+        ScreeningAttempt(
+            attempt_id=uuid4(),
+            agent_id=owner.agent_id,
+            screener_hotkey=_SCREENER,
+            policy_version=SCREENING_POLICY_VERSION,
+            status="running",
+            started_at=now - timedelta(minutes=75),
+            deadline=now - timedelta(minutes=5),
+            reason_code=reason_code,
+        )
+        for owner, reason_code in ((agent, None), (canary, POLICY_ONLY_RESCREEN_REASON))
+    )
+    async with session.begin():
+        session.add_all((agent, canary))
+        await session.flush()
+        session.add_all((attempt, canary_attempt))
+
+    async with session.begin():
+        assert await expire_screening_attempts(session, now=now) == 2
+
+    assert attempt.status == "expired"
+    assert attempt.public_reason == "Screening lease expired"
+    assert attempt.reason_code == LEASE_EXPIRED_REASON_CODE
+    assert agent.status == AgentStatus.SCREENING_FAILED
+    assert agent.screening_reason == "Screening lease expired"
+    assert agent.screening_reason_code == LEASE_EXPIRED_REASON_CODE
+    # A claim-time execution mode survives the expiry.
+    assert canary_attempt.status == "expired"
+    assert canary_attempt.reason_code == POLICY_ONLY_RESCREEN_REASON
+    assert canary.status == AgentStatus.SCORED
+    assert canary.screening_reason_code is None
+    async with session.begin():
+        assert await _inconclusive_attempt_count(session, agent_id=agent.agent_id) == 1
 
 
 async def test_scheduled_rescreen_does_not_requeue_unadmitted_historical_scored(

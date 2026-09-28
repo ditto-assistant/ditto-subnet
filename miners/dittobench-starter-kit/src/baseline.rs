@@ -40,8 +40,8 @@
 //!
 //! ======================= BENCH V13 HONEST ARCHITECTURE =====================
 //! Bench v13 grades the prose and adds relay-observed gates (see `v13.rs`
-//! and PROTOCOL.md "Bench v13"). The kit stays inside every gate by
-//! construction, and each rule below is the line a rewrite would cross:
+//! and PROTOCOL.md "Bench v13"). The default served path leaves the wire
+//! system prompt intact and lets the model decide how to answer and act:
 //!
 //!  * The model's value is served as the model wrote it. The `answer` slot is
 //!    only ever a verbatim substring of `final_text` (`v13::answer_slot_from_prose`);
@@ -52,23 +52,19 @@
 //!    wire stays at bench 9, so a default-on slot would change live v12
 //!    grading (an authoritative slot has no prose fallback).
 //!  * The graded value is never written into a harness-authored span. The
-//!    system prompt carries a values-free policy (`v13::HARNESS_POLICY_PROMPT`);
-//!    retrieved memory is injected by the harness library as `/seed`-derived
-//!    context, which the causal gate exempts. (`answer_in_prompt`.)
+//!    harness passes through the wire system prompt; retrieved memory is
+//!    injected by the harness library as `/seed`-derived context, which the
+//!    causal gate exempts. (`answer_in_prompt`.)
 //!  * The whole catalog is offered on every turn, including the deciding one.
 //!    The documented preloading example (`DITTOBENCH_PRELOAD_TOP_K`) trims by
 //!    the PUBLISHED embedding and always retains its top-3, which is the
 //!    safe harbor. Restraint is the model's choice: a model-emitted call is
 //!    always executed, never swallowed. (`restraint_without_offer`,
 //!    `expected_tool_not_offered`, `swallowed_model_call`.)
-//!  * Clarifying questions and declines come from the model, name the missing
-//!    detail, and cite what memory search found. The stock harness leaves the
-//!    optional `abstain` field absent; prose is never converted into a wire flag.
-//!  * Runtime-described options (`set_accent_color`, `set_chat_font`) are
-//!    solved list-then-act: the model calls `discover_capabilities`, reads the
-//!    served inventory, and passes one listed spelling; a near-miss is decided
-//!    by the qualifier the user used. The mock's "unknown option" error is fed
-//!    back to the model to recover, never patched on the host.
+//!  * Clarifying questions and declines come from the model. The stock harness
+//!    leaves the optional `abstain` field absent; prose is never converted into
+//!    a wire flag. Available tool schemas and results go to the model without
+//!    a host-side option registry or argument repair.
 //!
 //! `scripts/local-rehearsal.py --gates` replays the public rules against a
 //! local run and prints per-case notes before you upload.
@@ -116,26 +112,6 @@ struct ToolExecCtx {
     hop: AtomicI32,
 }
 
-const MAX_OBSERVED_TOOL_ATTEMPTS: usize = 2;
-
-fn is_retryable_tool_error(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    error.contains("retry")
-        || error.contains("transient")
-        || error.contains("temporary")
-        || error.contains("429")
-        || error.contains("502")
-        || error.contains("503")
-        || error.contains("504")
-}
-
-fn is_retryable_tool_status(status: reqwest::StatusCode) -> bool {
-    status == reqwest::StatusCode::TOO_MANY_REQUESTS
-        || status == reqwest::StatusCode::BAD_GATEWAY
-        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
-        || status == reqwest::StatusCode::GATEWAY_TIMEOUT
-}
-
 /// A catalog tool built from a wire tool definition. It exposes the case's
 /// catalog tool to the model — so the agent can *select* it, which is what the
 /// validator scores. When a [`ToolExecCtx`] is attached (observed execution), `execute()`
@@ -169,71 +145,46 @@ impl Tool for WireTool {
     }
 
     async fn execute(&self, args: Value) -> HarnessResult<Value> {
-        // Observed execution: execute for real through the validator's mock endpoint.
+        // Each model-emitted call gets one observed endpoint attempt. A 5xx or
+        // returned error may follow an executed mutation, so replaying it with
+        // a new hop could perform the action twice.
         if let Some(ctx) = &self.exec {
-            for attempt in 0..MAX_OBSERVED_TOOL_ATTEMPTS {
-                let hop = ctx.hop.fetch_add(1, Ordering::SeqCst);
-                let body = protocol::ToolExecRequest {
-                    case_id: ctx.case_id.clone(),
-                    user_id: ctx.user_id.clone(),
-                    name: self.def.name.clone(),
-                    args: args.clone(),
-                    hop,
-                };
-                match ctx.client.post(&ctx.endpoint).json(&body).send().await {
-                    Ok(resp) => {
-                        let status = resp.status();
-                        if !status.is_success() {
-                            let response_body = resp.text().await.unwrap_or_default();
-                            if attempt + 1 < MAX_OBSERVED_TOOL_ATTEMPTS
-                                && is_retryable_tool_status(status)
-                            {
-                                continue;
-                            }
-                            return Ok(json!({
-                                "error": format!(
-                                    "tool endpoint returned {status}: {response_body}"
-                                )
-                            }));
-                        }
-                        match resp.json::<protocol::ToolExecResponse>().await {
-                            Ok(r) if !r.result.is_empty() => {
-                                return Ok(json!({ "result": r.result }));
-                            }
-                            Ok(r) if !r.error.is_empty() => {
-                                if attempt + 1 < MAX_OBSERVED_TOOL_ATTEMPTS
-                                    && is_retryable_tool_error(&r.error)
-                                {
-                                    continue;
-                                }
-                                return Ok(json!({ "error": r.error }));
-                            }
-                            Ok(_) => {
-                                return Ok(json!({
-                                    "error": format!(
-                                        "tool endpoint returned an empty result for {}",
-                                        self.def.name
-                                    )
-                                }));
-                            }
-                            Err(err) => {
-                                return Ok(
-                                    json!({ "error": format!("decode tool result: {err}") }),
-                                );
-                            }
-                        }
+            let body = protocol::ToolExecRequest {
+                case_id: ctx.case_id.clone(),
+                user_id: ctx.user_id.clone(),
+                name: self.def.name.clone(),
+                args,
+                hop: ctx.hop.fetch_add(1, Ordering::SeqCst),
+            };
+            match ctx.client.post(&ctx.endpoint).json(&body).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if !status.is_success() {
+                        let response_body = resp.text().await.unwrap_or_default();
+                        return Ok(json!({
+                            "error": format!("tool endpoint returned {status}: {response_body}")
+                        }));
                     }
-                    Err(err) => {
-                        return Ok(json!({ "error": format!("tool endpoint unreachable: {err}") }));
+                    match resp.json::<protocol::ToolExecResponse>().await {
+                        Ok(r) if !r.result.is_empty() => Ok(json!({ "result": r.result })),
+                        Ok(r) if !r.error.is_empty() => Ok(json!({ "error": r.error })),
+                        Ok(_) => Ok(json!({
+                            "error": format!(
+                                "tool endpoint returned an empty result for {}",
+                                self.def.name
+                            )
+                        })),
+                        Err(err) => Ok(json!({ "error": format!("decode tool result: {err}") })),
                     }
                 }
+                Err(err) => Ok(json!({ "error": format!("tool endpoint unreachable: {err}") })),
             }
-            return Ok(json!({ "error": "tool endpoint retry budget exhausted" }));
+        } else {
+            Ok(json!({
+                "status": "ok",
+                "note": "stub result from the practice harness; provide tool_endpoint (observed execution) or a real Tool to execute",
+            }))
         }
-        Ok(json!({
-            "status": "ok",
-            "note": "stub result from the practice harness; provide tool_endpoint (observed execution) or a real Tool to execute",
-        }))
     }
 }
 
@@ -323,9 +274,10 @@ mod tool_exec_tests {
         }
     }
 
-    async fn assert_transient_recovery(
+    async fn assert_transient_not_replayed(
         app: Router,
         calls: Arc<Mutex<Vec<protocol::ToolExecRequest>>>,
+        expected_error: &str,
     ) {
         let (endpoint, task) = serve(app).await;
         let result = wire_tool(exec_context(endpoint))
@@ -334,33 +286,29 @@ mod tool_exec_tests {
             .expect("execute tool");
         task.abort();
 
-        assert_eq!(
-            result["result"],
-            "Top result: the Veltrix index reached 4,218 points."
-        );
+        assert!(result["error"].as_str().unwrap().contains(expected_error));
         let calls = calls.lock().expect("lock calls");
-        assert_eq!(calls.len(), 2);
+        assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].hop, 0);
-        assert_eq!(calls[1].hop, 1);
-        assert_eq!(calls[0].args, calls[1].args);
+        assert_eq!(calls[0].args, json!({"queries": ["Veltrix index"]}));
     }
 
     #[tokio::test]
-    async fn retries_a_transient_tool_error_once() {
+    async fn a_transient_tool_error_does_not_replay_a_model_call() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new()
             .route("/tool", post(transient_json_then_success))
             .with_state(Arc::clone(&calls));
-        assert_transient_recovery(app, calls).await;
+        assert_transient_not_replayed(app, calls, "transient upstream error").await;
     }
 
     #[tokio::test]
-    async fn retries_a_transient_http_status_once() {
+    async fn a_transient_http_status_does_not_replay_a_model_call() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new()
             .route("/tool", post(transient_status_then_success))
             .with_state(Arc::clone(&calls));
-        assert_transient_recovery(app, calls).await;
+        assert_transient_not_replayed(app, calls, "503").await;
     }
 }
 
@@ -744,12 +692,9 @@ impl Baseline {
             .map(|d| Arc::new(WireTool::from_wire(d, exec_ctx.clone())) as Arc<dyn Tool>)
             .collect();
 
-        // The system prompt the model runs on: the wire prompt first, then the
-        // values-free v13 answering policy (answer in the requested unit, ask
-        // by naming the missing detail, list-then-act, grounded declines), and
-        // the `Answer:` line request only when the slot is enabled.
-        // EXTENSION POINT: keep it values-free — a graded value written here is
-        // a harness-authored span and the v13 causal gate zeroes it.
+        // Default serving preserves the wire prompt. Only the opt-in local
+        // answer-slot rehearsal adds an output-format instruction. Never put a
+        // computed graded value in a harness-authored prompt span.
         let answer_slot = v13::answer_slot_enabled();
         let system_prompt = v13::compose_system_prompt(&req.system_prompt, answer_slot);
 

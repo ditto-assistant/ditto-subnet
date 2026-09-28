@@ -67,6 +67,7 @@ from ditto.api_server.source_inspect import (
     validate_upload_archive,
 )
 from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.upload_feedback import submission_cooldown_message
 from ditto.chain import ChainError
 from ditto.db.models import AgentStatus
 from ditto.db.queries.agents import (
@@ -80,7 +81,6 @@ from ditto.db.queries.payments import (
     consume_evaluation_credit,
     get_agent_for_payment_proof,
     get_evaluation_payment_for_proof,
-    get_same_hotkey_agent_by_sha,
     get_same_owner_agent_by_sha,
     insert_evaluation_payment,
 )
@@ -254,19 +254,19 @@ async def check(
     duplicate = None
     if (
         signature_valid
-        and registered
+        and owner_coldkey is not None
         and not banned
         and not body.allow_identical_rescore
         and body.payment_block_hash is None
     ):
-        duplicate = await get_same_hotkey_agent_by_sha(
-            session, miner_hotkey=body.hotkey, sha256=body.sha256
+        duplicate = await get_same_owner_agent_by_sha(
+            session, miner_coldkey=owner_coldkey, sha256=body.sha256
         )
         if duplicate:
             codes.append(ERROR_CODE_IDENTICAL_SUBMISSION)
             messages.append(
-                "identical artifact already submitted; no payment is required. "
-                "Set allow_identical_rescore=true only to purchase another seed."
+                "The previous submission cannot be resubmitted. "
+                "Please try again after updating."
             )
 
     settings = await effective_submission_settings(
@@ -375,7 +375,7 @@ async def check(
         )
         if retry_at is not None:
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)
-            messages.append(f"owner coldkey may submit again at {retry_at.isoformat()}")
+            messages.append(submission_cooldown_message(retry_at))
 
     admission = None
     if not codes and body.reserve_submission_slot:
@@ -401,7 +401,7 @@ async def check(
         except SubmissionCooldownError as exc:
             retry_at = exc.retry_at
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)
-            messages.append(f"owner coldkey may submit again at {retry_at.isoformat()}")
+            messages.append(submission_cooldown_message(retry_at))
 
     payment_required = not codes and not recovery_payment_verified
     return UploadCheckResponse(

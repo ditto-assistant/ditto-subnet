@@ -18,6 +18,7 @@ Invariants pinned:
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
@@ -31,6 +32,7 @@ from ditto.api_models import (
     UploadCheckResponse,
 )
 from ditto.api_models.agent_status import AgentStatus
+from ditto.miner_cli import preferences
 from ditto.miner_cli.commands.upload import (
     _offer_owner_link,
     _post_upload_with_retries,
@@ -1569,11 +1571,96 @@ class TestPaymentDisposition:
         assert "upload succeeded" not in err
         assert "submission v2" not in err
         assert "byte-identical" in err
+        assert (
+            "The previous submission cannot be resubmitted. "
+            "Please try again after updating."
+        ) in err
         assert "NOT spent" in err
         assert "reusable credit" in err
         # Names the flag that actually buys another seed, and the existing agent.
         assert "--allow-identical-rescore" in err
         assert str(response.credit_for_agent_id) in err
+
+    @pytest.mark.parametrize("allow_identical_rescore", [False, True])
+    def test_duplicate_race_receipt_funds_the_next_upload(
+        self,
+        good_tar: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        allow_identical_rescore: bool,
+    ) -> None:
+        monkeypatch.setenv("DITTO_CLI_CONFIG_PATH", str(tmp_path / "config.json"))
+        # Exercise real receipt persistence across two CLI invocations.
+        for name in (
+            "load_pending_payment",
+            "load_pending_payments_for_hotkey",
+            "save_pending_payment",
+            "clear_pending_payment",
+        ):
+            monkeypatch.setattr(
+                f"ditto.miner_cli.commands.upload.{name}", getattr(preferences, name)
+            )
+        client = MagicMock()
+        client.post_upload_check.side_effect = [
+            _ok_check(),
+            _ok_check().model_copy(update={"payment_required": False}),
+        ]
+        client.get_eval_pricing.return_value = _pricing()
+        client.post_upload_agent.side_effect = [
+            _reusable_credit_response(),
+            _upload_response().model_copy(
+                update={"payment_disposition": "credit_consumed"}
+            ),
+        ]
+        first = _good_preflight()
+        second = first if allow_identical_rescore else replace(first, sha256="ef" * 32)
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        receipt = _payment_receipt()
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                side_effect=[first, second],
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=receipt,
+            ) as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient", _patch_api_client(client)
+            ),
+        ):
+            assert run(make_args(good_tar)) == 0
+            assert (
+                preferences.load_pending_payment(
+                    network="local", hotkey=HOTKEY, name="alpha", sha256=first.sha256
+                )
+                == receipt
+            )
+            assert (
+                run(
+                    make_args(good_tar, allow_identical_rescore=allow_identical_rescore)
+                )
+                == 0
+            )
+
+        pay.assert_called_once()
+        check = client.post_upload_check.call_args.args[0]
+        assert check.payment_block_hash == receipt.block_hash
+        assert check.allow_identical_rescore is allow_identical_rescore
+        assert check.sha256 == second.sha256
+        assert client.post_upload_agent.call_args.kwargs["payment"] == receipt
+        assert (
+            preferences.load_pending_payments_for_hotkey(network="local", hotkey=HOTKEY)
+            == ()
+        )
 
     def test_credit_consumed_says_no_transfer_was_sent(
         self, good_tar: Path, capsys: pytest.CaptureFixture[str]

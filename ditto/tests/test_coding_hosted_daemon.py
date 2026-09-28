@@ -10,6 +10,8 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from ditto.tests.ansible_playbooks import converge_play
+
 ROOT = Path(__file__).parents[2]
 ROLE = ROOT / "infra/ansible/roles/coding_hosted"
 spec = importlib.util.spec_from_file_location(
@@ -293,12 +295,8 @@ def test_role_is_default_off_and_has_no_legacy_or_worker_activation():
         "ansible.builtin.apt:",
     ):
         assert forbidden not in source
-    play = yaml.safe_load(
-        (ROOT / "infra/ansible/playbooks/gcp-coding-hosted.yml").read_text()
-    )
-    assert play[0]["hosts"] == "role_coding_hosted" and play[0]["roles"] == [
-        "coding_hosted"
-    ]
+    play = converge_play(ROOT / "infra/ansible/playbooks/gcp-coding-hosted.yml")
+    assert play["hosts"] == "role_coding_hosted" and play["roles"] == ["coding_hosted"]
     assert (
         "playbooks/gcp-coding-hosted.yml"
         in (ROOT / ".github/workflows/infra-ci.yml").read_text()

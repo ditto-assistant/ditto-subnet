@@ -3,6 +3,9 @@ package inference
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -367,5 +370,41 @@ func TestValidateRequestSchemaRefusedListsEveryOffender(t *testing.T) {
 	if !strings.Contains(err.message, "function_call (use tool_choice instead)") ||
 		!strings.Contains(err.message, "functions (use tools instead)") {
 		t.Fatalf("both offenders must be named: %q", err.message)
+	}
+}
+
+func TestRequestFieldFatesMatchThePublishedContract(t *testing.T) {
+	// The checked-in table miners read (docs/MINER.md renders it). Platform
+	// asserts the same file against endpoints/inference.py, so a fate changed
+	// in only one language fails one of the two suites.
+	raw, err := os.ReadFile("../../../../docs/inference-request-fields.json")
+	if err != nil {
+		t.Fatalf("read contract: %v", err)
+	}
+	var contract struct {
+		Forwarded []string          `json:"forwarded"`
+		Pinned    map[string]string `json:"pinned"`
+		Dropped   map[string]string `json:"dropped"`
+		Refused   map[string]string `json:"refused"`
+	}
+	if err := json.Unmarshal(raw, &contract); err != nil {
+		t.Fatalf("parse contract: %v", err)
+	}
+	for _, fate := range []struct {
+		name string
+		got  map[string]struct{}
+		want []string
+	}{
+		{"forwarded", forwardedRequestFields, contract.Forwarded},
+		{"pinned", pinnedRequestFields, slices.Collect(maps.Keys(contract.Pinned))},
+		{"dropped", droppedRequestFields, slices.Collect(maps.Keys(contract.Dropped))},
+	} {
+		got, want := slices.Sorted(maps.Keys(fate.got)), slices.Sorted(slices.Values(fate.want))
+		if !slices.Equal(got, want) {
+			t.Errorf("%s fields = %v, contract lists %v", fate.name, got, want)
+		}
+	}
+	if !maps.Equal(refusedRequestFields, contract.Refused) {
+		t.Errorf("refused fields = %v, contract lists %v", refusedRequestFields, contract.Refused)
 	}
 }

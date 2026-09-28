@@ -99,6 +99,7 @@ import {
   leaseRevocationsListSchema,
   screenerCapacityViewSchema,
   screeningInfraRetryViewSchema,
+  screenerNodeChannelSettingsConfirmation,
   screenerProviderSettingsConfirmation,
   screenerProviderSettingsSchema,
   authorizeConfirmationBundleRetestInputSchema,
@@ -459,6 +460,28 @@ describe('admin API schemas', () => {
 
     expect(screenerProviderSettingsConfirmation(settings)).toBe(
       'APPLY SCREENER PROVIDERS BUILDS=gcp>targon RUNTIME=gcp>targon SOURCE_REVIEW=gcp GCE_OVERFLOW=DISABLED',
+    )
+  })
+
+  it('names production admission closure in the node concurrency confirmation', () => {
+    const settings = {
+      screening_concurrency: 0,
+      sandbox_slots: 4,
+      build_concurrency: 4,
+      runtime_concurrency: 4,
+      source_review_concurrency: 4,
+    }
+
+    expect(screenerNodeChannelSettingsConfirmation('subnet-screener-1', settings)).toBe(
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=0 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4 CLOSE PRODUCTION ADMISSION',
+    )
+    expect(
+      screenerNodeChannelSettingsConfirmation('subnet-screener-1', {
+        ...settings,
+        screening_concurrency: 4,
+      }),
+    ).toBe(
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=4 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4',
     )
   })
 

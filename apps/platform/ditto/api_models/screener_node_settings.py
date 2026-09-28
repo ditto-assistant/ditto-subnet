@@ -99,7 +99,7 @@ class ScreenerNodeAdminStatusWriteRequest(BaseModel):
 def node_channel_settings_confirmation(
     node_id: str, settings: ScreenerNodeChannelSettings
 ) -> str:
-    return (
+    confirmation = (
         f"APPLY SCREENER NODE {node_id} "
         f"SCREENING={settings.screening_concurrency} "
         f"SANDBOX={settings.sandbox_slots} "
@@ -107,6 +107,10 @@ def node_channel_settings_confirmation(
         f"RUNTIME={settings.runtime_concurrency} "
         f"SOURCE_REVIEW={settings.source_review_concurrency}"
     )
+    if settings.screening_concurrency == 0:
+        # Closing admission stops this node from taking production work.
+        confirmation += " CLOSE PRODUCTION ADMISSION"
+    return confirmation
 
 
 def node_status_confirmation(node_id: str, status: str) -> str:

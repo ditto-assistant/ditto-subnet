@@ -21,6 +21,17 @@ check that each managed validator lands at boundary `+3` rather than at the
 boundary itself. A null implied block means the commit block's timestamp state
 was unreadable on the node, not a healthy result.
 
+`get_validator_capacity` reads `GET /api/v1/admin/validator-capacity`, a
+bounded roll-up of the same heartbeat, slot-policy, and lease reconciliation
+`get_validator_fleet` serves, limited to validators inside its online window.
+It reports serviceable against claimed ordinary slots, each live lease's age and
+check progress, the oldest active-era submission that passes the fleet-wide
+queue filter and holds no lease, and live chat and embedding load against the
+global concurrency limit. `checks_per_minute` and
+`estimated_remaining_slot_minutes` are estimates measured from ticket issue to
+the latest heartbeat, and they are null, never zero, until a check completes. The
+tool is read-only and schedules nothing.
+
 `get_outlier_escalation` reads the anomalous-score escalation that can open ATH
 holds (`review_kind` `anomalous_score`) through
 `GET /api/v1/admin/outlier-escalation`. The escalation is configured only by

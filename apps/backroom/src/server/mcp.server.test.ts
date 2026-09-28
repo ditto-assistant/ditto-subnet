@@ -205,6 +205,7 @@ describe('Backroom MCP tools', () => {
         'get_validator_fleet',
         'get_validator_slot_settings',
         'list_validator_assignments',
+        'get_validator_capacity',
         'list_confirmation_bundles',
         'set_burn_settings',
         'set_continual_retest_settings',
@@ -413,7 +414,9 @@ describe('Backroom MCP tools', () => {
     // The two terminal-review eligibility reads (#2041) add a settings-history
     // input and one uuid input; measured 174,477 bytes together.
     // Naming the fleet-effective posture in its catalog line measures 174,513.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(174_950)
+    // Main also adds the no-input validator-capacity read (#2036); retain
+    // about 0.5 KB of headroom for their combined catalog.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(175_700)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -445,7 +448,8 @@ describe('Backroom MCP tools', () => {
       // one-line outlier-escalation dry-run read brings it to 30,794, and the
       // claim-provenance read summary to 30,878. The two one-line
       // terminal-review eligibility reads (#2041) measure 31,038.
-      // Naming the fleet-effective posture (protocol 28) measures 31,074.
+      // Naming the fleet-effective posture (protocol 28) measures 31,074;
+      // main also adds the validator-capacity summary (#2036).
       31_500,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
@@ -3467,6 +3471,99 @@ describe('Backroom MCP tools', () => {
       lanes: [{ request_kind: 'chat', peak_global_concurrency_60m: 11 }],
       windows: [{ calls_per_second: 1.55, latency_p95_ms: 9995 }],
     })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads fleet validator capacity with unknown estimates kept null', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        generated_at: '2026-09-27T00:00:00Z',
+        active_bench_version: 12,
+        online_window_seconds: 300,
+        live_validator_count: 1,
+        serviceable_validator_count: 1,
+        serviceable_slots: 8,
+        claimed_slots: 2,
+        active_assignment_count: 2,
+        estimated_remaining_slot_minutes: 120,
+        unestimated_assignment_count: 1,
+        eligible_unleased_count: 1,
+        oldest_eligible_unleased_age_seconds: 95,
+        relay: [
+          { request_kind: 'chat', active_requests: 12, global_limit: 256, saturation: 0.0469 },
+          { request_kind: 'embedding', active_requests: 0, global_limit: 64, saturation: 0 },
+        ],
+        validators: [
+          {
+            validator_hotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY',
+            seen_at: '2026-09-27T00:00:00Z',
+            bench_serviceability: 'serving',
+            admission: 'accepting',
+            issuance_paused: false,
+            configured_slots: 8,
+            serviceable_slots: 8,
+            claimed_slots: 2,
+            assignments: [
+              {
+                agent_id: '11111111-1111-4111-8111-111111111111',
+                agent_name: 'slow-agent',
+                slot_id: 'slot-0',
+                bench_version: 12,
+                purpose: 'canonical_quorum',
+                stage: 'running_benchmark',
+                started_at: '2026-09-26T23:00:00Z',
+                age_seconds: 3600,
+                completed_checks: 30,
+                total_checks: 90,
+                stalled: false,
+                checks_per_minute: 0.5,
+                estimated_remaining_slot_minutes: 120,
+              },
+              {
+                agent_id: '22222222-2222-4222-8222-222222222222',
+                agent_name: 'fresh-agent',
+                slot_id: 'slot-1',
+                bench_version: 12,
+                purpose: 'canonical_quorum',
+                stage: null,
+                started_at: '2026-09-26T23:59:00Z',
+                age_seconds: 60,
+                completed_checks: null,
+                total_checks: null,
+                stalled: false,
+                checks_per_minute: null,
+                estimated_remaining_slot_minutes: null,
+              },
+            ],
+          },
+        ],
+        validators_truncated: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({ name: 'get_validator_capacity', arguments: {} })
+
+    expect(response.isError).not.toBe(true)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/v1/admin/validator-capacity')
+    const body = readJsonResult(response) as {
+      serviceable_slots: number
+      claimed_slots: number
+      oldest_eligible_unleased_age_seconds: number | null
+      validators: { assignments: { estimated_remaining_slot_minutes: number | null }[] }[]
+    }
+    expect(body).toMatchObject({
+      serviceable_slots: 8,
+      claimed_slots: 2,
+      oldest_eligible_unleased_age_seconds: 95,
+    })
+    expect(
+      body.validators[0]?.assignments.map((item) => item.estimated_remaining_slot_minutes),
+    ).toEqual([120, null])
 
     await client.close()
     await server.close()

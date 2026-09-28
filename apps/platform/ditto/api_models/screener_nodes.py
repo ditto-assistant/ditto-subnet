@@ -146,6 +146,7 @@ class ScreenerControllerNodeState(BaseModel):
     ready: bool
     active_lease: bool
     screening_concurrency: Annotated[int, Field(ge=0)] = 0
+    admission_open: bool = True
     image_reference: str | None = None
     heartbeat_seen_at: datetime | None = None
 

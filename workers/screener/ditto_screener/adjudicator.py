@@ -675,6 +675,11 @@ def _system_prompt(policy_version: int) -> str:
     raise AssertionError("validated policy was not rendered")
 
 
+_VERDICT_TOOL_NAMES = frozenset(
+    {"submit_adjudication", "submit_clear", "submit_reject", "request_operator_review"}
+)
+
+
 _TOOLS: list[dict[str, object]] = [
     {
         "type": "function",
@@ -971,7 +976,7 @@ def _failure_code(error: BaseException) -> str:
 
 
 def _observe_completion(payload: object) -> None:
-    """Record token counts and whether a final tool call was present.
+    """Record token counts and whether a terminal verdict tool call was present.
 
     Metadata only. Model text, tool arguments, and prompts are not stored.
     """
@@ -1001,7 +1006,8 @@ def _observe_completion(payload: object) -> None:
     trace.final_tool_call_returned = any(
         isinstance(call, dict)
         and isinstance(call.get("function"), dict)
-        and call["function"].get("name") == "submit_adjudication"
+        and isinstance(call["function"].get("name"), str)
+        and call["function"].get("name") in _VERDICT_TOOL_NAMES
         for call in calls
     )
 
@@ -1924,13 +1930,7 @@ class SourceReviewAdjudicator:
                 if len(tool_calls) != 1 and any(
                     isinstance(call, dict)
                     and isinstance(call.get("function"), dict)
-                    and call["function"].get("name")
-                    in {
-                        "submit_adjudication",
-                        "submit_clear",
-                        "submit_reject",
-                        "request_operator_review",
-                    }
+                    and call["function"].get("name") in _VERDICT_TOOL_NAMES
                     for call in tool_calls
                 ):
                     raise ValueError(

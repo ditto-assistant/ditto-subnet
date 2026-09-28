@@ -73,18 +73,6 @@ class ProviderRouting:
     )
 
     @property
-    def targon_first(self) -> bool:
-        """True when Kaniko, runtime smoke, and L1 all start with Targon."""
-        return (
-            bool(self.build_provider_priority)
-            and self.build_provider_priority[0] == "targon"
-            and bool(self.runtime_provider_priority)
-            and self.runtime_provider_priority[0] == "targon"
-            and bool(self.source_review_provider_priority)
-            and self.source_review_provider_priority[0] == "targon"
-        )
-
-    @property
     def gcp_first(self) -> bool:
         return any(
             priority and priority[0] == "gcp"
@@ -127,29 +115,60 @@ def gce_overflow_target(
     jobs_per_slot: int,
     global_cap: int,
 ) -> tuple[int, str]:
-    """Choose GCE only for an explicit GCP route, outage, or queue overflow."""
+    """Choose GCE only for an explicit GCP route, outage, or queue overflow.
+
+    Precedence: explicit operator GCP routing wins, and it is the only outage
+    failover for a closed or unknown primary; a stale revision that still names
+    the retired Targon provider does not bypass the stop and falls back to GCE
+    only for a primary known to be open. Then a primary whose admission is
+    known to be closed (``admission_open`` false, or ``screening_concurrency ==
+    0`` from a Platform that predates that field) is an operator closure: a
+    global full stop that GCE never overflows, whatever the backlog,
+    ``gce_overflow_enabled``, or the host's readiness and heartbeat. Only raising
+    the primary's ``screening_concurrency`` to at least one reopens screening. A
+    primary the inventory cannot vouch for -- a failed node read, an omitted
+    primary row, or a row without its admission setting -- also fails closed,
+    since the operator stop cannot be ruled out. Only a primary known to be open
+    but unavailable is a host failure that overflows.
+    """
     if jobs_per_slot < 1 or global_cap < 0:
         raise ValueError("capacity inputs are out of range")
-    if routing.targon_first:
-        return (
-            min(global_cap, demand.desired),
-            "TARGON_NESTED_DOCKER_WORKER_LANE_RETIRED",
-        )
     if routing.gcp_first:
         return min(global_cap, demand.desired), "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
+    primary = primary_node or {}
+    primary_ready = primary.get("status") == "active" and primary.get("ready") is True
+    screening_concurrency = int(primary.get("screening_concurrency", 0))
+    admission_open = primary.get("admission_open")
+    if admission_open is None and "screening_concurrency" in primary:
+        # Platform releases before admission_open still report concurrency.
+        admission_open = screening_concurrency > 0
+    if admission_open is False:
+        # A known operator closure holds through any host health change, so a
+        # failed heartbeat cannot reopen screening through GCE.
+        return 0, "HETZNER_PRIMARY_ADMISSION_CLOSED"
+    if any(
+        priority and priority[0] == "targon"
+        for priority in (
+            routing.build_provider_priority,
+            routing.runtime_provider_priority,
+            routing.source_review_provider_priority,
+        )
+    ):
+        # A stale revision naming the retired provider still falls back to GCE,
+        # but only behind the same operator stop: never for an unknown primary.
+        if admission_open is None:
+            return 0, "HETZNER_PRIMARY_UNKNOWN"
+        return min(global_cap, demand.desired), "RETIRED_PROVIDER_ROUTING"
     policy = routing.overflow
     if not routing.hetzner_first or not policy.enabled:
         return 0, "GCE_OVERFLOW_DISABLED"
     cap = min(global_cap, policy.max_instances)
     if cap == 0:
         return 0, "GCE_OVERFLOW_CAPPED_AT_ZERO"
-    primary_ready = primary_node is not None and bool(
-        primary_node.get("status") == "active" and primary_node.get("ready") is True
-    )
+    if admission_open is None:
+        return 0, "HETZNER_PRIMARY_UNKNOWN"
     if not primary_ready:
         return min(cap, demand.desired), "HETZNER_PRIMARY_UNAVAILABLE"
-    assert primary_node is not None
-    screening_concurrency = int(primary_node.get("screening_concurrency", 0))
     threshold = max(
         policy.min_backlog,
         screening_concurrency * policy.backlog_multiplier,
@@ -705,22 +724,6 @@ def _record_provider_failure(
         platform.renew(failed)
 
 
-def _policy_reason(
-    provider_routing: ProviderRouting, *, available: bool, targon_first: bool
-) -> str:
-    if not available:
-        return "PROVIDER_ROUTING_UNAVAILABLE"
-    if targon_first:
-        return "TARGON_NESTED_DOCKER_WORKER_LANE_RETIRED"
-    if (
-        "targon" not in provider_routing.runtime_provider_priority
-        or "targon" not in provider_routing.source_review_provider_priority
-        or "targon" not in provider_routing.build_provider_priority
-    ):
-        return "TARGON_SCREENERS_DISABLED_BY_POLICY"
-    return "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
-
-
 def reconcile(settings: Settings) -> dict[str, Any]:
     token = _read_secret_file(settings.platform_token_file)
     platform = PlatformControl(
@@ -736,9 +739,8 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         provider_routing = platform.provider_routing()
     except ControllerError:
         # Platform is deployed before the controller in the normal release, but
-        # a rolling boundary or transient read failure must never resurrect
-        # Targon against an unknown operator setting. Route through GCP until a
-        # revision can be read.
+        # a rolling boundary or transient read failure must leave GCE as the
+        # bounded fallback until a routing revision can be read.
         provider_routing_available = False
         provider_routing = ProviderRouting(
             revision=0,
@@ -746,12 +748,6 @@ def reconcile(settings: Settings) -> dict[str, Any]:
             source_review_provider_priority=("gcp",),
             build_provider_priority=("gcp",),
         )
-    targon_first = provider_routing.targon_first
-    reason = _policy_reason(
-        provider_routing,
-        available=provider_routing_available,
-        targon_first=targon_first,
-    )
     node_states_available = True
     try:
         node_states_reader = getattr(platform, "node_states", None)
@@ -810,6 +806,15 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 "detail": f"GCE target {current_target} -> {target}",
             }
         )
+    last_reason = _load_state(settings.state_file).get("last_fallback_reason")
+    if isinstance(last_reason, str) and last_reason != reason:
+        events.append(
+            {
+                "event_type": "fallback_reason_changed",
+                "provider": "hetzner",
+                "detail": f"{last_reason} -> {reason}",
+            }
+        )
     prior_provider_ready, prior_error_code, prior_error_at = _provider_state(
         settings.state_file
     )
@@ -838,6 +843,11 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     # Lease acquisition/renewal fences every mutation below.  A concurrent
     # epoch receives 409 while the existing lease remains live.
     platform.renew(snapshot)
+    # The renewed snapshot delivered any reason-change event; record the
+    # reason now so a later failed mutation cannot repeat the transition.
+    state = _load_state(settings.state_file)
+    state["last_fallback_reason"] = reason
+    _write_state(settings.state_file, state)
     watchdog_enabled = target > 0
     if target == current_target:
         try:
@@ -939,7 +949,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lock-file", default="/run/lock/ditto-screener-capacity.lock")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once", action="store_true")
-    # Accept retired unit flags until Ansible reapplies the updated template.
+    # Installed systemd units may predate the Ansible template that removed
+    # these options. Accept their inert argv until those hosts are converged.
     for retired_flag in (
         "--targon-api-key-file",
         "--targon-org-slug",

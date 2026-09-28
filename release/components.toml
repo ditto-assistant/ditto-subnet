@@ -5,6 +5,7 @@
 ignored_paths = [
   "localstack/**",
   "preview/**",
+  "research/screener-controls/**", # Operator-owned calibration artifacts; no deployed component
   "scripts/preview",
   "scripts/hippius-probe/**", # Operator-only probe dependencies; no service release
   "ditto/treasury/**", # Manual operator package includes signer; not imported by service runtime
@@ -275,7 +276,7 @@ paths = [
 ]
 
 [components.screener_orchestrator]
-description = "Targon-first screener capacity and build controller"
+description = "Hetzner-first screener capacity controller and trusted build support"
 depends_on = ["screener"]
 paths = [
   "Dockerfile.screener-fleet-release",

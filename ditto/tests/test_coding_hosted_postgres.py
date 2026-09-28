@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from ditto.tests.ansible_playbooks import converge_play
+
 ROOT = Path(__file__).parents[2]
 
 
@@ -44,7 +46,7 @@ def test_guest_gate_admits_only_the_reviewed_host_and_creates_no_credentials():
 
 
 def test_admission_guard_precedes_base_role_and_has_role_level_backstop():
-    play = yaml.safe_load(read("infra/ansible/playbooks/gcp-platform-pg.yml"))[0]
+    play = converge_play(ROOT / "infra/ansible/playbooks/gcp-platform-pg.yml")
     assert (
         "coding-hosted-access.yml"
         in play["pre_tasks"][0]["ansible.builtin.import_tasks"]
@@ -92,9 +94,9 @@ def test_hba_changes_reload_while_restart_only_settings_keep_restart():
 
 
 def test_narrow_guest_admission_changes_only_ufw_hba_and_reload():
-    play = yaml.safe_load(
-        read("infra/ansible/playbooks/gcp-coding-hosted-postgres-admission.yml")
-    )[0]
+    play = converge_play(
+        ROOT / "infra/ansible/playbooks/gcp-coding-hosted-postgres-admission.yml"
+    )
     assert play["hosts"] == "role_platform_postgres"
     assert play["become"] is True and play["gather_facts"] is False
     assert "roles" not in play

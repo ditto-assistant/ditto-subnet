@@ -9,6 +9,8 @@ on:
       # The relay's db/schema.sql is a generated mirror of the Alembic chain;
       # a migration must re-run the drift guard below.
       - apps/platform/alembic/**
+      # schema_test.go asserts the request-field fates against this table.
+      - docs/inference-request-fields.json
 
 concurrency:
   group: model-relay-${{ github.ref }}

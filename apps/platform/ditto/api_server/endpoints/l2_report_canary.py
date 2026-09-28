@@ -144,9 +144,9 @@ def _valid_report(row: ScreenerL2ReportCanary, report: dict) -> bool:
             expected_challenge_status = "completed"
         if report.get("challenge_status") != expected_challenge_status:
             return False
-    allowed_review_modes = (
-        {"shadow", "enforce_preview"} if row.run_mode == "full_runtime" else {"shadow"}
-    )
+    # Rolling workers may finish an older shadow lease, while current workers
+    # preview the enforced source decision in either isolated run mode.
+    allowed_review_modes = {"shadow", "enforce_preview"}
     return (
         report.get("kind") == "l2_report_canary_v1"
         and report.get("authority") == "none"

@@ -27,9 +27,8 @@ validator_hotkey_admin_phase = "absent"
 # independently managed GCE MIG remains the bounded overflow path.
 enable_screener_prod = false
 
-# The fleet and its secret/IAM phase already exist in production. The
-# Targon-first controller starts with its hostile-runtime capability pinned to
-# NOGO, so real submission demand continues to use the bounded GCE fallback.
+# The fleet and its secret/IAM phase already exist in production. Hetzner is
+# primary, with the independently managed GCE MIG as bounded overflow.
 enable_screener_fleet_secrets       = true
 enable_screener_fleet               = true
 enable_screener_capacity_controller = true

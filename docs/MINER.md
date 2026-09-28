@@ -21,6 +21,7 @@ improving the best artifact, not for serving live inference.
 - [Verify and submit](#verify-and-submit)
 - [Track your submission](#track-your-submission)
 - [Scoring and emissions](#scoring-and-emissions)
+- [Inference request contract](#inference-request-contract)
 - [What counts as cheating](#what-counts-as-cheating)
 - [Link a rotated hotkey](#link-a-rotated-hotkey)
 - [Claim a public handle](#claim-a-public-handle)
@@ -286,6 +287,18 @@ submission until the platform's exact UTC retry time. Because the CLI runs the
 pre-check first, that rejection happens before funds move. It does not delay
 recovery of the already-paid upload described above.
 
+The cooldown rejection keeps that scheduled timestamp and also reports
+`Please try again in X hours and Y minutes.` The countdown uses Platform's
+clock and rounds a positive wait up to the next minute.
+
+An ordinary upload with the same tarball SHA-256 as a paid submission owned
+by your coldkey is rejected before payment, even from another hotkey. It
+reports: `The previous submission cannot be resubmitted. Please try again
+after updating.` Update and repackage the harness before submitting again.
+The existing explicit `--allow-identical-rescore` option still permits buying
+another seeded evaluation after the owner cooldown. Exact recovery of a
+previously paid upload continues to return its original submission identity.
+
 ## Track your submission
 
 ```sh
@@ -377,6 +390,45 @@ Scores, signatures, and each run's graded transcript are published so results
 can be independently checked: regenerate the dataset from the published seed,
 re-run the public grader over the transcript, and the numbers must match the
 signed composite.
+
+## Inference request contract
+
+Scored chat requests go through the ticket-bound OpenAI-compatible lane, which
+decides the fate of every top-level request field. The machine-readable table,
+with a note per field, is
+[`inference-request-fields.json`](inference-request-fields.json); Platform and
+model-relay tests fail if either implementation drifts from it.
+
+| Fate | Fields | Effect |
+|---|---|---|
+| Forwarded | `messages`, `tools`, `tool_choice`, `parallel_tool_calls`, `temperature`, `top_p`, `top_k`, `min_p`, `top_a`, `seed`, `stop`, `frequency_penalty`, `presence_penalty`, `repetition_penalty`, `logit_bias`, `logprobs`, `response_format`, `structured_outputs`, `prediction`, `verbosity`, `stream` | Sent unchanged once a malformed value is ruled out. `stream` must be `false` or absent. |
+| Pinned | `model`, `max_tokens`, `max_completion_tokens`, `n`, `best_of`, `reasoning`, `reasoning_effort`, `include_reasoning`, `service_tier`, `usage`, `prompt_cache_key` | Accepted, then replaced or removed: the ticket's model, output ceiling (clamped down, never refused), one completion, and reasoning contract govern. |
+| Dropped | `user`, `metadata`, `safety_identifier`, `store`, `stream_options`, `provider`, `route`, `preset` | Accepted and stripped; they affect neither the completion nor the response. |
+
+These fields are refused with a 400 whose detail names the field and reason:
+
+| Field | Reason returned |
+|---|---|
+| `models` | the model is pinned by the ticket, not chosen by the request |
+| `transforms` | prompt transforms would change benchmark semantics |
+| `plugins` | server-side plugins are not available on this lane |
+| `web_search_options` | server-side web search is not available on this lane |
+| `functions` | use tools instead |
+| `function_call` | use tool_choice instead |
+| `audio` | this lane serves text completions only |
+| `modalities` | this lane serves text completions only |
+| `top_logprobs` | logprobs is supported but top_logprobs is not: it would exceed this lane's response size limit |
+
+Any other top-level field is refused as `unsupported inference parameter:
+<names>`. Reasoning `exclude` is always `true`. Bench v7/v8 fix effort at
+`medium`; from v9 the agent may choose `low`, `medium`, or `high` (see the
+scoring engine's `PROTOCOL.md`, "V9 reasoning effort is an agent strategy").
+
+**One rejected request fails the scored run.** Every 4xx other than 429 counts
+against complete token usage, which Bench v7 and later require, so a single
+refused or malformed field fails the whole run with the terminal, non-retried
+code `inference_request_rejected`. Check your request shape against this
+table before submitting; do not probe the lane from a scored run.
 
 ## What counts as cheating
 

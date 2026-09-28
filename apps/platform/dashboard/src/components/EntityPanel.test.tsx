@@ -157,6 +157,32 @@ describe("EntityPanel miner tenant", () => {
     expect(document.getElementById("d-stats")?.textContent).not.toContain("Consensus (k=");
   });
 
+  it("ranks a miner within its own tier, finalized or provisional", () => {
+    const raw = leaderboard.entries ?? [];
+    // Two finalized rows and one provisional row: the provisional row takes P1
+    // on its own counter and must not read as "#1 of 3" next to the leader.
+    const tiered = rankEntries([
+      { ...raw[0]!, finalized: true },
+      { ...raw[1]!, finalized: true },
+      { ...raw[2]!, finalized: false },
+    ]);
+    render(() => (
+      <EntityPanel
+        entries={() => tiered}
+        operations={() => operations}
+        validatorNames={() => ({})}
+        currentBench={() => 7}
+        settledView={() => false}
+      />
+    ));
+    const rankOf = (hotkey: string) => {
+      visit("/#/overview?miner=" + hotkey);
+      return document.getElementById("d-stats")?.textContent ?? "";
+    };
+    expect(rankOf(tiered[2]!.miner_hotkey)).toContain("P1 of 1");
+    expect(rankOf(tiered[1]!.miner_hotkey)).toContain("#2 of 2");
+  });
+
   it("folds the composite derivation away without dropping it", () => {
     renderPanel();
     visit("/#/overview?miner=" + topEntry.miner_hotkey);

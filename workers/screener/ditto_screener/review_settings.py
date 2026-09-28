@@ -26,7 +26,7 @@ ReviewModel = Literal[
 SourceReviewModel = Literal["openai/gpt-5.6-luna", "openai/gpt-6-luna"]
 FanoutShadowModel = Literal["z-ai/glm-5.3-flash"]
 
-_MAX_SHADOW_PROVIDER_STAGES = 50
+MAX_SHADOW_PROVIDER_STAGES = 50
 
 
 class ShadowReviewUsage(BaseModel):
@@ -67,8 +67,8 @@ class ShadowReviewObservationRequest(BaseModel):
         if len(self.categories) > 8:
             raise ValueError("shadow review has too many categories")
         if (
-            len(self.response_models) > _MAX_SHADOW_PROVIDER_STAGES
-            or len(self.response_providers) > _MAX_SHADOW_PROVIDER_STAGES
+            len(self.response_models) > MAX_SHADOW_PROVIDER_STAGES
+            or len(self.response_providers) > MAX_SHADOW_PROVIDER_STAGES
         ):
             raise ValueError("shadow review has too many provider stages")
         if self.disposition in {"safe", "violation"} and self.risk_level is None:

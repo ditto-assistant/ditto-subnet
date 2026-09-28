@@ -21,6 +21,10 @@
 #
 # Note: the worker binary is shipped by CI (like the Hetzner model); the
 # river_worker role installs the unit and only starts it once the binary exists.
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_postgres
+
 - name: Converge GCP Postgres + worker VM
   hosts: role_postgres
   become: true

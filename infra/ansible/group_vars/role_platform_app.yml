@@ -6,7 +6,6 @@
 # --- GCP placement ---
 gcp_project: ditto-app-dev
 gcp_region: us-central1
-gcp_zone: us-central1-a
 
 # --- Connection over IAP ---
 # These VMs have a public IP for HTTP(S) (80/443) but SSH (22) is IAP-only — the

@@ -247,25 +247,6 @@
   changed_when: true
   notify: Restart screener fleet workers
 
-- name: Inspect the fleet-agent environment
-  ansible.builtin.stat:
-    path: "{{ screener_fleet_orchestrator_venv }}/bin/python"
-  register: screener_fleet_agent_environment
-  when: screener_fleet_runtime_enabled
-
-- name: Sync the fleet-agent environment
-  ansible.builtin.command:
-    cmd: /usr/local/bin/uv sync --frozen
-    chdir: "{{ screener_fleet_orchestrator_dir }}"
-  become_user: "{{ screener_fleet_user }}"
-  environment:
-    UV_PROJECT_ENVIRONMENT: "{{ screener_fleet_orchestrator_venv }}"
-  when:
-    - screener_fleet_runtime_enabled
-    - screener_fleet_checkout_result.changed or not screener_fleet_agent_environment.stat.exists
-  changed_when: true
-  notify: Restart screener fleet agent
-
 - name: Expose Debian's rootless Docker launcher on PATH
   ansible.builtin.file:
     src: /usr/share/docker.io/contrib/dockerd-rootless.sh
@@ -369,7 +350,6 @@
     - screener_fleet_runtime_enabled
     - not screener_fleet_current_state.stat.exists
   notify:
-    - Restart screener fleet agent
     - Restart screener fleet workers
 
 - name: Download the verified Debian cloud base
@@ -824,7 +804,6 @@
     group: "{{ screener_fleet_group }}"
     mode: "0600"
   notify:
-    - Restart screener fleet agent
     - Restart screener fleet workers
   when: screener_fleet_runtime_enabled
 
@@ -836,7 +815,6 @@
     group: "{{ screener_fleet_group }}"
     mode: "0600"
     force: false
-  notify: Restart screener fleet agent
   when: screener_fleet_runtime_enabled
 
 - name: Install checksum-pinned Cosign verifier
@@ -904,7 +882,6 @@
     mode: "0644"
   loop:
     - { src: ditto-screener-enroll.service.j2, dest: ditto-screener-enroll.service }
-    - { src: ditto-screener-fleet-agent.service.j2, dest: ditto-screener-fleet-agent.service }
     - { src: ditto-screener-worker@.service.j2, dest: ditto-screener-worker@.service }
   notify:
     - Reload systemd for screener fleet
@@ -938,11 +915,33 @@
     daemon_reload: true
   when: screener_fleet_runtime_enabled
 
-- name: Enable and start the fleet lane agent
+- name: Inspect the retired fleet lane unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/ditto-screener-fleet-agent.service
+  register: screener_fleet_retired_lane_unit
+  when: screener_fleet_runtime_enabled
+
+- name: Stop and disable the retired fleet lane agent
   ansible.builtin.systemd:
     name: ditto-screener-fleet-agent
-    enabled: true
-    state: started
+    enabled: false
+    state: stopped
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_retired_lane_unit.stat.exists
+
+- name: Remove the retired fleet lane unit
+  ansible.builtin.file:
+    path: /etc/systemd/system/ditto-screener-fleet-agent.service
+    state: absent
+  notify: Reload systemd for screener fleet
+  when: screener_fleet_runtime_enabled
+
+- name: Remove retired fleet lane unit overrides
+  ansible.builtin.file:
+    path: /etc/systemd/system/ditto-screener-fleet-agent.service.d
+    state: absent
+  notify: Reload systemd for screener fleet
   when: screener_fleet_runtime_enabled
 
 - name: Stop and disable screening workers above configured capacity

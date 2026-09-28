@@ -2,7 +2,6 @@
 # Disposable GCE rehearsal host. It prepares KVM/libvirt and the verified guest
 # base but cannot enroll or start a production screener identity.
 gcp_project: ditto-app-dev
-gcp_zone: us-central1-a
 
 ansible_user: "{{ lookup('env', 'GCP_OSLOGIN_USER') | default('', true) }}"
 ansible_ssh_common_args: >-

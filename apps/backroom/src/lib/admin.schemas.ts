@@ -771,7 +771,11 @@ export function screenerNodeChannelSettingsConfirmation(
   nodeId: string,
   settings: z.infer<typeof screenerNodeChannelSettingsSchema>,
 ) {
-  return `APPLY SCREENER NODE ${nodeId} SCREENING=${settings.screening_concurrency} SANDBOX=${settings.sandbox_slots} BUILD=${settings.build_concurrency} RUNTIME=${settings.runtime_concurrency} SOURCE_REVIEW=${settings.source_review_concurrency}`
+  const confirmation = `APPLY SCREENER NODE ${nodeId} SCREENING=${settings.screening_concurrency} SANDBOX=${settings.sandbox_slots} BUILD=${settings.build_concurrency} RUNTIME=${settings.runtime_concurrency} SOURCE_REVIEW=${settings.source_review_concurrency}`
+  // Mirrors Platform: closing admission stops this node from taking production work.
+  return settings.screening_concurrency === 0
+    ? `${confirmation} CLOSE PRODUCTION ADMISSION`
+    : confirmation
 }
 const screenerNodeStatusSchema = z.enum(['active', 'draining', 'quarantined', 'revoked'])
 
@@ -9211,6 +9215,87 @@ export const sourceReviewQueueSloSchema = z.object({
 })
 
 export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
+
+// Fleet validator capacity, ditto-subnet#2036 telemetry slice. Read-only:
+// progress rates and remaining slot-minutes are estimates, null when unknown.
+type GeneratedValidatorCapacityAssignment =
+  PlatformComponents['schemas']['ValidatorCapacityAssignment']
+type GeneratedValidatorCapacityEntry = PlatformComponents['schemas']['ValidatorCapacityEntry']
+type GeneratedRelayLaneSaturation = PlatformComponents['schemas']['RelayLaneSaturation']
+type GeneratedValidatorCapacitySummary =
+  PlatformComponents['schemas']['ValidatorCapacitySummary']
+
+const validatorCapacityAssignmentSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  slot_id: z.string(),
+  bench_version: z.number().int().positive(),
+  purpose: z.enum([
+    'legacy_unclassified',
+    'canonical_quorum',
+    'continual_retest',
+    'benchmark_canary',
+  ]),
+  stage: z
+    .enum([
+      'preparing',
+      'building_harness',
+      'generating_dataset',
+      'starting_harness',
+      'running_benchmark',
+      'waiting_for_relay',
+      'finalizing',
+      'submitting_result',
+      'failed_retrying',
+    ])
+    .nullable(),
+  started_at: z.string(),
+  age_seconds: z.number().int().nonnegative(),
+  completed_checks: z.number().int().nonnegative().nullable(),
+  total_checks: z.number().int().positive().nullable(),
+  stalled: z.boolean(),
+  checks_per_minute: z.number().nonnegative().nullable(),
+  estimated_remaining_slot_minutes: z.number().nonnegative().nullable(),
+} satisfies PlatformResponseShape<GeneratedValidatorCapacityAssignment>)
+
+const validatorCapacityEntrySchema = z.object({
+  validator_hotkey: z.string(),
+  seen_at: z.string(),
+  bench_serviceability: z.enum(['serving', 'scorer_unverified', 'software_obsolete']),
+  admission: z.enum(['accepting', 'draining', 'paused', 'resource_constrained']),
+  issuance_paused: z.boolean(),
+  configured_slots: z.number().int().positive(),
+  serviceable_slots: z.number().int().nonnegative(),
+  claimed_slots: z.number().int().nonnegative(),
+  assignments: z.array(validatorCapacityAssignmentSchema),
+} satisfies PlatformResponseShape<GeneratedValidatorCapacityEntry>)
+
+const relayLaneSaturationSchema = z.object({
+  request_kind: z.enum(['chat', 'embedding']),
+  active_requests: z.number().int().nonnegative(),
+  global_limit: z.number().int().positive(),
+  saturation: z.number().nonnegative(),
+} satisfies PlatformResponseShape<GeneratedRelayLaneSaturation>)
+
+export const validatorCapacitySummarySchema = z.object({
+  generated_at: z.string(),
+  active_bench_version: z.number().int().positive(),
+  online_window_seconds: z.number().int().positive(),
+  live_validator_count: z.number().int().nonnegative(),
+  serviceable_validator_count: z.number().int().nonnegative(),
+  serviceable_slots: z.number().int().nonnegative(),
+  claimed_slots: z.number().int().nonnegative(),
+  active_assignment_count: z.number().int().nonnegative(),
+  estimated_remaining_slot_minutes: z.number().nonnegative(),
+  unestimated_assignment_count: z.number().int().nonnegative(),
+  eligible_unleased_count: z.number().int().nonnegative(),
+  oldest_eligible_unleased_age_seconds: z.number().int().nonnegative().nullable(),
+  relay: z.array(relayLaneSaturationSchema),
+  validators: z.array(validatorCapacityEntrySchema),
+  validators_truncated: z.boolean(),
+} satisfies PlatformResponseShape<GeneratedValidatorCapacitySummary>)
+
+export type ValidatorCapacitySummary = z.infer<typeof validatorCapacitySummarySchema>
 
 // Anomalous-score outlier escalation (issue #476): the env-only posture that
 // can open ATH holds, each value's source, and its audit-chain activity.

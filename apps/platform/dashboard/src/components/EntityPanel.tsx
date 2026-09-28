@@ -702,7 +702,14 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
                 <MinerSummary
                   entry={entry()}
                   settled={settled()}
-                  total={props.entries().filter(isEligible).length}
+                  total={
+                    // Finalized and provisional rows rank on separate
+                    // counters, so the denominator is this entry's own tier.
+                    props
+                      .entries()
+                      .filter((x) => isEligible(x) && isFinalized(x) === isFinalized(entry()))
+                      .length
+                  }
                   currentBench={props.currentBench()}
                   emissionBench={props.emissionBench?.() ?? null}
                 />
@@ -1116,7 +1123,7 @@ function MinerSummary(props: {
             k="Rank"
             v={
               isEligible(e())
-                ? "#" + e().rank + " of " + props.total
+                ? (isFinalized(e()) ? "#" : "P") + e().rank + " of " + props.total
                 : kind() === "zero"
                   ? "unranked (scored 0.000)"
                   : "unranked (provisional)"

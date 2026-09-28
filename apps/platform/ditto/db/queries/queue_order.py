@@ -412,6 +412,59 @@ def _top_provisional_contenders(
     )
 
 
+def _fifo_arrival(
+    fifo_start_at: datetime | None, *, agent: AgentEntity = Agent
+) -> ColumnElement[datetime]:
+    """A row's queue arrival, clamped to the era's FIFO start when there is one."""
+    if fifo_start_at is None:
+        return agent.created_at
+    return case(
+        (agent.created_at < fifo_start_at, fifo_start_at),
+        else_=agent.created_at,
+    )
+
+
+def _live_assignment_count(
+    *, bench_version: int, now: datetime, agent: AgentEntity = Agent
+) -> ColumnElement[int]:
+    """Live non-canary leases a row holds at ``bench_version``."""
+    return (
+        select(func.count())
+        .where(
+            ValidatorTicket.agent_id == agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+            ValidatorTicket.bench_version == bench_version,
+            ValidatorTicket.status == TicketStatus.ISSUED,
+            ValidatorTicket.deadline > now,
+        )
+        .correlate(agent)
+        .scalar_subquery()
+    )
+
+
+def _occupied_quorum_slots(
+    *, bench_version: int, now: datetime, agent: AgentEntity = Agent
+) -> ColumnElement[int]:
+    """Quorum slots a row has spent: scored tickets plus live leases."""
+    return (
+        select(func.count())
+        .where(
+            ValidatorTicket.agent_id == agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+            ValidatorTicket.bench_version == bench_version,
+            or_(
+                ValidatorTicket.status == TicketStatus.SCORED,
+                and_(
+                    ValidatorTicket.status == TicketStatus.ISSUED,
+                    ValidatorTicket.deadline > now,
+                ),
+            ),
+        )
+        .correlate(agent)
+        .scalar_subquery()
+    )
+
+
 def queue_order_terms(
     *,
     bench_version: int,
@@ -436,14 +489,7 @@ def queue_order_terms(
     """
     from ditto.db.queries.scores import SCORING_QUORUM
 
-    fifo_age = (
-        case(
-            (agent.created_at < fifo_start_at, fifo_start_at),
-            else_=agent.created_at,
-        )
-        if fifo_start_at is not None
-        else agent.created_at
-    )
+    fifo_age = _fifo_arrival(fifo_start_at, agent=agent)
     if completion_first:
         # Keep the fresh-submission lane independent of the ordinary queue's
         # contender, coverage, artifact, and continuation-floor priorities. Age
@@ -483,17 +529,8 @@ def queue_order_terms(
         ),
         0.0,
     )
-    live_assignment_count = (
-        select(func.count())
-        .where(
-            ValidatorTicket.agent_id == agent.agent_id,
-            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
-            ValidatorTicket.bench_version == bench_version,
-            ValidatorTicket.status == TicketStatus.ISSUED,
-            ValidatorTicket.deadline > now,
-        )
-        .correlate(agent)
-        .scalar_subquery()
+    live_assignment_count = _live_assignment_count(
+        bench_version=bench_version, now=now, agent=agent
     )
     # A median-of-three cannot be bounded safely after one score. Once two
     # scores exist, their maximum is the best final median the third score can
@@ -1316,23 +1353,7 @@ async def preview_queue_order(
     # classified ``evaluating`` instead, so it never arrives here. What does
     # arrive is the row whose slots are all spent without a lease to show for
     # it, and calling that one "up next" is the divergence this closes.
-    occupied_quorum_slots = (
-        select(func.count())
-        .where(
-            ValidatorTicket.agent_id == Agent.agent_id,
-            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
-            ValidatorTicket.bench_version == bench_version,
-            or_(
-                ValidatorTicket.status == TicketStatus.SCORED,
-                and_(
-                    ValidatorTicket.status == TicketStatus.ISSUED,
-                    ValidatorTicket.deadline > now,
-                ),
-            ),
-        )
-        .correlate(Agent)
-        .scalar_subquery()
-    )
+    occupied_quorum_slots = _occupied_quorum_slots(bench_version=bench_version, now=now)
     leasable = set(
         await session.scalars(
             select(Agent.agent_id).where(
@@ -1444,6 +1465,42 @@ async def preview_queue_order(
         )
         for rank, (_, agent_id) in enumerate(ranked, start=1)
     }
+
+
+async def unleased_queue_backlog(
+    session: AsyncSession,
+    *,
+    bench_version: int,
+    now: datetime,
+    rollout: BenchmarkRollout | None,
+) -> tuple[int, datetime | None]:
+    """Count and earliest FIFO arrival of fleet-eligible rows nobody holds.
+
+    The same validator-independent candidate filter and quorum-slot count the
+    preview's ``not_leasable`` gate uses, restricted to rows with no live lease
+    at all. Owner serialization and each validator's own exclusions are not
+    applied, so the count is an upper bound on what the next poll could lease.
+    """
+    from ditto.db.queries.scores import SCORING_QUORUM
+
+    fifo_start_at = await resolve_fifo_start_at(
+        session, bench_version=bench_version, rollout=rollout
+    )
+    count, earliest = (
+        await session.execute(
+            select(func.count(), func.min(_fifo_arrival(fifo_start_at))).where(
+                _live_assignment_count(bench_version=bench_version, now=now) == 0,
+                _occupied_quorum_slots(bench_version=bench_version, now=now)
+                < SCORING_QUORUM,
+                *queue_candidate_predicate(
+                    bench_version=bench_version,
+                    artifact_mode=preview_artifact_mode(bench_version),
+                    rollout=rollout,
+                ),
+            )
+        )
+    ).one()
+    return int(count), earliest
 
 
 def _similarity_detail(

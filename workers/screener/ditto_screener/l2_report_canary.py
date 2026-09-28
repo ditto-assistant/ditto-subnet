@@ -49,9 +49,7 @@ def _identity_report(
     return {
         "kind": "l2_report_canary_v1",
         "authority": "none",
-        "review_mode": (
-            "enforce_preview" if claim.run_mode == "full_runtime" else "shadow"
-        ),
+        "review_mode": "enforce_preview",
         "canary_id": str(claim.canary_id),
         "agent_id": str(claim.agent_id),
         "source_attempt_id": str(claim.source_attempt_id),
@@ -141,6 +139,7 @@ def _report(
         "dossier_complete": l2_result.dossier_complete,
         "direct_clear_graph_complete": l2_result.direct_clear_graph_complete,
         "failure_subcode": l2_result.failure_subcode,
+        "scorer_attention": l2_result.scorer_attention,
         "inconclusive_model_audit": observation.inconclusive_model_audit,
         "l1_lead_dispositions": list(l2_result.l1_lead_dispositions),
         "analyst_finding": l2_result.analyst_finding,
@@ -230,7 +229,9 @@ async def consume(
     )
     canary_config = replace(
         effective,
-        l2_review_mode=("enforce" if claim.run_mode == "full_runtime" else "shadow"),
+        # Both isolated modes preview the same source decision as enforcement.
+        # source_only still skips runtime challenges and never posts a verdict.
+        l2_review_mode="enforce",
         l2_always_escalate=True,
         require_signed_runtime_lease=True,
         # This report-only packet was fresh when Platform issued the lease.
@@ -240,7 +241,6 @@ async def consume(
             claim.lease_expires_at.timestamp()
             - claim.scored_runtime_evidence.observed_at
         ),
-        remote_build_mode="off",
         l2_cache_dir=str(canary_root / "cache"),
         l2_audit_journal_file=str(canary_root / "l2-audit.jsonl"),
         static_preflight_audit_file=str(canary_root / "preflight-audit.jsonl"),

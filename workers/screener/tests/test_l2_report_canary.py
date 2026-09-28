@@ -86,9 +86,7 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
 
     class Gate:
         def __init__(self, canary_config, *_args, **kwargs):
-            assert canary_config.l2_review_mode == (
-                "enforce" if run_mode == "full_runtime" else "shadow"
-            )
+            assert canary_config.l2_review_mode == "enforce"
             assert kwargs["capture_enforce_result"] is True
             assert canary_config.l2_always_escalate
             assert canary_config.require_signed_runtime_lease
@@ -148,6 +146,18 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
                 usage=L2Usage(estimated_cost_usd=0.05),
                 cache_hit=False,
                 failure_subcode="no_tool_call_after_corrections",
+                scorer_attention={
+                    "counts": {"score_controls": 1},
+                    "locations": [
+                        {
+                            "kind": "score_controls",
+                            "path": "src/bin/miner.rs",
+                            "line": 388,
+                            "function": "evaluate",
+                        }
+                    ],
+                    "truncated": False,
+                },
             )
 
         def pop_preview_l1_review(self, _attempt_id):
@@ -183,10 +193,8 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
     assert completions[0][1]["status"] == "succeeded"
     report = completions[0][1]["report"]
     assert report["authority"] == "none"
-    assert report["review_mode"] == (
-        "enforce_preview" if run_mode == "full_runtime" else "shadow"
-    )
-    assert loaded_modes == ["enforce" if run_mode == "full_runtime" else "shadow"]
+    assert report["review_mode"] == "enforce_preview"
+    assert loaded_modes == ["enforce"]
     assert report["run_mode"] == run_mode
     assert report["challenge_status"] == (
         "completed" if run_mode == "full_runtime" else "not_run"
@@ -194,6 +202,9 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
     assert report["source_attempt_id"] == str(attempt_id)
     assert report["l2"]["risk_level"] == "low"
     assert report["l2"]["failure_subcode"] == "no_tool_call_after_corrections"
+    assert (
+        report["l2"]["scorer_attention"]["locations"][0]["path"] == "src/bin/miner.rs"
+    )
     assert report["l1"]["clearance_certified"] is True
     assert report["l1"]["finding"]["summary"] == "clean L1"
 

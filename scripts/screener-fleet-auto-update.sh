@@ -117,8 +117,6 @@ prepare_release() {
       die "existing release checkout does not match $revision"
     [ -x "$release_dir/worker-venv/bin/ditto-screener" ] || \
       die "existing worker environment is incomplete"
-    [ -x "$release_dir/orchestrator-venv/bin/python" ] || \
-      die "existing orchestrator environment is incomplete"
     return 0
   fi
   local staging="${release_dir}.staging.$$"
@@ -138,10 +136,6 @@ prepare_release() {
   run_as_service "$UV_BIN" venv --relocatable "$staging/worker-venv"
   run_as_service env UV_PROJECT_ENVIRONMENT="$staging/worker-venv" \
     "$UV_BIN" sync --frozen --no-editable --project "$staging/src/workers/screener"
-  run_as_service "$UV_BIN" venv --relocatable "$staging/orchestrator-venv"
-  run_as_service env UV_PROJECT_ENVIRONMENT="$staging/orchestrator-venv" \
-    "$UV_BIN" sync --frozen --no-editable \
-      --project "$staging/src/services/screener-orchestrator"
   run_as_service "$staging/worker-venv/bin/python" \
     "$staging/src/workers/screener/scripts/verify-installed-signing-contract.py"
   mv "$staging" "$release_dir"
@@ -268,11 +262,16 @@ stop_fleet() {
   : >"$HELD_WORKERS"
   DRAIN_STARTED_AT="$(date +%s)"
   write_drain_status draining
-  # Stop claiming lane work. The stop job below follows the unit's KillMode;
-  # this signal itself must not reach the agent's Docker children.
-  "$SYSTEMCTL" kill --kill-whom=main -s SIGTERM \
-    ditto-screener-fleet-agent.service >/dev/null 2>&1 || true
+  # A previous release may still have the producerless lane agent installed.
+  # Retire it before switching the worker release, including on rollback.
   timeout 60 "$SYSTEMCTL" stop ditto-screener-fleet-agent.service || true
+  if "$SYSTEMCTL" is-active --quiet ditto-screener-fleet-agent.service; then
+    die "retired fleet agent is still active"
+  fi
+  if "$SYSTEMCTL" is-enabled --quiet ditto-screener-fleet-agent.service; then
+    "$SYSTEMCTL" disable ditto-screener-fleet-agent.service || \
+      die "retired fleet agent could not be disabled"
+  fi
 
   for index in $(worker_indexes); do
     signal_worker_main "$index"
@@ -324,8 +323,6 @@ stop_fleet() {
     write_drain_status drained
   fi
 
-  "$SYSTEMCTL" stop ditto-screener-fleet-agent.service >/dev/null 2>&1 || true
-
   # Ansible normally reconciles this at converge time. The self-updater must
   # enforce the same bound too: release delivery is deliberately pull-based,
   # and it must be safe even when no Ansible run follows the canary change.
@@ -356,7 +353,6 @@ ensure_worker_state() {
 start_fleet() {
   local index failed=0
   ensure_worker_state || return 1
-  "$SYSTEMCTL" start ditto-screener-fleet-agent.service || failed=1
   for index in $(seq 1 "$WORKER_PROCESSES"); do
     # Re-enable the declared set too, so a previous smaller canary cannot
     # leave a later intentional scale-up stopped until an Ansible converge.
@@ -370,7 +366,6 @@ start_fleet() {
     "$SYSTEMCTL" restart "ditto-screener-worker@$index.service" || failed=1
   done
   sleep "${SCREENER_FLEET_START_SETTLE_SECONDS:-5}"
-  "$SYSTEMCTL" is-active --quiet ditto-screener-fleet-agent.service || failed=1
   for index in $(seq 1 "$WORKER_PROCESSES"); do
     held_worker_still_running "$index" && continue
     "$SYSTEMCTL" is-active --quiet "ditto-screener-worker@$index.service" || failed=1
@@ -379,7 +374,7 @@ start_fleet() {
   write_drain_status active
 }
 
-# Once the drain has begun the fleet agent is stopped and workers are
+# Once the drain has begun the retired lane agent is stopped and workers are
 # draining. Any abort before a fleet start succeeds (a failed command under
 # `set -e`, or systemd's TimeoutStartSec SIGTERM) must bring the node back on
 # whatever release is current rather than leave it down until the next timer.
@@ -388,7 +383,6 @@ restore_fleet_after_abort() {
   trap - EXIT TERM INT
   set +e
   log "update aborted after the drain began (exit $status); restarting the fleet on the current release"
-  "$SYSTEMCTL" start --no-block ditto-screener-fleet-agent.service
   for index in $(seq 1 "$WORKER_PROCESSES"); do
     # start, never restart: a held worker keeps finishing its review.
     "$SYSTEMCTL" start --no-block "ditto-screener-worker@$index.service"

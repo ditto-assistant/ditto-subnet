@@ -20,10 +20,12 @@ import os
 import re
 import socket
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
+
+from pydantic import ValidationError
 
 from ditto_screener import __version__
 from ditto_screener.errors import PlatformError
@@ -44,11 +46,11 @@ from ditto_screener.heartbeat import (
 from ditto_screener.policy import (
     PolicyEvidence,
     ScreeningOutcome,
-    SourceReviewObservation,
     builtin_policy_manifest,
     core_decision,
 )
 from ditto_screener.review_settings import (
+    MAX_SHADOW_PROVIDER_STAGES,
     EffectiveReviewSettings,
     ShadowReviewObservationRequest,
     ShadowReviewUsage,
@@ -838,71 +840,6 @@ class ScreenerWorker:
                         agent_id, attempt_id=attempt_id
                     )
 
-                    async def remote_build():  # type: ignore[no-untyped-def]
-                        if self._config.remote_build_mode == "off":
-                            return None
-                        # The remote and local caps are separate on purpose.
-                        # A normal 70-minute lease budgets 25 minutes for
-                        # Targon, then up to 45 minutes for local Docker. Do not
-                        # derive this from the local cap: older hosts may carry
-                        # a stale local override, which previously collapsed
-                        # Targon to a one-minute attempt.
-                        return await self._platform.build_submission_image(
-                            agent_id,
-                            attempt_id=attempt_id,
-                            timeout=self._config.remote_build_timeout_seconds,
-                        )
-
-                    async def remote_build_consumed(build_id: UUID) -> None:
-                        await self._platform.discard_submission_image_build(
-                            agent_id,
-                            attempt_id=attempt_id,
-                            build_id=build_id,
-                        )
-
-                    # A local build has no provider-owned image-build record.
-                    # Its review must therefore stay in this gate: the fleet
-                    # source-review claim correctly requires a completed
-                    # provider build and runtime smoke, and queueing one here
-                    # would wait on a prerequisite that local mode can never
-                    # produce.
-                    remote_source_review: (
-                        Callable[[], Awaitable[SourceReviewObservation | None]] | None
-                    ) = None
-                    if self._config.remote_build_mode != "off":
-
-                        async def review_with_remote_provider() -> (
-                            SourceReviewObservation | None
-                        ):
-                            payload = await self._platform.review_submission_source(
-                                agent_id,
-                                attempt_id=attempt_id,
-                                timeout=self._config.source_review_timeout_seconds,
-                            )
-                            if payload is None:
-                                return None
-                            return SourceReviewObservation(
-                                ok=payload.ok,
-                                risk_level=payload.risk_level,
-                                finding_digest=payload.finding_digest,
-                                categories=tuple(payload.categories),
-                                error_code=payload.error_code,
-                                finding=(
-                                    payload.finding.model_dump(mode="json")
-                                    if payload.finding is not None
-                                    else None
-                                ),
-                                failure_disposition=payload.failure_disposition,
-                                clearance_certified=payload.clearance_certified,
-                                review_audit=(
-                                    payload.review_audit.model_dump(mode="json")
-                                    if payload.review_audit is not None
-                                    else None
-                                ),
-                            )
-
-                        remote_source_review = review_with_remote_provider
-
                     result = await self._gate.screen(
                         agent_id=agent_id,
                         attempt_id=attempt_id,
@@ -916,9 +853,6 @@ class ScreenerWorker:
                         publish_held_image=publish_held_image,
                         record_archive_verification=record_archive_verification,
                         record_runtime_verification=record_runtime_verification,
-                        remote_build=remote_build,
-                        remote_build_consumed=remote_build_consumed,
-                        remote_source_review=remote_source_review,
                         # A build-only item requests the mechanical lane. That
                         # lane is used both for an already-adjudicated rebuild
                         # and for score-first admission when the complete source
@@ -935,13 +869,22 @@ class ScreenerWorker:
                 raise PlatformError(
                     "screening decision policy version does not match the claim"
                 )
-            shadow_review = self._gate.pop_shadow_review(attempt_id)
-            if shadow_review is not None:
-                await self._submit_shadow_review(
-                    agent_id=agent_id,
-                    attempt_id=attempt_id,
-                    artifact_sha256=item.sha256.lower(),
-                    result=shadow_review,
+            try:
+                shadow_review = self._gate.pop_shadow_review(attempt_id)
+                if shadow_review is not None:
+                    await self._submit_shadow_review(
+                        agent_id=agent_id,
+                        attempt_id=attempt_id,
+                        artifact_sha256=item.sha256.lower(),
+                        result=shadow_review,
+                    )
+            except Exception as error:
+                # Telemetry bugs must not discard the authoritative decision.
+                # Exception text can contain private findings or credentials.
+                logger.warning(
+                    "shadow review telemetry failed attempt_id=%s error_type=%s",
+                    attempt_id,
+                    type(error).__name__,
                 )
             if screened_image is not None:
                 await self._emit_router_source_screen(
@@ -1249,7 +1192,14 @@ class ScreenerWorker:
         finally:
             # A review can finish before a later build/image step raises. Do not
             # retain that attempt's private result in the long-lived worker.
-            self._gate.pop_shadow_review(attempt_id)
+            try:
+                self._gate.pop_shadow_review(attempt_id)
+            except Exception as error:
+                logger.warning(
+                    "shadow review cleanup failed attempt_id=%s error_type=%s",
+                    attempt_id,
+                    type(error).__name__,
+                )
             heartbeat_stop.set()
             await heartbeat_task
             progress_tasks = tuple(self._progress_heartbeat_tasks)
@@ -1374,51 +1324,95 @@ class ScreenerWorker:
                 "discarding shadow result without an applied platform revision"
             )
             return
-        observation = result.observation
-        risk_level = cast(
-            Literal["low", "medium", "high"] | None, observation.risk_level
-        )
-        disposition: Literal["safe", "violation", "inconclusive", "retryable_infra"] = (
-            "safe"
-            if observation.ok and observation.risk_level == "low"
-            else "violation"
-            if observation.ok
-            else "inconclusive"
-            if observation.failure_disposition == "inconclusive"
-            else "retryable_infra"
-        )
-        request = ShadowReviewObservationRequest(
-            attempt_id=attempt_id,
-            artifact_sha256=artifact_sha256,
-            settings_revision=settings.revision,
-            settings_scope=settings.scope,
-            settings_checksum=settings.checksum,
-            disposition=disposition,
-            risk_level=risk_level,
-            categories=observation.categories,
-            finding_digest=observation.finding_digest,
-            resolution_basis=result.resolution_basis,
-            clearance_path=result.clearance_path,
-            critic_disposition=result.critic_disposition,
-            adjudicator_disposition=result.adjudicator_disposition,
-            response_models=result.response_models,
-            response_providers=result.response_providers,
-            usage=ShadowReviewUsage(
-                input_tokens=result.usage.input_tokens,
-                output_tokens=result.usage.output_tokens,
-                cached_input_tokens=result.usage.cached_input_tokens,
-                reasoning_tokens=result.usage.reasoning_tokens,
-                estimated_cost_usd=result.usage.estimated_cost_usd,
-                reported_cost_usd=result.usage.reported_cost_usd,
-            ),
-        )
         try:
+            bounded = False
+
+            def bound_text(value: str | None, limit: int) -> str | None:
+                nonlocal bounded
+                if value is not None and len(value) > limit:
+                    bounded = True
+                    return value[:limit]
+                return value
+
+            def bound_cost(value: float) -> float:
+                nonlocal bounded
+                cost = min(max(value, 0.0), 25.0)
+                bounded |= cost != value
+                return cost
+
+            observation = result.observation
+            risk_level = cast(
+                Literal["low", "medium", "high"] | None, observation.risk_level
+            )
+            disposition: Literal[
+                "safe", "violation", "inconclusive", "retryable_infra"
+            ] = (
+                "safe"
+                if observation.ok and observation.risk_level == "low"
+                else "violation"
+                if observation.ok
+                else "inconclusive"
+                if observation.failure_disposition == "inconclusive"
+                else "retryable_infra"
+            )
+            categories = tuple(value[:64] for value in observation.categories[:8])
+            response_models = tuple(
+                value[:100]
+                for value in result.response_models[-MAX_SHADOW_PROVIDER_STAGES:]
+            )
+            response_providers = tuple(
+                value[:100]
+                for value in result.response_providers[-MAX_SHADOW_PROVIDER_STAGES:]
+            )
+            bounded = (
+                categories != observation.categories
+                or response_models != result.response_models
+                or response_providers != result.response_providers
+            )
+            request = ShadowReviewObservationRequest(
+                attempt_id=attempt_id,
+                artifact_sha256=artifact_sha256,
+                settings_revision=settings.revision,
+                settings_scope=settings.scope,
+                settings_checksum=settings.checksum,
+                disposition=disposition,
+                risk_level=risk_level,
+                categories=categories,
+                finding_digest=observation.finding_digest,
+                resolution_basis=bound_text(result.resolution_basis, 80),
+                clearance_path=bound_text(result.clearance_path, 100),
+                critic_disposition=bound_text(result.critic_disposition, 80),
+                adjudicator_disposition=bound_text(result.adjudicator_disposition, 80),
+                response_models=response_models,
+                response_providers=response_providers,
+                usage=ShadowReviewUsage(
+                    input_tokens=result.usage.input_tokens,
+                    output_tokens=result.usage.output_tokens,
+                    cached_input_tokens=result.usage.cached_input_tokens,
+                    reasoning_tokens=result.usage.reasoning_tokens,
+                    estimated_cost_usd=bound_cost(result.usage.estimated_cost_usd),
+                    reported_cost_usd=(
+                        bound_cost(result.usage.reported_cost_usd)
+                        if result.usage.reported_cost_usd is not None
+                        else None
+                    ),
+                ),
+            )
+            if bounded:
+                logger.info(
+                    "bounded shadow review telemetry attempt_id=%s "
+                    "original_model_stages=%s original_provider_stages=%s",
+                    attempt_id,
+                    len(result.response_models),
+                    len(result.response_providers),
+                )
             await self._platform.submit_shadow_review(agent_id, request)
-        except PlatformError as error:
+        except (ValidationError, ValueError, PlatformError) as error:
+            # Do not log validation inputs or transport exception messages.
             logger.warning(
-                "shadow review telemetry was not persisted attempt_id=%s: %s",
+                "shadow review telemetry was not persisted attempt_id=%s error_type=%s",
                 attempt_id,
-                error,
+                type(error).__name__,
             )
 
     async def _emit_router_source_screen(

@@ -1,4 +1,8 @@
 ---
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_coding_hosted
+
 - name: Install the dormant Platform native-v2 trusted connectivity profile
   hosts: role_coding_hosted
   become: true

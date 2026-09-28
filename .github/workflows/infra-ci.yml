@@ -106,6 +106,12 @@ jobs:
           python3 tests/test_screener_cache_gc.py
           uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/screener-cache-gc.yml
 
+      - name: Prove the screener checkout migrates only between repositories, without deleting it
+        run: python3 tests/test_screener_checkout_migration.py
+
+      - name: Prove the screener role converges in check mode on fresh, legacy, and converged hosts
+        run: uvx --from ansible-core==2.21.2 python3 tests/test_screener_worker_check_mode.py
+
       - name: Prove the PostgreSQL collector logs stay bounded and the data disk stays off
         run: |
           python3 tests/test_postgres_log_gc.py
@@ -139,3 +145,14 @@ jobs:
         run: >-
           uvx --from ansible-core==2.21.2 ansible-playbook --check
           -i localhost, tests/coding-hosted-postgres-environment.yml
+
+      - name: Prove GCP inventory spans every Terraform zone and fails closed on empty groups
+        run: |
+          uvx --from ansible-core==2.21.2 ansible-playbook -i tests/gcp-inventory tests/gcp-inventory.yml
+          for args in "-e required_group=role_validator_prod" "-e required_group=role_screener --limit ditto-platform-prod"; do
+            if out=$(uvx --from ansible-core==2.21.2 ansible-playbook -i tests/gcp-inventory playbooks/require-hosts.yml $args 2>&1); then
+              echo "require-hosts.yml accepted an empty target ($args)" >&2
+              exit 1
+            fi
+            grep -F "resolved to no hosts" <<<"$out"
+          done

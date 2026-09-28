@@ -1,4 +1,8 @@
 ---
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_coding_hosted
+
 - name: Install the locked native Coding custody service template without starting it
   hosts: role_coding_hosted
   become: true

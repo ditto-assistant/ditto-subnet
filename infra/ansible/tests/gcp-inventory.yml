@@ -1,0 +1,50 @@
+---
+# Run with -i tests/gcp-inventory: a multi-zone fixture replaying inventory/gcp.yml's
+# compose over instance-shaped host vars, with the real group_vars. Needs no
+# cloud credentials and contacts no host.
+- name: Keep the dynamic inventory's zones and compose in step with Terraform
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    gcp_inventory: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../inventory/gcp.yml') | from_yaml }}"
+    fixture: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/gcp-inventory/20-gcp-compose.yml') | from_yaml }}"
+    terraform_zones: >-
+      {{ lookup('ansible.builtin.file', *query('ansible.builtin.fileglob', playbook_dir ~ '/../../terraform/stacks/gcp-platform/*.tf'))
+         | regex_findall('"(us-central1-[a-z])"') | unique | sort }}
+  tasks:
+    - name: Discover every zone Terraform places managed instances in
+      ansible.builtin.assert:
+        that:
+          - terraform_zones | length > 1
+          - gcp_inventory.zones | sort == terraform_zones
+        fail_msg: "inventory/gcp.yml zones {{ gcp_inventory.zones }} != Terraform zones {{ terraform_zones }}"
+
+    - name: Compose each host's zone from its instance and replay it unchanged
+      ansible.builtin.assert:
+        that:
+          - gcp_inventory.compose.gcp_zone == 'zone'
+          - fixture.compose == gcp_inventory.compose
+          - fixture.keyed_groups == gcp_inventory.keyed_groups
+
+    - name: Tunnel to a non-default-zone host through its own zone
+      ansible.builtin.assert:
+        that:
+          - "'--zone=us-central1-c ' in hostvars['ditto-screener-prod'].ansible_ssh_common_args"
+          - "'--zone=us-central1-a ' in hostvars['ditto-platform-prod'].ansible_ssh_common_args"
+
+- name: Give every discovered host its instance zone
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Use the discovered zone, never a group default
+      ansible.builtin.assert:
+        that:
+          - gcp_zone == zone
+          - ansible_ssh_common_args is undefined or ('--zone=' ~ zone ~ ' ') in ansible_ssh_common_args
+        quiet: true
+
+- name: Accept a role group that spans several zones
+  ansible.builtin.import_playbook: ../playbooks/require-hosts.yml
+  vars:
+    required_group: role_screener_fleet

@@ -295,6 +295,7 @@ import {
   setQueuePolicySettings,
   fetchValidatorSlotSettings,
   fetchValidatorFleetObservability,
+  fetchValidatorCapacity,
   fetchValidatorWeightDiagnostics,
   fetchLedgerEpochSnapshots,
   fetchValidatorAssignments,
@@ -814,6 +815,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read validator heartbeats, stack identity, and version histogram.',
   list_validator_assignments:
     'Active validator leases.',
+  get_validator_capacity:
+    'Read serviceable vs claimed validator slots, run progress estimates, queue age, and relay saturation.',
   get_miner_owner_footprint:
     'Trace payment-record links for one miner hotkey or coldkey. Payment provenance is a common-control signal, not ownership; confirm metagraph ownership separately.',
   get_inference_concurrency_settings:
@@ -2855,6 +2858,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchValidatorWeightDiagnostics(input)),
+  )
+
+  registerTool(
+    'get_validator_capacity',
+    {
+      title: 'Get validator capacity',
+      description:
+        'Read whether one slow submission is delaying unrelated work. Built from the same heartbeat, slot-policy, and lease reconciliation get_validator_fleet reads, restricted to validators inside its online window (a stale heartbeat contributes nothing). Per validator: serviceable_slots (allowed_slots narrowed to healthy_slots, zero unless bench_serviceability is serving), claimed_slots (distinct ordinary slots held by a live lease, signed occupancy, or an evicted-but-maybe-running orphan; longmem confirmation slots excluded), and each live lease with age_seconds, stage, completed/total checks, and stalled. checks_per_minute and estimated_remaining_slot_minutes are ESTIMATES: completed checks over the minutes from ticket issue to the latest heartbeat, so pre-run stages drag the rate down and the projection covers only the current run; both are null until a check completes, never zero. Fleet totals sum the known projections and count the rest as unestimated_assignment_count. eligible_unleased_count and oldest_eligible_unleased_age_seconds apply the allocator\'s fleet-wide queue filter to active-era submissions with quorum slots left and no live lease, on its FIFO clock; owner serialization and per-validator exclusions are not applied, so the count is an upper bound. relay is live chat and embedding active_requests against the global concurrency limit; use get_inference_runtime_metrics for windows, peaks, and RPM. Idle serviceable slots beside an old queue age point at admission, not capacity; full claimed slots with long projections point at slow runs. validators is capped at 64 rows (validators_truncated); totals always cover the whole live fleet. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchValidatorCapacity()),
   )
 
   registerTool(

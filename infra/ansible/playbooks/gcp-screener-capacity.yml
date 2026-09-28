@@ -4,6 +4,10 @@
 #
 #   GCP_OSLOGIN_USER=... ansible-playbook -i infra/ansible/inventory/gcp.yml \
 #     infra/ansible/playbooks/gcp-screener-capacity.yml
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_screener_capacity
+
 - name: Converge the screener capacity controller
   hosts: role_screener_capacity
   become: true

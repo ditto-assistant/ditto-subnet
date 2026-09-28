@@ -34,8 +34,8 @@ resource "google_secret_manager_secret_iam_member" "screener_source_review_acces
 # Ditto Inference key for the private review layers (L1 Luna, L2 Terra, L3 Sol,
 # L4 GLM) once a node sets screener_fleet_review_inference_provider = ditto.
 # Deliberately a separate secret from validator-openrouter-key: that one is
-# shared by validators, the platform relay, the DittoBench role, and the Targon
-# CLI, so moving the screener to another gateway must never rotate their key.
+# shared by validators, the platform relay, and the DittoBench role, so moving
+# the screener to another gateway must never rotate their key.
 # Terraform owns the container only; an operator adds the ditto_inf_ version.
 resource "google_secret_manager_secret" "screener_review_ditto_inference_key" {
   count     = (var.enable_screener_prod || var.enable_screener_fleet) ? 1 : 0

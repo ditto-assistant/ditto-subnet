@@ -12,6 +12,10 @@
 #
 #   GCP_OSLOGIN_USER=… \
 #     ansible-playbook -i infra/ansible/inventory/gcp.yml infra/ansible/playbooks/gcp-validator.yml
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_validator
+
 - name: Converge the SN118 validator VM
   hosts: role_validator
   become: true

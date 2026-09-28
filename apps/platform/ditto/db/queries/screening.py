@@ -127,6 +127,10 @@ _ORPHANED_ATTEMPT_REASON_CODE = "worker-lease-orphaned"
 _ORPHANED_ATTEMPT_REASON = (
     "Screening worker stopped reporting this attempt; manual retry required"
 )
+# Unlike an orphan, an expiry still counts toward ``MAX_SCREENING_EXPIRIES`` and
+# backs off by status, so this code joins no retry or backoff set.
+LEASE_EXPIRED_REASON_CODE = "screening-lease-expired"
+_LEASE_EXPIRED_REASON = "Screening lease expired"
 # Provider/reviewer failures held on reclaim for ``FAILED_ATTEMPT_RETRY_BACKOFF`` and,
 # with peer-pass evidence, counted toward ``MAX_SCREENING_EXPIRIES``
 # (``_inconclusive_attempt_count``). Do not add a code that should retry
@@ -398,7 +402,12 @@ async def expire_screening_attempts(session: AsyncSession, *, now: datetime) -> 
     for attempt in attempts:
         attempt.status = "expired"
         attempt.finished_at = now
-        attempt.public_reason = "Screening lease expired"
+        attempt.public_reason = _LEASE_EXPIRED_REASON
+        if attempt.reason_code is None:
+            # A claim-time code (duplicate precheck, deferred mechanical
+            # admission, policy-only rescreen) is the lease's execution mode,
+            # which a late verdict is still checked against; keep it.
+            attempt.reason_code = LEASE_EXPIRED_REASON_CODE
         release = await session.scalar(
             select(ScoredPolicyRescreenRelease)
             .where(ScoredPolicyRescreenRelease.attempt_id == attempt.attempt_id)
@@ -411,7 +420,8 @@ async def expire_screening_attempts(session: AsyncSession, *, now: datetime) -> 
         agent = await session.get(Agent, attempt.agent_id)
         if agent is not None and agent.status == AgentStatus.SCREENING:
             agent.status = AgentStatus.SCREENING_FAILED
-            agent.screening_reason = "Screening lease expired"
+            agent.screening_reason = _LEASE_EXPIRED_REASON
+            agent.screening_reason_code = LEASE_EXPIRED_REASON_CODE
     return len(attempts)
 
 
@@ -436,8 +446,10 @@ async def fail_orphaned_screening_attempts(
     build is positive evidence the attempt is still being worked.
 
     These are infrastructure failures, not inconclusive reviews. Mark them
-    ``failed`` so they retry immediately without consuming the five-expiry
-    adjudication budget.
+    ``failed`` so they do not consume the five-expiry adjudication budget. They
+    park for an operator retry and are never retried automatically: a worker
+    also stops reporting an attempt after Platform rejected its verdict or the
+    worker died mid-screen, both of which the artifact can provoke.
     """
     candidates = list(
         (

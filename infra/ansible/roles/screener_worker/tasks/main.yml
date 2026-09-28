@@ -24,6 +24,7 @@
   register: screener_uv_check
   changed_when: false
   failed_when: false
+  check_mode: false
 
 - name: Install uv if missing
   when: screener_uv_check.rc != 0
@@ -53,15 +54,68 @@
   register: screener_existing_origin
   changed_when: false
   failed_when: false
+  check_mode: false
 
-- name: Remove the retired co-located ditto-subnet screener checkout
-  ansible.builtin.file:
-    path: "{{ screener_root }}/src"
-    state: absent
+# Another spelling of the same repository (ssh vs https, .git, case) is updated
+# in place by the git task below. Only a different repository is replaced, and
+# never by deleting the live checkout: the replacement is cloned and verified
+# beside it, then swapped in with the live venv carried over, so the systemd
+# entrypoint stays executable if a later step fails. The previous checkout is
+# kept at src.prev for rollback until the next migration.
+- name: Migrate the screener checkout to a different repository
   when:
     - screener_existing_origin.rc == 0
-    - screener_existing_origin.stdout | trim != screener_repo_url
+    - screener_existing_origin.stdout | git_repo_identity != screener_repo_url | git_repo_identity
+  vars:
+    screener_staged_source_dir: "{{ screener_root }}/src.next/{{ screener_source_dir | relpath(screener_root ~ '/src') }}"
+    screener_staged_venv: "{{ screener_root }}/src.next/{{ screener_venv | relpath(screener_root ~ '/src') }}"
+  block:
+    - name: Clear leftovers from an earlier migration
+      ansible.builtin.file:
+        path: "{{ screener_root }}/{{ item }}"
+        state: absent
+      loop:
+        - src.next
+        - src.prev
 
+    - name: Clone the replacement checkout beside the live one
+      ansible.builtin.git:
+        repo: "{{ screener_repo_url }}"
+        dest: "{{ screener_root }}/src.next"
+        version: "{{ screener_branch }}"
+      become_user: "{{ screener_user }}"
+      register: screener_migrated_clone
+
+    - name: Verify the replacement contains the worker project and executor installer
+      ansible.builtin.command:
+        argv:
+          - test
+          - -f
+          - "{{ screener_staged_source_dir }}/uv.lock"
+          - -a
+          - -x
+          - "{{ screener_staged_source_dir }}/scripts/install-rootless-docker.sh"
+      changed_when: false
+
+    - name: Carry the live worker venv into the replacement
+      ansible.builtin.command:
+        argv:
+          - cp
+          - -a
+          - "{{ screener_venv }}"
+          - "{{ screener_staged_venv }}"
+        removes: "{{ screener_venv }}"
+      when: screener_venv.startswith(screener_root ~ '/src/')
+
+    - name: Swap the verified replacement into the service path
+      ansible.builtin.shell:
+        cmd: mv -T src src.prev && { mv -T src.next src || { mv -T src.prev src; exit 1; }; }
+        chdir: "{{ screener_root }}"
+      changed_when: true
+
+# In check mode a pending migration leaves the retired checkout in place, and
+# probing it would fetch through its stale origin; the real converge swaps in
+# the verified replacement first.
 - name: Clone/update ditto-subnet at the pinned branch
   ansible.builtin.git:
     repo: "{{ screener_repo_url }}"
@@ -70,12 +124,18 @@
     force: true
   become_user: "{{ screener_user }}"
   register: screener_clone
+  # A migrated checkout is already at the pinned revision; it still needs the
+  # executor install and venv sync that key off this result.
+  changed_when: screener_clone.changed or screener_migrated_clone is changed
+  when: not (ansible_check_mode and screener_migrated_clone is changed)
 
 - name: Inspect the dedicated executor unit before converge
   ansible.builtin.stat:
     path: "/etc/systemd/system/{{ screener_executor_unit }}.service"
   register: screener_executor_unit_file
 
+# Check mode never runs the installer, and on a fresh host its checkout (chdir)
+# does not exist yet, which the command module rejects even in check mode.
 - name: Install and verify the separate rootless build executor
   ansible.builtin.command:
     cmd: "{{ screener_source_dir }}/scripts/install-rootless-docker.sh"
@@ -89,25 +149,43 @@
     SCREENER_EXECUTOR_GROUP: "{{ screener_executor_group }}"
     SCREENER_EXECUTOR_HOME: "{{ screener_executor_home }}"
   register: screener_rootless_install
+  when: not ansible_check_mode
   changed_when: screener_clone.changed or not screener_executor_unit_file.stat.exists
   notify:
     - reload systemd (screener)
     - restart screener executor
     - restart ditto-screener
 
+# Say that check mode skipped it rather than assert on an empty result or pass
+# silently.
+- name: Report that executor verification is deferred to apply in check mode
+  ansible.builtin.debug:
+    msg: >-
+      CHECK MODE: {{ screener_executor_unit }} was neither installed nor probed.
+      A real converge runs the installer and fails unless it returns
+      {{ screener_docker_host }}; a passing --check run does not prove it would.
+  when: ansible_check_mode
+
 - name: Assert the executor returned the pinned rootless socket
   ansible.builtin.assert:
     that:
       - screener_rootless_install.stdout | trim == screener_docker_host
     fail_msg: "rootless screener executor returned an unexpected Docker endpoint"
+  when: not ansible_check_mode
 
+# The installer creates the executor group; in check mode it may not exist yet.
 - name: Remove worker access to the rootful Docker control group
   ansible.builtin.user:
     name: "{{ screener_user }}"
     groups:
       - "{{ screener_executor_group }}"
     append: false
+  register: screener_worker_groups
+  failed_when:
+    - screener_worker_groups.failed | default(false)
+    - not (ansible_check_mode and 'does not exist' in (screener_worker_groups.msg | default('')))
 
+# The Docker packages may not be installed yet in check mode; that is not a failure.
 - name: Disable the unused rootful Docker daemon and socket after verification
   ansible.builtin.systemd:
     name: "{{ item }}"
@@ -116,6 +194,10 @@
   loop:
     - docker.service
     - docker.socket
+  register: screener_rootful_docker
+  failed_when:
+    - screener_rootful_docker.failed | default(false)
+    - not (ansible_check_mode and 'Could not find' in (screener_rootful_docker.msg | default('')))
 
 - name: Inspect the legacy rootful-Docker metadata guard
   ansible.builtin.stat:
@@ -141,7 +223,9 @@
   become_user: "{{ screener_user }}"
   environment:
     UV_PROJECT_ENVIRONMENT: "{{ screener_venv }}"
-  when: screener_clone.changed or not screener_venv_before_sync.stat.exists
+  when:
+    - not ansible_check_mode # never syncs in check mode; chdir may not exist yet
+    - screener_clone.changed or not screener_venv_before_sync.stat.exists
   changed_when: true
   notify: restart ditto-screener
 
@@ -150,12 +234,14 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ screener_mnemonic_secret }} --project={{ screener_gcp_project }}"
   register: screener_mnemonic_read
   changed_when: false
+  check_mode: false
   no_log: true
 
 - name: Read screener API token from Secret Manager (when configured)
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ screener_api_token_secret }} --project={{ screener_gcp_project }}"
   register: screener_api_token_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: screener_api_token_secret | length > 0
 
@@ -196,11 +282,16 @@
     path: "{{ screener_venv }}/bin/ditto-screener"
   register: screener_entrypoint
 
+# The unit may not exist yet in check mode; that is not a failure.
 - name: Enable the worker unit
   ansible.builtin.systemd:
     name: "{{ screener_unit }}"
     enabled: true
     daemon_reload: true
+  register: screener_unit_enable
+  failed_when:
+    - screener_unit_enable.failed | default(false)
+    - not (ansible_check_mode and 'Could not find' in (screener_unit_enable.msg | default('')))
 
 # The worker fails fast without a signing key / hotkey, so only start it once a
 # hotkey is configured (host_vars) AND the venv exists. Until then it's installed
@@ -209,6 +300,10 @@
   ansible.builtin.systemd:
     name: "{{ screener_unit }}"
     state: started
+  register: screener_unit_start
+  failed_when:
+    - screener_unit_start.failed | default(false)
+    - not (ansible_check_mode and 'Could not find' in (screener_unit_start.msg | default('')))
   when:
     - screener_hotkey | length > 0
     - screener_entrypoint.stat.exists

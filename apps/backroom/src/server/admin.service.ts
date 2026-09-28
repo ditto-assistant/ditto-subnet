@@ -303,6 +303,7 @@ import {
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
   sourceReviewQueueSloSchema,
+  validatorCapacitySummarySchema,
   outlierEscalationDryRunInputSchema,
   outlierEscalationDryRunSchema,
   outlierEscalationInputSchema,
@@ -1929,6 +1930,16 @@ export async function fetchValidatorFleetObservability() {
     retries: 1,
   })
   return validatorFleetObservabilitySchema.parse(payload)
+}
+
+const VALIDATOR_CAPACITY_PATH = '/api/v1/admin/validator-capacity'
+
+export async function fetchValidatorCapacity() {
+  const payload = await platformAdminRequest(VALIDATOR_CAPACITY_PATH, {
+    timeoutMs: 15_000,
+    retries: 1,
+  })
+  return validatorCapacitySummarySchema.parse(payload)
 }
 
 export async function fetchLedgerEpochSnapshots(limit = 24) {

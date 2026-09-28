@@ -91,6 +91,7 @@ def analyze_binary(sample: BinarySample, *, path: str) -> dict[str, object]:
     lowered = data.lower()
     markers = [item for item in _BENCHMARK_SCHEMA_MARKERS if item.encode() in lowered]
     detected_format, confidence, details = _detect_format(data, sample.truncated)
+    analysis_failed = details.get("parse_status") == "analysis-failed"
     return {
         "path": path,
         "bytes": sample.size,
@@ -98,7 +99,8 @@ def analyze_binary(sample: BinarySample, *, path: str) -> dict[str, object]:
         "sha256_bytes": sample.hashed_bytes,
         "sha256_complete": sample.hash_complete,
         "analyzed_bytes": len(data),
-        "analysis_truncated": sample.truncated,
+        "analysis_failed": analysis_failed,
+        "analysis_truncated": sample.truncated or analysis_failed,
         "format": detected_format,
         "format_confidence": confidence,
         "entropy_bits_per_byte": _entropy(data),
@@ -190,6 +192,7 @@ def compact_binary_analysis(value: dict[str, object]) -> dict[str, object]:
         "sha256_bytes": value.get("sha256_bytes"),
         "sha256_complete": value.get("sha256_complete"),
         "analyzed_bytes": value.get("analyzed_bytes"),
+        "analysis_failed": value.get("analysis_failed"),
         "analysis_truncated": value.get("analysis_truncated"),
         "format": detected_format,
         "format_confidence": value.get("format_confidence"),
@@ -263,6 +266,8 @@ def _detect_format(data: bytes, truncated: bool) -> tuple[str, str, dict[str, ob
 
     safetensors = _safetensors_details(data, truncated)
     if safetensors is not None:
+        if safetensors.get("parse_status") == "analysis-failed":
+            return "safetensors", "low", safetensors
         confidence = "high" if safetensors.get("payload_available") else "medium"
         return "safetensors", confidence, safetensors
 
@@ -391,8 +396,12 @@ def _safetensors_details(data: bytes, truncated: bool) -> dict[str, object] | No
         return None
     try:
         header = json.loads(data[8 : 8 + header_bytes])
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return None
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return {
+            "parse_status": "analysis-failed",
+            "reason": "header-unparseable",
+            "details_truncated": True,
+        }
     if not isinstance(header, dict):
         return None
     payload_bytes = len(data) - 8 - header_bytes

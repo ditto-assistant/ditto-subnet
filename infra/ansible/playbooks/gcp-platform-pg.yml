@@ -10,6 +10,10 @@
 #   # Day two: the existing root-owned password file is reused without export.
 #   GCP_OSLOGIN_USER=… \
 #     ansible-playbook -i infra/ansible/inventory/gcp.yml infra/ansible/playbooks/gcp-platform-pg.yml
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_platform_postgres
+
 - name: Converge ditto-platform Postgres VM
   hosts: role_platform_postgres
   become: true
