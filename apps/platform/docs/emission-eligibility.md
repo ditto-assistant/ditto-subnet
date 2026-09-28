@@ -166,10 +166,12 @@ Every direction is the same one: an error never withholds.
   absent. Keyed into the pin's `served` context **only** when present, so every
   pin without one keeps its digest; never served on a live read.
 * The pin stores its review eligibility records and effective enforcement in
-  its internal context. Public and operator reads use those frozen decisions
-  until the next pin, so a same-epoch review or settings change cannot claim
-  the current validator fold has already adopted it. The records do not change
-  the validator digest because they are explanatory, not fold inputs.
+  its internal context. Public row annotations and operator reads use those
+  frozen decisions until the next pin, so a same-epoch review or settings
+  change cannot claim the current validator fold has already adopted it. The
+  board's emissions section still projects the next pin using current policy.
+  The records do not change the validator digest because they are explanatory,
+  not fold inputs.
 * `PublicEmissionRecipient.paid` / `PublicLedgerEpochRecipient.paid` — present,
   and `false`, only on a provisional incumbent's slot.
 * `emission_eligibility_settings_revisions` — append-only posture, shaped like

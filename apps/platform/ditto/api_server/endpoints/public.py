@@ -3877,8 +3877,23 @@ async def build_public_leaderboard(
         active_version=active_version,
         pin=eligibility_pin,
     )
+    # Row annotations describe the pin validators fold now. Emissions project
+    # the next pin, so a review or settings revision made inside this epoch
+    # belongs in that projection without rewriting the active pin's labels.
+    projected_reward_eligibility = (
+        await _resolve_reward_eligibility(
+            request,
+            session,
+            finalized_generations + [row for row, _count in provisional_rows],
+            now=now,
+            active_version=active_version,
+        )
+        if eligibility_pin is not None
+        else reward_eligibility
+    )
     enforcing_eligibility = any(
-        record.enforcement == "enforce" for record in reward_eligibility.values()
+        record.enforcement == "enforce"
+        for record in projected_reward_eligibility.values()
     )
     emission_incumbent_id: UUID | None = None
     provisional_incumbent: LedgerRow | None = None
@@ -3887,7 +3902,7 @@ async def build_public_leaderboard(
         # generations dropped before owner dedupe, then registration -- so the
         # public champion and the folded champion cannot disagree.
         def withheld(agent_id: UUID) -> bool:
-            record = reward_eligibility.get(agent_id)
+            record = projected_reward_eligibility.get(agent_id)
             return record is not None and not record.posture_satisfied
 
         def registered(row: LedgerRow) -> bool:
@@ -4184,7 +4199,7 @@ async def build_public_leaderboard(
                 ceiling_band_clamp=ceiling_band_clamp_active,
                 ledger_pin=ledger_pin,
                 crown_incumbent_active=crown_incumbent_active,
-                reward_eligibility=reward_eligibility,
+                reward_eligibility=projected_reward_eligibility,
                 incumbent_agent_id=emission_incumbent_id,
                 provisional_incumbent=provisional_incumbent,
             )

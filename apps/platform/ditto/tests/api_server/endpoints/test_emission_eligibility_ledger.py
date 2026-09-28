@@ -668,7 +668,7 @@ class TestProvisionalIncumbent:
         await _set_posture(session, enforcement="enforce")
         app.state.emission_eligibility.invalidate()
 
-    async def test_policy_change_waits_for_the_next_pin_on_every_surface(
+    async def test_active_pin_labels_freeze_while_next_pin_projection_updates(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -714,8 +714,10 @@ class TestProvisionalIncumbent:
         board = (await client.get("/api/v1/public/leaderboard")).json()
         by_id = {row["agent_id"]: row for row in board["entries"]}
         assert by_id[str(_HELD_ID)].get("reward_eligibility") is None
-        assert board["emissions"].get("reward_eligibility_mode") is None
-        assert board["emissions"]["provisional_champion"] is False
+        # Emissions explicitly project the next pin, which can already show
+        # the new policy while row labels still describe the active pin.
+        assert board["emissions"]["reward_eligibility_mode"] == "enforce"
+        assert board["emissions"]["provisional_champion"] is True
         pipeline = (
             await client.get(f"/api/v1/public/agent/{_HELD_ID}/pipeline")
         ).json()
