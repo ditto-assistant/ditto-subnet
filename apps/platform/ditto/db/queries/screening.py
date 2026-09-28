@@ -1059,6 +1059,60 @@ async def claim_screening_attempts(
         .correlate(Agent)
         .scalar_subquery()
     )
+    allowed_canary_scopes: set[str] = set()
+    if review_settings_binding is not None:
+        allowed_canary_scopes = {
+            "*",
+            review_settings_binding[1],
+            review_settings_binding[2],
+        }
+        # The endpoint authenticates enrollment before passing the node scope.
+        if review_settings_enrolled_node_id is not None:
+            allowed_canary_scopes.add(review_settings_enrolled_node_id)
+    retry_canary_revision = (
+        select(ScreeningRetryOverride.review_settings_revision)
+        .where(ScreeningRetryOverride.attempt_id == latest_attempt_id)
+        .correlate(Agent)
+        .scalar_subquery()
+    )
+    release_canary_revision = (
+        select(ScoredPolicyRescreenRelease.review_settings_revision)
+        .where(
+            ScoredPolicyRescreenRelease.agent_id == Agent.agent_id,
+            *scored_release_criteria,
+        )
+        .correlate(Agent)
+        .scalar_subquery()
+        if can_claim_scored_rescreen
+        else None
+    )
+    # Match the binding chosen below: an exact latest-attempt override wins,
+    # otherwise the pending release supplies the canary revision. Filter before
+    # LIMIT so a retry unusable by this claimant cannot hide the next upload.
+    canary_revision = func.coalesce(retry_canary_revision, release_canary_revision)
+    canary_revision_usable: ColumnElement[bool] = canary_revision.is_(None)
+    if review_settings_binding is not None:
+        canary_revision_usable = or_(
+            canary_revision_usable,
+            exists(
+                select(ScreenerReviewSettingsRevision.revision).where(
+                    ScreenerReviewSettingsRevision.revision == canary_revision,
+                    ScreenerReviewSettingsRevision.scope.in_(allowed_canary_scopes),
+                    ScreenerReviewSettingsRevision.settings["mode"].as_string()
+                    == "enforce",
+                    func.coalesce(
+                        ScreenerReviewSettingsRevision.settings[
+                            "l3_enabled"
+                        ].as_boolean(),
+                        ScreenerReviewSettings().l3_enabled,
+                    ).is_(True),
+                    ScreenerReviewSettingsRevision.settings[
+                        "adjudicator_mode"
+                    ].as_string()
+                    == "enforce",
+                )
+            ),
+        )
     # Resolved before selection: a double-check hold without a usable posture
     # (or claimed by a worker that cannot bind one) must not be selected at
     # all, or it would sit at the head of every claim and starve the queue.
@@ -1234,7 +1288,12 @@ async def claim_screening_attempts(
                 candidate_payment,
                 candidate_payment.agent_id == Agent.agent_id,
             )
-            .where(eligible, ~has_running_or_backoff, ~earlier_pending)
+            .where(
+                eligible,
+                ~has_running_or_backoff,
+                ~earlier_pending,
+                canary_revision_usable,
+            )
             .order_by(*screening_priority_order())
             # Surplus probe candidates only exist to be skipped below; widen the
             # window so they cannot crowd out claimable work behind them.
@@ -1438,35 +1497,56 @@ async def claim_screening_attempts(
             # the live global revision: that would turn a one-attempt canary
             # into a fleet-wide toggle between the claim and the verdict.
             if review_settings_binding is None:
+                logger.warning(
+                    "screening canary skipped agent_id=%s revision=%s scope=%s "
+                    "instance_id=%s reason=no_binding",
+                    agent.agent_id,
+                    canary_review_settings_revision,
+                    None,
+                    None,
+                )
                 continue
             canary_settings = await session.get(
                 ScreenerReviewSettingsRevision,
                 canary_review_settings_revision,
             )
             if canary_settings is None:
+                logger.warning(
+                    "screening canary skipped agent_id=%s revision=%s scope=%s "
+                    "instance_id=%s reason=missing_revision",
+                    agent.agent_id,
+                    canary_review_settings_revision,
+                    None,
+                    review_settings_binding[1],
+                )
                 continue
             parsed_canary_settings = ScreenerReviewSettings.model_validate(
                 canary_settings.settings
             )
             instance_id = review_settings_binding[1]
-            allowed_canary_scopes = {
-                "*",
-                instance_id,
-                review_settings_binding[2],
-            }
-            # A persistent node owns multiple local worker heartbeat identities.
-            # Its live setting may intentionally inherit the global posture
-            # while one exact retry remains bound to an older, immutable
-            # node-scoped enforce revision. The endpoint supplies this value
-            # only after authenticating that the instance belongs to the node.
-            if review_settings_enrolled_node_id is not None:
-                allowed_canary_scopes.add(review_settings_enrolled_node_id)
+            if canary_settings.scope not in allowed_canary_scopes:
+                logger.warning(
+                    "screening canary skipped agent_id=%s revision=%s scope=%s "
+                    "instance_id=%s reason=scope_mismatch",
+                    agent.agent_id,
+                    canary_review_settings_revision,
+                    canary_settings.scope,
+                    instance_id,
+                )
+                continue
             if (
-                canary_settings.scope not in allowed_canary_scopes
-                or parsed_canary_settings.mode != "enforce"
+                parsed_canary_settings.mode != "enforce"
                 or not parsed_canary_settings.l3_enabled
                 or parsed_canary_settings.adjudicator_mode != "enforce"
             ):
+                logger.warning(
+                    "screening canary skipped agent_id=%s revision=%s scope=%s "
+                    "instance_id=%s reason=posture_mismatch",
+                    agent.agent_id,
+                    canary_review_settings_revision,
+                    canary_settings.scope,
+                    instance_id,
+                )
                 continue
             attempt_review_settings_binding = (
                 canary_settings.revision,

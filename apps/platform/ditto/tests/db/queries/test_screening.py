@@ -380,6 +380,7 @@ async def _authorize_latest_retry(
     *,
     reason: str = "operator retry",
     force_full_review: bool = False,
+    review_settings_revision: int | None = None,
 ) -> ScreeningRetryOverride:
     async with session.begin():
         attempt = await session.scalar(
@@ -398,6 +399,7 @@ async def _authorize_latest_retry(
             artifact_sha256=agent.sha256,
             expected_score_count=0,
             force_full_review=force_full_review,
+            review_settings_revision=review_settings_revision,
             reason=reason,
             actor="operator@example.com",
             created_at=datetime.now(UTC),
@@ -555,6 +557,7 @@ async def _claim(
     deferred_review_mode: str = "off",
     integrity_double_check_mode: str = "off",
     review_settings_binding: tuple[int, str, str, str] | None = None,
+    review_settings_enrolled_node_id: str | None = None,
     now: datetime | None = None,
     canary_policy_version: int | None = None,
 ) -> list:
@@ -568,6 +571,7 @@ async def _claim(
             deferred_review_mode=deferred_review_mode,
             integrity_double_check_mode=integrity_double_check_mode,
             review_settings_binding=review_settings_binding,
+            review_settings_enrolled_node_id=review_settings_enrolled_node_id,
             canary_policy_version=canary_policy_version,
         )
 
@@ -2766,6 +2770,317 @@ async def test_scheduled_rescreen_does_not_requeue_unadmitted_historical_scored(
 
 
 _NORMAL_BINDING = (1, "worker-instance-1", "*", "a" * 64)
+
+
+async def _seed_canary_posture(
+    session: AsyncSession,
+    *,
+    scope: str = "*",
+    settings: ScreenerReviewSettings | None = None,
+    omit_legacy_l3_field: bool = False,
+) -> ScreenerReviewSettingsRevision:
+    settings = settings or ScreenerReviewSettings(
+        mode="enforce", l3_enabled=True, adjudicator_mode="enforce"
+    )
+    stored = settings.model_dump(mode="json")
+    if omit_legacy_l3_field:
+        stored.pop("l3_enabled")
+    row = ScreenerReviewSettingsRevision(
+        parent_revision=0,
+        scope=scope,
+        settings=stored,
+        checksum=review_settings_checksum(settings),
+        reason="claim a pinned adjudicator canary without blocking other work",
+        actor="test",
+    )
+    async with session.begin():
+        session.add(row)
+    return row
+
+
+async def _seed_canary_retry_and_fresh_upload(
+    session: AsyncSession, revision: int
+) -> tuple[Agent, ScreeningRetryOverride, Agent]:
+    held = await _seed_failed_agent_with_age(
+        session, name="pinned-canary", age=timedelta(days=1)
+    )
+    await _add_expired_attempts(session, held, 1)
+    override = await _authorize_latest_retry(
+        session, held, force_full_review=True, review_settings_revision=revision
+    )
+    fresh = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-fresh-behind-canary",
+        name="fresh-behind-canary",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.UPLOADED,
+    )
+    async with session.begin():
+        session.add(fresh)
+    return held, override, fresh
+
+
+async def test_unusable_canary_override_does_not_starve_queue(
+    session: AsyncSession,
+) -> None:
+    posture = await _seed_canary_posture(session, scope="subnet-screener-1")
+    held, override, fresh = await _seed_canary_retry_and_fresh_upload(
+        session, posture.revision
+    )
+
+    claimed = await _claim(session, limit=1, review_settings_binding=_NORMAL_BINDING)
+
+    assert [agent.agent_id for agent, _, _ in claimed] == [fresh.agent_id]
+    assert held.status == AgentStatus.SCREENING_FAILED
+    async with session.begin():
+        assert (
+            await session.scalar(
+                select(ScreeningRetryOverride.review_settings_revision).where(
+                    ScreeningRetryOverride.override_id == override.override_id
+                )
+            )
+            == posture.revision
+        )
+        attempts = list(
+            await session.scalars(
+                select(ScreeningAttempt).where(
+                    ScreeningAttempt.agent_id == held.agent_id
+                )
+            )
+        )
+        assert len(attempts) == 1
+        assert attempts[0].status == "expired"
+
+    claimed = await _claim(
+        session,
+        limit=1,
+        review_settings_binding=_NORMAL_BINDING,
+        review_settings_enrolled_node_id="subnet-screener-1",
+    )
+    assert [agent.agent_id for agent, _, _ in claimed] == [held.agent_id]
+    attempt = claimed[0][1]
+    assert (
+        attempt.review_settings_revision,
+        attempt.review_settings_instance_id,
+        attempt.review_settings_scope,
+        attempt.review_settings_checksum,
+    ) == (
+        posture.revision,
+        _NORMAL_BINDING[1],
+        posture.scope,
+        posture.checksum,
+    )
+
+
+async def test_canary_override_skipped_in_sql_for_revision_zero_claimant(
+    session: AsyncSession,
+) -> None:
+    posture = await _seed_canary_posture(session)
+    held, _, fresh = await _seed_canary_retry_and_fresh_upload(
+        session, posture.revision
+    )
+
+    claimed = await _claim(session, limit=1, review_settings_binding=None)
+
+    assert [agent.agent_id for agent, _, _ in claimed] == [fresh.agent_id]
+    assert held.status == AgentStatus.SCREENING_FAILED
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        ScreenerReviewSettings(mode="shadow", adjudicator_mode="enforce"),
+        ScreenerReviewSettings(
+            mode="enforce", l3_enabled=False, adjudicator_mode="enforce"
+        ),
+        ScreenerReviewSettings(mode="enforce", adjudicator_mode="shadow"),
+    ],
+    ids=["mode", "l3", "adjudicator"],
+)
+async def test_unusable_canary_posture_does_not_starve_queue(
+    session: AsyncSession, settings: ScreenerReviewSettings
+) -> None:
+    posture = await _seed_canary_posture(session, settings=settings)
+    held, _, fresh = await _seed_canary_retry_and_fresh_upload(
+        session, posture.revision
+    )
+
+    claimed = await _claim(session, limit=1, review_settings_binding=_NORMAL_BINDING)
+
+    assert [agent.agent_id for agent, _, _ in claimed] == [fresh.agent_id]
+    assert held.status == AgentStatus.SCREENING_FAILED
+
+
+@pytest.mark.parametrize("scope", ["*", "worker-instance-1", "effective-posture"])
+async def test_global_or_claimant_scoped_canary_override_still_claimable(
+    session: AsyncSession, scope: str
+) -> None:
+    posture = await _seed_canary_posture(session, scope=scope)
+    held, _, _ = await _seed_canary_retry_and_fresh_upload(session, posture.revision)
+    binding = (_NORMAL_BINDING[0], _NORMAL_BINDING[1], "effective-posture", "a" * 64)
+
+    claimed = await _claim(session, limit=1, review_settings_binding=binding)
+
+    assert [agent.agent_id for agent, _, _ in claimed] == [held.agent_id]
+    attempt = claimed[0][1]
+    assert attempt.review_settings_revision == posture.revision
+    assert attempt.review_settings_scope == scope
+    assert attempt.review_settings_checksum == posture.checksum
+
+
+async def test_legacy_canary_posture_uses_the_l3_model_default(
+    session: AsyncSession,
+) -> None:
+    posture = await _seed_canary_posture(session, omit_legacy_l3_field=True)
+    held, _, _ = await _seed_canary_retry_and_fresh_upload(session, posture.revision)
+
+    claimed = await _claim(session, limit=1, review_settings_binding=_NORMAL_BINDING)
+
+    assert [agent.agent_id for agent, _, _ in claimed] == [held.agent_id]
+
+
+async def _seed_scored_canary_release_and_fresh_upload(
+    session: AsyncSession,
+) -> tuple[Agent, ScoredPolicyRescreenRelease, ScreenerPolicyActivation, Agent]:
+    await _activate_current_era(session)
+    posture = await _seed_canary_posture(session, scope="another-worker")
+    target = SCREENING_FLOOR_POLICY_VERSION + 1
+    now = datetime.now(UTC)
+    held = _scored_agent(
+        hotkey="5HK-scored-scoped-canary",
+        name="scored-scoped-canary",
+        created_at=now - timedelta(minutes=30),
+    )
+    fresh = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-fresh-behind-rescreen",
+        name="fresh-behind-rescreen",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.UPLOADED,
+        created_at=now,
+    )
+    async with session.begin():
+        activation = ScreenerPolicyActivation(
+            parent_revision=0,
+            target_policy_version=target,
+            activate_at=now - timedelta(minutes=1),
+            rescreen_scored=True,
+            canary_only=True,
+            reason="one scored canary pinned to a different worker",
+            actor="test",
+        )
+        session.add_all((held, fresh, activation))
+        await session.flush()
+        release = ScoredPolicyRescreenRelease(
+            release_id=uuid4(),
+            activation_revision=activation.revision,
+            target_policy_version=target,
+            agent_id=held.agent_id,
+            position=1,
+            state="pending",
+            review_settings_revision=posture.revision,
+            actor="test",
+            reason="one scored canary pinned to a different worker",
+        )
+        session.add(release)
+    return held, release, activation, fresh
+
+
+async def test_out_of_scope_policy_rescreen_canary_does_not_starve_queue(
+    session: AsyncSession,
+) -> None:
+    (
+        held,
+        release,
+        activation,
+        fresh,
+    ) = await _seed_scored_canary_release_and_fresh_upload(session)
+
+    with _due_canary_activation(
+        target_policy_version=activation.target_policy_version,
+        activation_revision=activation.revision,
+    ):
+        claimed = await _claim(
+            session,
+            limit=1,
+            canary_policy_version=activation.target_policy_version,
+            review_settings_binding=_NORMAL_BINDING,
+        )
+        assert [agent.agent_id for agent, _, _ in claimed] == [fresh.agent_id]
+        assert held.status == AgentStatus.SCORED
+        assert release.state == "pending"
+        assert release.attempt_id is None
+
+        claimed = await _claim(
+            session,
+            limit=1,
+            canary_policy_version=activation.target_policy_version,
+            review_settings_binding=(1, "another-worker", "*", "a" * 64),
+        )
+        assert [agent.agent_id for agent, _, _ in claimed] == [held.agent_id]
+        assert (
+            claimed[0][1].review_settings_revision == release.review_settings_revision
+        )
+        assert release.state == "running"
+        assert release.attempt_id == claimed[0][1].attempt_id
+
+
+@pytest.mark.parametrize("override_scope", ["*", "unrelated-worker"])
+async def test_retry_canary_override_takes_precedence_over_a_usable_release(
+    session: AsyncSession, override_scope: str
+) -> None:
+    (
+        held,
+        release,
+        activation,
+        fresh,
+    ) = await _seed_scored_canary_release_and_fresh_upload(session)
+    posture = await _seed_canary_posture(session, scope=override_scope)
+    now = datetime.now(UTC)
+    async with session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=uuid4(),
+                agent_id=held.agent_id,
+                screener_hotkey=_SCREENER,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="failed",
+                started_at=now - timedelta(minutes=15),
+                deadline=now + timedelta(minutes=30),
+                finished_at=now - timedelta(minutes=10),
+            )
+        )
+    await _authorize_latest_retry(
+        session,
+        held,
+        force_full_review=True,
+        review_settings_revision=posture.revision,
+    )
+
+    with _due_canary_activation(
+        target_policy_version=activation.target_policy_version,
+        activation_revision=activation.revision,
+    ):
+        claimed = await _claim(
+            session,
+            limit=1,
+            canary_policy_version=activation.target_policy_version,
+            review_settings_binding=_NORMAL_BINDING,
+            review_settings_enrolled_node_id="another-worker",
+        )
+
+    if override_scope == "*":
+        assert [agent.agent_id for agent, _, _ in claimed] == [held.agent_id]
+        attempt = claimed[0][1]
+        assert attempt.review_settings_revision == posture.revision
+        assert attempt.review_settings_scope == "*"
+        assert attempt.review_settings_checksum == posture.checksum
+        assert release.state == "running"
+    else:
+        # The allowed release cannot silently replace an unusable exact retry pin.
+        assert [agent.agent_id for agent, _, _ in claimed] == [fresh.agent_id]
+        assert release.state == "pending"
+        assert held.status == AgentStatus.SCORED
 
 
 async def _seed_double_check_posture(
