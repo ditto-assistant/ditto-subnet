@@ -2116,6 +2116,90 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
     ] == ["read_file", "submit_adjudication"]
 
 
+@pytest.mark.parametrize(
+    ("name", "arguments", "failure_code"),
+    [
+        pytest.param(
+            "submit_clear",
+            {
+                "clear_clause": "model_authors_graded_slot",
+                "reason": "The model writes the reply.",
+                "reject_invariant": "i6_tool_execution_fidelity",
+            },
+            "verdict-invalid",
+            id="self-inconsistent-clear",
+        ),
+        pytest.param(
+            "submit_reject",
+            {"reject_invariant": "i6_tool_execution_fidelity"},
+            "verdict-invalid",
+            id="reject-without-reason",
+        ),
+        pytest.param(
+            "request_operator_review",
+            {"reason": ""},
+            "response-invalid",
+            id="operator-review-without-reason",
+        ),
+    ],
+)
+async def test_v13_failure_diagnostic_marks_verdict_tool_returned(
+    tmp_path: Path, name: str, arguments: dict[str, object], failure_code: str
+) -> None:
+    result = await _adjudicator(
+        _key(tmp_path), _transport([[_call(name, arguments)]])
+    ).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN], policy_version=13, ledger_final=True
+    )
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == failure_code
+    assert result.run_diagnostic.final_tool_call_returned is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["submit_adjudication", "submit_clear", "submit_reject", "request_operator_review"],
+)
+async def test_v13_failure_diagnostic_marks_verdict_in_mixed_batch(
+    tmp_path: Path, name: str
+) -> None:
+    calls = [
+        _call("read_file", {"path": "src/main.rs", "start_line": 4, "end_line": 6}),
+        _call(name, {"reason": "The source supports this decision."}),
+    ]
+    result = await _adjudicator(_key(tmp_path), _transport([calls])).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN], policy_version=13, ledger_final=True
+    )
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "tool-call-invalid"
+    assert result.run_diagnostic.final_tool_call_returned is True
+
+
+@pytest.mark.parametrize("read_only", [False, True], ids=["no-call", "read-file-only"])
+async def test_v13_failure_diagnostic_without_verdict_tool(
+    tmp_path: Path, read_only: bool
+) -> None:
+    calls = (
+        [_call("read_file", {"path": "src/main.rs", "start_line": 4, "end_line": 6})]
+        if read_only
+        else []
+    )
+    result = await _adjudicator(_key(tmp_path), _transport([calls] * 6)).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN], policy_version=13, ledger_final=True
+    )
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == (
+        "tool-call-invalid" if read_only else "response-invalid"
+    )
+    assert result.run_diagnostic.final_tool_call_returned is False
+
+
 async def test_v13_certifies_visible_endpoint_present_i6_violation(
     tmp_path: Path,
 ) -> None:
