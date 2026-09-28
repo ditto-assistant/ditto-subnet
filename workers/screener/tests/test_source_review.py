@@ -4178,56 +4178,65 @@ async def test_malformed_or_unavailable_reviewer_is_retryable_not_reject(
 
 
 @pytest.mark.parametrize(
-    "final",
+    ("final", "expected_error_code"),
     [
-        {
-            "risk_level": "low",
-            "confidence": 0.9,
-            "categories": ["benchmark_emulation"],
-            "evidence": [
-                {
-                    "path": "src/main.rs",
-                    "line": 1,
-                    "category": "benchmark_emulation",
-                }
-            ],
-            "summary": "Low risk despite a prohibited category.",
-        },
-        {
-            "risk_level": "high",
-            "confidence": 0.9,
-            "categories": ["benchmark_emulation"],
-            "evidence": [
-                {
-                    "path": "src/main.rs",
-                    "line": 1,
-                    "category": "benchmark_emulation",
-                }
-            ],
-            "summary": "High risk without a separate causal source location.",
-        },
-        {
-            "risk_level": "high",
-            "confidence": 0.9,
-            "categories": ["benchmark_emulation", "none"],
-            "evidence": [
-                {
-                    "path": "src/main.rs",
-                    "line": 1,
-                    "category": "benchmark_emulation",
-                },
-                {
-                    "path": "src/main.rs",
-                    "line": 2,
-                    "category": "benchmark_emulation",
-                },
-            ],
-            "summary": "None cannot hide an elevated category.",
-        },
+        (
+            {
+                "risk_level": "low",
+                "confidence": 0.9,
+                "categories": ["benchmark_emulation"],
+                "evidence": [
+                    {
+                        "path": "src/main.rs",
+                        "line": 1,
+                        "category": "benchmark_emulation",
+                    }
+                ],
+                "summary": "Low risk despite a prohibited category.",
+            },
+            "source-review-inconsistent-verdict-low-risk-category",
+        ),
+        (
+            {
+                "risk_level": "high",
+                "confidence": 0.9,
+                "categories": ["benchmark_emulation"],
+                "evidence": [
+                    {
+                        "path": "src/main.rs",
+                        "line": 1,
+                        "category": "benchmark_emulation",
+                    }
+                ],
+                "summary": "High risk without a separate causal source location.",
+            },
+            "source-review-inconsistent-verdict-category-locations",
+        ),
+        (
+            {
+                "risk_level": "high",
+                "confidence": 0.9,
+                "categories": ["benchmark_emulation", "none"],
+                "evidence": [
+                    {
+                        "path": "src/main.rs",
+                        "line": 1,
+                        "category": "benchmark_emulation",
+                    },
+                    {
+                        "path": "src/main.rs",
+                        "line": 2,
+                        "category": "benchmark_emulation",
+                    },
+                ],
+                "summary": "None cannot hide an elevated category.",
+            },
+            "source-review-inconsistent-verdict-none-mixed",
+        ),
     ],
 )
 async def test_internally_inconsistent_review_is_retryable_not_a_weak_finding(
-    tmp_path: Path, final: dict[str, object]
+    tmp_path: Path, final: dict[str, object], expected_error_code: str
 ) -> None:
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
@@ -4239,7 +4248,7 @@ async def test_internally_inconsistent_review_is_retryable_not_a_weak_finding(
     )
 
     assert not observation.ok
-    assert observation.error_code == "source-review-inconsistent-verdict"
+    assert observation.error_code == expected_error_code
 
 
 async def test_expired_lease_deadline_stops_review_before_first_call(
@@ -4979,7 +4988,15 @@ def test_source_review_budget_exhaustion_has_public_safe_exact_accounting() -> N
                 "source review category benchmark_emulation requires two "
                 "source locations"
             ),
-            "source-review-inconsistent-verdict",
+            "source-review-inconsistent-verdict-category-locations",
+        ),
+        (
+            ValueError("elevated source review is missing category evidence"),
+            "source-review-inconsistent-verdict-missing-evidence",
+        ),
+        (
+            ValueError("source review evidence fields are invalid"),
+            "source-review-inconsistent-verdict-evidence-fields",
         ),
         # Anything unrecognized must degrade to the historical shape rather
         # than lose the failure.

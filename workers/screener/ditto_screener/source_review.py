@@ -318,15 +318,20 @@ _SOURCE_REVIEW_FAILURE_CODES: Mapping[str, str] = {
     "analyze_binary path is invalid": "model-tool-call-invalid",
     "source reviewer requested an unsupported tool": "model-tool-call-invalid",
     "source reviewer cited an unknown archive member": "model-cited-unknown-member",
-    # The model returned a verdict that contradicts itself.
-    "source review has unexpected fields": "inconsistent-verdict",
-    "source review fields are invalid": "inconsistent-verdict",
-    "source review evidence is invalid": "inconsistent-verdict",
-    "source review evidence fields are invalid": "inconsistent-verdict",
-    "source review none category must be exclusive": "inconsistent-verdict",
-    "low-risk source review contains a prohibited category": "inconsistent-verdict",
-    "elevated source review cannot use none": "inconsistent-verdict",
-    "elevated source review is missing category evidence": "inconsistent-verdict",
+    # Fixed, source-free subcodes distinguish repairable reviewer contract
+    # failures without publishing its arguments or untrusted source text.
+    "source review has unexpected fields": "inconsistent-verdict-extra-fields",
+    "source review fields are invalid": "inconsistent-verdict-fields",
+    "source review evidence is invalid": "inconsistent-verdict-evidence",
+    "source review evidence fields are invalid": "inconsistent-verdict-evidence-fields",
+    "source review none category must be exclusive": "inconsistent-verdict-none-mixed",
+    "low-risk source review contains a prohibited category": (
+        "inconsistent-verdict-low-risk-category"
+    ),
+    "elevated source review cannot use none": "inconsistent-verdict-elevated-none",
+    "elevated source review is missing category evidence": (
+        "inconsistent-verdict-missing-evidence"
+    ),
     # Screener-side data we ship. This one really is our infrastructure.
     "at least one provenance manifest is required": "provenance-invalid",
     "provenance manifest is too large": "provenance-invalid",
@@ -3981,10 +3986,14 @@ def _source_review_failure_code(error: BaseException) -> str:
         return f"source-review-http-{error.response.status_code}"
     message = str(error).strip()
     suffix = _SOURCE_REVIEW_FAILURE_CODES.get(message)
-    if suffix is None and message.startswith("source review category "):
-        suffix = "inconsistent-verdict"
+    if (
+        suffix is None
+        and message.startswith("source review category ")
+        and message.endswith(" requires two source locations")
+    ):
+        suffix = "inconsistent-verdict-category-locations"
     if suffix is None and ("policy v10" in message or "invariant" in message):
-        suffix = "inconsistent-verdict"
+        suffix = "inconsistent-verdict-invariant"
     if suffix is None:
         return f"source-review-{type(error).__name__.lower()}"
     return f"source-review-{suffix}"
