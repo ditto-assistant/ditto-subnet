@@ -100,3 +100,20 @@ and `.claude/skills/<name>`.
   ref alone.
 - Verify every changed remote Git context with a fresh or empty BuildKit
   builder. A successful build against a warm local cache is not sufficient.
+
+## Jira
+
+Work is prioritized in Jira (`https://omniaura-team.atlassian.net`, cloudId
+`492f4031-0349-4bcf-a05b-d0913759db8e`). This repo's project is `SN`. Use the
+`jira` skill for details.
+
+- Every PR title ends with the Jira key it delivers: `feat(scope): outcome
+  [SN-123]`. If you don't have a key, find or create one with the `jira` skill
+  before opening the PR. Never invent a key.
+- A Jira item is an outcome, not a PR: related PRs across repos and whole stacks
+  share one key.
+- Keep status honest: In Progress when you start, In Review when the PR opens,
+  Verify after merge, Done only with prod evidence.
+- Use the Atlassian MCP server (`.mcp.json`,
+  `https://mcp.atlassian.com/v2/mcp`); pass the cloudId above directly and make
+  calls one at a time.
