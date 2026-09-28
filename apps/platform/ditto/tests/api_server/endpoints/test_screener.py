@@ -108,6 +108,7 @@ from ditto.db.models import (
     ScreeningReviewWindow,
     ScreeningVerificationReceipt,
     SubmissionImageBuild,
+    SubmissionSourceReview,
     TrustedImageBuild,
     ValidatorQueueWithdrawal,
     ValidatorTicket,
@@ -3781,6 +3782,29 @@ class TestQueue:
             headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
         )
         assert controller_nodes.status_code == 200, controller_nodes.text
+        review_id = uuid4()
+        job_token = "legacy-off-source-review-job-token"
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                SubmissionSourceReview(
+                    review_id=review_id,
+                    agent_id=agent_id,
+                    attempt_id=UUID(claim.json()["items"][0]["attempt_id"]),
+                    environment="prod",
+                    artifact_sha256=_SHA256,
+                    status="running",
+                    job_token_hash=hashlib.sha256(job_token.encode()).hexdigest(),
+                    job_token_expires_at=now + timedelta(minutes=10),
+                    lease_expires_at=now + timedelta(minutes=10),
+                )
+            )
+        source = await client.get(
+            f"/api/v1/screener/submission-source-reviews/{review_id}/source",
+            headers={"Authorization": f"Bearer {job_token}"},
+        )
+        assert source.status_code == 200, source.text
+        assert source.json()["artifact_sha256"] == _SHA256
 
     async def test_dedicated_screener_needs_no_validator_permit(
         self,
