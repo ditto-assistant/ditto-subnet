@@ -236,6 +236,9 @@ def _ruling(
         "expected_score_count": score_count,
         "reason": reason,
         "evidence_references": list(refs),
+        "reason_codes": (
+            ["I5.benchmark_semantic_compiler"] if action == "reject" else []
+        ),
     }
 
 
@@ -317,7 +320,7 @@ def _board_rulings(board: dict[str, tuple[UUID, str]]) -> list[dict[str, object]
     return [
         _ruling("open", champion[0], champion[1], refs=()),
         _ruling("reject", runner[0], runner[1]),
-        _ruling("clear", held[0], held[1], refs=()),
+        _ruling("clear", held[0], held[1]),
         _ruling("open", stale[0], "0" * 64, refs=()),
         _ruling("reject", uuid4(), "1" * 64),
         _ruling("reject", uncited[0], uncited[1], refs=()),
@@ -1048,9 +1051,9 @@ async def test_preview_mirrors_the_resolve_guards_on_a_drifted_hold(
     _install(app, maker)
 
     rulings = [
-        _ruling("clear", evidence_drift[0], evidence_drift[1], refs=()),
+        _ruling("clear", evidence_drift[0], evidence_drift[1]),
         _ruling("reject", reason_drift[0], reason_drift[1]),
-        _ruling("clear", intact[0], intact[1], refs=()),
+        _ruling("clear", intact[0], intact[1]),
     ]
     preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
     assert preview.status_code == 200, preview.text

@@ -59,6 +59,9 @@ class AdminAthRuling(BaseModel):
     evidence_references: Annotated[list[EvidenceReference], Field(max_length=64)] = (
         Field(default_factory=list)
     )
+    reason_codes: Annotated[list[str], Field(max_length=16)] = Field(
+        default_factory=list
+    )
 
 
 class AdminAthRulingsDocument(BaseModel):
@@ -168,6 +171,7 @@ class AdminAthRulingPreviewItem(BaseModel):
     steps: list[Literal["open", "clear", "reject"]] = Field(default_factory=list)
     reason: str
     evidence_references: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
     message: str
 
 

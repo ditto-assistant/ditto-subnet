@@ -86,6 +86,10 @@ from ditto.db.queries.scores import (
     LedgerRow,
     list_scores_for_agent,
 )
+from ditto_screening_protocol.policy_reason_codes import (
+    FIRST_REASON_CODE_POLICY_VERSION,
+    unpublished_violation_codes,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -260,6 +264,10 @@ def _audit(
                 previous_status=action.evidence.get("previous_status"),
                 artifact_sha256=action.evidence.get("sha256"),
                 score_count=action.evidence.get("score_count"),
+                evidence_references=action.evidence.get("evidence_references", []),
+                reason_codes=action.evidence.get("reason_codes", []),
+                policy_version=action.evidence.get("policy_version"),
+                violation_proven=action.evidence.get("violation_proven"),
             )
             for action in actions or []
         ],
@@ -1067,6 +1075,30 @@ async def resolve_copy_review(
             raise HTTPException(
                 status_code=409, detail="agent hold reason no longer matches review"
             )
+        held_sha = review.original_evidence.get("sha256")
+        if isinstance(held_sha, str) and held_sha.lower() != agent.sha256.lower():
+            raise HTTPException(
+                status_code=409, detail="agent artifact no longer matches review"
+            )
+        policy_version = max(
+            FIRST_REASON_CODE_POLICY_VERSION,
+            agent.screening_policy_version,
+            review.original_policy_version,
+        )
+        if canonical == "reject":
+            unpublished = unpublished_violation_codes(
+                payload.reason_codes, policy_version
+            )
+            if unpublished is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"no reason-code catalog for policy v{policy_version}",
+                )
+            if unpublished:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"invalid codes for policy v{policy_version}: {unpublished}",
+                )
         latest_reopen = await session.scalar(
             select(AthReviewAction)
             .where(
@@ -1130,7 +1162,14 @@ async def resolve_copy_review(
                 action=canonical,
                 reason=payload.reason,
                 actor=actor,
-                evidence={"previous_status": previous_status},
+                evidence={
+                    "previous_status": previous_status,
+                    "sha256": agent.sha256,
+                    "evidence_references": list(payload.evidence_references),
+                    "reason_codes": list(payload.reason_codes),
+                    "policy_version": policy_version,
+                    "violation_proven": canonical == "reject",
+                },
                 created_at=review.resolved_at,
             )
         )

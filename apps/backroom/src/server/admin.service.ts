@@ -2239,7 +2239,12 @@ export async function resolveCopyReview(rawInput: unknown, actor: string) {
     {
       method: 'POST',
       actor,
-      body: { resolution: input.resolution, reason: input.reason },
+      body: {
+        resolution: input.resolution,
+        reason: input.reason,
+        evidence_references: input.evidenceReferences,
+        reason_codes: input.reasonCodes,
+      },
     },
   )
   invalidateCopyReviewsCache()

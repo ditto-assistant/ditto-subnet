@@ -2454,6 +2454,7 @@ describe('copy review schemas', () => {
       agentId: identity.agentId,
       resolution: 'clear',
       reason,
+      evidenceReferences: ['src/agent.py:42'],
     }).reason).toBe(reason)
   })
 
@@ -4761,6 +4762,7 @@ describe('batched ATH rulings schemas', () => {
       'miner_hotkey',
       'ok',
       'reason',
+      'reason_codes',
       'score_count',
       'stale_guard',
       'steps',
