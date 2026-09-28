@@ -4153,9 +4153,11 @@ class TerraSolSourceReviewAgent:
             deterministic[command] = analysis
             tools.append(command)
         inventory = json.loads(repository.inventory())
-        # Binary failures and inventory omissions remain reviewable evidence
-        # gaps, even when every separate dossier analyzer completed.
-        if _contains_truncation(inventory):
+        # Binary failures remain evidence gaps even when the other analyzers
+        # completed. A bounded inventory may omit their individual entries.
+        if inventory.get("opaque_truncated") is True or _contains_truncation(
+            inventory.get("binary_analysis")
+        ):
             dossier_complete = False
         starter_diff = deterministic.get("starter_diff")
         selected_starter_revision = (

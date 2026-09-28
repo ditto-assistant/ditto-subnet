@@ -3149,17 +3149,22 @@ async def test_partial_dossier_can_prove_violation_but_never_clear(
     assert result.clearance_path == "l2_violation"
 
 
-@pytest.mark.parametrize("inventory_failure", [False, True])
+@pytest.mark.parametrize("inventory_gap", [None, "failed", "omitted"])
 async def test_partial_dossier_safe_consensus_cannot_clear(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inventory_failure: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inventory_gap: str | None
 ) -> None:
-    harness = _FakeHarness() if inventory_failure else _PartialHarness()
-    if inventory_failure:
+    harness = _FakeHarness() if inventory_gap else _PartialHarness()
+    if inventory_gap:
         # Failure alone must block clearance even if truncation semantics change.
+        inventory = (
+            {"binary_analysis": [{"analysis_failed": True}]}
+            if inventory_gap == "failed"
+            else {"binary_analysis": [], "opaque_truncated": True}
+        )
         monkeypatch.setattr(
             TarSourceRepository,
             "inventory",
-            lambda _self: json.dumps({"binary_analysis": [{"analysis_failed": True}]}),
+            lambda _self: json.dumps(inventory),
         )
     source = "fn main() { serve(); }\nfn serve() {}"
     archive, artifact_sha = _tar(tmp_path, source)
