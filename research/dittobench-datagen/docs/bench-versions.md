@@ -26,6 +26,21 @@ applied to an existing version. It ships as a new one.
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
 | 13 (pre-activation) | `2027-05-01` | Deterministic typed worlds and compositional enterprise records; model-authored private wording deferred to V14. A published 250-case memory mix with money capped at ≤12% target / 15% hard, typed claim grading in the requested unit, and relay-evidenced tool gates (catalog-present, provenance, causal, twin/pair, cost) that ship in shadow/observe. Same seed and generator revision reproduce the dataset. Activation follows exact-candidate qualification and canary evidence. |
 
+## Answer-pool collision audit
+
+`grade.Hit` can accept ordinary prose as an answer for some persona values.
+Across 100 full-profile seeds, the incidental-prose fixture records 167
+collisions at V7, 83 at V8, and 90 at V9. The matcher and published V8–V13
+answer pools remain unchanged: changing a pool would change the generated
+persona plan for the same `(seed, bench_version)`. Three full-profile seeds per
+version from V8 through V13 are pinned to their pre-audit plan hashes.
+
+Qualified eye colors and star signs, plus middle names filtered against the
+incidental-prose fixture, are staged for bench version 14 or later. Version 14
+is not supported by the generator or scorer yet. This candidate pool policy
+must be included in a complete new-version contract and qualification before
+any scored run can use it; it does not correct historical scores.
+
 ## V10 generator-as-spec contract
 
 V10 starts from a seed-scoped semantic specification rather than a reusable

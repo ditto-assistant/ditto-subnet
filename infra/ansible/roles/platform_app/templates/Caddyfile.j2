@@ -11,8 +11,23 @@
     # Runtime profiles contain process internals. They are collected over IAP
     # SSH from loopback and must never enter the public request plane, even if
     # an application accidentally grows a matching route in the future.
+    # Process metrics are the same kind of operator-only data: every reader
+    # (the admin observability read, an on-host scraper) uses loopback, so the
+    # app's unauthenticated /metrics route must not be reachable here either.
+    #
+    # These are `handle` blocks, not a site-level `respond`. Caddy orders
+    # `handle` before `respond`, so with the relay pool below a site-level
+    # `respond` sorts after the catch-all `handle { reverse_proxy }` and never
+    # runs. Named-matcher `handle` blocks keep their written order ahead of the
+    # matcher-less catch-all.
     @runtimeProfiles path /debug/pprof /debug/pprof/*
-    respond @runtimeProfiles 404
+    handle @runtimeProfiles {
+        respond 404
+    }
+    @operatorMetrics path /metrics /metrics/*
+    handle @operatorMetrics {
+        respond 404
+    }
 {% if platform_inference_relay_ports %}
     # --- Go request plane -> the relay pool (platform_inference_relay_ports) ---
     #

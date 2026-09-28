@@ -17,6 +17,7 @@ import {
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
   fetchScreeningFailureSummary,
+  fetchL2ReportCanaryPreflight,
   fetchOwnerAttestations,
   fetchScreeningDisputes,
   fetchValidatorAssignments,
@@ -690,6 +691,30 @@ describe('inference route administration', () => {
 })
 
 describe('screening submission admin service', () => {
+  it('reads the exact L2 canary guard snapshot through Platform admin', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const sourceAttemptId = '22222222-2222-4222-8222-222222222222'
+    const snapshot = {
+      agent_id: agentId,
+      source_attempt_id: sourceAttemptId,
+      agent_artifact_sha256: 'a'.repeat(64),
+      source_attempt_artifact_sha256: null,
+      agent_status: 'evaluating',
+      attempt_policy_version: 13,
+      arrival_bench_version: 13,
+      score_row_count: 2,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(snapshot))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchL2ReportCanaryPreflight({ agentId, sourceAttemptId })).resolves.toEqual(snapshot)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/preflight/${agentId}/${sourceAttemptId}`,
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
   it('forwards explicit pagination for screening history and disputes', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi
@@ -756,6 +781,61 @@ describe('screening submission admin service', () => {
     )
   })
 
+  it('forwards every screening-submission search filter as Platform query params', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ items: [], count: 0, generation: 'all', active_bench_version: 12 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchScreeningSubmissions(10, 20, 'all', {
+      agentName: 'moonlight_v1',
+      agentNamePrefix: 'moon',
+      minerHotkey: '5Hot',
+      minerColdkey: '5Cold',
+      artifactSha256: 'AB'.repeat(32),
+      agentStatus: ['scored', 'banned'],
+      screeningReasonCode: ['docker-build', 'policy-network-egress'],
+      submittedAfter: '2026-07-01T00:00:00Z',
+      submittedBefore: '2026-08-01T00:00:00+00:00',
+    })
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?' +
+        [
+          'generation=all',
+          'limit=10',
+          'offset=20',
+          'agent_name=moonlight_v1',
+          'agent_name_prefix=moon',
+          'miner_hotkey=5Hot',
+          'miner_coldkey=5Cold',
+          `artifact_sha256=${'AB'.repeat(32)}`,
+          'submitted_after=2026-07-01T00%3A00%3A00Z',
+          'submitted_before=2026-08-01T00%3A00%3A00%2B00%3A00',
+          'agent_status=scored',
+          'agent_status=banned',
+          'screening_reason_code=docker-build',
+          'screening_reason_code=policy-network-egress',
+        ].join('&'),
+    )
+  })
+
+  it('rejects malformed screening-submission filters before calling Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      fetchScreeningSubmissions(10, 0, 'all', { artifactSha256: 'not-hex' }),
+    ).rejects.toThrow()
+    await expect(
+      fetchScreeningSubmissions(10, 0, 'all', { agentStatus: ['nope'] }),
+    ).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('gets one exact submission without requesting artifact data', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
@@ -817,6 +897,7 @@ describe('screening submission admin service', () => {
       ),
     ).resolves.toEqual({
       ...diagnostic,
+      l2_review_diagnostic: null,
       court_diagnostic: null,
       court_completion_receipt: null,
     })
@@ -940,6 +1021,7 @@ describe('screening submission admin service', () => {
       ),
     ).resolves.toEqual({
       ...diagnostic,
+      l2_review_diagnostic: null,
       court_diagnostic: court,
       court_completion_receipt: null,
     })
@@ -988,6 +1070,7 @@ describe('screening submission admin service', () => {
       fetchScreeningFailureDiagnostic({ agentId, attemptId }, 'reviewer@example.com'),
     ).resolves.toEqual({
       ...response,
+      l2_review_diagnostic: null,
       court_completion_receipt: receipt,
     })
   })
@@ -2835,6 +2918,36 @@ describe('copy review admin service', () => {
           request_id: derivedRetryId,
           expected_snapshot: snapshot,
           reason: 'Verified validator OOM',
+          acknowledge_provider_outage: false,
+        }),
+      }),
+    )
+
+    // An acknowledged retry into a still-open provider outage says so on the
+    // wire; the platform refuses it otherwise (ditto-subnet#2087).
+    fetchMock.mockResolvedValueOnce(Response.json({ recovery, idempotent: false }))
+    await retryValidation(
+      {
+        agentId,
+        expectedSnapshot: snapshot,
+        reason: 'Provider lane verified healthy',
+        acknowledgeProviderOutage: true,
+      },
+      'operator@example.com',
+    )
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/${agentId}/retry`,
+      expect.objectContaining({
+        body: JSON.stringify({
+          request_id: await deriveRequestId('validation-retry', [
+            agentId,
+            'operator@example.com',
+            'Provider lane verified healthy',
+            snapshot,
+          ]),
+          expected_snapshot: snapshot,
+          reason: 'Provider lane verified healthy',
+          acknowledge_provider_outage: true,
         }),
       }),
     )
@@ -3124,6 +3237,7 @@ describe('copy review admin service', () => {
       ticket_status: 'scored',
       ticket_deadline: '2026-07-20T04:00:00Z',
       replacement_pending: false,
+      replacement_queued: false,
       replacement_request_id: null,
       replacement_reason: null,
       replacement_actor: null,
@@ -3214,9 +3328,9 @@ describe('copy review admin service', () => {
         queue_position: null,
         replacement_deadline: deadline,
         replacement_allowed: false,
-        blocking_reason: 'replacement score is already pending',
+        blocking_reason: 'replacement ticket is already issued and pending a score',
         queue_allowed: false,
-        queue_blocking_reason: 'replacement score is already queued or pending',
+        queue_blocking_reason: 'replacement ticket is already issued and pending a score',
       }],
       count: 1,
       limit: 50,
@@ -4019,6 +4133,95 @@ describe('production score reads', () => {
       raw_leader_decision: { required_lead: 0.011, dethrones: false },
       recipients: [{ shared_seed_confirmations: 7 }],
     })
+  })
+
+  // #2079 follow-up: #2098 named the board's scoring and emission versions.
+  // An operator asked why the newer one is not paying needs both, plus
+  // Platform's own sentence for the gates still holding emissions.
+  it('relays the scoring and emission versions with the rollout promotion gates', async () => {
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    const requirement =
+      'Bench v13 scoring is in progress; Bench v12 still controls emissions. ' +
+      'Emission authority moves to v13 only once the first 5 inherited ' +
+      'priority-cohort positions each hold a complete 3-score v13 quorum.'
+    const rolling = {
+      ...leaderboard,
+      current_bench_version: 13,
+      scoring_bench_version: 13,
+      emission_bench_version: 12,
+      active_bench_version: 12,
+      desired_bench_version: 13,
+    }
+    const rollout = {
+      active_version: 12,
+      desired_version: 13,
+      status: 'collecting',
+      promotion_pending: true,
+      promotion_requirement: requirement,
+      priority_cohort_size: 5,
+      priority_cohort_ready_count: 3,
+      ranked_quorum_agents: 2,
+      min_ranked_quorum_agents: 5,
+      members: [],
+    }
+    const fetchMock = vi.fn(async (url: string) =>
+      Response.json(url.endsWith('/api/v1/public/bench/rollout') ? rollout : rolling),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const page = await fetchScoreLeaderboard({ status: 'all', limit: 2, offset: 0 })
+
+    expect(page.scoring_bench_version).toBe(13)
+    expect(page.emission_bench_version).toBe(12)
+    expect(page.current_bench_version).toBe(13)
+    expect(page.active_bench_version).toBe(12)
+    expect(page.rollout_promotion).toEqual({
+      active_version: 12,
+      desired_version: 13,
+      status: 'collecting',
+      promotion_pending: true,
+      promotion_requirement: requirement,
+      priority_cohort_size: 5,
+      priority_cohort_ready_count: 3,
+      ranked_quorum_agents: 2,
+      min_ranked_quorum_agents: 5,
+    })
+  })
+
+  it('still reads a board from a Platform that predates these fields', async () => {
+    // One release unit, two non-atomic deploys: an older Platform omits the
+    // #2098 names and the promotion keys, and a rollout read that fails must
+    // not fail the board an operator asked for.
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    const olderRollout = { active_version: 7, desired_version: 7, status: 'inactive' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        Response.json(url.endsWith('/api/v1/public/bench/rollout') ? olderRollout : leaderboard),
+      ),
+    )
+    const page = await fetchScoreLeaderboard({ status: 'all', limit: 2, offset: 0 })
+    expect(page.scoring_bench_version).toBeNull()
+    expect(page.emission_bench_version).toBeNull()
+    expect(page.active_bench_version).toBe(7)
+    expect(page.rollout_promotion).toMatchObject({
+      status: 'inactive',
+      promotion_pending: null,
+      promotion_requirement: null,
+      priority_cohort_ready_count: null,
+    })
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.endsWith('/api/v1/public/bench/rollout')
+          ? new Response('upstream unavailable', { status: 503 })
+          : Response.json(leaderboard),
+      ),
+    )
+    const degraded = await fetchScoreLeaderboard({ status: 'all', limit: 2, offset: 0 })
+    expect(degraded.rollout_promotion).toBeNull()
+    expect(degraded.entries).toHaveLength(2)
   })
 
   it('filters provisional entries and forwards a historical bench version', async () => {

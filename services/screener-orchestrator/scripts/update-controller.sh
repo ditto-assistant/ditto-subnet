@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Exact-commit, rollback-capable deployment for the capacity controller and its
-# sibling trusted builder. Provider credentials remain in the Ansible-owned
-# mode-0600 files; this updater never reads or rewrites them.
+# Exact-commit, rollback-capable deployment for the capacity controller.
+# Provider credentials remain in Ansible-owned mode-0600 files.
 
 CONTROLLER_ROOT="${SCREENER_CONTROLLER_ROOT:-/opt/ditto-subnet}"
 CONTROLLER_USER="${SCREENER_CONTROLLER_USER:-deploy}"
@@ -11,11 +10,13 @@ CONTROLLER_GROUP="${SCREENER_CONTROLLER_GROUP:-ditto}"
 CONTROLLER_EXPECTED_SHA="${SCREENER_CONTROLLER_EXPECTED_SHA:?missing SCREENER_CONTROLLER_EXPECTED_SHA}"
 CONTROLLER_UV_BIN="${SCREENER_CONTROLLER_UV_BIN:-/usr/local/bin/uv}"
 CONTROLLER_UNIT="${SCREENER_CONTROLLER_UNIT:-ditto-screener-capacity}"
-BUILDER_UNIT="${SCREENER_BUILDER_UNIT:-ditto-image-builder}"
 CONTROLLER_HEALTH_URL="${SCREENER_CONTROLLER_HEALTH_URL:-https://platform-api.heyditto.ai/api/v1/public/screener-capacity-watchdog?environment=prod}"
 CONTROLLER_PLATFORM_URL="${SCREENER_CONTROLLER_PLATFORM_URL:-https://platform-api.heyditto.ai}"
 CONTROLLER_TOKEN_FILE="${SCREENER_CONTROLLER_TOKEN_FILE:-/etc/ditto-screener-capacity/platform-controller-token}"
 CONTROLLER_ENVIRONMENT="${SCREENER_CONTROLLER_ENVIRONMENT:-prod}"
+RETIRED_BUILDER_UNIT="ditto-image-builder.service"
+RETIRED_BUILDER_UNIT_FILE="/etc/systemd/system/ditto-image-builder.service"
+RETIRED_TARGON_KEY_FILE="/etc/ditto-screener-capacity/targon-api-key"
 
 service_dir="$CONTROLLER_ROOT/services/screener-orchestrator"
 venv="$service_dir/.venv"
@@ -115,15 +116,13 @@ PY
 verify_services() {
   local revision="$1"
   local prior_epoch="${2:-}"
-  local consecutive=0 capacity_pid builder_pid health
+  local consecutive=0 capacity_pid health
   # A clean restart may need to wait for the previous 180-second Platform
   # writer lease to expire before its new epoch can acquire the fence.
   for _ in $(seq 1 150); do
-    if systemctl is-active --quiet "$CONTROLLER_UNIT" \
-      && systemctl is-active --quiet "$BUILDER_UNIT"; then
+    if systemctl is-active --quiet "$CONTROLLER_UNIT"; then
       capacity_pid="$(systemctl show --property MainPID --value "$CONTROLLER_UNIT")"
-      builder_pid="$(systemctl show --property MainPID --value "$BUILDER_UNIT")"
-      if [[ "$capacity_pid" =~ ^[1-9][0-9]*$ && "$builder_pid" =~ ^[1-9][0-9]*$ ]]; then
+      if [[ "$capacity_pid" =~ ^[1-9][0-9]*$ ]]; then
         health="$(curl --fail --silent --show-error --max-time 10 \
           "$CONTROLLER_HEALTH_URL" 2>/dev/null || true)"
         # Provider readiness controls operational fallback, not whether this
@@ -151,7 +150,7 @@ verify_services() {
     fi
     sleep 2
   done
-  systemctl --no-pager --full status "$CONTROLLER_UNIT" "$BUILDER_UNIT" >&2 || true
+  systemctl --no-pager --full status "$CONTROLLER_UNIT" >&2 || true
   return 1
 }
 
@@ -159,16 +158,30 @@ activate_revision() {
   local revision="$1"
   local prior_epoch
   prior_epoch="$(health_epoch 2>/dev/null || true)"
-  systemctl stop "$BUILDER_UNIT" "$CONTROLLER_UNIT" || return 1
+  systemctl stop "$CONTROLLER_UNIT" || return 1
   release_lease "$prior_epoch"
   as_deploy git -C "$CONTROLLER_ROOT" reset --hard "$revision" || return 1
   as_deploy env UV_PROJECT_ENVIRONMENT="$venv" \
     "$CONTROLLER_UV_BIN" sync --project "$service_dir" --frozen || return 1
   systemctl start "$CONTROLLER_UNIT" || return 1
-  systemctl start "$BUILDER_UNIT" || return 1
   verify_services "$revision" "$prior_epoch" || return 1
   test "$(as_deploy git -C "$CONTROLLER_ROOT" rev-parse HEAD)" = "$revision" \
     || return 1
+}
+
+retire_builder() {
+  # This transition also runs when the requested revision is already deployed.
+  # Keep the old rental poller stopped even if a controller rollback is needed.
+  if systemctl is-active --quiet "$RETIRED_BUILDER_UNIT"; then
+    systemctl stop "$RETIRED_BUILDER_UNIT" || return 1
+  fi
+  systemctl disable "$RETIRED_BUILDER_UNIT" >/dev/null 2>&1 || true
+  rm -f -- "$RETIRED_BUILDER_UNIT_FILE" "$RETIRED_TARGON_KEY_FILE"
+  systemctl daemon-reload
+  if systemctl is-active --quiet "$RETIRED_BUILDER_UNIT"; then
+    echo "retired builder remains active; refusing controller deploy" >&2
+    return 1
+  fi
 }
 
 install -d -o "$CONTROLLER_USER" -g "$CONTROLLER_GROUP" -m 0700 "$state_dir"
@@ -180,6 +193,8 @@ if ! as_deploy git -C "$CONTROLLER_ROOT" merge-base --is-ancestor \
   echo "refusing to deploy a revision that is not on origin/main" >&2
   exit 1
 fi
+
+retire_builder
 
 previous_sha="$(as_deploy git -C "$CONTROLLER_ROOT" rev-parse HEAD)"
 if [[ -s "$deployed_marker" ]]; then
@@ -196,15 +211,15 @@ if [[ "$previous_sha" == "$CONTROLLER_EXPECTED_SHA" ]] \
   printf '%s\n' "$CONTROLLER_EXPECTED_SHA" >"$deployed_marker"
   chown "$CONTROLLER_USER:$CONTROLLER_GROUP" "$deployed_marker"
   chmod 0600 "$deployed_marker"
-  echo "controller and builder already serve $CONTROLLER_EXPECTED_SHA"
+  echo "controller already serves $CONTROLLER_EXPECTED_SHA"
   exit 0
 fi
 
-echo "deploying controller and builder at $CONTROLLER_EXPECTED_SHA"
+echo "deploying controller at $CONTROLLER_EXPECTED_SHA"
 if ! activate_revision "$CONTROLLER_EXPECTED_SHA"; then
   echo "deployment failed; rolling back to $previous_sha" >&2
   if ! activate_revision "$previous_sha"; then
-    echo "rollback failed; both systemd unit statuses were printed above" >&2
+    echo "rollback failed; controller systemd status was printed above" >&2
     exit 2
   fi
   exit 1
@@ -213,4 +228,4 @@ fi
 printf '%s\n' "$CONTROLLER_EXPECTED_SHA" >"$deployed_marker"
 chown "$CONTROLLER_USER:$CONTROLLER_GROUP" "$deployed_marker"
 chmod 0600 "$deployed_marker"
-echo "controller and builder are active at $CONTROLLER_EXPECTED_SHA"
+echo "controller is active at $CONTROLLER_EXPECTED_SHA"

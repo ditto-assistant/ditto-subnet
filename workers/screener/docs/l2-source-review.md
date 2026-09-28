@@ -76,7 +76,7 @@ digests, prompt revisions `l2-terra-source-review-v37-policy-v10`,
 `l3-sol-safety-adjudicator-v23-policy-v10`, and
 `l2-integrity-static-hold-v3`, dossier revision
 `l1-compressed-dossier-v10`, harness revision
-`l2-isolated-coding-harness-v19`, and the supported canonical-starter revision
+`l2-isolated-coding-harness-v20`, and the supported canonical-starter revision
 set. The compressed L1 dossier now also surfaces C13 bench-family fingerprint
 leads; they remain search prompts, never auto-bans. L1 and this L2 prompt apply
 all seven policy-v10 invariants. I4, independent I5, and I7 are not cleared by
@@ -231,6 +231,112 @@ packets, and miner-authenticated exhaustive feedback require the append-only
 platform contract tracked in issue #224.
 
 ## Offline calibration
+
+Before changing an L2 prompt or rolling it to workers, replay the exact held
+artifact and independently labeled CLEAR and REJECT artifacts locally. Store
+their SHA-verified `agent.tar.gz` files under
+`<private-artifact-root>/<sha256>/agent.tar.gz`; keep the manifest, key, cache,
+audit, and results outside the repository with owner-only permissions. Each
+manifest item supplies `agent_id`, `attempt_id`, `artifact_sha256`,
+`expected_disposition`, and `expected_resolution_basis`. Supply the complete
+sanitized `l1_observation` only when replaying a retained L1 result; `--run-l1`
+generates it afresh. Select only exact full digests with repeated
+`--artifact-sha256` arguments when a larger protected manifest is available.
+
+Build the isolated analyzer from the proposed checkout and run the production
+reviewer with the current effective step, token, and time ceilings. For example,
+the 2026-09-25 settings can be tested with a local $20 per-case stop (the live
+ceiling is $25):
+
+```bash
+docker build -f workers/screener/deploy/l2-analyzer.Dockerfile \
+  -t ditto-screener-l2-analyzer:local workers/screener
+uv run --project workers/screener python workers/screener/scripts/run_l2_calibration.py \
+  --manifest <private-manifest.json> --artifact-root <private-artifact-root> \
+  --api-key-file <owner-only-key-file> \
+  --analyzer-image ditto-screener-l2-analyzer:local \
+  --results-file <private-results.json> --concurrency 1 \
+  --timeout-seconds 1800 --max-steps 256 \
+  --max-input-tokens 5000000 --max-output-tokens 1000000 \
+  --max-completion-tokens 16000 --max-cost-usd 20 \
+  --turn-timeout-seconds 300 \
+  --run-l1 --l1-timeout-seconds 600 --l1-max-steps 160 \
+  --l1-max-read-bytes 8000000 --l1-max-completion-tokens 8000 \
+  --require-label-match
+```
+
+The strict flag fails if any case is inconclusive or disagrees with its label or
+expected resolution basis. Inspect each private audit and the full result,
+including error code and budget stop, before a PR; a summary classification
+metric alone does not certify a CLEAR. The per-case cost ceiling is a stop, so
+use a separate total key limit for the corpus. `--run-l1` reruns the actual
+Luna source reviewer locally before L2 and saves an owner-only L1 checkpoint
+alongside the results. If L2 hits a provider fault, the checkpoint's
+`observation` can be placed in the exact item's manifest as `l1_observation`
+for a later L2-only diagnostic run; a fresh full gate still requires
+`--run-l1`. A scored runtime capabilities
+endpoint may be supplied with `--scorer-capabilities-url` and
+`--expected-scorer-revision` together; without that trusted endpoint, local
+replay lacks signed scorer runtime evidence. To compare with an active cohort,
+save the read-only Backroom `get_v13_scorer_cohort` JSON privately and pass it
+with `--local-cohort-packet-file`. The runner binds the supplied packet fields
+to each local attempt, but this is an explicitly labeled
+**simulation**, not a Platform-signed attempt lease or clearance proof. This
+review exercises L2/L3 source
+analysis but cannot produce a trusted image, served runtime, private challenge,
+or validator receipt. Those still require an isolated report-only live replay
+before a primary retry.
+
+For a report-only single-layer comparator, repeat the same exact manifest and
+limits with `--single-layer-sol --require-label-match` and separate private
+cache, audit, and result paths. This runs GPT-6 Sol as the sole autonomous
+coding analyst against the same isolated analyzers, with no fallback model or
+L3 critic. Compare two inputs for each label: retained exact L1 evidence, and
+`--omit-l1`, which supplies no L1 finding and tasks Sol to review the entire
+served artifact independently. The comparator's final tool schema permits only
+safe or violation, and the strict gate requires a terminal, label-matching
+outcome. A provider fault or invalid response fails it; the model is explicitly
+told not to invent evidence to satisfy the terminal requirement. This comparator
+does not change production decisions or replace signed live evidence. The
+`--turn-timeout-seconds` override is local: production currently caps individual
+Responses API turns at 45 seconds even when its whole review lease is longer.
+`--retry-provider-body-once` optionally repeats one exact model turn after a
+transport-class fault relayed in an HTTP 200 response; the overall lease and
+local key cap still bound that report-only experiment.
+`--sol-provider azure` pins only the report-only comparator to an eligible
+OpenRouter Azure route with zero-retention routing. Provider faults are recorded
+as private fixed-label audit events with allowlisted rate-limit headers; no
+response body, prompt, or credential is persisted.
+
+`--compact-review-packet` is a report-only experiment for the terminal Sol
+comparator. It sends a SHA-bound index instead of the full analyzer dossier,
+keeps all eight omitted sections available through `dossier_section`, and
+retains the complete immutable source archive for `search` and `read_file`.
+Once the model has consumed a large tool result, later turns carry its digest
+and a reload instruction; repeating the same read returns exact bytes. Safe
+submissions require all sections and at least one exact source read before the
+terminal tool can be accepted. Violation citations still undergo host-side
+path and line validation. The private audit records only per-turn byte/token
+counts, selected model/provider, and cost for comparing this path with the
+full-dossier baseline. No local comparator result authorizes a live decision.
+Rejected report-only final submissions receive a fixed correction category.
+For missing safe coverage, the correction lists exact section IDs and whether
+an exact source read is still needed; schema, citation, and causal-evidence
+rejections remain fail-closed. The private audit records only the fixed cause,
+proposed disposition, and missing section IDs, never submitted source text.
+Host validation failures are further reduced to allowlisted schema,
+artifact-citation, causal-link, basis/category, or multi-location subcodes with
+matching fixed hints. The model must still resubmit the full evidence-bound
+certificate; a hint never relaxes a citation or causal acceptance check.
+The final report separately counts `terminal_decisions` and
+`no_decision_cases`. Its reported cost includes successful model turns from
+the private audit even when a later provider timeout prevents a final verdict;
+the legacy binary classification summary treats that no-verdict case as a
+negative prediction, so use the decision counts when interpreting accuracy.
+Report-only turn start, completion, timeout, fixed response status/incomplete
+reason, and fixed tool names are logged without response bodies, tool arguments,
+or source text. A longer local per-turn timeout remains bounded by the same
+whole-review lease and cost cap.
 
 `scripts/run_l2_calibration.py` accepts a protected SHA-bound manifest plus a
 directory of already verified artifacts. It rechecks every tarball digest,

@@ -1778,7 +1778,7 @@ tbody tr.champion:focus-visible .miner-avatar {
     content: "Avg run cost";
   }
   .board #board td.lat::before {
-    content: "Latency";
+    content: "Median case latency";
   }
   .board #board td.first-seen-cell::before {
     content: "Crown since";

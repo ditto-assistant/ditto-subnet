@@ -7362,6 +7362,42 @@
         },
         "type": "object"
       },
+      "ScoredRuntimeEnvEvidence": {
+        "properties": {
+          "bench_version": {
+            "const": 13,
+            "type": "integer"
+          },
+          "injected_keys": {
+            "items": {
+              "maxLength": 128,
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "const": "scorer-injected-env-only",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "source_revision": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bench_version",
+          "scope",
+          "source_revision",
+          "injected_keys",
+          "sha256"
+        ],
+        "type": "object"
+      },
       "ScorerBenchmarkCapability": {
         "properties": {
           "deterministic_v13_datasets": {
@@ -7388,6 +7424,17 @@
             "anyOf": [
               {
                 "$ref": "#/$defs/ScorerLivenessProbe"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "scored_runtime_env": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ScoredRuntimeEnvEvidence"
               },
               {
                 "type": "null"

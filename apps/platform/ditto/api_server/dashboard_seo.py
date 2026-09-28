@@ -406,7 +406,7 @@ def llms_full_txt(origin: str) -> str:
             "| `/bench/config` | Frozen scoring setup for the active bench |",
             "| `/bench/glossary` | Metric and category vocabulary |",
             "| `/bench/timeline` | Historical bench releases |",
-            "| `/bench/rollout` | In-progress bench version collection |",
+            "| `/bench/rollout` | Bench rollout progress and promotion gates |",
             "",
             "Source tarballs become downloadable only after the public-source",
             "window; review-held and rejected source stays private.",

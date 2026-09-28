@@ -1,4 +1,72 @@
 import '@tanstack/react-start/server-only'
+import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
+
+export async function previewTreasuryTopup(rawInput: unknown) {
+  const input = treasuryPreviewInputSchema.parse(rawInput)
+  const [policy, quote] = await Promise.all([
+    fetchTreasurySettings(), fetchTreasuryQuote(input),
+  ])
+  const proposed = policy.effective
+  const quoteImpact = treasuryRouteImpactBps(input.route, quote)
+  return {
+    dry_run: true as const,
+    execution_enabled: false as const,
+    route: input.route,
+    quote,
+    policy_revision: policy.revision,
+    checks: {
+      gm_allocation_proposed: proposed.gm_bps > 0,
+      single_topup_within_limit: quote.tao_path.amount_rao <= proposed.max_single_topup_rao,
+      price_impact_within_limit: quoteImpact <= proposed.max_slippage_bps,
+      linked_wallet_verified: false,
+      current_payment_instructions_verified: false,
+      daily_spend_reconciled: false,
+    },
+  }
+}
+
+export async function fetchTreasuryQuote(rawInput: unknown) {
+  const input = treasuryQuoteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/treasury-quote?source_alpha_rao=${input.sourceAlphaRao}`,
+  )
+  return treasuryQuoteSchema.parse(payload)
+}
+
+export async function fetchTreasurySettings() {
+  return treasuryControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-settings'))
+}
+
+export async function recordTreasurySettings(rawInput: unknown, actor: string) {
+  const input = recordTreasurySettingsInputSchema.parse(rawInput)
+  const revision = await platformAdminRequest('/api/v1/admin/treasury-settings', {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      settings: input.settings,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  treasuryRevisionSchema.parse(revision)
+  return fetchTreasurySettings()
+}
+
+import {
+  listV13BenignApprovalsInputSchema,
+  v13BenignApprovalLookupInputSchema,
+  v13BenignApprovalSchema,
+  v13BenignApprovalWriteInputSchema,
+  v13PrivateStatisticsSchema,
+  v13ReplayGroupSchema,
+  v13ReplayGroupWriteInputSchema,
+  v13ReplayPackageSchema,
+  v13ReplayPackageWriteInputSchema,
+  v13ReplayPrivateLookupInputSchema,
+  v13ReplayPrivateReceiptSchema,
+} from '../lib/v13-private.schemas'
 
 import {
   scheduleV13ReviewClockInputSchema,
@@ -96,6 +164,7 @@ import {
   expireRunningScreeningResponseSchema,
   rejectScreeningSubmissionInputSchema,
   rejectScreeningSubmissionResponseSchema,
+  screeningSubmissionFiltersSchema,
   resolveScreeningQuarantineInputSchema,
   resolveScreeningQuarantineResponseSchema,
   resolveScreeningDisputeInputSchema,
@@ -109,6 +178,7 @@ import {
   screeningQuarantineBatchPreviewResponseSchema,
   screeningQuarantineContextSchema,
   screeningQuarantineListSchema,
+  screeningReviewEventListSchema,
   screeningArtifactInputSchema,
   screeningArtifactSchema,
   screeningFailureDiagnosticInputSchema,
@@ -230,6 +300,12 @@ import {
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
   sourceReviewQueueSloSchema,
+  outlierEscalationDryRunInputSchema,
+  outlierEscalationDryRunSchema,
+  outlierEscalationInputSchema,
+  outlierEscalationSchema,
+  claimProvenanceCasesInputSchema,
+  claimProvenanceCasesSchema,
   queuePolicySettingsControlSchema,
   setInferenceConcurrencySettingsInputSchema,
   runtimeProfileArtifactSchema,
@@ -261,6 +337,11 @@ import {
   screenerReviewRevisionSchema,
   screenerFanoutShadowInputSchema,
   screenerFanoutShadowResponseSchema,
+  l2ReportCanaryLookupInputSchema,
+  l2ReportCanaryPreflightInputSchema,
+  l2ReportCanaryPreflightViewSchema,
+  scheduleL2ReportCanaryInputSchema,
+  l2ReportCanaryViewSchema,
   screenerPolicyManifestControlSchema,
   copyCourtControlSchema,
   applyCopyCourtSettingsInputSchema,
@@ -278,6 +359,9 @@ import {
   setScreenerProviderSettingsInputSchema,
   setScreenerNodeChannelSettingsInputSchema,
   setScreenerNodeReplayCapacityInputSchema,
+  replayProcessReadinessSchema,
+  registerReplayProcessKeyInputSchema,
+  revokeReplayProcessKeyInputSchema,
   screenerNodeChannelSettingsControlSchema,
   retryTrustedImageBuildInputSchema,
   trustedImageBuildSchema,
@@ -295,6 +379,7 @@ import {
   ownerFootprintSchema,
   ownerFootprintDetailSchema,
   publicAgentScoresSchema,
+  leaderboardRolloutPromotionSchema,
   publicLeaderboardSchema,
   publicSubmissionPipelineSchema,
   scoreLeaderboardInputSchema,
@@ -572,6 +657,46 @@ export async function fetchScreenerFanoutShadow(rawInput: unknown = {}) {
   return screenerFanoutShadowResponseSchema.parse(payload)
 }
 
+export async function fetchL2ReportCanary(rawInput: unknown) {
+  const input = l2ReportCanaryLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/${input.canaryId}`,
+  )
+  return l2ReportCanaryViewSchema.parse(payload)
+}
+
+export async function fetchL2ReportCanaryPreflight(rawInput: unknown) {
+  const input = l2ReportCanaryPreflightInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/preflight/${input.agentId}/${input.sourceAttemptId}`,
+  )
+  return l2ReportCanaryPreflightViewSchema.parse(payload)
+}
+
+export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
+  const input = scheduleL2ReportCanaryInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/screener-l2-report-canaries', {
+    method: 'POST',
+    actor,
+    body: {
+      request_id: input.requestId,
+      agent_id: input.agentId,
+      source_attempt_id: input.sourceAttemptId,
+      artifact_sha256: input.artifactSha256,
+      policy_version: 13,
+      expected_agent_status: input.expectedAgentStatus,
+      expected_score_count: input.expectedScoreCount,
+      target_node_id: input.targetNodeId,
+      review_label: input.reviewLabel,
+      run_mode: input.runMode,
+      historical_ruling_kind: input.historicalRulingKind,
+      historical_ruling_id: input.historicalRulingId,
+      confirm_report_only: true,
+    },
+  })
+  return l2ReportCanaryViewSchema.parse(payload)
+}
+
 export async function fetchCopyCourtControl() {
   const payload = await platformAdminRequest('/api/v1/admin/copy-court/settings')
   return copyCourtControlSchema.parse(payload)
@@ -746,6 +871,42 @@ export async function updateScreenerNodeReplayCapacity(actor: string, rawInput: 
     },
   )
   return fetchScreenerCapacity()
+}
+
+const REPLAY_PROCESS_PATH =
+  '/api/v1/admin/screening-verification-replays/process-keys/subnet-screener-2'
+
+export async function fetchReplayProcessReadiness() {
+  return replayProcessReadinessSchema.parse(await platformAdminRequest(REPLAY_PROCESS_PATH))
+}
+
+export async function registerReplayProcessKey(actor: string, rawInput: unknown) {
+  const input = registerReplayProcessKeyInputSchema.parse(rawInput)
+  await platformAdminRequest(REPLAY_PROCESS_PATH, {
+    method: 'POST', actor,
+    body: {
+      expected_hotkey: input.expectedHotkey,
+      instance_id: 'subnet-screener-2-worker-1',
+      public_key_hex: input.publicKeyHex,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    },
+  })
+  return fetchReplayProcessReadiness()
+}
+
+export async function revokeReplayProcessKey(actor: string, rawInput: unknown) {
+  const input = revokeReplayProcessKeyInputSchema.parse(rawInput)
+  await platformAdminRequest(`${REPLAY_PROCESS_PATH}/revoke`, {
+    method: 'POST', actor,
+    body: {
+      expected_hotkey: input.expectedHotkey,
+      expected_key_sha256: input.expectedKeySha256,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    },
+  })
+  return fetchReplayProcessReadiness()
 }
 
 export async function fetchArtifactReleaseControl() {
@@ -1324,6 +1485,58 @@ export async function fetchSourceReviewQueueSlo() {
   return sourceReviewQueueSloSchema.parse(payload)
 }
 
+export async function fetchOutlierEscalation(rawInput: unknown = {}) {
+  const input = outlierEscalationInputSchema.parse(rawInput)
+  const params = new URLSearchParams({
+    limit: String(input.limit),
+    window_hours: String(input.windowHours),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/outlier-escalation?${params.toString()}`,
+    { retries: 1 },
+  )
+  return outlierEscalationSchema.parse(payload)
+}
+
+export async function fetchClaimProvenanceCases(rawInput: unknown) {
+  const input = claimProvenanceCasesInputSchema.parse(rawInput)
+  const params = new URLSearchParams({
+    artifact_sha256: input.artifactSha256,
+    run_id: input.runId,
+    include_unflagged: String(input.includeUnflagged),
+    limit: String(input.limit),
+  })
+  if (input.caseId) params.set('case_id', input.caseId)
+  if (input.finding) params.set('finding', input.finding)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/claim-provenance?${params.toString()}`,
+    { retries: 1 },
+  )
+  return claimProvenanceCasesSchema.parse(payload)
+}
+
+export async function fetchOutlierEscalationDryRun(rawInput: unknown = {}) {
+  const input = outlierEscalationDryRunInputSchema.parse(rawInput)
+  const params = new URLSearchParams({ limit: String(input.limit) })
+  if (input.benchVersion !== undefined) {
+    params.set('bench_version', String(input.benchVersion))
+  }
+  if (input.minCohortSize !== undefined) {
+    params.set('min_cohort_size', String(input.minCohortSize))
+  }
+  if (input.modifiedZThreshold !== undefined) {
+    params.set('modified_z_threshold', String(input.modifiedZThreshold))
+  }
+  if (input.minCompositeFloor !== undefined) {
+    params.set('min_composite_floor', String(input.minCompositeFloor))
+  }
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/outlier-escalation/dry-run?${params.toString()}`,
+    { retries: 1 },
+  )
+  return outlierEscalationDryRunSchema.parse(payload)
+}
+
 export async function fetchInferenceFailureTaxonomy() {
   const payload = await platformAdminRequest(INFERENCE_FAILURE_TAXONOMY_PATH, {
     timeoutMs: 30_000,
@@ -1485,6 +1698,90 @@ export async function setInferenceConcurrencySettings(rawInput: unknown, actor: 
 
 const VALIDATOR_SLOT_SETTINGS_PATH = '/api/v1/admin/validator-slot-settings'
 
+const V13_SCORER_COHORT_PATH = '/api/v1/admin/v13-scorer-cohort'
+
+export async function fetchV13ScorerCohort() {
+  return platformAdminRequest(V13_SCORER_COHORT_PATH)
+}
+
+export async function fetchV13ScorerCohortPreflight() {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/preflight`)
+}
+
+export async function fetchV13ScorerCohortHistory() {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/history`)
+}
+
+export async function fetchV13ReportOnlyCurrentPacket() {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/report-only-current-packet`)
+}
+
+export async function activateV13ScorerCohort(input: {
+  hotkeys: [string, string, string]
+  packet: {
+    source_revision: string
+    release_descriptor_digest: string
+    scorer_image_digest: string
+    scorer_env_sha256: string
+    injected_keys: string[]
+  }
+  expectedSlotSettingsRevision: number
+  expectedSlotSettingsChecksum: string
+  reason: string
+  confirmation: string
+}, actor: string) {
+  return platformAdminRequest(V13_SCORER_COHORT_PATH, {
+    method: 'POST', actor,
+    body: {
+      hotkeys: input.hotkeys,
+      packet: input.packet,
+      expected_slot_settings_revision: input.expectedSlotSettingsRevision,
+      expected_slot_settings_checksum: input.expectedSlotSettingsChecksum,
+      reason: input.reason,
+      confirmation: input.confirmation,
+      actor,
+    },
+  })
+}
+
+export async function rotateV13ScorerCohort(input: {
+  hotkeys: [string, string, string]
+  packet: {
+    source_revision: string
+    release_descriptor_digest: string
+    scorer_image_digest: string
+    scorer_env_sha256: string
+    injected_keys: string[]
+  }
+  expectedCurrentPacket: {
+    source_revision: string
+    release_descriptor_digest: string
+    scorer_image_digest: string
+    scorer_env_sha256: string
+    injected_keys: string[]
+  }
+  expectedCurrentRotationId?: number
+  expectedSlotSettingsRevision: number
+  expectedSlotSettingsChecksum: string
+  reason: string
+  confirmation: string
+}, actor: string) {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/rotate`, {
+    method: 'POST', actor,
+    body: {
+      hotkeys: input.hotkeys,
+      packet: input.packet,
+      expected_current_packet: input.expectedCurrentPacket,
+      expected_current_rotation_id: input.expectedCurrentRotationId ?? null,
+      expected_slot_settings_revision: input.expectedSlotSettingsRevision,
+      expected_slot_settings_checksum: input.expectedSlotSettingsChecksum,
+      reason: input.reason,
+      confirmation: input.confirmation,
+      actor,
+    },
+  })
+}
+
 export async function fetchValidatorSlotSettings() {
   const payload = await platformAdminRequest(VALIDATOR_SLOT_SETTINGS_PATH)
   return validatorSlotSettingsControlSchema.parse(payload)
@@ -1644,6 +1941,18 @@ export async function fetchScreeningQuarantines(
     `/api/v1/admin/screening-quarantines?${query.toString()}`,
   )
   return screeningQuarantineListSchema.parse(payload)
+}
+
+export async function fetchScreeningReviewEvents(
+  agentId: string | undefined,
+  limit = 50,
+  offset = 0,
+) {
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (agentId) query.set('agent_id', agentId)
+  return screeningReviewEventListSchema.parse(
+    await platformAdminRequest(`/api/v1/admin/screening-review-events?${query.toString()}`),
+  )
 }
 
 export async function resolveScreeningQuarantine(
@@ -1973,12 +2282,30 @@ export async function fetchScreeningSubmissions(
   limit = 200,
   offset = 0,
   generation: 'active' | 'all' = 'active',
+  rawFilters: unknown = {},
 ) {
+  const filters = screeningSubmissionFiltersSchema.parse(rawFilters)
   const query = new URLSearchParams({
     generation,
     limit: String(limit),
     offset: String(offset),
   })
+  const scalar: Array<[string, string | undefined]> = [
+    ['agent_name', filters.agentName],
+    ['agent_name_prefix', filters.agentNamePrefix],
+    ['miner_hotkey', filters.minerHotkey],
+    ['miner_coldkey', filters.minerColdkey],
+    ['artifact_sha256', filters.artifactSha256],
+    ['submitted_after', filters.submittedAfter],
+    ['submitted_before', filters.submittedBefore],
+  ]
+  for (const [key, value] of scalar) {
+    if (value !== undefined) query.set(key, value)
+  }
+  for (const status of filters.agentStatus ?? []) query.append('agent_status', status)
+  for (const code of filters.screeningReasonCode ?? []) {
+    query.append('screening_reason_code', code)
+  }
   const payload = await platformAdminRequest(
     `/api/v1/admin/screening-submissions?${query.toString()}`,
   )
@@ -2033,6 +2360,107 @@ export async function fetchV13GenerationGroup(rawInput: unknown) {
   return input.role
     ? v13GroupPackageSchema.parse(payload)
     : v13GenerationGroupSchema.parse(payload)
+}
+
+export async function listV13BenignApprovals(rawInput: unknown) {
+  const input = listV13BenignApprovalsInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/known-benign-approvals?limit=${input.limit}&offset=${input.offset}`,
+  )
+  return v13BenignApprovalSchema.array().parse(payload)
+}
+
+export async function fetchV13BenignApproval(rawInput: unknown) {
+  const input = v13BenignApprovalLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/known-benign-approvals/${encodeURIComponent(input.approvalId)}`,
+  )
+  return v13BenignApprovalSchema.parse(payload)
+}
+
+export async function recordV13BenignApproval(actor: string, rawInput: unknown) {
+  const input = v13BenignApprovalWriteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    '/api/v1/admin/v13-private-generation/known-benign-approvals',
+    {
+      method: 'POST',
+      actor,
+      body: {
+        agent_id: input.agentId,
+        attempt_id: input.attemptId,
+        artifact_sha256: input.artifactSha256,
+        image_sha256: input.imageSha256,
+        profile_sha256: input.profileSha256,
+        review_evidence_sha256: input.reviewEvidenceSha256,
+        reason: input.reason,
+      },
+    },
+  )
+  return v13BenignApprovalSchema.parse(payload)
+}
+
+export async function fetchV13ReplayPrivateGroup(rawInput: unknown) {
+  const input = v13ReplayPrivateLookupInputSchema.parse(rawInput)
+  const base = `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}`
+  const payload = await platformAdminRequest(
+    input.role ? `${base}/packages/${encodeURIComponent(input.role)}` : `${base}/group`,
+  )
+  return input.role
+    ? v13ReplayPackageSchema.parse(payload)
+    : v13ReplayGroupSchema.parse(payload)
+}
+
+export async function recordV13ReplayPrivateGroup(actor: string, rawInput: unknown) {
+  const input = v13ReplayGroupWriteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}/group`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        target_agent_id: input.targetAgentId,
+        target_attempt_id: input.targetAttemptId,
+        target_artifact_sha256: input.targetArtifactSha256,
+        target_image_sha256: input.targetImageSha256,
+        approval_id: input.approvalId,
+        profile_sha256: input.profileSha256,
+      },
+    },
+  )
+  return v13ReplayGroupSchema.parse(payload)
+}
+
+export async function registerV13ReplayPrivatePackage(actor: string, rawInput: unknown) {
+  const input = v13ReplayPackageWriteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}/packages/${encodeURIComponent(input.role)}`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        generation_receipt_sha256: input.generationReceiptSha256,
+        manifest_sha256: input.manifestSha256,
+        pair_inventory_sha256: input.pairInventorySha256,
+      },
+    },
+  )
+  return v13ReplayPackageSchema.parse(payload)
+}
+
+export async function fetchV13ReplayPrivateReceipt(rawInput: unknown) {
+  const input = v13ReplayPrivateLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-verification-replays/${encodeURIComponent(input.replayId)}/private-receipt`,
+  )
+  return v13ReplayPrivateReceiptSchema.parse(payload)
+}
+
+export async function fetchV13ReplayPrivateStatistics(rawInput: unknown) {
+  const input = v13ReplayPrivateLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-verification-replays/${encodeURIComponent(input.replayId)}/private-statistics`,
+  )
+  return v13PrivateStatisticsSchema.parse(payload)
 }
 
 export async function fetchScreeningReviewDeadline(rawInput: unknown) {
@@ -2225,6 +2653,7 @@ export async function retryValidation(rawInput: unknown, actor: string) {
         request_id: requestId,
         expected_snapshot: input.expectedSnapshot,
         reason: input.reason,
+        acknowledge_provider_outage: input.acknowledgeProviderOutage,
       } satisfies RetryRequest,
     },
   )
@@ -2371,7 +2800,11 @@ export async function batchRetryValidation(rawInput: unknown, actor: string) {
     {
       method: 'POST',
       actor,
-      body: { reason: input.reason, items },
+      body: {
+        reason: input.reason,
+        items,
+        acknowledge_provider_outage: input.acknowledgeProviderOutage,
+      },
     },
   )
   return batchRetryValidationResponseSchema.parse(payload)
@@ -3016,17 +3449,42 @@ async function fetchPublicSubmissionPipeline(agentId: string) {
   }
 }
 
+/**
+ * The rollout's promotion progress for the authoritative board, or null.
+ *
+ * Best-effort by design: this explains the board, it is not the board. A
+ * rollout read that fails or returns an unrecognizable shape degrades to null
+ * instead of failing the leaderboard an operator asked for.
+ */
+async function fetchRolloutPromotion() {
+  try {
+    const payload = await platformPublicRequest('/api/v1/public/bench/rollout')
+    const parsed = leaderboardRolloutPromotionSchema.safeParse(payload)
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
 export async function fetchScoreLeaderboard(rawInput: unknown) {
   const input = scoreLeaderboardInputSchema.parse(rawInput)
-  const board = await fetchLeaderboardSnapshot(input.benchVersion)
+  // A historical board is a pinned past version: the live rollout's gates say
+  // nothing about it, so only the authoritative board carries them.
+  const [board, rolloutPromotion] = await Promise.all([
+    fetchLeaderboardSnapshot(input.benchVersion),
+    input.benchVersion === undefined ? fetchRolloutPromotion() : Promise.resolve(null),
+  ])
   const filtered = board.entries.filter((entry) =>
     input.status === 'all' ? true : input.status === 'finalized' ? entry.finalized : !entry.finalized,
   )
   return scoreLeaderboardPageSchema.parse({
     generated_at: board.generated_at,
     current_bench_version: board.current_bench_version,
+    scoring_bench_version: board.scoring_bench_version,
+    emission_bench_version: board.emission_bench_version,
     active_bench_version: board.active_bench_version,
     desired_bench_version: board.desired_bench_version,
+    rollout_promotion: rolloutPromotion,
     available_bench_versions: board.available_bench_versions,
     selection_mode: board.selection_mode,
     status: input.status,

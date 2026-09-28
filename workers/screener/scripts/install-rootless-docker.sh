@@ -54,7 +54,6 @@ if ! id "$EXECUTOR_USER" >/dev/null 2>&1; then
   useradd --create-home --home-dir "$EXECUTOR_HOME" --shell /bin/bash \
     --gid "$EXECUTOR_GROUP" "$EXECUTOR_USER"
 fi
-usermod -aG "$EXECUTOR_GROUP" "$SCREENER_USER"
 
 uid="$(id -u "$EXECUTOR_USER")"
 runtime_dir="/run/ditto-screener-docker"
@@ -173,6 +172,25 @@ fi
 if [[ "$daemon_config_changed" == true && "$daemon_was_active" == true ]]; then
   "${user_systemctl[@]}" restart "$SCREENER_ROOTLESS_UNIT"
 fi
+
+# Do not grant the worker the executor group, and do not drop rootful Docker
+# access, until the daemon is active and the socket group is the host group.
+# A remapped numeric group means the worker still cannot use the socket.
+socket_ready=false
+for _attempt in $(seq 1 30); do
+  if "${user_systemctl[@]}" is-active --quiet "$SCREENER_ROOTLESS_UNIT" \
+    && [[ -S "$runtime_dir/docker.sock" ]] \
+    && [[ "$(stat -c %G "$runtime_dir/docker.sock")" == "$EXECUTOR_GROUP" ]]; then
+    socket_ready=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$socket_ready" != true ]]; then
+  echo "rootless screener docker did not become ready with host group $EXECUTOR_GROUP" >&2
+  exit 1
+fi
+usermod -aG "$EXECUTOR_GROUP" "$SCREENER_USER"
 
 for _attempt in $(seq 1 30); do
   if runuser -u "$SCREENER_USER" -- env DOCKER_HOST="$docker_host" \

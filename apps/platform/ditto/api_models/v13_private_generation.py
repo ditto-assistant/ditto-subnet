@@ -62,6 +62,10 @@ class V13GenerationGroupView(BaseModel):
     status: Literal["recorded_unverified"] = "recorded_unverified"
 
 
+class V13ReplayGenerationGroupView(V13GenerationGroupView):
+    replay_id: UUID
+
+
 class V13GroupPackageRegisterRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -84,3 +88,7 @@ class V13GroupPackageView(BaseModel):
     registrar_actor: str
     registered_at: datetime
     status: Literal["recorded_unverified"] = "recorded_unverified"
+
+
+class V13ReplayGroupPackageView(V13GroupPackageView):
+    replay_id: UUID

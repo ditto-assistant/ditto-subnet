@@ -2,6 +2,7 @@ import handler from '@tanstack/react-start/server-entry'
 import OAuthProvider from '@cloudflare/workers-oauth-provider'
 import {
   BACKROOM_ARTIFACT_SCOPE,
+  BACKROOM_CHALLENGE_SCOPE,
   BACKROOM_READ_SCOPE,
   BACKROOM_WRITE_SCOPE,
   type BackroomEnv,
@@ -182,7 +183,7 @@ export default {
       if (!challenge.includes('scope=')) {
         challenged.headers.set(
           'WWW-Authenticate',
-          `${challenge}, scope="${BACKROOM_READ_SCOPE}"`,
+          `${challenge}, scope="${BACKROOM_CHALLENGE_SCOPE}"`,
         )
       }
       return applySecurityHeaders(challenged, request)

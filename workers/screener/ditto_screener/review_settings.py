@@ -18,11 +18,12 @@ from ditto_screener.config import ScreenerConfig
 
 ReviewModel = Literal[
     "openai/gpt-5.6-terra",
+    "openai/gpt-6-sol",
     "moonshotai/kimi-k3",
     "z-ai/glm-5.2",
     "openai/gpt-5.6-sol",
 ]
-SourceReviewModel = Literal["openai/gpt-5.6-luna"]
+SourceReviewModel = Literal["openai/gpt-5.6-luna", "openai/gpt-6-luna"]
 FanoutShadowModel = Literal["z-ai/glm-5.3-flash"]
 
 _MAX_SHADOW_PROVIDER_STAGES = 50
@@ -88,9 +89,9 @@ class ReviewSettings(BaseModel):
     l2_model: ReviewModel
     l2_fallback_models: tuple[ReviewModel, ...]
     l3_enabled: bool = True
-    l3_model: Literal["openai/gpt-5.6-sol"]
+    l3_model: Literal["openai/gpt-5.6-sol", "openai/gpt-6-sol"]
     timeout_seconds: Annotated[int, Field(ge=30, le=1_800)]
-    max_steps: Annotated[int, Field(ge=1, le=48)]
+    max_steps: Annotated[int, Field(ge=1, le=256)]
     source_review_max_steps: Annotated[int, Field(ge=1, le=240)] = 200
     source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=16_000_000)] = (
         8_000_000
@@ -130,10 +131,11 @@ class ReviewSettings(BaseModel):
     fanout_shadow_daily_cost_usd: Annotated[float, Field(gt=0, le=100)] = 20.0
     fanout_shadow_global_concurrency: Literal[1] = 1
     fanout_shadow_reserved_targon_slots: Annotated[int, Field(ge=1, le=4)] = 1
-    max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
-    max_output_tokens: Annotated[int, Field(ge=1, le=128_000)]
+    # Aggregate effective input: uncached tokens plus 10% of cached tokens.
+    max_input_tokens: Annotated[int, Field(ge=1, le=5_000_000)]
+    max_output_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)]
-    max_cost_usd: Annotated[float, Field(gt=0, le=10)]
+    max_cost_usd: Annotated[float, Field(gt=0, le=25)]
     critic_reasoning_effort: Literal["low", "medium", "high"]
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)]
     audit_retention_days: Annotated[int, Field(ge=1, le=365)]

@@ -10,6 +10,13 @@ This document defines where the maintenance treasury gets its money, who holds
 it, what it may pay for, and how every movement is recorded. It sets policy
 only. It does not register keys, change weights, or approve a bounty.
 
+**Open denominator decision:** This earlier proposal makes treasury and burn
+additive shares of the full miner vector (`1 - burn_share - treasury_share`).
+The separate SN118 GM/bounty prototype proposes 25 bps for each purpose from
+the *released* miner vector, or `(1 - burn_share) * treasury_share`. They differ
+when burn is partial. Neither formula has an active validator fold; choose one
+explicitly before recording a nonzero policy or routing weights.
+
 ## Principles
 
 1. **Only a signed treasury action moves funds.** Chain transfers are made only

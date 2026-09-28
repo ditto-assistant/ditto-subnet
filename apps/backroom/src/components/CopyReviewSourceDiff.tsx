@@ -178,6 +178,22 @@ export function CopyReviewSourceDiff({
               Showing {manifest.files.length} of {manifest.file_count} files.
             </p>
           ) : null}
+          {manifest.omitted_file_count > 0 ? (
+            <div className="text-xs text-[var(--amber)]">
+              <p>
+                {manifest.omitted_file_count}{' '}
+                {manifest.omitted_file_count === 1 ? 'file was' : 'files were'} past the
+                source read budget and not compared:
+              </p>
+              <ul className="mt-1 space-y-0.5 font-mono">
+                {manifest.omitted_paths.map((path) => (
+                  <li key={path} className="truncate">
+                    {sanitizeSourceLine(path)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {sorted.map((file) => (
             <div key={file.path} className="rounded-md border border-white/5">
               <button

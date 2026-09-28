@@ -20,6 +20,12 @@
   become: true
   gather_facts: true
 
+  vars:
+    # Docker's apt signing key, fingerprint 9DC8 5822 9FC7 DD38 854A E2D8 8D81
+    # 803C 0EBF CD88. Kept identical to the role defaults by
+    # infra/ansible/tests/test_docker_apt_key_pin.py.
+    docker_apt_key_sha256: "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
+
   # base first (creates the deploy user + uv + hardening), then the CLI/rootless
   # prerequisites, then the screener role provisions its separate executor user.
   roles:
@@ -34,6 +40,7 @@
         url: https://download.docker.com/linux/debian/gpg
         dest: /usr/share/keyrings/docker.asc
         mode: "0644"
+        checksum: "sha256:{{ docker_apt_key_sha256 }}"
       tags: [docker]
 
     # apt_repository is deprecated (removed in ansible-core 2.25). The

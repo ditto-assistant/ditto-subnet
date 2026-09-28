@@ -11,13 +11,13 @@ from uuid import UUID
 import httpx
 
 from ditto_screener.enrollment import _materialize_source_review_secret
-from ditto_screener.fanout_review import MODEL, review_archive
-from ditto_screener.policy import builtin_policy_manifest
-from ditto_screener.source_review_job import (
+from ditto_screener.fanout_job_support import (
     _download_verified,
     _required,
     _stage_source_review_secret,
 )
+from ditto_screener.fanout_review import MODEL, review_archive
+from ditto_screener.policy import builtin_policy_manifest
 
 _SHADOW_ROUTER_URL = "https://router.heyditto.ai/v1"
 

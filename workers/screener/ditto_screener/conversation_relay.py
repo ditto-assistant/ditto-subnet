@@ -34,13 +34,26 @@ class RelayError(ValueError):
     """Only fixed, source-owned codes may be persisted as private diagnostics."""
 
 
+class DrainingHTTPServer(ThreadingHTTPServer):
+    """Wait for every request handler before writing the settled ledger."""
+
+    daemon_threads = False
+    block_on_close = True
+
+
 class Relay:
-    def __init__(self, key: str, state_file: Path):
+    def __init__(self, key: str, state_file: Path, *, budget_microusd: int = BUDGET):
+        if type(budget_microusd) is not int or not 0 < budget_microusd <= BUDGET:
+            raise RelayError("invalid_inference_budget")
         self.key = key
         self.state_file = state_file
+        self.budget_microusd = budget_microusd
         self.lock = threading.Lock()
         self.spent = 0
         self.requests = 0
+        self.chat_dispatches = 0
+        self.successful_chat_responses = 0
+        self.settled = False
         self.tokens = 0
         self.unmetered = False
         self.cost_is_upper_bound = False
@@ -78,6 +91,9 @@ class Relay:
                     {
                         "profile": PROFILE,
                         "requests": self.requests,
+                        "chat_dispatches": self.chat_dispatches,
+                        "successful_chat_responses": self.successful_chat_responses,
+                        "settled": self.settled,
                         "tokens": self.tokens,
                         "spent_microusd": self.spent,
                         "unmetered": self.unmetered,
@@ -279,11 +295,13 @@ class Relay:
             if (
                 self.failed
                 or self.requests >= MAX_REQUESTS
-                or self.spent + reservation > BUDGET
+                or self.spent + reservation > self.budget_microusd
             ):
                 raise RelayError("inference_budget_unavailable")
             self.spent += reservation
             self.requests += 1
+            if not embed:
+                self.chat_dispatches += 1
             self.unmetered = True
             self.save()  # Persist before a possibly billed dispatch.
             try:
@@ -350,6 +368,8 @@ class Relay:
                 self.spent += math.ceil(cost * 1_000_000) - reservation
                 self.tokens += prompt + completion
                 self.unmetered = False
+                if not embed:
+                    self.successful_chat_responses += 1
                 if embed and path in {"/api/embed", "/api/embeddings"}:
                     vectors = [
                         item["embedding"]
@@ -483,12 +503,14 @@ def serve(relay: Relay) -> None:
             self.wfile.write(encoded)
 
     # Serial dispatch plus a bounded socket backlog contains malicious fan-out.
-    server = ThreadingHTTPServer(("0.0.0.0", 11434), Handler)
-    tls = ThreadingHTTPServer(("0.0.0.0", 443), Handler)
+    private_case = os.environ.get("DITTO_PRIVATE_CASE") == "1"
+    server_type = DrainingHTTPServer if private_case else ThreadingHTTPServer
+    server = server_type(("0.0.0.0", 11434), Handler)
+    tls = server_type(("0.0.0.0", 443), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain("/private/leaf.crt", "/private/leaf.key")
     tls.socket = context.wrap_socket(tls.socket, server_side=True)
-    chat = ThreadingHTTPServer(("0.0.0.0", 11435), Handler)
+    chat = server_type(("0.0.0.0", 11435), Handler)
     servers = [server, tls, chat]
     stopped = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
@@ -503,12 +525,25 @@ def serve(relay: Relay) -> None:
         # outer stop deadline still bounds hostile or stalled connections.
         for listener in servers:
             listener.server_close()
+        if private_case:
+            with relay.lock:
+                relay.settled = True
+                relay.save()
 
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["harness"]:
         harness_stdio()
     elif not sys.argv[1:]:
-        serve(Relay(os.environ["OPENROUTER_API_KEY"], Path("/state/usage.json")))
+        private_budget = os.environ.get("DITTO_PRIVATE_BUDGET_MICROUSD")
+        serve(
+            Relay(
+                os.environ["OPENROUTER_API_KEY"],
+                Path("/state/usage.json"),
+                budget_microusd=(
+                    int(private_budget) if private_budget is not None else BUDGET
+                ),
+            )
+        )
     else:
         raise SystemExit("unsupported relay mode")

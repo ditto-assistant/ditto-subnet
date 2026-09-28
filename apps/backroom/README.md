@@ -52,7 +52,9 @@ Workspace account receives read access; only `BACKROOM_ADMIN_EMAILS` receives
 write access. `BACKROOM_BLOCKED_EMAILS` denies named identities on every console
 and MCP request, including requests carrying an already-issued token. Sessions
 expire after 7 days and roles are recomputed from the current Worker bindings on
-every request. Workspace-account revocation alone has an accepted maximum 7-day
+every request. Interactive MCP access tokens last 24 hours, or less when the
+staff session ends sooner. `get_backroom_access` reports `expires_at`. Signed
+artifact download URLs keep their own short lifetime. Workspace-account revocation alone has an accepted maximum 7-day
 read-only window for an already-issued session; see `docs/oauth.md` for the
 immediate-revocation procedure.
 

@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from ditto.api_models.inference_observability import ProviderCircuitSnapshot
 from ditto.api_models.retry_state import RecommendedRetryAction, RetryState
 
 
@@ -187,6 +188,26 @@ class AdminValidationRetryDetail(BaseModel):
     """
     dominant_failure_code: str | None = None
     """The remaining tickets' current ``failure_detail`` when they all agree."""
+    provider_outage: ProviderCircuitSnapshot | None = None
+    """The relay's provider circuit, when it bears on this submission's retry.
+
+    Reported while the circuit is open (it is then why a grant is refused), and
+    also while it is closed if a remaining exhausted slot was parked by it
+    (``failure_detail == "provider_outage_parked"``), because ``closed_at`` --
+    last time a provider request succeeded and closed the circuit -- is
+    recovery evidence. ``last_failure_at``/``last_error_code`` are the
+    newest outage evidence. ``None`` when the circuit is unrelated.
+    """
+    provider_outage_blocks_retry: bool = False
+    """An open circuit or a recently provider-parked slot blocks plain retry.
+
+    ``park_scoring_leases`` parks every issued lease while the circuit is open,
+    exempting only the single half-open probe. After it closes, a slot parked
+    by that outage waits for 30 minutes without another failure. While true,
+    ``recovery_allowed`` is false, ``recommended_action`` is not ``retry``, and
+    the retry routes require ``acknowledge_provider_outage=true``. A closed
+    circuit is a current-state observation, not proof of a healthy route.
+    """
     withdrawal_allowed: bool
     withdrawal_blocking_reason: str | None
     eviction_allowed: bool
@@ -241,6 +262,11 @@ class AdminStuckSubmission(BaseModel):
     """
     dominant_failure_code: str | None = None
     """Remaining current ``failure_detail`` when every leftover slot agrees."""
+    provider_outage: ProviderCircuitSnapshot | None = None
+    """Provider circuit when a remaining slot was parked by it; see
+    :attr:`AdminValidationRetryDetail.provider_outage`."""
+    provider_outage_blocks_retry: bool = False
+    """See :attr:`AdminValidationRetryDetail.provider_outage_blocks_retry`."""
     earliest_retry_after: datetime | None
     attempts_used: int
     exhausted_validator_count: int
@@ -283,6 +309,11 @@ class AdminValidationRetryRequest(BaseModel):
         str,
         StringConstraints(strip_whitespace=True, min_length=3),
     ]
+    acknowledge_provider_outage: bool = False
+    """Grant even though the provider-wide outage circuit is still open.
+
+    Without it the grant is refused: while the circuit is open every scoring
+    lease is parked, so the restored slot would be parked again."""
 
 
 class AdminValidationRetryResponse(BaseModel):
@@ -439,6 +470,9 @@ class AdminBatchRetryRequest(BaseModel):
         StringConstraints(strip_whitespace=True, min_length=3),
     ]
     items: Annotated[list[AdminBatchRetryItem], Field(min_length=1, max_length=100)]
+    acknowledge_provider_outage: bool = False
+    """Applies to every item; see
+    :attr:`AdminValidationRetryRequest.acknowledge_provider_outage`."""
 
     @field_validator("items")
     @classmethod
@@ -475,7 +509,11 @@ class AdminValidatorScoreReplacementDetail(BaseModel):
     ticket_status: Literal["issued", "scored", "expired"] | None
     ticket_deadline: datetime | None
     replacement_pending: bool
+    """A replacement ticket is issued and awaiting its score."""
+    replacement_queued: bool
+    """A replacement re-test is waiting behind the validator's current work."""
     replacement_request_id: UUID | None
+    """Identity of the open request, whether queued or pending."""
     replacement_reason: str | None
     replacement_actor: str | None
     replacement_allowed: bool

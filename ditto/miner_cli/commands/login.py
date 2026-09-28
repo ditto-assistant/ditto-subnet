@@ -17,6 +17,7 @@ from ditto.api_models.miner_session import (
 from ditto.api_models.name_claim import NameClaimProof
 from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.confirm import confirm_login_action
+from ditto.miner_cli.errors import LoginRequiredError
 from ditto.miner_cli.miner_session import (
     login_message,
     sign_payload,
@@ -157,6 +158,10 @@ def _logout(args: argparse.Namespace) -> int:
         try:
             with ApiClient(base_url=network.api_url) as client:
                 client.revoke_miner_session(token)
+        except LoginRequiredError:
+            # Already expired or revoked server-side (for example from the
+            # dashboard); only the local copy is left to clear.
+            print("server session was already invalid or expired", file=sys.stderr)
         except Exception as exc:
             print(f"could not revoke server session: {exc}", file=sys.stderr)
             return 1

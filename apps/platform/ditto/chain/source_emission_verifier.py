@@ -23,11 +23,12 @@ from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import ChainMinerEmissionReceipt
 
 # https://github.com/RaoFoundation/subtensor/releases/download/v464/subtensor-digest.json
-# Compressed/compact WASM for v464 and v459, and verified compressed v466.
-# Reveal, weights, epoch math and block_step are unchanged in v466.
-# Artifact verification and scoped runtime audit: docs/source-runtime-v466.md.
+# Compressed/compact WASM for v464 and v459, plus verified compressed v466/v467.
+# Reveal, weights, epoch math and block_step are unchanged through v467.
+# Artifact verification and scoped runtime audits: docs/source-runtime-v{466,467}.md.
 AUDITED_RUNTIME_CODE_HASHES = frozenset(
     {
+        "0x2f175dcc64196ec8a6b9235f8d7cfd84efef6c68bb925c4455949591cef9f6d2",
         "0xff4ba0da10fb8ac26fab3e446f23413ef7f91de4a604802097ece0b928d53a8e",
         "0x637844a3ad94d3bdbea45664b67bbfa07a31f21c087834a56a772ba27f612b9f",
         "0xd32f5c4347c58f0c5e68dc3e5dd53a26d4e5a24b770fb01279d1b05ec0612218",

@@ -1261,6 +1261,41 @@ describe("board view controls (row 1 slice)", () => {
     expect(document.querySelector(".run-cost-cell")?.textContent).toContain("7 completed");
   });
 
+  it("labels latency as a per-case median over the run's own case count", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, i) => ({
+            ...entry,
+            median_ms: 51_000,
+            n: i === 0 ? 351 : 250,
+          })),
+        };
+      },
+    });
+    await waitForBoard();
+    const th = document.querySelector('th[data-sort="latency"]') as HTMLElement;
+    expect(th).toHaveTextContent("Median case latency");
+    const tip = th.querySelector(".tip")?.getAttribute("data-tooltip") ?? "";
+    expect(tip).toContain("not total run time");
+    expect(tip).not.toMatch(/\d+ cases/);
+    await waitFor(() =>
+      expect(document.querySelector("#rows tr[data-i] td.lat")).toHaveTextContent("51 s"),
+    );
+    const counts = document.querySelectorAll("#rows tr[data-i] td.lat .cases");
+    expect(counts[0]).toHaveTextContent("median/case · 351 cases");
+    expect(counts[1]).toHaveTextContent("median/case · 250 cases");
+    const cell = document.querySelector("#rows tr[data-i] td.lat") as HTMLElement;
+    expect(cell).toHaveAttribute(
+      "title",
+      "51 s median per case across the run's 351 scored cases. Advisory: latency does not enter the score.",
+    );
+    expect(cssNorm).toContain('.board #board td.lat::before { content: "Median case latency"; }');
+  });
+
   it("opens a row's miner drill-down route on click (plain tabbable tr, no role=button)", async () => {
     renderPage();
     await waitForBoard();
@@ -1402,6 +1437,72 @@ describe("dethrone floor + rollout strip (row 36)", () => {
     expect(el("rollout-note").textContent).toBe(
       "Weights remain on v7 throughout. A superseded rollout never moves emissions.",
     );
+  });
+
+  // #2079 follow-up: #2098 names the board's scoring and emission versions.
+  // The strip answers the next question, what emissions are waiting on, from
+  // Platform's own barrier count and promotion sentence.
+  it("names scoring vs emissions and carries the served promotion gate mid-rollout", async () => {
+    const requirement =
+      "Bench v8 scoring is in progress; Bench v7 still controls emissions. Emission " +
+      "authority moves to v8 only once the first 5 inherited priority-cohort positions " +
+      "each hold a complete 3-score v8 quorum.";
+    const collecting = (body: unknown): RolloutState => ({
+      ...(body as RolloutState),
+      active_version: 7,
+      desired_version: 8,
+      status: "collecting",
+      priority_complete: false,
+      priority_cohort_size: 5,
+      // Four finished leaders plus a banned one the barrier skips: the served
+      // count says 5, the members alone could only ever show 4.
+      priority_cohort_ready_count: 5,
+      members: [
+        { position: 1, score_count: 3 },
+        { position: 2, score_count: 3 },
+        { position: 3, score_count: 0 },
+        { position: 4, score_count: 3 },
+        { position: 5, score_count: 3 },
+      ],
+      promotion_pending: true,
+      promotion_requirement: requirement,
+    });
+    renderPage({
+      patch: (name, body) => {
+        if (name === "bench-rollout") return collecting(body);
+        if (name === "leaderboard")
+          return {
+            ...(body as LeaderboardPayload),
+            current_bench_version: 8,
+            scoring_bench_version: 8,
+            active_bench_version: 7,
+            emission_bench_version: 7,
+            desired_bench_version: 8,
+          };
+        return body;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("rollout-head").textContent).toContain(
+        "v8 scoring in progress · v7 controls emissions",
+      ),
+    );
+    expect(el("rollout-progress").textContent).toContain("5 of 5");
+    expect(el("rollout-progress").textContent).toContain(
+      "This priority-cohort quorum is the first gate emissions wait on.",
+    );
+    expect(el("rollout-promotion").textContent).toBe(requirement);
+  });
+
+  it("shows no pending promotion once the rollout has activated", async () => {
+    // The stock fixture is the completed transition: v7 activated and paying.
+    renderPage();
+    await waitForBoard();
+    await waitFor(() => expect(el("rollout-head").textContent).toContain("activated"));
+    expect(el("rollout-head").textContent).toContain("v7 controls emissions");
+    expect(el("rollout-head").textContent).not.toContain("scoring in progress");
+    expect(document.getElementById("rollout-promotion")).toBeNull();
   });
 });
 

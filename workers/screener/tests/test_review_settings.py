@@ -18,11 +18,23 @@ from ditto_screener.review_settings import (
     _POST_CHECKSUM_FIELDS,
     CachedReviewSettings,
     EffectiveReviewSettings,
+    ReviewSettings,
     ReviewSettingsCache,
     ShadowReviewObservationRequest,
     ShadowReviewUsage,
     bootstrap_review_settings,
 )
+
+
+def test_gpt6_sol_l2_setting_is_valid_with_existing_critic(make_config) -> None:
+    settings = bootstrap_review_settings(make_config()).settings.model_dump(mode="json")
+    settings["l2_model"] = "openai/gpt-6-sol"
+    settings["source_review_model"] = "openai/gpt-6-luna"
+    settings["l3_model"] = "openai/gpt-6-sol"
+    parsed = ReviewSettings.model_validate(settings)
+    assert parsed.l2_model == "openai/gpt-6-sol"
+    assert parsed.source_review_model == "openai/gpt-6-luna"
+    assert parsed.l3_model == "openai/gpt-6-sol"
 
 
 def _shadow_observation(*, stages: int) -> ShadowReviewObservationRequest:

@@ -15,13 +15,9 @@ screener_fleet_release_dir: "{{ screener_fleet_releases_dir }}/{{ screener_fleet
 screener_fleet_current: "{{ screener_fleet_root }}/current"
 screener_fleet_checkout: "{{ screener_fleet_release_dir }}/src"
 screener_fleet_worker_dir: "{{ screener_fleet_checkout }}/workers/screener"
-screener_fleet_orchestrator_dir: "{{ screener_fleet_checkout }}/services/screener-orchestrator"
 screener_fleet_worker_venv: "{{ screener_fleet_release_dir }}/worker-venv"
-screener_fleet_orchestrator_venv: "{{ screener_fleet_release_dir }}/orchestrator-venv"
 screener_fleet_active_worker_dir: "{{ screener_fleet_current }}/src/workers/screener"
-screener_fleet_active_orchestrator_dir: "{{ screener_fleet_current }}/src/services/screener-orchestrator"
 screener_fleet_active_worker_venv: "{{ screener_fleet_current }}/worker-venv"
-screener_fleet_active_orchestrator_venv: "{{ screener_fleet_current }}/orchestrator-venv"
 screener_fleet_state_dir: /var/lib/ditto-screener-fleet
 screener_fleet_config_dir: /etc/ditto-screener-fleet
 screener_fleet_secret_agent_user: ditto-screener-secrets
@@ -106,6 +102,10 @@ screener_fleet_release_sha: ""
 # Safe first-converge/canary posture. Raise this alongside the audited
 # Backroom screening concurrency only after the lower setting is proven.
 screener_fleet_worker_processes: 1
+# Opt-in only on the independent physical node. The ordinary worker unit is
+# replaced by the signed, report-only replay entrypoint at the same instance ID.
+screener_fleet_replay_worker_enabled: false
+screener_fleet_replay_process_key_file: "{{ screener_fleet_config_dir }}/replay-process.key"
 screener_fleet_agent_workers: 12
 screener_fleet_poll_seconds: 2
 screener_fleet_build_timeout_seconds: 2400

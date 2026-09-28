@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -134,5 +135,57 @@ func TestDispatcherNilGetUsesDefaultClient(t *testing.T) {
 	})
 	if !errors.Is(err, ErrNotIncluded) {
 		t.Fatalf("unreachable server must be a benign skip, got %v", err)
+	}
+}
+
+// A harness that accepts the probe and then stalls must not hold the run: the
+// probe runs before the finished memory run is recorded, and the job context has
+// no deadline of its own.
+func TestProbeClientBoundsAStalledHarness(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{"no response headers", func(_ http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		}},
+		{"stalled advertisement body", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok",`))
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(tc.handler)
+			defer srv.Close()
+			d := Dispatcher{
+				Backend: NewLocalBackend(),
+				Get:     newProbeClient(true, 200*time.Millisecond).Get,
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				_, _, err := d.Run(context.Background(), RouterSubmission{
+					MinerHotkey:   "hk",
+					RouterBaseURL: srv.URL,
+				})
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if !errors.Is(err, ErrNotIncluded) {
+					t.Fatalf("a stalled probe must be a benign skip, got %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("inclusion probe did not return for a stalled harness")
+			}
+		})
+	}
+}
+
+func TestNewProbeClientIsBounded(t *testing.T) {
+	if got := NewProbeClient(false).Timeout; got != probeTimeout || got <= 0 {
+		t.Fatalf("probe client timeout = %v, want %v", got, probeTimeout)
 	}
 }

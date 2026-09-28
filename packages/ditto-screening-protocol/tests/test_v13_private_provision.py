@@ -10,19 +10,26 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 import pytest
 
+from ditto_screening_protocol.v13_private_clean_control import (
+    TrustedGenerationGroup,
+    compute_v13_generation_role_digest,
+)
 from ditto_screening_protocol.v13_private_execute import (
     IsolatedCaseObservation,
     PrivateExecutionUnavailable,
     execute_v13_private_pairs,
 )
 from ditto_screening_protocol.v13_private_package import (
+    V13_PRIVATE_PROFILE_SHA256,
     ArtifactCommitment,
     PrivatePackageRegistration,
+    _prepare_registered_package,
     prepare_sealed_v13_package,
 )
 from ditto_screening_protocol.v13_private_provision import (
     PrivateBlueprintPair,
     PrivateProvisioningUnavailable,
+    provision_v13_matched_private_packages,
     provision_v13_private_package,
 )
 
@@ -101,6 +108,130 @@ class MemoryPublisher:
 
     async def read_payload(self, sha256: str) -> bytes:
         return self.blobs[sha256]
+
+
+class MatchedMemoryPublisher(MemoryPublisher):
+    def __init__(self) -> None:
+        super().__init__()
+        self.registrations: list[tuple[PrivatePackageRegistration, str]] = []
+
+    async def register_group(
+        self, registration: PrivatePackageRegistration, pair_inventory_sha256: str
+    ) -> None:
+        self.registrations.append((registration, pair_inventory_sha256))
+
+
+def _matched_group(
+    target: ArtifactCommitment, control: ArtifactCommitment
+) -> TrustedGenerationGroup:
+    group = TrustedGenerationGroup(
+        group_id=uuid5(NAMESPACE_URL, "synthetic-group"),
+        replay_id=uuid5(NAMESPACE_URL, "synthetic-replay"),
+        target_agent_id=target.agent_id,
+        target_attempt_id=target.attempt_id,
+        target_artifact_sha256=target.artifact_sha256,
+        target_image_sha256=target.image_sha256,
+        control_agent_id=control.agent_id,
+        control_attempt_id=control.attempt_id,
+        control_artifact_sha256=control.artifact_sha256,
+        control_image_sha256=control.image_sha256,
+        approval_id=uuid5(NAMESPACE_URL, "synthetic-approval"),
+        approval_receipt_sha256="c" * 64,
+        profile_sha256=V13_PRIVATE_PROFILE_SHA256,
+        started_at=datetime.now(UTC) - timedelta(milliseconds=100),
+        target_receipt_sha256="0" * 64,
+        control_receipt_sha256="0" * 64,
+    )
+    return group.model_copy(
+        update={
+            "target_receipt_sha256": compute_v13_generation_role_digest(
+                group, "target"
+            ),
+            "control_receipt_sha256": compute_v13_generation_role_digest(
+                group, "known_benign"
+            ),
+        }
+    )
+
+
+@pytest.mark.parametrize("tool_catalog_applicable", [False, True])
+def test_matched_provisioning_registers_one_inventory_for_both_roles(
+    tool_catalog_applicable: bool,
+) -> None:
+    target = _commitment()
+    control = target.model_copy(
+        update={
+            "agent_id": uuid5(NAMESPACE_URL, "synthetic-control-agent"),
+            "attempt_id": uuid5(NAMESPACE_URL, "synthetic-control-attempt"),
+            "artifact_sha256": "d" * 64,
+            "image_sha256": "e" * 64,
+        }
+    )
+    publisher = MatchedMemoryPublisher()
+    result = asyncio.run(
+        provision_v13_matched_private_packages(
+            group=_matched_group(target, control),
+            target=target,
+            known_benign=control,
+            bank=SyntheticBank(classes=4 if tool_catalog_applicable else 3),
+            publisher=publisher,
+            registrar_id="trusted-test-registrar",
+            tool_catalog_applicable=tool_catalog_applicable,
+        )
+    )
+    assert len(publisher.registrations) == 2
+    assert {item[1] for item in publisher.registrations} == {
+        result.pair_inventory_sha256
+    }
+    target_package = asyncio.run(
+        _prepare_registered_package(
+            store=publisher, commitment=target, registration=result.target
+        )
+    )
+    control_package = asyncio.run(
+        _prepare_registered_package(
+            store=publisher,
+            commitment=control,
+            registration=result.known_benign,
+        )
+    )
+    assert target_package.manifest.pairs == control_package.manifest.pairs
+    assert result.pair_count == (80 if tool_catalog_applicable else 60)
+    assert result.target.manifest_sha256 != result.known_benign.manifest_sha256
+
+
+def test_matched_provisioning_rejects_tampered_group_before_bank_access() -> None:
+    target = _commitment()
+    control = target.model_copy(
+        update={
+            "agent_id": uuid5(NAMESPACE_URL, "synthetic-control-agent"),
+            "attempt_id": uuid5(NAMESPACE_URL, "synthetic-control-attempt"),
+            "artifact_sha256": "d" * 64,
+            "image_sha256": "e" * 64,
+        }
+    )
+    group = _matched_group(target, control).model_copy(
+        update={"target_receipt_sha256": "f" * 64}
+    )
+
+    class InaccessibleBank:
+        async def load(self) -> tuple[PrivateBlueprintPair, ...]:
+            raise AssertionError("bank must not be read")
+
+    publisher = MatchedMemoryPublisher()
+    with pytest.raises(PrivateProvisioningUnavailable, match="trusted generation"):
+        asyncio.run(
+            provision_v13_matched_private_packages(
+                group=group,
+                target=target,
+                known_benign=control,
+                bank=InaccessibleBank(),
+                publisher=publisher,
+                registrar_id="trusted-test-registrar",
+                tool_catalog_applicable=False,
+            )
+        )
+    assert publisher.blobs == {} and publisher.registrations == []
 
 
 class SyntheticFreshExecutor:

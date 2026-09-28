@@ -35,6 +35,7 @@ DispatchDeclineReason = Literal[
     "disk_breaker",
     "slot_cap",
     "validator_paused",
+    "v13_scorer_cohort_pin",
     "inference_slot_cap",
     "provider_outage",
     "slot_occupied",

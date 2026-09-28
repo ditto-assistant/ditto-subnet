@@ -58,6 +58,7 @@ class TrustedGenerationGroup(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     group_id: UUID
+    replay_id: UUID | None = None
     target_agent_id: UUID
     target_attempt_id: UUID
     target_artifact_sha256: str = Field(pattern=_SHA_PATTERN)
@@ -67,6 +68,7 @@ class TrustedGenerationGroup(BaseModel):
     control_artifact_sha256: str = Field(pattern=_SHA_PATTERN)
     control_image_sha256: str = Field(pattern=_SHA_PATTERN)
     approval_id: UUID
+    approval_receipt_sha256: str | None = Field(default=None, pattern=_SHA_PATTERN)
     profile_sha256: str = Field(pattern=_SHA_PATTERN)
     started_at: datetime
     target_receipt_sha256: str = Field(pattern=_SHA_PATTERN)
@@ -80,7 +82,11 @@ def compute_v13_generation_role_digest(
     if group.started_at.tzinfo is None:
         raise ValueError("generation group timestamp is not authoritative UTC")
     payload = {
-        "revision": "v13-generation-group-v1",
+        "revision": (
+            "v13-replay-generation-group-v1"
+            if group.replay_id is not None
+            else "v13-generation-group-v1"
+        ),
         "group_id": str(group.group_id),
         "role": role,
         "target_agent_id": str(group.target_agent_id),
@@ -97,6 +103,11 @@ def compute_v13_generation_role_digest(
         .isoformat(timespec="microseconds")
         .replace("+00:00", "Z"),
     }
+    if group.replay_id is not None:
+        if group.approval_receipt_sha256 is None:
+            raise ValueError("replay group approval receipt missing")
+        payload["replay_id"] = str(group.replay_id)
+        payload["approval_receipt_sha256"] = group.approval_receipt_sha256
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -130,6 +141,7 @@ class V13MatchedCleanControlCommitment(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     group_id: UUID
+    replay_id: UUID | None = None
     target_agent_id: UUID
     target_attempt_id: UUID
     target_artifact_sha256: str = Field(pattern=_SHA_PATTERN)
@@ -156,6 +168,7 @@ class MatchedCleanControlUnavailable(ValueError):
 async def _prepare_v13_matched_clean_control(
     *,
     group_id: UUID,
+    replay_id: UUID | None = None,
     target: ArtifactCommitment,
     control: ArtifactCommitment,
     store: SealedPackageStore,
@@ -180,6 +193,7 @@ async def _prepare_v13_matched_clean_control(
         approval = await controls.get_approval(control.agent_id, control.attempt_id)
         if (
             group.group_id != group_id
+            or group.replay_id != replay_id
             or group.target_agent_id != target.agent_id
             or group.target_attempt_id != target.attempt_id
             or group.target_artifact_sha256 != target.artifact_sha256
@@ -263,6 +277,7 @@ async def _prepare_v13_matched_clean_control(
         ).encode()
         return V13MatchedCleanControlCommitment(
             group_id=group_id,
+            replay_id=replay_id,
             target_agent_id=target.agent_id,
             target_attempt_id=target.attempt_id,
             target_artifact_sha256=target.artifact_sha256,
@@ -292,6 +307,7 @@ async def _prepare_v13_matched_clean_control(
 async def prepare_v13_matched_clean_control(
     *,
     group_id: UUID,
+    replay_id: UUID | None = None,
     target: ArtifactCommitment,
     control: ArtifactCommitment,
     store: SealedPackageStore,
@@ -304,6 +320,7 @@ async def prepare_v13_matched_clean_control(
         async with asyncio.timeout(60):
             return await _prepare_v13_matched_clean_control(
                 group_id=group_id,
+                replay_id=replay_id,
                 target=target,
                 control=control,
                 store=store,

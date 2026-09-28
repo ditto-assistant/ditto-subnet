@@ -11,12 +11,10 @@ Flow for one agent:
 2. **Contract check.** Reject unsafe archive entries and require a root
    ``Dockerfile`` before any build is attempted. The implementation language is
    deliberately unconstrained; the image must satisfy the HTTP harness contract.
-3. **Build.** Prefer the attempt-bound Targon Kaniko archive. When its runtime
-   smoke already succeeded, the worker never docker-loads or rebuilds. Local
-   ``docker build`` is residual fallback for ``prefer``/``off`` only.
-4. **Serve smoke.** Reuse the Targon rental ``GET /health`` when that lane
-   succeeded. Otherwise run the image detached with a memory + pids cap and
-   poll ``GET /health`` until it returns 2xx, then prove the harness can ingest
+3. **Build.** Load an exact preverified image for a guarded replay, or build the
+   submitted Dockerfile in the worker's isolated Docker executor.
+4. **Serve smoke.** Run the image detached with a memory + pids cap and poll
+   ``GET /health`` until it returns 2xx, then prove the harness can ingest
    with one bounded ``POST /seed`` wave (``SCREENER_SEED_PROBE_MODE``:
    ``shadow`` records the signal, ``enforce`` makes it a contract failure,
    ``off`` skips it). The probe is served by the same isolated fake gateway, so
@@ -84,10 +82,6 @@ from ditto_screener.l2_review import (
     LayeredSourceReviewAgent,
     TerraSolSourceReviewAgent,
 )
-from ditto_screener.platform import (
-    LocalScreeningProviderSelected,
-    RemoteSubmissionBuildRejected,
-)
 from ditto_screener.policy import (
     _MAX_EVIDENCE,
     ChallengeObservation,
@@ -98,6 +92,7 @@ from ditto_screener.policy import (
     ScreeningDecision,
     ScreeningOutcome,
     load_policy_engine,
+    source_review_low_clearance_allowed,
 )
 from ditto_screener.policy import (
     core_decision as make_core_decision,
@@ -122,11 +117,11 @@ from ditto_screener.source_review import (
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     STRICT_TWO_OUTCOME_POLICY_VERSION,
+    ScoredRuntimeEvidenceLease,
 )
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
-    from ditto_screener.platform import RemoteImageArchive
     from ditto_screener.review_settings import EffectiveReviewSettings
 
 logger = logging.getLogger(__name__)
@@ -212,6 +207,14 @@ _DOCKER_INFRASTRUCTURE_MARKERS = (
     # so it is reported as infrastructure rather than rejecting the artifact.
     "context canceled",
     "context cancelled",
+    # The build client's session to BuildKit (which streams the stdin context)
+    # was lost, or the daemon's gRPC stream dropped mid-solve. BuildKit reports
+    # these without its own name, and the same archive builds on a retry.
+    "no http response from session",
+    "no active session for",
+    "failed to receive status",
+    "error reading from server",
+    "rpc error: code = unavailable",
     "buildkit",
     "snapshotter",
     "failed to mount",
@@ -230,6 +233,10 @@ _DOCKER_INFRASTRUCTURE_MARKERS = (
     "bad gateway",
     "gateway timeout",
 )
+# An optional BuildKit step prefix (``#12 43.02``) or quoted-log timestamp
+# (``43.02``), then a gutter (``88  |``, ``   |``) or Dockerfile excerpt
+# (``  14 | >>> RUN``).
+_QUOTED_SOURCE_LINE = re.compile(r"^(?:#\d+\s+)?(?:\d+\.\d+\s+)?\s*\d*\s*\|")
 
 
 @dataclass(frozen=True)
@@ -927,7 +934,16 @@ def _detail_tail(text: str) -> str:
 
 
 def _docker_infrastructure_failure(text: str) -> bool:
-    normalized = text.casefold()
+    # Compiler diagnostics and BuildKit's Dockerfile excerpt quote submitted
+    # source as ``NN | code`` lines. That text is the miner's, so a string such
+    # as ``Err("service unavailable")`` on the failing line must not turn a
+    # compile error into an infrastructure park. Daemon and transport errors
+    # never use this layout.
+    normalized = "\n".join(
+        line
+        for line in text.casefold().splitlines()
+        if not _QUOTED_SOURCE_LINE.match(line)
+    )
     return any(marker in normalized for marker in _DOCKER_INFRASTRUCTURE_MARKERS)
 
 
@@ -1010,6 +1026,7 @@ class BuildGate:
         *,
         policy: PolicyEngine,
         journal: ReviewJournal,
+        capture_enforce_result: bool = False,
     ) -> None:
         self._config = config
         self._client = client
@@ -1020,6 +1037,7 @@ class BuildGate:
         )
         self._review_settings_key: tuple[int, str] | None = None
         self._executor_verified = False
+        self._capture_enforce_result = capture_enforce_result
         self._configure_source_reviewer(config)
 
     def _configure_source_reviewer(self, config: ScreenerConfig) -> None:
@@ -1059,6 +1077,7 @@ class BuildGate:
             max_input_tokens=config.l2_max_input_tokens,
             max_output_tokens=config.l2_max_output_tokens,
             max_completion_tokens=config.l2_max_completion_tokens,
+            max_completion_request_seconds=config.l2_max_completion_request_seconds,
             max_cost_usd=config.l2_max_cost_usd,
             analyst_reasoning_effort=config.l2_analyst_reasoning_effort,
             critic_reasoning_effort=config.l2_critic_reasoning_effort,
@@ -1068,6 +1087,10 @@ class BuildGate:
             l3_enabled=config.l3_review_enabled,
             critic_model=config.l3_review_model,
             critic_provider=config.l3_review_provider,
+            scorer_capabilities_url=config.scorer_capabilities_url,
+            expected_scorer_revision=config.expected_scorer_revision,
+            require_signed_runtime_lease=config.require_signed_runtime_lease,
+            signed_runtime_lease_max_age_seconds=config.signed_runtime_lease_max_age_seconds,
         )
         self._source_reviewer = LayeredSourceReviewAgent(
             l1=l1_reviewer,
@@ -1078,6 +1101,7 @@ class BuildGate:
             adjudicator=build_adjudicator(config),
             adjudicator_reserve_seconds=config.adjudicator_timeout_seconds,
             always_escalate=config.l2_always_escalate,
+            capture_enforce_result=self._capture_enforce_result,
         )
 
     def apply_review_settings(self, effective: EffectiveReviewSettings) -> bool:
@@ -1109,6 +1133,10 @@ class BuildGate:
         """Return and remove one attempt's non-authoritative shadow result."""
         return self._source_reviewer.pop_shadow_result(attempt_id)
 
+    def pop_preview_l1_review(self, attempt_id: UUID) -> SourceReviewObservation | None:
+        """Return the L1 lead paired with an isolated enforce preview."""
+        return self._source_reviewer.pop_preview_l1_result(attempt_id)
+
     async def screen(
         self,
         *,
@@ -1121,18 +1149,22 @@ class BuildGate:
         progress: Callable[[ScreenerProgressStage], None] | None = None,
         deadline: Deadline = None,
         publish_image: Callable[[BuiltImageArtifact], Awaitable[None]] | None = None,
+        publish_held_image: (
+            Callable[[BuiltImageArtifact], Awaitable[None]] | None
+        ) = None,
         record_archive_verification: Callable[[], Awaitable[None]] | None = None,
         record_runtime_verification: (
             Callable[[str, str], Awaitable[None]] | None
         ) = None,
-        remote_build: Callable[[], Awaitable[RemoteImageArchive | None]] | None = None,
-        remote_build_consumed: Callable[[UUID], Awaitable[None]] | None = None,
-        remote_source_review: Callable[[], Awaitable[SourceReviewObservation | None]]
-        | None = None,
         build_only: bool = False,
+        replay_runtime_probes: bool = False,
+        preverified_image: tuple[str, str] | None = None,
+        record_preverified_image: Callable[[], Awaitable[None]] | None = None,
         policy_only: bool = False,
         deferred_source_review: bool = False,
         policy_version: int = SCREENING_POLICY_VERSION,
+        scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
+        execution_namespace: UUID | None = None,
     ) -> ScreeningDecision:
         """Screen one agent end-to-end; never raises.
 
@@ -1165,6 +1197,18 @@ class BuildGate:
 
         if build_only and policy_only:
             raise ValueError("build-only and policy-only modes are mutually exclusive")
+        if execution_namespace is not None and (
+            publish_image is not None or publish_held_image is not None
+        ):
+            raise ValueError("isolated execution cannot publish or import an image")
+        if replay_runtime_probes and (not build_only or policy_version != 13):
+            raise ValueError("replay runtime probes require v13 build-only mode")
+        if preverified_image is not None and (
+            not replay_runtime_probes
+            or publish_image is not None
+            or record_preverified_image is None
+        ):
+            raise ValueError("preverified image requires isolated replay mode")
 
         def core_decision(
             outcome: ScreeningOutcome,
@@ -1201,8 +1245,14 @@ class BuildGate:
         # published image reference remains stable for the immutable agent
         # submission; downstream consumers and rescreens share that identity.
         execution_id = f"{agent_id}-{attempt_id}"
+        if execution_namespace is not None:
+            execution_id += f"-{execution_namespace.hex}"
         build_tag = f"ditto-screen/{execution_id}:latest"
-        image_ref = f"ditto-screen/{agent_id}:latest"
+        image_ref = (
+            f"ditto-screen/{agent_id}:latest"
+            if execution_namespace is None
+            else f"ditto-screen/canary-{execution_namespace.hex}:latest"
+        )
         container = f"ditto-screen-{execution_id}"
         gateway_container = f"ditto-gateway-{execution_id}"
         network = f"ditto-screen-{execution_id}"
@@ -1213,7 +1263,6 @@ class BuildGate:
             Callable[[], Coroutine[Any, Any, SourceReviewObservation]] | None
         ) = None
         used_local_docker = False
-        remote_archive: RemoteImageArchive | None = None
         try:
             report("downloading")
             if (
@@ -1329,15 +1378,18 @@ class BuildGate:
                         ),
                         deadline=deadline,
                         policy_version=policy_version,
+                        scored_runtime_evidence=scored_runtime_evidence,
                     )
-                    if resolved_preflight.ok and resolved_preflight.risk_level == "low":
+                    if source_review_low_clearance_allowed(
+                        resolved_preflight, policy_version=policy_version
+                    ):
                         preflight_clearance = resolved_preflight
                     elif (
                         resolved_preflight.adjudication is not None
                         and resolved_preflight.adjudication.get("decision") == "clear"
                     ):
-                        # L4 has terminally cleared the static lead, but a full
-                        # screen still owes Platform a verified runtime image.
+                        # An L4 clear settles the static lead, but a full
+                        # screen still owes Platform a verified built image.
                         # Returning PASS here bypasses build/export and makes
                         # the worker correctly reject the incomplete result.
                         # Carry this exact cleared observation into the normal
@@ -1383,46 +1435,7 @@ class BuildGate:
 
                 if preflight_clearance is None:
 
-                    async def review_with_selected_provider() -> (
-                        SourceReviewObservation
-                    ):
-                        remote_only = self._config.remote_build_mode != "off"
-                        if remote_source_review is not None:
-                            try:
-                                remote = await remote_source_review()
-                            except LocalScreeningProviderSelected:
-                                return await self._source_reviewer.review(
-                                    tmp_path,
-                                    artifact_sha256=sha256.lower(),
-                                    attempt_id=attempt_id,
-                                    progress=report_review_progress,
-                                    deadline=deadline,
-                                )
-                            except Exception:  # noqa: BLE001 - terminal provider failure
-                                logger.warning(
-                                    "remote source reviewer raised unexpectedly; "
-                                    "parking screening attempt",
-                                    exc_info=True,
-                                )
-                            else:
-                                if remote is not None:
-                                    # Targon/Cloud Run now run L1 then L2/L3 in
-                                    # the same rental. A completed observation
-                                    # is authoritative so GCE does not re-review.
-                                    remote_failed = (
-                                        not remote.ok and remote.risk_level is None
-                                    )
-                                    if not remote_failed or remote_only:
-                                        return remote
-                        if remote_only and remote_source_review is not None:
-                            return SourceReviewObservation(
-                                ok=False,
-                                risk_level=None,
-                                finding_digest=None,
-                                categories=(),
-                                error_code="targon-source-review-unavailable",
-                                failure_disposition="retryable_infra",
-                            )
+                    async def review_locally() -> SourceReviewObservation:
                         return await self._source_reviewer.review(
                             tmp_path,
                             artifact_sha256=sha256.lower(),
@@ -1430,9 +1443,10 @@ class BuildGate:
                             progress=report_review_progress,
                             deadline=deadline,
                             policy_version=policy_version,
+                            scored_runtime_evidence=scored_runtime_evidence,
                         )
 
-                    review_factory = review_with_selected_provider
+                    review_factory = review_locally
                 else:
 
                     async def cleared_preflight() -> SourceReviewObservation:
@@ -1527,51 +1541,7 @@ class BuildGate:
             built = False
             build_detail = ""
             built_image_id: str | None = None
-            targon_runtime_ok = False
-            local_build_selected = False
-            if remote_build is not None:
-                try:
-                    remote_archive = await remote_build()
-                except LocalScreeningProviderSelected:
-                    local_build_selected = True
-                except RemoteSubmissionBuildRejected:
-                    return core_decision(
-                        ScreeningOutcome.DETERMINISTIC_REJECT,
-                        code="docker-build",
-                        summary="artifact Docker image did not build",
-                        detail="build failed: DITTO_SUBMISSION_BUILD_FAILED=KANIKO",
-                    )
-                except Exception:  # noqa: BLE001 - terminal provider failure
-                    logger.warning(
-                        "remote builder raised unexpectedly; parking screening attempt",
-                        exc_info=True,
-                    )
-            targon_runtime_ok = (
-                remote_archive is not None
-                and remote_archive.runtime_status == "succeeded"
-            )
-            if targon_runtime_ok:
-                # Targon already booted this exact archive as a Rental and
-                # probed /health. Do not import or rebuild it on GCE.
-                assert remote_archive is not None
-                built = True
-                built_image_id = f"sha256:{remote_archive.sha256}"
-                build_detail = "targon-runtime-health"
-            elif (
-                remote_build is not None
-                and self._config.remote_build_mode != "off"
-                and not local_build_selected
-            ):
-                return core_decision(
-                    ScreeningOutcome.RETRYABLE_INFRA,
-                    code="targon-runtime-unavailable",
-                    summary="Targon runtime smoke did not admit this archive",
-                    detail=(
-                        "screener error: remote-only screening requires a "
-                        "succeeded Targon runtime health result"
-                    ),
-                )
-            elif remote_archive is not None:
+            if preverified_image is not None:
                 executor_error = await self._verify_executor()
                 if executor_error is not None:
                     return core_decision(
@@ -1581,22 +1551,26 @@ class BuildGate:
                         detail=f"screener error: {executor_error}",
                     )
                 used_local_docker = True
-                try:
-                    built, build_detail, built_image_id = await self._load_remote_image(
-                        remote_archive.path,
-                        build_tag,
-                        timeout=min(build_timeout, 120.0),
+                image_path, expected_image_id = preverified_image
+                if not self._replay_image_config_matches(image_path, expected_image_id):
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="replay-image-identity-mismatch",
+                        summary="verified replay image identity did not match",
+                        detail=(
+                            "screener error: image tar config differs from the "
+                            "pinned image ID"
+                        ),
                     )
-                finally:
-                    with contextlib.suppress(OSError):
-                        os.unlink(remote_archive.path)
-                if not built:
-                    logger.warning(
-                        "verified remote archive could not be imported (%s); "
-                        "using local Docker",
-                        _log_tail(build_detail),
-                    )
-            if not built:
+                built, build_detail, built_image_id = await self._load_remote_image(
+                    image_path, expected_image_id, timeout=min(build_timeout, 120.0)
+                )
+                if built and built_image_id != expected_image_id:
+                    raise RuntimeError("preverified image ID changed during import")
+                if built:
+                    assert record_preverified_image is not None
+                    await record_preverified_image()
+            if not built and preverified_image is None:
                 executor_error = await self._verify_executor()
                 if executor_error is not None:
                     return core_decision(
@@ -1617,6 +1591,13 @@ class BuildGate:
                 (asyncio.get_running_loop().time() - started) * 1000
             )
             if not built:
+                if preverified_image is not None:
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="replay-image-load-failed",
+                        summary="verified replay image could not be loaded",
+                        detail=f"screener error: {build_detail}",
+                    )
                 retryable = _docker_infrastructure_failure(build_detail)
                 return core_decision(
                     ScreeningOutcome.RETRYABLE_INFRA
@@ -1647,24 +1628,14 @@ class BuildGate:
                 return exhausted
             started = asyncio.get_running_loop().time()
             audit_runtime: _AuditRuntime | None
-            if targon_runtime_ok:
-                report("health_check")
-                serve_result = _StageResult(True, "")
-                audit_runtime = _AuditRuntime(
-                    harness_base="",
-                    gateway_response_token="",
-                    oracle_answer="",
-                    gateway_state_file="",
-                )
-            else:
-                serve_result, audit_runtime = await self._run_and_probe(
-                    built_image_id,
-                    container,
-                    gateway_container=gateway_container,
-                    network=network,
-                    gateway_state_dir=gateway_state_dir,
-                    progress=report,
-                )
+            serve_result, audit_runtime = await self._run_and_probe(
+                built_image_id,
+                container,
+                gateway_container=gateway_container,
+                network=network,
+                gateway_state_dir=gateway_state_dir,
+                progress=report,
+            )
             health_elapsed_ms = round(
                 (asyncio.get_running_loop().time() - started) * 1000
             )
@@ -1754,7 +1725,6 @@ class BuildGate:
                 context,
                 build_only=build_only,
                 deferred_source_review=deferred_source_review,
-                skip_challenges=targon_runtime_ok,
             )
             if (
                 policy_version < STRICT_TWO_OUTCOME_POLICY_VERSION
@@ -1837,36 +1807,47 @@ class BuildGate:
                 decision, active_audit_runtime.seed_probe
             )
             self._journal.record(context=context, decision=decision)
+            held_source_review = (
+                policy_version == 13
+                and decision.outcome == ScreeningOutcome.QUARANTINE
+                and decision.finding is None
+                and any(
+                    item.code == "adjudicated-source-review-escalate"
+                    for item in decision.evidence
+                )
+            )
+            image_publisher = (
+                publish_held_image if held_source_review else publish_image
+            )
             if (
                 decision.outcome
-                in {
-                    ScreeningOutcome.PASS,
-                    ScreeningOutcome.PASS_INCONCLUSIVE,
-                }
-                and publish_image is not None
-            ):
+                in {ScreeningOutcome.PASS, ScreeningOutcome.PASS_INCONCLUSIVE}
+                or held_source_review
+            ) and image_publisher is not None:
                 report("submitting")
+                # A held image is supplemental evidence. Keep time to submit
+                # the authoritative quarantine even if export is slow.
+                image_deadline = (
+                    deadline - 30.0
+                    if held_source_review and deadline is not None
+                    else deadline
+                )
                 if (
                     exhausted := self._lease_exhausted(
-                        deadline, "image export", policy_version=policy_version
+                        image_deadline, "image export", policy_version=policy_version
                     )
                 ) is not None:
-                    return exhausted
+                    return decision if held_source_review else exhausted
                 try:
-                    if targon_runtime_ok:
-                        assert remote_archive is not None
-                        image = await self._export_remote_archive(
-                            remote_archive,
-                            image_ref=image_ref,
-                            deadline=deadline,
-                        )
-                    else:
-                        image = await self._export_image(
-                            built_image_id,
-                            image_ref=image_ref,
-                            deadline=deadline,
-                        )
+                    image = await self._export_image(
+                        built_image_id,
+                        image_ref=image_ref,
+                        deadline=image_deadline,
+                    )
                 except _ScreenedImageTooLargeError as error:
+                    if held_source_review:
+                        logger.warning("held image export exceeded limit: %s", error)
+                        return decision
                     return core_decision(
                         ScreeningOutcome.DETERMINISTIC_REJECT,
                         code="screened-image-too-large",
@@ -1874,6 +1855,8 @@ class BuildGate:
                         detail=str(error),
                     )
                 except _LeaseDeadlineError:
+                    if held_source_review:
+                        return decision
                     return self._lease_exhausted(
                         deadline, "image export", policy_version=policy_version
                     ) or core_decision(
@@ -1885,6 +1868,9 @@ class BuildGate:
                         ),
                     )
                 except Exception as error:  # noqa: BLE001 - classify export infra
+                    if held_source_review:
+                        logger.warning("held image export failed: %s", error)
+                        return decision
                     return core_decision(
                         ScreeningOutcome.RETRYABLE_INFRA,
                         code="screened-image-export-failed",
@@ -1892,15 +1878,17 @@ class BuildGate:
                         detail=f"screener error: image export failed: {error}",
                     )
                 try:
-                    remaining = self._lease_remaining(deadline)
+                    remaining = self._lease_remaining(image_deadline)
                     if remaining is None:
-                        await publish_image(image)
+                        await image_publisher(image)
                     elif remaining <= 0:
                         raise _LeaseDeadlineError
                     else:
                         async with asyncio.timeout(remaining):
-                            await publish_image(image)
+                            await image_publisher(image)
                 except (TimeoutError, _LeaseDeadlineError):
+                    if held_source_review:
+                        return decision
                     return core_decision(
                         ScreeningOutcome.RETRYABLE_INFRA,
                         code="lease-budget-exhausted",
@@ -1910,6 +1898,9 @@ class BuildGate:
                         ),
                     )
                 except Exception as error:  # noqa: BLE001 - publish is parked infra
+                    if held_source_review:
+                        logger.warning("held image upload failed: %s", error)
+                        return decision
                     return core_decision(
                         ScreeningOutcome.RETRYABLE_INFRA,
                         code="image-upload-failed",
@@ -1927,13 +1918,16 @@ class BuildGate:
             # 15s, including all receipt writes; an observation is expendable.
             if (
                 policy_version == 13
-                and not targon_runtime_ok
                 and self._config.v13_runtime_receipts_mode == "shadow"
                 and record_runtime_verification is not None
             ):
                 remaining = self._lease_remaining(deadline)
+                # An independent replay lease has room for the complete
+                # public probe set; ordinary screening keeps its 15s
+                # expendable shadow budget.
+                probe_cap = 180.0 if replay_runtime_probes else 15.0
                 shadow_budget = (
-                    15.0 if remaining is None else min(15.0, remaining - 30.0)
+                    probe_cap if remaining is None else min(probe_cap, remaining - 30.0)
                 )
                 if shadow_budget > 0:
                     try:
@@ -1947,7 +1941,7 @@ class BuildGate:
                                 bench_version=bench_version,
                                 deadline=deadline,
                                 record=record_runtime_verification,
-                                include_runs=not build_only,
+                                include_runs=not build_only or replay_runtime_probes,
                             )
                     except TimeoutError:
                         logger.info("v13 shadow runtime observation budget expired")
@@ -1981,12 +1975,6 @@ class BuildGate:
                     network=network,
                 )
             shutil.rmtree(gateway_state_dir, ignore_errors=True)
-            if remote_archive is not None:
-                with contextlib.suppress(OSError):
-                    os.unlink(remote_archive.path)
-                if remote_build_consumed is not None:
-                    with contextlib.suppress(Exception):
-                        await remote_build_consumed(remote_archive.build_id)
             if tmp_path is not None:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp_path)
@@ -2299,51 +2287,6 @@ class BuildGate:
             path=destination_path,
             image_id=f"sha256:{config_hex}",
         )
-
-    async def _export_remote_archive(
-        self,
-        archive: RemoteImageArchive,
-        *,
-        image_ref: str,
-        deadline: Deadline,
-    ) -> BuiltImageArtifact:
-        """Publish the Platform-verified Kaniko tar without a local docker save."""
-        if archive.size_bytes > _MAX_SCREENED_IMAGE_BYTES:
-            raise _ScreenedImageTooLargeError(
-                f"screened image exceeds {_MAX_SCREENED_IMAGE_BYTES} byte cap"
-            )
-        fd, created_path = tempfile.mkstemp(
-            prefix="ditto-portable-image-", suffix=".tar"
-        )
-        os.close(fd)
-        portable_path: str | None = created_path
-        try:
-            portable = await asyncio.to_thread(
-                self._portable_image_archive,
-                archive.path,
-                created_path,
-                deadline=deadline,
-            )
-            portable_path = None
-            size_bytes = os.path.getsize(portable.path)
-            if size_bytes > _MAX_SCREENED_IMAGE_BYTES:
-                raise _ScreenedImageTooLargeError(
-                    "screened image archive exceeds "
-                    f"{_MAX_SCREENED_IMAGE_BYTES} byte cap"
-                )
-            sha256 = await self._hash_image_archive(portable.path, deadline=deadline)
-            return BuiltImageArtifact(
-                path=portable.path,
-                sha256=sha256,
-                size_bytes=size_bytes,
-                image_id=portable.image_id,
-                image_ref=image_ref,
-            )
-        except BaseException:
-            if portable_path is not None:
-                with contextlib.suppress(OSError):
-                    os.unlink(portable_path)
-            raise
 
     async def _export_image(
         self,
@@ -2841,6 +2784,41 @@ class BuildGate:
         if volumes.strip():
             return False, "docker image inspect returned invalid output", None
         return True, "", image_id
+
+    @staticmethod
+    def _replay_image_config_matches(path: str, expected_image_id: str) -> bool:
+        """Bind the downloaded portable tar to its Platform-pinned config ID."""
+        try:
+            with tarfile.open(path, mode="r:") as archive:
+                manifest = archive.getmember("manifest.json")
+                if not manifest.isfile() or not 0 < manifest.size <= 1 << 20:
+                    return False
+                manifest_file = archive.extractfile(manifest)
+                if manifest_file is None:
+                    return False
+                entries = json.load(manifest_file)
+                if not isinstance(entries, list) or len(entries) != 1:
+                    return False
+                config_name = entries[0].get("Config")
+                if not isinstance(config_name, str) or not re.fullmatch(
+                    r"[0-9a-f]{64}\.json", config_name
+                ):
+                    return False
+                config = archive.getmember(config_name)
+                if not config.isfile() or not 0 < config.size <= 4 << 20:
+                    return False
+                config_file = archive.extractfile(config)
+                if config_file is None:
+                    return False
+                config_bytes = config_file.read(config.size + 1)
+                digest = hashlib.sha256(config_bytes).hexdigest()
+                return (
+                    len(config_bytes) == config.size
+                    and config_name == f"{digest}.json"
+                    and expected_image_id == f"sha256:{digest}"
+                )
+        except (KeyError, OSError, tarfile.TarError, ValueError, TypeError):
+            return False
 
     async def _run_and_probe(
         self,

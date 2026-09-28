@@ -100,8 +100,8 @@ jobs:
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
-    # Push and manual-on-main sweeps write migration-order/merge-result on every
-    # open PR, so they share one lane. Queue instead of cancelling: a sweep is
+    # Push and manual-on-main sweeps may update migration-order/merge-result on
+    # open PRs, so they share one lane. Queue instead of cancelling: a sweep is
     # never killed mid-write, and the run that started later (against the newer
     # origin/main) always finishes last, so an older sweep cannot overwrite it.
     # GitHub keeps only the newest pending run, so a burst of pushes collapses.

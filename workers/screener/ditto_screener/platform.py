@@ -11,12 +11,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import fcntl
-import hashlib
 import logging
 import os
-import tempfile
 import time
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -63,12 +60,8 @@ from ditto_screening_protocol import (
     SourceReviewAdjudication,
     SourceReviewFinding,
     SourceReviewNote,
-    SourceReviewObservationPayload,
-    SubmissionImageBuildRequest,
-    SubmissionImageBuildResponse,
-    SubmissionSourceReviewRequest,
-    SubmissionSourceReviewResponse,
 )
+from ditto_screening_protocol.v13_private_receipt import V13ReplayPrivateReceipt
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -78,49 +71,11 @@ logger = logging.getLogger(__name__)
 _PREFIX = "/api/v1/screener"
 _IMAGE_REQUEST_TIMEOUT = httpx.Timeout(300.0, connect=30.0, pool=30.0)
 _IMAGE_INIT_RETRY_DELAYS = (0.5, 1.0)
-_REMOTE_BUILD_POLL_SECONDS = 5.0
-_REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS = 120.0
-
-
-def _remote_source_review_poll_deadline(*, now: float, timeout: float) -> float:
-    """Keep polling long enough for the remote court to commit its verdict.
-
-    The remote review receives ``timeout`` as its evidence-and-adjudication
-    deadline. At that boundary it still needs a short tail to turn an exhausted
-    model call into the mandatory terminal decision and POST the persisted
-    notes. Ending the client poll at the same instant races that commit and the
-    cleanup DELETE cancels an otherwise healthy job.
-    """
-    return now + max(1.0, timeout) + _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS
-
-
 _TRANSIENT_PLATFORM_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
 
 
 def _is_transient_platform_status(status_code: int) -> bool:
     return status_code in {408, 425, 429} or status_code >= 500
-
-
-@dataclass(frozen=True)
-class RemoteImageArchive:
-    build_id: UUID
-    path: str
-    sha256: str
-    size_bytes: int
-    runtime_status: str = "skipped"
-    runtime_image_reference: str | None = None
-
-
-class LocalScreeningProviderSelected(RuntimeError):
-    """Backroom selected the GCP/local lane as primary for this operation."""
-
-
-class RemoteSubmissionBuildRejected(RuntimeError):
-    """The remote builder reached a deterministic miner Docker build failure."""
-
-    def __init__(self, error_code: str) -> None:
-        super().__init__(error_code)
-        self.error_code = error_code
 
 
 class PlatformClient:
@@ -174,6 +129,70 @@ class PlatformClient:
                 f"conversation control returned HTTP {response.status_code}"
             )
         return response.json()
+
+    async def submit_replay_private_receipt(
+        self, receipt: V13ReplayPrivateReceipt
+    ) -> dict[str, Any]:
+        """One authenticated report-only dispatch; never retry uncertain writes."""
+        response = await self._client.post(
+            self._base
+            + _PREFIX
+            + f"/verification-replays/{receipt.binding.replay_id}/private-receipt",
+            json=receipt.model_dump(mode="json"),
+            headers=await self._auth_headers(),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise PlatformError(
+                f"replay private receipt returned HTTP {response.status_code}"
+            )
+        body = response.json()
+        if (
+            type(body) is not dict
+            or body.get("policy_verification_complete") is not False
+            or body.get("status") != "recorded_unverified"
+        ):
+            raise PlatformError("replay private receipt response invalid")
+        return body
+
+    async def replay_private_inputs(self, replay_id: UUID) -> dict[str, Any]:
+        """Fetch current short-lived image URLs and immutable role bindings."""
+        response = await self._client.get(
+            self._base + _PREFIX + f"/verification-replays/{replay_id}/private-inputs",
+            headers=await self._auth_headers(),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise PlatformError(
+                f"replay private inputs returned HTTP {response.status_code}"
+            )
+        body = response.json()
+        if (
+            type(body) is not dict
+            or body.get("replay_id") != str(replay_id)
+            or body.get("policy_verification_complete") is not False
+        ):
+            raise PlatformError("replay private inputs response invalid")
+        return body
+
+    async def renew_verification_replay(self, replay_id: UUID) -> dict[str, Any]:
+        response = await self._client.post(
+            self._base + _PREFIX + f"/verification-replays/{replay_id}/renew",
+            headers=await self._auth_headers(),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise PlatformError(
+                f"replay lease renewal returned HTTP {response.status_code}"
+            )
+        body = response.json()
+        if (
+            type(body) is not dict
+            or body.get("replay_id") != str(replay_id)
+            or body.get("status") != "running"
+        ):
+            raise PlatformError("replay lease renewal response invalid")
+        return body
 
     async def _refresh_auth_headers(self, path: Path) -> dict[str, str]:
         """Serialize credential rotation across every worker on one node."""
@@ -435,7 +454,9 @@ class PlatformClient:
             raise PlatformError(
                 f"screening claim rejected ({resp.status_code}): {resp.text[:200]}"
             )
-        return ScreenerQueueResponse.model_validate(resp.json())
+        # The nested signed V13 runtime lease keeps UUID fields strict. Parse
+        # the HTTP JSON bytes as JSON, where UUID strings are the wire form.
+        return ScreenerQueueResponse.model_validate_json(resp.content)
 
     async def get_artifact(
         self, agent_id: UUID, *, attempt_id: UUID | None = None
@@ -458,6 +479,82 @@ class PlatformClient:
                 f"artifact rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return ArtifactResponse.model_validate(resp.json())
+
+    async def claim_l2_report_canary(
+        self,
+        *,
+        instance_id: str,
+        settings_revision: int,
+        settings_checksum: str,
+    ) -> dict[str, Any] | None:
+        """Claim an isolated, non-authoritative L2 audit only when idle."""
+        url = f"{self._base}{_PREFIX}/l2-report-canaries/claim"
+        try:
+            resp = await self._client.post(
+                url,
+                json={
+                    "instance_id": instance_id,
+                    "settings_revision": settings_revision,
+                    "settings_checksum": settings_checksum,
+                },
+                headers=await self._auth_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"L2 canary claim failed: {error}") from error
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"L2 canary claim rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        value = resp.json()
+        if value is not None and not isinstance(value, dict):
+            raise PlatformError("L2 canary claim response is invalid")
+        return value
+
+    async def complete_l2_report_canary(
+        self,
+        canary_id: UUID,
+        *,
+        lease_token: str,
+        lease_expires_at: datetime,
+        status: str,
+        report: dict[str, Any],
+        error_code: str | None,
+    ) -> None:
+        """Commit one idempotent report within its lease; never post a verdict."""
+        url = f"{self._base}{_PREFIX}/l2-report-canaries/{canary_id}/complete"
+        body = {
+            "lease_token": lease_token,
+            "status": status,
+            "report": report,
+            "error_code": error_code,
+        }
+        last_error = "L2 canary completion did not run"
+        for retry_index in range(len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1):
+            try:
+                resp = await self._client.post(
+                    url, json=body, headers=await self._auth_headers()
+                )
+            except httpx.HTTPError as error:
+                last_error = f"L2 canary completion failed: {error}"
+                transient = True
+            else:
+                if resp.status_code == 200:
+                    return
+                last_error = (
+                    f"L2 canary completion rejected ({resp.status_code}): "
+                    f"{resp.text[:200]}"
+                )
+                transient = _is_transient_platform_status(resp.status_code)
+            if not transient or retry_index >= len(_TRANSIENT_PLATFORM_RETRY_DELAYS):
+                raise PlatformError(last_error)
+            delay = _TRANSIENT_PLATFORM_RETRY_DELAYS[retry_index]
+            if datetime.now(UTC) + timedelta(seconds=delay + 1) >= lease_expires_at:
+                raise PlatformError(f"{last_error}; no lease time remains for retry")
+            logger.warning(
+                "%s; retrying report-only completion in %.0fs", last_error, delay
+            )
+            await asyncio.sleep(delay)
+        raise PlatformError(last_error)  # pragma: no cover
 
     async def record_verification_receipt(
         self,
@@ -495,263 +592,6 @@ class PlatformClient:
             raise PlatformError(
                 f"verification receipt rejected ({response.status_code})"
             )
-
-    async def build_submission_image(
-        self,
-        agent_id: UUID,
-        *,
-        attempt_id: UUID,
-        timeout: float,
-    ) -> RemoteImageArchive | None:
-        """Return one verified Targon archive or a terminal remote failure."""
-        base_url = f"{self._base}{_PREFIX}/agent/{agent_id}/submission-image-builds"
-        try:
-            response = await self._client.post(
-                base_url,
-                json=SubmissionImageBuildRequest(attempt_id=attempt_id).model_dump(
-                    mode="json"
-                ),
-                headers=await self._auth_headers(),
-            )
-            if response.status_code != 200:
-                logger.warning(
-                    "remote build queue unavailable status=%d",
-                    response.status_code,
-                )
-                return None
-            build = SubmissionImageBuildResponse.model_validate(response.json())
-        except (httpx.HTTPError, ValueError) as error:
-            logger.warning("remote build queue unavailable: %s", error)
-            return None
-        deadline = asyncio.get_running_loop().time() + max(1.0, timeout)
-        try:
-            while asyncio.get_running_loop().time() < deadline:
-                if build.status == "succeeded":
-                    archive = await self._download_remote_image(build)
-                    if archive is not None:
-                        return archive
-                    break
-                if build.status in {"fallback_required", "canceled", "consumed"}:
-                    if (
-                        build.status == "fallback_required"
-                        and build.error_code
-                        == "TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY"
-                    ):
-                        raise LocalScreeningProviderSelected("GCP build lane selected")
-                    if build.status == "fallback_required" and (
-                        build.error_code or ""
-                    ).endswith("_SUBMISSION_KANIKO_FAILED"):
-                        raise RemoteSubmissionBuildRejected(build.error_code)
-                    logger.warning(
-                        "remote build unavailable code=%s",
-                        build.error_code or "TARGON_SUBMISSION_BUILD_UNAVAILABLE",
-                    )
-                    return None
-                await asyncio.sleep(
-                    min(
-                        _REMOTE_BUILD_POLL_SECONDS,
-                        max(0.0, deadline - asyncio.get_running_loop().time()),
-                    )
-                )
-                response = await self._client.get(
-                    f"{base_url}/{build.build_id}",
-                    params={"attempt_id": str(attempt_id)},
-                    headers=await self._auth_headers(),
-                )
-                if response.status_code != 200:
-                    raise PlatformError(
-                        f"remote build poll rejected ({response.status_code})"
-                    )
-                build = SubmissionImageBuildResponse.model_validate(response.json())
-        except (httpx.HTTPError, ValueError, PlatformError) as error:
-            logger.warning("remote build failed: %s", error)
-        await self.discard_submission_image_build(
-            agent_id, attempt_id=attempt_id, build_id=build.build_id
-        )
-        return None
-
-    async def _download_remote_image(
-        self, build: SubmissionImageBuildResponse
-    ) -> RemoteImageArchive | None:
-        if (
-            build.download_url is None
-            or build.output_sha256 is None
-            or build.output_size_bytes is None
-        ):
-            return None
-        fd, path = tempfile.mkstemp(prefix="ditto-targon-image-", suffix=".tar")
-        os.fchmod(fd, 0o600)
-        digest = hashlib.sha256()
-        total = 0
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                async with self._client.stream(
-                    "GET", build.download_url, timeout=_IMAGE_REQUEST_TIMEOUT
-                ) as response:
-                    if response.status_code != 200:
-                        raise PlatformError(
-                            f"remote image download rejected ({response.status_code})"
-                        )
-                    async for chunk in response.aiter_bytes(8 * 1024**2):
-                        total += len(chunk)
-                        if total > build.output_size_bytes:
-                            raise PlatformError("remote image exceeded declared size")
-                        digest.update(chunk)
-                        await asyncio.to_thread(handle.write, chunk)
-            if total != build.output_size_bytes:
-                raise PlatformError("remote image ended before declared size")
-            actual = digest.hexdigest()
-            if actual != build.output_sha256:
-                raise PlatformError("remote image digest did not match Platform")
-            return RemoteImageArchive(
-                build_id=build.build_id,
-                path=path,
-                sha256=actual,
-                size_bytes=total,
-                runtime_status=build.runtime_status,
-                runtime_image_reference=build.runtime_image_reference,
-            )
-        except (httpx.HTTPError, OSError, PlatformError) as error:
-            with contextlib.suppress(OSError):
-                os.unlink(path)
-            logger.warning(
-                "remote image download failed; using local builder: %s", error
-            )
-            return None
-
-    async def discard_submission_image_build(
-        self,
-        agent_id: UUID,
-        *,
-        attempt_id: UUID,
-        build_id: UUID,
-    ) -> None:
-        """Revoke an active job or delete a successfully imported temp object."""
-        try:
-            response = await self._client.delete(
-                f"{self._base}{_PREFIX}/agent/{agent_id}/"
-                f"submission-image-builds/{build_id}",
-                params={"attempt_id": str(attempt_id)},
-                headers=await self._auth_headers(),
-            )
-            if response.status_code not in {204, 404, 409}:
-                logger.warning(
-                    "remote build cleanup rejected status=%d", response.status_code
-                )
-        except httpx.HTTPError as error:
-            logger.warning("remote build cleanup failed: %s", error)
-
-    async def review_submission_source(
-        self,
-        agent_id: UUID,
-        *,
-        attempt_id: UUID,
-        timeout: float,
-    ) -> SourceReviewObservationPayload | None:
-        """Return one bounded remote review or a terminal remote failure."""
-        base_url = f"{self._base}{_PREFIX}/agent/{agent_id}/submission-source-reviews"
-        review: SubmissionSourceReviewResponse | None = None
-        try:
-            response = await self._client.post(
-                base_url,
-                json=SubmissionSourceReviewRequest(attempt_id=attempt_id).model_dump(
-                    mode="json"
-                ),
-                headers=await self._auth_headers(),
-            )
-            if response.status_code != 200:
-                logger.warning(
-                    "remote source-review queue unavailable status=%d; "
-                    "parking remote-selected screening attempt",
-                    response.status_code,
-                )
-                return None
-            review = SubmissionSourceReviewResponse.model_validate(response.json())
-            deadline = _remote_source_review_poll_deadline(
-                now=asyncio.get_running_loop().time(), timeout=timeout
-            )
-            while asyncio.get_running_loop().time() < deadline:
-                if review.status == "succeeded":
-                    observation = review.observation
-                    if observation is None:
-                        return None
-                    if (
-                        observation.ok
-                        and observation.risk_level == "low"
-                        and observation.clearance_certified
-                    ):
-                        return observation
-                    # The completed remote observation is authoritative; no
-                    # second provider is dispatched.
-                    return observation
-                if review.status in {"fallback_required", "canceled", "consumed"}:
-                    if (
-                        review.status == "fallback_required"
-                        and review.error_code
-                        == "TARGON_SOURCE_REVIEW_DISABLED_BY_POLICY"
-                    ):
-                        raise LocalScreeningProviderSelected(
-                            "GCP source-review lane selected"
-                        )
-                    logger.warning(
-                        "remote source review unavailable code=%s; "
-                        "parking remote-selected screening attempt",
-                        review.error_code or "TARGON_SOURCE_REVIEW_UNAVAILABLE",
-                    )
-                    return None
-                await asyncio.sleep(
-                    min(
-                        _REMOTE_BUILD_POLL_SECONDS,
-                        max(0.0, deadline - asyncio.get_running_loop().time()),
-                    )
-                )
-                try:
-                    response = await self._client.get(
-                        f"{base_url}/{review.review_id}",
-                        params={"attempt_id": str(attempt_id)},
-                        headers=await self._auth_headers(),
-                    )
-                except httpx.HTTPError as error:
-                    logger.warning(
-                        "remote source-review poll failed transiently; "
-                        "retrying within review deadline: %s",
-                        error,
-                    )
-                    continue
-                if response.status_code != 200:
-                    if _is_transient_platform_status(response.status_code):
-                        logger.warning(
-                            "remote source-review poll rejected transiently "
-                            "status=%d; retrying within review deadline",
-                            response.status_code,
-                        )
-                        continue
-                    raise PlatformError(
-                        f"remote source-review poll rejected ({response.status_code})"
-                    )
-                review = SubmissionSourceReviewResponse.model_validate(response.json())
-        except (httpx.HTTPError, ValueError, PlatformError) as error:
-            logger.warning(
-                "remote source review failed; parking remote-selected screening "
-                "attempt: %s",
-                error,
-            )
-        finally:
-            if review is not None:
-                try:
-                    response = await self._client.delete(
-                        f"{base_url}/{review.review_id}",
-                        params={"attempt_id": str(attempt_id)},
-                        headers=await self._auth_headers(),
-                    )
-                    if response.status_code not in {204, 404, 409}:
-                        logger.warning(
-                            "remote source-review cleanup rejected status=%d",
-                            response.status_code,
-                        )
-                except httpx.HTTPError as error:
-                    logger.warning("remote source-review cleanup failed: %s", error)
-        return None
 
     async def submit_result(
         self,

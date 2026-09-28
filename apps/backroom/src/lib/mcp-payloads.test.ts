@@ -154,6 +154,21 @@ describe('screening list summaries', () => {
       items: Array<{ attempts: Array<unknown> }>
     }
     expect(full.items[0].attempts).toHaveLength(2)
+
+    const identity = compactScreeningSubmissions(payload, 'identity') as {
+      detail: string
+      items: Array<Record<string, unknown>>
+    }
+    expect(identity.detail).toBe('identity')
+    expect(identity.items[0]).toEqual({
+      agent_id: agentId(1),
+      agent_name: 'screened-agent',
+      agent_version: 2,
+      agent_status: 'screening_failed',
+      submitted_at: '2026-07-25T12:00:00Z',
+      artifact_sha256: 'ab'.repeat(32),
+    })
+    expect(bytes(identity)).toBeLessThan(bytes(summary))
   })
 
   it('replaces quarantine evidence arrays with counts and codes in summary mode', () => {
@@ -171,7 +186,7 @@ describe('screening list summaries', () => {
           policy_version: 9,
           manifest_digest: 'ef'.repeat(32),
           finding_digest: '12'.repeat(32),
-          reason_code: 'unsafe_source',
+          screening_reason_code: 'unsafe_source',
           evidence: Array.from({ length: 8 }, (_, index) => ({
             module_id: `module-${index}`,
             code: `CODE_${index}`,

@@ -102,6 +102,88 @@ export const QUEUE_GATES: Record<string, QueueGate> = {
   },
 };
 
+export interface ParkedReading {
+  label: string;
+  title: string;
+  /** Chip styling class suffix: a hold is a warning, a terminal row is final. */
+  tone: "hold" | "terminal";
+}
+
+/** Plain language for each allowlisted agent-attributable code.
+ *
+ * Only codes the API is willing to publish appear here. An unknown code keeps
+ * the terminal sentence without inventing a cause for it. */
+const TERMINAL_CAUSES: Record<string, string> = {
+  inference_allowance_exhausted:
+    "The agent used its whole inference allowance before finishing its run.",
+  inference_request_rejected:
+    "The platform rejected the agent's inference requests, so no run could complete.",
+  model_inference_required:
+    "The agent answered without the model inference the benchmark requires.",
+};
+
+/** Codes that name a failure Ditto owns, with the sentence that explains it.
+ *
+ * Only a hold carrying one of these has been attributed to the fleet. Every
+ * other hold is merely unattributed, and the copy for it must not assign
+ * fault in either direction. */
+const HOLD_CAUSES: Record<string, string> = {
+  provider_outage_parked:
+    "An inference provider outage ended the remaining attempts, not anything in this submission.",
+  inference_lane_saturated: "The inference lane was saturated, not anything in this submission.",
+  provider_recovery_exhausted:
+    "Provider recovery was exhausted before the run could finish, not anything in this submission.",
+  grant_decline_evidence_mismatch:
+    "An inference grant check failed inside Ditto, not anything in this submission.",
+  budget_evidence_absent:
+    "An inference budget record was missing inside Ditto, not anything in this submission.",
+};
+
+/** How to present a parked submission, or null while it is still advancing.
+ *
+ * The verdict comes from the API's retry_disposition. The dashboard never
+ * re-derives it, so a row the platform declined to attribute is never
+ * presented as the miner's fault here either.
+ *
+ * A hold only names Ditto as the cause when the API published an agreed
+ * no-fault code for it. Without one the row is unattributed, and the copy says
+ * so rather than guessing: an operator has to look before anyone knows whose
+ * failure it was. */
+export function parkedReading(entry: PipelineEntryExt): ParkedReading | null {
+  if (entry.retry_disposition === "terminal_artifact_failure") {
+    const code = String(entry.terminal_failure_code || "");
+    const cause = TERMINAL_CAUSES[code];
+    return {
+      label: "Cannot finish scoring" + (code ? " · " + code : ""),
+      title:
+        "This artifact cannot finish scoring. " +
+        (cause ? cause + " " : "") +
+        "Fix the artifact and submit a new version; this submission will not " +
+        "resume on its own.",
+      tone: "terminal",
+    };
+  }
+  if (entry.retry_disposition === "operator_hold" || entry.retry_state === "exhausted") {
+    const cause = HOLD_CAUSES[String(entry.hold_failure_code || "")];
+    if (cause) {
+      return {
+        label: "On hold · Ditto-side failure",
+        title: cause + " It is waiting for an operator to authorize the next attempt.",
+        tone: "hold",
+      };
+    }
+    return {
+      label: "On hold · needs operator review",
+      title:
+        "The remaining validator attempts ended without a cause this surface " +
+        "can name, so the platform has not attributed this to either side. An " +
+        "operator has to review it before it can continue.",
+      tone: "hold",
+    };
+  }
+  return null;
+}
+
 export function queueGateLabel(entry: PipelineEntryExt): QueueGate | null {
   const gate = entry.validator_queue_gate;
   return (gate != null && QUEUE_GATES[gate]) || null;

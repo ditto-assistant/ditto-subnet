@@ -984,15 +984,34 @@ function RolloutStrip(props: { store: LeaderboardStore }): JSX.Element {
   const strip = createMemo(() => rolloutStripState(store.rollout()));
   const quorum = createMemo(() => rolloutQuorum(store.rollout()));
 
+  // The two halves are named with #2098's board fields: `scoring_bench_version`
+  // (what is being collected) and `emission_bench_version` (the ledger pin).
+  // Only the authoritative board speaks for the rollout, because a historical
+  // view pins an old scoring version that nothing is collecting. The rollout
+  // payload's own versions stand in when the board has not loaded or predates
+  // those fields.
+  const headVersions = (): { scoring: number; emission: number } | null => {
+    const s = strip();
+    if (!s) return null;
+    const board = store.payload();
+    const authoritative = board?.selection_mode !== "historical";
+    return {
+      scoring: (authoritative && Number(board?.scoring_bench_version)) || s.desired,
+      emission: Number(board?.emission_bench_version) || s.active,
+    };
+  };
   const headHint = (): string => {
     const s = strip();
-    if (!s) return "";
+    const v = headVersions();
+    if (!s || !v) return "";
     return s.rolling
-      ? "v" + s.active + " drives validator weights · v" + s.desired + " is rolling out"
+      ? "v" + v.scoring + " scoring in progress · v" + v.emission + " controls emissions"
       : s.collecting
-        ? "v" + s.active + " drives validator weights · inherited cohort scoring continues"
-        : "v" + s.active + " drives validator weights";
+        ? "v" + v.emission + " controls emissions · inherited cohort scoring continues"
+        : "v" + v.emission + " controls emissions";
   };
+  /** Platform's sentence for the gates still holding emissions, or "". */
+  const promotionRequirement = (): string => String(store.rollout()?.promotion_requirement || "");
 
   type Progress = { count: [number, number] | null; text: string; note: string };
   const progress = createMemo<Progress | null>(() => {
@@ -1003,7 +1022,10 @@ function RolloutStrip(props: { store: LeaderboardStore }): JSX.Element {
     if (s.collecting && !state?.priority_complete) {
       return {
         count: [q.priorityReady, q.prioritySize],
-        text: " inherited leaders have complete v" + s.desired + " quorums.",
+        text:
+          " inherited leaders have complete v" +
+          s.desired +
+          " quorums. This priority-cohort quorum is the first gate emissions wait on.",
         note:
           "The first five from the prior benchmark are a fleet-wide barrier. Validators that have already scored every " +
           "eligible leader intentionally idle until the other validators finish them; rank 6 and later cannot skip ahead.",
@@ -1106,6 +1128,13 @@ function RolloutStrip(props: { store: LeaderboardStore }): JSX.Element {
       <div class="rollout-note" id="rollout-note">
         {progress()?.note ?? ""}
       </div>
+      {/* Served, not re-derived: the gates are implemented in Platform, so the
+          public answer to "why have emissions not moved" is Platform's own. */}
+      <Show when={promotionRequirement()}>
+        <div class="rollout-note" id="rollout-promotion">
+          {promotionRequirement()}
+        </div>
+      </Show>
     </div>
   );
 }

@@ -438,6 +438,13 @@ class Agent(Base):
         ),
         Index("agents_miner_hotkey_idx", "miner_hotkey"),
         Index("agents_sha256_idx", "sha256"),
+        # Operator submission search: exact name and literal ``LIKE 'x%'``
+        # prefix. ``text_pattern_ops`` because the collation is not ``C``.
+        Index(
+            "agents_name_pattern_idx",
+            "name",
+            postgresql_ops={"name": "text_pattern_ops"},
+        ),
         Index("agents_created_agent_idx", "created_at", "agent_id"),
         # Exact-repack duplicate lookups for the quarantine review console.
         Index("agents_normalized_source_hash_idx", "normalized_source_hash"),
@@ -948,6 +955,7 @@ class ScreeningVerificationReplay(Base):
     image_verified_storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     worker_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    process_key_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
     lease_deadline: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -982,6 +990,9 @@ class ScreeningVerificationReplay(Base):
             ["image_upload_id"],
             ["screened_image_uploads.image_upload_id"],
             ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["process_key_sha256"], ["screener_replay_process_keys.key_sha256"]
         ),
         CheckConstraint(
             "artifact_sha256 ~ '^[0-9a-f]{64}$'", name="svrp_artifact_sha_check"
@@ -1047,6 +1058,190 @@ class ScreeningVerificationReplayReceipt(Base):
             "length(check_code) BETWEEN 1 AND 64", name="svrr_check_code_check"
         ),
         Index("svrr_replay_code_idx", "replay_id", "check_code", unique=True),
+    )
+
+
+class ScreeningVerificationReplaySignedObservation(Base):
+    """Authenticated replay claim, still unverified and report-only."""
+
+    __tablename__ = "screening_verification_replay_signed_observations"
+
+    observation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    check_code: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    runner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replay_id"],
+            ["screening_verification_replays.replay_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("length(check_code) BETWEEN 1 AND 64", name="svrso_check_code"),
+        CheckConstraint(
+            "status IN ('passed', 'failed', 'inconclusive')", name="svrso_status"
+        ),
+        CheckConstraint("length(evidence_sha256) = 64", name="svrso_evidence_sha"),
+        CheckConstraint("length(runner_hotkey) BETWEEN 1 AND 120", name="svrso_runner"),
+        CheckConstraint("length(signature) = 128", name="svrso_signature"),
+        Index("svrso_replay_check_idx", "replay_id", "check_code", unique=True),
+    )
+
+
+class V13ReplayPrivateGenerationGroup(Base):
+    """Pre-randomness two-role commitment to a replay's verified image."""
+
+    __tablename__ = "v13_replay_private_generation_groups"
+
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    target_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    target_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    target_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    target_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    control_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    control_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    approval_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    target_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replay_id"],
+            ["screening_verification_replays.replay_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["target_agent_id"], ["agents.agent_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["target_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["control_agent_id"], ["agents.agent_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["control_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["approval_id"],
+            ["v13_known_benign_control_approvals.approval_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("replay_id", name="v13rpg_replay_key"),
+        CheckConstraint(
+            "target_agent_id <> control_agent_id", name="v13rpg_distinct_agents"
+        ),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13rpg_{name}_check")
+            for name in (
+                "target_artifact_sha256",
+                "target_image_sha256",
+                "control_artifact_sha256",
+                "control_image_sha256",
+                "approval_receipt_sha256",
+                "profile_sha256",
+                "target_receipt_sha256",
+                "control_receipt_sha256",
+            )
+        ),
+        CheckConstraint("length(actor) BETWEEN 1 AND 120", name="v13rpg_actor"),
+    )
+
+
+class V13ReplayGroupPackageRegistration(Base):
+    """Digest-only sealed package for one replay generation role."""
+
+    __tablename__ = "v13_replay_group_package_registrations"
+
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    role: Mapped[str] = mapped_column(Text, primary_key=True)
+    generation_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    pair_inventory_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    registrar_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["group_id"],
+            ["v13_replay_private_generation_groups.group_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("role IN ('target', 'known_benign')", name="v13rgp_role"),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13rgp_{name}")
+            for name in (
+                "generation_receipt_sha256",
+                "manifest_sha256",
+                "pair_inventory_sha256",
+            )
+        ),
+        CheckConstraint(
+            "length(registrar_actor) BETWEEN 1 AND 120", name="v13rgp_actor"
+        ),
+    )
+
+
+class ScreeningVerificationReplayPrivateReceipt(Base):
+    """Append-only authenticated report; policy verification remains separate."""
+
+    __tablename__ = "screening_verification_replay_private_receipts"
+
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    runner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    report: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replay_id"],
+            ["screening_verification_replays.replay_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["group_id"],
+            ["v13_replay_private_generation_groups.group_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("length(receipt_sha256) = 64", name="svrpr_receipt_sha"),
+        CheckConstraint("length(runner_hotkey) BETWEEN 1 AND 120", name="svrpr_runner"),
+        CheckConstraint("length(signature) = 128", name="svrpr_signature"),
     )
 
 
@@ -1424,7 +1619,9 @@ class ScreeningQuarantine(Base):
         ),
         CheckConstraint(
             "review_audit IS NULL OR reason_code IN "
-            "('source-review-inconclusive', 'agentic-source-review-tripwire')",
+            "('source-review-inconclusive', 'agentic-source-review-tripwire', "
+            "'l2-model-inconclusive', 'l2-model-total-budget', "
+            "'l2-model-tool-budget', 'l2-model-step-budget')",
             name="screening_quarantines_review_audit_reason_check",
         ),
         CheckConstraint(
@@ -1481,6 +1678,62 @@ class ScreeningQuarantineResolution(Base):
             "quarantine_id",
             "created_at",
         ),
+    )
+
+
+class ScreeningReviewEvent(Base):
+    """Immutable snapshot of an accepted automated review or operator ruling."""
+
+    __tablename__ = "screening_review_events"
+
+    event_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    quarantine_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    resolution_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    previous_event_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    event_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewer_model: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    effective_decision: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    prior_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
+    next_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["previous_event_id"],
+            ["screening_review_events.event_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("event_kind IN ('automated', 'manual')", name="sre_kind_check"),
+        CheckConstraint("length(artifact_sha256) = 64", name="sre_sha_check"),
+        CheckConstraint("policy_version > 0", name="sre_policy_check"),
+        CheckConstraint(
+            "effective_decision IN ('reject', 'hold', 'pass', "
+            "'provisional_admission', 'no_change', 'release', 'rescreen')",
+            name="sre_decision_check",
+        ),
+        CheckConstraint("length(trim(actor)) > 0", name="sre_actor_check"),
+        Index(
+            "sre_automated_attempt_key",
+            "attempt_id",
+            unique=True,
+            postgresql_where=text("event_kind = 'automated'"),
+            sqlite_where=text("event_kind = 'automated'"),
+        ),
+        UniqueConstraint("resolution_id", name="sre_resolution_key"),
+        Index("sre_agent_created_idx", "agent_id", "created_at", "event_id"),
+        Index("sre_created_idx", "created_at", "event_id"),
     )
 
 
@@ -1664,6 +1917,8 @@ class EvaluationPayment(Base):
             name="evaluation_payments_extrinsic_index_check",
         ),
         Index("evaluation_payments_miner_hotkey_idx", "miner_hotkey"),
+        # Operator submission search by payment-time owner.
+        Index("evaluation_payments_miner_coldkey_idx", "miner_coldkey"),
         Index(
             "evaluation_payments_available_credit_idx",
             "miner_hotkey",
@@ -5596,6 +5851,61 @@ class ScreenerNode(Base):
     )
 
 
+class ScreenerReplayProcessKey(Base):
+    """Operator-pinned public key for one independent node's replay worker."""
+
+    __tablename__ = "screener_replay_process_keys"
+
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    instance_id: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key_hex: Mapped[str] = mapped_column(Text, nullable=False)
+    key_sha256: Mapped[str] = mapped_column(Text, primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(public_key_hex) = 64", name="srpk_public_key_hex_length_check"
+        ),
+        CheckConstraint("length(key_sha256) = 64", name="srpk_key_sha256_length_check"),
+        CheckConstraint("revision > 0", name="srpk_revision_check"),
+        CheckConstraint("status IN ('active', 'revoked')", name="srpk_status_check"),
+        ForeignKeyConstraint(["node_id"], ["screener_nodes.node_id"]),
+        Index(
+            "srpk_one_active_instance_idx",
+            "node_id",
+            "instance_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+    )
+
+
+class ScreenerReplayProcessNonce(Base):
+    """Durable once-only process proof nonce, scoped to one registered key."""
+
+    __tablename__ = "screener_replay_process_nonces"
+
+    key_sha256: Mapped[str] = mapped_column(Text, primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text, primary_key=True)
+    consumed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(nonce) = 32", name="srpn_nonce_length_check"),
+        ForeignKeyConstraint(
+            ["key_sha256"], ["screener_replay_process_keys.key_sha256"]
+        ),
+        Index("srpn_consumed_at_idx", "consumed_at"),
+    )
+
+
 class ScreenerCapacitySnapshot(Base):
     """Latest fenced capacity-reconciler state for one environment."""
 
@@ -6225,6 +6535,42 @@ class ArtifactReleaseSettingsRevision(Base):
     )
 
 
+class TranscriptMirrorSettingsRevision(Base):
+    """Append-only gate for copying quorum transcripts into the public bucket."""
+
+    __tablename__ = "transcript_mirror_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="transcript_mirror_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="transcript_mirror_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="transcript_mirror_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="transcript_mirror_settings_parent_revision_key",
+        ),
+    )
+
+
 class SubmissionSettingsRevision(Base):
     """Append-only, operator-audited miner submission settings revision."""
 
@@ -6694,6 +7040,154 @@ class ScreenerFanoutShadowReview(Base):
         ),
         Index("screener_fanout_shadow_reviews_created_idx", "created_at", "shadow_id"),
         Index("screener_fanout_shadow_reviews_reserved_idx", "reserved_at"),
+    )
+
+
+class ScreenerL2ReportCanary(Base):
+    """One exact-attempt, non-authoritative L2 replay on an enrolled screener."""
+
+    __tablename__ = "screener_l2_report_canaries"
+
+    canary_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    source_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    review_label: Mapped[str] = mapped_column(Text, nullable=False)
+    run_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="source_only"
+    )
+    # A newly verified current object for an older null-SHA attempt. This does
+    # not claim what the historical attempt executed and never changes it.
+    source_attestation: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
+    claimed_instance_id: Mapped[str | None] = mapped_column(Text)
+    settings_revision: Mapped[int | None] = mapped_column(Integer)
+    settings_checksum: Mapped[str | None] = mapped_column(Text)
+    runtime_evidence_sha256: Mapped[str | None] = mapped_column(Text)
+    lease_token_hash: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    report: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["source_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(["target_node_id"], ["screener_nodes.node_id"]),
+        UniqueConstraint("request_id", name="screener_l2_canary_request_key"),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'", name="screener_l2_canary_sha_check"
+        ),
+        CheckConstraint(
+            "policy_version = 13 AND bench_version = 13",
+            name="screener_l2_canary_v13_check",
+        ),
+        CheckConstraint(
+            "expected_score_count >= 0", name="screener_l2_canary_scores_check"
+        ),
+        CheckConstraint(
+            "review_label IN ('candidate_clear', 'known_reject')",
+            name="screener_l2_canary_label_check",
+        ),
+        CheckConstraint(
+            "run_mode IN ('source_only', 'full_runtime')",
+            name="run_mode_check",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'succeeded', 'incomplete', 'expired')",
+            name="screener_l2_canary_status_check",
+        ),
+        CheckConstraint(
+            "lease_token_hash IS NULL OR lease_token_hash ~ '^[0-9a-f]{64}$'",
+            name="screener_l2_canary_token_check",
+        ),
+        CheckConstraint(
+            "runtime_evidence_sha256 IS NULL OR "
+            "runtime_evidence_sha256 ~ '^[0-9a-f]{64}$'",
+            name="screener_l2_canary_runtime_check",
+        ),
+        Index("screener_l2_canary_queue_idx", "target_node_id", "status", "created_at"),
+        Index(
+            "screener_l2_canary_one_active_source_idx",
+            "source_attempt_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'leased')"),
+        ),
+    )
+
+
+class V13ScorerCohortPin(Base):
+    """Immutable, operator-audited V13 scorer and runtime packet admission."""
+
+    __tablename__ = "v13_scorer_cohort_pins"
+
+    bench_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hotkeys: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    packet: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    slot_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("bench_version = 13", name="v13_scorer_pin_version_check"),
+        CheckConstraint(
+            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            name="v13_scorer_pin_three_hotkeys_check",
+        ),
+        CheckConstraint(
+            "length(slot_settings_checksum) = 64",
+            name="v13_scorer_pin_settings_checksum_check",
+        ),
+    )
+
+
+class V13ScorerCohortRotation(Base):
+    """Append-only successor to the original V13 scorer pin."""
+
+    __tablename__ = "v13_scorer_cohort_rotations"
+
+    rotation_id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkeys: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    packet: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    previous_packet: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    slot_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("bench_version = 13", name="v13_scorer_rotation_version_check"),
+        CheckConstraint(
+            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            name="v13_scorer_rotation_three_hotkeys_check",
+        ),
+        CheckConstraint(
+            "length(slot_settings_checksum) = 64",
+            name="v13_scorer_rotation_settings_checksum_check",
+        ),
     )
 
 
@@ -7439,6 +7933,69 @@ class InferenceRoutingAudit(Base):
     )
 
     __table_args__ = (Index("inference_routing_audit_history_idx", "recorded_at"),)
+
+
+class InferenceAdmissionRejection(Base):
+    """A request refused before any inference_requests row existed.
+
+    The columns are operational telemetry only. Prompt text, bodies, headers,
+    and provider credentials are not stored.
+    """
+
+    __tablename__ = "inference_admission_rejections"
+
+    rejection_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    lane: Mapped[str] = mapped_column(Text, nullable=False)
+    http_status: Mapped[int] = mapped_column(Integer, nullable=False)
+    admission_code: Mapped[str] = mapped_column(Text, nullable=False)
+    grant_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    validator_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correlation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    request_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    byte_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    platform_revision: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "lane IN ('inference', 'embedding')",
+            name="inference_admission_rejections_lane_check",
+        ),
+        CheckConstraint(
+            "http_status IN (400, 403, 409, 413)",
+            name="inference_admission_rejections_status_check",
+        ),
+        CheckConstraint(
+            "admission_code IN ("
+            "'invalid_json', 'invalid_schema', 'request_too_large', "
+            "'stale_session', 'model_not_allowed', 'grant_not_servable')",
+            name="inference_admission_rejections_code_check",
+        ),
+        CheckConstraint(
+            "request_bytes >= 0",
+            name="inference_admission_rejections_bytes_check",
+        ),
+        CheckConstraint(
+            "byte_limit IS NULL OR byte_limit >= 0",
+            name="inference_admission_rejections_limit_check",
+        ),
+        CheckConstraint(
+            "length(platform_revision) BETWEEN 1 AND 64",
+            name="inference_admission_rejections_revision_check",
+        ),
+        CheckConstraint(
+            "validator_hotkey IS NULL OR length(validator_hotkey) BETWEEN 1 AND 120",
+            name="inference_admission_rejections_hotkey_check",
+        ),
+        Index(
+            "inference_admission_rejections_grant_idx",
+            "grant_id",
+            "created_at",
+        ),
+        Index("inference_admission_rejections_created_idx", "created_at"),
+    )
 
 
 class InferenceRequest(Base):
@@ -8199,6 +8756,33 @@ class ContinualRetestSettingsRevision(Base):
             "parent_revision",
             name="continual_retest_settings_scope_parent_key",
         ),
+    )
+
+
+class TreasurySettingsRevision(Base):
+    """Append-only shadow policy; no validator or signer consumes it."""
+
+    __tablename__ = "treasury_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("parent_revision >= 0", name="treasury_settings_parent_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="treasury_settings_checksum_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="treasury_settings_reason_check"
+        ),
+        UniqueConstraint("parent_revision", name="treasury_settings_parent_key"),
     )
 
 
@@ -10560,4 +11144,121 @@ class AdminActivityOutcome(Base):
             "status IN ('succeeded', 'failed', 'recorded')",
             name="admin_activity_outcome_status",
         ),
+    )
+
+
+class TreasuryPublicEvent(Base):
+    """Public, append-only projection of independently verified treasury receipts.
+
+    A payment can have a finalized and a reconciled event. No credentials,
+    GM account identifiers, private billing rows, or free-form payloads belong
+    in this table. Producers must verify the chain receipt before insertion.
+    """
+
+    __tablename__ = "treasury_public_events"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    payment_id: Mapped[str] = mapped_column(Text, nullable=False)
+    event_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    finalized_event_id: Mapped[int | None] = mapped_column(BigInteger)
+    event_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    burn_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    burn_share_micros: Mapped[int] = mapped_column(Integer, nullable=False)
+    denominator: Mapped[str] = mapped_column(Text, nullable=False)
+    maintenance_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    gm_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocation_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocated_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    route: Mapped[str] = mapped_column(Text, nullable=False)
+    deposit_asset: Mapped[str] = mapped_column(Text, nullable=False)
+    deposit_amount_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    credited_usd_nano: Mapped[int | None] = mapped_column(BigInteger)
+    bounty_award_id: Mapped[str | None] = mapped_column(Text)
+    accepted_work_ref: Mapped[str | None] = mapped_column(Text)
+    public_sender: Mapped[str] = mapped_column(Text, nullable=False)
+    public_recipient: Mapped[str] = mapped_column(Text, nullable=False)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor_provenance: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_public_id: Mapped[str] = mapped_column(Text, nullable=False)
+    verification_source: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(["finalized_event_id"], ["treasury_public_events.id"]),
+        UniqueConstraint("payment_id", "state", name="treasury_public_payment_state"),
+        UniqueConstraint(
+            "block_hash",
+            "extrinsic_index",
+            "event_index",
+            "state",
+            name="treasury_public_chain_event_state",
+        ),
+        CheckConstraint(
+            "(event_kind = 'gm_token_deposit' AND state = 'chain_finalized' "
+            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NULL AND accepted_work_ref IS NULL) OR "
+            "(event_kind = 'gm_credit_purchase' AND state = 'reconciled' "
+            "AND finalized_event_id IS NOT NULL AND credited_usd_nano IS NOT NULL "
+            "AND credited_usd_nano > 0 AND bounty_award_id IS NULL "
+            "AND accepted_work_ref IS NULL) OR "
+            "(event_kind = 'maintenance_bounty' AND state = 'chain_finalized' "
+            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NOT NULL AND accepted_work_ref IS NOT NULL "
+            "AND length(bounty_award_id) BETWEEN 8 AND 120 "
+            "AND length(accepted_work_ref) BETWEEN 8 AND 240)",
+            name="treasury_public_kind",
+        ),
+        CheckConstraint(
+            "state IN ('chain_finalized', 'reconciled')", name="treasury_public_state"
+        ),
+        CheckConstraint(
+            "denominator IN ('miner_emission', 'released_miner_emission')",
+            name="treasury_public_denominator",
+        ),
+        CheckConstraint(
+            "maintenance_bps BETWEEN 0 AND 10000 AND "
+            "gm_bps BETWEEN 0 AND 10000 AND "
+            "allocation_bps BETWEEN 0 AND 10000 AND "
+            "allocated_alpha_rao >= 0 AND source_alpha_rao > 0 AND "
+            "burn_revision >= 0 AND burn_share_micros BETWEEN 0 AND 1000000",
+            name="treasury_public_allocation",
+        ),
+        CheckConstraint(
+            "(event_kind = 'maintenance_bounty' AND allocation_bps = maintenance_bps) "
+            "OR (event_kind <> 'maintenance_bounty' AND allocation_bps = gm_bps)",
+            name="treasury_public_purpose_allocation",
+        ),
+        CheckConstraint(
+            "deposit_amount_atomic > 0 AND "
+            "deposit_asset IN ('TAO', 'SN28_ALPHA', 'SN118_ALPHA')",
+            name="treasury_public_amounts",
+        ),
+        CheckConstraint(
+            "route IN ('alpha_to_tao', 'alpha_to_gm_alpha', "
+            "'alpha_transfer', 'alpha_to_tao_bounty')",
+            name="treasury_public_route",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0 AND event_index >= 0", name="treasury_public_indexes"
+        ),
+        CheckConstraint(
+            "actor_provenance IN "
+            "('treasury_signer', 'gm_reconciler', 'bounty_executor')",
+            name="treasury_public_actor_provenance",
+        ),
+        CheckConstraint(
+            "length(actor_public_id) BETWEEN 3 AND 120",
+            name="treasury_public_actor_id",
+        ),
+        CheckConstraint(
+            "verification_source IN "
+            "('finalized_chain_rpc', 'chain_and_provider_reconciliation')",
+            name="treasury_public_verification_source",
+        ),
+        Index("treasury_public_event_at_idx", "event_at", "id"),
     )

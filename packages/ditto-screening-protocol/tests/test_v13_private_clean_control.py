@@ -282,6 +282,35 @@ def test_generation_group_role_digest_fixed_vector() -> None:
     )
 
 
+def test_replay_group_digest_commits_independent_image_and_approval() -> None:
+    group = TrustedGenerationGroup(
+        group_id=UUID(int=1),
+        replay_id=UUID(int=7),
+        target_agent_id=UUID(int=2),
+        target_attempt_id=UUID(int=3),
+        target_artifact_sha256="a" * 64,
+        target_image_sha256="b" * 64,
+        control_agent_id=UUID(int=4),
+        control_attempt_id=UUID(int=5),
+        control_artifact_sha256="c" * 64,
+        control_image_sha256="d" * 64,
+        approval_id=UUID(int=6),
+        approval_receipt_sha256="f" * 64,
+        profile_sha256="e" * 64,
+        started_at=datetime(2026, 9, 23, 12, 0, 45, 123456, tzinfo=UTC),
+        target_receipt_sha256="0" * 64,
+        control_receipt_sha256="0" * 64,
+    )
+    target = compute_v13_generation_role_digest(group, "target")
+    assert target != compute_v13_generation_role_digest(group, "known_benign")
+    assert target != compute_v13_generation_role_digest(
+        group.model_copy(update={"replay_id": UUID(int=8)}), "target"
+    )
+    assert target != compute_v13_generation_role_digest(
+        group.model_copy(update={"approval_receipt_sha256": "9" * 64}), "target"
+    )
+
+
 def test_same_sealed_pairs_yield_digest_only_distinct_image_commitment() -> None:
     fixture = _fixture()
     matched = _prepare(fixture)

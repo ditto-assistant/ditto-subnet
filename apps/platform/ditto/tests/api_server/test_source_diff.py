@@ -1,8 +1,11 @@
 """Unit coverage for the copy-review per-file source diff."""
 
 from ditto.api_server.source_diff import (
+    MAX_OMITTED_PATHS,
+    build_baseline_diff_manifest,
     build_source_diff_manifest,
     unified_diff_for_file,
+    without_omitted,
 )
 
 
@@ -181,3 +184,115 @@ def test_manifest_file_list_is_bounded() -> None:
     assert manifest["file_count"] == 10
     assert len(manifest["files"]) == 3
     assert manifest["truncated"] is True
+
+
+def test_manifest_without_omissions_reports_an_empty_omitted_set() -> None:
+    manifest = build_source_diff_manifest({"a.py": "x\n"}, {"a.py": "x\n"})
+    assert manifest["omitted_file_count"] == 0
+    assert manifest["omitted_paths"] == []
+
+
+def test_file_skipped_in_the_candidate_is_omitted_not_removed() -> None:
+    # Issue #480: the bounded reader skipped the candidate's big file, so only
+    # the reference side had text for it. It was never compared; calling it
+    # "removed" told an operator the miner deleted code they actually wrote.
+    candidate = {"src/lib.rs": "fn a() {}\n"}
+    reference = {"src/lib.rs": "fn a() {}\n", "src/baseline.rs": "kit\n" * 739}
+    manifest = build_source_diff_manifest(
+        candidate, reference, omitted=["src/baseline.rs"]
+    )
+    assert [row["path"] for row in manifest["files"]] == ["src/lib.rs"]
+    assert manifest["removed_count"] == 0
+    assert manifest["file_count"] == 1
+    assert manifest["omitted_file_count"] == 1
+    assert manifest["omitted_paths"] == ["src/baseline.rs"]
+
+
+def test_file_skipped_in_the_reference_is_omitted_not_added() -> None:
+    candidate = {"src/lib.rs": "fn a() {}\n", "data.json": "{}\n"}
+    reference = {"src/lib.rs": "fn a() {}\n"}
+    manifest = build_source_diff_manifest(candidate, reference, omitted=["data.json"])
+    assert manifest["added_count"] == 0
+    assert "data.json" not in {row["path"] for row in manifest["files"]}
+    assert manifest["omitted_paths"] == ["data.json"]
+
+
+def test_omitted_file_is_not_rename_paired() -> None:
+    body = "fn stolen() {\n    1 + 1\n}\n"
+    manifest = build_source_diff_manifest(
+        {"src/new_name.rs": body},
+        {"src/old_name.rs": body},
+        omitted=["src/old_name.rs"],
+    )
+    assert manifest["renamed_count"] == 0
+    assert manifest["added_count"] == 1
+    assert manifest["omitted_paths"] == ["src/old_name.rs"]
+
+
+def test_omitted_paths_are_bounded_but_counted_in_full() -> None:
+    omitted = [f"fixtures/f{i:04d}.json" for i in range(MAX_OMITTED_PATHS + 7)]
+    manifest = build_source_diff_manifest({}, {}, omitted=[*omitted, omitted[0]])
+    assert manifest["omitted_file_count"] == MAX_OMITTED_PATHS + 7
+    assert manifest["omitted_paths"] == sorted(omitted)[:MAX_OMITTED_PATHS]
+
+
+def test_without_omitted_returns_the_inputs_when_nothing_was_skipped() -> None:
+    candidate, reference = {"a": "1"}, {"b": "2"}
+    kept_candidate, kept_reference, skipped = without_omitted(candidate, reference, [])
+    assert kept_candidate is candidate
+    assert kept_reference is reference
+    assert skipped == []
+
+
+def test_baseline_custom_lines_are_summed_before_the_file_list_cut() -> None:
+    candidate = {
+        "a_solver.rs": "1\n2\n",
+        "b_solver.rs": "1\n2\n3\n",
+        "c_solver.rs": "1\n2\n3\n4\n",
+    }
+    manifest = build_baseline_diff_manifest(
+        candidate, {}, lambda _text: False, max_files=1
+    )
+    assert len(manifest["files"]) == 1
+    assert manifest["truncated"] is True
+    assert manifest["custom_file_count"] == 3
+    assert manifest["custom_added_lines"] == 9
+    # The list cut does not make the total a lower bound; only omission does.
+    assert manifest["custom_added_lines_complete"] is True
+
+
+def test_baseline_stock_count_covers_files_past_the_cut() -> None:
+    manifest = build_baseline_diff_manifest(
+        {f"kit{i}.rs": "same\n" for i in range(5)},
+        {f"kit{i}.rs": "same\n" for i in range(5)},
+        lambda _text: False,
+        max_files=2,
+    )
+    assert manifest["stock_kit_count"] == 5
+    assert manifest["identical_count"] == 5
+
+
+def test_baseline_omission_makes_the_total_a_lower_bound() -> None:
+    baseline = {"src/baseline.rs": "kit\n" * 739, "Cargo.toml": "[package]\n"}
+    candidate = {"Cargo.toml": "[package]\n", "src/solver.rs": "a\nb\n"}
+    manifest = build_baseline_diff_manifest(
+        candidate, baseline, lambda _text: False, omitted=["src/baseline.rs"]
+    )
+    by_path = {row["path"]: row for row in manifest["files"]}
+    assert "src/baseline.rs" not in by_path
+    assert manifest["removed_count"] == 0
+    assert manifest["custom_added_lines"] == 2
+    assert manifest["custom_added_lines_complete"] is False
+    assert manifest["omitted_file_count"] == 1
+    assert manifest["omitted_paths"] == ["src/baseline.rs"]
+    assert "renamed_count" not in manifest
+
+
+def test_baseline_without_omission_is_complete() -> None:
+    manifest = build_baseline_diff_manifest(
+        {"src/solver.rs": "a\n"}, {}, lambda _text: False
+    )
+    assert manifest["custom_added_lines"] == 1
+    assert manifest["custom_added_lines_complete"] is True
+    assert manifest["omitted_file_count"] == 0
+    assert manifest["omitted_paths"] == []

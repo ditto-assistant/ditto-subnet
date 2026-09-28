@@ -209,7 +209,19 @@ prune_sandbox_docker &
 # Docker 29 defaults new installations to the containerd image store. Keep the
 # classic store so `docker image save` emits the portable archive contract that
 # older validator daemons load with the exact signed config digest.
-exec dockerd-entrypoint.sh \
+#
+# Name `dockerd` and its listeners explicitly. When the first argument is an
+# option, the upstream dind entrypoint prepends its own defaults, and with TLS
+# disabled (DOCKER_TLS_CERTDIR="") that default is --host=tcp://0.0.0.0:2375:
+# an unauthenticated, privileged daemon API on every interface of this
+# container, reachable from any other container on the compose network. The
+# only TCP clients are the scorer, which joins this network namespace, and the
+# in-container healthcheck, and both use 127.0.0.1. Passing `dockerd` first
+# skips only that host-default block; upstream still removes stale PID files,
+# runs docker-init as PID 1 and selects the iptables backend.
+exec dockerd-entrypoint.sh dockerd \
+  --host=unix:///var/run/docker.sock \
+  --host=tcp://127.0.0.1:2375 \
   --feature containerd-snapshotter=false \
   --label io.heyditto.dittobench.isolated=true \
   "$@"

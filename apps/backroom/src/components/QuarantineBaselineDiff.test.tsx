@@ -43,6 +43,9 @@ function manifest(overrides: Partial<BaselineDiffManifest> = {}): BaselineDiffMa
     custom_added_lines: 12,
     path_aligned: false,
     truncated: false,
+    omitted_file_count: 0,
+    omitted_paths: [],
+    custom_added_lines_complete: true,
     files: [
       {
         path: 'Cargo.toml',
@@ -172,5 +175,34 @@ describe('QuarantineBaselineDiff', () => {
     fireEvent.click(screen.getByRole('button', { name: /load diff vs\. starter kit/i }))
 
     expect(await screen.findByText(/paths realigned/i)).toBeTruthy()
+  })
+
+  it('marks the custom total as a lower bound and names omitted files', async () => {
+    vi.mocked(getScreeningBaselineDiff).mockResolvedValue(
+      manifest({
+        omitted_file_count: 2,
+        omitted_paths: ['fixtures/seed-user/pairs.json'],
+        custom_added_lines_complete: false,
+      }),
+    )
+    render(<QuarantineBaselineDiff agentId={AGENT_ID} canView />)
+    fireEvent.click(screen.getByRole('button', { name: /load diff vs\. starter kit/i }))
+
+    expect(await screen.findByText('at least')).toBeTruthy()
+    expect(screen.getByText(/2 files were past the source read budget/i)).toBeTruthy()
+    expect(screen.getByText('fixtures/seed-user/pairs.json')).toBeTruthy()
+    expect(screen.getByText(/and 1\s+more/i)).toBeTruthy()
+  })
+
+  it('does not claim a lower bound for a complete or unknown total', async () => {
+    vi.mocked(getScreeningBaselineDiff).mockResolvedValue(
+      manifest({ custom_added_lines_complete: null }),
+    )
+    render(<QuarantineBaselineDiff agentId={AGENT_ID} canView />)
+    fireEvent.click(screen.getByRole('button', { name: /load diff vs\. starter kit/i }))
+
+    expect(await screen.findByText('12')).toBeTruthy()
+    expect(screen.queryByText('at least')).toBeNull()
+    expect(screen.queryByText(/source read budget/i)).toBeNull()
   })
 })

@@ -453,3 +453,47 @@ async def test_activity_keeps_attested_child_name_and_strikes_copycat(
         headers={"Authorization": "Bearer test-admin-token-at-least-32-characters"},
     )
     assert admin.status_code == 200, admin.text
+
+
+async def test_id_only_surfaces_keep_the_owners_reserved_name(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    # /public/ledger-epochs and /public/bench/timeline hold only agent ids. They
+    # must resolve the same attested payment-owner root the claim records, or
+    # an upheld handle strikes its own owner's champion as "Unnamed submission".
+    from sqlalchemy import select
+
+    from ditto.api_server.endpoints.public import (
+        _attested_owner_roots_for_agents,
+        _ledger_actor_names,
+    )
+    from ditto.api_server.name_claim import STRICKEN_PUBLIC_NAME
+    from ditto.db.queries.name_claims import owner_root_for_hotkey
+
+    _install(app, session_maker)
+    alice = _kp("//Alice")
+    await _uphold_jupiter(client, session_maker, alice)
+    thief = _kp("//Ferdie")
+    thief_id = await _seed_family(
+        session_maker,
+        hotkey=thief.ss58_address,
+        coldkey=_kp("//Ferdie//stash").ss58_address,
+        name="Jupiter-ditto-v9",
+    )
+    async with session_maker() as session:
+        owner_id = await session.scalar(
+            select(Agent.agent_id).where(
+                Agent.miner_hotkey == alice.ss58_address,
+                Agent.name == "Jupiter-ditto-v1",
+            )
+        )
+        assert owner_id is not None
+        roots = await _attested_owner_roots_for_agents(session, [owner_id])
+        names = await _ledger_actor_names(session, {owner_id, thief_id})
+        claimant_root = await owner_root_for_hotkey(session, hotkey=alice.ss58_address)
+
+    assert roots[owner_id] == claimant_root
+    assert names[owner_id][0] == "Jupiter-ditto-v1"
+    assert names[thief_id][0] == STRICKEN_PUBLIC_NAME

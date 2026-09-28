@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.storage import S3StorageClient
-from ditto.db.models import Agent
+from ditto.db.models import Agent, ScreenedImageUpload, ScreeningQuarantine
 from ditto.db.queries.scores import list_eligible_ledger
 
 _ABANDONED_AFTER = timedelta(days=1)
@@ -47,8 +47,9 @@ async def cleanup_screened_images(
     has already been removed. There is deliberately no source-build fallback for
     the current benchmark era (v3+): a detached agent is simply not re-scorable
     until it is re-screened, which is correct — a validator must never rebuild
-    untrusted miner source. Completed objects never accepted by a verdict are
-    removed after one day.
+    untrusted miner source. A verified image for an active source-review hold
+    remains available to exact-attempt private verification. Other completed
+    objects never accepted by a verdict are removed after one day.
     """
     now = now or datetime.now(UTC)
     abandoned_before = now - _ABANDONED_AFTER
@@ -81,6 +82,31 @@ async def cleanup_screened_images(
             screened_image_key(agent.agent_id, agent.screened_image_upload_id)
             for agent in rows
         }
+        held_uploads = (
+            await session.execute(
+                select(
+                    ScreenedImageUpload.agent_id,
+                    ScreenedImageUpload.image_upload_id,
+                )
+                .join(
+                    ScreeningQuarantine,
+                    ScreeningQuarantine.attempt_id == ScreenedImageUpload.attempt_id,
+                )
+                .join(Agent, Agent.agent_id == ScreenedImageUpload.agent_id)
+                .where(
+                    ScreeningQuarantine.agent_id == ScreenedImageUpload.agent_id,
+                    ScreeningQuarantine.screener_hotkey
+                    == ScreenedImageUpload.screener_hotkey,
+                    ScreeningQuarantine.status == "active",
+                    Agent.status == AgentStatus.QUARANTINED,
+                    ScreenedImageUpload.status == "verified",
+                )
+            )
+        ).all()
+        accepted_keys.update(
+            screened_image_key(agent_id, upload_id)
+            for agent_id, upload_id in held_uploads
+        )
         superseded: list[tuple[Agent, str]] = []
         for agent in rows:
             created_at = agent.created_at

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -51,11 +52,11 @@ def test_deploy_reinstalls_and_probes_embedded_protocol() -> None:
     assert "verify-installed-signing-contract.py" in bootstrap
 
 
-def test_bootstrap_preserves_separate_remote_and_local_build_budgets() -> None:
+def test_bootstrap_uses_local_build_budget_only() -> None:
     bootstrap = (ROOT / "scripts" / "bootstrap-screener.sh").read_text()
 
-    assert "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS=1500" in bootstrap
     assert "SCREENER_BUILD_TIMEOUT_SECONDS=2700" in bootstrap
+    assert "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS" not in bootstrap
 
 
 def test_deploy_repairs_legacy_remote_build_mode_and_restarts_worker() -> None:
@@ -343,6 +344,14 @@ def test_rootless_executor_is_separate_from_worker_and_denies_private_egress() -
         '"${user_systemctl[@]}" enable --now "$SCREENER_ROOTLESS_UNIT"'
     )
     assert guard_start < user_daemon_start
+    group_grant = installer.index('usermod -aG "$EXECUTOR_GROUP" "$SCREENER_USER"')
+    consumer_probe = installer.index(
+        'runuser -u "$SCREENER_USER" -- env DOCKER_HOST="$docker_host"'
+    )
+    drop_rootful = installer.index('gpasswd -d "$SCREENER_USER" docker')
+    assert user_daemon_start < group_grant < consumer_probe < drop_rootful
+    assert 'stat -c %G "$runtime_dir/docker.sock"' in installer
+    assert "rootless screener docker did not become ready" in installer
     assert 'daemon_root="$EXECUTOR_HOME/docker"' in installer
     assert "SCREENER_EXECUTOR_HOME=/var/lib/ditto-screener-docker" in bootstrap
     assert 'executor_home="$(env_value SCREENER_EXECUTOR_HOME)"' in updater
@@ -458,6 +467,9 @@ def test_golden_image_bake_pipeline_exists() -> None:
 
     assert "image_family      = var.image_family" in packer
     assert "ditto-screener-fleet" in packer
+    # The builder plugin runs with the bake credentials; pin it exactly.
+    plugin_versions = re.findall(r'^\s*version\s*=\s*"([^"]+)"', packer, re.M)
+    assert plugin_versions == ["= 1.2.7"]
     # Bakes via the same bootstrap script in bake mode; stores no secret.
     assert "SCREENER_BAKE_ONLY=1" in packer
     assert "environment: prod" in workflow

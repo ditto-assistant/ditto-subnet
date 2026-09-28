@@ -527,7 +527,13 @@ export interface RolloutState {
   ranked_quorum_agents?: number | null;
   min_ranked_quorum_agents?: number | null;
   priority_cohort_size?: number | null;
+  /** Priority members satisfying the barrier, counted as the gate counts them. */
+  priority_cohort_ready_count?: number | null;
   priority_complete?: boolean;
+  /** True while the desired version is collecting and does not pay yet. */
+  promotion_pending?: boolean;
+  /** Platform's sentence for the gates still holding emissions. */
+  promotion_requirement?: string | null;
   cohort_size?: number | null;
   cohort_ready_count?: number | null;
   members?: RolloutMember[];

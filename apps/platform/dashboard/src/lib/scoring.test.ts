@@ -480,6 +480,26 @@ describe("rolloutQuorum", () => {
     expect(rolloutQuorum({ priority_cohort_size: 0 }).prioritySize).toBe(5);
     expect(rolloutQuorum(null).cohortSize).toBe(0);
   });
+
+  it("prefers Platform's barrier count, which satisfies an ineligible leader", () => {
+    // Four finished leaders plus one banned leader: the gate is closed, but
+    // `members` carries no status, so the local derivation can only see four.
+    const members = [
+      { position: 1, score_count: 3 },
+      { position: 2, score_count: 3 },
+      { position: 3, score_count: 0 }, // banned; the barrier skips it
+      { position: 4, score_count: 3 },
+      { position: 5, score_count: 3 },
+    ];
+    expect(rolloutQuorum({ priority_cohort_size: 5, members }).priorityReady).toBe(4);
+    expect(
+      rolloutQuorum({ priority_cohort_size: 5, priority_cohort_ready_count: 5, members })
+        .priorityReady,
+    ).toBe(5);
+    // A served zero is a real zero, while null falls back to the derivation.
+    expect(rolloutQuorum({ priority_cohort_ready_count: 0, members }).priorityReady).toBe(0);
+    expect(rolloutQuorum({ priority_cohort_ready_count: null, members }).priorityReady).toBe(4);
+  });
 });
 
 describe("cohortMedian", () => {
@@ -734,6 +754,12 @@ describe("chip thresholds", () => {
       penalized: false,
     });
     expect(tokenPenaltyChipLabel({ token_penalty: null } as CompositeBreakdown)).toBeNull();
+    expect(
+      tokenPenaltyChipLabel({
+        token_penalty: 0,
+        maximum_token_penalty: 0,
+      } as CompositeBreakdown),
+    ).toBeNull();
     expect(tokenPenaltyChipLabel(null)).toBeNull();
   });
 
@@ -821,6 +847,27 @@ describe("composite equations (row 38: quality and token adjustments stay separa
     expect(byKey["Observed token use"]).toBe(
       (120000).toLocaleString() + " / " + (100000).toLocaleString() + " p95 baseline",
     );
+  });
+
+  it("renders the neutral bench v7+ quality-only token record as an unpenalized factor", () => {
+    const neutral = {
+      ...breakdown,
+      final_composite: 0.558,
+      token_penalty: 0,
+      token_efficiency_multiplier: 1,
+      maximum_token_penalty: 0,
+    };
+    expect(compositeEquationText(neutral)).toBe("0.620 × 0.900 × 1.000 = 0.558");
+    const rows = compositeCalculationRows({
+      tool_mean: 0.7,
+      memory_mean: 0.54,
+      bench_version: 9,
+      composite_breakdown: neutral,
+      token_efficiency: { observed_total_tokens: 120000, budget_percentile: 0 },
+    });
+    const byKey = Object.fromEntries((rows ?? []).map((row) => [row.k, row.v]));
+    expect(byKey["Token efficiency"]).toBe("× 1.000 (−0.0%; max 0%)");
+    expect(byKey["Observed token use"]).toBe((120000).toLocaleString() + " / baseline unavailable");
   });
 
   it("shows the post-continual efficiency fold as separate ranking provenance", () => {

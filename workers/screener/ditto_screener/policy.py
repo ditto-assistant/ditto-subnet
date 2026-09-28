@@ -249,6 +249,9 @@ class SourceReviewObservation:
     failure_disposition: str = "retryable_infra"
     clearance_certified: bool = False
     review_audit: Mapping[str, object] | None = None
+    # Structured model submission exposed only by the non-authoritative L2
+    # canary report. It contains no source text or model-authored prose.
+    inconclusive_model_audit: Mapping[str, object] | None = None
     adjudication: Mapping[str, object] | None = None
     """Automated clear/reject on an outcome that would otherwise hold
     (SourceReviewAdjudication shape). ``None`` when the adjudicator is off,
@@ -257,6 +260,20 @@ class SourceReviewObservation:
     """Typed in-progress determinations (SourceReviewNote shape). Recorded
     DURING review so a budget- or fault-terminated attempt still ships the
     evidence it accumulated; at exhaustion they decide the gradient verdict."""
+
+
+def source_review_low_clearance_allowed(
+    observation: SourceReviewObservation, *, policy_version: int
+) -> bool:
+    """Require a source clearance certificate at every v13 admission path."""
+    return bool(
+        observation.ok
+        and observation.risk_level == "low"
+        and (
+            policy_version < STRICT_TWO_OUTCOME_POLICY_VERSION
+            or observation.clearance_certified
+        )
+    )
 
 
 ChallengeRunner = Callable[
@@ -346,18 +363,17 @@ class PolicyManifest:
 
 
 CORE_ONLY_MANIFEST = PolicyManifest(rotation_id="v8-core-build-health-no-run")
+# Preserve the stored Backroom rotation identifiers during the rollout. The
+# manifest digest commits the changed module list; the historical identifier
+# alone must never be treated as proof that an oracle ran.
 DEFAULT_V8_MANIFEST = PolicyManifest(
     rotation_id="v8-luna-source-review-behavioral-oracle",
-    module_specs=(
-        {"kind": "agentic_source_review", "id": "luna-source-review"},
-        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
-    ),
+    module_specs=({"kind": "agentic_source_review", "id": "luna-source-review"},),
 )
 DEFAULT_L2_MANIFEST = PolicyManifest(
     rotation_id="v8-luna-terra-sol-l2-source-review-behavioral-oracle",
     module_specs=(
         {"kind": "agentic_source_review", "id": "luna-terra-sol-source-review"},
-        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
     ),
 )
 
@@ -692,11 +708,29 @@ class AgenticSourceReviewModule(_BaseModule):
                         "private source review did not produce a usable result",
                     ),
                 ),
+                review_audit=observation.review_audit,
                 review_notes=review_notes,
             )
         if observation.risk_level == "low" and set(observation.categories) <= (
             {"none"} | _ADVISORY_SOURCE_CATEGORIES
         ):
+            if not source_review_low_clearance_allowed(
+                observation, policy_version=context.policy_version
+            ):
+                return ModuleResult(
+                    ModuleDisposition.QUARANTINE,
+                    (
+                        PolicyEvidence(
+                            self.module_id,
+                            "source-review-clearance-unproven",
+                            "private source review did not certify low-risk clearance",
+                            observation.finding_digest,
+                        ),
+                    ),
+                    finding=observation.finding,
+                    review_audit=observation.review_audit,
+                    review_notes=review_notes,
+                )
             # Keep the low-risk finding: if another module later quarantines,
             # clean or advisory-only source review is useful operator context.
             # Advisory correctness/build observations are not anti-cheat
@@ -1157,26 +1191,19 @@ class PolicyEngine:
                 policy_version=context.policy_version,
             )
 
-        # Challenge-phase modules run on every full review, decoupled from the
-        # selector tripwire. The always-on behavioral oracle lives here so a
-        # harness cannot behave only during a ~5% audit. It still runs for a
-        # qualifying submission's deferred review; mechanical admission above
-        # only establishes that an image is ready for validator scoring.
-        # Targon runtime smoke has no isolated fake-gateway sidecar, so the
-        # oracle is skipped until a screener-to-rental prompt tool exists.
+        # A challenge runs only when an operator explicitly includes one in a
+        # private manifest. The built-in admission profiles are source-only;
+        # an absent challenge must not turn a completed source review into an
+        # inconclusive outcome.
         configured_challenges = tuple(
             module for module in self.modules if module.phase == "challenge"
         )
-        if (
-            skip_challenges
-            and configured_challenges
-            and context.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
-        ):
+        if skip_challenges and configured_challenges:
             evidence.append(
                 PolicyEvidence(
                     "policy-engine",
                     "challenge-inconclusive",
-                    "mandatory v13 behavioral verification was unavailable",
+                    "explicitly configured behavioral audit was unavailable",
                 )
             )
             return self._decision(
@@ -1201,8 +1228,8 @@ class PolicyEngine:
             if terminal is not None:
                 # Historical policy allowed an evidence-bound source-review L4
                 # clearance to settle an auxiliary oracle transport failure.
-                # V13 makes runtime verification mandatory, so a source-only
-                # decision cannot clear its missing runtime observation.
+                # Explicit challenge manifests retain their own result; a
+                # source clearance never silently overrides an observed fault.
                 #
                 # Keep the legacy exception narrow: a usable oracle response with
                 # insufficient calls, a wrong token, or an implausibly fast
@@ -1251,9 +1278,8 @@ class PolicyEngine:
                 evidence.append(
                     PolicyEvidence(
                         "policy-engine",
-                        "audit-awaiting-private-challenge",
-                        "tripwire selected quarantine until a private challenge "
-                        "is available",
+                        "source-finding-held",
+                        "source finding held for evidence-bound review",
                     )
                 )
             return self._decision(
@@ -1434,6 +1460,24 @@ class PolicyEngine:
                 review_notes=observation.notes,
                 policy_version=policy_version,
             )
+        if observation.risk_level == "low" and not source_review_low_clearance_allowed(
+            observation, policy_version=policy_version
+        ):
+            return self._decision(
+                ScreeningOutcome.QUARANTINE,
+                (
+                    PolicyEvidence(
+                        "agentic-preexecution-review",
+                        "source-review-clearance-unproven",
+                        "private source review did not certify a low-risk clearance",
+                        observation.finding_digest,
+                    ),
+                ),
+                observation.finding,
+                review_audit=observation.review_audit,
+                review_notes=observation.notes,
+                policy_version=policy_version,
+            )
         if observation.risk_level not in {"medium", "high"}:
             raise ValueError("pre-execution source decision requires elevated risk")
         code, summary = _source_review_reason(observation.categories)
@@ -1460,7 +1504,7 @@ def load_policy_engine(
     manifest_profile: str | None = None,
     rotation_id: str | None = None,
 ) -> PolicyEngine:
-    """Load a strict private manifest, or production v8 Luna source review."""
+    """Load a strict private manifest, or the built-in source review."""
     if manifest_path is None:
         profile = manifest_profile or ("l1_l2" if l2_mode == "enforce" else "l1")
         if profile == "core":
@@ -1483,7 +1527,6 @@ def load_policy_engine(
                         else "luna-source-review"
                     )
                 ),
-                BehavioralOracleModule(module_id="v8-behavioral-oracle"),
             ),
         )
     raw = _read_json(Path(manifest_path), max_bytes=_MAX_MANIFEST_BYTES)

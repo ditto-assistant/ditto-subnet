@@ -52,8 +52,9 @@ export function PipelinePage(
               <div>
                 <span class="atlas-note">
                   Mechanical admission builds a verified image before validators. Deferred source
-                  review happens later only for qualifying or anomalous results. A hold is neutral
-                  when the automated review only ran out of budget; the row says so.
+                  review happens later only for qualifying or anomalous results; entering it is not
+                  a finding. Each held row names its trigger and what the automated review
+                  concluded.
                 </span>
                 <span class="atlas-note" id="operations-snapshot" aria-live="polite">
                   {snap.snapshotNote()}

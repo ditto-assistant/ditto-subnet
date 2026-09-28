@@ -43,6 +43,7 @@ import { StatusChip } from "../ui/StatusChip";
 import { BenchmarkProgressView } from "../operations/progress";
 import type { ArtifactRelease } from "../pipeline/artifact-release";
 import {
+  admissionLaneLine,
   admissionRetryChip,
   admissionRetryLine,
   benchmarkVersionKey,
@@ -1030,6 +1031,9 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
               {(chip) => <StatusChip label={chip()[0]} tone={chip()[1]} />}
             </Show>
             <Show when={admissionRetryLine(loadedPipeline()?.admission_retry)}>
+              {(line) => <p class="pipeline-current-message">{line()}</p>}
+            </Show>
+            <Show when={admissionLaneLine(loadedPipeline()?.admission_retry)}>
               {(line) => <p class="pipeline-current-message">{line()}</p>}
             </Show>
             <For each={summaryBenchmarks()}>

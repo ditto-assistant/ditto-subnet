@@ -699,8 +699,11 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         os.environ.get("VALIDATOR_PLATFORM_API_URL", "http://localhost:8000"),
     )
     benchmark_capacity = int(os.environ.get("VALIDATOR_BENCHMARK_CAPACITY", "1"))
-    longmem_capacity = int(
-        os.environ.get("VALIDATOR_LONGMEM_CAPACITY", str((benchmark_capacity + 1) // 2))
+    # Compose passes an empty value when the operator sets none; treat it like
+    # unset so a host sized below 7 slots derives a capacity it can accept.
+    longmem_raw = os.environ.get("VALIDATOR_LONGMEM_CAPACITY", "").strip()
+    longmem_capacity = (
+        int(longmem_raw) if longmem_raw else (benchmark_capacity + 1) // 2
     )
     coding_shadow_enabled = (
         os.environ.get("VALIDATOR_CODING_SHADOW_ENABLED", "false").lower() in _truthy

@@ -293,7 +293,7 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert "--to-latest" in deploy["run"]
 
 
-def test_release_auto_deploys_controller_and_builder_from_exact_release() -> None:
+def test_release_auto_deploys_controller_from_exact_release() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     deploy = workflow["jobs"]["deploy-screener-controller"]
 
@@ -767,32 +767,26 @@ def test_release_uses_the_root_projects_minimum_python() -> None:
     assert protocol_copy < frozen_sync
 
 
-def test_screener_runner_fallback_requires_platform_authorization() -> None:
+def test_screener_release_build_registers_exact_digest_with_platform() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     job = workflow["jobs"]["build-screener"]
     steps = job["steps"]
-    request = _step(steps, "Ask Platform for a Targon Kaniko build")
-    fallback = _step(steps, "Build on the existing runner when Targon is unavailable")
+    request = _step(steps, "Register the trusted release image build")
+    build = _step(steps, "Build the screener image on the trusted runner")
     record = _step(steps, "Record immutable screener image identity")
 
-    assert fallback["if"] == "steps.targon.outputs.mode == 'fallback'"
-    assert "fallback_required)" in request["run"]
-    assert "fallback_required|failed|canceled" not in request["run"]
-    assert "no provider authorized a fallback" in request["run"]
-    assert "timed out without a Platform-issued fallback" in request["run"]
-    assert "reusing immutable fallback image" in fallback["run"]
-    assert "Platform build poll unavailable; retrying" in request["run"]
+    assert "trusted-image-builds" in request["run"]
+    assert "SOURCE_SHA" in request["env"]
+    assert "status=$(jq -er .status" in request["run"]
+    assert build["if"] == "steps.image_build.outputs.status != 'succeeded'"
+    assert "docker build" in build["run"]
+    assert "reusing immutable release image" in build["run"]
     assert "gcloud artifacts docker images describe" in record["run"]
-    assert '"$digest" != "$TARGON_DIGEST"' in record["run"]
+    assert '"$digest" =~ ^sha256:' in record["run"]
+    assert '"$BUILD_DIGEST" == "$digest"' in record["run"]
+    assert '"$BUILD_STATUS" == "fallback_required"' in record["run"]
     assert "--retry-all-errors" in record["run"]
-    assert job["needs"] == [
-        "plan",
-        "release",
-        "deploy_platform",
-        "deploy-screener-controller",
-    ]
-    assert "needs.deploy-screener-controller.result == 'success'" in job["if"]
-    assert "needs.deploy-screener-controller.result == 'skipped'" in job["if"]
+    assert job["needs"] == ["plan", "release", "deploy_platform"]
 
 
 def test_submission_builder_is_immutable_and_gates_controller_deploy() -> None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ditto.api_models.inference_concurrency_settings import (
@@ -256,55 +255,6 @@ class EfficiencyBonusConfig:
 
 
 @dataclass(frozen=True)
-class TargonRentalConfig:
-    """Create Kaniko, runtime-smoke, and L1 rentals from the Platform process."""
-
-    api_key: str = field(repr=False)
-    org_slug: str
-    resource: str
-    public_platform_url: str
-    submission_builder_image: str
-    candidate_writer_sa: str
-    candidate_reader_sa: str
-    bootstrap_sa: str
-    source_review_secret_resource: str
-    fanout_shadow_secret_resource: str = ""
-    environment: str = "prod"
-    interval_seconds: float = 15.0
-    provision_timeout_seconds: float = 600.0
-    smoke_provision_timeout_seconds: float = 30.0
-    """Targon-first smoke wait. Kaniko keeps ``provision_timeout_seconds``."""
-    build_timeout_seconds: float = 1500.0
-    runtime_timeout_seconds: float = 180.0
-    source_review_timeout_seconds: float = 3600.0
-    max_inflight: int = 10
-    """Cap on concurrent Targon rentals (Kaniko, smoke, and L1 combined)."""
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.api_key) and bool(self.submission_builder_image)
-
-
-@dataclass(frozen=True)
-class CloudRunScreeningConfig:
-    """GCP Cloud Run fallback for Kaniko Jobs, L1 Jobs, and smoke Services."""
-
-    project: str
-    region: str
-    untrusted_sa_email: str
-    platform_invoker_sa_email: str
-
-    @property
-    def enabled(self) -> bool:
-        return bool(
-            self.project
-            and self.region
-            and self.untrusted_sa_email
-            and self.platform_invoker_sa_email
-        )
-
-
-@dataclass(frozen=True)
 class ApiServerConfig:
     """Resolved configuration for the API server process.
 
@@ -525,114 +475,8 @@ class ApiServerConfig:
     """Observability-only overdue thresholds for the ordinary source-review
     queue-age SLO (ditto-subnet#2042). Both thresholds default unset."""
 
-    targon: TargonRentalConfig | None = None
-    """In-process Targon rental loop. Disabled when the API key is absent."""
-
-    cloudrun: CloudRunScreeningConfig | None = None
-    """Cloud Run Jobs/Service fallback. Disabled when project/SA env is absent."""
-
     source_emission_confirmation_enabled: bool = True
     """Allow verified payout attribution to arm the embargo; collection stays on."""
-
-
-def _parse_targon_rental_config_from_env(commit_hash: str) -> TargonRentalConfig | None:
-    api_key = os.environ.get("DITTO_TARGON_API_KEY", "").strip()
-    if not api_key:
-        key_file = os.environ.get("DITTO_TARGON_API_KEY_FILE", "").strip()
-        if not key_file:
-            return None
-        try:
-            api_key = Path(key_file).read_text().strip()
-        except OSError as error:
-            raise ApiServerConfigError(
-                "DITTO_TARGON_API_KEY_FILE is unreadable"
-            ) from error
-    if len(api_key) < 32:
-        raise ApiServerConfigError("DITTO_TARGON_API_KEY is invalid")
-    public_url = os.environ.get("DITTO_TARGON_PUBLIC_PLATFORM_URL", "").strip()
-    builder_image = os.environ.get("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", "").strip()
-    image_name = builder_image.rsplit("/", 1)[-1]
-    if builder_image and "@" not in image_name and ":" not in image_name:
-        if not re.fullmatch(r"[0-9a-f]{40}", commit_hash):
-            raise ApiServerConfigError(
-                "Targon builder image tag requires a 40-character commit hash"
-            )
-        builder_image = f"{builder_image}:sha-{commit_hash}"
-    if not public_url.startswith("https://") or not builder_image:
-        raise ApiServerConfigError(
-            "Targon rentals require DITTO_TARGON_PUBLIC_PLATFORM_URL and "
-            "DITTO_TARGON_SUBMISSION_BUILDER_IMAGE"
-        )
-    return TargonRentalConfig(
-        api_key=api_key,
-        org_slug=os.environ.get("DITTO_TARGON_ORG_SLUG", "ditto").strip(),
-        resource=os.environ.get("DITTO_TARGON_RESOURCE", "cpu-small").strip(),
-        public_platform_url=public_url.rstrip("/"),
-        submission_builder_image=builder_image,
-        candidate_writer_sa=os.environ.get(
-            "DITTO_TARGON_CANDIDATE_PUSH_SA", ""
-        ).strip(),
-        candidate_reader_sa=os.environ.get(
-            "DITTO_TARGON_CANDIDATE_PULL_SA", ""
-        ).strip(),
-        bootstrap_sa=os.environ.get("DITTO_TARGON_BOOTSTRAP_SA", "").strip(),
-        source_review_secret_resource=os.environ.get(
-            "DITTO_TARGON_SOURCE_REVIEW_SECRET", ""
-        ).strip(),
-        fanout_shadow_secret_resource=os.environ.get(
-            "DITTO_TARGON_FANOUT_SHADOW_SECRET", ""
-        ).strip(),
-        environment=os.environ.get("DITTO_TARGON_ENVIRONMENT", "prod").strip()
-        or "prod",
-        max_inflight=_parse_targon_max_inflight(),
-        smoke_provision_timeout_seconds=_parse_targon_smoke_provision_timeout(),
-    )
-
-
-def _parse_targon_smoke_provision_timeout() -> float:
-    raw = (
-        os.environ.get("DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS", "30").strip()
-        or "30"
-    )
-    try:
-        value = float(raw)
-    except ValueError as error:
-        raise ApiServerConfigError(
-            "DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS must be a number"
-        ) from error
-    if value < 0 or value > 600:
-        raise ApiServerConfigError(
-            "DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS must be between 0 and 600"
-        )
-    return value
-
-
-def _parse_targon_max_inflight() -> int:
-    raw = os.environ.get("DITTO_TARGON_MAX_INFLIGHT", "10").strip() or "10"
-    try:
-        value = int(raw)
-    except ValueError as error:
-        raise ApiServerConfigError(
-            "DITTO_TARGON_MAX_INFLIGHT must be an integer"
-        ) from error
-    if value < 1:
-        raise ApiServerConfigError("DITTO_TARGON_MAX_INFLIGHT must be >= 1")
-    return value
-
-
-def _parse_cloudrun_screening_config_from_env() -> CloudRunScreeningConfig | None:
-    project = os.environ.get("DITTO_CLOUDRUN_PROJECT", "").strip()
-    untrusted = os.environ.get("DITTO_CLOUDRUN_UNTRUSTED_SA", "").strip()
-    invoker = os.environ.get("DITTO_CLOUDRUN_INVOKER_SA", "").strip()
-    if not project or not untrusted or not invoker:
-        return None
-    return CloudRunScreeningConfig(
-        project=project,
-        region=os.environ.get("DITTO_CLOUDRUN_REGION", "us-central1").strip()
-        or "us-central1",
-        untrusted_sa_email=untrusted,
-        platform_invoker_sa_email=invoker,
-    )
 
 
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -970,9 +814,6 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     if top5_backoff_cap < max(1, top5_backoff_base):
         raise ApiServerConfigError("TOP5_RESCORE_BACKOFF_CAP must be >= max(1, base)")
 
-    targon = _parse_targon_rental_config_from_env(commit_hash)
-    cloudrun = _parse_cloudrun_screening_config_from_env()
-
     return ApiServerConfig(
         conversation_shadow_enabled=os.environ.get(
             "DITTO_CONVERSATION_SHADOW_ENABLED", "false"
@@ -996,8 +837,6 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         embedding=parse_embedding_config_from_env(),
         data_pipeline=parse_data_pipeline_config_from_env(),
         private_preparation=parse_private_preparation_config(),
-        targon=targon,
-        cloudrun=cloudrun,
         screener_auth=ScreenerAuthConfig(
             hotkey=screener_hotkey,
             api_token=screener_api_token,
@@ -1120,14 +959,6 @@ def check_config(config: ApiServerConfig) -> None:
         raise ApiServerConfigError("SCREENER_HOTKEY is not a valid SS58 address")
     if auth.api_token is not None and len(auth.api_token) < 32:
         raise ApiServerConfigError("SCREENER_API_TOKEN must be at least 32 characters")
-    if config.targon is not None and (
-        config.cloudrun is None or not config.cloudrun.enabled
-    ):
-        raise ApiServerConfigError(
-            "Targon screening requires Cloud Run fallback; set "
-            "DITTO_CLOUDRUN_PROJECT, DITTO_CLOUDRUN_UNTRUSTED_SA, and "
-            "DITTO_CLOUDRUN_INVOKER_SA"
-        )
     if auth.controller_api_token is not None and len(auth.controller_api_token) < 32:
         raise ApiServerConfigError(
             "SCREENER_CONTROLLER_API_TOKEN must be at least 32 characters"

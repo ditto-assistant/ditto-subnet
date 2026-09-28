@@ -6,7 +6,6 @@ Per-test instantiation (no module-level ``app =`` global) keeps
 
 from __future__ import annotations
 
-import asyncio
 import html
 import logging
 import os
@@ -14,9 +13,7 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -70,6 +67,7 @@ from ditto.api_server.endpoints import (
     admin_attestation_router,
     admin_benchmark_rollout_router,
     admin_burn_settings_router,
+    admin_claim_provenance_router,
     admin_coding_catalog_router,
     admin_coding_certifications_router,
     admin_coding_control_plane_router,
@@ -85,12 +83,15 @@ from ditto.api_server.endpoints import (
     admin_core_qualification_router,
     admin_efficiency_bonus_settings_router,
     admin_hotkey_bans_router,
+    admin_inference_admission_router,
     admin_inference_concurrency_settings_router,
     admin_inference_observability_router,
     admin_inference_routes_router,
+    admin_l2_report_canary_router,
     admin_leaderboard_router,
     admin_lease_revocations_router,
     admin_miner_fees_router,
+    admin_outlier_escalation_router,
     admin_owner_router,
     admin_quarantine_router,
     admin_queue_policy_settings_router,
@@ -105,7 +106,11 @@ from ditto.api_server.endpoints import (
     admin_submission_deposit_address_router,
     admin_submission_settings_router,
     admin_traces_router,
+    admin_transcript_mirror_settings_router,
+    admin_treasury_quote_router,
+    admin_treasury_settings_router,
     admin_v13_private_generation_router,
+    admin_v13_scorer_cohort_router,
     admin_validation_retry_router,
     admin_validator_slot_settings_router,
     admin_validator_weights_router,
@@ -124,6 +129,7 @@ from ditto.api_server.endpoints import (
     public_router,
     retrieval_router,
     scoring_router,
+    screener_l2_report_canary_router,
     screener_router,
     upload_router,
     validator_coding_certification_leases_router,
@@ -168,7 +174,6 @@ from ditto.api_server.inference_concurrency_settings import (
 from ditto.api_server.inference_routing import ProviderRouteRefresher
 from ditto.api_server.ledger_pin import LedgerPinLoop, LedgerPinMaterializer
 from ditto.api_server.middleware import (
-    AuthPassThroughMiddleware,
     PublicCacheMiddleware,
     RequestIDMiddleware,
     SizedGZipMiddleware,
@@ -482,105 +487,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await validator_names.start(app.state.session_maker)
 
-            targon_loop = None
-            if (
-                _process_role() == PLATFORM_ROLE
-                and config.targon is not None
-                and config.targon.enabled
-                and config.screener_auth.hotkey
-            ):
-                from ditto.api_server.targon_client import AsyncTargonClient
-                from ditto.api_server.targon_promote import (
-                    mint_access_token,
-                    promote_runtime_archive,
-                )
-                from ditto.api_server.targon_rental_loop import TargonRentalLoop
-
-                targon_client = AsyncTargonClient(
-                    api_key=config.targon.api_key,
-                    org_slug=config.targon.org_slug,
-                )
-                stack.push_async_callback(targon_client.aclose)
-
-                async def mint_token(service_account: str) -> str:
-                    return await asyncio.to_thread(mint_access_token, service_account)
-
-                async def promote_archive(
-                    source_key: str, destination: str, writer_token: str
-                ) -> str:
-                    return await promote_runtime_archive(
-                        storage=storage,
-                        source_key=source_key,
-                        destination=destination,
-                        access_token=writer_token,
-                    )
-
-                from ditto.api_server.cloudrun_client import AsyncCloudRunClient
-                from ditto.api_server.cloudrun_provider import CloudRunComputeProvider
-                from ditto.api_server.screening_provider import ScreeningComputeProvider
-                from ditto.api_server.targon_provider import TargonComputeProvider
-
-                providers: list[ScreeningComputeProvider] = [
-                    TargonComputeProvider(targon_client, config.targon)
-                ]
-                if config.cloudrun is not None and config.cloudrun.enabled:
-                    cloudrun_client = AsyncCloudRunClient(
-                        project=config.cloudrun.project,
-                        region=config.cloudrun.region,
-                    )
-                    stack.push_async_callback(cloudrun_client.aclose)
-                    providers.append(
-                        CloudRunComputeProvider(
-                            cloudrun_client,
-                            config.cloudrun,
-                            config.targon,
-                        )
-                    )
-                from ditto.api_server.builder_image import (
-                    resolve_submission_builder_image,
-                )
-                from ditto.api_server.targon_screening import (
-                    finalize_targon_screen_and_pin_dataset,
-                )
-
-                attester = config.screener_auth.hotkey
-                assert attester is not None
-
-                async def complete_screen(attempt_id: UUID) -> None:
-                    async with app.state.session_maker() as session:
-                        await finalize_targon_screen_and_pin_dataset(
-                            session,
-                            storage=storage,
-                            screener_hotkey=attester,
-                            attempt_id=attempt_id,
-                            now=datetime.now(UTC),
-                            generator=generator,
-                            chain=chain,
-                        )
-
-                async def traces_put(key: str, body: bytes, content_type: str) -> str:
-                    if traces_hippius is None:
-                        return ""
-                    return await traces_hippius.put_object(
-                        key=key, body=body, content_type=content_type
-                    )
-
-                targon_loop = TargonRentalLoop(
-                    session_maker=app.state.session_maker,
-                    config=config.targon,
-                    targon=targon_client,
-                    screener_hotkey=attester,
-                    promote_archive=promote_archive,
-                    mint_token=mint_token,
-                    providers=providers,
-                    complete_screen=complete_screen,
-                    resolve_builder_image=resolve_submission_builder_image,
-                    storage=storage,
-                    traces_put=traces_put if traces_hippius is not None else None,
-                )
-                stack.push_async_callback(targon_loop.aclose)
-                await targon_loop.start()
-            app.state.targon_rental_loop = targon_loop
         except Exception as e:
             raise ApiServerLifespanError(
                 f"failed to open dependencies during startup: {e}"
@@ -671,7 +577,11 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # add_middleware call ends up outermost on the wire. RequestIDMiddleware
     # must be outermost so its contextvar is live for every downstream
     # middleware + handler + log line, including any future auth that
-    # short-circuits before reaching the app.
+    # short-circuits before reaching the app. There is deliberately no auth
+    # middleware: every endpoint authenticates itself through its own
+    # dependency (ValidatorDep, the signed-nonce dependencies, AdminDep, the
+    # screener dependencies), so a stack entry named for auth would only
+    # suggest a gate that does not exist.
     # Gzip is inside the public cache: each identity/gzip representation is
     # built once and cached independently, so a 200KB operations cache HIT
     # does not burn CPU recompressing the same user-agnostic bytes.
@@ -682,13 +592,15 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     from ditto.api_server.admin_activity import AdminActivityMiddleware
 
     app.add_middleware(AdminActivityMiddleware)
-    app.add_middleware(AuthPassThroughMiddleware)
     app.add_middleware(RequestIDMiddleware)
 
     register_exception_handlers(app)
 
     from ditto.api_server.endpoints.public_admin_activity import (
         router as activity_router,
+    )
+    from ditto.api_server.endpoints.public_treasury_activity import (
+        router as treasury_activity_router,
     )
 
     app.include_router(health_router)
@@ -702,6 +614,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
         app.include_router(inference_router, prefix="/api/v1")
         return app
     app.include_router(activity_router, prefix="/api/v1")
+    app.include_router(treasury_activity_router, prefix="/api/v1")
     app.include_router(attestation_router, prefix="/api/v1")
     app.include_router(name_claims_router, prefix="/api/v1")
     app.include_router(miner_avatars_router, prefix="/api/v1")
@@ -729,15 +642,19 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(validator_confirmation_router, prefix="/api/v1")
     app.include_router(inference_router, prefix="/api/v1")
     app.include_router(screener_router, prefix="/api/v1")
+    app.include_router(screener_l2_report_canary_router, prefix="/api/v1")
     app.include_router(scoring_router, prefix="/api/v1")
     app.include_router(public_router, prefix="/api/v1")
     app.include_router(admin_artifact_release_settings_router, prefix="/api/v1")
+    app.include_router(admin_transcript_mirror_settings_router, prefix="/api/v1")
     app.include_router(admin_attestation_router, prefix="/api/v1")
     app.include_router(admin_benchmark_rollout_router, prefix="/api/v1")
     app.include_router(admin_benchmark_canary_router, prefix="/api/v1")
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_policy_activation_router, prefix="/api/v1")
     app.include_router(admin_v13_private_generation_router, prefix="/api/v1")
+    app.include_router(admin_inference_admission_router, prefix="/api/v1")
+    app.include_router(admin_v13_scorer_cohort_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")
@@ -755,9 +672,11 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_scoring_readiness_router, prefix="/api/v1")
     app.include_router(admin_screener_review_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_fanout_shadow_router, prefix="/api/v1")
+    app.include_router(admin_l2_report_canary_router, prefix="/api/v1")
     app.include_router(admin_screener_capacity_router, prefix="/api/v1")
     app.include_router(admin_screening_infra_retry_router, prefix="/api/v1")
     app.include_router(admin_source_review_queue_slo_router, prefix="/api/v1")
+    app.include_router(admin_outlier_escalation_router, prefix="/api/v1")
     app.include_router(admin_submission_settings_router, prefix="/api/v1")
     app.include_router(admin_submission_deposit_address_router, prefix="/api/v1")
     app.include_router(admin_copy_review_router, prefix="/api/v1")
@@ -774,7 +693,10 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_confirmation_bundles_router, prefix="/api/v1")
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_core_qualification_router, prefix="/api/v1")
+    app.include_router(admin_claim_provenance_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
+    app.include_router(admin_treasury_settings_router, prefix="/api/v1")
+    app.include_router(admin_treasury_quote_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
     app.include_router(admin_conversation_router, prefix="/api/v1")
     app.include_router(screener_conversation_router, prefix="/api/v1")

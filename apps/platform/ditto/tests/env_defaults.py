@@ -89,6 +89,9 @@ TEST_ENV_DEFAULTS: dict[str, str] = {
     "STORAGE_SECRET_KEY": minioharness.SECRET_KEY,
     "STORAGE_REGION": "us-east-1",
     "STORAGE_USE_TLS": "false",
+    # 32-byte Ed25519 seed for the public moderation role key. Not a production
+    # secret; production publishing fails closed when the variable is unset.
+    "DITTO_MODERATION_AUDIT_SIGNING_KEY": "11" * 32,
 }
 
 # Supplied per-worker by the `worker_database` fixture in conftest, not by

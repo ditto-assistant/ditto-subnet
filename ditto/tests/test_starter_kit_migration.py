@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yaml
@@ -37,3 +38,14 @@ def test_starter_default_crate_target_uses_the_monorepo_subdirectory() -> None:
     for text in (env, submit):
         assert "https://github.com/ditto-assistant/ditto-subnet" in text
         assert "miners/dittobench-starter-kit" in text
+
+
+def test_starter_does_not_synthesize_wire_abstention_from_model_prose() -> None:
+    # I4/W8 requires optional scorer fields to remain absent unless authored
+    # by the model. Guard the served response constructor, not a test helper.
+    baseline = (KIT / "src" / "baseline.rs").read_text()
+    served_response = baseline.split("let final_text = result.result.text;", 1)[
+        1
+    ].split("#[cfg(test)]", 1)[0]
+    assert re.search(r"abstain:\s*None\b", served_response)
+    assert not re.search(r"abstain:\s*\w+\s*\(\s*&?final_text", served_response)

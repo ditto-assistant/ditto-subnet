@@ -8,7 +8,10 @@ description: Review Ditto SN118 miner submissions through Backroom — screening
 Use the OAuth-protected `sn118-backroom` MCP at
 `https://backroom.dittobench.ai/mcp` as the only production control plane. Do
 not use the private product Backroom, raw Platform admin endpoints, database
-writes, or copied credentials.
+writes, or copied credentials. An interactive MCP access token lasts 24 hours
+or until the staff session ends, whichever is sooner. `get_backroom_access`
+reports `expires_at`. Signed artifact URLs stay short-lived and are not
+covered by that window.
 
 Two courts, one control plane:
 
@@ -100,8 +103,10 @@ the observed-tool path. Runtime/concurrency diagnosis is
    active quarantines, oldest first. Default to five items unless the prompt
    specifies another bound.
 2. Retain the exact quarantine ID, agent UUID, name, version, full hotkey,
-   artifact SHA-256, screening attempt ID, policy version, reason code, and
-   timestamps.
+   artifact SHA-256, screening attempt ID, policy version, screening reason
+   code, and timestamps. The screening reason code is the lead the screener
+   held the submission on, never the operator's ruling — that is
+   `resolution_reason_code`, and the two are different fields on purpose.
 3. Fetch `get_screening_quarantine_contexts` for the batch, or
    `get_screening_quarantine_context` item by item. Record prior attempts,
    miner/owner lineage, duplicate evidence, and L2/L3 observations.

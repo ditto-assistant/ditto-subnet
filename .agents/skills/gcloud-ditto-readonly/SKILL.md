@@ -1,13 +1,13 @@
 ---
 name: gcloud-ditto-readonly
-description: Safely read SN118 production Platform Postgres, Platform API pm2 logs, GCE screener-worker journals, Cloud Run screening-job logs, Targon rental logs/state, and Platform app-VM disk inventory via gcloud. Use for prod DB lookups, counts, audits, EXPLAIN ANALYZE, API 500 tracebacks, screener fleet bootstrap or stuck-worker diagnosis, Cloud Run build/smoke/source-review job failures, Targon rental logs, Kaniko/builder logs, wrk- workloads, Targon API state, live screening-build diagnosis, or a host disk-full during platform-deploy. Never prints credentials.
+description: Safely read SN118 production Platform Postgres, Platform API pm2 logs, GCE screener-worker journals, historical Cloud Run screening-job logs, and Platform app-VM disk inventory via gcloud. Use for prod DB lookups, counts, audits, EXPLAIN ANALYZE, API 500 tracebacks, screener fleet bootstrap or stuck-worker diagnosis, historical Cloud Run job failures, live screening-build diagnosis, or a host disk-full during platform-deploy. Never prints credentials.
 ---
 
 # Read-only SN118 production debug
 
 Use the bundled scripts. Do not print credentials, open a free-form remote shell, or mutate production.
 
-Pick the smallest surface that answers the question. Corroborate Targon logs with the database and the live `/health` commit. W&B remains `$wandb-ops`.
+Pick the smallest surface that answers the question. Corroborate logs with the database and the live `/health` commit. W&B remains `$wandb-ops`.
 
 ## Database
 
@@ -23,7 +23,7 @@ printf '%s\n' 'SELECT now()' | .agents/skills/gcloud-ditto-readonly/scripts/quer
 1. Refuse writes, DDL, permission changes, and maintenance commands.
 2. Inspect `ditto/db/models.py` and Alembic when names are uncertain.
 3. Select only needed columns, filter by exact identifiers, `LIMIT` row dumps, aggregate for counts.
-4. Report facts vs deployed code vs live Targon state separately. Redact tokens, passwords, private object URLs, and full artifacts.
+4. Report facts vs deployed code vs live state separately. Redact tokens, passwords, private object URLs, and full artifacts.
 
 Target is project `ditto-app-dev`, zone `us-central1-a`, instance `ditto-platform-prod`, env `/opt/ditto-platform/.env`. Connect through IAP. Default statement timeout 30s; `DITTO_DB_STATEMENT_TIMEOUT_MS` at most 120000.
 
@@ -94,7 +94,7 @@ or read environment/credential files from this skill.
 
 ## Cloud Run screening job logs
 
-Cloud Run screening lanes (GCP fallback of the Targon-first stack) log only
+Cloud Run jobs in the retained one-shot screening stack log only
 to Cloud Logging, and Platform's `replica_logs` stub returns `""` for Cloud
 Run, so the DB replica-trace columns are empty for gcp rows — Cloud Logging
 is the only artifact. The rental loop deletes failed jobs after capture, so
@@ -119,18 +119,6 @@ gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name=
 
 Resolve the name suffix from the Platform row (`build_id` /
 `review_id`), not from `provider_resource_id` (often cleared after release).
-
-## Targon logs
-
-Stream `TARGON_API_KEY` only through `scripts/query_targon.sh` into `targon_cli --api-key-stdin`. Never run Secret Manager access outside that wrapper, export the key, put it on argv, or ask the user to paste it. Do not use the VM `.env` for this key.
-
-```bash
-.agents/skills/gcloud-ditto-readonly/scripts/query_targon.sh state wrk-xxxxxxxxxxxxxxxx
-.agents/skills/gcloud-ditto-readonly/scripts/query_targon.sh logs wrk-xxxxxxxxxxxxxxxx --tail 400 --include-state
-.agents/skills/gcloud-ditto-readonly/scripts/query_targon.sh list
-```
-
-Read-only `logs` / `state` / `list` only. Stop for creates, deploys, probes, suspends, or deletes. Resolve `wrk-` uids from Platform `resource_id` or `list`. Fetch logs while the replica is `running`; after `error` or delete, `GET .../logs` often 404s. Targon `exit code 2` after a successful complete is often teardown, not ARCHIVE. Kaniko compiles are long; start `--tail` at 400. `TARGON_TIMEOUT_SECONDS` at most 120. Org slug `ditto`.
 
 ## Host disk
 

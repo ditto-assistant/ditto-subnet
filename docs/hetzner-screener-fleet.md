@@ -1,18 +1,19 @@
 # `subnet-screener-1` setup and operation
 
-`subnet-screener-1` is the normal-load screener. Eight full workers share one
-enrolled node identity, while Platform admits at most four disposable KVM
-build/smoke guests and four source reviews at once on the 64 GB host. Different
-submissions progress concurrently, but one submission is always ordered:
+`subnet-screener-1` is the normal-load screener. Signed workers share one
+enrolled node identity and claim screening attempts directly from Platform.
+Each worker runs the source review and build gate for its own attempt. The old
+fleet build, runtime-smoke, and source-review job queues have no producers and
+their host agent is retired.
 
 ```text
-static safety preflight -> build -> runtime smoke -> general source review -> verdict
+signed claim -> source review -> build/runtime gate -> signed verdict
 ```
 
 GCE is overflow capacity for work that the primary node has not claimed. It is
-not an automatic retry destination after a failed Hetzner build, smoke, or
-review. The capacity controller starts GCE only when the primary heartbeat is
-not ready or the unclaimed queue exceeds the audited backlog multiple.
+not an automatic retry destination after a failed Hetzner attempt. Read the
+current controller lease and provider settings through public Backroom before
+changing routing.
 
 ## 0. Rehearse the host on disposable GCE
 
@@ -85,7 +86,8 @@ The public inventory already pins the versioned Debian 12 genericcloud image
 exercised by the GCE rehearsal. If it changes, verify Debian's official checksum
 manifest and update its exact URL and digest together. Put the actual Hetzner
 Robot server ID, the exact 40-character public release commit, and a
-digest-pinned submission-builder image in the private inventory;
+digest-pinned submission-builder image in the private inventory for the
+existing bootstrap-grant and release-manifest wire contracts;
 mutable branches and image tags are rejected.
 
 Read the current controller epoch with Backroom's `get_screener_capacity`, then
@@ -97,15 +99,16 @@ create a single-use prod bootstrap grant for:
 - provider resource ID equal to the Robot server ID.
 
 Bind the grant to the immutable, digest-pinned submission-builder image from
-the private inventory. The operation fails closed if the controller epoch has
+the private inventory. This field remains for rolling wire compatibility; the
+retired fleet job agent does not consume it. The operation fails closed if the controller epoch has
 changed, its lease has expired, the node is already enrolled, or an unexpired
 grant already exists. It returns the only plaintext copy of the short-lived
 registration token; store it immediately in the encrypted variables file.
 
-The source-review process does require OpenRouter. It reuses the existing
-`validator-openrouter-key` Secret Manager secret, but the host does not receive
+The source-review process uses the configured Ditto Inference or OpenRouter
+gateway. Its review key comes from a dedicated Secret Manager secret, and the host does not receive
 that value through GitHub, Terraform, or Ansible. Terraform creates a dedicated
-`subnet-screener-1` service account with no project roles, gives it accessor on
+`subnet-screener-1` service account with no project roles, gives it access to
 only that one secret, and allows only this X.509 subject to impersonate it:
 
 ```text
@@ -167,7 +170,7 @@ openssl x509 -req -sha256 -days 90 \
 
 Create an encrypted variables file outside git containing the returned
 single-use enrollment grant and the two public certificates. It deliberately
-contains neither the OpenRouter value nor either private key:
+contains neither the review key nor either private key:
 
 ```yaml
 screener_fleet_registration_token: replace-with-single-use-grant
@@ -187,8 +190,8 @@ file, consumed once, and deleted after enrollment. Set
 available. Ansible verifies its CA chain, client purpose, exact URI SAN,
 remaining lifetime, and match to the host-generated private key before it asks
 Google for a 15-minute token. A dedicated hourly service atomically refreshes
-the review-only key; neither that key nor Google credentials enter a KVM build
-or smoke guest.
+the review-only key. The signed worker reads the protected key file, while
+untrusted submission code receives neither it nor Google credentials.
 
 ## 3. Converge from the default Debian install
 
@@ -206,7 +209,7 @@ ansible-playbook \
 
 The play installs KVM/libvirt and Docker, builds a verified disposable guest
 base, validates X.509 federation without printing the secret, enrolls one node
-identity, starts the trusted lane agent, and starts one full screener process
+identity, and starts one signed screener worker
 for the initial canary. The bootstrap operator receives a validated passwordless sudo rule
 for future Ansible converges; root SSH is disabled. Re-run with `ansible_user`
 set to that operator after the first converge.
@@ -220,47 +223,22 @@ the service account still has no authority beyond the one secret.
 
 ## 4. Shadow in production
 
-New nodes have zero capacity. Keep the existing provider routes unchanged and
-leave every `subnet-screener-1` channel at zero while verifying its heartbeat,
-Robot resource identity, exact code/image revisions, host metrics, KVM guest
-creation, and local build/smoke probes. This is shadow mode: the full service is
-running, but Platform cannot grant it a production lease.
-
-Prove a cold Rust build, successful runtime smoke, failed-build/no-review, and
-failed-smoke/no-review locally before changing routing. Shadow findings do not
-authorize a raw database update; Backroom remains the audited policy authority.
+New nodes have zero screening capacity. Keep routing unchanged while checking
+the enrolled resource identity, controller lease, worker heartbeats, release
+revision, and host health through public Backroom. A running worker with zero
+admission capacity cannot claim a production screening attempt. Shadow
+findings do not authorize a raw database update; Backroom remains the audited
+policy authority.
 
 ## 5. Enforce in production
 
-Start with one canary lane by appending this node setting through Backroom:
-
-```text
-SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1
-```
-
-Set every lane to `hetzner > gcp`, enable GCE overflow with primary node
-`subnet-screener-1`, backlog multiplier `3`, minimum backlog `12`, and maximum
-GCE instances `6`. After one successful build -> smoke -> source-review
-sequence and one terminal build failure that consumed no review lease, raise
-the node to its initial 64 GB steady-state limits:
-
-```text
-SCREENING=2 SANDBOX=2 BUILD=2 RUNTIME=2 SOURCE_REVIEW=2
-```
-
-Backroom shows the exact confirmation phrase before it can append each
-revision. Then set `screener_fleet_worker_processes: 2` in the private inventory
-and re-run Ansible so the host has two claimers for the two admitted screens.
-Keep the process count equal to the Backroom screening ceiling: surplus idle
-pollers add lock pressure without adding throughput. For any one submission,
-build and smoke finish before source review begins.
-
-Leave the GCE MIG at zero during normal load. Before declaring the rollout
-complete, verify two simultaneous cold Rust builds, two smoke transitions,
-source review only after successful smoke, and one controlled primary-heartbeat
-outage that scales GCE out and back to zero without moving an already-failed
-job. Raise to three only after measured peak memory proves simultaneous sandbox
-and source-review guests leave safe host margin.
+Use a guarded Backroom revision to admit one signed screening attempt at a
+time. The legacy `SANDBOX`, `BUILD`, `RUNTIME`, and `SOURCE_REVIEW` channel
+fields remain in the rolling settings contract, but they do not create the
+retired fleet jobs. Confirm a terminal signed-worker result and the GCE
+fallback posture before raising screening concurrency. Keep worker process
+count aligned with the admitted screening ceiling and measured host capacity.
+Do not infer capacity from installed units or local defaults.
 
 ## Drain and update
 
@@ -274,11 +252,11 @@ descriptor has been extracted and checked. The host timer then:
 2. verifies the exact `release.yml@refs/heads/main` signer and GitHub OIDC
    issuer;
 3. validates the closed manifest and fleet-specific image labels;
-4. fetches the signed revision from canonical public `main` and prepares both
-   locked Python environments without disturbing the running release;
+4. fetches the signed revision from canonical public `main` and prepares the
+   locked worker Python environment without disturbing the running release;
 5. asks every service to stop claiming and drain active work, atomically moves
    `current`, and starts the new release; and
-6. restores the previous link and builder digest if any service fails to start.
+6. restores the previous link and active analyzer image if a worker fails to start.
 
 The host stores no GitHub token or CI SSH private key. Inspect the last accepted
 descriptor and timer state without printing a secret:
@@ -304,7 +282,8 @@ review journal, then set the node `active`.
 
 The updater writes the activated `SCREENER_FLEET_REVISION`,
 `SCREENER_FLEET_VERSION`, and `SCREENER_FLEET_ACTIVATED_AT` into the
-service-readable `release.env` beside the builder image. Every worker samples
+service-readable `release.env`. The builder-image field remains in the wire
+manifest for rolling compatibility. Every worker samples
 that file once at startup and signs it into its heartbeat as the protocol v7
 `release` block together with the policy version compiled into its build, so
 `get_screener_capacity` shows `release` per node and worker, and
@@ -338,14 +317,26 @@ Ansible inventory, alongside its own Hetzner Robot resource ID and the
 node-2 Terraform provider/email outputs. Keep the node at one worker and all
 five Backroom channel limits at zero on first converge. Read the live controller
 epoch, grant a single-use bootstrap capability for that exact node/resource and
-digest-pinned builder image, and let enrollment generate its own hotkey on the
+wire-compatible digest-pinned builder image, and let enrollment generate its own hotkey on the
 host. Platform registers new nodes as `active`, but replay capacity defaults
 to zero and claims require a positive value. Ordinary channel limits remain
 separate from this replay admission guard. Verify the
 hotkey differs from the source attempt's hotkey, its heartbeat
-reports the intended release/policy, and isolated build and runtime lanes work
-before enabling any review lane. Apply one guarded Backroom channel revision
+reports the intended release/policy, and the signed worker can serve an
+isolated report-only review before enabling screening admission. Apply one guarded Backroom channel revision
 at a time; do not change provider routing merely to run a verification replay.
+
+The first converge keeps `screener_fleet_replay_worker_enabled: false` while
+the host creates its own identity. On node 2, generate a raw 32-byte Ed25519
+seed at `screener_fleet_replay_process_key_file`, owned by `ditto-screener` with
+mode `0400` or `0600`; keep those bytes on that host. Register only its derived
+public key through Backroom. Set `screener_fleet_replay_worker_enabled: true`
+in the private inventory and converge again. The existing one-worker systemd
+unit then runs `ditto-screener-replay` with shadow receipts and the exact
+process key path, replacing the ordinary screening poller at that instance ID.
+Ansible checks node 2, X.509, one worker, regular file ownership, mode, and
+32-byte length before starting the replay process. The private key is never an
+Ansible variable or release artifact.
 
 The verification-replay API alone records evidence; it does not run the replay
 worker, complete private V13 checks, clear holds, or authorize emissions.

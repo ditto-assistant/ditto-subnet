@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -41,7 +41,6 @@ from ditto_screener.gate import (
     dockerfile_at_root,
     image_binding_advisory,
 )
-from ditto_screener.platform import RemoteImageArchive
 from ditto_screener.policy import (
     CORE_ONLY_MANIFEST,
     AgenticSourceReviewModule,
@@ -289,9 +288,80 @@ async def test_v13_shadow_semantics_require_tool_and_user_specific_memory(
     assert all(marker not in repr(decisions) for marker in memories.values())
 
 
+async def test_v13_incomplete_source_hold_retains_verified_image_without_passing(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    tarball = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+    held = ScreeningDecision(
+        outcome=ScreeningOutcome.QUARANTINE,
+        detail="source review incomplete",
+        manifest_digest="ab" * 32,
+        evidence=(
+            PolicyEvidence(
+                "adjudication", "adjudicated-source-review-escalate", "held"
+            ),
+        ),
+        policy_version=13,
+    )
+    uploads: list[str] = []
+
+    async def evaluate(*_args: Any, **_kwargs: Any) -> ScreeningDecision:
+        return held
+
+    async def run_and_probe(*_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
+        return gate_module._StageResult(True, ""), gate_module._AuditRuntime(
+            harness_base="http://harness:8080",
+            gateway_response_token="secret-a",
+            oracle_answer="secret-b",
+            gateway_state_file="/state/model-called",
+            tool_route="route",
+            tool_key=b"key",
+        )
+
+    async def export_image(
+        image_id: str, *, image_ref: str, deadline: float | None
+    ) -> BuiltImageArtifact:
+        assert deadline is None
+        path = tmp_path / "held-image.tar"
+        path.write_bytes(b"held image")
+        return BuiltImageArtifact(
+            path=str(path),
+            sha256=hashlib.sha256(b"held image").hexdigest(),
+            size_bytes=10,
+            image_id=image_id,
+            image_ref=image_ref,
+        )
+
+    async def publish_held(image: BuiltImageArtifact) -> None:
+        uploads.append(image.sha256)
+
+    gate._policy.evaluate = evaluate  # type: ignore[method-assign]
+    gate._run_and_probe = run_and_probe  # type: ignore[method-assign]
+    gate._export_image = export_image  # type: ignore[method-assign]
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=13,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            policy_version=13,
+            publish_image=lambda _image: asyncio.sleep(0),
+            publish_held_image=publish_held,
+        )
+
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert uploads == [hashlib.sha256(b"held image").hexdigest()]
+    assert not (tmp_path / "held-image.tar").exists()
+
+
+@pytest.mark.parametrize("replay_probes", [False, True])
 async def test_v13_shadow_observation_runs_only_after_policy_decision(
     make_config: Callable[..., ScreenerConfig],
     tmp_path: Path,
+    replay_probes: bool,
 ) -> None:
     tarball = _valid_tar()
     gate = _gate_with(
@@ -316,8 +386,8 @@ async def test_v13_shadow_observation_runs_only_after_policy_decision(
             tool_key=b"key",
         )
 
-    async def observe(*_args: Any, **_kwargs: Any) -> None:
-        events.append("shadow")
+    async def observe(*_args: Any, **kwargs: Any) -> None:
+        events.append(f"shadow:{kwargs['include_runs']}")
 
     async def export_image(
         image_id: str, *, image_ref: str, deadline: float | None
@@ -351,13 +421,14 @@ async def test_v13_shadow_observation_runs_only_after_policy_decision(
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url=_URL,
             build_only=True,
+            replay_runtime_probes=replay_probes,
             policy_version=13,
             publish_image=publish_image,
             record_runtime_verification=lambda _code, _digest: asyncio.sleep(0),
         )
 
     assert decision.outcome == ScreeningOutcome.PASS
-    assert events == ["policy", "export", "publish", "shadow"]
+    assert events == ["policy", "export", "publish", f"shadow:{replay_probes}"]
 
 
 async def test_v13_shadow_timeout_does_not_change_decision(
@@ -564,6 +635,7 @@ async def _screen(  # type: ignore[no-untyped-def]
     policy_only=False,
     policy_version=SCREENING_POLICY_VERSION,
     record_archive_verification=None,
+    execution_namespace=None,
 ):
     return await gate.screen(
         agent_id=_AGENT,
@@ -577,6 +649,7 @@ async def _screen(  # type: ignore[no-untyped-def]
         policy_only=policy_only,
         policy_version=policy_version,
         record_archive_verification=record_archive_verification,
+        execution_namespace=execution_namespace,
     )
 
 
@@ -662,6 +735,95 @@ def test_unportable_build_context_owner_is_infrastructure_failure() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "ERROR: failed to solve: rpc error: code = Unknown desc = no http "
+        "response from session for qmxu3s09iqv12evun9jcoq2we",
+        "ERROR: failed to solve: no active session for "
+        "qmxu3s09iqv12evun9jcoq2we: context deadline exceeded",
+        "ERROR: failed to receive status: rpc error: code = Unavailable "
+        "desc = error reading from server: EOF",
+    ],
+)
+def test_lost_buildkit_session_is_infrastructure_failure(detail: str) -> None:
+    assert _docker_infrastructure_failure(detail)
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101',
+        "ERROR: failed to solve: failed to compute cache key: failed to "
+        'calculate checksum of ref abc::xyz: "/Cargo.lock": not found',
+        "ERROR: failed to solve: dockerfile parse error on line 3: "
+        "unknown instruction: RUNN",
+    ],
+)
+def test_artifact_build_failure_is_not_infrastructure(detail: str) -> None:
+    assert not _docker_infrastructure_failure(detail)
+
+
+def _rustc_failure(source_line: str) -> str:
+    return (
+        "#12 [builder 5/6] RUN cargo build --release --locked\n"
+        "#12 43.02 error[E0308]: mismatched types\n"
+        "#12 43.02    --> src/relay.rs:88:24\n"
+        "#12 43.02     |\n"
+        f"#12 43.02 88  |         {source_line}\n"
+        "#12 43.02     |                       ^^^^ expected `RelayError`\n"
+        "#12 43.05 error: could not compile `dittobench-miner` due to 1 "
+        "previous error\n"
+        '#12 ERROR: process "/bin/sh -c cargo build --release --locked" did '
+        "not complete successfully: exit code: 101\n"
+        "------\n"
+        " > [builder 5/6] RUN cargo build --release --locked:\n"
+        f"43.02 88  |         {source_line}\n"
+        "------\n"
+        "Dockerfile:14\n"
+        "--------------------\n"
+        "  14 | >>> RUN cargo build --release --locked\n"
+        "--------------------\n"
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101'
+    )
+
+
+@pytest.mark.parametrize(
+    "source_line",
+    [
+        '503 => return Err("service unavailable"),',
+        '429 => bail!("too many requests"),',
+        'Err(e) => log::warn!("connection refused: {e}"),',
+    ],
+)
+def test_compiler_quoted_source_is_not_infrastructure(source_line: str) -> None:
+    assert not _docker_infrastructure_failure(_rustc_failure(source_line))
+
+
+def test_dockerfile_excerpt_is_not_infrastructure() -> None:
+    assert not _docker_infrastructure_failure(
+        "Dockerfile:9\n"
+        "--------------------\n"
+        '   9 | >>> RUN ./check.sh || (echo "killed" && exit 1)\n'
+        "--------------------\n"
+        'ERROR: failed to solve: process "/bin/sh -c ./check.sh" did not '
+        "complete successfully: exit code: 1"
+    )
+
+
+def test_dependency_fetch_failure_stays_infrastructure() -> None:
+    assert _docker_infrastructure_failure(
+        "#12 3.21 error: failed to get `serde` as a dependency of package "
+        "`dittobench-miner v0.1.0 (/app)`\n"
+        "#12 3.21 Caused by:\n"
+        "#12 3.21   [6] Could not resolve host: index.crates.io\n"
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101'
+    )
+
+
 async def test_export_image_hashes_exact_docker_archive(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -732,126 +894,6 @@ async def test_export_image_strips_attempt_scoped_remote_tag(
         assert manifest[0]["RepoTags"] is None
     finally:
         os.unlink(exported.path)
-
-
-async def test_targon_runtime_success_skips_docker_and_exports_archive(
-    make_config: Callable[..., ScreenerConfig], tmp_path: Path
-) -> None:
-    tarball = _valid_tar()
-    archive_bytes, config_id, _ = _oci_image_save_archive()
-    archive_path = tmp_path / "remote.tar"
-    archive_path.write_bytes(archive_bytes)
-    calls: list[list[str]] = []
-    published: list[BuiltImageArtifact] = []
-    consumed: list[UUID] = []
-
-    async def run(args: list[str], **_: Any) -> tuple[int, str]:
-        calls.append(args)
-        raise AssertionError(f"local Docker must not run: {args}")
-
-    async def remote_build() -> RemoteImageArchive:
-        return RemoteImageArchive(
-            build_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
-            path=str(archive_path),
-            sha256=hashlib.sha256(archive_bytes).hexdigest(),
-            size_bytes=len(archive_bytes),
-            runtime_status="succeeded",
-            runtime_image_reference=(
-                "us-central1-docker.pkg.dev/ditto-app-dev/"
-                "ditto-screening-candidates/miner@sha256:" + "ab" * 32
-            ),
-        )
-
-    async def remote_build_consumed(build_id: UUID) -> None:
-        consumed.append(build_id)
-
-    async def publish(image: BuiltImageArtifact) -> None:
-        published.append(image)
-
-    gate = _gate_with(
-        make_config(require_rootless_docker=True, remote_build_mode="require"),
-        run,
-        tarball=tarball,
-    )
-    async with gate._client:
-        result = await gate.screen(
-            agent_id=_AGENT,
-            attempt_id=_ATTEMPT,
-            bench_version=12,
-            miner_hotkey=_MINER,
-            sha256=hashlib.sha256(tarball).hexdigest(),
-            download_url=_URL,
-            publish_image=publish,
-            remote_build=remote_build,
-            remote_build_consumed=remote_build_consumed,
-        )
-    assert result.outcome == ScreeningOutcome.PASS
-    assert calls == []
-    assert [image.image_id for image in published] == [config_id]
-    assert consumed == [UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
-
-
-async def test_remote_require_does_not_local_build_without_targon_health(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    tarball = _valid_tar()
-    calls: list[list[str]] = []
-
-    async def run(args: list[str], **_: Any) -> tuple[int, str]:
-        calls.append(args)
-        return 0, ""
-
-    async def remote_build() -> None:
-        return None
-
-    gate = _gate_with(
-        make_config(require_rootless_docker=True, remote_build_mode="require"),
-        run,
-        tarball=tarball,
-    )
-    async with gate._client:
-        result = await gate.screen(
-            agent_id=_AGENT,
-            attempt_id=_ATTEMPT,
-            bench_version=12,
-            miner_hotkey=_MINER,
-            sha256=hashlib.sha256(tarball).hexdigest(),
-            download_url=_URL,
-            remote_build=remote_build,
-        )
-    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
-    assert result.evidence[-1].code == "targon-runtime-unavailable"
-    assert calls == []
-
-
-async def test_remote_kaniko_failure_is_deterministic_docker_rejection(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    from ditto_screener.platform import RemoteSubmissionBuildRejected
-
-    tarball = _valid_tar()
-
-    async def remote_build() -> None:
-        raise RemoteSubmissionBuildRejected("FLEET_SUBMISSION_KANIKO_FAILED")
-
-    gate = _gate_with(
-        make_config(require_rootless_docker=True, remote_build_mode="require"),
-        _ok_run(),
-        tarball=tarball,
-    )
-    async with gate._client:
-        result = await gate.screen(
-            agent_id=_AGENT,
-            attempt_id=_ATTEMPT,
-            bench_version=12,
-            miner_hotkey=_MINER,
-            sha256=hashlib.sha256(tarball).hexdigest(),
-            download_url=_URL,
-            remote_build=remote_build,
-        )
-    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
-    assert result.evidence[-1].code == "docker-build"
-    assert result.detail == "build failed: DITTO_SUBMISSION_BUILD_FAILED=KANIKO"
 
 
 async def test_export_rejects_oversize_before_save(
@@ -1053,6 +1095,39 @@ async def test_default_v6_builds_and_health_checks_without_run(
     assert not any("http://harness:8080/run" in arg for call in calls for arg in call)
 
 
+async def test_canary_execution_uses_separate_docker_names_and_cannot_publish(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    namespace = uuid4()
+    async with gate._client:
+        result = await _screen(
+            gate,
+            hashlib.sha256(tarball).hexdigest(),
+            execution_namespace=namespace,
+        )
+
+        async def publish(_image: BuiltImageArtifact) -> None:
+            raise AssertionError("isolated canary cannot publish")
+
+        with pytest.raises(ValueError, match="isolated execution"):
+            await gate.screen(
+                agent_id=_AGENT,
+                attempt_id=_ATTEMPT,
+                bench_version=13,
+                miner_hotkey=_MINER,
+                sha256=hashlib.sha256(tarball).hexdigest(),
+                download_url=_URL,
+                execution_namespace=namespace,
+                publish_image=publish,
+            )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert any(namespace.hex in arg for call in calls for arg in call)
+
+
 async def test_archive_receipt_follows_verified_contract_only(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1079,10 +1154,11 @@ async def test_static_malicious_preflight_quarantines_before_docker(
 ) -> None:
     tarball = _valid_tar(
         **{
+            "Dockerfile": b"FROM scratch\nCOPY src/main.rs /src/main.rs\n",
             "src/main.rs": (
                 b'let endpoint = "/var/run/docker.sock";\n'
                 b"connect_control_socket(endpoint);\n"
-            )
+            ),
         }
     )
     calls: list[list[str]] = []
@@ -1219,7 +1295,7 @@ async def test_static_preflight_v2_enforce_reviews_helper_before_build(
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
 
 
-async def test_static_preflight_v2_shadow_preserves_v1_and_journals_delta(
+async def test_static_preflight_v2_shadow_clears_excluded_helper_and_journals_delta(
     make_config: Callable[..., ScreenerConfig], tmp_path: Path
 ) -> None:
     tarball = _valid_tar(
@@ -1249,13 +1325,11 @@ async def test_static_preflight_v2_shadow_preserves_v1_and_journals_delta(
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
-    assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert result.finding is not None
-    assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert result.outcome == ScreeningOutcome.PASS
+    assert any(call[0] == "build" for call in calls)
     record = json.loads(audit_path.read_text())
     assert record["mode"] == "shadow"
-    assert record["legacy_decisive"] is True
+    assert record["legacy_decisive"] is False
     assert record["candidate_decisive"] is False
     assert record["artifact_sha256"] == hashlib.sha256(tarball).hexdigest()
     assert "collector.invalid" not in audit_path.read_text()
@@ -1313,6 +1387,7 @@ class _SafeStaticLeadReviewer:
             risk_level="low",
             finding_digest="a" * 64,
             categories=("none",),
+            clearance_certified=True,
             finding={
                 "prompt_revision": "l3-sol-adversarial-critic-v3",
                 "risk_level": "low",
@@ -1376,10 +1451,43 @@ async def test_l3_cleared_static_lead_can_continue_to_build(
     assert any(call[0] == "build" for call in calls)
 
 
-async def test_l4_cleared_static_lead_builds_before_it_passes(
+async def test_v13_uncertified_static_preflight_low_holds_before_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    """A terminal L4 clear admits only after the full image contract passes."""
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
+            "scripts/local-only.sh": (
+                b'path="/var/run/docker.sock"\nconnect_control_socket "$path"\n'
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+
+    class UncertifiedReviewer(_SafeStaticLeadReviewer):
+        async def resolve_lead(
+            self, *_args: Any, **_kwargs: Any
+        ) -> SourceReviewObservation:
+            cleared = await super().resolve_lead(*_args, **_kwargs)
+            return SourceReviewObservation(
+                **{**cleared.__dict__, "clearance_certified": False}
+            )
+
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    gate._source_reviewer = UncertifiedReviewer()  # type: ignore[assignment]
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), policy_version=13
+        )
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert result.evidence[0].code == "source-review-clearance-unproven"
+    assert not any(call[0] == "build" for call in calls)
+
+
+async def test_v13_l4_cleared_static_lead_continues_to_build(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A source L4 clear still requires mechanical build and health gates."""
     tarball = _valid_tar(
         **{
             "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
@@ -1455,6 +1563,7 @@ class _StubReviewer:
             risk_level="low",
             finding_digest=None,
             categories=("none",),
+            clearance_certified=True,
         )
 
 
@@ -1473,6 +1582,7 @@ class _TransportSettlingReviewer(_StubReviewer):
             risk_level="low",
             finding_digest="a" * 64,
             categories=("none",),
+            clearance_certified=True,
             notes=(
                 {
                     "kind": "observation",
@@ -1565,17 +1675,17 @@ async def test_policy_only_rescreen_starts_source_review_without_runtime(
 @pytest.mark.parametrize(
     ("policy_version", "expected", "settle_calls"),
     [
-        (12, ScreeningOutcome.PASS, 1),
-        (13, ScreeningOutcome.INCONCLUSIVE, 0),
+        (12, ScreeningOutcome.PASS, 0),
+        (13, ScreeningOutcome.PASS, 0),
     ],
 )
-async def test_oracle_transport_failure_is_fail_closed_for_v13(
+async def test_unrequested_oracle_transport_cannot_block_source_certificate(
     make_config: Callable[..., ScreenerConfig],
     policy_version: int,
     expected: ScreeningOutcome,
     settle_calls: int,
 ) -> None:
-    """A source-only settlement cannot clear v13 mandatory runtime verification."""
+    """The built-in source profile does not depend on a runtime oracle."""
     events: list[str] = []
     tarball = _valid_tar()
     gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
@@ -1599,16 +1709,10 @@ async def test_oracle_transport_failure_is_fail_closed_for_v13(
     assert result.outcome == expected
     assert result.policy_version == policy_version
     assert reviewer.settle_calls == settle_calls
-    if policy_version == 12:
-        assert result.adjudication is not None
-        assert result.adjudication["decision"] == "clear"
-        assert [evidence.code for evidence in result.evidence][-2:] == [
-            "challenge-transport-failure",
-            "source-review-adjudicated",
-        ]
-    else:
-        assert result.adjudication is None
-        assert result.evidence[-1].code == "challenge-transport-failure"
+    assert result.adjudication is None
+    assert not any(
+        evidence.code == "challenge-transport-failure" for evidence in result.evidence
+    )
 
 
 async def test_source_review_is_not_started_when_the_build_fails(
@@ -1824,6 +1928,31 @@ async def test_unloaded_buildx_result_is_retryable_infrastructure(
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "docker-build-infrastructure"
     assert "No such image" in result.detail
+
+
+async def test_lost_buildkit_session_is_retryable_infrastructure(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+
+    async def session_lost(
+        args: list[str], *, stdin: Any = None, **_: Any
+    ) -> tuple[int, str]:
+        if args[0] == "build" and stdin is not None:
+            stdin.read()
+            return 1, (
+                "ERROR: failed to solve: rpc error: code = Unknown desc = no "
+                "http response from session for qmxu3s09iqv12evun9jcoq2we"
+            )
+        return 0, ""
+
+    gate = _gate_with(make_config(), session_lost, tarball=tarball)
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert result.evidence[-1].code == "docker-build-infrastructure"
+    assert "no http response from session" in result.detail
 
 
 async def test_build_uses_daemon_image_id_resolved_from_unique_tag(
@@ -3100,3 +3229,23 @@ async def test_the_locked_persistence_paths_reach_the_smoke_container(
     )
     assert "DITTOBENCH_MEMORY_PATH=/tmp/dittobench-memory.json" in run_call
     assert "DITTOBENCH_DB=/tmp/dittobench.db" in run_call
+
+
+def test_gate_threads_l2_turn_timeout_to_the_reviewer(make_config) -> None:  # type: ignore[no-untyped-def]
+    derived = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    # conftest keeps the 2.4k profile, so the derived cap stays at its floor.
+    assert derived._source_reviewer._l2._max_completion_request_seconds == 45.0
+    derived = _gate_with(
+        make_config(l2_max_completion_tokens=16_000, l2_max_output_tokens=1_000_000),
+        _ok_run(),
+        tarball=_valid_tar(),
+    )
+    assert derived._source_reviewer._l2._max_completion_request_seconds == (
+        pytest.approx(16_000 / 60)
+    )
+    explicit = _gate_with(
+        make_config(l2_max_completion_request_seconds=300.0),
+        _ok_run(),
+        tarball=_valid_tar(),
+    )
+    assert explicit._source_reviewer._l2._max_completion_request_seconds == 300.0

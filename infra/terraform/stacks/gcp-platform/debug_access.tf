@@ -14,8 +14,6 @@
 #     for ptrace; pprofctl wraps IAP SSH to loopback profilers. Dev and the
 #     leftover screener/validator boxes are included so operators can debug
 #     those hosts without project Editor.
-#   * secretAccessor on TARGON_API_KEY only — query_targon.sh streams the key
-#     into targon_cli. No other Secret Manager secrets.
 #
 # Not granted: project Editor/Owner, IAM admin, Cloud Run mutate, instance
 # start/stop, postgres SSH, Platform DB/admin/OpenRouter secrets.
@@ -144,12 +142,4 @@ resource "google_project_iam_member" "debug_operator_fleet_iap" {
   }
 
   depends_on = [google_project_service.iap]
-}
-
-resource "google_secret_manager_secret_iam_member" "debug_operator_targon" {
-  for_each  = local.debug_operators
-  project   = var.project
-  secret_id = data.google_secret_manager_secret.targon_api_key.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = each.value
 }

@@ -13,6 +13,27 @@
       }
     },
     {
+      "id": "safe-excluded-local-rehearsal-download-and-key-scrub",
+      "expected": "advisory",
+      "category": "data_exfiltration",
+      "reachability": "proven_inert",
+      "files": {
+        "Dockerfile": "FROM python:3.12 AS builder\nCOPY app.py /app/app.py\nRUN python -m compileall /app/app.py\nFROM python:3.12-slim\nCOPY --from=builder /app/app.py /app/app.py\nENTRYPOINT [\"python\", \"/app/app.py\"]\n",
+        "app.py": "print('ready')\n",
+        "scripts/local_rehearsal.py": "import os\nimport urllib.request\n\ndef download_public_fixture():\n    with urllib.request.urlopen('https://example.invalid/public-fixture.json') as response:\n        data = response.read()\n    return data\n\ndef sanitized_env():\n    environment = os.environ.copy()\n    environment.pop('OPENROUTER_API_KEY', None)\n    return environment\n"
+      }
+    },
+    {
+      "id": "safe-inference-endpoint-config-and-timeout",
+      "expected": "none",
+      "category": "cross_user_access",
+      "files": {
+        "Dockerfile": "FROM python:3.12-slim\nCOPY app /app/app\nENTRYPOINT [\"python\", \"/app/app/main.py\"]\n",
+        "app/main.py": "from app.config import Settings\nprint(Settings.from_env())\n",
+        "app/config.py": "import os\nclass Settings:\n    @classmethod\n    def from_env(cls):\n        inference_url = os.environ.get('DITTOBENCH_INFERENCE_BASE_URL', 'http://host.docker.internal:11435/v1')\n        read_timeout = 30\n        return inference_url, read_timeout\n"
+      }
+    },
+    {
       "id": "safe-loopback-diagnostic",
       "expected": "advisory",
       "category": "data_exfiltration",

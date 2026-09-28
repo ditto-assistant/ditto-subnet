@@ -64,6 +64,7 @@ from ditto.db.queries.screening_retry import (
     latest_screening_attempt_id,
 )
 from ditto.db.queries.screening_review_deadlines import record_first_v13_claim_window
+from ditto.db.queries.screening_review_events import append_platform_hold_event
 from ditto.screener_policy_state import (
     effective_rescreen_scored,
     effective_scored_rescreen_activation_revision,
@@ -763,24 +764,34 @@ async def _park_repeatedly_inconclusive(
     # Flush so the attempt row exists before the quarantine's FK references it
     # (no ORM relationship links them to order the inserts automatically).
     await session.flush()
-    session.add(
-        ScreeningQuarantine(
-            quarantine_id=uuid4(),
-            agent_id=agent.agent_id,
-            attempt_id=attempt.attempt_id,
-            screener_hotkey=screener_hotkey,
-            policy_version=effective_screening_policy_version(),
-            manifest_digest=_EXHAUSTED_MANIFEST_DIGEST,
-            finding_digest=None,
-            reason_code=_EXHAUSTED_REASON_CODE,
-            evidence=None,
-            finding=None,
-            status="active",
-        )
+    quarantine = ScreeningQuarantine(
+        quarantine_id=uuid4(),
+        agent_id=agent.agent_id,
+        attempt_id=attempt.attempt_id,
+        screener_hotkey=screener_hotkey,
+        policy_version=effective_screening_policy_version(),
+        manifest_digest=_EXHAUSTED_MANIFEST_DIGEST,
+        finding_digest=None,
+        reason_code=_EXHAUSTED_REASON_CODE,
+        evidence=None,
+        finding=None,
+        status="active",
     )
+    session.add(quarantine)
+    prior_status = agent.status
     agent.status = AgentStatus.QUARANTINED
     agent.screening_reason = _EXHAUSTED_PUBLIC_REASON
     agent.screening_reason_code = _EXHAUSTED_REASON_CODE
+    await append_platform_hold_event(
+        session,
+        agent=agent,
+        attempt=attempt,
+        quarantine=quarantine,
+        prior_agent_status=prior_status,
+        reason_code=_EXHAUSTED_REASON_CODE,
+        reason=_EXHAUSTED_PUBLIC_REASON,
+        created_at=now,
+    )
 
 
 async def latest_integrity_double_check_posture(

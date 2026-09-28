@@ -634,6 +634,24 @@ export function ScreenerCapacityPanel({
         </button>
       </div>
 
+      <section className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-5">
+        <h2 className="text-sm font-semibold">Last GCE fleet read</h2>
+        <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">
+          {formatWhen(snapshot.last_provider_success_at)}. This clock advances only when the
+          managed-group target and instance counts are read. A Targon or routing failure in the
+          same pass does not mean Targon recovered.
+        </p>
+        {snapshot.last_provider_error_code ? (
+          <p className="mt-2 text-xs text-[var(--muted-strong)]">
+            Latest controller error {snapshot.last_provider_error_code}
+            {snapshot.last_provider_error_at
+              ? ` at ${formatWhen(snapshot.last_provider_error_at)}`
+              : ''}
+            .
+          </p>
+        ) : null}
+      </section>
+
       {latestCleanup ? (
         <section className="rounded-xl border border-[var(--amber)]/30 bg-[var(--amber-dim)] p-4 sm:p-5">
           <div className="flex items-start gap-3">

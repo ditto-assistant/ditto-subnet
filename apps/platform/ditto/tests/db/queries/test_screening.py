@@ -34,6 +34,7 @@ from ditto.db.models import (
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningRetryOverride,
+    ScreeningReviewEvent,
     SubmissionImageBuild,
 )
 from ditto.db.queries.screening import (
@@ -2139,6 +2140,19 @@ async def test_expiries_after_release_still_exhaust(session: AsyncSession) -> No
         )
     )
     assert parked is not None and parked.artifact_sha256 is None
+    event = await session.scalar(
+        select(ScreeningReviewEvent).where(
+            ScreeningReviewEvent.attempt_id == parked.attempt_id
+        )
+    )
+    assert event is not None
+    assert event.outcome == "synthetic_hold"
+    assert event.effective_decision == "hold"
+    assert event.actor == "platform:lease-expiry-park"
+    assert event.artifact_sha256 == agent.sha256
+    assert event.prior_agent_status == AgentStatus.EVALUATING
+    assert event.next_agent_status == AgentStatus.QUARANTINED
+    assert event.evidence["signed_artifact_bound_verdict"] is None
 
 
 async def test_fresh_upload_claim_is_not_build_only(

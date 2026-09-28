@@ -13,6 +13,17 @@ import type {
 
 // ── Activity / submissions (/public/activity) ────────────────
 
+/** Coarse public reason a submission entered deferred source review. */
+export type DeferredReviewTrigger = "top_five" | "anomaly";
+
+/** Public automated-review conclusion for a held submission. */
+export type ReviewConclusion =
+  | "pending"
+  | "not_completed"
+  | "no_finding"
+  | "budget_exhausted"
+  | "adverse_signal";
+
 export interface ActivityEntry {
   agent_id?: string;
   name?: string | null;
@@ -33,6 +44,12 @@ export interface ActivityEntry {
   score_floor?: number | null;
   review_reason?: string | null;
   screening_reason?: string | null;
+  /** Why an active deferred-source-review hold was opened (#562). Empty when
+   * the row is not held for deferred review. */
+  deferred_review_triggers?: DeferredReviewTrigger[] | null;
+  /** What the automated source review concluded for a held row (#562); null
+   * when the hold has no automated conclusion (e.g. a copy review). */
+  review_conclusion?: ReviewConclusion | null;
   duplicate_of?: string | null;
   duplicate_name?: string | null;
   duplicate_version?: number | null;
@@ -121,6 +138,14 @@ export interface PipelineEntry extends ActivityEntry {
   /** "exhausted" | "cooling_down" | others advance on their own. */
   retry_state?: string | null;
   retry_after?: string | null;
+  /** "operator_hold" | "terminal_artifact_failure"; null while advancing. A
+   * parked row says whose failure it was: the fleet's, or the artifact's. */
+  retry_disposition?: string | null;
+  /** Allowlisted machine cause behind a terminal disposition, else null. */
+  terminal_failure_code?: string | null;
+  /** Allowlisted cause behind an operator hold, when every remaining slot
+   * agrees on one. Null means unattributed, not that the fleet is at fault. */
+  hold_failure_code?: string | null;
   provisional_composite?: number | null;
   active_benchmarks?: BenchmarkProgress[];
   active_bench_version?: number | null;
@@ -279,18 +304,30 @@ export interface Dispute {
   submitted_at?: string | null;
 }
 
+/** Live validator-retry state while a submission is below scoring quorum. */
+export interface ValidatorRetry {
+  state?: string | null;
+  disposition?: string | null;
+  terminal_failure_code?: string | null;
+  hold_failure_code?: string | null;
+  retry_after?: string | null;
+}
+
 /** Live admission-retry state while a submission is still in admission. */
 export interface AdmissionRetry {
   state?: string | null;
   attempt_count?: number | null;
   next_retry_at?: string | null;
   last_failure_infrastructure?: boolean | null;
+  /** "build" | "runtime_smoke" | "source_review"; null when unknown. */
+  lane?: string | null;
 }
 
 /** /public/agent/{id}/pipeline — the drawer's full history. */
 export interface PipelinePayload {
   status?: string;
   admission_retry?: AdmissionRetry | null;
+  validator_retry?: ValidatorRetry | null;
   quorum?: number | null;
   score_count?: number | null;
   active_bench_version?: number | null;

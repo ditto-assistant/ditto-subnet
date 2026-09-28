@@ -8,8 +8,10 @@ manifest is small enough to render inline; unified-diff bodies are fetched one
 file at a time so a large submission never returns an unbounded payload.
 
 All inputs are ``path -> full text`` maps produced by
-:meth:`ditto.api_server.source_inspect.TarSourceInspector.read_all_text`, i.e.
-already size-bounded, UTF-8, and free of unsafe paths. Normalized identity
+:meth:`ditto.api_server.source_inspect.TarSourceInspector.read_text_snapshot`,
+i.e. already size-bounded, UTF-8, and free of unsafe paths; the paths that
+snapshot skipped are passed as ``omitted`` so they are reported as not compared
+rather than mistaken for files one side does not have. Normalized identity
 reuses the anti-copy fingerprint canonicalization (comments and whitespace
 stripped) so an operator can tell a genuine copy from an identical-after-
 reformat repack. Pure CPU work — callers run it via ``asyncio.to_thread``.
@@ -19,7 +21,7 @@ from __future__ import annotations
 
 import difflib
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, Literal
 
 from ditto.api_server.fingerprint import _normalized_source
@@ -30,6 +32,9 @@ MAX_UNIFIED_DIFF_LINES = 4000
 # The manifest lists at most this many files (the reader already bounds how many
 # members it returns, but the manifest is defensive in its own right).
 MAX_MANIFEST_FILES = 512
+# A manifest names at most this many omitted paths; ``omitted_file_count``
+# always carries the true total.
+MAX_OMITTED_PATHS = 128
 # Leftover add/remove paths whose normalized line sequences match at or above
 # this ratio are the same file under a new name, not an independent add.
 RENAME_SIMILARITY_THRESHOLD = 0.9
@@ -257,14 +262,32 @@ def _pair_rename_leftovers(
     return pairs, leftover_added, leftover_removed
 
 
-def build_source_diff_manifest(
-    candidate: dict[str, str],
-    reference: dict[str, str],
-    *,
-    max_files: int = MAX_MANIFEST_FILES,
-    pair_renames: bool = True,
-) -> dict[str, Any]:
-    """Classify every file across the two artifacts with change statistics."""
+def without_omitted(
+    candidate: dict[str, str], reference: dict[str, str], omitted: Iterable[str]
+) -> tuple[dict[str, str], dict[str, str], list[str]]:
+    """Drop every path the bounded reader skipped, on EITHER side, from both maps.
+
+    A path the reader left out of one artifact was not compared. Keeping its
+    counterpart on the other side would classify it as a whole-file add or
+    delete — exactly how a large authored ``src/baseline.rs`` came back as
+    ``removed`` with zero candidate lines (issue #480). Returns the two maps and
+    the sorted, de-duplicated omitted paths.
+    """
+    skipped = sorted(set(omitted))
+    if not skipped:
+        return candidate, reference, []
+    drop = set(skipped)
+    return (
+        {path: text for path, text in candidate.items() if path not in drop},
+        {path: text for path, text in reference.items() if path not in drop},
+        skipped,
+    )
+
+
+def _classify_files(
+    candidate: dict[str, str], reference: dict[str, str], *, pair_renames: bool
+) -> tuple[list[dict[str, object]], dict[str, int]]:
+    """Every compared file's entry, path-sorted, plus the per-status counts."""
     paths = sorted(set(candidate) | set(reference))
     files: list[dict[str, object]] = []
     identical = modified = added_files = removed_files = renamed_files = 0
@@ -307,17 +330,49 @@ def build_source_diff_manifest(
         files.append(_removed_entry(path, reference[path]))
 
     files.sort(key=lambda row: str(row["path"]))
-    truncated = len(files) > max_files
-    return {
-        "files": files[:max_files],
+    return files, {
         "file_count": len(paths),
         "identical_count": identical,
         "modified_count": modified,
         "added_count": added_files,
         "removed_count": removed_files,
         "renamed_count": renamed_files,
-        "truncated": truncated,
     }
+
+
+def _bounded_manifest(
+    files: list[dict[str, object]],
+    counts: dict[str, int],
+    omitted: list[str],
+    max_files: int,
+) -> dict[str, Any]:
+    return {
+        "files": files[:max_files],
+        **counts,
+        "truncated": len(files) > max_files,
+        "omitted_file_count": len(omitted),
+        "omitted_paths": omitted[:MAX_OMITTED_PATHS],
+    }
+
+
+def build_source_diff_manifest(
+    candidate: dict[str, str],
+    reference: dict[str, str],
+    *,
+    max_files: int = MAX_MANIFEST_FILES,
+    pair_renames: bool = True,
+    omitted: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Classify every compared file across the two artifacts with change stats.
+
+    ``omitted`` names paths the bounded reader skipped on either side. They are
+    not compared, so they appear in no ``files`` row and no count (``file_count``
+    covers compared paths only); ``omitted_file_count`` and the bounded
+    ``omitted_paths`` report them instead.
+    """
+    candidate, reference, skipped = without_omitted(candidate, reference, omitted)
+    files, counts = _classify_files(candidate, reference, pair_renames=pair_renames)
+    return _bounded_manifest(files, counts, skipped, max_files)
 
 
 def build_baseline_diff_manifest(
@@ -326,6 +381,7 @@ def build_baseline_diff_manifest(
     is_stock: Callable[[str], bool],
     *,
     max_files: int = MAX_MANIFEST_FILES,
+    omitted: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Manifest against the starter kit, with stock-kit files marked.
 
@@ -339,31 +395,39 @@ def build_baseline_diff_manifest(
     that against the whole lineage, so those files stay out of the custom-surface
     total instead of masquerading as authored code.
 
+    The aggregates are summed over EVERY compared file, before the ``files``
+    list is cut to ``max_files``. ``custom_added_lines_complete`` is false when
+    the reader omitted anything: the total is then a lower bound, and
+    ``omitted_paths`` names what was not compared.
+
     Rename pairing stays off here: starter-kit review is path-oriented (which
     kit files the miner kept) and its wire status enum does not include
     ``renamed``. Copy-review pairing is the operator-facing copy-diff only.
     """
-    manifest = build_source_diff_manifest(
-        candidate, baseline, max_files=max_files, pair_renames=False
-    )
-    manifest.pop("renamed_count", None)
+    candidate, baseline, skipped = without_omitted(candidate, baseline, omitted)
+    files, counts = _classify_files(candidate, baseline, pair_renames=False)
+    counts.pop("renamed_count", None)
     stock_count = 0
     custom_files = 0
     custom_added = 0
-    for entry in manifest["files"]:
+    for entry in files:
         text = candidate.get(str(entry["path"]))
         stock = entry["status"] == "identical" or (text is not None and is_stock(text))
         entry["stock_kit"] = stock
         if stock:
             stock_count += 1
         elif entry["status"] != "removed":
+            added_lines = entry["added_lines"]
+            assert isinstance(added_lines, int)
             custom_files += 1
-            custom_added += int(entry["added_lines"])
+            custom_added += added_lines
+    manifest = _bounded_manifest(files, counts, skipped, max_files)
     manifest["stock_kit_count"] = stock_count
     manifest["custom_file_count"] = custom_files
     # The headline number: lines present in the submission that are neither
     # baseline code nor kit code at any revision.
     manifest["custom_added_lines"] = custom_added
+    manifest["custom_added_lines_complete"] = not skipped
     return manifest
 
 
@@ -444,8 +508,11 @@ def unified_diff_for_file(
 
 __all__ = [
     "MAX_MANIFEST_FILES",
+    "MAX_OMITTED_PATHS",
     "MAX_UNIFIED_DIFF_LINES",
     "RENAME_SIMILARITY_THRESHOLD",
+    "build_baseline_diff_manifest",
     "build_source_diff_manifest",
     "unified_diff_for_file",
+    "without_omitted",
 ]

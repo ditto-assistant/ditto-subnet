@@ -68,24 +68,6 @@ secret_screener_api_token: "screener-api-token-prod"
 # access. Operators add the payload before converging this host.
 secret_screener_controller_api_token: "screener-controller-api-token-prod"
 
-# In-process Targon screening. Terraform grants this VM's attached identity
-# secretAccessor on TARGON_API_KEY; Ansible folds the value into .env.
-secret_targon_api_key: TARGON_API_KEY
-platform_targon_public_url: https://platform-api.heyditto.ai
-platform_targon_submission_builder_image: us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/submission-builder
-platform_targon_candidate_push_sa: ditto-screening-candidate-push@ditto-app-dev.iam.gserviceaccount.com
-platform_targon_candidate_pull_sa: ditto-screening-candidate-pull@ditto-app-dev.iam.gserviceaccount.com
-platform_targon_bootstrap_sa: ditto-screener-bootstrap@ditto-app-dev.iam.gserviceaccount.com
-platform_targon_source_review_secret: projects/ditto-app-dev/secrets/validator-openrouter-key
-# Set only after provisioning a dedicated Router key with a $20/day key cap.
-# Dedicated $20/day Router key for the report-only pilot; expires 2026-10-14.
-# The separate audited screener setting remains off until the release image is trusted.
-platform_targon_fanout_shadow_secret: projects/ditto-app-dev/secrets/screener-fanout-shadow-router-key
-platform_cloudrun_project: ditto-app-dev
-platform_cloudrun_region: us-central1
-platform_cloudrun_untrusted_sa: ditto-screening-untrusted@ditto-app-dev.iam.gserviceaccount.com
-platform_cloudrun_invoker_sa: ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com
-
 # Publish the screening backlog (waiting_screening + screening) to Cloud
 # Monitoring every 60s — the prod screener fleet's autoscaling signal
 # (terraform infra/terraform/stacks/gcp-platform/screener-fleet.tf). Needs the metricWriter

@@ -153,15 +153,18 @@ services:
       DITTOBENCH_SANDBOX_SECCOMP_PROFILE: ${DITTOBENCH_SANDBOX_SECCOMP_PROFILE:-}
       DITTOBENCH_SANDBOX_APPARMOR_PROFILE: ${DITTOBENCH_SANDBOX_APPARMOR_PROFILE:-}
       # Scorer-side run capacity. Rides the same variable as the validator's
-      # advertised slot count so the two can never disagree: the worker fails
-      # closed (claims nothing at all) when the scorer advertises fewer full-run
-      # slots than the worker has configured. The compose default is the
+      # advertised slot count so the two agree once the stack is recreated
+      # together. If the scorer advertises fewer full-run slots than the worker
+      # has configured (a targeted update refreshed only one of them), the worker
+      # claims on the scorer's count and logs a warning. The compose default is the
       # production value; the platform's operator cap decides how many of these
       # slots actually receive tickets.
       DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
       # LongMemEval runs in a disjoint pool. It defaults to half the ordinary
-      # capacity and never consumes the canonical full-run semaphore.
-      DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS: ${VALIDATOR_LONGMEM_CAPACITY:-4}
+      # capacity and never consumes the canonical full-run semaphore. Left
+      # empty, the scorer and the worker both derive half rounded up (8 -> 4,
+      # 4 -> 2); a fixed 4 would crash-loop a worker sized below 7 slots.
+      DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS: ${VALIDATOR_LONGMEM_CAPACITY:-}
       # Public release assets opt the scorer into the bounded shadow executor.
       # These are immutable files inside the image, not host mounts, cloud
       # identities, Secret Manager references, or provider credentials.
@@ -205,8 +208,9 @@ services:
       DITTOBENCH_CODING_SOURCE_PORT: "11438"
       DITTOBENCH_CODING_SOURCE_PUBLIC_BASE_URL: http://host.docker.internal:11438
       DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY: ${DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY:-}
-      # Authorizes the validator's session prepare/activate/cancel calls. Same
-      # anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the validator.
+      # Authorizes the validator's control-plane calls (everything but
+      # /health). Same anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the
+      # validator.
       DITTOBENCH_BROKER_CONTROL_TOKEN: *broker-control-token
       # The broker refuses an activation whose proxy_url does not byte-match
       # this value, and treats an unset/malformed value as "refuse everything"
@@ -278,7 +282,7 @@ services:
       VALIDATOR_PLATFORM_API_URL: ${VALIDATOR_PLATFORM_API_URL}
       VALIDATOR_DITTOBENCH_API_URL: http://sandbox-docker:8000
       VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS: "3"
-      # Presented as `Authorization: Bearer` on the inference control plane
+      # Presented as `Authorization: Bearer` on the scorer control plane
       # only. Same anchor as the scorer's DITTOBENCH_BROKER_CONTROL_TOKEN; it
       # is never sent to the platform, Pylon, or any other host.
       VALIDATOR_DITTOBENCH_CONTROL_TOKEN: *broker-control-token
@@ -330,7 +334,8 @@ services:
       VALIDATOR_EPOCH_SECONDS: "3600"
       VALIDATOR_QUEUE_LIMIT: "50"
       # Heartbeat v10+ advertises every active slot. The scorer independently
-      # publishes the same bound and the worker fails closed on mismatch.
+      # publishes the same bound, and on a mismatch the worker claims on the
+      # smaller of the two.
       #
       # This is the CAPABILITY the host offers, not the concurrency it will run.
       # How many of these slots actually receive tickets is decided by the
@@ -340,7 +345,10 @@ services:
       # here gives the operator room to ramp without shipping a new stack; idle
       # slots only add lightweight polls to each sweep.
       VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
-      VALIDATOR_LONGMEM_CAPACITY: ${VALIDATOR_LONGMEM_CAPACITY:-4}
+      # Empty derives half of VALIDATOR_BENCHMARK_CAPACITY rounded up, the only
+      # value the worker accepts for the documented smaller hosts. An explicit
+      # value is still validated against that bound.
+      VALIDATOR_LONGMEM_CAPACITY: ${VALIDATOR_LONGMEM_CAPACITY:-}
       # Self-imposed resource ceilings. At or above these the worker stops
       # claiming tickets and reports admission=resource_constrained, while
       # still heartbeating and still finishing what it holds. High on purpose:

@@ -19,6 +19,7 @@ from ditto.db.models import (
     ScreenerHeartbeat,
     ScreenerNode,
     ScreenerNodeBootstrapGrant,
+    ScreenerReplayProcessKey,
     TrustedImageBuild,
 )
 
@@ -34,15 +35,6 @@ _IMAGE_REFERENCE = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime/"
     "screener@sha256:" + "a" * 64
 )
-
-
-async def test_only_targon_platform_callback_is_terminal() -> None:
-    """Keep node-review completion on the same terminal-authority rule."""
-    from ditto.api_server.endpoints.screener import _platform_finalizes_remote_lane
-
-    assert _platform_finalizes_remote_lane("targon")
-    assert not _platform_finalizes_remote_lane("hetzner")
-    assert not _platform_finalizes_remote_lane("gcp")
 
 
 def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
@@ -177,9 +169,9 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
     assert initial.status_code == 200, initial.text
     assert initial.json()["current"]["revision"] == 0
     assert initial.json()["current"]["settings"] == {
-        "runtime_provider_priority": ["gcp", "targon"],
-        "source_review_provider_priority": ["gcp", "targon"],
-        "build_provider_priority": ["gcp", "targon"],
+        "runtime_provider_priority": ["gcp"],
+        "source_review_provider_priority": ["gcp"],
+        "build_provider_priority": ["gcp"],
         "gce_overflow_enabled": False,
         "primary_node_id": None,
         "gce_overflow_backlog_multiplier": 3,
@@ -192,7 +184,7 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
         headers=_HEADERS,
         json=_payload(
             expected_revision=0,
-            screening=["gcp", "targon"],
+            screening=["hetzner", "gcp"],
             builds=["gcp"],
         ),
     )
@@ -211,8 +203,8 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
         headers=_HEADERS,
         json=_payload(
             expected_revision=0,
-            screening=["targon", "gcp"],
-            builds=["targon", "gcp"],
+            screening=["hetzner", "gcp"],
+            builds=["hetzner", "gcp"],
         ),
     )
     assert stale.status_code == 409
@@ -416,7 +408,7 @@ async def test_independent_replay_capacity_is_guarded_and_audited(
             path, headers=headers, json={**payload, "expected_hotkey": source_hotkey}
         )
     ).status_code == 409
-    # Enrolled identity alone cannot turn on replay: the runner has not shipped.
+    # Enrolled identity alone cannot turn on replay without its signed runner.
     assert (await client.post(path, headers=headers, json=payload)).status_code == 409
     monkeypatch.setattr(
         admin_screener_capacity,
@@ -521,6 +513,36 @@ async def test_independent_replay_capacity_is_guarded_and_audited(
                 "activated_at": int(now.timestamp()),
             }
         }
+    # A second ordinary worker is not the single signed replay process, even
+    # when both workers advertise a new enough release.
+    assert (await client.post(path, headers=headers, json=payload)).status_code == 409
+    key_hex = "a1" * 32
+    key_sha = hashlib.sha256(bytes.fromhex(key_hex)).hexdigest()
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerReplayProcessKey(
+                node_id="subnet-screener-2",
+                instance_id="subnet-screener-2-worker-1",
+                public_key_hex=key_hex,
+                key_sha256=key_sha,
+                revision=1,
+                status="active",
+                registered_at=now,
+            )
+        )
+        primary = await session.get(
+            ScreenerHeartbeat, (replay_hotkey, "subnet-screener-2-worker-1")
+        )
+        sibling = await session.get(
+            ScreenerHeartbeat, (replay_hotkey, "subnet-screener-2-worker-2")
+        )
+        assert primary is not None and sibling is not None
+        assert isinstance(primary.system_metrics, dict)
+        primary.system_metrics = {
+            **primary.system_metrics,
+            "replay_process": {"key_sha256": key_sha},
+        }
+        sibling.seen_at = now - timedelta(minutes=10)
     applied = await client.post(path, headers=headers, json=payload)
     assert applied.status_code == 204, applied.text
     assert (await client.post(path, headers=headers, json=payload)).status_code == 409
@@ -682,306 +704,6 @@ async def test_capacity_attributes_all_persistent_worker_heartbeats_to_node(
     assert node["release"]["version"] == "0.230.0"
 
 
-async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    from ditto.api_models.agent_status import AgentStatus
-    from ditto.db.models import ScreeningAttempt, SubmissionImageBuild
-    from ditto.tests.api_server.endpoints.test_screener import (
-        _CLAIM_URL,
-        _SCREENER_HOTKEY,
-        _install_chain,
-        _install_db,
-        _install_storage,
-        _seed_agent,
-    )
-
-    _install(app, session_maker)
-    _install_db(app, session_maker)
-    _install_chain(app)
-    _install_storage(app)
-    now = datetime.now(UTC)
-    async with session_maker() as session, session.begin():
-        session.add(
-            ScreenerNode(
-                environment="prod",
-                node_id="subnet-screener-1",
-                provider="hetzner",
-                provider_resource_id="robot-2984021",
-                screener_hotkey=_SCREENER_HOTKEY,
-                token_hash=hashlib.sha256(_NODE_TOKEN.encode()).hexdigest(),
-                token_expires_at=now + timedelta(hours=6),
-                status="active",
-                capacity=3,
-            )
-        )
-    provider = await client.post(
-        _PATH,
-        headers=_HEADERS,
-        json=_payload(
-            expected_revision=0,
-            screening=["hetzner", "gcp"],
-            builds=["hetzner", "gcp"],
-        ),
-    )
-    assert provider.status_code == 200, provider.text
-    node_headers = {
-        "Authorization": f"Bearer {_NODE_TOKEN}",
-        "X-Screener-Hotkey": _SCREENER_HOTKEY,
-    }
-    limits_path = "/api/v1/admin/screener-nodes/subnet-screener-1/channel-settings"
-    screening_only = await client.post(
-        limits_path,
-        headers=_HEADERS,
-        json={
-            "environment": "prod",
-            "expected_revision": 0,
-            "settings": {
-                "screening_concurrency": 1,
-                "sandbox_slots": 0,
-                "build_concurrency": 0,
-                "runtime_concurrency": 0,
-                "source_review_concurrency": 0,
-            },
-            "reason": "Permit the enrolled node to claim its own screening lease",
-            "actor": "operator@example.com",
-            "confirmation": (
-                "APPLY SCREENER NODE subnet-screener-1 SCREENING=1 "
-                "SANDBOX=0 BUILD=0 RUNTIME=0 SOURCE_REVIEW=0"
-            ),
-        },
-    )
-    assert screening_only.status_code == 200, screening_only.text
-
-    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    claim = await client.post(_CLAIM_URL, headers=node_headers)
-    attempt_id = claim.json()["items"][0]["attempt_id"]
-    queued = await client.post(
-        f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-        headers=node_headers,
-        json={"attempt_id": attempt_id},
-    )
-    assert queued.status_code == 200, queued.text
-    build_id = queued.json()["build_id"]
-
-    disabled = await client.post(
-        "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
-        headers=node_headers,
-        json={"environment": "prod"},
-    )
-    assert disabled.status_code == 200, disabled.text
-    assert disabled.json()["build"] is None
-
-    enabled = await client.post(
-        limits_path,
-        headers=_HEADERS,
-        json={
-            "environment": "prod",
-            "expected_revision": 1,
-            "settings": {
-                "screening_concurrency": 2,
-                "sandbox_slots": 1,
-                "build_concurrency": 1,
-                "runtime_concurrency": 1,
-                "source_review_concurrency": 2,
-            },
-            "reason": "Enable one isolated VM slot for the node claim test",
-            "actor": "operator@example.com",
-            "confirmation": (
-                "APPLY SCREENER NODE subnet-screener-1 SCREENING=2 "
-                "SANDBOX=1 BUILD=1 "
-                "RUNTIME=1 SOURCE_REVIEW=2"
-            ),
-        },
-    )
-    assert enabled.status_code == 200, enabled.text
-
-    leased = await client.post(
-        "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
-        headers=node_headers,
-        json={"environment": "prod"},
-    )
-    assert leased.status_code == 200, leased.text
-    assert leased.json()["build"]["build_id"] == build_id
-    async with session_maker() as session:
-        row = await session.get(SubmissionImageBuild, build_id)
-        assert row is not None
-        assert row.node_id == "subnet-screener-1"
-        assert row.provider == "hetzner"
-
-    failed = await client.put(
-        f"/api/v1/screener/nodes/jobs/submission-image-builds/{build_id}",
-        headers=node_headers,
-        json={
-            "status": "fallback_required",
-            "provider_resource_id": "ditto-build-test",
-            "error_code": (
-                "FLEET_SUBMISSION_BUILDKIT_LOCAL_CARGO_DEPENDENCY_MISSING_FAILED"
-            ),
-        },
-    )
-    assert failed.status_code == 204, failed.text
-    async with session_maker() as session:
-        attempt = await session.get(ScreeningAttempt, attempt_id)
-        row = await session.get(SubmissionImageBuild, build_id)
-        assert attempt is not None
-        assert row is not None
-        assert row.runtime_status == "skipped"
-        assert row.runtime_error_code == "FLEET_RUNTIME_SKIPPED_BUILD_UNAVAILABLE"
-        assert attempt.failure_provider == "hetzner"
-        assert attempt.failure_lane == "buildkit"
-        assert attempt.private_failure_detail == (
-            "A local Cargo dependency is declared but absent from the Docker image "
-            "build context. Copy the dependency directory into the build stage "
-            "before running cargo build (for example, COPY vendor ./vendor)."
-        )
-        assert attempt.failure_captured_at is not None
-
-    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    second = await client.post(
-        _CLAIM_URL,
-        headers=node_headers,
-    )
-    assert second.status_code == 200, second.text
-    assert len(second.json()["items"]) == 1
-    capped = await client.post(
-        _CLAIM_URL,
-        headers=node_headers,
-    )
-    assert capped.status_code == 200, capped.text
-    assert capped.json()["items"] == []
-
-
-async def test_hetzner_node_runtime_defers_terminal_verdict_to_screener_worker(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    """A node result is evidence for the signed screener verdict, not a verdict."""
-    from ditto.api_models.agent_status import AgentStatus
-    from ditto.db.models import ScreeningAttempt, SubmissionImageBuild
-    from ditto.tests.api_server.endpoints.test_screener import (
-        _CLAIM_URL,
-        _SCREENER_HOTKEY,
-        _install_chain,
-        _install_db,
-        _install_storage,
-        _seed_agent,
-    )
-
-    _install(app, session_maker)
-    _install_db(app, session_maker)
-    _install_chain(app)
-    _install_storage(app)
-    now = datetime.now(UTC)
-    async with session_maker() as session, session.begin():
-        session.add(
-            ScreenerNode(
-                environment="prod",
-                node_id="subnet-screener-1",
-                provider="hetzner",
-                provider_resource_id="robot-2984021",
-                screener_hotkey=_SCREENER_HOTKEY,
-                token_hash=hashlib.sha256(_NODE_TOKEN.encode()).hexdigest(),
-                token_expires_at=now + timedelta(hours=6),
-                status="active",
-                capacity=1,
-            )
-        )
-    provider = await client.post(
-        _PATH,
-        headers=_HEADERS,
-        json=_payload(
-            expected_revision=0,
-            screening=["hetzner", "gcp"],
-            builds=["hetzner", "gcp"],
-        ),
-    )
-    assert provider.status_code == 200, provider.text
-    limits_path = "/api/v1/admin/screener-nodes/subnet-screener-1/channel-settings"
-    limits = await client.post(
-        limits_path,
-        headers=_HEADERS,
-        json={
-            "environment": "prod",
-            "expected_revision": 0,
-            "settings": {
-                "screening_concurrency": 1,
-                "sandbox_slots": 1,
-                "build_concurrency": 1,
-                "runtime_concurrency": 1,
-                "source_review_concurrency": 1,
-            },
-            "reason": "Exercise a Hetzner runtime result without terminalizing it",
-            "actor": "operator@example.com",
-            "confirmation": (
-                "APPLY SCREENER NODE subnet-screener-1 SCREENING=1 "
-                "SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1"
-            ),
-        },
-    )
-    assert limits.status_code == 200, limits.text
-    node_headers = {
-        "Authorization": f"Bearer {_NODE_TOKEN}",
-        "X-Screener-Hotkey": _SCREENER_HOTKEY,
-    }
-
-    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    claimed = await client.post(_CLAIM_URL, headers=node_headers)
-    assert claimed.status_code == 200, claimed.text
-    attempt_id = claimed.json()["items"][0]["attempt_id"]
-    queued = await client.post(
-        f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-        headers=node_headers,
-        json={"attempt_id": attempt_id},
-    )
-    assert queued.status_code == 200, queued.text
-    build_id = queued.json()["build_id"]
-    build = await client.post(
-        "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
-        headers=node_headers,
-        json={"environment": "prod"},
-    )
-    assert build.status_code == 200, build.text
-    assert build.json()["build"]["build_id"] == build_id
-    async with session_maker() as session, session.begin():
-        row = await session.get(SubmissionImageBuild, build_id)
-        assert row is not None
-        row.status = "succeeded"
-        row.output_sha256 = "12" * 32
-        row.output_size_bytes = 123
-        row.output_image_id = "sha256:" + "34" * 32
-        row.runtime_status = "pending"
-        row.completed_at = datetime.now(UTC)
-
-    runtime = await client.post(
-        "/api/v1/screener/nodes/jobs/submission-runtime-smokes/claim",
-        headers=node_headers,
-        json={"environment": "prod"},
-    )
-    assert runtime.status_code == 200, runtime.text
-    assert runtime.json()["artifact"]["build_id"] == build_id
-    completed = await client.post(
-        f"/api/v1/screener/nodes/jobs/submission-runtime-smokes/{build_id}/result",
-        headers=node_headers,
-        json={
-            "status": "succeeded",
-            "provider_resource_id": "local-buildkit-runtime",
-        },
-    )
-    assert completed.status_code == 204, completed.text
-    async with session_maker() as session:
-        attempt = await session.get(ScreeningAttempt, attempt_id)
-        row = await session.get(SubmissionImageBuild, build_id)
-        assert attempt is not None
-        assert row is not None
-        assert attempt.status == "running"
-        assert row.runtime_status == "succeeded"
-
-
 async def test_failed_trusted_build_requires_exact_manual_retry(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -1062,11 +784,7 @@ async def test_unknown_fields_ignored_and_gcp_first_keeps_targon_fallback() -> N
         }
     )
     assert settings.runtime_provider_priority == ("gcp", "targon")
-    assert settings.targon_runtime_enabled() is True
-    assert settings.targon_source_review_enabled() is False
-    assert settings.targon_builders_enabled() is True
     assert settings.all_lanes_gcp_only() is False
-    assert settings.all_lanes_targon_first() is False
 
     payload = ScreenerProviderSettingsWriteRequest.model_validate(
         {
@@ -1087,166 +805,39 @@ async def test_unknown_fields_ignored_and_gcp_first_keeps_targon_fallback() -> N
         source_review_provider_priority=("targon", "gcp"),
         build_provider_priority=("targon", "gcp"),
     )
-    assert targon_first.all_lanes_targon_first() is True
+    assert targon_first.runtime_provider_priority[0] == "targon"
     assert targon_first.all_lanes_gcp_only() is False
-    assert ScreenerProviderSettings().all_lanes_targon_first() is False
+    assert ScreenerProviderSettings().all_lanes_gcp_only() is True
 
 
-async def test_all_lanes_gcp_only_keep_submission_work_on_gce_fleet(
+async def test_new_targon_routing_is_rejected(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    from ditto.api_models.agent_status import AgentStatus
-    from ditto.tests.api_server.endpoints.test_screener import (
-        _AUTH_HEADER,
-        _CLAIM_URL,
-        _CONTROLLER_TOKEN,
-        _install_chain,
-        _install_db,
-        _install_storage,
-        _seed_agent,
-    )
-
     _install(app, session_maker)
-    _install_db(app, session_maker)
-    _install_chain(app)
-    _install_storage(app)
-    app.state.config = replace(
-        app.state.config,
-        screener_auth=replace(
-            app.state.config.screener_auth,
-            controller_api_token=_CONTROLLER_TOKEN,
-        ),
-    )
-    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-    attempt_id = claim.json()["items"][0]["attempt_id"]
-    controller_headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
-    async with session_maker() as session, session.begin():
-        session.add(
-            TrustedImageBuild(
-                build_id=uuid4(),
-                environment="prod",
-                component="screener",
-                source_repository=(
-                    "https://github.com/ditto-assistant/ditto-subnet.git"
-                ),
-                source_sha="a" * 40,
-                context_path=".",
-                dockerfile_path="workers/screener/Dockerfile",
-                destination=(
-                    "us-central1-docker.pkg.dev/ditto-app-dev/"
-                    "ditto-public-runtime/screener:sha-test"
-                ),
-                status="succeeded",
-                provider="gcp",
-                image_digest="sha256:" + "b" * 64,
-                completed_at=datetime.now(UTC),
-                created_by="test",
-                reason="provide a pinned reviewed source worker image",
-            )
-        )
-
-    cutover = await client.post(
+    response = await client.post(
         _PATH,
         headers=_HEADERS,
         json=_payload(
             expected_revision=0,
-            screening=["gcp"],
-            builds=["gcp"],
-        ),
-    )
-    assert cutover.status_code == 200, cutover.text
-
-    queued_build = await client.post(
-        f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-        headers=_AUTH_HEADER,
-        json={"attempt_id": attempt_id},
-    )
-    assert queued_build.status_code == 200, queued_build.text
-    assert queued_build.json()["status"] == "fallback_required"
-    assert (
-        queued_build.json()["error_code"]
-        == "TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY"
-    )
-    assert queued_build.json()["runtime_status"] == "skipped"
-
-    queued_review = await client.post(
-        f"/api/v1/screener/agent/{agent_id}/submission-source-reviews",
-        headers=_AUTH_HEADER,
-        json={"attempt_id": attempt_id},
-    )
-    assert queued_review.status_code == 200, queued_review.text
-    assert queued_review.json()["status"] == "fallback_required"
-    assert (
-        queued_review.json()["error_code"] == "TARGON_SOURCE_REVIEW_DISABLED_BY_POLICY"
-    )
-
-    build_claim = await client.post(
-        "/api/v1/screener/controller/submission-image-builds/claim",
-        headers=controller_headers,
-        json={"environment": "prod", "controller_epoch": "builder:cutover"},
-    )
-    assert build_claim.status_code == 200, build_claim.text
-    assert build_claim.json()["build"] is None
-
-    runtime_claim = await client.post(
-        "/api/v1/screener/controller/submission-runtime-smokes/claim",
-        headers=controller_headers,
-        json={"environment": "prod", "controller_epoch": "builder:cutover"},
-    )
-    assert runtime_claim.status_code == 200, runtime_claim.text
-    assert runtime_claim.json()["artifact"] is None
-
-    review_claim = await client.post(
-        "/api/v1/screener/controller/submission-source-reviews/claim",
-        headers=controller_headers,
-        json={"environment": "prod", "controller_epoch": "builder:cutover"},
-    )
-    assert review_claim.status_code == 200, review_claim.text
-    assert review_claim.json()["review"] is None
-
-    restored = await client.post(
-        _PATH,
-        headers=_HEADERS,
-        json=_payload(
-            expected_revision=cutover.json()["revision"],
             screening=["targon", "gcp"],
             builds=["targon", "gcp"],
         ),
     )
-    assert restored.status_code == 200, restored.text
-
-    restore_agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    restore_claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-    restore_attempt_id = restore_claim.json()["items"][0]["attempt_id"]
-    restored_build = await client.post(
-        f"/api/v1/screener/agent/{restore_agent_id}/submission-image-builds",
-        headers=_AUTH_HEADER,
-        json={"attempt_id": restore_attempt_id},
-    )
-    assert restored_build.status_code == 200, restored_build.text
-    assert restored_build.json()["status"] == "queued"
-    leased = await client.post(
-        "/api/v1/screener/controller/submission-image-builds/claim",
-        headers=controller_headers,
-        json={"environment": "prod", "controller_epoch": "builder:restore"},
-    )
-    assert leased.status_code == 200, leased.text
-    assert leased.json()["build"]["build_id"] == restored_build.json()["build_id"]
+    assert response.status_code == 422, response.text
 
 
-async def test_gcp_then_targon_keeps_submission_work_on_gce_fleet(
+async def test_hetzner_job_claim_does_not_preclaim_signed_worker_attempt(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     from ditto.api_models.agent_status import AgentStatus
+    from ditto.db.models import ScreeningAttempt, SubmissionImageBuild
     from ditto.tests.api_server.endpoints.test_screener import (
-        _AUTH_HEADER,
         _CLAIM_URL,
-        _CONTROLLER_TOKEN,
+        _SCREENER_HOTKEY,
         _install_chain,
         _install_db,
         _install_storage,
@@ -1257,33 +848,81 @@ async def test_gcp_then_targon_keeps_submission_work_on_gce_fleet(
     _install_db(app, session_maker)
     _install_chain(app)
     _install_storage(app)
-    app.state.config = replace(
-        app.state.config,
-        screener_auth=replace(
-            app.state.config.screener_auth,
-            controller_api_token=_CONTROLLER_TOKEN,
-        ),
-    )
-    applied = await client.post(
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id="subnet-screener-1",
+                provider="hetzner",
+                provider_resource_id="robot-2984021",
+                screener_hotkey=_SCREENER_HOTKEY,
+                token_hash=hashlib.sha256(_NODE_TOKEN.encode()).hexdigest(),
+                token_expires_at=now + timedelta(hours=6),
+                status="active",
+                capacity=1,
+            )
+        )
+    provider = await client.post(
         _PATH,
         headers=_HEADERS,
         json=_payload(
             expected_revision=0,
-            screening=["gcp", "targon"],
-            builds=["gcp", "targon"],
+            screening=["hetzner", "gcp"],
+            builds=["hetzner", "gcp"],
         ),
     )
-    assert applied.status_code == 200, applied.text
-    assert applied.json()["settings"]["runtime_provider_priority"] == ["gcp", "targon"]
-
-    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-    attempt_id = claim.json()["items"][0]["attempt_id"]
-    queued = await client.post(
-        f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-        headers=_AUTH_HEADER,
-        json={"attempt_id": attempt_id},
+    assert provider.status_code == 200, provider.text
+    node_headers = {
+        "Authorization": f"Bearer {_NODE_TOKEN}",
+        "X-Screener-Hotkey": _SCREENER_HOTKEY,
+    }
+    limits = await client.post(
+        "/api/v1/admin/screener-nodes/subnet-screener-1/channel-settings",
+        headers=_HEADERS,
+        json={
+            "environment": "prod",
+            "expected_revision": 0,
+            "settings": {
+                "screening_concurrency": 1,
+                "sandbox_slots": 0,
+                "build_concurrency": 0,
+                "runtime_concurrency": 0,
+                "source_review_concurrency": 0,
+            },
+            "reason": "Permit the signed screener worker to claim work",
+            "actor": "operator@example.com",
+            "confirmation": (
+                "APPLY SCREENER NODE subnet-screener-1 SCREENING=1 "
+                "SANDBOX=0 BUILD=0 RUNTIME=0 SOURCE_REVIEW=0"
+            ),
+        },
     )
-    assert queued.status_code == 200, queued.text
-    assert queued.json()["status"] == "fallback_required"
-    assert queued.json()["error_code"] == "TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY"
+    assert limits.status_code == 200, limits.text
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    idle_job = await client.post(
+        "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
+        headers=node_headers,
+        json={"environment": "prod"},
+    )
+    assert idle_job.status_code == 200, idle_job.text
+    assert idle_job.json()["build"] is None
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(ScreeningAttempt).where(ScreeningAttempt.agent_id == agent_id)
+            )
+            is None
+        )
+        assert (
+            await session.scalar(
+                select(SubmissionImageBuild).where(
+                    SubmissionImageBuild.agent_id == agent_id
+                )
+            )
+            is None
+        )
+    signed_claim = await client.post(_CLAIM_URL, headers=node_headers)
+    assert signed_claim.status_code == 200, signed_claim.text
+    assert len(signed_claim.json()["items"]) == 1
+    assert signed_claim.json()["items"][0]["agent_id"] == str(agent_id)

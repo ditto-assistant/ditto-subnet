@@ -9,28 +9,13 @@ screener_capacity_venv: "{{ screener_capacity_service_dir }}/.venv"
 screener_capacity_state_dir: /var/lib/ditto-screener-capacity
 screener_capacity_config_dir: /etc/ditto-screener-capacity
 screener_capacity_unit: ditto-screener-capacity
-screener_capacity_builder_unit: ditto-image-builder
 
 screener_capacity_environment: prod
 screener_capacity_platform_url: https://platform-api.heyditto.ai
 screener_capacity_global_cap: 6
 screener_capacity_jobs_per_slot: 6
 screener_capacity_interval_seconds: 30
-screener_capacity_targon_org_slug: ditto
 screener_capacity_gce_project: ditto-app-dev
 screener_capacity_gce_region: us-central1
 screener_capacity_gce_mig: ditto-screener-fleet
-screener_capacity_gcp_bootstrap_service_account: ""
-screener_capacity_source_review_secret_resource: ""
-screener_capacity_builder_targon_resource: cpu-small
-screener_capacity_builder_kaniko_image: us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/kaniko-executor:v1.25.16
-screener_capacity_builder_registry_service_account: ""
-screener_capacity_builder_interval_seconds: 15
-screener_capacity_builder_timeout_seconds: 1800
-screener_capacity_source_review_timeout_seconds: 180
-screener_capacity_candidate_registry_service_account: ""
-screener_capacity_candidate_registry_writer_service_account: ""
-screener_capacity_runtime_timeout_seconds: 180
-
-screener_capacity_targon_api_key_secret: TARGON_API_KEY
 screener_capacity_platform_token_secret: screener-controller-api-token-prod

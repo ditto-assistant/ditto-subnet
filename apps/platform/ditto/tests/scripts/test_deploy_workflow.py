@@ -39,9 +39,40 @@ def test_public_proxy_explicitly_denies_runtime_profiles() -> None:
     template = CADDYFILE_TEMPLATE.read_text()
 
     assert "@runtimeProfiles path /debug/pprof /debug/pprof/*" in template
-    assert "respond @runtimeProfiles 404" in template
+    assert "handle @runtimeProfiles {\n        respond 404\n    }" in template
     for profiler_port in (11000, 11010, 11011, 14434):
         assert str(profiler_port) not in template
+
+
+def test_public_proxy_denies_operator_metrics() -> None:
+    template = CADDYFILE_TEMPLATE.read_text()
+
+    assert "@operatorMetrics path /metrics /metrics/*" in template
+    assert "handle @operatorMetrics {\n        respond 404\n    }" in template
+
+
+def test_public_proxy_denials_precede_every_proxy_route() -> None:
+    """A site-level `respond` would never run under the relay pool.
+
+    Caddy orders `handle` before `respond`, so with platform_inference_relay_ports
+    set (as in prod) a site-level `respond @matcher 404` sorts after the
+    matcher-less `handle { reverse_proxy }` catch-all and every request is
+    proxied. The denials must be `handle` blocks written before any route that
+    proxies, so they win in both the relay and the single-upstream layout.
+    """
+    template = CADDYFILE_TEMPLATE.read_text()
+
+    assert "respond @" not in template
+    first_proxy_route = min(
+        template.index(marker)
+        for marker in (
+            "handle @goUploadAdmission",
+            "handle /api/v1/inference/*",
+            "reverse_proxy localhost:{{ platform_api_port }}",
+        )
+    )
+    for denial in ("handle @runtimeProfiles", "handle @operatorMetrics"):
+        assert template.index(denial) < first_proxy_route, denial
 
 
 def test_api_and_relay_releases_have_independent_concurrency_lanes() -> None:

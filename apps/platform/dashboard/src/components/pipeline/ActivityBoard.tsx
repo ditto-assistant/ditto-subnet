@@ -29,9 +29,8 @@ import {
   ACTIVITY_FILTER_NAMES,
   activityStage,
   duplicateComparisonLabel,
-  isSourceReviewIncomplete,
+  deferredReviewSummary,
   reviewEvidenceNotes,
-  SOURCE_REVIEW_INCOMPLETE_NOTE,
   validationProgress,
 } from "./status";
 import type { ActivityStatusEntry } from "./status";
@@ -139,8 +138,10 @@ function StageCell(props: { entry: ActivityRow }): JSX.Element {
           />
         )}
       </For>
-      <Show when={isSourceReviewIncomplete(e())}>
-        <span class="stage-note">{SOURCE_REVIEW_INCOMPLETE_NOTE}</span>
+      {/* #562: why this row is held and what the automated review concluded,
+          visible without opening the drawer. */}
+      <Show when={deferredReviewSummary(e())}>
+        {(summary) => <span class="stage-note deferred-review-summary">{summary()}</span>}
       </Show>
       <Show when={!e().review_reason && e().screening_reason}>
         {(reason) => <EvidenceNote label="Screening" text={reason()} lines={3} />}

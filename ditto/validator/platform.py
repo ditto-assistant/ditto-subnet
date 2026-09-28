@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
@@ -120,6 +121,7 @@ from ditto.validator.coding_publication import (
 from ditto.validator.errors import (
     PlatformError,
     PlatformInfrastructureError,
+    WeightReceiptConflictError,
 )
 from ditto.validator.signing import (
     sign_artifact_request,
@@ -288,6 +290,16 @@ def _inference_budget_evidence(response: httpx.Response) -> dict[str, int]:
     return evidence
 
 
+def _weight_receipt_conflict_code(response: httpx.Response) -> str:
+    """Platform's bounded ``<code>: ...`` 409 category; never echo the rest."""
+    try:
+        message = response.json()["message"]
+    except (ValueError, KeyError, TypeError):
+        return "unknown"
+    code = message.partition(":")[0] if isinstance(message, str) else ""
+    return code if re.fullmatch(r"[a-z_]{1,32}", code) else "unknown"
+
+
 class PlatformClient:
     """HTTP client for one platform base URL."""
 
@@ -350,6 +362,8 @@ class PlatformClient:
             )
         except httpx.HTTPError as exc:
             raise PlatformError("weight receipt persistence outcome unknown") from exc
+        if response.status_code == 409:
+            raise WeightReceiptConflictError(_weight_receipt_conflict_code(response))
         if response.status_code != 200:
             raise PlatformError(f"weight receipt rejected ({response.status_code})")
         result = SubmitWeightReceiptResponse.model_validate(response.json())

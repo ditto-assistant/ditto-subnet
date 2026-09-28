@@ -38,7 +38,7 @@ import os
 import re
 import statistics
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from datetime import time as datetime_time
@@ -149,6 +149,7 @@ from ditto.api_models import (
     PublicValidatorHeartbeatsResponse,
     PublicValidatorName,
     PublicValidatorNamesResponse,
+    PublicValidatorRetry,
     PublicValidatorScore,
     PublicValidatorSlotPolicy,
     PublicValidatorWeightVector,
@@ -172,6 +173,9 @@ from ditto.api_models.public import (
     BenchServiceability,
     FleetAvailability,
     FleetHealth,
+    PublicAdmissionLane,
+    PublicDeferredReviewTrigger,
+    PublicReviewConclusion,
     PublicScreeningInvariantAssessment,
     PublicScreeningReviewNote,
     ScorerLiveness,
@@ -187,6 +191,7 @@ from ditto.api_models.screener_policy_activation import (
     PublicV13ReviewClockRevision,
     PublicV13ReviewClockSchedule,
 )
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import (
     SystemMetrics,
@@ -218,6 +223,13 @@ from ditto.api_server.continual_retest_settings import (
     tie_weighting_is_active,
 )
 from ditto.api_server.datapipeline import DataPipelineError
+from ditto.api_server.deferred_source_review import (
+    DEFERRED_REVIEW_KIND,
+    deep_review_attempt_id,
+    public_deferred_review_triggers,
+    public_review_conclusion,
+    verified_review_notes,
+)
 from ditto.api_server.efficiency import (
     EfficiencyBoardView,
     ensure_current_efficiency_state,
@@ -285,6 +297,7 @@ from ditto.db.models import (
     Score,
     ScreenerCapacitySnapshot,
     ScreenerNode,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     ScreeningDispute,
     ScreeningQuarantine,
@@ -352,6 +365,7 @@ from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
 from ditto.db.queries.ledger_epochs import latest_pin, list_pins
 from ditto.db.queries.miner_avatars import get_miner_avatar, list_miner_avatars
+from ditto.db.queries.moderation_audit import published_signer_public_keys
 from ditto.db.queries.orphaned_leases import OrphanedLease, list_orphaned_leases
 from ditto.db.queries.queue_order import (
     QueueGate,
@@ -416,10 +430,10 @@ from ditto.db.queries.tickets import (
     get_score_priority_floors,
     score_priority_floor_rows_from_resolved_ledger,
 )
+from ditto.db.queries.transcript_mirror_settings import transcript_mirror_enabled
 from ditto.score_order import score_order_key
 from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
-from ditto_screening_protocol.models import SourceReviewNote, source_review_notes_digest
 
 logger = logging.getLogger(__name__)
 
@@ -971,22 +985,17 @@ def _public_terminal_screening_review(
     # These bounded reviewer-authored summaries are public-safe by protocol.
     # They are working observations, not additional final rejection findings.
     notes: list[PublicScreeningReviewNote] = []
-    if isinstance(quarantine.review_notes, list) and len(quarantine.review_notes) <= 48:
+    parsed_notes = verified_review_notes(
+        quarantine.review_notes, quarantine.review_notes_digest
+    )
+    if parsed_notes is not None:
         try:
-            parsed_notes = [
-                SourceReviewNote.model_validate(item)
-                for item in quarantine.review_notes
+            notes = [
+                PublicScreeningReviewNote.model_validate(note.model_dump())
+                for note in parsed_notes
             ]
-            if (
-                source_review_notes_digest(parsed_notes)
-                == quarantine.review_notes_digest
-            ):
-                notes = [
-                    PublicScreeningReviewNote.model_validate(note.model_dump())
-                    for note in parsed_notes
-                ]
         except ValueError:
-            pass
+            notes = []
 
     evidence: list[PublicScreeningReviewEvidence] = []
     if isinstance(quarantine.evidence, list):
@@ -2227,6 +2236,45 @@ async def _attested_owner_roots_for_rows(
     return {row.agent.agent_id: root for row, root in zip(rows, roots, strict=True)}
 
 
+async def _attested_owner_roots_for_agents(
+    session: Any, agent_ids: Iterable[UUID]
+) -> dict[UUID, str]:
+    """Attested payment-owner root per agent id, as name claims record it.
+
+    For surfaces that only hold agent ids. A root built without the payment
+    coldkey (or with no owner at all) never equals the claimant's root, so an
+    upheld handle would strike its own owner's agents as disputed.
+    """
+    ids = list(set(agent_ids))
+    if not ids:
+        return {}
+    rows = (
+        (
+            await session.execute(
+                select(
+                    Agent.agent_id, Agent.miner_hotkey, EvaluationPayment.miner_coldkey
+                )
+                .select_from(Agent)
+                .outerjoin(
+                    EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id
+                )
+                .where(Agent.agent_id.in_(ids))
+            )
+        )
+        .tuples()
+        .all()
+    )
+    identities = [
+        (hotkey, emission_owner(miner_hotkey=hotkey, miner_coldkey=coldkey))
+        for _agent_id, hotkey, coldkey in rows
+    ]
+    roots = await attested_emission_owner_roots(session, identities)
+    return {
+        agent_id: root
+        for (agent_id, _hotkey, _coldkey), root in zip(rows, roots, strict=True)
+    }
+
+
 def _public_coding_shadow(
     bundle: CodingShadowRunBundle | None,
     *,
@@ -2961,15 +3009,8 @@ async def benchmark_timeline(
     from ditto.db.queries.name_claims import active_handle_claims
 
     handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
-    identities = [
-        (
-            point.miner_hotkey,
-            emission_owner(miner_hotkey=point.miner_hotkey, miner_coldkey=None),
-        )
-        for point in points
-    ]
-    timeline_roots = (
-        await attested_emission_owner_roots(session, identities) if points else []
+    timeline_roots = await _attested_owner_roots_for_agents(
+        session, (point.agent_id for point in points)
     )
     return PublicBenchmarkTimelineResponse(
         generated_at=datetime.now(UTC),
@@ -2981,14 +3022,17 @@ async def benchmark_timeline(
                 bench_version=point.bench_version,
                 agent_id=point.agent_id,
                 agent_name=_public_named(
-                    point.agent_name, root, handle_claims, strike=True
+                    point.agent_name,
+                    timeline_roots.get(point.agent_id),
+                    handle_claims,
+                    strike=True,
                 )[0],
                 miner_hotkey=point.miner_hotkey,
                 memory_mean=point.memory_mean,
                 composite=point.composite,
                 score_count=point.score_count,
             )
-            for point, root in zip(points, timeline_roots, strict=True)
+            for point in points
         ],
     )
 
@@ -3928,8 +3972,11 @@ async def _ledger_actor_names(
         .all()
     )
     claims = await active_handle_claims(session, netuid=_name_claim_netuid())
+    roots = await _attested_owner_roots_for_agents(
+        session, (agent_id for agent_id, _name, _version in rows)
+    )
     return {
-        agent_id: (_public_named(name, None, claims)[0], version)
+        agent_id: (_public_named(name, roots.get(agent_id), claims)[0], version)
         for agent_id, name, version in rows
     }
 
@@ -5551,6 +5598,7 @@ def _public_activity_response(
     duplicate_metadata: dict[UUID, _DuplicateSubmissionMetadata] | None = None,
     ath_reviews: dict[UUID, _PublicAthReviewSnapshot] | None = None,
     ath_review_composite: dict[UUID, float] | None = None,
+    review_inputs: _ReviewProjectionInputs | None = None,
     retired_agent_ids: set[UUID] | None = None,
     ath_only: bool = False,
     terminal_history_limit: int | None = None,
@@ -5731,6 +5779,16 @@ def _public_activity_response(
             return None
         return matches.get(row.agent.duplicate_of)
 
+    review_projections = {
+        row.agent.agent_id: _public_review_projection(
+            row_status=row_status,
+            agent=row.agent,
+            review=_review(row),
+            inputs=review_inputs,
+        )
+        for row, row_status in page_rows
+    }
+
     return PublicActivityResponse(
         generated_at=now,
         count=len(page_rows),
@@ -5791,6 +5849,8 @@ def _public_activity_response(
                     if row.agent.agent_id in (ath_reviews or {})
                     else None
                 ),
+                deferred_review_triggers=review_projections[row.agent.agent_id][0],
+                review_conclusion=review_projections[row.agent.agent_id][1],
                 preserved_composite=(ath_review_composite or {}).get(
                     row.agent.agent_id
                 ),
@@ -5833,6 +5893,31 @@ def _public_activity_response(
                 ),
                 retry_after=(
                     retry_by_agent[row.agent.agent_id].earliest_retry_after
+                    if row_status in ("waiting_validator", "below_score_floor")
+                    and row.agent.agent_id in retry_by_agent
+                    else None
+                ),
+                # Scoped to the same waiting lanes as ``retry_state`` for the
+                # same reason: on a finalized row a past parked lease is
+                # history, not the reason anything is or is not moving.
+                retry_disposition=(
+                    retry_by_agent[row.agent.agent_id].disposition
+                    if row_status in ("waiting_validator", "below_score_floor")
+                    and row.agent.agent_id in retry_by_agent
+                    else None
+                ),
+                terminal_failure_code=(
+                    public_validation_failure_code(
+                        retry_by_agent[row.agent.agent_id].terminal_failure_code
+                    )
+                    if row_status in ("waiting_validator", "below_score_floor")
+                    and row.agent.agent_id in retry_by_agent
+                    else None
+                ),
+                hold_failure_code=(
+                    public_validation_failure_code(
+                        retry_by_agent[row.agent.agent_id].hold_failure_code
+                    )
                     if row_status in ("waiting_validator", "below_score_floor")
                     and row.agent.agent_id in retry_by_agent
                     else None
@@ -5952,6 +6037,203 @@ class _PublicAthReviewSnapshot:
     opened_at: datetime
     original_reason: str
     original_duplicate_of: UUID | None
+    # Internal only: the active deferred review's evidence, reduced to closed
+    # public enums by ``_public_review_projection``. Never serialized.
+    deferred_evidence: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _QuarantineFinding:
+    """Internal only: an active quarantine's review record, never serialized."""
+
+    attempt_id: UUID
+    finding_digest: str | None
+    finding: dict[str, Any] | None
+    review_audit: dict[str, Any] | None
+    review_notes: list[Any] | None
+    review_notes_digest: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ReviewProjectionInputs:
+    """Internal only: per-page inputs for ``_public_review_projection``."""
+
+    quarantines: dict[UUID, _QuarantineFinding]
+    # attempt_id -> ``concern_hold_count`` from that attempt's pinned settings.
+    concern_hold_counts: dict[UUID, int]
+
+    def concern_hold_count(self, attempt_id: UUID | None) -> int:
+        """The pinned threshold, else the fail-safe floor of 1."""
+        if attempt_id is None:
+            return _FAIL_SAFE_CONCERN_HOLD_COUNT
+        return self.concern_hold_counts.get(attempt_id, _FAIL_SAFE_CONCERN_HOLD_COUNT)
+
+
+# Unknown threshold: any substantiated concern on a held budget row is adverse.
+_FAIL_SAFE_CONCERN_HOLD_COUNT = 1
+
+
+async def _pinned_concern_hold_counts(
+    session: AsyncSession, attempt_ids: set[UUID]
+) -> dict[UUID, int]:
+    """``concern_hold_count`` from the review settings each attempt ran under.
+
+    Only an attempt pinned to a settings revision whose checksum and scope
+    still match has a knowable threshold. An unbound attempt ran on the
+    worker's local bootstrap settings or predates binding, and no stored row
+    says which count it used; "the latest revision now" is not it, and an
+    operator raising the count later would soften old concern-held rows. Those
+    attempts, and any unresolvable binding, use the fail-safe floor of 1: any
+    substantiated concern on a held budget row reads ``adverse_signal``.
+    """
+    if not attempt_ids:
+        return {}
+    attempts = (
+        (
+            await session.execute(
+                select(
+                    ScreeningAttempt.attempt_id,
+                    ScreeningAttempt.review_settings_revision,
+                    ScreeningAttempt.review_settings_checksum,
+                    ScreeningAttempt.review_settings_scope,
+                ).where(ScreeningAttempt.attempt_id.in_(attempt_ids))
+            )
+        )
+        .tuples()
+        .all()
+    )
+    pinned = {revision for _, revision, _, _ in attempts if revision is not None}
+    revisions = (
+        {
+            row.revision: row
+            for row in await session.scalars(
+                select(ScreenerReviewSettingsRevision).where(
+                    ScreenerReviewSettingsRevision.revision.in_(pinned)
+                )
+            )
+        }
+        if pinned
+        else {}
+    )
+    counts: dict[UUID, int] = {}
+    for attempt_id, revision, checksum, scope in attempts:
+        row = revisions.get(revision) if revision is not None else None
+        if row is None or row.checksum != checksum or row.scope != scope:
+            continue
+        try:
+            counts[attempt_id] = ScreenerReviewSettings.model_validate(
+                row.settings
+            ).concern_hold_count
+        except ValueError:
+            continue
+    return counts
+
+
+async def _public_review_inputs(
+    session: AsyncSession,
+    rows: list[Any],
+    ath_reviews: dict[UUID, _PublicAthReviewSnapshot],
+) -> _ReviewProjectionInputs:
+    """Active quarantine records and pinned hold thresholds for this page.
+
+    At most one quarantine per agent is active
+    (``screening_quarantines_one_active_agent_idx``), and the lookup is
+    limited to rows whose agent is currently quarantined.
+    """
+    agent_ids = {
+        row.agent.agent_id
+        for row in rows
+        if row.agent.status == AgentStatus.QUARANTINED
+    }
+    quarantines: dict[UUID, _QuarantineFinding] = {}
+    if agent_ids:
+        result = await session.execute(
+            select(
+                ScreeningQuarantine.agent_id,
+                ScreeningQuarantine.attempt_id,
+                ScreeningQuarantine.finding_digest,
+                ScreeningQuarantine.finding,
+                ScreeningQuarantine.review_audit,
+                ScreeningQuarantine.review_notes,
+                ScreeningQuarantine.review_notes_digest,
+            ).where(
+                ScreeningQuarantine.agent_id.in_(agent_ids),
+                ScreeningQuarantine.status == "active",
+            )
+        )
+        quarantines = {
+            agent_id: _QuarantineFinding(
+                attempt_id=attempt_id,
+                finding_digest=digest,
+                finding=finding,
+                review_audit=review_audit,
+                review_notes=review_notes,
+                review_notes_digest=review_notes_digest,
+            )
+            for (
+                agent_id,
+                attempt_id,
+                digest,
+                finding,
+                review_audit,
+                review_notes,
+                review_notes_digest,
+            ) in result.tuples()
+        }
+    attempt_ids = {quarantine.attempt_id for quarantine in quarantines.values()}
+    for row in rows:
+        review = ath_reviews.get(row.agent.agent_id)
+        if review is not None and review.deferred_evidence is not None:
+            deep_attempt = deep_review_attempt_id(review.deferred_evidence)
+            if deep_attempt is not None:
+                attempt_ids.add(deep_attempt)
+    return _ReviewProjectionInputs(
+        quarantines=quarantines,
+        concern_hold_counts=await _pinned_concern_hold_counts(session, attempt_ids),
+    )
+
+
+def _public_review_projection(
+    *,
+    row_status: str,
+    agent: Agent,
+    review: _PublicAthReviewSnapshot | None,
+    inputs: _ReviewProjectionInputs | None,
+) -> tuple[list[PublicDeferredReviewTrigger], PublicReviewConclusion | None]:
+    """Public trigger kinds and automated-review conclusion for one row (#562)."""
+    if row_status != "under_review":
+        return [], None
+    evidence = review.deferred_evidence if review is not None else None
+    inputs = inputs or _ReviewProjectionInputs(quarantines={}, concern_hold_counts={})
+    quarantine = inputs.quarantines.get(agent.agent_id)
+    return (
+        public_deferred_review_triggers(evidence),
+        public_review_conclusion(
+            deferred_review_active=evidence is not None,
+            deferred_evidence=evidence,
+            deferred_concern_hold_count=inputs.concern_hold_count(
+                deep_review_attempt_id(evidence)
+            ),
+            quarantined=agent.status == AgentStatus.QUARANTINED,
+            screening_reason_code=agent.screening_reason_code,
+            quarantine_finding_digest=(
+                quarantine.finding_digest if quarantine is not None else None
+            ),
+            quarantine_finding=(quarantine.finding if quarantine is not None else None),
+            quarantine_review_audit=(
+                quarantine.review_audit if quarantine is not None else None
+            ),
+            quarantine_review_notes=(
+                quarantine.review_notes if quarantine is not None else None
+            ),
+            quarantine_review_notes_digest=(
+                quarantine.review_notes_digest if quarantine is not None else None
+            ),
+            quarantine_concern_hold_count=inputs.concern_hold_count(
+                quarantine.attempt_id if quarantine is not None else None
+            ),
+        ),
+    )
 
 
 _DIRECT_POLICY_V12_REJECTION = re.compile(
@@ -6023,6 +6305,14 @@ async def _ath_review_public_snapshot(
             opened_at=lifecycle.opened_at,
             original_reason=review.original_reason or DEFAULT_OPEN_REASON,
             original_duplicate_of=review.original_duplicate_of,
+            deferred_evidence=(
+                review.original_evidence
+                if review.status == "pending"
+                and review.algorithm_provenance.get("review_kind")
+                == DEFERRED_REVIEW_KIND
+                and isinstance(review.original_evidence, dict)
+                else None
+            ),
         )
 
     active_agent_ids = {
@@ -6186,6 +6476,7 @@ async def activity(
         policy=release_policy,
     )
     ath_reviews, ath_composite = await _ath_review_public_snapshot(session, rows)
+    review_inputs = await _public_review_inputs(session, rows, ath_reviews)
     queue_preview = await queue_preview_for_rows(
         session,
         rows=rows,
@@ -6224,6 +6515,7 @@ async def activity(
         duplicate_metadata=await _duplicate_submission_metadata(session, rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
+        review_inputs=review_inputs,
         precomputed_statuses=statuses,
         precomputed_status_counts=activity_page.status_counts,
         precomputed_downloadable_count=activity_page.downloadable_count,
@@ -6450,6 +6742,7 @@ async def operations(
     ath_reviews, ath_composite = await _ath_review_public_snapshot(
         session, activity_rows
     )
+    review_inputs = await _public_review_inputs(session, activity_rows, ath_reviews)
     # Operations keeps stored agents.name; handle annotations still travel so
     # the operator board can mark a reserved or stricken stem.
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
@@ -6494,6 +6787,7 @@ async def operations(
         duplicate_metadata=await _duplicate_submission_metadata(session, activity_rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
+        review_inputs=review_inputs,
         precomputed_statuses=activity_statuses,
         precomputed_status_counts=activity_page.status_counts,
         precomputed_downloadable_count=activity_page.downloadable_count,
@@ -6566,6 +6860,19 @@ async def operations(
                     retry_state=retry.state if retry is not None else "queued",
                     retry_after=(
                         retry.earliest_retry_after if retry is not None else None
+                    ),
+                    retry_disposition=(
+                        retry.disposition if retry is not None else None
+                    ),
+                    terminal_failure_code=(
+                        public_validation_failure_code(retry.terminal_failure_code)
+                        if retry is not None
+                        else None
+                    ),
+                    hold_failure_code=(
+                        public_validation_failure_code(retry.hold_failure_code)
+                        if retry is not None
+                        else None
                     ),
                     active_benchmarks=progress,
                 )
@@ -6818,6 +7125,12 @@ async def agent_summary(
         else {}
     )
     review = ath_reviews.get(agent_id)
+    review_projection = _public_review_projection(
+        row_status=status,
+        agent=row.agent,
+        review=review,
+        inputs=await _public_review_inputs(session, [row], ath_reviews),
+    )
     show_similarity_evidence = not _supersedes_public_similarity_evidence(review)
     duplicate = (
         duplicate_metadata.get(row.agent.duplicate_of)
@@ -6872,6 +7185,8 @@ async def agent_summary(
             else None
         ),
         review_opened_at=review.opened_at if review is not None else None,
+        deferred_review_triggers=review_projection[0],
+        review_conclusion=review_projection[1],
         preserved_composite=ath_composites.get(agent_id),
         active_benchmarks=[
             _public_benchmark_progress(
@@ -6884,6 +7199,49 @@ async def agent_summary(
             for work in active_work
         ],
     )
+
+
+# The lane each Ditto-side admission failure stopped in. Any other reason code
+# names no lane the public pipeline can vouch for.
+_ADMISSION_LANE_BY_REASON_CODE: dict[str, PublicAdmissionLane] = {
+    "docker-build-infrastructure": "build",
+    "targon-build-unavailable": "build",
+    "cloudrun-build-unavailable": "build",
+    "targon-runtime-unavailable": "runtime_smoke",
+    "cloudrun-runtime-unavailable": "runtime_smoke",
+    "targon-source-review-unavailable": "source_review",
+    "source-review-retryable-infra": "source_review",
+}
+
+
+async def _admission_lane(
+    session: AsyncSession, attempt: ScreeningAttempt
+) -> PublicAdmissionLane | None:
+    """The admission lane ``attempt`` is in or stopped in, when Platform knows.
+
+    A failure's reason code names the lane that failed. Otherwise the attempt's
+    Platform-queued image build orders the lanes: build, then runtime smoke,
+    then source review. A worker-local build or smoke leaves no row to evidence
+    its progress, so that lane stays unknown.
+    """
+    if attempt.reason_code is not None:
+        return _ADMISSION_LANE_BY_REASON_CODE.get(attempt.reason_code)
+    build = await session.scalar(
+        select(SubmissionImageBuild).where(
+            SubmissionImageBuild.attempt_id == attempt.attempt_id
+        )
+    )
+    if build is None:
+        return None
+    if build.status in ("queued", "leased", "running"):
+        return "build"
+    if build.status not in ("succeeded", "consumed"):
+        return None
+    if build.runtime_status in ("pending", "running"):
+        return "runtime_smoke"
+    if build.runtime_status == "succeeded" and not attempt.build_only:
+        return "source_review"
+    return None
 
 
 @router.get("/agent/{agent_id}/pipeline", response_model=PublicSubmissionPipeline)
@@ -6971,6 +7329,12 @@ async def agent_pipeline(
             attempt_count=len(attempts),
             next_retry_at=next_retry_at,
             last_failure_infrastructure=last_failure_infrastructure,
+            # A queued submission has not entered this cycle's first lane yet.
+            lane=(
+                await _admission_lane(session, latest_attempt)
+                if latest_attempt is not None and retry_state != "queued"
+                else None
+            ),
         )
     quarantines = list(
         await session.scalars(
@@ -7106,6 +7470,33 @@ async def agent_pipeline(
         )
     )
     canonical_version = await active_bench_version(session)
+    # The same classification the operations feed publishes, for one agent. A
+    # submission that is finalized, withdrawn, or has no validator work yet is
+    # absent from the result, which is the null case on the wire.
+    validator_retry_state = (
+        await _public_retry_states(
+            request,
+            session,
+            agents=[agent],
+            now=now,
+            canonical_version=canonical_version,
+        )
+    ).get(agent_id)
+    validator_retry = (
+        PublicValidatorRetry(
+            state=validator_retry_state.state,
+            disposition=validator_retry_state.disposition,
+            terminal_failure_code=public_validation_failure_code(
+                validator_retry_state.terminal_failure_code
+            ),
+            hold_failure_code=public_validation_failure_code(
+                validator_retry_state.hold_failure_code
+            ),
+            retry_after=validator_retry_state.earliest_retry_after,
+        )
+        if validator_retry_state is not None
+        else None
+    )
     # Read every generation before owner reduction, then run the same current
     # official-score resolver and canonical owner dedupe used by ranking/floor
     # authority. The old detail path read the SQL pre-efficiency representative,
@@ -7280,6 +7671,7 @@ async def agent_pipeline(
         generated_at=now,
         agent_id=agent_id,
         admission_retry=admission_retry,
+        validator_retry=validator_retry,
         ordinary_review=ordinary_review,
         artifact_release=(
             await _artifact_release_snapshot(
@@ -7793,6 +8185,7 @@ async def audit(
         count=len(entries),
         genesis_hash=GENESIS_HASH,
         head_hash=entries[-1].entry_hash if entries else None,
+        moderation_signer_public_keys=published_signer_public_keys(),
         entries=[
             PublicAuditEntry(
                 seq=e.seq,
@@ -7902,7 +8295,7 @@ async def bench_config(
     )
     transcript_template = (
         f"https://storage.googleapis.com/{public_bucket}/transcripts/{{sha256}}.json"
-        if public_bucket
+        if public_bucket and await transcript_mirror_enabled(session)
         else None
     )
     return PublicBenchConfigResponse(
@@ -8143,7 +8536,8 @@ async def benchmark_rollout_state(
     ``ranked_quorum_agents`` / ``min_ranked_quorum_agents`` answer the question
     the rest of this payload only implies: how close the desired version is to
     taking over weight-setting. Weights stay on ``active_version`` until the
-    former reaches the latter.
+    priority-cohort gate closes AND the former reaches the latter;
+    ``promotion_pending`` / ``promotion_requirement`` say so directly.
     """
     response.headers["Cache-Control"] = "public, max-age=30"
     state = await rollout_state(session)

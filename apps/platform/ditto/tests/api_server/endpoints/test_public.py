@@ -52,6 +52,7 @@ from ditto.api_models.screener import (
     SourceReviewEvidenceItem,
     SourceReviewFinding,
 )
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_models.stack_health import (
     ComponentHealthState,
     ValidatorComponentHealth,
@@ -101,6 +102,7 @@ from ditto.db.models import (
     LedgerEpochSnapshot,
     OwnerAttestation,
     Score,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     ScreeningQuarantine,
     SubmissionImageBuild,
@@ -116,7 +118,10 @@ from ditto.db.queries.audit import (
 from ditto.db.queries.benchmark_rollout import (
     DEFAULT_BENCH_VERSION,
     LEGACY_BENCH_VERSION,
+    MIN_DESIRED_AUTHORITY_AGENTS,
     MIN_SCOREABLE_BENCH_VERSION,
+    PRIORITY_COHORT_SIZE,
+    SCORING_QUORUM,
 )
 from ditto.db.queries.coding_evaluations import CodingShadowRunBundle
 from ditto.db.queries.confirmation_bundles import (
@@ -134,6 +139,11 @@ from ditto.tests.legacy_era import (
 )
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
+from ditto_screening_protocol.models import (
+    ScreenReviewAudit,
+    SourceReviewNote,
+    source_review_notes_digest,
+)
 
 # Every use of SCREENING_POLICY_VERSION in this module means "the version the
 # platform REQUIRES," which — with no scheduled activation written — is the
@@ -145,6 +155,13 @@ SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 _MINER_A = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _MINER_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
 _VALIDATOR_C = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+
+
+def _fake_validator_hotkey(index: int) -> str:
+    """A distinct SS58-shaped hotkey; the public models validate the pattern."""
+    return f"5{'BCDEFGH'[index]}" + "A" * 46
+
+
 # The era every generic fixture in this file sits on. Almost nothing here is
 # about a particular benchmark generation -- these tests need *a* score, and v2
 # was only ever the value ``DEFAULT_BENCH_VERSION`` happened to hold. The
@@ -452,6 +469,80 @@ def test_composite_breakdown_shows_no_token_penalty_when_within_budget() -> None
     )
     assert breakdown.token_efficiency_multiplier == 1.0
     assert breakdown.token_penalty == 0.0
+
+
+def test_composite_breakdown_publishes_neutral_quality_only_token_multiplier() -> None:
+    # Byte shape of DittoBench's efficiency.ApplyForVersion for bench v7+: no
+    # baseline, and a zero budget percentile because no budget exists.
+    token_efficiency = {
+        "formula_version": "v7-quality-only-v1",
+        "budget_percentile": 0,
+        "observed_prompt_tokens": 1_000_000,
+        "observed_completion_tokens": 283_639,
+        "observed_total_tokens": 1_283_639,
+        "excess_ratio": 0,
+        "maximum_penalty": 0,
+        "minimum_multiplier": 1,
+        "multiplier": 1,
+        "raw_composite": 0.834978,
+        "adjusted_composite": 0.834978,
+        "raw_composite_stderr": 0.01,
+        "adjusted_composite_stderr": 0.01,
+        "penalty_applied": False,
+        "decision_reason": "v7_quality_only_contract",
+    }
+    details = {"token_efficiency": token_efficiency}
+
+    decision = public_endpoint._safe_token_efficiency(details)
+    breakdown = public_endpoint._composite_breakdown(
+        tool_mean=0.95,
+        memory_mean=0.9768707482,
+        final_composite=0.834978,
+        details=details,
+    )
+
+    assert decision is not None and decision.budget_percentile == 0.0
+    assert breakdown is not None
+    assert breakdown.pre_token_composite == 0.834978
+    assert breakdown.token_efficiency_multiplier == 1.0
+    assert breakdown.token_penalty == 0.0
+    assert breakdown.maximum_token_penalty == 0.0
+
+    # The zero percentile is accepted only on a record that stayed neutral.
+    token_efficiency["multiplier"] = 0.95
+    assert public_endpoint._safe_token_efficiency(details) is None
+    token_efficiency["multiplier"] = 1
+    token_efficiency["penalty_applied"] = True
+    assert public_endpoint._safe_token_efficiency(details) is None
+
+
+def test_budgeted_token_record_still_requires_a_budget_percentile() -> None:
+    details = {
+        "token_efficiency": {
+            "formula_version": "v5-relay-token-waste-p90-v1",
+            "baseline_id": "v5-baseline",
+            "baseline_total_tokens": 1_491_793,
+            "budget_percentile": 0,
+            "observed_prompt_tokens": 1_000_000,
+            "observed_completion_tokens": 283_639,
+            "observed_total_tokens": 1_283_639,
+            "excess_ratio": 0.0,
+            "maximum_penalty": 0.1,
+            "minimum_multiplier": 0.9,
+            "multiplier": 1.0,
+            "raw_composite": 0.493952,
+            "adjusted_composite": 0.493952,
+            "penalty_applied": False,
+            "decision_reason": "within_budget",
+        },
+    }
+
+    assert public_endpoint._safe_token_efficiency(details) is None
+    breakdown = public_endpoint._composite_breakdown(
+        tool_mean=0.8, memory_mean=0.8, final_composite=0.493952, details=details
+    )
+    assert breakdown is not None
+    assert breakdown.token_efficiency_multiplier is None
 
 
 def test_public_coding_shadow_keeps_absent_pending_stale_and_zero_distinct() -> None:
@@ -4853,6 +4944,73 @@ class TestPublicLeaderboard:
         assert partial["rollout_composite"] == pytest.approx(0.5)
         assert partial["rollout_score_count"] == 1
 
+    async def test_rollout_status_publishes_promotion_progress(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """#2079 follow-up: rollout status says what emissions are waiting on.
+
+        #2098 labels the board's ``scoring_bench_version`` apart from its
+        ``emission_bench_version``. This is the other half of the question a
+        miner asks when those differ -- what still has to happen -- answered
+        by ``/bench/rollout`` from the live gate values, then cleared by the
+        activation that makes the two versions equal again.
+        """
+        await _activate_era(session_maker)
+        await _seed_k3(session_maker, miner=_MINER_A, composites=[0.8, 0.8, 0.8])
+        rollout_id = uuid4()
+        async with session_maker() as s, s.begin():
+            s.add(
+                BenchmarkRollout(
+                    rollout_id=rollout_id,
+                    from_version=_ERA,
+                    desired_version=_NEXT_ERA,
+                    status="collecting",
+                    cohort_size=5,
+                    priority_cohort_target=PRIORITY_COHORT_SIZE,
+                    created_at=datetime.now(UTC),
+                )
+            )
+        _install_db(app, session_maker)
+
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        rollout = (await client.get("/api/v1/public/bench/rollout")).json()
+        # The rollout status and #2098's board fields describe one state.
+        assert board["scoring_bench_version"] == rollout["desired_version"]
+        assert board["emission_bench_version"] == rollout["active_version"] == _ERA
+        assert rollout["status"] == "collecting"
+        assert rollout["promotion_pending"] is True
+        assert rollout["priority_cohort_size"] == PRIORITY_COHORT_SIZE
+        assert rollout["priority_cohort_ready_count"] == 0
+        requirement = rollout["promotion_requirement"]
+        assert f"Bench v{_NEXT_ERA} scoring is in progress" in requirement
+        assert f"Bench v{_ERA} still controls emissions" in requirement
+        assert (
+            f"first {PRIORITY_COHORT_SIZE} inherited priority-cohort positions"
+            in requirement
+        )
+        assert f"complete {SCORING_QUORUM}-score v{_NEXT_ERA} quorum" in requirement
+        assert f"at least {MIN_DESIRED_AUTHORITY_AGENTS} agents" in requirement
+
+        # The completed activation: emission authority moves and nothing is
+        # pending any more, on the rollout status and on the board alike.
+        async with session_maker() as s, s.begin():
+            row = await s.get(BenchmarkRollout, rollout_id)
+            assert row is not None
+            row.status = "activated"
+            row.activated_at = datetime.now(UTC)
+
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        rollout = (await client.get("/api/v1/public/bench/rollout")).json()
+        assert rollout["status"] == "activated"
+        assert rollout["active_version"] == rollout["desired_version"] == _NEXT_ERA
+        assert board["emission_bench_version"] == board["scoring_bench_version"]
+        assert board["emission_bench_version"] == _NEXT_ERA
+        assert rollout["promotion_pending"] is False
+        assert rollout["promotion_requirement"] is None
+
     async def test_rollout_state_is_null_without_an_open_rollout(
         self,
         app: FastAPI,
@@ -6351,6 +6509,8 @@ class TestPublicActivity:
             "review_event_at": None,
             "review_original_reason": None,
             "review_opened_at": None,
+            "deferred_review_triggers": [],
+            "review_conclusion": None,
             "preserved_composite": None,
             "active_benchmarks": [],
         }
@@ -6486,6 +6646,9 @@ class TestPublicActivity:
                 "quorum": 3,
                 "retry_state": "queued",
                 "retry_after": None,
+                "retry_disposition": None,
+                "terminal_failure_code": None,
+                "hold_failure_code": None,
                 "active_benchmarks": [],
             }
         ]
@@ -6753,6 +6916,8 @@ class TestPublicActivity:
             "review_event_at",
             "review_original_reason",
             "review_opened_at",
+            "deferred_review_triggers",
+            "review_conclusion",
             "preserved_composite",
             "score_count",
             "provisional_composite",
@@ -6763,6 +6928,9 @@ class TestPublicActivity:
             "quorum",
             "retry_state",
             "retry_after",
+            "retry_disposition",
+            "terminal_failure_code",
+            "hold_failure_code",
             "screening_policy_version",
             "required_screening_policy_version",
             "screening_attempt_id",
@@ -6861,6 +7029,590 @@ class TestPublicActivity:
             "opened_by",
         ):
             assert private_value not in serialized
+
+    async def test_deferred_review_projects_only_trigger_and_conclusion_enums(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """#562: say why a row is held and whether a finding exists, nothing more."""
+        opened_at = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
+        private_note = "PRIVATE-REVIEW-NOTE src/secret_router.rs:42"
+        private_digest = "fd" * 32
+
+        def deferred_evidence(
+            triggers: list[str], deep_result: dict[str, object] | None
+        ) -> dict[str, object]:
+            evidence: dict[str, object] = {
+                "sha256": "ab" * 32,
+                "previous_status": "scored",
+                "deferred_review": {
+                    "rank": 3,
+                    "cohort_size": 41,
+                    "thresholds": {"composite": {"median": 0.4312, "mad": 0.0917}},
+                    "triggers": triggers,
+                    "screening_reason_code": "deferred-mechanical-admission",
+                    "review_notes": [{"summary": private_note}],
+                },
+            }
+            if deep_result is not None:
+                evidence["deep_review_result"] = deep_result
+            return evidence
+
+        # Audit shapes as the screener records them (see
+        # test_deferred_source_review.py for the producer mapping).
+        l1_budget_audit = ScreenReviewAudit(
+            stage="l1",
+            reason_code="source-review-read-budget-exhausted",
+            prompt_revision="l1-v13",
+            max_steps=240,
+            steps_used=37,
+            max_read_bytes=320_000,
+            read_bytes_used=338_278,
+        ).model_dump(mode="json")
+        l2_inconclusive_audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-model-inconclusive",
+            prompt_revision="l2-v13",
+            max_steps=64,
+            steps_used=12,
+            model_disposition="inconclusive",
+            model_steps_observed=12,
+            budget_stop_reason="none",
+        ).model_dump(mode="json")
+        preflight_audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-runtime-evidence-unavailable",
+            prompt_revision="l2-v13",
+            max_steps=64,
+            steps_used=0,
+            model_steps_observed=0,
+            final_stage="preflight",
+            cause_detail="lease_unavailable",
+        ).model_dump(mode="json")
+        concern_site = "src/PRIVATE_CONCERN_SITE.rs"
+        concern_notes = [
+            {
+                "kind": "concern",
+                "category": "none",
+                "path": concern_site,
+                "line": line,
+                "summary": private_note,
+                "stage": "l1",
+            }
+            for line in (3, 17, 41)
+        ]
+        # Thin coverage: an uncited concern is not substantiated, so even the
+        # fail-safe floor of 1 that an unbound attempt gets is not reached.
+        thin_notes: list[dict[str, object]] = [
+            {
+                "kind": "concern",
+                "category": "none",
+                "summary": private_note,
+                "stage": "l1",
+            },
+            {"kind": "cleared", "category": "none", "summary": "ok", "stage": "l1"},
+        ]
+
+        def ledger_digest(notes: list[dict[str, object]]) -> str:
+            """The digest a genuine writer records with ``notes``."""
+            return source_review_notes_digest(
+                [SourceReviewNote.model_validate(note) for note in notes]
+            )
+
+        budget_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "inconclusive",
+            "reason_code": "source-review-inconclusive",
+            "finding_digest": None,
+            "review_audit": l1_budget_audit,
+            "review_notes": thin_notes,
+            "review_notes_digest": ledger_digest(thin_notes),
+        }
+        # A thin ledger presented with the digest of the concern-bearing ledger
+        # it replaced: unverifiable, so it must not lower the conclusion.
+        tampered_result: dict[str, object] = {
+            **budget_result,
+            "attempt_id": str(uuid4()),
+            "review_notes_digest": ledger_digest(concern_notes),
+        }
+        pinned_attempt = uuid4()
+        concern_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "inconclusive",
+            "reason_code": "source-review-inconclusive",
+            "finding_digest": None,
+            "review_audit": l1_budget_audit,
+            "review_notes": concern_notes,
+            "review_notes_digest": ledger_digest(concern_notes),
+        }
+        unbound_attempt = uuid4()
+        concern_unbound_result: dict[str, object] = {
+            **concern_result,
+            "attempt_id": str(unbound_attempt),
+            # One substantiated concern: below every configured threshold.
+            "review_notes": concern_notes[:1],
+            "review_notes_digest": ledger_digest(concern_notes[:1]),
+        }
+        concern_pinned_result: dict[str, object] = {
+            **concern_result,
+            "attempt_id": str(pinned_attempt),
+        }
+        preflight_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "pass_inconclusive",
+            "reason_code": "source-review-inconclusive",
+            "finding_digest": None,
+            "review_audit": preflight_audit,
+        }
+        auditless_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "pass_inconclusive",
+            "reason_code": "source-review-inconclusive",
+            "finding_digest": None,
+            "review_audit": None,
+        }
+        model_inconclusive_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "inconclusive",
+            "reason_code": "l2-model-inconclusive",
+            "finding_digest": None,
+            "review_audit": l2_inconclusive_audit,
+        }
+        adverse_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "quarantine",
+            "reason_code": "source-safety-malicious-risk",
+            "finding_digest": private_digest,
+            "review_audit": None,
+        }
+        interrupted_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "retryable_infra",
+            "reason_code": "docker-build-infrastructure",
+            "finding_digest": None,
+            "review_notes": [{"summary": private_note}],
+        }
+        quarantine_digest = "ee" * 32
+        cases: dict[str, tuple[AgentStatus, str | None, dict[str, object] | None]] = {
+            "budget-top5": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], budget_result),
+            ),
+            "pending-both": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five", "tool_anomaly"], None),
+            ),
+            "adverse-anomaly": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["composite_anomaly"], adverse_result),
+            ),
+            "preflight-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], preflight_result),
+            ),
+            "auditless-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], auditless_result),
+            ),
+            "inconclusive-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], model_inconclusive_result),
+            ),
+            "concern-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], concern_result),
+            ),
+            "concern-pinned-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], concern_pinned_result),
+            ),
+            "concern-unbound-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], concern_unbound_result),
+            ),
+            "tampered-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], tampered_result),
+            ),
+            "quarantine-stale-digest": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
+            ),
+            "quarantine-budget-no-notes": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
+            ),
+            "quarantine-concern": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
+            ),
+            "quarantine-thin": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
+            ),
+            "quarantine-budget": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
+            ),
+            "quarantine-preflight": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
+            ),
+            "quarantine-auditless": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
+            ),
+            "quarantine-inconclusive": (
+                AgentStatus.QUARANTINED,
+                "l2-model-inconclusive",
+                None,
+            ),
+            "quarantine-tripwire": (
+                AgentStatus.QUARANTINED,
+                "agentic-source-review-tripwire",
+                None,
+            ),
+            "interrupted-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], interrupted_result),
+            ),
+            "quarantine-finding": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
+            ),
+            "copy-hold": (AgentStatus.ATH_PENDING_REVIEW, None, None),
+        }
+        ids: dict[str, UUID] = {}
+        for name, (status, code, _evidence) in cases.items():
+            ids[name] = UUID(
+                await _seed_agent(
+                    session_maker, miner=_MINER_A, status=status, name=name
+                )
+            )
+            async with session_maker() as session, session.begin():
+                agent = await session.get(Agent, ids[name])
+                assert agent is not None
+                agent.screening_reason_code = code
+        async with session_maker() as session, session.begin():
+            for name, (status, _code, evidence) in cases.items():
+                if status != AgentStatus.ATH_PENDING_REVIEW:
+                    continue
+                session.add(
+                    AthReview(
+                        review_id=uuid4(),
+                        agent_id=ids[name],
+                        status="pending",
+                        opened_at=opened_at,
+                        original_duplicate_of=None,
+                        original_reason=(
+                            "Score qualified this submission for deferred source review"
+                            if evidence is not None
+                            else "Submission requires ATH similarity review"
+                        ),
+                        original_policy_version=13,
+                        original_evidence=evidence or {"sha256": "ab" * 32},
+                        algorithm_provenance={
+                            "review_kind": (
+                                "deferred_source_review"
+                                if evidence is not None
+                                else "copy"
+                            )
+                        },
+                    )
+                )
+        # Active pre-score quarantines: (reason code, finding digest, finding,
+        # review audit). A finding is never softened; otherwise only a proving
+        # audit may publish a no-finding state.
+        quarantine_rows: dict[
+            str,
+            tuple[
+                str,
+                str | None,
+                dict[str, object] | None,
+                dict | None,
+                list[dict[str, object]] | None,
+            ],
+        ] = {
+            "quarantine-concern": (
+                "source-review-inconclusive",
+                None,
+                None,
+                l1_budget_audit,
+                concern_notes,
+            ),
+            "quarantine-thin": (
+                "source-review-inconclusive",
+                None,
+                None,
+                l1_budget_audit,
+                thin_notes,
+            ),
+            "quarantine-finding": (
+                "source-review-inconclusive",
+                quarantine_digest,
+                {"risk": "high", "summary": private_note},
+                None,
+                None,
+            ),
+            "quarantine-budget": (
+                "source-review-inconclusive",
+                None,
+                None,
+                {
+                    **l1_budget_audit,
+                    "reason_code": "source-review-step-budget-exhausted",
+                },
+                [],
+            ),
+            # A concern-bearing ledger replaced by an empty list, keeping the
+            # original digest: unverifiable.
+            "quarantine-stale-digest": (
+                "source-review-inconclusive",
+                None,
+                None,
+                l1_budget_audit,
+                [],
+            ),
+            # A legacy quarantine with a budget audit but no retained ledger.
+            "quarantine-budget-no-notes": (
+                "source-review-inconclusive",
+                None,
+                None,
+                l1_budget_audit,
+                None,
+            ),
+            "quarantine-preflight": (
+                "source-review-inconclusive",
+                None,
+                None,
+                preflight_audit,
+                None,
+            ),
+            "quarantine-inconclusive": (
+                "l2-model-inconclusive",
+                None,
+                None,
+                l2_inconclusive_audit,
+                None,
+            ),
+        }
+        async with session_maker() as session, session.begin():
+            # A settings revision pinned on one deferred deep attempt raises its
+            # hold threshold to 4, so the same three concerns stay a budget hold.
+            session.add(
+                ScreenerReviewSettingsRevision(
+                    revision=1,
+                    parent_revision=0,
+                    scope="pinned-test",
+                    settings=ScreenerReviewSettings(concern_hold_count=4).model_dump(
+                        mode="json"
+                    ),
+                    reason="pinned concern threshold for #562",
+                    actor="tests",
+                    checksum="9a" * 32,
+                )
+            )
+            # The latest GLOBAL revision raises the count to 4. An unbound
+            # attempt did not run under it, so it must not soften that row.
+            session.add(
+                ScreenerReviewSettingsRevision(
+                    revision=2,
+                    parent_revision=0,
+                    scope="*",
+                    settings=ScreenerReviewSettings(concern_hold_count=4).model_dump(
+                        mode="json"
+                    ),
+                    reason="later global raise of the concern threshold",
+                    actor="tests",
+                    checksum="8b" * 32,
+                )
+            )
+            await session.flush()
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=unbound_attempt,
+                    agent_id=ids["concern-unbound-deep"],
+                    screener_hotkey=_MINER_B,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="quarantined",
+                    started_at=opened_at,
+                    deadline=opened_at + timedelta(minutes=30),
+                    finished_at=opened_at + timedelta(minutes=5),
+                    public_reason="Deferred source review held",
+                )
+            )
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=pinned_attempt,
+                    agent_id=ids["concern-pinned-deep"],
+                    screener_hotkey=_MINER_B,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="quarantined",
+                    review_settings_revision=1,
+                    review_settings_instance_id="test-screener",
+                    review_settings_scope="pinned-test",
+                    review_settings_checksum="9a" * 32,
+                    started_at=opened_at,
+                    deadline=opened_at + timedelta(minutes=30),
+                    finished_at=opened_at + timedelta(minutes=5),
+                    public_reason="Deferred source review held",
+                )
+            )
+            for name, (
+                q_code,
+                q_digest,
+                q_finding,
+                q_audit,
+                q_notes,
+            ) in quarantine_rows.items():
+                attempt_id = uuid4()
+                session.add(
+                    ScreeningAttempt(
+                        attempt_id=attempt_id,
+                        agent_id=ids[name],
+                        screener_hotkey=_MINER_B,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="quarantined",
+                        started_at=opened_at,
+                        deadline=opened_at + timedelta(minutes=30),
+                        finished_at=opened_at + timedelta(minutes=5),
+                        public_reason="Bounded source review was inconclusive",
+                    )
+                )
+                await session.flush()
+                session.add(
+                    ScreeningQuarantine(
+                        quarantine_id=uuid4(),
+                        agent_id=ids[name],
+                        attempt_id=attempt_id,
+                        screener_hotkey=_MINER_B,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        manifest_digest="ab" * 32,
+                        finding_digest=q_digest,
+                        review_audit=q_audit,
+                        review_audit_digest=(
+                            "cd" * 32 if q_audit is not None else None
+                        ),
+                        reason_code=q_code,
+                        evidence=[],
+                        finding=q_finding,
+                        review_notes=q_notes,
+                        review_notes_digest=(
+                            ledger_digest(concern_notes)
+                            if name == "quarantine-stale-digest"
+                            else ledger_digest(q_notes)
+                            if q_notes is not None
+                            else None
+                        ),
+                        status="active",
+                    )
+                )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+
+        response = await client.get(
+            "/api/v1/public/activity?status=under_review&limit=200"
+        )
+
+        assert response.status_code == 200
+        entries = {row["name"]: row for row in response.json()["entries"]}
+        projected = {
+            name: (row["deferred_review_triggers"], row["review_conclusion"])
+            for name, row in entries.items()
+        }
+        assert projected == {
+            "budget-top5": (["top_five"], "budget_exhausted"),
+            "concern-deep": (["top_five"], "adverse_signal"),
+            "concern-pinned-deep": (["top_five"], "budget_exhausted"),
+            "concern-unbound-deep": (["top_five"], "adverse_signal"),
+            "tampered-deep": (["top_five"], "adverse_signal"),
+            "quarantine-stale-digest": ([], "adverse_signal"),
+            "quarantine-budget-no-notes": ([], "adverse_signal"),
+            "quarantine-concern": ([], "adverse_signal"),
+            "quarantine-thin": ([], "budget_exhausted"),
+            "preflight-deep": (["top_five"], "not_completed"),
+            "auditless-deep": (["top_five"], "not_completed"),
+            "inconclusive-deep": (["top_five"], "no_finding"),
+            "pending-both": (["top_five", "anomaly"], "pending"),
+            "adverse-anomaly": (["anomaly"], "adverse_signal"),
+            "quarantine-budget": ([], "budget_exhausted"),
+            "quarantine-preflight": ([], "not_completed"),
+            "quarantine-auditless": ([], "not_completed"),
+            "quarantine-inconclusive": ([], "no_finding"),
+            "quarantine-tripwire": ([], "adverse_signal"),
+            "interrupted-deep": (["top_five"], "pending"),
+            "quarantine-finding": ([], "adverse_signal"),
+            "copy-hold": ([], None),
+        }
+
+        # Every state is projected identically on the per-agent summary.
+        bodies = [response.text]
+        for name, expected in projected.items():
+            summary = await client.get(f"/api/v1/public/agent/{ids[name]}/summary")
+            assert summary.status_code == 200, name
+            assert (
+                summary.json()["deferred_review_triggers"],
+                summary.json()["review_conclusion"],
+            ) == expected, name
+            bodies.append(summary.text)
+        assert {conclusion for _, conclusion in projected.values()} == {
+            "pending",
+            "not_completed",
+            "no_finding",
+            "budget_exhausted",
+            "adverse_signal",
+            None,
+        }
+
+        for body in bodies:
+            for private_value in (
+                "source-review-inconclusive",
+                "read-budget-exhausted",
+                "step-budget-exhausted",
+                "source-safety-malicious-risk",
+                "agentic-source-review-tripwire",
+                "deferred-mechanical-admission",
+                "docker-build-infrastructure",
+                quarantine_digest,
+                "l2-model-inconclusive",
+                "l2-runtime-evidence-unavailable",
+                "lease_unavailable",
+                concern_site,
+                "pinned-test",
+                "final_stage",
+                "cause_detail",
+                "steps_used",
+                "tool_anomaly",
+                "composite_anomaly",
+                "338278",
+                "0.4312",
+                "0.0917",
+                private_note,
+                private_digest,
+                "ab" * 32,
+            ):
+                assert private_value not in body
 
     async def test_activity_projects_latest_reopen_reason_not_original_copy_reason(
         self,
@@ -8893,6 +9645,158 @@ class TestPublicActivity:
         ).json()["entries"][0]
         assert rejected["retry_state"] is None
         assert rejected["retry_after"] is None
+
+    async def test_a_parked_row_publishes_whose_failure_it_was(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Two exhausted rows, one Ditto's fault and one the artifact's.
+
+        This is the shape the operator queue actually holds: on 2026-09-21 it
+        carried seven rows recoverable by an operator and one exhausted on a
+        named agent-attributable code. Before this the public feed called both
+        of them "exhausted" and nothing more, so a miner could not tell a fleet
+        outage from a dead artifact.
+        """
+        now = datetime.now(UTC)
+        held_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="held",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        terminal_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_B,
+                status=AgentStatus.EVALUATING,
+                name="terminal",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        failures = {
+            held_id: ("infrastructure", "provider_outage_parked"),
+            terminal_id: ("scoring_error", "inference_request_rejected"),
+        }
+        async with session_maker() as session, session.begin():
+            for agent_id, (reason, detail) in failures.items():
+                for index in range(3):
+                    session.add(
+                        ValidatorTicket(
+                            agent_id=agent_id,
+                            validator_hotkey=_fake_validator_hotkey(index),
+                            status=TicketStatus.EXPIRED,
+                            issued_at=now - timedelta(hours=3),
+                            deadline=now - timedelta(hours=2, minutes=index),
+                            bench_version=_ERA,
+                            attempt_count=2,
+                            manual_retry_grants=0,
+                            failure_reason=reason,
+                            failure_detail=detail,
+                            failed_at=now - timedelta(hours=2, minutes=index),
+                            retry_after=now - timedelta(hours=1),
+                        )
+                    )
+        _install_db(app, session_maker)
+
+        by_id = {
+            entry["agent_id"]: entry
+            for entry in (await client.get("/api/v1/public/operations")).json()[
+                "activity"
+            ]["entries"]
+        }
+        held = by_id[str(held_id)]
+        terminal = by_id[str(terminal_id)]
+        assert held["retry_state"] == terminal["retry_state"] == "exhausted"
+        assert held["retry_disposition"] == "operator_hold"
+        assert held["terminal_failure_code"] is None
+        # Every slot agreed on one no-fault code, so this hold is attributable.
+        assert held["hold_failure_code"] == "provider_outage_parked"
+        assert terminal["retry_disposition"] == "terminal_artifact_failure"
+        assert terminal["terminal_failure_code"] == "inference_request_rejected"
+
+        # The per-submission page must agree with the feed for the same agent,
+        # and it publishes the no-fault outage code rather than staying silent.
+        pipeline = (await client.get(f"/api/v1/public/agent/{held_id}/pipeline")).json()
+        assert pipeline["validator_retry"]["state"] == "exhausted"
+        assert pipeline["validator_retry"]["disposition"] == "operator_hold"
+        assert pipeline["validator_retry"]["terminal_failure_code"] is None
+        assert {
+            attempt["failure_code"] for attempt in pipeline["validation_attempts"]
+        } == {"provider_outage_parked"}
+
+    async def test_an_unnamed_parked_cause_never_blames_the_submission(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A validator diagnostic the allowlist does not name stays no-fault.
+
+        The public code field also stays null rather than leaking the raw
+        detail, which is free-form text written by the validator.
+        """
+        now = datetime.now(UTC)
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="unnamed",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        async with session_maker() as session, session.begin():
+            for index in range(3):
+                session.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        validator_hotkey=_fake_validator_hotkey(index),
+                        status=TicketStatus.EXPIRED,
+                        issued_at=now - timedelta(hours=3),
+                        deadline=now - timedelta(hours=2, minutes=index),
+                        bench_version=_ERA,
+                        attempt_count=2,
+                        manual_retry_grants=0,
+                        failure_reason="infrastructure",
+                        failure_detail=(
+                            "DittobenchError: run deadbeef did not finish within "
+                            "6600.0s"
+                        ),
+                        failed_at=now - timedelta(hours=2, minutes=index),
+                        retry_after=now - timedelta(hours=1),
+                    )
+                )
+        _install_db(app, session_maker)
+
+        entry = {
+            item["agent_id"]: item
+            for item in (await client.get("/api/v1/public/operations")).json()[
+                "activity"
+            ]["entries"]
+        }[str(agent_id)]
+        assert entry["retry_state"] == "exhausted"
+        assert entry["retry_disposition"] == "operator_hold"
+        assert entry["terminal_failure_code"] is None
+        # Every slot agrees here, but the cause is a free-form validator
+        # diagnostic rather than an allowlisted code. Agreement is not enough:
+        # the row still publishes no cause, so nothing downstream can describe
+        # it as the fleet's failure or as the miner's.
+        assert entry["hold_failure_code"] is None
+        pipeline = (
+            await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        ).json()
+        assert pipeline["validator_retry"]["disposition"] == "operator_hold"
+        assert all(
+            attempt["failure_code"] is None
+            for attempt in pipeline["validation_attempts"]
+        )
+        assert "deadbeef" not in json.dumps(pipeline)
 
     async def test_retry_label_ignores_attempts_on_an_issuance_paused_validator(
         self,
@@ -11898,11 +12802,42 @@ class TestBenchConfig:
         assert body["public_mirror_url_template"] == (
             "https://storage.googleapis.com/ditto-platform-public-dev/scored/{agent_id}.json"
         )
-        assert body["public_transcript_url_template"] == (
-            "https://storage.googleapis.com/ditto-platform-public-dev/transcripts/{sha256}.json"
-        )
+        assert body["public_transcript_url_template"] is None
         assert body["public_transcript_telemetry_url_template"] == (
             "/api/v1/public/bench/transcript/{sha256}/telemetry"
+        )
+
+    async def test_transcript_template_requires_the_audited_setting(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch,
+    ) -> None:
+        from ditto.db.models import TranscriptMirrorSettingsRevision
+
+        _install_db(app, session_maker)
+        monkeypatch.setenv("STORAGE_PUBLIC_BUCKET", "ditto-platform-public-dev")
+        async with session_maker() as session, session.begin():
+            current = await session.scalar(
+                select(TranscriptMirrorSettingsRevision).order_by(
+                    TranscriptMirrorSettingsRevision.revision.desc()
+                )
+            )
+            assert current is not None
+            assert current.enabled is False
+            session.add(
+                TranscriptMirrorSettingsRevision(
+                    parent_revision=current.revision,
+                    enabled=True,
+                    reason="Operator enabled the quorum transcript mirror",
+                    actor="test",
+                )
+            )
+        body = (await client.get("/api/v1/public/bench/config")).json()
+        assert body["public_transcript_url_template"] == (
+            "https://storage.googleapis.com/ditto-platform-public-dev/"
+            "transcripts/{sha256}.json"
         )
 
     async def test_transcript_telemetry_is_verified_allowlisted_and_immutable(

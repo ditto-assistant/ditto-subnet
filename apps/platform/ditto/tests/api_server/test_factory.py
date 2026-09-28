@@ -10,10 +10,7 @@ from fastapi import FastAPI
 from ditto.api_server import create_api_server
 from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
-from ditto.api_server.middleware import (
-    AuthPassThroughMiddleware,
-    RequestIDMiddleware,
-)
+from ditto.api_server.middleware import RequestIDMiddleware
 from ditto.tests.api_server.conftest import make_api_server_config
 
 
@@ -39,10 +36,14 @@ class TestCreateApiServer:
         app = create_api_server(make_api_server_config())
         classes = [m.cls for m in app.user_middleware]
         assert classes[0] is RequestIDMiddleware
-        assert AuthPassThroughMiddleware in classes
-        assert classes.index(RequestIDMiddleware) < classes.index(
-            AuthPassThroughMiddleware
-        )
+
+    def test_no_middleware_poses_as_an_auth_gate(self):
+        """Auth is enforced per endpoint. A no-op stack entry named for auth
+        (the former AuthPassThroughMiddleware) would only mislead a reader
+        into thinking requests are authenticated before routing."""
+        app = create_api_server(make_api_server_config())
+        names = [m.cls.__name__ for m in app.user_middleware]
+        assert not [name for name in names if "auth" in name.lower()], names
 
     def test_redoc_disabled(self):
         app = create_api_server(make_api_server_config())

@@ -62,32 +62,19 @@ retry/deadline, transition, opaque-component verification, and exact-artifact
 emission rules in `workers/screener/docs/policy-v13.md` are satisfied for the
 next version.
 
-## Provider-routed screening jobs
+## Provider-routed screening
 
-Build, runtime smoke, and source review have independent revisioned provider
-lists. Targon is enabled for a lane only when that list starts with `targon`.
-Any other list, including `['gcp', 'targon']`, is the GCE-only cutover: queued
-Targon work is terminalized and GCE workers remain the authority. A remote
-build is attempt-bound and becomes consumable only after Platform verifies the
-complete image archive. When runtime starts with Targon, the trusted controller
-promotes that exact archive to a private ephemeral registry, launches it
-directly as a Rental, and records digest/workload provenance. When runtime smoke records `succeeded`, that Targon `/health` result is the
-mechanical admission. Platform copies the verified Kaniko archive to the
-screened-image key, creates the Targon rentals, and records the verdict.
-There is no screener sr25519, no GCE worker, and no capacity-controller host. Isolated fake-gateway oracle is
-skipped until a screener-to-rental prompt tool exists.
+Enrolled Hetzner workers claim attempts and return signed terminal verdicts.
+The GCE managed instance group is a bounded outage and backlog fallback.
+Provider routing and per-node concurrency are revisioned and audited through
+Backroom. New routing writes cannot select the retired provider; historical
+provider values remain readable in existing audit rows. The separate node-job
+APIs can settle previously queued build, runtime, and source-review rows, but
+they do not open new screening attempts.
 
-Source review is also attempt-bound. A pinned trusted worker may return a
-bounded L1 observation. Certified low-risk clearance is a pass without local
-L2. `require` mode uses the remote observation as-is (elevated findings
-quarantine). `prefer` mode follows the same single-provider rule: uncertified
-results quarantine, and provider failures park the attempt for a manual
-Backroom retry instead of falling back to GCE L2/L3. For full reviews, Platform
-queues source review at admission alongside the build so the independent lanes
-can run concurrently; finalization still waits for build, runtime smoke, and
-source review to finish. Job tokens are
-stored only as hashes and revoked at terminal completion; provider Rental
-identities and cleanup failures remain durable operator evidence.
+The signed screener worker remains the terminal verdict writer. Platform
+verifies source and image identities and records each job result without
+turning a source-review hold into an automatic reject.
 
 ## Quarantine management
 
@@ -121,6 +108,52 @@ Resolution requires `X-Admin-Actor` and one of `release`, `rescreen`, or
 needed and promotes to evaluation; rescreen returns the preserved submission to
 the screener queue; reject retains the submission and prior scores but prevents
 evaluation until a future policy-version rescreen.
+
+Every quarantine carries two codes from disjoint vocabularies, and they are
+never interchangeable:
+
+- `screening_reason_code` is why the screener held the submission: the code
+  from the signed verdict that opened the quarantine. It survives the
+  resolution, so a resolved quarantine still reports the lead the operator
+  ruled on, and the append-only `screening_review_events` ledger keeps that
+  same code verbatim on the manual event it snapshots. It is screening-origin
+  provenance, not a decision — `behavioral-oracle-passed`, for instance, is
+  emitted with a CLEAR disposition by the screener, so reading it as the reason
+  for a later rejection inverts its meaning.
+- `resolution_reason_code` is the operator's own ruling, derived from
+  `resolution` as `operator-released-quarantine`,
+  `operator-rescreened-quarantine`, or `operator-rejected-quarantine`. It is
+  null while the quarantine is active and null on an automated review event,
+  because an automated rejection is the screener's own verdict arriving over
+  the signed screening path, not an operator ruling.
+
+The quarantine, review-event, and miner-summary responses also carry a
+deprecated `reason_code` alias holding exactly the same screening-origin code
+as `screening_reason_code`. Platform and Backroom deploy in parallel from one
+release with no ordering between them, so a Backroom that has not been
+redeployed still requires the old name and would reject every quarantine item
+without it. The alias is never a second fact: Backroom coalesces it onto
+`screening_reason_code` and drops it, and both the alias and that fallback are
+removed once no supported Backroom reads the old name.
+
+Deriving the ruling code rather than storing it keeps rows written before the
+field existed correct without rewriting an append-only ledger, and leaves no
+denormalized copy to drift. The vocabularies are disjoint — no screening-origin
+code begins with `operator-` — so a code on its own still says which of the two
+facts it records. They are also deliberately distinct from the
+`operator-rejected-screening` code minted by the pre-quarantine
+`/api/v1/admin/screening-submissions/{agent_id}/reject` route, whose retry guard
+treats that exact token as proof it already ran.
+
+A manual resolution stamps the matching ruling code onto the agent, so the
+miner-facing `screening_reason` / `screening_reason_code` pair returned by
+`GET /api/v1/retrieval/agent/{agent_id}/status` and
+`GET /api/v1/retrieval/agent-by-hotkey` always describes a single decision
+rather than pairing the operator's prose with a stale screening code. The
+pre-quarantine retry routes clear `screening_reason_code` for the same reason:
+the submission is back in the screener's hands, so no verdict describes it and
+the operator's prose stands alone until the next attempt concludes. That clear
+loses nothing, because the attempt row keeps the earlier lead verbatim.
 
 Quarantine listings default to `sort=oldest` so operator queues process the
 longest-waiting submission first. Clients may request `sort=newest`; pagination

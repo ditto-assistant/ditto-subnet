@@ -145,6 +145,18 @@ status, the conservative count of currently capable validators, each qualified
 agent and position, and its target-version score count. State is database-backed
 and idempotent across API restarts.
 
+It also reports promotion progress, so "scoring is on the desired version but
+emissions are not" never has to be inferred. `priority_cohort_ready_count` of
+`priority_cohort_size` is the first gate's progress, counted exactly as the
+barrier counts it (a permanently ineligible member is satisfied);
+`ranked_quorum_agents` of `min_ranked_quorum_agents` is the second.
+`promotion_pending` is true while the desired version is collecting and has not
+yet taken authority, and `promotion_requirement` states both gates in one
+sentence built from their live values (the rollout's frozen priority target,
+`SCORING_QUORUM`, and `MIN_DESIRED_AUTHORITY_AGENTS`). Both clear as soon as
+authority moves, including the hybrid flip while the row is still collecting.
+The admin rollout reads (`/api/v1/admin/benchmark-rollout`) carry the same keys.
+
 Before activation, the public leaderboard defaults to the active-version pool
 and retains explicit historical version views that never project current
 emissions. After activation, the target is canonical and source-only results

@@ -19,9 +19,11 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -312,7 +314,7 @@ func main() {
 	routerBackend := routerbackend.NewOffloadedBackend(
 		strings.TrimSpace(os.Getenv("DITTOBENCH_ROUTER_OFFLOAD_URL")), allowPrivate,
 	)
-	routerGetClient := netguard.Client(allowPrivate)
+	routerGetClient := routerbackend.NewProbeClient(allowPrivate)
 	s.routerDispatcher = routerbackend.Dispatcher{
 		Backend: routerBackend,
 		Get:     routerGetClient.Get,
@@ -433,6 +435,33 @@ type capabilitiesResponse struct {
 	SourceRevisionMismatch bool `json:"source_revision_mismatch"`
 	// SoftwareVersionOrigin mirrors SourceRevisionOrigin for software_version.
 	SoftwareVersionOrigin release.Origin `json:"software_version_origin,omitempty"`
+	// Only keys injected by this binary into a Bench v13 sandbox are covered.
+	ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"scored_runtime_env,omitempty"`
+}
+
+type scoredRuntimeEnvEvidence struct {
+	BenchVersion   int      `json:"bench_version"`
+	Scope          string   `json:"scope"`
+	SourceRevision string   `json:"source_revision"`
+	InjectedKeys   []string `json:"injected_keys"`
+	SHA256         string   `json:"sha256"`
+}
+
+func (s *server) scoredRuntimeEnvEvidence() *scoredRuntimeEnvEvidence {
+	// A practice-only scorer does not launch screened miner images and cannot
+	// attest to the scored container environment.
+	if !s.allowScreenedImages || s.sourceRevisionOrigin != release.OriginBinary || s.sourceRevisionMismatch || !canonicalSourceRevision(s.sourceRevision) {
+		return nil
+	}
+	const version = protocol.BenchVersionV13
+	keys := make([]string, 0)
+	for key := range harnessSandboxEnv(nil, version) {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	material := "scored-runtime-env-v1\n13\n" + s.sourceRevision + "\n" + strings.Join(keys, "\n")
+	digest := sha256.Sum256([]byte(material))
+	return &scoredRuntimeEnvEvidence{version, "scorer-injected-env-only", s.sourceRevision, keys, hex.EncodeToString(digest[:])}
 }
 
 // advertisedMinBenchVersion / advertisedMaxBenchVersion bound the capability
@@ -538,6 +567,7 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		SourceRevisionOrigin:   s.sourceRevisionOrigin,
 		SourceRevisionMismatch: s.sourceRevisionMismatch,
 		SoftwareVersionOrigin:  s.softwareVersionOrigin,
+		ScoredRuntimeEnv:       s.scoredRuntimeEnvEvidence(),
 	})
 }
 
@@ -993,7 +1023,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// Abuse guard: per-IP rate limit on the expensive submit endpoint. Skipped
 	// in local/dev mode (DITTOBENCH_ALLOW_PRIVATE_HARNESS), where a calibration
 	// loop legitimately submits in bulk from a single IP.
-	if !s.allowPrivate && !s.limiter.Allow(clientIP(r)) {
+	if !s.allowPrivate && !s.limiter.Allow(rateLimitKey(clientIP(r))) {
 		writeError(w, http.StatusTooManyRequests, "rate limit exceeded; slow down and retry shortly")
 		return
 	}
@@ -1099,7 +1129,7 @@ func (s *server) handleVersionedScore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
-	if !s.allowPrivate && !s.limiter.Allow(clientIP(r)) {
+	if !s.allowPrivate && !s.limiter.Allow(rateLimitKey(clientIP(r))) {
 		writeError(w, http.StatusTooManyRequests, "rate limit exceeded; slow down and retry shortly")
 		return
 	}
@@ -3308,17 +3338,78 @@ func harnessGateway(inferenceSessionID string) string {
 	return envOr("HARNESS_GATEWAY_URL", "http://host.docker.internal:11434")
 }
 
-// clientIP returns the caller's IP for rate-limiting, honoring the first hop of
-// X-Forwarded-For (set by Cloud Run / proxies) and falling back to RemoteAddr.
+// maxTrustedProxyHops bounds DITTOBENCH_TRUSTED_PROXY_HOPS so a typo cannot
+// walk arbitrarily far into the client-written part of X-Forwarded-For.
+const maxTrustedProxyHops = 8
+
+// trustedProxyHops is how many right-most X-Forwarded-For entries were
+// appended by proxies this service trusts. The default of 1 is the Google
+// front end that serves a *.run.app URL. An external load balancer in front
+// of Cloud Run appends two (client, load balancer), so it needs 2. A service
+// exposed directly with no proxy should use 0, which ignores the header.
+var trustedProxyHops = parseTrustedProxyHops(os.Getenv("DITTOBENCH_TRUSTED_PROXY_HOPS"))
+
+func parseTrustedProxyHops(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 1
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 || n > maxTrustedProxyHops {
+		log.Printf("DITTOBENCH_TRUSTED_PROXY_HOPS=%q is not an integer in [0, %d]; using 1", raw, maxTrustedProxyHops)
+		return 1
+	}
+	return n
+}
+
+// clientIP returns the caller's address for per-IP rate limiting.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+	return clientIPFromHops(r, trustedProxyHops)
+}
+
+// clientIPFromHops resolves the caller's address, trusting only proxy-written
+// X-Forwarded-For entries.
+//
+// The header is client-writable: a caller can send any values it likes, and
+// each proxy only appends. The left-most entry is therefore whatever the
+// caller chose, and keying a rate limiter on it lets a caller rotate it to get
+// a fresh bucket on every request. The address the first trusted proxy saw is
+// hops entries from the right. If the header is missing, shorter than that,
+// or the chosen entry is not an IP address, use the transport peer instead of
+// a caller-controlled value.
+func clientIPFromHops(r *http.Request, hops int) string {
+	if hops > 0 {
+		var entries []string
+		for _, header := range r.Header.Values("X-Forwarded-For") {
+			for _, entry := range strings.Split(header, ",") {
+				entries = append(entries, strings.TrimSpace(entry))
+			}
 		}
-		return strings.TrimSpace(xff)
+		if len(entries) >= hops {
+			if candidate := entries[len(entries)-hops]; net.ParseIP(candidate) != nil {
+				return candidate
+			}
+		}
 	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// rateLimitKey buckets a client address for the per-IP limiter. An IPv6
+// client is typically assigned a whole /64 and can rotate through it freely,
+// so IPv6 is keyed by its /64 prefix; IPv4, including IPv4-mapped IPv6, stays
+// keyed per address.
+func rateLimitKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	prefix, _ := addr.Prefix(64)
+	return prefix.String()
 }

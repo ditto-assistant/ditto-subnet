@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
@@ -89,6 +90,42 @@ class InferenceFailureLaneWindow(BaseModel):
     groups_truncated: bool
 
 
+class InferenceRateLimitedTicket(BaseModel):
+    """One validator ticket whose calls hit ``upstream_http_429`` in the window."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    agent_id: UUID
+    bench_version: int
+    validator_hotkey: str
+    slot_id: str
+    ticket_deadline: datetime
+    rate_limited_failures: int
+
+
+class InferenceRateLimitBurst(BaseModel):
+    """Report-only five-minute upstream rate-limit signal for one lane.
+
+    ``active`` means the lane's ``upstream_http_429`` count reached the
+    provisional ``threshold`` while the local global in-flight peak stayed below
+    the configured limit -- the upstream pool, not Ditto's own admission, was
+    the bottleneck. Nothing is enforced, rerouted, or retried on it.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    request_kind: InferenceRequestKind
+    window_seconds: int
+    rate_limited_failures: int
+    threshold: int
+    peak_global_concurrency: int
+    global_concurrency_limit: int
+    active: bool
+    tickets_total: int
+    tickets_truncated: bool
+    tickets: list[InferenceRateLimitedTicket]
+
+
 class InferenceFailureTaxonomy(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -97,3 +134,4 @@ class InferenceFailureTaxonomy(BaseModel):
     group_limit: int
     lanes: list[InferenceFailureLaneWindow]
     groups: list[InferenceFailureGroup]
+    rate_limit_bursts: list[InferenceRateLimitBurst]
