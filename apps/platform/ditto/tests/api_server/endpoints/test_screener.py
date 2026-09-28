@@ -327,6 +327,18 @@ def test_unknown_container_contract_detail_stays_public_safe() -> None:
             "is operator-owned and is retried automatically with backoff for a "
             "limited time, then held for an operator retry.",
         ),
+        (
+            "build failed: [timeout after 2700s]\nSECRET_FROM_BUILD",
+            "docker-build-timeout",
+            "Docker image build exceeded the 45-minute build time limit. "
+            "Reduce build time by caching dependencies or simplifying the Dockerfile.",
+        ),
+        (
+            "build failed: SECRET_FROM_BUILD",
+            "docker-build-timeout",
+            "Docker image build exceeded the configured build time limit. "
+            "Reduce build time by caching dependencies or simplifying the Dockerfile.",
+        ),
     ],
 )
 def test_public_docker_build_reason_is_actionable_and_redacted(
@@ -3909,11 +3921,13 @@ class TestClaim:
         assert replay.status_code == 200
         assert replay.json()["status"] == AgentStatus.EVALUATING
 
+    @pytest.mark.parametrize("reason_code", ["docker-build", "docker-build-timeout"])
     async def test_signed_local_build_feedback_is_private_and_persisted(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        reason_code: str,
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
@@ -3927,8 +3941,12 @@ class TestClaim:
             passed=False,
             attempt_id=attempt_id,
             outcome="deterministic_reject",
-            detail="build failed: Cargo dependency could not be read",
-            reason_code="docker-build",
+            detail=(
+                "build failed: [timeout after 2700s]"
+                if reason_code == "docker-build-timeout"
+                else "build failed: Cargo dependency could not be read"
+            ),
+            reason_code=reason_code,
             private_failure_detail=(
                 "Cargo could not read vendor/harness/Cargo.toml; token=secret-value"
             ),
@@ -3960,6 +3978,8 @@ class TestClaim:
         assert attempt.failure_captured_at is not None
         assert agent.screening_reason is not None
         assert "Cargo.toml" not in agent.screening_reason
+        if reason_code == "docker-build-timeout":
+            assert "45-minute" in agent.screening_reason
 
     async def test_exact_duplicate_waits_for_usable_owner_then_rejects_before_screen(
         self,

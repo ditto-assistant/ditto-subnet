@@ -1074,14 +1074,16 @@ async def test_screen_one_fail_forwards_detail(
     assert v["outcome"] == ScreenResultOutcome.DETERMINISTIC_REJECT
 
 
+@pytest.mark.parametrize("reason_code", ["docker-build", "docker-build-timeout"])
 async def test_local_build_failure_forwards_signed_private_miner_feedback(
     make_config: Callable[..., ScreenerConfig],
+    reason_code: str,
 ) -> None:
     platform = _FakePlatform([])
     gate = _FakeGate(
         core_decision(
             ScreeningOutcome.DETERMINISTIC_REJECT,
-            code="docker-build",
+            code=reason_code,
             summary="artifact Docker image did not build",
             detail="build failed: token=secret-value\nerror: missing Cargo.toml",
         )

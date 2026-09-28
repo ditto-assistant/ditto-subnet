@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tarfile
 import tempfile
 from collections.abc import Callable
@@ -28,6 +29,7 @@ from ditto_screener.gate import (
     _MAX_SCREENED_IMAGE_BYTES,
     BuildGate,
     BuiltImageArtifact,
+    LeaseDeadline,
     _detail_tail,
     _docker_infrastructure_failure,
     _format_stage_timings,
@@ -636,6 +638,7 @@ async def _screen(  # type: ignore[no-untyped-def]
     policy_version=SCREENING_POLICY_VERSION,
     record_archive_verification=None,
     execution_namespace=None,
+    deadline=None,
 ):
     return await gate.screen(
         agent_id=_AGENT,
@@ -650,6 +653,7 @@ async def _screen(  # type: ignore[no-untyped-def]
         policy_version=policy_version,
         record_archive_verification=record_archive_verification,
         execution_namespace=execution_namespace,
+        deadline=deadline,
     )
 
 
@@ -683,6 +687,151 @@ async def test_timed_out_docker_process_may_exit_before_kill(
 
     assert code == 124
     assert output == "[timeout after 0.01s]"
+
+
+@pytest.mark.parametrize(
+    ("lease_seconds", "cap_seconds", "renew", "outcome", "reason_code"),
+    [
+        (0.15, 2.0, True, ScreeningOutcome.PASS, None),
+        (
+            0.10,
+            2.0,
+            False,
+            ScreeningOutcome.RETRYABLE_INFRA,
+            "docker-build-infrastructure",
+        ),
+        (
+            0.15,
+            0.10,
+            True,
+            ScreeningOutcome.DETERMINISTIC_REJECT,
+            "docker-build-timeout",
+        ),
+    ],
+)
+async def test_running_build_observes_lease_renewal_and_absolute_cap(
+    make_config: Callable[..., ScreenerConfig],
+    lease_seconds: float,
+    cap_seconds: float,
+    renew: bool,
+    outcome: ScreeningOutcome,
+    reason_code: str | None,
+) -> None:
+    tarball = _valid_tar()
+    gate = _gate_with(
+        make_config(docker_bin=sys.executable, build_timeout_seconds=cap_seconds),
+        _ok_run(),
+        tarball=tarball,
+    )
+    ok_run = _ok_run()
+    loop = asyncio.get_running_loop()
+    deadline = LeaseDeadline(loop.time() + 60)
+    original_expiry = deadline.expires_at
+    build_started = asyncio.Event()
+
+    async def run(args: list[str], **kwargs: Any) -> tuple[int, str]:
+        nonlocal original_expiry
+        if args[0] != "build":
+            return await ok_run(args, **kwargs)
+        assert kwargs["timeout"] == cap_seconds
+        assert kwargs["deadline"] is deadline
+        # Exhaust the short test lease only after ordinary preflight checks.
+        deadline.expires_at = loop.time() + lease_seconds
+        original_expiry = deadline.expires_at
+        build_started.set()
+        code, output = await BuildGate._run(
+            gate,
+            ["-c", "import time; time.sleep(0.3); print('built')"],
+            timeout=kwargs["timeout"],
+            deadline=kwargs["deadline"],
+        )
+        if code == 0:
+            _write_iidfile(args)
+        return code, output
+
+    async def renew_lease() -> None:
+        await build_started.wait()
+        await asyncio.sleep(0.03)
+        deadline.renew(loop.time() + 60)
+
+    gate._run = run  # type: ignore[method-assign]
+    renewal = asyncio.create_task(renew_lease()) if renew else None
+    try:
+        async with gate._client:
+            result = await asyncio.wait_for(
+                _screen(
+                    gate,
+                    hashlib.sha256(tarball).hexdigest(),
+                    build_only=True,
+                    deadline=deadline,
+                ),
+                timeout=3,
+            )
+    finally:
+        if renewal is not None:
+            renewal.cancel()
+            await asyncio.gather(renewal, return_exceptions=True)
+    assert result.outcome == outcome
+    if reason_code is not None:
+        assert result.evidence[-1].code == reason_code
+    else:
+        assert loop.time() > original_expiry
+    if outcome == ScreeningOutcome.RETRYABLE_INFRA:
+        assert "lease expired during build" in result.detail
+
+
+async def test_cancelled_docker_command_is_killed_and_reaped(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processes: list[asyncio.subprocess.Process] = []
+    started = asyncio.Event()
+    create_process = asyncio.create_subprocess_exec
+
+    async def capture_process(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await create_process(*args, **kwargs)
+        processes.append(process)
+        started.set()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_process)
+    async with httpx.AsyncClient() as client:
+        gate = BuildGate(
+            make_config(docker_bin=sys.executable),
+            client,
+            policy=PolicyEngine(CORE_ONLY_MANIFEST),
+            journal=ReviewJournal(None),
+        )
+        task = asyncio.create_task(
+            gate._run(
+                ["-c", "import time; time.sleep(10)"],
+                timeout=20,
+                deadline=LeaseDeadline(asyncio.get_running_loop().time() + 20),
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+    assert len(processes) == 1
+    assert processes[0].returncode is not None
+
+
+@pytest.mark.parametrize("marker", ["[lease expired after 1s]", "[timeout after 1s]"])
+async def test_docker_output_cannot_forge_a_timeout(
+    make_config: Callable[..., ScreenerConfig], marker: str
+) -> None:
+    async with httpx.AsyncClient() as client:
+        gate = BuildGate(
+            make_config(docker_bin=sys.executable),
+            client,
+            policy=PolicyEngine(CORE_ONLY_MANIFEST),
+            journal=ReviewJournal(None),
+        )
+        code, output = await gate._run(
+            ["-c", f"import sys; print({marker!r}); sys.exit(124)"], timeout=2
+        )
+    assert code == 124
+    assert output.startswith("Docker command output:")
 
 
 def test_root_and_log_helpers() -> None:
@@ -2558,8 +2707,10 @@ async def test_transient_build_failures_are_retryable_infrastructure(
     assert result.detail.startswith("screener error:")
 
 
+@pytest.mark.parametrize("exit_code", [-15, 137, 143])
 async def test_signal_interrupted_build_is_retryable_infrastructure(
     make_config: Callable[..., ScreenerConfig],
+    exit_code: int,
 ) -> None:
     tarball = _valid_tar()
 
@@ -2569,14 +2720,15 @@ async def test_signal_interrupted_build_is_retryable_infrastructure(
         if args[0] == "build":
             if stdin is not None:
                 stdin.read()
-            return -15, ""
+            return exit_code, "step 3/9"
         return 0, ""
 
     gate = _gate_with(make_config(), interrupted, tarball=tarball)
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
-    assert "SIGTERM" in result.detail
+    expected_signal = "SIGTERM" if exit_code < 0 else f"({exit_code})"
+    assert expected_signal in result.detail
 
 
 async def test_failure_diagnostics_are_bounded(

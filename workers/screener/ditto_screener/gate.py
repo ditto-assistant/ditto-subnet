@@ -193,6 +193,7 @@ _DOCKER_INFRASTRUCTURE_MARKERS = (
     "cannot allocate memory",
     "killed",
     "docker command exited with signal",
+    "docker command exited after signal",
     "signal sigterm",
     "signal sigkill",
     # Common cgroup / compiler spellings do not include the whitespace-only
@@ -1580,12 +1581,11 @@ class BuildGate:
                         detail=f"screener error: {executor_error}",
                     )
                 used_local_docker = True
-                remaining = self._lease_remaining(deadline)
-                local_timeout = self._config.build_timeout_seconds
-                if remaining is not None:
-                    local_timeout = min(local_timeout, remaining)
                 built, build_detail, built_image_id = await self._build(
-                    tmp_path, build_tag, timeout=local_timeout
+                    tmp_path,
+                    build_tag,
+                    timeout=self._config.build_timeout_seconds,
+                    deadline=deadline,
                 )
             build_elapsed_ms = round(
                 (asyncio.get_running_loop().time() - started) * 1000
@@ -1598,7 +1598,19 @@ class BuildGate:
                         summary="verified replay image could not be loaded",
                         detail=f"screener error: {build_detail}",
                     )
-                retryable = _docker_infrastructure_failure(build_detail)
+                if build_detail.startswith("[timeout after"):
+                    return core_decision(
+                        ScreeningOutcome.DETERMINISTIC_REJECT,
+                        code="docker-build-timeout",
+                        summary=(
+                            "artifact Docker image build exceeded the build time limit"
+                        ),
+                        detail=f"build failed: {build_detail}",
+                    )
+                lease_expired = build_detail.startswith("[lease expired after")
+                retryable = lease_expired or _docker_infrastructure_failure(
+                    build_detail
+                )
                 return core_decision(
                     ScreeningOutcome.RETRYABLE_INFRA
                     if retryable
@@ -1612,7 +1624,12 @@ class BuildGate:
                         else "artifact Docker image did not build"
                     ),
                     detail=(
-                        f"screener error: Docker build infrastructure: {build_detail}"
+                        "screener error: Docker build infrastructure: "
+                        + (
+                            f"lease expired during build ({build_detail})"
+                            if lease_expired
+                            else build_detail
+                        )
                         if retryable
                         else f"build failed: {build_detail}"
                     ),
@@ -2611,11 +2628,12 @@ class BuildGate:
         tag: str,
         *,
         timeout: float | None = None,
+        deadline: Deadline = None,
     ) -> tuple[bool, str, str | None]:
         """``docker build`` from the tarball-on-stdin; returns (ok, log_tail).
 
-        ``timeout`` overrides the configured build cap so the worker can clamp a
-        build to the remaining lease budget; it defaults to the full cap.
+        ``timeout`` is the absolute build cap. A live ``deadline`` separately
+        bounds the build while allowing heartbeat renewals to extend its lease.
         """
         fd, iid_path = tempfile.mkstemp(prefix="ditto-screen-iid-")
         os.close(fd)
@@ -2671,7 +2689,7 @@ class BuildGate:
         try:
             with _normalized_build_context(tar_path) as stdin_f:
                 code, out = await self._run(
-                    args, stdin=stdin_f, timeout=timeout, env=env
+                    args, stdin=stdin_f, timeout=timeout, env=env, deadline=deadline
                 )
             if code == 0:
                 try:
@@ -2727,6 +2745,8 @@ class BuildGate:
         finally:
             with contextlib.suppress(OSError):
                 os.unlink(iid_path)
+        if code == 124 and out.startswith(("[lease expired after", "[timeout after")):
+            return False, out, None
         if code < 0:
             signal_name = signal.Signals(-code).name
             return (
@@ -2740,7 +2760,7 @@ class BuildGate:
                 (f"docker command exited after signal ({code}): {_log_tail(out)}"),
                 None,
             )
-        return False, _log_tail(out), None
+        return False, f"Docker build failed: {_log_tail(out)}", None
 
     async def _load_remote_image(
         self,
@@ -4096,11 +4116,13 @@ sys.stdout.buffer.write(output)
         stdin: io.BufferedReader | None = None,
         timeout: float,
         env: dict[str, str] | None = None,
+        deadline: Deadline = None,
     ) -> tuple[int, str]:
         """Run ``docker <args>`` with a hard timeout; return (returncode, output).
 
-        stdout+stderr are merged. On timeout the process is killed and a
-        non-zero code with a ``[timeout]`` marker is returned.
+        stdout+stderr are merged. The hard timeout never extends. A renewable
+        lease is re-read while waiting; the worker already reserves submission
+        time in that deadline. Expiry kills and reaps the process.
         """
         process_env = dict(os.environ) if env is None else dict(env)
         if self._config.docker_host is not None:
@@ -4113,12 +4135,52 @@ sys.stdout.buffer.write(output)
             stderr=asyncio.subprocess.STDOUT,
             env=process_env,
         )
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        timeout_at = started + timeout
+        timeout_detail = f"[timeout after {timeout:g}s]"
+        communication = asyncio.create_task(proc.communicate())
         try:
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except TimeoutError:
+            if deadline is None:
+                out, _ = await asyncio.wait_for(communication, timeout=timeout)
+            else:
+                while True:
+                    now = loop.time()
+                    lease_at = (
+                        deadline.expires_at
+                        if isinstance(deadline, LeaseDeadline)
+                        else deadline
+                    )
+                    cap_remaining = timeout_at - now
+                    lease_remaining = lease_at - now
+                    if min(cap_remaining, lease_remaining) <= 0:
+                        if lease_at < timeout_at:
+                            timeout_detail = (
+                                f"[lease expired after {loop.time() - started:g}s]"
+                            )
+                        raise TimeoutError
+                    done, _ = await asyncio.wait(
+                        {communication},
+                        timeout=min(15.0, cap_remaining, lease_remaining),
+                    )
+                    if done:
+                        out, _ = communication.result()
+                        break
+        except (TimeoutError, asyncio.CancelledError) as error:
             with contextlib.suppress(Exception):
                 proc.kill()
             with contextlib.suppress(Exception):
                 await proc.wait()
-            return 124, f"[timeout after {timeout:g}s]"
-        return proc.returncode or 0, out.decode("utf-8", errors="replace")
+            if isinstance(error, asyncio.CancelledError):
+                raise
+            return 124, timeout_detail
+        finally:
+            if not communication.done():
+                communication.cancel()
+            await asyncio.gather(communication, return_exceptions=True)
+        output = out.decode("utf-8", errors="replace")
+        # Only this method's clock can authorize a lease-expiry retry. A
+        # submitted Dockerfile can print a lookalike marker and exit 124.
+        if output.lstrip().startswith(("[lease expired after", "[timeout after")):
+            output = f"Docker command output: {output}"
+        return proc.returncode or 0, output

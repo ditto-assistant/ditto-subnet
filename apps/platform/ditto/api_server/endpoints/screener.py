@@ -4179,6 +4179,24 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
             "Rust source under src/."
         )
     normalized = detail.strip().casefold()
+    if reason_code == "docker-build-timeout":
+        match = re.match(
+            r"build failed: \[timeout after ([0-9]{1,6}(?:\.[0-9]{1,6})?)s\]",
+            normalized,
+        )
+        limit = "configured"
+        if match is not None:
+            seconds = float(match.group(1))
+            if 0 < seconds <= 86_400:
+                limit = (
+                    f"{seconds / 60:g}-minute"
+                    if seconds >= 60
+                    else f"{seconds:g}-second"
+                )
+        return (
+            f"Docker image build exceeded the {limit} build time limit. "
+            "Reduce build time by caching dependencies or simplifying the Dockerfile."
+        )
     if reason_code == "docker-build-infrastructure":
         return (
             "Docker build infrastructure failed before screening completed. This "
@@ -4524,7 +4542,8 @@ def _backfill_private_failure_feedback(
     if attempt.failure_lane is None:
         attempt.failure_lane = (
             "buildkit"
-            if payload.reason_code in {"docker-build", "docker-build-infrastructure"}
+            if payload.reason_code
+            in {"docker-build", "docker-build-infrastructure", "docker-build-timeout"}
             else "screening"
         )
     attempt.failure_captured_at = datetime.now(UTC)

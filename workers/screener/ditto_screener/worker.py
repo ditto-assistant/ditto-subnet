@@ -102,7 +102,7 @@ EXACT_CROSS_MINER_DUPLICATE = "exact-cross-miner-duplicate"
 # public reason or a private-failure cause.
 _SEED_ENVELOPE_OBSERVATION = "seed-envelope-usage"
 _PRIVATE_BUILD_FAILURE_CODES = frozenset(
-    {"docker-build", "docker-build-infrastructure"}
+    {"docker-build", "docker-build-infrastructure", "docker-build-timeout"}
 )
 
 

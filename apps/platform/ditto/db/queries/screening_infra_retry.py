@@ -125,6 +125,7 @@ BREAKER_HISTORY_LOOKBACK = timedelta(hours=48)
 # one), or a deterministic ``docker-build`` rejection (the build ran and judged
 # the archive). A quarantine alone is not proof: the static preflight can quarantine
 # before any build starts.
+# A build timeout proves nothing about infrastructure health and is not recovery.
 _RECOVERY_REJECT_REASON = "docker-build"
 
 # Beyond this the doubling is already clamped; it only keeps the shift small.

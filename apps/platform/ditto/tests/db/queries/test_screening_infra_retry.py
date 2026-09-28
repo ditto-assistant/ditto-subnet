@@ -1582,6 +1582,12 @@ async def test_mixed_history_mirror_hetzner_pass_does_not_close_gcp(
             "with_image": False,
             "reason_code": "container-harness-contract",
         },
+        # A timed-out build cannot certify recovery of the failing builder.
+        {
+            "status": "rejected",
+            "with_image": False,
+            "reason_code": "docker-build-timeout",
+        },
     ],
 )
 async def test_outcomes_without_build_proof_do_not_close_the_breaker(
