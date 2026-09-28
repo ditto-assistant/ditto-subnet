@@ -593,7 +593,9 @@ def _run_upload(
             raise
 
     print(result.agent_id)
-    if not clear_pending_payment(
+    # A duplicate race banks the payment without spending it. Keep its receipt
+    # so the next upload can recover that credit instead of sending more TAO.
+    if result.payment_disposition != "reusable_credit" and not clear_pending_payment(
         network=network_name,
         hotkey=handle.hotkey_ss58,
         name=agent_name,
