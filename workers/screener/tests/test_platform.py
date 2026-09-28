@@ -332,6 +332,13 @@ async def test_enrolled_node_refresh_failure_is_single_shot(
     assert stored.pending_refresh_id is not None
 
 
+def _open_fd_count() -> int | None:
+    # Linux exposes descriptor counts through procfs. Keep the lock/cancellation
+    # assertions running on macOS even though this extra leak check is unavailable.
+    descriptors = Path("/proc/self/fd")
+    return len(list(descriptors.iterdir())) if descriptors.is_dir() else None
+
+
 def _stored_node_credential(
     path: Path, cfg: ScreenerConfig, *, expires_at: datetime
 ) -> NodeCredential:
@@ -388,7 +395,7 @@ async def test_cancelled_auth_wait_does_not_leak_flock(
     client, http = _make_client(cfg, handler)
     try:
         async with http:
-            fd_count = len(list(Path("/proc/self/fd").iterdir()))
+            fd_count = _open_fd_count()
             task = asyncio.create_task(client.get_required_policy_version())
             try:
                 await asyncio.wait_for(waiting.wait(), timeout=2)
@@ -396,7 +403,7 @@ async def test_cancelled_auth_wait_does_not_leak_flock(
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await asyncio.wait_for(task, timeout=2)
-            assert len(list(Path("/proc/self/fd").iterdir())) == fd_count
+            assert _open_fd_count() == fd_count
     finally:
         os.close(holder)
     probe = os.open(lock_path, os.O_WRONLY)
@@ -469,10 +476,10 @@ async def test_auth_lock_wait_is_bounded(
     client, http = _make_client(cfg, handler)
     try:
         async with http:
-            fd_count = len(list(Path("/proc/self/fd").iterdir()))
+            fd_count = _open_fd_count()
             with pytest.raises(PlatformError, match="credential lock timed out"):
                 await asyncio.wait_for(client.get_required_policy_version(), timeout=2)
-            assert len(list(Path("/proc/self/fd").iterdir())) == fd_count
+            assert _open_fd_count() == fd_count
     finally:
         os.close(holder)
 
@@ -572,7 +579,7 @@ async def test_cancelled_refresh_releases_flock_and_preserves_refresh_id(
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = PlatformClient(cfg, http, keypair=Keypair())
-        fd_count = len(list(Path("/proc/self/fd").iterdir()))
+        fd_count = _open_fd_count()
         task = asyncio.create_task(client.get_required_policy_version())
         try:
             await asyncio.wait_for(refresh_started.wait(), timeout=2)
@@ -580,7 +587,7 @@ async def test_cancelled_refresh_releases_flock_and_preserves_refresh_id(
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(task, timeout=2)
-        assert len(list(Path("/proc/self/fd").iterdir())) == fd_count
+        assert _open_fd_count() == fd_count
         probe = os.open(tmp_path / ".node.json.refresh.lock", os.O_WRONLY)
         try:
             fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
