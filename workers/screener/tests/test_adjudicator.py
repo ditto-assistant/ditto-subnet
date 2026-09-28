@@ -2200,6 +2200,21 @@ async def test_v13_failure_diagnostic_without_verdict_tool(
     assert result.run_diagnostic.final_tool_call_returned is False
 
 
+@pytest.mark.parametrize("name", [[], {}], ids=["list", "object"])
+async def test_v13_failure_diagnostic_tolerates_unhashable_tool_name(
+    tmp_path: Path, name: object
+) -> None:
+    call = {"id": "invalid-1", "function": {"name": name, "arguments": "{}"}}
+    result = await _adjudicator(_key(tmp_path), _transport([[call]])).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN], policy_version=13, ledger_final=True
+    )
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "tool-call-invalid"
+    assert result.run_diagnostic.final_tool_call_returned is False
+
+
 async def test_v13_certifies_visible_endpoint_present_i6_violation(
     tmp_path: Path,
 ) -> None:

@@ -1006,6 +1006,7 @@ def _observe_completion(payload: object) -> None:
     trace.final_tool_call_returned = any(
         isinstance(call, dict)
         and isinstance(call.get("function"), dict)
+        and isinstance(call["function"].get("name"), str)
         and call["function"].get("name") in _VERDICT_TOOL_NAMES
         for call in calls
     )
