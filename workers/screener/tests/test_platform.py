@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -13,6 +15,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
+from ditto_screener import platform as platform_module
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.enrollment import (
     NodeCredential,
@@ -327,6 +330,271 @@ async def test_enrolled_node_refresh_failure_is_single_shot(
     stored = load_node_credential(credential_file)
     assert stored.api_token == old_token
     assert stored.pending_refresh_id is not None
+
+
+def _stored_node_credential(
+    path: Path, cfg: ScreenerConfig, *, expires_at: datetime
+) -> NodeCredential:
+    credential = NodeCredential(
+        environment="test",
+        node_id="ditto-screener-test",
+        provider="test",
+        provider_resource_id="resource-test",
+        screener_hotkey=cfg.screener_hotkey,
+        mnemonic=(
+            "bottom drive obey lake curtain smoke basket hold race lonely fit walk"
+        ),
+        api_token="stored-node-token-at-least-43-characters-xxxxxxxx",
+        expires_at=expires_at,
+    )
+    store_node_credential(path, credential)
+    return credential
+
+
+def _observe_credential_lock_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> asyncio.Event:
+    waiting = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    flock = fcntl.flock
+
+    def observed_flock(descriptor: int, operation: int) -> None:
+        if operation & fcntl.LOCK_EX:
+            loop.call_soon_threadsafe(waiting.set)
+        flock(descriptor, operation)
+
+    monkeypatch.setattr(platform_module.fcntl, "flock", observed_flock)
+    return waiting
+
+
+async def test_cancelled_auth_wait_does_not_leak_flock(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_file = tmp_path / "node.json"
+    cfg = make_config(node_credential_file=str(credential_file))
+    _stored_node_credential(
+        credential_file, cfg, expires_at=datetime.now(UTC) + timedelta(minutes=1)
+    )
+    lock_path = tmp_path / ".node.json.refresh.lock"
+    holder = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    waiting = _observe_credential_lock_wait(monkeypatch)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        pytest.fail("a cancelled lock waiter must not send a Platform request")
+
+    client, http = _make_client(cfg, handler)
+    try:
+        async with http:
+            fd_count = len(list(Path("/proc/self/fd").iterdir()))
+            task = asyncio.create_task(client.get_required_policy_version())
+            try:
+                await asyncio.wait_for(waiting.wait(), timeout=2)
+            finally:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=2)
+            assert len(list(Path("/proc/self/fd").iterdir())) == fd_count
+    finally:
+        os.close(holder)
+    probe = os.open(lock_path, os.O_WRONLY)
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(probe)
+
+
+@pytest.mark.parametrize("hold_lock", [False, True])
+async def test_auth_fast_path_skips_lock_when_not_expiring(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path, hold_lock: bool
+) -> None:
+    credential_file = tmp_path / "node.json"
+    cfg = make_config(node_credential_file=str(credential_file))
+    credential = _stored_node_credential(
+        credential_file, cfg, expires_at=datetime.now(UTC) + timedelta(hours=6)
+    )
+    lock_path = tmp_path / ".node.json.refresh.lock"
+    holder = None
+    if hold_lock:
+        holder = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/screener/queue"
+        assert request.headers["Authorization"] == f"Bearer {credential.api_token}"
+        return httpx.Response(
+            200,
+            json={
+                "items": [],
+                "count": 0,
+                "required_policy_version": SCREENING_POLICY_VERSION,
+            },
+        )
+
+    client, http = _make_client(cfg, handler)
+    try:
+        async with http:
+            assert (
+                await asyncio.wait_for(client.get_required_policy_version(), timeout=2)
+                == SCREENING_POLICY_VERSION
+            )
+        assert lock_path.exists() == hold_lock
+    finally:
+        if holder is not None:
+            os.close(holder)
+
+
+async def test_auth_lock_wait_is_bounded(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_file = tmp_path / "node.json"
+    cfg = make_config(
+        node_credential_file=str(credential_file), http_timeout_seconds=0.1
+    )
+    _stored_node_credential(
+        credential_file, cfg, expires_at=datetime.now(UTC) + timedelta(minutes=1)
+    )
+    monkeypatch.setattr(platform_module, "_CREDENTIAL_LOCK_GRACE_SECONDS", 0)
+    lock_path = tmp_path / ".node.json.refresh.lock"
+    holder = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        pytest.fail("a timed-out lock waiter must not send a Platform request")
+
+    client, http = _make_client(cfg, handler)
+    try:
+        async with http:
+            fd_count = len(list(Path("/proc/self/fd").iterdir()))
+            with pytest.raises(PlatformError, match="credential lock timed out"):
+                await asyncio.wait_for(client.get_required_policy_version(), timeout=2)
+            assert len(list(Path("/proc/self/fd").iterdir())) == fd_count
+    finally:
+        os.close(holder)
+
+
+async def test_auth_rechecks_expiry_after_acquiring_lock(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_file = tmp_path / "node.json"
+    cfg = make_config(node_credential_file=str(credential_file))
+    credential = _stored_node_credential(
+        credential_file, cfg, expires_at=datetime.now(UTC) + timedelta(minutes=1)
+    )
+    rotated = credential.model_copy(
+        update={
+            "api_token": "peer-rotated-token-at-least-43-characters-xxxxxxxx",
+            "expires_at": datetime.now(UTC) + timedelta(hours=6),
+        }
+    )
+    lock_path = tmp_path / ".node.json.refresh.lock"
+    holder = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    waiting = _observe_credential_lock_wait(monkeypatch)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        assert request.headers["Authorization"] == f"Bearer {rotated.api_token}"
+        return httpx.Response(
+            200,
+            json={
+                "items": [],
+                "count": 0,
+                "required_policy_version": SCREENING_POLICY_VERSION,
+            },
+        )
+
+    client, http = _make_client(cfg, handler)
+    try:
+        async with http:
+            task = asyncio.create_task(client.get_required_policy_version())
+            try:
+                await asyncio.wait_for(waiting.wait(), timeout=2)
+                store_node_credential(credential_file, rotated)
+                fcntl.flock(holder, fcntl.LOCK_UN)
+                assert (
+                    await asyncio.wait_for(task, timeout=2) == SCREENING_POLICY_VERSION
+                )
+            finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+    finally:
+        os.close(holder)
+    assert calls == ["/api/v1/screener/queue"]
+
+
+async def test_cancelled_refresh_releases_flock_and_preserves_refresh_id(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    credential_file = tmp_path / "node.json"
+    cfg = make_config(node_credential_file=str(credential_file))
+    _stored_node_credential(
+        credential_file, cfg, expires_at=datetime.now(UTC) + timedelta(minutes=1)
+    )
+    refresh_started = asyncio.Event()
+    refresh_ids: list[str] = []
+    new_token = "rotated-node-token-at-least-43-characters-xxxxxxxx"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/nodes/refresh"):
+            refresh_ids.append(json.loads(request.content)["refresh_id"])
+            if len(refresh_ids) == 1:
+                refresh_started.set()
+                await asyncio.Event().wait()
+            return httpx.Response(
+                200,
+                json={
+                    "api_token": new_token,
+                    "expires_at": (datetime.now(UTC) + timedelta(hours=6)).isoformat(),
+                },
+            )
+        assert request.headers["Authorization"] == f"Bearer {new_token}"
+        return httpx.Response(
+            200,
+            json={
+                "items": [],
+                "count": 0,
+                "required_policy_version": SCREENING_POLICY_VERSION,
+            },
+        )
+
+    class Keypair:
+        def sign(self, _message: bytes) -> bytes:
+            return b"a" * 64
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = PlatformClient(cfg, http, keypair=Keypair())
+        fd_count = len(list(Path("/proc/self/fd").iterdir()))
+        task = asyncio.create_task(client.get_required_policy_version())
+        try:
+            await asyncio.wait_for(refresh_started.wait(), timeout=2)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+        assert len(list(Path("/proc/self/fd").iterdir())) == fd_count
+        probe = os.open(tmp_path / ".node.json.refresh.lock", os.O_WRONLY)
+        try:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(probe)
+        assert (
+            await asyncio.wait_for(client.get_required_policy_version(), timeout=2)
+            == SCREENING_POLICY_VERSION
+        )
+    assert len(refresh_ids) == 2
+    assert refresh_ids[0] == refresh_ids[1]
+    stored = load_node_credential(credential_file)
+    assert stored.api_token == new_token
+    assert stored.pending_refresh_id is None
 
 
 async def test_submit_heartbeat_matches_open_platform_contract(

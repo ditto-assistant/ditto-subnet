@@ -14,6 +14,7 @@ import fcntl
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -72,6 +73,51 @@ _PREFIX = "/api/v1/screener"
 _IMAGE_REQUEST_TIMEOUT = httpx.Timeout(300.0, connect=30.0, pool=30.0)
 _IMAGE_INIT_RETRY_DELAYS = (0.5, 1.0)
 _TRANSIENT_PLATFORM_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
+_ROTATION_WINDOW = timedelta(minutes=15)
+_CREDENTIAL_LOCK_GRACE_SECONDS = 30.0
+
+
+@contextlib.asynccontextmanager
+async def _node_credential_flock(
+    lock_path: Path, *, timeout: float
+) -> AsyncIterator[None]:
+    """Bound lock contention without leaving a cancelled acquisition in a thread."""
+    descriptor: int | None = None
+    acquired = False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    try:
+        descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+        while not acquired:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except BlockingIOError as error:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise PlatformError(
+                        "screener node credential lock timed out"
+                    ) from error
+                await asyncio.sleep(min(0.05, remaining))
+                if loop.time() >= deadline:
+                    raise PlatformError(
+                        "screener node credential lock timed out"
+                    ) from error
+        yield
+    finally:
+        if descriptor is not None:
+            try:
+                if acquired:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+
+def _credential_needs_rotation(credential: NodeCredential) -> bool:
+    expires_at = credential.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at <= datetime.now(UTC) + _ROTATION_WINDOW
 
 
 def _is_transient_platform_status(status_code: int) -> bool:
@@ -196,15 +242,20 @@ class PlatformClient:
 
     async def _refresh_auth_headers(self, path: Path) -> dict[str, str]:
         """Serialize credential rotation across every worker on one node."""
+        # Atomic credential-file replacement lets ordinary requests read without
+        # competing for the node-wide rotation lock.
+        credential = load_node_credential(path)
+        if not _credential_needs_rotation(credential):
+            self._headers["Authorization"] = f"Bearer {credential.api_token}"
+            return dict(self._headers)
         lock_path = path.with_name(f".{path.name}.refresh.lock")
-        descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
-        await asyncio.to_thread(fcntl.flock, descriptor, fcntl.LOCK_EX)
-        try:
+        async with _node_credential_flock(
+            lock_path,
+            timeout=self._config.http_timeout_seconds + _CREDENTIAL_LOCK_GRACE_SECONDS,
+        ):
+            # A peer may have completed the rotation while this worker waited.
             credential = load_node_credential(path)
-            expires_at = credential.expires_at
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=UTC)
-            if expires_at > datetime.now(UTC) + timedelta(minutes=15):
+            if not _credential_needs_rotation(credential):
                 self._headers["Authorization"] = f"Bearer {credential.api_token}"
                 return dict(self._headers)
             if self._keypair is None:
@@ -268,9 +319,6 @@ class PlatformClient:
             store_node_credential(path, rotated)
             self._headers["Authorization"] = f"Bearer {rotated.api_token}"
             return dict(self._headers)
-        finally:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-            os.close(descriptor)
 
     @property
     def review_settings_source(self) -> Literal["platform", "cache", "bootstrap"]:
