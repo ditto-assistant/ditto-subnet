@@ -373,7 +373,9 @@ def records_from_pin_context(context: object) -> dict[UUID, AgentEmissionEligibi
     try:
         records = [AgentEmissionEligibility.model_validate(item) for item in raw]
     except ValidationError:
-        logger.warning("invalid reward eligibility records on ledger pin", exc_info=True)
+        logger.warning(
+            "invalid reward eligibility records on ledger pin", exc_info=True
+        )
         return {}
     return {record.agent_id: record for record in records}
 

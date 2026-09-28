@@ -2423,7 +2423,9 @@ async def _agent_reward_eligibility(
             getattr(request.app.state, "session_maker", None)
         )
         if continual.ledger_pin_mode == "epoch":
-            pin = await latest_pin(session, netuid=request.app.state.config.chain.netuid)
+            pin = await latest_pin(
+                session, netuid=request.app.state.config.chain.netuid
+            )
             if pin is not None:
                 return records_from_pin_context(pin.context).get(agent_id)
         policy = await _effective_eligibility_policy(
