@@ -1212,7 +1212,16 @@ class PolicyEngine:
                         review_notes=review_notes,
                         policy_version=context.policy_version,
                         reason_code=(
-                            result.evidence[0].code
+                            (
+                                # A v13 court clear is held by the explicit
+                                # verification requirement appended by this module.
+                                result.evidence[-1].code
+                                if result.adjudication is not None
+                                and result.adjudication.get("decision") == "clear"
+                                and context.policy_version
+                                >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                                else result.evidence[0].code
+                            )
                             if result.evidence
                             else f"policy-{terminal.value.replace('_', '-')}"
                         ),
@@ -1499,7 +1508,9 @@ class PolicyEngine:
                 adjudication=adjudication,
                 review_notes=observation.notes,
                 policy_version=policy_version,
-                reason_code="source-review-adjudicated",
+                reason_code=(
+                    evidence[-1].code if held_clear else "source-review-adjudicated"
+                ),
             )
         if not observation.ok:
             retryable = observation.failure_disposition == "retryable_infra"

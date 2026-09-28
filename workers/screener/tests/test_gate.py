@@ -1720,7 +1720,7 @@ async def test_v13_l4_cleared_static_lead_continues_to_build(
         item.code == "source-review-awaiting-v13-verification"
         for item in result.evidence
     )
-    assert result.reason_code == "source-review-adjudicated"
+    assert result.reason_code == "source-review-awaiting-v13-verification"
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
     assert any(call[0] == "build" for call in calls)

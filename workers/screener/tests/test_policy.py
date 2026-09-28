@@ -1439,6 +1439,7 @@ async def test_v13_court_clear_is_quarantine_transport_on_both_paths() -> None:
         assert decision.outcome == ScreeningOutcome.QUARANTINE
         assert decision.adjudication == adjudication
         assert decision.evidence[-1].code == "source-review-awaiting-v13-verification"
+        assert decision.reason_code == "source-review-awaiting-v13-verification"
 
 
 async def test_v13_source_clear_does_not_require_universal_oracle() -> None:
