@@ -46,15 +46,15 @@ PolicyManifestProfile = Literal["core", "l1", "l1_l2"]
 # one claimed attempt at a time.
 INTEGRITY_DOUBLE_CHECK_SCOPE = "integrity-double-check"
 
+# Keep these modules identical to worker builtin_policy_manifest. The optional
+# runtime challenge is no longer part of either built-in source-review profile.
 _POLICY_MANIFEST_MODULES: dict[PolicyManifestProfile, list[dict[str, str]]] = {
     "core": [],
     "l1": [
         {"kind": "agentic_source_review", "id": "luna-source-review"},
-        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
     ],
     "l1_l2": [
         {"kind": "agentic_source_review", "id": "luna-terra-sol-source-review"},
-        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
     ],
 }
 
