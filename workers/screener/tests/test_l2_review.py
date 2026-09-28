@@ -5841,6 +5841,66 @@ async def test_report_only_audit_records_turn_timeout_and_tool_names_without_sou
     assert "private-source-marker" not in audit_path.read_text()
 
 
+async def test_http_failure_after_review_turn_keeps_prior_usage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(
+            str(tmp_path / "http-audit.jsonl"), retention_days=30
+        ),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+    )
+    calls = 0
+
+    async def post(*_args: object, **_kwargs: object) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _response(
+                [_tool_call("1", "workspace_index", {})], model="openai/gpt-6-sol"
+            )
+        request = httpx.Request("POST", "https://openrouter.test/api/v1/responses")
+        response = httpx.Response(400, request=request, json={"error": "unknown"})
+        raise httpx.HTTPStatusError("bad request", request=request, response=response)
+
+    monkeypatch.setattr(agent, "_post", post)
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(l2_review.L2TrajectoryError) as raised:
+            await agent._run_trajectory(
+                client,
+                "test-key",
+                tmp_path,
+                None,  # type: ignore[arg-type]
+                artifact_sha256="d" * 64,
+                dossier={"source": "private-source-marker"},
+                role="analyst",
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider="azure",
+                usage_before=l2_review.L2Usage(),
+                deadline=None,
+                dossier_complete=True,
+            )
+    assert raised.value.code == "http-400-unclassified-json"
+    assert raised.value.steps_used == 2
+    assert raised.value.usage.input_tokens == 1_000
+    assert raised.value.usage.output_tokens == 200
+    assert raised.value.tools == ("workspace_index",)
+
+
 @pytest.mark.parametrize(
     ("reason", "expected"),
     [("content_filter", "content_filter"), ("private-source-marker", "other")],

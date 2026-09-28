@@ -107,9 +107,13 @@ def test_http_status_codes_stay_provider_specific() -> None:
         ),
         (
             {"error": {"code": "bad/request", "message": "Source text: secret-value"}},
-            "l2-http-400",
+            "l2-http-400-unclassified-json",
         ),
-        ({"error": "bad shape"}, "l2-http-400"),
+        ({"error": "bad shape"}, "l2-http-400-unclassified-json"),
+        (
+            {"error": {"message": "Input exceeds context limit"}},
+            "l2-http-400-context-limit",
+        ),
     ],
 )
 def test_http_400_exposes_only_a_bounded_error_class(
@@ -117,5 +121,21 @@ def test_http_400_exposes_only_a_bounded_error_class(
 ) -> None:
     request = httpx.Request("POST", "https://openrouter.example/api")
     response = httpx.Response(400, request=request, json=body)
+    error = httpx.HTTPStatusError("bad request", request=request, response=response)
+    assert l2_review_module._error_code("l2", error) == expected
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (b"", "l2-http-400-body-empty"),
+        (b"not json and private-source-marker", "l2-http-400-body-non-json"),
+        (b"[]", "l2-http-400-body-non-object"),
+        (b"x" * 16_385, "l2-http-400-body-oversize"),
+    ],
+)
+def test_http_400_reports_only_body_shape(body: bytes, expected: str) -> None:
+    request = httpx.Request("POST", "https://openrouter.example/api")
+    response = httpx.Response(400, request=request, content=body)
     error = httpx.HTTPStatusError("bad request", request=request, response=response)
     assert l2_review_module._error_code("l2", error) == expected

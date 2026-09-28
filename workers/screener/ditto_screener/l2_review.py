@@ -4496,6 +4496,12 @@ class TerraSolSourceReviewAgent:
                         }
                     )
                 raise
+            except httpx.HTTPStatusError as error:
+                # Keep usage from earlier successful reviewer turns. Letting the
+                # raw HTTP error reach run() replaces that usage with an empty
+                # L2Usage, making a late provider failure look like a first-call
+                # failure in the public report.
+                raise failure(_error_code("l2", error).removeprefix("l2-")) from error
             payload: object | None = None
             try:
                 payload = response.json()
@@ -7456,22 +7462,24 @@ def _error_code(prefix: str, error: BaseException) -> str:
 
 def _http_failure_hint(response: httpx.Response) -> str:
     """Expose only a bounded error class, never the provider's source-bearing text."""
-    if len(response.content) > 16_384:
+    if response.status_code not in {400, 413, 422}:
         return ""
+    if not response.content:
+        return "-body-empty"
+    if len(response.content) > 16_384:
+        return "-body-oversize"
     try:
         payload = response.json()
     except (ValueError, TypeError):
-        return ""
+        return "-body-non-json"
     if not isinstance(payload, Mapping):
-        return ""
+        return "-body-non-object"
     error = payload.get("error")
     if not isinstance(error, Mapping):
         error = {}
     metadata = error.get("metadata")
     if not isinstance(metadata, Mapping):
         metadata = {}
-    if response.status_code not in {400, 413, 422}:
-        return ""
     values = (
         metadata.get("provider_error_code"),
         error.get("code"),
@@ -7491,10 +7499,14 @@ def _http_failure_hint(response: httpx.Response) -> str:
         for phrase in (
             "context length",
             "context window",
+            "context limit",
+            "exceeds context",
             "prompt is too long",
+            "prompt too long",
             "too many tokens",
             "maximum input tokens",
             "input token limit",
+            "input tokens exceed",
         )
     ):
         return "-context-limit"
@@ -7509,7 +7521,7 @@ def _http_failure_hint(response: httpx.Response) -> str:
         for phrase in ("model not found", "invalid model", "unsupported model")
     ):
         return "-model-unavailable"
-    return ""
+    return "-unclassified-json"
 
 
 def _l1_evidence(observation: SourceReviewObservation) -> list[dict[str, object]]:
