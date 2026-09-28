@@ -236,11 +236,9 @@ export interface paths {
          * Get Agent Eligibility
          * @description One exact artifact's eligibility record, plus why the fold sees it or not.
          *
-         *     ``in_ledger`` is read from the same ``list_eligible_ledger`` the validator
-         *     reads. ``in_ledger`` false alongside a terminal review means the hold is
-         *     somewhere else entirely (``agents.status``, the ranked-run floor, or a
-         *     rollout version pin) -- which is the answer a miner appeal usually needs and
-         *     the one an operator otherwise has to guess at.
+         *     ``in_ledger`` reads the frozen payable entries in epoch mode. In live mode
+         *     it applies this gate to ``list_eligible_ledger``. A held provisional
+         *     incumbent remains a crown input but is never in the payable pool.
          */
         get: operations["get_agent_eligibility_api_v1_admin_agents__agent_id__emission_eligibility_get"];
         put?: never;
