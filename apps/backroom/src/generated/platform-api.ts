@@ -6632,13 +6632,13 @@ export interface paths {
          *     ``details["transcript_sha256"]`` and bound into its score signature. The
          *     platform accepts the bytes only when their SHA-256 equals that declared
          *     digest, then stores them content-addressed in authoritative storage.
-         *     The fresh, one-time request proof binds the validator, agent, run and
-         *     digest before any body bytes are read. Re-uploading an existing digest
-         *     with a fresh proof does not rewrite the primary object.
          *     The anonymous public mirror is a separate audited setting and, when
-         *     enabled, runs at quorum or on a later upload after quorum. A retry can
-         *     complete a missing public mirror once quorum and the operator setting
-         *     allow it.
+         *     enabled, runs at quorum or on a later upload after quorum. Because the
+         *     binding is *content* equality against an already-signed digest, a
+         *     caller spoofing another validator's hotkey can only ever upload the exact
+         *     bytes that validator attested — so the header + permit check is sufficient
+         *     auth here. A retry does not rewrite the primary object and can complete a
+         *     missing public mirror once quorum and the operator setting allow it.
          */
         put: operations["submit_transcript_api_v1_validator_agent__agent_id__transcript__run_id__put"];
         post?: never;
@@ -46520,10 +46520,6 @@ export interface operations {
             query?: never;
             header?: {
                 "x-validator-hotkey"?: string | null;
-                "x-validator-transcript-sha256"?: string | null;
-                "x-validator-transcript-nonce"?: string | null;
-                "x-validator-transcript-requested-at"?: string | null;
-                "x-validator-transcript-signature"?: string | null;
             };
             path: {
                 agent_id: string;
