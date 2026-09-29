@@ -798,6 +798,10 @@ func NewServerWithEffectReceiptsV1() *Server {
 	return s
 }
 
+// SupportsToolEffectReceiptsV1 lets the trusted broker fail closed before
+// consuming a model emission when this endpoint cannot deduplicate effects.
+func (s *Server) SupportsToolEffectReceiptsV1() bool { return s.effectProtocolV1 }
+
 // Register installs a case's fixture. Safe to call before serving.
 func (s *Server) Register(caseID string, f Fixture) {
 	s.mu.Lock()
