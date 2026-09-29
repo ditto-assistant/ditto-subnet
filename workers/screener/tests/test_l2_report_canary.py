@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-import math
+import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -233,6 +233,7 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
     }
     completions = []
     claimed = []
+    claimed_before = int(time.time())
     progress_stages = []
     loaded_modes = []
 
@@ -253,9 +254,10 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
             assert kwargs["capture_enforce_result"] is True
             assert canary_config.l2_always_escalate
             assert canary_config.require_signed_runtime_lease
-            assert canary_config.signed_runtime_lease_max_age_seconds == math.ceil(
-                datetime.fromisoformat(claim["lease_expires_at"]).timestamp()
-                - packet.observed_at
+            # One receipt-anchored rule for both lanes: no canary-only widening.
+            assert (
+                canary_config.signed_runtime_lease_max_age_seconds
+                == config.signed_runtime_lease_max_age_seconds
             )
             assert str(canary_id) in canary_config.l2_cache_dir
             assert canary_config.l2_cache_dir != config.l2_cache_dir
@@ -270,6 +272,11 @@ async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
             assert kwargs.get("publish_image") is None
             assert kwargs.get("record_runtime_verification") is None
             assert kwargs["scored_runtime_evidence"] == packet
+            assert (
+                claimed_before
+                <= kwargs["scored_runtime_evidence_received_at"]
+                <= int(time.time())
+            )
             kwargs["progress"]("source_review_0")
             if run_mode == "full_runtime":
                 return ScreeningDecision(

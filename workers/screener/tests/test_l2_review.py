@@ -862,6 +862,28 @@ class _FakeL2:
         return self.result
 
 
+def _signed_lease(
+    *, observed_at: int, artifact_sha256: str = "c" * 64
+) -> ScoredRuntimeEvidenceLease:
+    revision = "a" * 40
+    keys = ("DITTOBENCH_DB", "DITTOBENCH_MODEL")
+    return ScoredRuntimeEvidenceLease(
+        attempt_id=ATTEMPT,
+        artifact_sha256=artifact_sha256,
+        policy_version=13,
+        bench_version=13,
+        scorer_source_revision=revision,
+        release_descriptor_digest="sha256:" + "d" * 64,
+        scorer_image_digest="sha256:" + "e" * 64,
+        scorer_env_sha256=hashlib.sha256(
+            ("scored-runtime-env-v1\n13\n" + revision + "\n" + "\n".join(keys)).encode()
+        ).hexdigest(),
+        injected_keys=keys,
+        validator_count=3,
+        observed_at=observed_at,
+    )
+
+
 async def test_required_lease_holds_before_l1_or_l4_can_clear() -> None:
     l1 = _FakeL1(_l1("low", clearance_certified=True))
     l2 = _FakeL2(_model_result(_safe()))
@@ -872,9 +894,11 @@ async def test_required_lease_holds_before_l1_or_l4_can_clear() -> None:
         "unused",
         artifact_sha256="c" * 64,
         attempt_id=ATTEMPT,
-        scored_runtime_evidence=None,
+        policy_version=13,
+        scored_runtime_evidence=_signed_lease(observed_at=int(time.time()) - 400),
     )
 
+    assert l1.calls == l2.calls == 0
     assert result.error_code == "l2-runtime-evidence-unavailable"
     assert result.failure_disposition == "pass_inconclusive"
     audit = ScreenReviewAudit.model_validate(result.review_audit)
@@ -992,6 +1016,244 @@ async def test_required_lease_shadow_records_hold_without_applying_it(
     assert shadow is not None
     assert shadow.observation.error_code == "l2-runtime-evidence-unavailable"
     assert shadow.observation.failure_disposition == "pass_inconclusive"
+
+
+async def test_shadow_mode_tolerates_missing_lease() -> None:
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="shadow")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+        scored_runtime_evidence=None,
+    )
+
+    assert result.ok
+    assert l1.calls == 1
+
+
+async def test_lease_fresh_at_receipt_survives_long_l1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received_at = 1_800_000_000
+    lease = _signed_lease(observed_at=received_at - 200)
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+    # Build, serve and L1 have run for 25 minutes since the claim arrived.
+    monkeypatch.setattr(l2_review.time, "time", lambda: received_at + 1_500.0)
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+        scored_runtime_evidence=lease,
+        scored_runtime_evidence_received_at=received_at,
+    )
+
+    assert result.ok
+    assert l1.calls == 1
+    assert l2.calls == 1
+
+
+async def test_lease_stale_at_receipt_holds(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    received_at = 1_800_000_000
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+    monkeypatch.setattr(l2_review.time, "time", lambda: received_at + 5.0)
+
+    with caplog.at_level("WARNING", logger=l2_review.logger.name):
+        result = await layered.review(
+            "unused",
+            artifact_sha256="c" * 64,
+            attempt_id=ATTEMPT,
+            policy_version=13,
+            scored_runtime_evidence=_signed_lease(observed_at=received_at - 400),
+            scored_runtime_evidence_received_at=received_at,
+        )
+
+    assert l1.calls == l2.calls == 0
+    assert result.error_code == "l2-runtime-evidence-unavailable"
+    assert result.failure_disposition == "pass_inconclusive"
+    audit = ScreenReviewAudit.model_validate(result.review_audit)
+    assert audit.cause_detail == "lease_unavailable"
+    assert any(
+        f"attempt_id={ATTEMPT}" in record.getMessage()
+        and "lease_present=True" in record.getMessage()
+        and "age_seconds=400" in record.getMessage()
+        and "max_age_seconds=300" in record.getMessage()
+        and "clause=age_stale" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(
+    ("update", "clause"),
+    [
+        ({"attempt_id": UUID(int=1)}, "attempt_id"),
+        ({"artifact_sha256": "d" * 64}, "artifact"),
+        ({"policy_version": 12}, "policy"),
+    ],
+)
+async def test_v13_lease_identity_mismatch_still_holds(
+    update: dict[str, object], clause: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    received_at = int(time.time())
+    lease = _signed_lease(observed_at=received_at).model_copy(update=update)
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    with caplog.at_level("WARNING", logger=l2_review.logger.name):
+        result = await layered.review(
+            "unused",
+            artifact_sha256="c" * 64,
+            attempt_id=ATTEMPT,
+            policy_version=13,
+            scored_runtime_evidence=lease,
+            scored_runtime_evidence_received_at=received_at,
+        )
+
+    assert l1.calls == l2.calls == 0
+    assert result.failure_disposition == "pass_inconclusive"
+    assert any(f"clause={clause}" in record.getMessage() for record in caplog.records)
+
+
+async def test_missing_lease_is_retryable_infra(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    with caplog.at_level("WARNING", logger=l2_review.logger.name):
+        reviewed = await layered.review(
+            "unused",
+            artifact_sha256="c" * 64,
+            attempt_id=ATTEMPT,
+            policy_version=13,
+            scored_runtime_evidence=None,
+            bench_version=13,
+        )
+    resolved = await layered.resolve_lead(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1("high"),
+        policy_version=13,
+        scored_runtime_evidence=None,
+        bench_version=13,
+    )
+
+    for observation in (reviewed, resolved):
+        assert observation.error_code == "l2-runtime-evidence-unavailable"
+        assert observation.failure_disposition == "retryable_infra"
+        # No paid stage started, so nothing is accounted as a review audit.
+        assert observation.review_audit is None
+    assert l1.calls == l2.calls == 0
+    assert any(
+        "lease_present=False" in record.getMessage()
+        and "clause=missing" in record.getMessage()
+        for record in caplog.records
+    )
+
+    sol = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    sol._l3_enabled = False
+
+    async def must_not_run(*_args: object, **_kwargs: object) -> L2RunResult:
+        raise AssertionError("model must not run without the signed lease")
+
+    monkeypatch.setattr(sol, "_review_uncached", must_not_run)
+    direct = await sol.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+        policy_version=13,
+        scored_runtime_evidence=None,
+        bench_version=13,
+    )
+    assert direct.observation.error_code == "l2-runtime-evidence-unavailable"
+    assert direct.observation.failure_disposition == "retryable_infra"
+
+
+@pytest.mark.parametrize("bench_version", [12, 14, None])
+async def test_missing_lease_for_a_non_v13_arrival_keeps_the_inconclusive_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bench_version: int | None
+) -> None:
+    """A per-agent cause must not enter the fleet infrastructure auto-retry."""
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    held = await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+        scored_runtime_evidence=None,
+        bench_version=bench_version,
+    )
+
+    assert l1.calls == l2.calls == 0
+    assert held.error_code == "l2-runtime-evidence-unavailable"
+    assert held.failure_disposition == "pass_inconclusive"
+    audit = ScreenReviewAudit.model_validate(held.review_audit)
+    assert audit.cause_detail == "lease_unavailable"
+
+    sol = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    sol._l3_enabled = False
+
+    async def must_not_run(*_args: object, **_kwargs: object) -> L2RunResult:
+        raise AssertionError("model must not run without the signed lease")
+
+    monkeypatch.setattr(sol, "_review_uncached", must_not_run)
+    direct = await sol.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+        policy_version=13,
+        scored_runtime_evidence=None,
+        bench_version=bench_version,
+    )
+    assert direct.observation.failure_disposition == "pass_inconclusive"
+
+
+async def test_v13_review_disabled_keeps_its_inconclusive_hold() -> None:
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="off")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+        scored_runtime_evidence=None,
+    )
+
+    assert result.failure_disposition == "pass_inconclusive"
+    audit = ScreenReviewAudit.model_validate(result.review_audit)
+    assert audit.cause_detail == "review_disabled"
 
 
 async def test_clean_l1_skips_sol() -> None:

@@ -847,6 +847,7 @@ type brokerEffectOperation struct {
 	name       string
 	argsSHA256 string
 	generation uint64
+	hop        int
 	replays    uint8
 }
 
@@ -1896,6 +1897,17 @@ func (b *inferenceBroker) authorizeEffectOperationV1(
 			recordEffectDenialLocked(session, caseID, generation, toolFindingDuplicateExecution)
 			return false
 		}
+		// A transport retry retains its hop. A later model-emitted retry has a
+		// new hop and must consume its own matching emission before the cached
+		// endpoint receipt can be returned without applying the effect again.
+		if prior.hop != call.Hop {
+			if !consumeModelToolCallLocked(session, caseID, call, argsSHA256, nil) {
+				return false
+			}
+			prior.hop = call.Hop
+			prior.replays++
+			return true
+		}
 		prior.replays++
 		if generation != 0 {
 			snapshot := session.caseSnapshots[generation]
@@ -1915,7 +1927,7 @@ func (b *inferenceBroker) authorizeEffectOperationV1(
 		session.effectOperations = make(map[brokerEffectOperationKey]*brokerEffectOperation)
 	}
 	session.effectOperations[key] = &brokerEffectOperation{
-		userID: call.UserID, name: call.Name, argsSHA256: argsSHA256, generation: generation,
+		userID: call.UserID, name: call.Name, argsSHA256: argsSHA256, generation: generation, hop: call.Hop,
 	}
 	return true
 }

@@ -7531,6 +7531,7 @@ _ADMISSION_LANE_BY_REASON_CODE: dict[str, PublicAdmissionLane] = {
     "cloudrun-runtime-unavailable": "runtime_smoke",
     "targon-source-review-unavailable": "source_review",
     **dict.fromkeys(_SOURCE_REVIEW_MODEL_TIMEOUT_REASON_CODES, "source_review"),
+    "l2-runtime-evidence-unavailable": "source_review",
 }
 
 

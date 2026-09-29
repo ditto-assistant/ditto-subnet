@@ -1,7 +1,9 @@
 """Automatic, bounded retry and a fleet circuit breaker for infrastructure builds.
 
 A screener that reports ``docker-build-infrastructure`` (Docker daemon, BuildKit,
-or the build host failed; the miner's archive was never judged) or
+or the build host failed; the miner's archive was never judged), a retryable
+``l2-runtime-evidence-unavailable`` (no signed scorer-cohort lease was available
+at claim), or
 ``worker-claim-not-started`` (the worker settled a durable claim before fetching
 the artifact) parks the agent as ``screening_failed``. Unlike the provider codes in
 ``PROVIDER_BACKOFF_REASON_CODES`` it is retried without an operator, so this
@@ -88,6 +90,13 @@ if TYPE_CHECKING:
 # index ``screening_attempts_infra_failed_idx`` (models.py, its migration, and
 # ``_infra_failure_filters``) in the same change, or the breaker scan silently
 # goes back to a sequential scan under the claim lock.
+#
+# ``l2-runtime-evidence-unavailable`` reaches here only as a retryable failure,
+# which the worker emits only when Platform attached no signed scorer-cohort lease
+# to a V13 arrival under policy 13: the pinned cohort was unavailable (#2444).
+# Every other cause (a present lease failing identity or freshness, or an arrival
+# that can never carry a lease) is an INCONCLUSIVE verdict with an ``expired``
+# attempt, never matched here, so no per-agent cause can loop this retry.
 # ``worker-claim-not-started`` qualifies because the worker emits it only between
 # ``claim_next`` and ``_screen_one`` (stop during a multi-item claim, a policy
 # change during the claim, an out-of-range item policy, an unparseable claim
@@ -95,6 +104,7 @@ if TYPE_CHECKING:
 INFRA_AUTO_RETRY_REASON_CODES: tuple[str, ...] = (
     "docker-build-infrastructure",
     "worker-claim-not-started",
+    "l2-runtime-evidence-unavailable",
 )
 
 INFRA_RETRY_BASE_BACKOFF = timedelta(minutes=10)

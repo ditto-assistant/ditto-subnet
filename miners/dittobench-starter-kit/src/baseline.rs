@@ -71,8 +71,9 @@
 //!
 //! =========================================================================
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Context;
@@ -111,6 +112,35 @@ struct ToolExecCtx {
     user_id: String,
     hop: AtomicI32,
     effect_receipts_v1: bool,
+    pending_effects: Mutex<HashMap<(String, String), String>>,
+}
+
+impl ToolExecCtx {
+    fn operation_for(&self, key: &(String, String)) -> String {
+        self.pending_effects
+            .lock()
+            .expect("pending tool effects lock")
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+    }
+
+    fn mark_unknown(&self, key: &(String, String), operation_id: &str) {
+        self.pending_effects
+            .lock()
+            .expect("pending tool effects lock")
+            .insert(key.clone(), operation_id.to_string());
+    }
+
+    fn resolve_effect(&self, key: &(String, String), operation_id: &str) {
+        let mut pending = self
+            .pending_effects
+            .lock()
+            .expect("pending tool effects lock");
+        if pending.get(key).is_some_and(|id| id == operation_id) {
+            pending.remove(key);
+        }
+    }
 }
 
 /// A catalog tool built from a wire tool definition. It exposes the case's
@@ -146,13 +176,28 @@ impl Tool for WireTool {
     }
 
     async fn execute(&self, args: Value) -> HarnessResult<Value> {
-        // Each model-emitted call gets one operation identity. Only a validator
-        // that explicitly advertises V1 receipts may safely recover a lost
-        // response by retransmitting that same operation and hop.
+        // A new model-emitted effect gets one operation identity. Under V1,
+        // an uncertain effect keeps that identity for a later matching model
+        // emission; a verified result releases it so an intentional repeat is
+        // a separate effect. Same-emission transport retries retain the hop.
         if let Some(ctx) = &self.exec {
-            let operation_id = ctx
-                .effect_receipts_v1
-                .then(|| uuid::Uuid::new_v4().to_string());
+            let effect_key = ctx.effect_receipts_v1.then(|| {
+                (
+                    self.def.name.clone(),
+                    serde_json::to_string(&args).expect("JSON arguments serialize"),
+                )
+            });
+            let operation_id = effect_key.as_ref().map(|key| ctx.operation_for(key));
+            let mark_unknown = || {
+                if let (Some(key), Some(id)) = (&effect_key, &operation_id) {
+                    ctx.mark_unknown(key, id);
+                }
+            };
+            let resolve_effect = || {
+                if let (Some(key), Some(id)) = (&effect_key, &operation_id) {
+                    ctx.resolve_effect(key, id);
+                }
+            };
             let body = protocol::ToolExecRequest {
                 case_id: ctx.case_id.clone(),
                 user_id: ctx.user_id.clone(),
@@ -175,6 +220,7 @@ impl Tool for WireTool {
                             }
                             let response_body = resp.text().await.unwrap_or_default();
                             if ctx.effect_receipts_v1 {
+                                mark_unknown();
                                 return Ok(json!({
                                     "error": format!("tool effect delivery unknown: endpoint returned {status}: {response_body}")
                                 }));
@@ -187,21 +233,24 @@ impl Tool for WireTool {
                             Ok(r) => {
                                 if ctx.effect_receipts_v1 {
                                     if r.operation_id != operation_id {
+                                        mark_unknown();
                                         return Ok(
                                             json!({ "error": "tool receipt operation mismatch" }),
                                         );
                                     }
                                     match r.effect_state.as_deref() {
-                                        Some("applied") => {}
+                                        Some("applied") => resolve_effect(),
                                         Some("not_applied") => {
+                                            resolve_effect();
                                             return Ok(json!({
                                                 "error": if r.error.is_empty() { "tool effect not applied" } else { &r.error }
-                                            }))
+                                            }));
                                         }
                                         _ => {
+                                            mark_unknown();
                                             return Ok(
                                                 json!({ "error": "tool effect delivery unknown" }),
-                                            )
+                                            );
                                         }
                                     }
                                 }
@@ -220,6 +269,7 @@ impl Tool for WireTool {
                                     continue;
                                 }
                                 if ctx.effect_receipts_v1 {
+                                    mark_unknown();
                                     return Ok(json!({
                                         "error": format!("tool effect delivery unknown: decode tool result: {err}")
                                     }));
@@ -235,6 +285,7 @@ impl Tool for WireTool {
                             continue;
                         }
                         if ctx.effect_receipts_v1 {
+                            mark_unknown();
                             return Ok(json!({
                                 "error": format!("tool effect delivery unknown: endpoint unreachable: {err}")
                             }));
@@ -326,6 +377,7 @@ mod tool_exec_tests {
             user_id: "scored-user".to_string(),
             hop: AtomicI32::new(0),
             effect_receipts_v1: false,
+            pending_effects: Mutex::new(HashMap::new()),
         })
     }
 
@@ -372,6 +424,30 @@ mod tool_exec_tests {
     ) -> StatusCode {
         calls.lock().expect("lock calls").push(call);
         StatusCode::SERVICE_UNAVAILABLE
+    }
+
+    async fn receipt_available_on_later_model_emission(
+        State(calls): State<Arc<Mutex<Vec<protocol::ToolExecRequest>>>>,
+        Json(call): Json<protocol::ToolExecRequest>,
+    ) -> (StatusCode, Json<protocol::ToolExecResponse>) {
+        let attempt = {
+            let mut calls = calls.lock().expect("lock calls");
+            calls.push(call.clone());
+            calls.len()
+        };
+        if attempt <= 2 {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(Default::default()));
+        }
+        (
+            StatusCode::OK,
+            Json(protocol::ToolExecResponse {
+                result: "effect applied".to_string(),
+                operation_id: call.operation_id,
+                effect_state: Some("applied".to_string()),
+                replayed: attempt == 3,
+                ..Default::default()
+            }),
+        )
     }
 
     fn wire_tool(exec: Arc<ToolExecCtx>) -> WireTool {
@@ -499,6 +575,47 @@ mod tool_exec_tests {
         let calls = calls.lock().expect("lock calls");
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0], calls[1]);
+    }
+
+    #[tokio::test]
+    async fn later_model_retry_reuses_pending_operation_then_new_effect_gets_new_id() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(receipt_available_on_later_model_emission))
+            .with_state(Arc::clone(&calls));
+        let (endpoint, task) = serve(app).await;
+        let mut ctx = exec_context(endpoint);
+        Arc::get_mut(&mut ctx)
+            .expect("unshared context")
+            .effect_receipts_v1 = true;
+        let tool = wire_tool(ctx);
+
+        let uncertain = tool
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("first model emission");
+        assert!(uncertain["error"]
+            .as_str()
+            .expect("unknown result")
+            .contains("delivery unknown"));
+        let recovered = tool
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("second model emission");
+        assert_eq!(recovered["result"], "effect applied");
+        let separate_effect = tool
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("third model emission");
+        assert_eq!(separate_effect["result"], "effect applied");
+        task.abort();
+
+        let calls = calls.lock().expect("lock calls");
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0], calls[1]);
+        assert_eq!(calls[0].operation_id, calls[2].operation_id);
+        assert_eq!((calls[0].hop, calls[2].hop, calls[3].hop), (0, 1, 2));
+        assert_ne!(calls[2].operation_id, calls[3].operation_id);
     }
 }
 
@@ -851,6 +968,7 @@ impl Baseline {
                 hop: AtomicI32::new(0),
                 effect_receipts_v1: req.tool_effect_protocol.as_deref()
                     == Some(protocol::TOOL_EFFECT_PROTOCOL_V1),
+                pending_effects: Mutex::new(HashMap::new()),
             })
         });
 

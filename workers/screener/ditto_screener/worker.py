@@ -617,6 +617,7 @@ class ScreenerWorker:
                 error=error,
             )
             return 0
+        claim_received_at = int(time.time())
         if queue.required_policy_version != required_policy:
             policy_changed = PlatformError(
                 "platform changed screening policy during claim: expected "
@@ -717,6 +718,7 @@ class ScreenerWorker:
                 item,
                 policy_version=item_policy_version,
                 normal_review_settings=review_settings,
+                received_at=claim_received_at,
             )
             done += 1
         return done
@@ -727,8 +729,14 @@ class ScreenerWorker:
         *,
         policy_version: int,
         normal_review_settings: EffectiveReviewSettings | None = None,
+        received_at: int | None = None,
     ) -> None:
-        """Gate one agent and post its signed verdict. Never raises."""
+        """Gate one agent and post its signed verdict. Never raises.
+
+        ``received_at`` is when the claim carrying ``item`` arrived. Its signed
+        runtime lease is checked for freshness against that time once, not
+        against the clock at each later use.
+        """
         agent_id = item.agent_id
         if item.attempt_id is None:
             # Platform creates an attempt for every claim; without one there
@@ -744,6 +752,8 @@ class ScreenerWorker:
         self._active_lease_wall = item.lease_deadline
         self._active_attempt_id = attempt_id
         self._job_started_at = int(time.time())
+        if received_at is None:
+            received_at = self._job_started_at
         self._set_progress("preparing")
         heartbeat_stop = asyncio.Event()
         heartbeat_task = asyncio.create_task(
@@ -927,6 +937,7 @@ class ScreenerWorker:
                         deferred_source_review=item.deferred_source_review,
                         policy_version=policy_version,
                         scored_runtime_evidence=item.scored_runtime_evidence,
+                        scored_runtime_evidence_received_at=received_at,
                     )
             if result.policy_version != policy_version:
                 raise PlatformError(

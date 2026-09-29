@@ -132,6 +132,7 @@ from ditto.tests.legacy_era import retired_era_writes_allowed
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     AdjudicationCompletionReceipt,
+    ScoredRuntimeEvidenceLease,
     ScreenResultOutcome,
     ScreenReviewAudit,
     SourceReviewAdjudication,
@@ -5999,6 +6000,300 @@ class TestClaim:
             assert attempt is not None
             assert attempt.review_settings_revision == claimed_revision_id
             assert attempt.review_settings_checksum == claimed_checksum
+
+    @staticmethod
+    async def _bind_settings(
+        session_maker: async_sessionmaker[AsyncSession],
+        settings: ScreenerReviewSettings,
+    ) -> dict[str, str | int]:
+        """Publish ``settings`` globally and return the matching claim binding."""
+        checksum = _review_settings_checksum(settings)
+        async with session_maker() as session, session.begin():
+            revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=settings.model_dump(mode="json"),
+                checksum=checksum,
+                reason="signed runtime lease claim test",
+                actor="test",
+            )
+            session.add(revision)
+            await session.flush()
+            revision_id = revision.revision
+        return {
+            "policy_version": SCREENING_POLICY_VERSION,
+            "review_settings_revision": revision_id,
+            "review_settings_instance_id": "ditto-screener-fleet-test",
+            "review_settings_scope": "*",
+            "review_settings_checksum": checksum,
+        }
+
+    @staticmethod
+    async def _claim_v13_bound(
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        binding: dict[str, str | int],
+        *,
+        lease_available: bool,
+        bench_version: int = 13,
+        bench_versions: dict[UUID, int] | None = None,
+        limit: int = 1,
+    ) -> httpx.Response:
+        """Claim policy-13 attempts under ``binding`` with a controlled lease."""
+        monkeypatch.setattr(
+            "ditto.db.queries.screening.effective_screening_policy_version",
+            lambda: 13,
+        )
+
+        async def arrival(_session: AsyncSession, *, agent: Agent) -> int:
+            return (bench_versions or {}).get(agent.agent_id, bench_version)
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.screener.arrival_bench_version", arrival
+        )
+
+        async def lease_lookup(
+            _session: AsyncSession,
+            *,
+            attempt_id: UUID,
+            artifact_sha256: str,
+            policy_version: int,
+            bench_version: int,
+        ) -> ScoredRuntimeEvidenceLease | None:
+            if not lease_available or policy_version != 13 or bench_version != 13:
+                return None
+            revision = "a" * 40
+            keys = ("DITTOBENCH_MODEL",)
+            return ScoredRuntimeEvidenceLease(
+                attempt_id=attempt_id,
+                artifact_sha256=artifact_sha256,
+                policy_version=13,
+                bench_version=13,
+                scorer_source_revision=revision,
+                release_descriptor_digest="sha256:" + "b" * 64,
+                scorer_image_digest="sha256:" + "c" * 64,
+                scorer_env_sha256=hashlib.sha256(
+                    (
+                        "scored-runtime-env-v1\n13\n"
+                        + revision
+                        + "\n"
+                        + "\n".join(keys)
+                    ).encode()
+                ).hexdigest(),
+                injected_keys=keys,
+                validator_count=3,
+                observed_at=int(datetime.now(UTC).timestamp()),
+            )
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.screener.scored_runtime_evidence_for_lease",
+            lease_lookup,
+        )
+        return await client.post(
+            "/api/v1/screener/claim",
+            params={**binding, "limit": limit},
+            headers=_AUTH_HEADER,
+        )
+
+    @staticmethod
+    async def _assert_still_queued(
+        session_maker: async_sessionmaker[AsyncSession], agent_id: UUID
+    ) -> None:
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempts = list(
+                await session.scalars(
+                    select(ScreeningAttempt).where(
+                        ScreeningAttempt.agent_id == agent_id
+                    )
+                )
+            )
+        assert agent is not None
+        assert agent.status == AgentStatus.UPLOADED
+        assert attempts == []
+
+    async def test_claim_withholds_v13_attempt_without_cohort_lease_when_l3_disabled(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        binding = await self._bind_settings(
+            session_maker, ScreenerReviewSettings(mode="enforce", l3_enabled=False)
+        )
+
+        with caplog.at_level(logging.WARNING, logger="ditto.api_server.endpoints"):
+            withheld = await self._claim_v13_bound(
+                client, monkeypatch, binding, lease_available=False
+            )
+
+        assert withheld.status_code == 200, withheld.text
+        assert withheld.json()["items"] == []
+        assert withheld.headers["X-Ditto-Claim-Empty-Reason"] == (
+            "scorer_cohort_unavailable"
+        )
+        assert any(
+            "scorer_cohort_unavailable" in record.getMessage()
+            and str(agent_id) in record.getMessage()
+            and "reason=no_cohort_packet" in record.getMessage()
+            for record in caplog.records
+        )
+        await self._assert_still_queued(session_maker, agent_id)
+
+        # Once the cohort can certify the lease, the same agent is leased with it.
+        leased = await self._claim_v13_bound(
+            client, monkeypatch, binding, lease_available=True
+        )
+        assert leased.status_code == 200, leased.text
+        item = leased.json()["items"][0]
+        assert item["agent_id"] == str(agent_id)
+        assert item["policy_version"] == 13
+        assert item["scored_runtime_evidence"]["attempt_id"] == item["attempt_id"]
+
+    async def test_non_v13_arrival_at_the_head_does_not_stall_the_queue(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A per-agent missing lease is leased as before, never withheld.
+
+        Withholding it would roll back every claim while that agent stays at
+        the head of the queue, starving the V13 arrivals behind it.
+        """
+        now = datetime.now(UTC)
+        head = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="non-v13-head",
+            sha256="1" * 64,
+            created_at=now - timedelta(hours=2),
+        )
+        behind = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="v13-behind",
+            sha256="2" * 64,
+            created_at=now - timedelta(hours=1),
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        binding = await self._bind_settings(
+            session_maker, ScreenerReviewSettings(mode="enforce", l3_enabled=False)
+        )
+
+        claimed = []
+        with caplog.at_level(logging.WARNING, logger="ditto.api_server.endpoints"):
+            for _ in range(2):
+                response = await self._claim_v13_bound(
+                    client,
+                    monkeypatch,
+                    binding,
+                    lease_available=True,
+                    bench_versions={head: 12},
+                )
+                assert response.status_code == 200, response.text
+                assert "X-Ditto-Claim-Empty-Reason" not in response.headers
+                claimed.extend(response.json()["items"])
+
+        assert [item["agent_id"] for item in claimed] == [str(head), str(behind)]
+        # The head keeps main's behaviour: leased without a lease, so the
+        # worker holds it inconclusive instead of retrying a per-agent cause.
+        assert claimed[0]["bench_version"] == 12
+        assert claimed[0]["scored_runtime_evidence"] is None
+        assert claimed[1]["bench_version"] == 13
+        assert (
+            claimed[1]["scored_runtime_evidence"]["attempt_id"]
+            == (claimed[1]["attempt_id"])
+        )
+        assert not any(
+            "scorer_cohort_unavailable" in record.getMessage()
+            for record in caplog.records
+        )
+
+    async def test_missing_cohort_lease_does_not_roll_back_other_batch_items(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        now = datetime.now(UTC)
+        v13 = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="v13-unavailable",
+            sha256="3" * 64,
+            created_at=now - timedelta(hours=2),
+        )
+        v12 = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="v12-behind",
+            sha256="4" * 64,
+            created_at=now - timedelta(hours=1),
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        binding = await self._bind_settings(
+            session_maker, ScreenerReviewSettings(mode="enforce", l3_enabled=False)
+        )
+
+        response = await self._claim_v13_bound(
+            client,
+            monkeypatch,
+            binding,
+            lease_available=False,
+            bench_versions={v12: 12},
+            limit=2,
+        )
+
+        assert response.status_code == 200, response.text
+        assert "X-Ditto-Claim-Empty-Reason" not in response.headers
+        items = response.json()["items"]
+        assert [item["agent_id"] for item in items] == [str(v13), str(v12)]
+        assert all(item["scored_runtime_evidence"] is None for item in items)
+        assert all(item["attempt_id"] for item in items)
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            ScreenerReviewSettings(mode="enforce", l3_enabled=True),
+            ScreenerReviewSettings(mode="shadow", l3_enabled=False),
+        ],
+        ids=["l3-enabled", "l2-shadow"],
+    )
+    async def test_claim_returns_attempt_without_lease_when_not_required(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        settings: ScreenerReviewSettings,
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await self._claim_v13_bound(
+            client,
+            monkeypatch,
+            await self._bind_settings(session_maker, settings),
+            lease_available=False,
+        )
+
+        assert response.status_code == 200, response.text
+        item = response.json()["items"][0]
+        assert item["agent_id"] == str(agent_id)
+        assert item["policy_version"] == 13
+        assert item["scored_runtime_evidence"] is None
 
     async def test_integrity_double_check_runs_on_the_pinned_stronger_posture(
         self,

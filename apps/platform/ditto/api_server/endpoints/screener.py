@@ -233,6 +233,7 @@ from ditto.db.queries.screening_review_events import append_automated_review_eve
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     AdjudicationCompletionReceipt,
+    ScoredRuntimeEvidenceLease,
     ScreenResultOutcome,
     SourceReviewFinding,
     completion_receipt_signing_message,
@@ -382,7 +383,11 @@ _LEGACY_INSTANCE_ID = "legacy"
 _HEARTBEAT_RETENTION = timedelta(days=1)
 _CLAIM_FALLBACK_LOCK = asyncio.Lock()
 _ClaimEmptyReason = Literal[
-    "claim_lock_busy", "legacy_gcp_held", "admission_closed", "admission_full"
+    "claim_lock_busy",
+    "legacy_gcp_held",
+    "admission_closed",
+    "admission_full",
+    "scorer_cohort_unavailable",
 ]
 _CLAIM_EMPTY_REASON_HEADER = "X-Ditto-Claim-Empty-Reason"
 _ADMISSION_CLOSED_LOG_INTERVAL_SECONDS = 60.0
@@ -3402,6 +3407,76 @@ def _empty_claim(
     )
 
 
+class _ScorerCohortUnavailableError(Exception):
+    """Roll back a claim whose attempt needs a signed lease Platform cannot issue."""
+
+
+_ClaimedAttempt = tuple[Agent, ScreeningAttempt, UUID | None]
+
+
+async def _bind_claim_runtime_leases(
+    session: AsyncSession, claimed: list[_ClaimedAttempt]
+) -> dict[UUID, tuple[int, ScoredRuntimeEvidenceLease | None]]:
+    """Bind each claimed attempt's arrival bench version and signed runtime lease.
+
+    Under policy 13 with L3 off and L2 not in shadow, the worker holds a source
+    review that has no exact signed scorer-cohort lease. When a V13 arrival
+    under policy 13 gets no lease, the only cause is the pinned cohort: it is
+    not fully healthy, or an unpinned V13 ticket is live. That is fleet-wide
+    and transient. For a one-item claim, this raises and the caller rolls the
+    claim back: the agent stays queued and no attempt budget is spent. A batch
+    containing other items must commit so an unavailable V13 item cannot starve
+    unrelated arrivals; the worker settles that item as retryable infrastructure.
+
+    Any other missing lease has a per-agent cause, such as a non-V13 arrival
+    during an open rollout. Withholding it would stall every claim behind that
+    one agent, so it is leased without a lease as before and the worker holds
+    it inconclusive. The lease stays optional with L3 on, for the mechanical
+    lane, and for a duplicate precheck; none of them run the source review.
+    """
+    bound: dict[UUID, tuple[int, ScoredRuntimeEvidenceLease | None]] = {}
+    unavailable: list[tuple[Agent, ScreeningAttempt, int]] = []
+    for agent, attempt, duplicate_of in claimed:
+        bench_version = await arrival_bench_version(session, agent=agent)
+        lease = await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt.attempt_id,
+            artifact_sha256=agent.sha256,
+            policy_version=attempt.policy_version,
+            bench_version=bench_version,
+        )
+        bound[attempt.attempt_id] = (bench_version, lease)
+        if (
+            lease is not None
+            or attempt.policy_version != 13
+            or bench_version != 13
+            or attempt.build_only
+            or duplicate_of is not None
+            or attempt.review_settings_revision is None
+        ):
+            continue
+        revision = await session.get(
+            ScreenerReviewSettingsRevision, attempt.review_settings_revision
+        )
+        if revision is None:
+            continue
+        settings = ScreenerReviewSettings.model_validate(revision.settings)
+        if settings.l3_enabled or settings.mode == "shadow":
+            continue
+        unavailable.append((agent, attempt, bench_version))
+    if unavailable and len(claimed) == 1:
+        agent, attempt, bench_version = unavailable[0]
+        logger.warning(
+            "scorer_cohort_unavailable agent_id=%s attempt_id=%s bench_version=%d "
+            "reason=no_cohort_packet",
+            agent.agent_id,
+            attempt.attempt_id,
+            bench_version,
+        )
+        raise _ScorerCohortUnavailableError
+    return bound
+
+
 async def _claim_admission(
     session: AsyncSession,
     *,
@@ -3556,96 +3631,93 @@ async def claim(
         # Revision zero is computed from built-in defaults and has no immutable row.
         return expected if effective.revision >= 1 else None
 
-    if session.get_bind().dialect.name == "postgresql":
-        async with session.begin():
-            if not await try_acquire_screening_claim_lock(session):
-                return _empty_claim(
-                    response,
-                    reason="claim_lock_busy",
-                    required_policy=required_policy,
+    try:
+        if session.get_bind().dialect.name == "postgresql":
+            async with session.begin():
+                if not await try_acquire_screening_claim_lock(session):
+                    return _empty_claim(
+                        response,
+                        reason="claim_lock_busy",
+                        required_policy=required_policy,
+                    )
+                node_id = getattr(request.state, "screener_node_id", None)
+                limit, empty_reason = await _claim_admission(
+                    session,
+                    node_id=node_id,
+                    screener_hotkey=screener_hotkey,
+                    now=now,
+                    limit=limit,
                 )
-            node_id = getattr(request.state, "screener_node_id", None)
-            limit, empty_reason = await _claim_admission(
-                session,
-                node_id=node_id,
-                screener_hotkey=screener_hotkey,
-                now=now,
-                limit=limit,
-            )
-            if empty_reason is not None:
-                return _empty_claim(
-                    response, reason=empty_reason, required_policy=required_policy
+                if empty_reason is not None:
+                    return _empty_claim(
+                        response, reason=empty_reason, required_policy=required_policy
+                    )
+                queue_settings = await resolve_queue_policy_settings(session)
+                binding = await resolve_claim_binding()
+                claimed = await claim_screening_attempts(
+                    session,
+                    screener_hotkey=screener_hotkey,
+                    now=now,
+                    ttl=lease_ttl,
+                    limit=limit,
+                    netuid=expected_netuid(),
+                    deferred_review_mode=queue_settings.deferred_source_review.mode,
+                    integrity_double_check_mode=(
+                        queue_settings.deferred_source_review.integrity_double_check_mode
+                    ),
+                    review_settings_binding=binding,
+                    review_settings_enrolled_node_id=node_id,
+                    canary_policy_version=canary_policy_version,
+                    claim_lock_held=True,
                 )
-            queue_settings = await resolve_queue_policy_settings(session)
-            binding = await resolve_claim_binding()
-            claimed = await claim_screening_attempts(
-                session,
-                screener_hotkey=screener_hotkey,
-                now=now,
-                ttl=lease_ttl,
-                limit=limit,
-                netuid=expected_netuid(),
-                deferred_review_mode=queue_settings.deferred_source_review.mode,
-                integrity_double_check_mode=(
-                    queue_settings.deferred_source_review.integrity_double_check_mode
-                ),
-                review_settings_binding=binding,
-                review_settings_enrolled_node_id=node_id,
-                canary_policy_version=canary_policy_version,
-                claim_lock_held=True,
-            )
-    else:
-        # SQLite is used by local/test deployments and has no advisory locks.
-        # Hold a process-local lock through commit so its behavior matches the
-        # Postgres transaction-scoped lock used in production.
-        async with _CLAIM_FALLBACK_LOCK, session.begin():
-            node_id = getattr(request.state, "screener_node_id", None)
-            limit, empty_reason = await _claim_admission(
-                session,
-                node_id=node_id,
-                screener_hotkey=screener_hotkey,
-                now=now,
-                limit=limit,
-            )
-            if empty_reason is not None:
-                return _empty_claim(
-                    response, reason=empty_reason, required_policy=required_policy
+                bound = await _bind_claim_runtime_leases(session, claimed)
+        else:
+            # SQLite is used by local/test deployments and has no advisory locks.
+            # Hold a process-local lock through commit so its behavior matches the
+            # Postgres transaction-scoped lock used in production.
+            async with _CLAIM_FALLBACK_LOCK, session.begin():
+                node_id = getattr(request.state, "screener_node_id", None)
+                limit, empty_reason = await _claim_admission(
+                    session,
+                    node_id=node_id,
+                    screener_hotkey=screener_hotkey,
+                    now=now,
+                    limit=limit,
                 )
-            queue_settings = await resolve_queue_policy_settings(session)
-            binding = await resolve_claim_binding()
-            claimed = await claim_screening_attempts(
-                session,
-                screener_hotkey=screener_hotkey,
-                now=now,
-                ttl=lease_ttl,
-                limit=limit,
-                netuid=expected_netuid(),
-                deferred_review_mode=queue_settings.deferred_source_review.mode,
-                integrity_double_check_mode=(
-                    queue_settings.deferred_source_review.integrity_double_check_mode
-                ),
-                review_settings_binding=binding,
-                review_settings_enrolled_node_id=node_id,
-                canary_policy_version=canary_policy_version,
-            )
-    bench_versions = {
-        agent.agent_id: await arrival_bench_version(session, agent=agent)
-        for agent, _, _ in claimed
-    }
-    runtime_leases = {
-        attempt.attempt_id: await scored_runtime_evidence_for_lease(
-            session,
-            attempt_id=attempt.attempt_id,
-            artifact_sha256=agent.sha256,
-            policy_version=attempt.policy_version,
-            bench_version=bench_versions[agent.agent_id],
+                if empty_reason is not None:
+                    return _empty_claim(
+                        response, reason=empty_reason, required_policy=required_policy
+                    )
+                queue_settings = await resolve_queue_policy_settings(session)
+                binding = await resolve_claim_binding()
+                claimed = await claim_screening_attempts(
+                    session,
+                    screener_hotkey=screener_hotkey,
+                    now=now,
+                    ttl=lease_ttl,
+                    limit=limit,
+                    netuid=expected_netuid(),
+                    deferred_review_mode=queue_settings.deferred_source_review.mode,
+                    integrity_double_check_mode=(
+                        queue_settings.deferred_source_review.integrity_double_check_mode
+                    ),
+                    review_settings_binding=binding,
+                    review_settings_enrolled_node_id=node_id,
+                    canary_policy_version=canary_policy_version,
+                )
+                bound = await _bind_claim_runtime_leases(session, claimed)
+    except _ScorerCohortUnavailableError:
+        # Rolled back above: the attempt was never leased and the agent stays
+        # queued until the pinned scorer cohort can certify it.
+        return _empty_claim(
+            response,
+            reason="scorer_cohort_unavailable",
+            required_policy=required_policy,
         )
-        for agent, attempt, _ in claimed
-    }
     items = [
         ScreenerQueueItem(
             agent_id=agent.agent_id,
-            bench_version=bench_versions[agent.agent_id],
+            bench_version=bound[attempt.attempt_id][0],
             miner_hotkey=agent.miner_hotkey,
             name=agent.name,
             sha256=agent.sha256,
@@ -3654,7 +3726,7 @@ async def claim(
             attempt_id=attempt.attempt_id,
             lease_deadline=attempt.deadline,
             policy_version=attempt.policy_version,
-            scored_runtime_evidence=runtime_leases[attempt.attempt_id],
+            scored_runtime_evidence=bound[attempt.attempt_id][1],
             # ``precheck_reason_code`` is the exact-duplicate channel and the
             # signed queue contract requires it to be paired with
             # ``duplicate_of``. Mechanical deferred admission has its own
@@ -4384,6 +4456,13 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
             "Docker build infrastructure failed before screening completed. This "
             "is operator-owned and is retried automatically with backoff for a "
             "limited time, then held for an operator retry."
+        )
+    if reason_code == "l2-runtime-evidence-unavailable":
+        return (
+            "The scorer runtime evidence source review needs was unavailable "
+            "before screening completed. This is operator-owned and is retried "
+            "automatically with backoff for a limited time, then held for an "
+            "operator retry."
         )
     if reason_code == "worker-claim-not-started":
         return (

@@ -43,6 +43,7 @@ from ditto_screener.gate import (
     dockerfile_at_root,
     image_binding_advisory,
 )
+from ditto_screener.l2_review import L2RunResult, L2Usage, LayeredSourceReviewAgent
 from ditto_screener.policy import (
     CORE_ONLY_MANIFEST,
     AgenticSourceReviewModule,
@@ -59,7 +60,10 @@ from ditto_screener.policy import (
     load_policy_engine,
 )
 from ditto_screener.runtime_verification import runtime_evidence_sha256
-from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
+    ScoredRuntimeEvidenceLease,
+)
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _ATTEMPT = UUID("7c5df3f9-3ea7-47ba-92d1-1bbcf4c5f300")
@@ -2088,6 +2092,192 @@ async def test_source_review_starts_only_after_build_and_health(
     assert result.outcome == ScreeningOutcome.PASS
     assert events.index("build_finished") < events.index("review_started")
     assert events[-1] == "review_finished"
+
+
+class _ReceiptRecordingReviewer(_SafeStaticLeadReviewer):
+    """Records the claim receipt time each review entry point receives."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.received_at: list[object] = []
+
+    async def resolve_lead(self, *args: Any, **kwargs: Any) -> SourceReviewObservation:
+        self.received_at.append(kwargs.get("scored_runtime_evidence_received_at"))
+        return await super().resolve_lead(*args, **kwargs)
+
+    async def review(self, *_args: Any, **kwargs: Any) -> SourceReviewObservation:
+        self.received_at.append(kwargs.get("scored_runtime_evidence_received_at"))
+        return SourceReviewObservation(
+            ok=True,
+            risk_level="low",
+            finding_digest=None,
+            categories=("none",),
+            clearance_certified=True,
+        )
+
+
+@pytest.mark.parametrize("static_lead", [True, False], ids=["preflight", "post-build"])
+async def test_every_review_entry_point_receives_the_claim_receipt_time(
+    make_config: Callable[..., ScreenerConfig], static_lead: bool
+) -> None:
+    tarball = (
+        _valid_tar(
+            **{
+                "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
+                "scripts/local-only.sh": (
+                    b'path="/var/run/docker.sock"\nconnect_control_socket "$path"\n'
+                ),
+            }
+        )
+        if static_lead
+        else _valid_tar()
+    )
+    reviewer = _ReceiptRecordingReviewer()
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+    gate._policy = _review_engine()
+    gate._source_reviewer = reviewer  # type: ignore[assignment]
+
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=12,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            scored_runtime_evidence_received_at=1_800_000_000,
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert reviewer.received_at == [1_800_000_000]
+    assert reviewer.resolve_calls == (1 if static_lead else 0)
+
+
+@pytest.mark.parametrize(
+    ("lease_attached", "bench_version"), [(True, 13), (False, 13), (False, 12)]
+)
+async def test_slow_build_does_not_age_out_a_receipt_fresh_v13_lease(
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    lease_attached: bool,
+    bench_version: int,
+) -> None:
+    """Build time counts from the claim, not against the signed lease window.
+
+    A V13 arrival Platform could not attach a lease to is retryable fleet
+    infrastructure. Any other arrival without one keeps the inconclusive hold,
+    so a per-agent cause never loops through the infrastructure retry.
+    """
+    received_at = 1_800_000_000
+    clock = [float(received_at)]
+    monkeypatch.setattr(gate_module.time, "time", lambda: clock[0])
+    revision = "a" * 40
+    keys = ("DITTOBENCH_MODEL",)
+    tarball = _valid_tar()
+    sha256 = hashlib.sha256(tarball).hexdigest()
+    lease = ScoredRuntimeEvidenceLease(
+        attempt_id=_ATTEMPT,
+        artifact_sha256=sha256,
+        policy_version=13,
+        bench_version=13,
+        scorer_source_revision=revision,
+        release_descriptor_digest="sha256:" + "b" * 64,
+        scorer_image_digest="sha256:" + "c" * 64,
+        scorer_env_sha256=hashlib.sha256(
+            ("scored-runtime-env-v1\n13\n" + revision + "\n" + "\n".join(keys)).encode()
+        ).hexdigest(),
+        injected_keys=keys,
+        validator_count=3,
+        observed_at=received_at - 10,
+    )
+    reviewed: list[str] = []
+
+    class L1:
+        async def review(self, *_args: Any, **_kwargs: Any) -> SourceReviewObservation:
+            reviewed.append("l1")
+            return SourceReviewObservation(
+                ok=True,
+                risk_level="low",
+                finding_digest=None,
+                categories=("none",),
+                clearance_certified=True,
+            )
+
+    class L2:
+        _require_signed_runtime_lease = False
+        _l3_enabled = False
+        _signed_runtime_lease_max_age_seconds = 300
+        _model = "openai/gpt-6-sol"
+        _max_steps = 1
+        _max_input_tokens = 1
+        _max_output_tokens = 1
+        _max_cost_usd = 1.0
+        _timeout_seconds = 60.0
+
+        async def review(self, *_args: Any, **_kwargs: Any) -> L2RunResult:
+            reviewed.append("l2")
+            return L2RunResult(
+                SourceReviewObservation(
+                    ok=True,
+                    risk_level="low",
+                    finding_digest=None,
+                    categories=("none",),
+                    clearance_certified=True,
+                ),
+                (),
+                (),
+                (),
+                L2Usage(),
+                False,
+            )
+
+    ok_run = _ok_run()
+
+    async def slow_build(args: list[str], **kwargs: Any) -> tuple[int, str]:
+        if args[0] == "build":
+            clock[0] += 400
+        return await ok_run(args, **kwargs)
+
+    gate = _gate_with(make_config(), slow_build, tarball=tarball)
+    gate._policy = _review_engine()
+    gate._source_reviewer = LayeredSourceReviewAgent(
+        l1=L1(),  # type: ignore[arg-type]
+        l2=L2(),  # type: ignore[arg-type]
+        mode="enforce",
+    )
+
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=bench_version,
+            miner_hotkey=_MINER,
+            sha256=sha256,
+            download_url=_URL,
+            policy_version=13,
+            scored_runtime_evidence=lease if lease_attached else None,
+            scored_runtime_evidence_received_at=received_at,
+        )
+
+    assert clock[0] >= received_at + 400
+    held = [
+        item.code
+        for item in result.evidence
+        if item.code == "l2-runtime-evidence-unavailable"
+    ]
+    if lease_attached:
+        assert reviewed == ["l1", "l2"]
+        assert result.outcome != ScreeningOutcome.INCONCLUSIVE
+        assert held == []
+    elif bench_version == 13:
+        assert reviewed == []
+        assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+        assert held == ["l2-runtime-evidence-unavailable"]
+    else:
+        # Exactly the pre-existing inconclusive hold, which parks the agent.
+        assert reviewed == []
+        assert result.outcome == ScreeningOutcome.INCONCLUSIVE
+        assert "source-review-inconclusive" in {item.code for item in result.evidence}
 
 
 async def test_policy_only_rescreen_starts_source_review_without_runtime(

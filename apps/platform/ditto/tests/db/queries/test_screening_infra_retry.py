@@ -359,15 +359,19 @@ def test_infra_code_is_split_from_the_park_cap_tuple() -> None:
 # --- per-artifact retry ---------------------------------------------------
 
 
+@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
 async def test_infra_failure_is_held_for_its_backoff_then_retried(
-    session_maker: async_sessionmaker[AsyncSession],
+    session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:
     now = datetime.now(UTC)
     attempt_id = uuid4()
     delay = infra_retry_delay(1, attempt_id)
     failed_at = now - timedelta(minutes=30)
     agent_id = await _failing_agent(
-        session_maker, finished_at=failed_at, attempt_id=attempt_id
+        session_maker,
+        finished_at=failed_at,
+        attempt_id=attempt_id,
+        reason_code=reason_code,
     )
 
     assert await _claim(session_maker, now=failed_at + delay - _SECOND) == []
@@ -417,6 +421,29 @@ async def test_artifact_dependent_codes_stay_parked(
         agent = await session.get(Agent, agent_id)
         assert agent is not None
         assert agent.status == AgentStatus.SCREENING_FAILED
+
+
+async def test_inconclusive_runtime_evidence_hold_stays_parked(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A present lease that failed its checks is a verdict, not infrastructure.
+
+    The worker reports it INCONCLUSIVE, which Platform stores as an ``expired``
+    attempt; only the retryable no-lease failure is retried automatically.
+    """
+    now = datetime.now(UTC)
+    agent_id = await _seed_agent(session_maker)
+    await _add_attempt(
+        session_maker,
+        agent_id,
+        status="expired",
+        started_at=now - timedelta(hours=3),
+        finished_at=now - timedelta(hours=2),
+        reason_code="l2-runtime-evidence-unavailable",
+    )
+
+    assert agent_id not in (await _plan(session_maker, now=now)).decisions
+    assert await _claim(session_maker, now=now) == []
 
 
 async def test_streak_doubles_per_consecutive_failure_and_caps(

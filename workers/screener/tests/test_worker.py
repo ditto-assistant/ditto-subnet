@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -109,6 +110,7 @@ class _FakeGate:
         self.bench_versions: list[int] = []
         self.shadow_result: Any = None
         self.applied_review_settings: list[Any] = []
+        self.received_at: list[int | None] = []
 
     def apply_review_settings(self, settings: Any) -> bool:
         self.applied_review_settings.append(settings)
@@ -131,9 +133,11 @@ class _FakeGate:
         deferred_source_review: bool = False,
         policy_version: int | None = None,
         bench_version: int | None = None,
+        scored_runtime_evidence_received_at: int | None = None,
         **_: Any,
     ) -> ScreeningDecision:
         self.calls.append(agent_id)
+        self.received_at.append(scored_runtime_evidence_received_at)
         self.deadlines.append(deadline)
         self.build_only_calls.append(build_only)
         self.policy_only_calls.append(policy_only)
@@ -1824,6 +1828,48 @@ async def test_run_forever_drains_queue_then_stops(
     await asyncio.wait_for(worker.run_forever(stop), timeout=2.0)
     assert gate.calls == [a1, a2]
     assert {v["agent_id"] for v in platform.verdicts} == {a1, a2}
+
+
+async def test_screen_one_passes_claim_receipt_time_to_gate(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+    await worker._screen_one(
+        _item(uuid4()), policy_version=SCREENING_POLICY_VERSION, received_at=1234
+    )
+    before = int(time.time())
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+    assert gate.received_at[0] == 1234
+    received = gate.received_at[1]
+    assert received is not None and before <= received <= int(time.time())
+
+
+async def test_every_item_of_one_claim_shares_its_receipt_time(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A later item's signed lease is judged from the claim, not its own start."""
+    first, second = uuid4(), uuid4()
+    platform = _FakePlatform([[_item(first), _item(second)]])
+    stop = asyncio.Event()
+    platform.stop_after_queue = stop
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    original = gate.screen
+
+    async def slow_screen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        if not gate.calls:
+            await asyncio.sleep(1.1)
+        return await original(*args, **kwargs)
+
+    gate.screen = slow_screen  # type: ignore[method-assign]
+    before = int(time.time())
+    worker = _worker(make_config(), platform, gate)
+    await asyncio.wait_for(worker.run_forever(stop), timeout=5.0)
+    assert gate.calls == [first, second]
+    assert gate.received_at[0] == gate.received_at[1]
+    received = gate.received_at[0]
+    assert received is not None and before <= received < int(time.time())
 
 
 async def test_stop_during_review_finishes_the_signed_verdict(
