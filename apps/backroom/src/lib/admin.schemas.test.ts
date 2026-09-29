@@ -100,6 +100,8 @@ import {
   screenerCapacityViewSchema,
   screeningInfraRetryViewSchema,
   screenerNodeChannelSettingsConfirmation,
+  screenerNodeChannelSettingsControlSchema,
+  setScreenerNodeChannelSettingsInputSchema,
   screenerProviderSettingsConfirmation,
   screenerProviderSettingsSchema,
   authorizeConfirmationBundleRetestInputSchema,
@@ -476,19 +478,76 @@ describe('admin API schemas', () => {
       build_concurrency: 4,
       runtime_concurrency: 4,
       source_review_concurrency: 4,
+      canary_concurrency: 1,
     }
 
     expect(screenerNodeChannelSettingsConfirmation('subnet-screener-1', settings)).toBe(
-      'APPLY SCREENER NODE subnet-screener-1 SCREENING=0 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4 CLOSE PRODUCTION ADMISSION',
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=0 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4 CANARY=1 CLOSE PRODUCTION ADMISSION',
     )
     expect(
       screenerNodeChannelSettingsConfirmation('subnet-screener-1', {
         ...settings,
         screening_concurrency: 4,
+        canary_concurrency: 0,
       }),
     ).toBe(
-      'APPLY SCREENER NODE subnet-screener-1 SCREENING=4 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4',
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=4 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4 CANARY=0',
     )
+  })
+
+  it('reads a pre-canary node revision with the Platform default but writes all six limits', () => {
+    const legacy = {
+      screening_concurrency: 2,
+      sandbox_slots: 2,
+      build_concurrency: 2,
+      runtime_concurrency: 2,
+      source_review_concurrency: 2,
+    }
+    const revision = {
+      environment: 'prod',
+      node_id: 'subnet-screener-1',
+      revision: 3,
+      parent_revision: 2,
+      settings: legacy,
+      reason: 'Open two production lanes on the primary',
+      actor: 'operator@example.com',
+      created_at: null,
+    }
+    const control = screenerNodeChannelSettingsControlSchema.parse({
+      current: revision,
+      history: [revision],
+      usage: {
+        screening_active: 1,
+        sandbox_active: 0,
+        build_active: 0,
+        runtime_active: 0,
+        source_review_active: 0,
+      },
+    })
+    expect(control.current.settings.canary_concurrency).toBe(1)
+    expect(control.usage?.canary_active).toBe(0)
+
+    const write = {
+      nodeId: 'subnet-screener-1',
+      expectedRevision: 3,
+      reason: 'Reserve both production lanes on the primary',
+      confirmation: 'unused',
+    }
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.safeParse({ ...write, settings: legacy }).success,
+    ).toBe(false)
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.safeParse({
+        ...write,
+        settings: { ...legacy, canary_concurrency: 9 },
+      }).success,
+    ).toBe(false)
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.parse({
+        ...write,
+        settings: { ...legacy, canary_concurrency: 0 },
+      }).settings.canary_concurrency,
+    ).toBe(0)
   })
 
   it('parses aggregate inference controls and rejects unsafe operator input', () => {

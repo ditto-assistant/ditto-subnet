@@ -185,6 +185,80 @@ async def try_acquire_screening_claim_lock(session: AsyncSession) -> bool:
     )
 
 
+def screening_running_or_backoff(now: datetime) -> ColumnElement[bool]:
+    """Match an agent that holds a running lease or is still backing off.
+
+    A failed attempt backs off from its FAILURE time, not to the end of the
+    70-minute lease it no longer occupies: holding a review that died 20
+    minutes in until minute 70 stranded agents for most of an hour and read
+    as a stuck queue from the public pipeline. The short hold still prevents
+    hot-looping against a broken provider, the lease deadline stays the
+    upper bound, and an attempt with no recorded finish keeps the historical
+    deadline behavior. An operator retry for the attempt waives its hold.
+    """
+    backoff_until = func.least(
+        ScreeningAttempt.deadline,
+        func.coalesce(
+            ScreeningAttempt.finished_at + FAILED_ATTEMPT_RETRY_BACKOFF,
+            ScreeningAttempt.deadline,
+        ),
+    )
+    return exists(
+        select(ScreeningAttempt.attempt_id).where(
+            ScreeningAttempt.agent_id == Agent.agent_id,
+            or_(
+                ScreeningAttempt.status == "running",
+                and_(
+                    or_(
+                        ScreeningAttempt.status == "expired",
+                        and_(
+                            ScreeningAttempt.status == "failed",
+                            ScreeningAttempt.reason_code.in_(
+                                PROVIDER_BACKOFF_REASON_CODES
+                            ),
+                        ),
+                    ),
+                    backoff_until > now,
+                    ~exists(
+                        select(ScreeningRetryOverride.override_id).where(
+                            ScreeningRetryOverride.attempt_id
+                            == ScreeningAttempt.attempt_id
+                        )
+                    ),
+                ),
+            ),
+        )
+    )
+
+
+async def has_claimable_screening_work(session: AsyncSession, *, now: datetime) -> bool:
+    """Report whether a fresh submission is waiting for a production claim.
+
+    Covers the two fresh-work arms of ``claim_screening_attempts``: a new
+    upload, and a failed screen whose exact latest attempt carries a Backroom
+    retry authorization. Like the claim, it skips an agent that still holds a
+    running lease or a backoff hold, so a retry production cannot take yet
+    does not hold other lanes back.
+
+    This is an advisory read for lanes that must yield to production, such as
+    report-only canaries. It is one unlocked ``SELECT``: it takes no advisory
+    lock, locks no rows, runs no expiry or orphan sweep, and writes nothing, so
+    it never queues behind or delays a production claim.
+    """
+    # Two EXISTS arms rather than one OR so the upload arm stays on the
+    # partial ``agents_status_uploaded_idx`` index.
+    uploaded = exists().where(
+        Agent.status == AgentStatus.UPLOADED,
+        ~screening_running_or_backoff(now),
+    )
+    authorized_retry = exists().where(
+        Agent.status == AgentStatus.SCREENING_FAILED,
+        failed_screening_retry_authorized(),
+        ~screening_running_or_backoff(now),
+    )
+    return bool(await session.scalar(select(or_(uploaded, authorized_retry))))
+
+
 def screening_score_count() -> ScalarSelect[int]:
     """Return the accepted-score count correlated to the current agent."""
     return (
@@ -918,46 +992,7 @@ async def claim_screening_attempts(
         limit = min(limit, claim_budget)
         if limit <= 0:
             return []
-    # A failed attempt backs off from its FAILURE time, not to the end of the
-    # 70-minute lease it no longer occupies: holding a review that died 20
-    # minutes in until minute 70 stranded agents for most of an hour and read
-    # as a stuck queue from the public pipeline. The short hold still prevents
-    # hot-looping against a broken provider, the lease deadline stays the
-    # upper bound, and an attempt with no recorded finish keeps the historical
-    # deadline behavior.
-    backoff_until = func.least(
-        ScreeningAttempt.deadline,
-        func.coalesce(
-            ScreeningAttempt.finished_at + FAILED_ATTEMPT_RETRY_BACKOFF,
-            ScreeningAttempt.deadline,
-        ),
-    )
-    has_running_or_backoff = exists(
-        select(ScreeningAttempt.attempt_id).where(
-            ScreeningAttempt.agent_id == Agent.agent_id,
-            or_(
-                ScreeningAttempt.status == "running",
-                and_(
-                    or_(
-                        ScreeningAttempt.status == "expired",
-                        and_(
-                            ScreeningAttempt.status == "failed",
-                            ScreeningAttempt.reason_code.in_(
-                                PROVIDER_BACKOFF_REASON_CODES
-                            ),
-                        ),
-                    ),
-                    backoff_until > now,
-                    ~exists(
-                        select(ScreeningRetryOverride.override_id).where(
-                            ScreeningRetryOverride.attempt_id
-                            == ScreeningAttempt.attempt_id
-                        )
-                    ),
-                ),
-            ),
-        )
-    )
+    has_running_or_backoff = screening_running_or_backoff(now)
     # Infrastructure-parked agents retry on their own schedule: per-artifact
     # exponential backoff, then the fleet breaker. Planned under the claim lock
     # from persisted attempts, so every worker derives the same answer.

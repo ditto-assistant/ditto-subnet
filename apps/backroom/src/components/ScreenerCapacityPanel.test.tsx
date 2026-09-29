@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ScreenerCapacityView, TrustedImageBuild } from '../lib/admin.schemas'
 import { ScreenerCapacityPanel } from './ScreenerCapacityPanel'
@@ -378,5 +378,63 @@ describe('ScreenerCapacityPanel', () => {
       })
     })
     expect(screen.getByText('queued')).toBeTruthy()
+  })
+
+  it('writes the report-only canary cap with the node limits it confirms', async () => {
+    const settings = {
+      screening_concurrency: 2,
+      sandbox_slots: 2,
+      build_concurrency: 2,
+      runtime_concurrency: 2,
+      source_review_concurrency: 2,
+      canary_concurrency: 1,
+    }
+    const revision = {
+      environment: 'prod',
+      node_id: 'subnet-screener-1',
+      revision: 4,
+      parent_revision: 3,
+      settings,
+      reason: 'Open two production lanes on the primary',
+      actor: 'operator@example.com',
+      created_at: '2026-09-28T00:00:00Z',
+    }
+    const control = { current: revision, history: [revision], usage: null }
+    updateScreenerNodeChannelSettings.mockResolvedValue({
+      ...control,
+      current: { ...revision, revision: 5, settings: { ...settings, canary_concurrency: 0 } },
+    })
+
+    render(
+      <ScreenerCapacityPanel
+        initialState={capacity({ node_controls: [control] })}
+        readOnly={false}
+      />,
+    )
+
+    const node = within(
+      screen.getByRole('heading', { name: 'subnet-screener-1' }).closest('section') as HTMLElement,
+    )
+    fireEvent.change(node.getByLabelText('Report canaries'), { target: { value: '0' } })
+    const expected =
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=2 SANDBOX=2 BUILD=2 RUNTIME=2 SOURCE_REVIEW=2 CANARY=0'
+    expect(node.getByText(expected)).toBeTruthy()
+    fireEvent.change(node.getByLabelText('Audit reason'), {
+      target: { value: 'Keep report canaries off while admission is open' },
+    })
+    fireEvent.change(node.getByLabelText(/Type to confirm/), { target: { value: expected } })
+    fireEvent.click(node.getByRole('button', { name: 'Append node capacity revision' }))
+
+    await waitFor(() => {
+      expect(updateScreenerNodeChannelSettings).toHaveBeenCalledWith({
+        data: {
+          nodeId: 'subnet-screener-1',
+          expectedRevision: 4,
+          settings: { ...settings, canary_concurrency: 0 },
+          reason: 'Keep report canaries off while admission is open',
+          confirmation: expected,
+        },
+      })
+    })
   })
 })

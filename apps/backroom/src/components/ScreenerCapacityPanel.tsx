@@ -400,6 +400,7 @@ function NodeChannelControl({
     { key: 'build_concurrency', label: 'Builds', max: 16 },
     { key: 'runtime_concurrency', label: 'Runtime smoke', max: 16 },
     { key: 'source_review_concurrency', label: 'Source review', max: 32 },
+    { key: 'canary_concurrency', label: 'Report canaries', max: 8 },
   ]
 
   async function submit() {
@@ -440,7 +441,7 @@ function NodeChannelControl({
           </span>
         ) : null}
       </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {fields.map(({ key, label, max }) => (
           <label key={key} className="text-xs text-[var(--muted)]">
             {label}
