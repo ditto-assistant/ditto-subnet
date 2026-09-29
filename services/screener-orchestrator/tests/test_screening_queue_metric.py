@@ -68,6 +68,19 @@ def test_watchdog_malformed_response_publishes_zero_depth() -> None:
     assert publisher["_read_fallback_depth"]() == (0, "platform_read_failed")
 
 
+def test_unbounded_count_publishes_zero_depth() -> None:
+    publisher = _publisher()
+
+    def get(url: str, headers: dict | None = None) -> bytes:
+        del headers
+        if url == publisher["ACTIVITY_URL"]:
+            return b'{"status_counts":{"waiting_screening":1e999}}'
+        return b'{"activate_fallback":true,"reason":"controller_stale"}'
+
+    publisher["_get"] = get
+    assert publisher["_read_fallback_depth"]() == (0, "platform_read_failed")
+
+
 def test_open_watchdog_retains_positive_backlog() -> None:
     publisher = _publisher()
 

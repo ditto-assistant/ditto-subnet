@@ -4161,6 +4161,8 @@ class TestClaim:
             ("stale", "capped-zero", False, False),
             ("missing", "gcp-first", True, True),
             ("missing", "gcp-first-closed", False, False),
+            ("missing", "mixed-gcp-first", True, True),
+            ("missing", "mixed-gcp-first-closed", False, False),
             ("stale", "gcp-first-unknown", False, False),
             ("unready", "gcp-first-no-admission", False, False),
             ("stale", "retired-open", True, True),
@@ -4203,12 +4205,14 @@ class TestClaim:
                     await session.delete(channels)
             provider = (
                 "gcp"
-                if policy.startswith("gcp-first")
+                if policy.startswith(("gcp-first", "mixed-gcp-first"))
                 else "targon"
                 if policy.startswith("retired-")
                 else "hetzner"
             )
             priorities = [provider] if provider == "gcp" else [provider, "gcp"]
+            if policy.startswith("mixed-gcp-first"):
+                priorities = ["hetzner", "gcp"]
             session.add(
                 ScreenerProviderSettingsRevision(
                     environment="prod",
@@ -4216,7 +4220,11 @@ class TestClaim:
                     settings={
                         "runtime_provider_priority": priorities,
                         "source_review_provider_priority": priorities,
-                        "build_provider_priority": priorities,
+                        "build_provider_priority": (
+                            ["gcp", "hetzner"]
+                            if policy.startswith("mixed-gcp-first")
+                            else priorities
+                        ),
                         "gce_overflow_enabled": (
                             policy != "disabled" and provider == "hetzner"
                         ),

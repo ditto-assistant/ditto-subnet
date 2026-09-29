@@ -59,7 +59,7 @@ def _read_fallback_depth() -> tuple[int, str]:
         if not isinstance(counts, dict):
             raise ValueError("invalid activity counts")
         return fallback_depth(counts, watchdog), str(watchdog.get("reason", "invalid"))
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, OverflowError):
         return 0, "platform_read_failed"
 
 
