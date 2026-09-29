@@ -392,8 +392,7 @@ def _run_upload(
                     payment_extrinsic_index=(
                         candidate_receipt.extrinsic_index if candidate_receipt else None
                     ),
-                ),
-                tar_path=args.tar_path,
+                )
             )
 
         try:

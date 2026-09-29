@@ -62,6 +62,56 @@ afterEach(() => {
 })
 
 describe('Backroom MCP tools', () => {
+  it('compares paid archives through read scope without exposing profiles or creating writers', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'attempt-read-token'
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const referenceId = '22222222-2222-4222-8222-222222222222'
+    const policy = {
+      report_only: true, admission_effect: 'none', source_clearance: false,
+      integrity_clearance: false, classifier_version: 2, source_build: 'exact-build',
+      settings_digest: 'a'.repeat(64), reference_corpus: { corpus_id: 'b'.repeat(64) },
+      max_archive_bytes: 2097152, max_unpacked_bytes: 8388608, max_members: 512,
+      max_owner_links: 100, small_delta_jaccard: 0.98,
+    }
+    const record = {
+      policy, agent_id: agentId, reference_agent_id: referenceId,
+      as_of: '2026-09-29T12:00:00Z', classification: 'material_new_work',
+      reason: 'Residual lexical overlap is below the observation threshold.',
+      sha256: 'c'.repeat(64), reference_sha256: 'd'.repeat(64),
+      feedback_status: 'completed', feedback_reason: null, feedback_at: null,
+      profile: { source: 'should never be emitted', fingerprint: [1, 2, 3] },
+    }
+    const fetchMock = vi.fn(async (url: string) => Response.json(
+      String(url).endsWith('/submission-attempts') ? policy : record,
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const catalog = await client.listTools()
+    for (const name of ['get_submission_attempt', 'get_submission_attempt_policy']) {
+      expect(catalog.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).toBe(true)
+      expect(TOOL_SCOPE_REQUIREMENTS.get(name)).toBe(BACKROOM_READ_SCOPE)
+    }
+    for (const name of ['set_submission_attempt_policy', 'replay_submission_attempts', 'resolve_submission_attempt_appeal']) {
+      expect(catalog.tools.some((tool) => tool.name === name)).toBe(false)
+    }
+    const response = await client.callTool({
+      name: 'get_submission_attempt', arguments: { agent_id: agentId, reference_agent_id: referenceId },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      classification: 'material_new_work', policy: { admission_effect: 'none', source_clearance: false, integrity_clearance: false },
+    })
+    expect(readJsonResult(response)).not.toHaveProperty('profile')
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/submission-attempts/${agentId}?reference_agent_id=${referenceId}`,
+      expect.objectContaining({ method: 'GET' }),
+    )
+    const readPolicy = await client.callTool({ name: 'get_submission_attempt_policy', arguments: {} })
+    expect(readJsonResult(readPolicy)).toEqual(policy)
+    await client.close()
+    await server.close()
+  })
+
   it('keeps benchmark canary mutations write-scoped', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -241,6 +291,8 @@ describe('Backroom MCP tools', () => {
         'get_screening_submission',
         'get_source_release_policy',
         'get_owner_attestations',
+        'get_submission_attempt',
+        'get_submission_attempt_policy',
         'get_submission_cooldown',
         'get_treasury_settings',
         'quote_treasury_topup',
@@ -424,7 +476,9 @@ describe('Backroom MCP tools', () => {
     // guarded verified V13 court-clear release adds a bounded writer entry.
     // Four canonical starter fixture controls bring the measured catalog to
     // 179,468 bytes; retain about 0.5 KB headroom.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(180_000)
+    // Two bounded report-only paid archive reads measure 180,811 bytes.
+    // Retain the same roughly 0.5 KB headroom; detailed procedures stay in help.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(181_400)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

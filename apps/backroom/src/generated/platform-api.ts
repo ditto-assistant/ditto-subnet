@@ -3189,58 +3189,6 @@ export interface paths {
         /** Get Policy */
         get: operations["get_policy_api_v1_admin_submission_attempts_get"];
         put?: never;
-        /** Set Policy */
-        post: operations["set_policy_api_v1_admin_submission_attempts_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/submission-attempts/appeal": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Grant Appeal */
-        post: operations["grant_appeal_api_v1_admin_submission_attempts_appeal_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/submission-attempts/replay": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Shadow Replay */
-        post: operations["shadow_replay_api_v1_admin_submission_attempts_replay_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/submission-attempts/replay/{calibration_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Calibration */
-        get: operations["read_calibration_api_v1_admin_submission_attempts_replay__calibration_id__get"];
-        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -3255,8 +3203,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read Attempt */
-        get: operations["read_attempt_api_v1_admin_submission_attempts__agent_id__get"];
+        /** Compare Paid Submission */
+        get: operations["compare_paid_submission_api_v1_admin_submission_attempts__agent_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6706,28 +6654,16 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Check */
-        post: operations["check_api_v1_upload_check_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/upload/check-artifact": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
         /**
-         * Check Artifact
-         * @description Verify the archive before payment so repair/delta terms can be reserved.
+         * Check
+         * @description Pre-payment dry-run validation.
+         *
+         *     Aggregates every failed check into ``error_codes`` + ``messages`` so
+         *     the miner CLI sees every reason in one round trip. ``file_size_bytes``
+         *     is miner-reported and unverified at this endpoint; the next-PR
+         *     ``/upload/agent`` re-derives it from the actual tarball bytes.
          */
-        post: operations["check_artifact_api_v1_upload_check_artifact_post"];
+        post: operations["check_api_v1_upload_check_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -14153,260 +14089,89 @@ export interface components {
              */
             sha256: string;
         };
-        /** AttemptAppealRequest */
-        AttemptAppealRequest: {
-            /**
-             * Actor
-             * @default admin_api
-             */
-            actor: string;
+        /** AttemptComparison */
+        AttemptComparison: {
             /**
              * Agent Id
              * Format: uuid
              */
             agent_id: string;
-            /** Confirmation */
-            confirmation: string;
-            /** Expected Policy Revision */
-            expected_policy_revision: number;
-            /** Reason */
-            reason: string;
-        };
-        /** AttemptAppealResponse */
-        AttemptAppealResponse: {
-            /** Actor */
-            actor: string;
             /**
-             * Appeal Id
-             * Format: uuid
-             */
-            appeal_id: string;
-            /**
-             * Created At
+             * As Of
              * Format: date-time
              */
-            created_at: string;
-            /** Policy Revision */
-            policy_revision: number;
-            /** Reason */
-            reason: string;
-        };
-        /** AttemptCalibrationResponse */
-        AttemptCalibrationResponse: {
-            /** Actor */
-            actor: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Reason */
-            reason: string;
-            report: components["schemas"]["AttemptReplayReport"];
-        };
-        /** AttemptControlSettings */
-        AttemptControlSettings: {
-            /**
-             * Cooldown Seconds
-             * @default 3600
-             */
-            cooldown_seconds: number;
-            /**
-             * Fast Repair Limit
-             * @default 2
-             */
-            fast_repair_limit: number;
-            /**
-             * Lineage Jaccard
-             * @default 0.9
-             */
-            lineage_jaccard: number;
-            /**
-             * Low Information Limit
-             * @default 3
-             */
-            low_information_limit: number;
-            /**
-             * Mode
-             * @default shadow
-             * @enum {string}
-             */
-            mode: "off" | "shadow" | "enforce";
-            /**
-             * Small Delta Jaccard
-             * @default 0.98
-             */
-            small_delta_jaccard: number;
-            /**
-             * Window Seconds
-             * @default 86400
-             */
-            window_seconds: number;
-        };
-        /** AttemptGuidance */
-        AttemptGuidance: {
-            /** Appeal Id */
-            appeal_id?: string | null;
+            as_of: string;
             /**
              * Classification
              * @enum {string}
              */
             classification: "first_submission" | "infrastructure_retry" | "packaging_only_repair" | "small_source_delta" | "material_new_work" | "inconclusive";
+            /** Feedback At */
+            feedback_at?: string | null;
+            /** Feedback Reason */
+            feedback_reason?: string | null;
             /**
-             * Completed Low Information Attempts
-             * @default 0
-             */
-            completed_low_information_attempts: number;
-            /** Evaluated At */
-            evaluated_at?: string | null;
-            /**
-             * Fast Repair
-             * @default false
-             */
-            fast_repair: boolean;
-            /**
-             * Fast Repairs Remaining
-             * @default 0
-             */
-            fast_repairs_remaining: number;
-            /** Lineage Agent Id */
-            lineage_agent_id?: string | null;
-            /**
-             * Mode
+             * Feedback Status
+             * @default pending
              * @enum {string}
              */
-            mode: "off" | "shadow" | "enforce";
-            /** Policy Revision */
-            policy_revision: number;
+            feedback_status: "infrastructure" | "repairable" | "completed" | "pending";
+            policy: components["schemas"]["AttemptObservationPolicy"];
             /** Reason */
             reason: string;
             /** Reference Agent Id */
             reference_agent_id?: string | null;
+            /** Reference Sha256 */
+            reference_sha256?: string | null;
+            /** Sha256 */
+            sha256: string;
+        };
+        /** AttemptObservationPolicy */
+        AttemptObservationPolicy: {
             /**
-             * Reserved Low Information Attempts
-             * @default 0
+             * Admission Effect
+             * @default none
+             * @constant
              */
-            reserved_low_information_attempts: number;
-            /** Retry At */
-            retry_at?: string | null;
+            admission_effect: "none";
+            /** Classifier Version */
+            classifier_version: number;
             /**
-             * Settings Digest
-             * @default
+             * Integrity Clearance
+             * @default false
+             * @constant
              */
-            settings_digest: string;
-        };
-        /** AttemptPolicyResponse */
-        AttemptPolicyResponse: {
-            current: components["schemas"]["AttemptPolicyRevision"];
-            effective_settings: components["schemas"]["AttemptControlSettings"];
-            /** Enforcement Blocked Reason */
-            enforcement_blocked_reason?: string | null;
-            /** History */
-            history: components["schemas"]["AttemptPolicyRevision"][];
-        };
-        /** AttemptPolicyRevision */
-        AttemptPolicyRevision: {
-            /** Actor */
-            actor: string;
-            /** Calibration Id */
-            calibration_id?: string | null;
-            /** Created At */
-            created_at?: string | null;
-            /** Parent Revision */
-            parent_revision: number;
-            /** Reason */
-            reason: string;
-            /** Revision */
-            revision: number;
-            settings: components["schemas"]["AttemptControlSettings"];
-        };
-        /** AttemptRecordResponse */
-        AttemptRecordResponse: {
-            /** Appeals */
-            appeals: components["schemas"]["AttemptAppealResponse"][];
-            guidance: components["schemas"]["AttemptGuidance"];
-        };
-        /** AttemptReplayReport */
-        AttemptReplayReport: {
-            /**
-             * Calibration Id
-             * Format: uuid
-             */
-            calibration_id: string;
-            /** Case Count */
-            case_count: number;
-            /** Classification Mismatches */
-            classification_mismatches: number;
-            /** Coverage */
-            coverage: {
-                [key: string]: number;
+            integrity_clearance: false;
+            /** Max Archive Bytes */
+            max_archive_bytes: number;
+            /** Max Members */
+            max_members: number;
+            /** Max Owner Links */
+            max_owner_links: number;
+            /** Max Unpacked Bytes */
+            max_unpacked_bytes: number;
+            /** Reference Corpus */
+            reference_corpus: {
+                [key: string]: string;
             };
-            /** Eligible For Enforcement */
-            eligible_for_enforcement: boolean;
-            /** False Allows */
-            false_allows: number;
-            /** False Throttles */
-            false_throttles: number;
-            /** Immediate Admission Deferral Ratio */
-            immediate_admission_deferral_ratio: number;
-            /** Immediate Admissions Deferred */
-            immediate_admissions_deferred: number;
-            /** Inconclusive Count */
-            inconclusive_count: number;
-            /** Proposed Delays */
-            proposed_delays: number;
-            /** Rows */
-            rows: components["schemas"]["AttemptReplayRow"][];
+            /**
+             * Report Only
+             * @default true
+             * @constant
+             */
+            report_only: true;
             /** Settings Digest */
             settings_digest: string;
-        };
-        /** AttemptReplayRequest */
-        AttemptReplayRequest: {
+            /** Small Delta Jaccard */
+            small_delta_jaccard: number;
+            /** Source Build */
+            source_build: string;
             /**
-             * Actor
-             * @default admin_api
+             * Source Clearance
+             * @default false
+             * @constant
              */
-            actor: string;
-            /** Cases */
-            cases: components["schemas"]["ReplayCase"][];
-            /** Reason */
-            reason: string;
-            settings: components["schemas"]["AttemptControlSettings"];
-        };
-        /** AttemptReplayRow */
-        AttemptReplayRow: {
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /**
-             * Expected Classification
-             * @enum {string}
-             */
-            expected_classification: "first_submission" | "infrastructure_retry" | "packaging_only_repair" | "small_source_delta" | "material_new_work" | "inconclusive";
-            /** Expected Throttled */
-            expected_throttled: boolean;
-            guidance: components["schemas"]["AttemptGuidance"];
-            /** Would Throttle */
-            would_throttle: boolean;
-        };
-        /** AttemptSettingsRequest */
-        AttemptSettingsRequest: {
-            /**
-             * Actor
-             * @default admin_api
-             */
-            actor: string;
-            /** Calibration Id */
-            calibration_id?: string | null;
-            /** Confirmation */
-            confirmation: string;
-            /** Expected Revision */
-            expected_revision: number;
-            /** Reason */
-            reason: string;
-            settings: components["schemas"]["AttemptControlSettings"];
+            source_clearance: false;
         };
         /**
          * BenchDatasetConfig
@@ -14673,13 +14438,6 @@ export interface components {
             decision: string;
             /** T */
             t: string;
-        };
-        /** Body_check_artifact_api_v1_upload_check_artifact_post */
-        Body_check_artifact_api_v1_upload_check_artifact_post: {
-            /** Agent Tar */
-            agent_tar: string;
-            /** Payload */
-            payload: string;
         };
         /** Body_set_miner_avatar_api_v1_miner_avatars_post */
         Body_set_miner_avatar_api_v1_miner_avatars_post: {
@@ -28791,21 +28549,6 @@ export interface components {
              */
             target: "platform-relay-1" | "platform-relay-2";
         };
-        /** ReplayCase */
-        ReplayCase: {
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /**
-             * Expected Classification
-             * @enum {string}
-             */
-            expected_classification: "first_submission" | "infrastructure_retry" | "packaging_only_repair" | "small_source_delta" | "material_new_work" | "inconclusive";
-            /** Expected Throttled */
-            expected_throttled: boolean;
-        };
         /** ReplayProcessKeyRevoke */
         ReplayProcessKeyRevoke: {
             /** Confirmation */
@@ -33162,7 +32905,6 @@ export interface components {
             admission_expires_at?: string | null;
             /** Admission Token */
             admission_token?: string | null;
-            attempt_guidance?: components["schemas"]["AttemptGuidance"] | null;
             /** Cooldown Seconds */
             cooldown_seconds?: number | null;
             /** Error Codes */
@@ -41741,7 +41483,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AttemptPolicyResponse"];
+                    "application/json": components["schemas"]["AttemptObservationPolicy"];
                 };
             };
             /** @description Validation Error */
@@ -41755,147 +41497,11 @@ export interface operations {
             };
         };
     };
-    set_policy_api_v1_admin_submission_attempts_post: {
+    compare_paid_submission_api_v1_admin_submission_attempts__agent_id__get: {
         parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
+            query?: {
+                reference_agent_id?: string | null;
             };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AttemptSettingsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AttemptPolicyRevision"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    grant_appeal_api_v1_admin_submission_attempts_appeal_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AttemptAppealRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AttemptAppealResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    shadow_replay_api_v1_admin_submission_attempts_replay_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AttemptReplayRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AttemptReplayReport"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_calibration_api_v1_admin_submission_attempts_replay__calibration_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                calibration_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AttemptCalibrationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_attempt_api_v1_admin_submission_attempts__agent_id__get: {
-        parameters: {
-            query?: never;
             header?: {
                 authorization?: string | null;
             };
@@ -41912,7 +41518,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AttemptRecordResponse"];
+                    "application/json": components["schemas"]["AttemptComparison"];
                 };
             };
             /** @description Validation Error */
@@ -47858,39 +47464,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UploadCheckRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UploadCheckResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    check_artifact_api_v1_upload_check_artifact_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_check_artifact_api_v1_upload_check_artifact_post"];
             };
         };
         responses: {

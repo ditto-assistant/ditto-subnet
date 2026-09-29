@@ -1,322 +1,332 @@
-"""Audited calibration and appeal controls over actual paid Postgres history."""
+"""Real paid-ledger/owner-history operator reads; no admission writes."""
 
-from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
-import httpx
 import pytest
-from fastapi import FastAPI
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy import func, select
 
-from ditto.api_models.submission_attempts import AttemptControlSettings
-from ditto.api_server.dependencies import get_session
-from ditto.db.models import Agent, SubmissionAttemptCalibration
-from ditto.db.queries.submission_attempts import compare_attempt
-from ditto.tests.submission_attempt_fixtures import NOW, paid_attempt, profile
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_server.attestation import expected_netuid
+from ditto.api_server.dependencies import get_session, get_storage_client
+from ditto.api_server.storage import ObjectDownloadFailedError
+from ditto.db.models import (
+    Agent,
+    EvaluationPayment,
+    OwnerAttestation,
+    ScreeningAttempt,
+    ValidatorTicket,
+)
+from ditto.tests.submission_attempt_fixtures import archive, paid_submission, source
 
 pytestmark = pytest.mark.asyncio
-TOKEN = "test-admin-token-at-least-32-characters"
+NOW = datetime(2026, 9, 29, 12, tzinfo=UTC)
+TOKEN = "test-attempt-read-token-at-least-32-characters"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
-PATH = "/api/v1/admin/submission-attempts"
+BASE = "/api/v1/admin/submission-attempts"
 
 
-def install(app: FastAPI, maker: async_sessionmaker[AsyncSession]):
-    app.state.config = replace(app.state.config, admin_api_token=TOKEN)
-
-    async def dependency() -> AsyncIterator[AsyncSession]:
-        async with maker() as session:
+@pytest.fixture
+async def observations(app, session_maker):
+    async def sessions():
+        async with session_maker() as session:
             yield session
 
-    app.dependency_overrides[get_session] = dependency
-
-
-def policy(mode="shadow", revision=0, **kwargs):
-    return {
-        "expected_revision": revision,
-        "settings": AttemptControlSettings(mode=mode).model_dump(),
-        "actor": "operator@example.com",
-        "reason": "reviewed admission settings",
-        "confirmation": f"SET SUBMISSION ATTEMPT MODE {mode.upper()}",
-        **kwargs,
-    }
-
-
-async def test_shadow_default_auth_revision_and_enforcement_gate(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker,
-):
-    install(app, session_maker)
-    assert (await client.get(PATH)).status_code == 401
-    initial = await client.get(PATH, headers=HEADERS)
-    assert initial.json()["current"]["settings"]["mode"] == "shadow"
-    rejected = await client.post(PATH, json=policy("enforce"), headers=HEADERS)
-    assert rejected.status_code == 409
-    invalid = policy()
-    invalid["settings"]["fast_repair_limit"] = 0
-    assert (await client.post(PATH, json=invalid, headers=HEADERS)).status_code == 422
-    updated = await client.post(PATH, json=policy("off"), headers=HEADERS)
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["actor"] == "operator@example.com"
-    assert (await client.post(PATH, json=policy(), headers=HEADERS)).status_code == 409
-    wrong = policy(revision=updated.json()["revision"], confirmation="wrong")
-    assert (await client.post(PATH, json=wrong, headers=HEADERS)).status_code == 409
-
-
-async def test_historical_replay_reports_false_throttles_and_is_not_eligible(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker,
-    session: AsyncSession,
-):
-    install(app, session_maker)
-    async with session.begin():
-        anchor = await paid_attempt(session, classification="first_submission")
-        for i in range(3):
-            await paid_attempt(
-                session, lineage=anchor, submitted_at=NOW - timedelta(minutes=9 - i)
-            )
-        candidate = await paid_attempt(
-            session, lineage=anchor, submitted_at=NOW - timedelta(minutes=5)
-        )
-    payload = {
-        "settings": AttemptControlSettings().model_dump(),
-        "cases": [
-            {
-                "agent_id": str(candidate),
-                "expected_classification": "small_source_delta",
-                "expected_throttled": False,
-            }
-        ],
-        "actor": "operator@example.com",
-        "reason": "independently reviewed repair replay",
-    }
-    response = await client.post(PATH + "/replay", headers=HEADERS, json=payload)
-    assert response.status_code == 200, response.text
-    report = response.json()
-    assert report["false_throttles"] == 1
-    assert report["immediate_admissions_deferred"] == 1
-    assert report["eligible_for_enforcement"] is False
-    audit = await client.get(
-        PATH + "/replay/" + report["calibration_id"], headers=HEADERS
+    app.dependency_overrides[get_session] = sessions
+    app.state.config = replace(
+        app.state.config, admin_api_token=TOKEN, commit_hash="exact-build"
     )
-    assert audit.json()["actor"] == "operator@example.com"
-    assert audit.json()["report"] == report
-    enforce = await client.post(
-        PATH,
-        headers=HEADERS,
-        json=policy("enforce", calibration_id=report["calibration_id"]),
-    )
-    assert enforce.status_code == 409
-    assert "profile" not in audit.text and "fingerprint" not in audit.text
+    objects = {}
+    storage = MagicMock()
+
+    async def download(*, key, max_bytes):
+        assert max_bytes == 2 * 1024 * 1024
+        return objects[key]
+
+    storage.get_object = AsyncMock(side_effect=download)
+    app.dependency_overrides[get_storage_client] = lambda: storage
+    async with session_maker() as session, session.begin():
+        data = archive({"main.py": source("memory")})
+        prior = paid_submission(
+            session, data, coldkey="owner", created_at=NOW - timedelta(hours=1)
+        )
+        current = paid_submission(session, data, coldkey="owner", created_at=NOW)
+        await session.flush()
+        objects[f"{prior.agent_id}/agent.tar.gz"] = data
+        objects[f"{current.agent_id}/agent.tar.gz"] = data
+        ids = prior.agent_id, current.agent_id
+    return {"prior": ids[0], "current": ids[1], "objects": objects, "storage": storage}
 
 
-async def test_complete_replay_allows_only_matching_fresh_policy(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker,
-    session: AsyncSession,
-):
-    install(app, session_maker)
-    cases = []
-
-    async def add(expected, throttled=False, **kwargs):
-        agent = await paid_attempt(session, classification=expected, **kwargs)
-        cases.append(
-            {
-                "agent_id": str(agent),
-                "expected_classification": expected,
-                "expected_throttled": throttled,
-            }
-        )
-        return agent
-
-    async with session.begin():
-        anchor = await add("first_submission", submitted_at=NOW - timedelta(minutes=20))
-        for i in range(3):
-            await add(
-                "small_source_delta",
-                lineage=anchor,
-                submitted_at=NOW - timedelta(minutes=19 - i),
-            )
-        await add(
-            "small_source_delta",
-            True,
-            lineage=anchor,
-            submitted_at=NOW - timedelta(minutes=15),
-        )
-        material = profile("f")
-        material["fingerprint"]["m"] = list(range(200, 300))
-        await add(
-            "material_new_work",
-            source=material,
-            submitted_at=NOW - timedelta(minutes=14),
-        )
-        infra = await add(
-            "first_submission",
-            hotkey="infra-key",
-            coldkey="infra-owner",
-            outcome="failed",
-            submitted_at=NOW - timedelta(minutes=12),
-        )
-        await add(
-            "infrastructure_retry",
-            hotkey="infra-key",
-            coldkey="infra-owner",
-            lineage=infra,
-            submitted_at=NOW - timedelta(minutes=11),
-        )
-        repair = await add(
-            "first_submission",
-            hotkey="repair-key",
-            coldkey="repair-owner",
-            reason="docker-build",
-            submitted_at=NOW - timedelta(minutes=10),
-        )
-        await add(
-            "packaging_only_repair",
-            hotkey="repair-key",
-            coldkey="repair-owner",
-            lineage=repair,
-            fast_repair=True,
-            source=profile(packaging="f"),
-            submitted_at=NOW - timedelta(minutes=9),
-        )
-    response = await client.post(
-        PATH + "/replay",
-        headers=HEADERS,
-        json={
-            "settings": AttemptControlSettings().model_dump(),
-            "cases": cases,
-            "actor": "reviewer@example.com",
-            "reason": "independently labeled actual paid submissions",
-        },
-    )
-    assert response.status_code == 200, response.text
-    report = response.json()
-    assert report["eligible_for_enforcement"], report
-    calibration_id = report["calibration_id"]
-    changed = policy("enforce", calibration_id=calibration_id)
-    changed["settings"]["low_information_limit"] = 4
-    assert (await client.post(PATH, headers=HEADERS, json=changed)).status_code == 409
-    async with session.begin():
-        calibration = await session.get(SubmissionAttemptCalibration, calibration_id)
-        assert calibration is not None
-        calibration.created_at -= timedelta(days=8)
+async def test_auth_and_no_write_routes(client, observations):
+    assert (await client.get(BASE)).status_code == 401
+    policy = await client.get(BASE, headers=HEADERS)
+    assert policy.status_code == 200
+    assert policy.headers["cache-control"] == "no-store"
+    assert policy.json()["source_build"] == "exact-build"
+    assert policy.json()["admission_effect"] == "none"
+    assert (await client.post(BASE, headers=HEADERS, json={})).status_code == 405
     assert (
-        await client.post(
-            PATH, headers=HEADERS, json=policy("enforce", calibration_id=calibration_id)
-        )
-    ).status_code == 409
-    async with session.begin():
-        assert calibration is not None
-        calibration.created_at += timedelta(days=8)
-    accepted = await client.post(
-        PATH, headers=HEADERS, json=policy("enforce", calibration_id=calibration_id)
-    )
-    assert accepted.status_code == 200, accepted.text
-    assert accepted.json()["settings"]["mode"] == "enforce"
+        await client.post("/api/v1/upload/check-artifact", json={})
+    ).status_code == 404
+    observations["storage"].get_object.assert_not_awaited()
 
 
-async def test_appeal_is_audited_idempotent_and_does_not_change_agent_verdict(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker,
-    session: AsyncSession,
+async def test_paid_pair_reads_only_two_objects_and_writes_nothing(
+    client, observations, session_maker
 ):
-    install(app, session_maker)
-    now = datetime.now(UTC)
-    async with session.begin():
-        anchor = await paid_attempt(session, submitted_at=now - timedelta(minutes=10))
-        await paid_attempt(
-            session, lineage=anchor, submitted_at=now - timedelta(minutes=9)
+    for _ in range(2):
+        response = await client.get(
+            f"{BASE}/{observations['current']}", headers=HEADERS
         )
-        previous = await paid_attempt(
-            session, lineage=anchor, submitted_at=now - timedelta(minutes=8)
+        assert response.status_code == 200, response.text
+        assert response.headers["cache-control"] == "no-store"
+        body = response.json()
+        assert body["classification"] == "small_source_delta"
+        assert body["reference_agent_id"] == str(observations["prior"])
+        assert not body["policy"]["source_clearance"]
+        assert not body["policy"]["integrity_clearance"]
+        assert "profile" not in body and "fingerprint" not in body
+    assert observations["storage"].get_object.await_count == 4
+    async with session_maker() as session:
+        assert await session.scalar(select(func.count()).select_from(Agent)) == 2
+        assert (
+            await session.scalar(select(func.count()).select_from(EvaluationPayment))
+            == 2
         )
-    before = await compare_attempt(
-        session,
-        profile=profile(),
-        hotkey="hotkey-a",
-        coldkey="owner-a",
-        netuid=118,
-        settings=AttemptControlSettings(),
-        revision=0,
-        now=now,
-    )
-    assert before.retry_at is not None
-    original_status = await session.scalar(
-        select(Agent.status).where(Agent.agent_id == previous)
-    )
-    await session.rollback()
-    payload = {
-        "agent_id": str(previous),
-        "expected_policy_revision": 0,
-        "actor": "operator@example.com",
-        "reason": "confirmed legitimate packaging repair",
-        "confirmation": f"ALLOW SUBMISSION RETRY {previous}",
-    }
-    first = await client.post(PATH + "/appeal", headers=HEADERS, json=payload)
-    second = await client.post(PATH + "/appeal", headers=HEADERS, json=payload)
-    assert first.status_code == second.status_code == 200, first.text
-    assert first.json() == second.json()
-    now = datetime.now(UTC)
-    after = await compare_attempt(
-        session,
-        profile=profile(),
-        hotkey="hotkey-a",
-        coldkey="owner-a",
-        netuid=118,
-        settings=AttemptControlSettings(),
-        revision=0,
-        now=now,
-    )
-    assert after.retry_at is None
-    record = await client.get(PATH + "/" + str(previous), headers=HEADERS)
-    assert record.json()["appeals"][0]["actor"] == "operator@example.com"
-    assert (
-        await session.scalar(select(Agent.status).where(Agent.agent_id == previous))
-        == original_status
-    )
-    await session.rollback()
-    # A repair whose lexical sketch differs can leave an older artifact as the
-    # strongest match. Its consumed appeal must not authorize further retries.
-    repair = profile("f")
-    repair["fingerprint"]["m"] = list(range(1, 101))
-    quoted = await compare_attempt(
-        session,
-        profile=repair,
-        hotkey="hotkey-a",
-        coldkey="owner-a",
-        netuid=118,
-        settings=AttemptControlSettings(),
-        revision=0,
-        now=now,
-    )
-    assert quoted.appeal_id is not None
-    await session.rollback()
-    async with session.begin():
-        await paid_attempt(
+        assert (
+            await session.scalar(select(func.count()).select_from(ScreeningAttempt))
+            == 0
+        )
+        assert {
+            a.status.value for a in (await session.scalars(select(Agent))).all()
+        } == {"uploaded"}
+
+
+@pytest.mark.parametrize(
+    "mutation", ["tampered", "missing", "oversized", "unknown_size"]
+)
+async def test_unavailable_artifact_is_inconclusive(
+    client, observations, session_maker, mutation
+):
+    if mutation == "tampered":
+        observations["objects"][f"{observations['current']}/agent.tar.gz"] = b"tampered"
+    elif mutation == "missing":
+        observations["storage"].get_object.side_effect = ObjectDownloadFailedError(
+            "not available"
+        )
+    else:
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, observations["current"])
+            agent.size_bytes = 2 * 1024 * 1024 + 1 if mutation == "oversized" else None
+    response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    assert response.json()["classification"] == "inconclusive"
+    if mutation in {"oversized", "unknown_size"}:
+        observations["storage"].get_object.assert_not_awaited()
+
+
+async def test_unpaid_candidate_and_reference_do_not_infer_payment(
+    client, observations, session_maker
+):
+    async with session_maker() as session, session.begin():
+        unpaid = paid_submission(
             session,
-            source=repair,
-            decision=quoted,
-            submitted_at=now + timedelta(seconds=1),
+            b"unused",
+            coldkey="owner",
+            created_at=NOW - timedelta(minutes=10),
+            paid=False,
         )
-    reused = await compare_attempt(
-        session,
-        profile=profile(),
-        hotkey="hotkey-a",
-        coldkey="owner-a",
-        netuid=118,
-        settings=AttemptControlSettings(),
-        revision=0,
-        now=now + timedelta(seconds=2),
+        await session.flush()
+        unpaid_id = unpaid.agent_id
+    assert (await client.get(f"{BASE}/{unpaid_id}", headers=HEADERS)).status_code == 404
+    response = await client.get(
+        f"{BASE}/{observations['current']}?reference_agent_id={unpaid_id}",
+        headers=HEADERS,
     )
-    assert reused.reference_agent_id == previous
-    assert reused.appeal_id is None
-    assert reused.retry_at is not None
-    missing = await client.get(PATH + "/" + str(uuid4()), headers=HEADERS)
-    assert missing.status_code == 404
+    assert response.json()["classification"] == "inconclusive"
+    observations["storage"].get_object.assert_not_awaited()
+
+
+def attestation(
+    *,
+    lo="owner",
+    hi="other",
+    kind="coldkey",
+    created_at=NOW - timedelta(minutes=30),
+    revoked_at=None,
+):
+    return OwnerAttestation(
+        netuid=expected_netuid(),
+        hotkey_lo=uuid4().hex + "a",
+        hotkey_hi="z" + uuid4().hex,
+        nonce=uuid4(),
+        issued_at=created_at,
+        created_at=created_at,
+        lo_key_kind=kind,
+        hi_key_kind=kind,
+        lo_signer=lo,
+        hi_signer=hi,
+        lo_signature="a" * 128,
+        hi_signature="b" * 128,
+        revoked_at=revoked_at,
+        revoked_by="operator" if revoked_at else None,
+    )
+
+
+@pytest.mark.parametrize(
+    "link,matched",
+    [
+        ("none", False),
+        ("direct", True),
+        ("hotkey", False),
+        ("mixed", False),
+        ("transitive", False),
+        ("future", False),
+        ("revoked_before", False),
+        ("revoked_after", True),
+        ("wrong_netuid", False),
+    ],
+)
+async def test_only_direct_coldkey_links_at_candidate_timestamp(
+    client, observations, session_maker, link, matched
+):
+    async with session_maker() as session, session.begin():
+        current = await session.get(Agent, observations["current"])
+        prior = await session.get(Agent, observations["prior"])
+        # Hotkey reuse does not establish payer identity.
+        other = paid_submission(
+            session,
+            observations["objects"][f"{prior.agent_id}/agent.tar.gz"],
+            coldkey="other",
+            created_at=NOW - timedelta(minutes=20),
+            hotkey=current.miner_hotkey,
+        )
+        await session.flush()
+        other_id = other.agent_id
+        if link == "transitive":
+            session.add(attestation(hi="middle"))
+            session.add(attestation(lo="middle", hi="other"))
+        elif link != "none":
+            row = attestation(
+                kind="hotkey" if link == "hotkey" else "coldkey",
+                created_at=NOW + timedelta(seconds=1)
+                if link == "future"
+                else NOW - timedelta(minutes=30),
+                revoked_at=NOW - timedelta(seconds=1)
+                if link == "revoked_before"
+                else NOW + timedelta(seconds=1)
+                if link == "revoked_after"
+                else None,
+            )
+            if link == "mixed":
+                row.hi_key_kind = "hotkey"
+            if link == "wrong_netuid":
+                row.netuid += 1
+            session.add(row)
+    observations["objects"][f"{other_id}/agent.tar.gz"] = observations["objects"][
+        f"{observations['prior']}/agent.tar.gz"
+    ]
+    response = await client.get(
+        f"{BASE}/{observations['current']}?reference_agent_id={other_id}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["classification"] == (
+        "small_source_delta" if matched else "inconclusive"
+    )
+    assert observations["storage"].get_object.await_count == (2 if matched else 0)
+
+
+@pytest.mark.parametrize(
+    "status,reason,future,expected",
+    [
+        ("failed", "docker-build-infrastructure", False, "infrastructure_retry"),
+        ("failed", "docker-build-infrastructure", True, "small_source_delta"),
+        ("expired", "worker-lost", False, "small_source_delta"),
+        ("failed", "model-reject", False, "small_source_delta"),
+    ],
+)
+async def test_feedback_cutoff_and_expiry_never_infers_infrastructure(
+    client, observations, session_maker, status, reason, future, expected
+):
+    finished = NOW + timedelta(minutes=1) if future else NOW - timedelta(minutes=1)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=uuid4(),
+                agent_id=observations["prior"],
+                screener_hotkey="worker",
+                policy_version=13,
+                status=status,
+                started_at=NOW - timedelta(minutes=30),
+                deadline=NOW + timedelta(minutes=30),
+                finished_at=finished,
+                reason_code=reason,
+            )
+        )
+    response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    assert response.json()["classification"] == expected
+
+
+async def test_no_prior_submission_and_timestamp_ties(
+    client, observations, session_maker
+):
+    first = await client.get(f"{BASE}/{observations['prior']}", headers=HEADERS)
+    assert first.json()["classification"] == "first_submission"
+    async with session_maker() as session, session.begin():
+        tie = paid_submission(session, b"unused", coldkey="owner", created_at=NOW)
+        await session.flush()
+        tie_id = tie.agent_id
+    response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
+    assert response.json()["classification"] == "inconclusive"
+    assert response.json()["reference_agent_id"] == str(tie_id)
+
+
+@pytest.mark.parametrize(
+    "reason,purpose,expected",
+    [
+        ("infrastructure", TicketPurpose.CANONICAL_QUORUM, "infrastructure_retry"),
+        ("scoring_error", TicketPurpose.CANONICAL_QUORUM, "small_source_delta"),
+        ("sandbox_oom", TicketPurpose.CANONICAL_QUORUM, "small_source_delta"),
+        ("infrastructure", TicketPurpose.BENCHMARK_CANARY, "small_source_delta"),
+    ],
+)
+async def test_only_canonical_infrastructure_failures_qualify(
+    client, observations, session_maker, reason, purpose, expected
+):
+    async with session_maker() as session, session.begin():
+        session.add(
+            ValidatorTicket(
+                agent_id=observations["prior"],
+                validator_hotkey="validator",
+                bench_version=13,
+                purpose=purpose,
+                status=TicketStatus.EXPIRED,
+                issued_at=NOW - timedelta(minutes=30),
+                deadline=NOW + timedelta(minutes=30),
+                failed_at=NOW - timedelta(minutes=1),
+                failure_reason=reason,
+            )
+        )
+    response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    assert response.json()["classification"] == expected
+
+
+async def test_excess_owner_links_are_inconclusive_before_download(
+    client, observations, session_maker, monkeypatch
+):
+    from ditto.db.queries import submission_attempts
+
+    monkeypatch.setattr(submission_attempts, "MAX_OWNER_LINKS", 1)
+    async with session_maker() as session, session.begin():
+        session.add(attestation(hi="one"))
+        session.add(attestation(hi="two"))
+    response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
+    assert response.json()["classification"] == "inconclusive"
+    assert "owner-link budget" in response.json()["reason"]
+    observations["storage"].get_object.assert_not_awaited()

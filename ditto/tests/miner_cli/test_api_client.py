@@ -113,59 +113,6 @@ class TestEvalPricing:
 
 
 class TestUploadCheck:
-    def test_verified_precheck_sends_archive_and_signed_payload(self, tmp_path):
-        archive = tmp_path / "agent.tar.gz"
-        archive.write_bytes(b"archive-bytes")
-        captured = []
-
-        def handler(request):
-            captured.append(request)
-            return httpx.Response(
-                200, json={"ok": True, "error_codes": [], "messages": []}
-            )
-
-        with make_client(handler) as client:
-            assert client.post_upload_check(self._body(), tar_path=archive).ok
-        assert len(captured) == 1
-        assert captured[0].url.path == "/api/v1/upload/check-artifact"
-        assert b'name="payload"' in captured[0].content
-        assert (
-            self._body().model_dump_json(exclude_none=True).encode()
-            in captured[0].content
-        )
-        assert b'name="agent_tar"' in captured[0].content
-        assert b"archive-bytes" in captured[0].content
-
-    def test_old_platform_fallback_only_for_missing_route(self, tmp_path):
-        archive = tmp_path / "agent.tar.gz"
-        archive.write_bytes(b"archive-bytes")
-        paths = []
-
-        def handler(request):
-            paths.append(request.url.path)
-            return httpx.Response(
-                404 if len(paths) == 1 else 200,
-                json={"ok": True, "error_codes": [], "messages": []},
-            )
-
-        with make_client(handler) as client:
-            assert client.post_upload_check(self._body(), tar_path=archive).ok
-        assert paths == ["/api/v1/upload/check-artifact", "/api/v1/upload/check"]
-
-    @pytest.mark.parametrize("status", [400, 429, 503])
-    def test_policy_and_server_errors_never_fall_back(self, tmp_path, status):
-        archive = tmp_path / "agent.tar.gz"
-        archive.write_bytes(b"archive-bytes")
-        paths = []
-
-        def handler(request):
-            paths.append(request.url.path)
-            return _envelope_response(status, 1106, "repeat after reviewed feedback")
-
-        with make_client(handler) as client, pytest.raises(PreCheckRejectedError):
-            client.post_upload_check(self._body(), tar_path=archive)
-        assert paths == ["/api/v1/upload/check-artifact"]
-
     def _body(self) -> UploadCheckRequest:
         return UploadCheckRequest(
             hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",

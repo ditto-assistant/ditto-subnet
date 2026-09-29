@@ -43,11 +43,8 @@ if TYPE_CHECKING:
 class SubmissionCooldownError(Exception):
     """A miner coldkey submitted again before its cooldown expired."""
 
-    def __init__(
-        self, retry_at: datetime, *, attempt_reason: str | None = None
-    ) -> None:
+    def __init__(self, retry_at: datetime) -> None:
         self.retry_at = retry_at
-        self.attempt_reason = attempt_reason
         super().__init__(f"submission cooldown active until {retry_at.isoformat()}")
 
 

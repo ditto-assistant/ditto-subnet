@@ -1,3 +1,5 @@
+import { attemptLookupInputSchema } from '../lib/submission-attempt.schemas'
+import { fetchSubmissionAttemptPolicy, fetchSubmissionAttempt } from './admin.service'
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import {
@@ -11,14 +13,6 @@ import {
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
-import {
-  attemptPolicyInputSchema, attemptReplayInputSchema, attemptAppealInputSchema,
-  attemptLookupInputSchema, attemptCalibrationLookupInputSchema,
-} from '../lib/submission-attempt.schemas'
-import {
-  fetchSubmissionAttemptPolicy, fetchSubmissionAttempt, fetchSubmissionAttemptCalibration,
-  setSubmissionAttemptPolicy, replaySubmissionAttempts, appealSubmissionAttempt,
-} from './admin.service'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
 import { fetchTreasuryQuote, fetchTreasurySettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 
@@ -471,6 +465,8 @@ export const WRITE_TOOL_NAMES = new Set([
 ])
 
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
+  ['get_submission_attempt_policy', BACKROOM_READ_SCOPE],
+  ['get_submission_attempt', BACKROOM_READ_SCOPE],
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
@@ -661,18 +657,6 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
-  get_submission_attempt_policy:
-    'Read configured/effective attempt settings and revision audit.',
-  get_submission_attempt:
-    'Read one paid comparison, owner lineage, timing and appeals; no source.',
-  get_submission_attempt_calibration:
-    'Read labeled replay metrics, compatibility and audit actor.',
-  set_submission_attempt_policy:
-    'Set guarded attempt policy; enforce needs calibration. Write scope.',
-  replay_submission_attempts:
-    'Audit labeled paid-history replay; changes no admission/verdict. Write scope.',
-  appeal_submission_attempt:
-    'Permit one retry for an exact predecessor/revision. Write scope.',
   get_ledger_epoch_snapshots:
     'Read the epoch-pinned validator ledger history: per chain epoch, the frozen fold input digest, champion, incumbent, recipients, and whether the crown changed.',
   create_ath_rulings_upload:
@@ -898,6 +882,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read the terminal-review emission gate: posture (off/shadow/enforce), what the fleet is actually folding, stored or default revision, emission windows, and the shadow withheld count. Opt-in history.',
   get_agent_emission_eligibility:
     'Explain one exact agent UUID: whether it is earning, the withheld class and reason, when a clear starts earning, and whether the validator fold sees it.',
+  get_submission_attempt_policy:
+    'Read report-only classifier/build provenance and bounds.',
+  get_submission_attempt:
+    'Compare bounded past paid archives; report-only, with no admission or source/integrity clearance effect.',
   get_submission_cooldown:
     'Read the current miner submission fee and owner-coldkey cooldown. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
   list_hotkey_bans: 'Hotkey bans.',
@@ -964,7 +952,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
   )
 
-const detailedToolDescriptions = new Map<string, string>()
+  const detailedToolDescriptions = new Map<string, string>()
   function registerTool<
     OutputArgs extends ZodRawShapeCompat | AnySchema,
     InputArgs extends undefined | ZodRawShapeCompat | AnySchema = undefined,
@@ -2277,43 +2265,28 @@ const detailedToolDescriptions = new Map<string, string>()
     async (input) => write(() => unbanHotkey(input, props.session.email)),
   )
 
-  registerTool('get_submission_attempt_policy', {
-    title: 'Get delta-aware submission attempt policy',
-    description: 'Read current off/shadow/enforce settings and audited revisions. Shadow preserves baseline admission; enforcement requires compatible labeled replay. Read scope.',
-    inputSchema: MCP_SETTINGS_HISTORY_INPUT, annotations: toolAnnotations('read'),
-  }, async ({ historyLimit, historyOffset }) => result(compacted(pageRevisionHistory(
-    await fetchSubmissionAttemptPolicy(), historyLimit, historyOffset,
-  ), REVISION_LISTS)))
+  registerTool(
+    'get_submission_attempt_policy',
+    {
+      title: 'Get report-only submission comparison provenance',
+      description: 'Read classifier identity, current reference corpus, resource bounds and explicit no-authority flags.',
+      inputSchema: {},
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchSubmissionAttemptPolicy()),
+  )
 
-  registerTool('get_submission_attempt', {
-    title: 'Get a paid submission comparison and appeals',
-    description: 'Read source-safe classification, exact predecessor and lineage IDs, completed and tentative usage, repair allowance, proposed retry time, and audited appeals. No source or misconduct verdict. Read scope.',
-    inputSchema: attemptLookupInputSchema, annotations: toolAnnotations('read'),
-  }, async ({ agent_id }) => result(await fetchSubmissionAttempt(agent_id)))
-
-  registerTool('get_submission_attempt_calibration', {
-    title: 'Get a labeled shadow replay audit',
-    description: 'Read false throttles, false allows, coverage, proposed admission deferrals, compatibility digest and audit actor. Deferrals do not establish benchmark runs saved. Read scope.',
-    inputSchema: attemptCalibrationLookupInputSchema, annotations: toolAnnotations('read'),
-  }, async ({ calibration_id }) => result(await fetchSubmissionAttemptCalibration(calibration_id)))
-
-  registerTool('set_submission_attempt_policy', {
-    title: 'Set delta-aware admission policy',
-    description: 'Append a guarded revision with the complete settings, expected_revision, reason, and exact confirmation SET SUBMISSION ATTEMPT MODE OFF/SHADOW/ENFORCE. Enforcement requires a compatible eligible calibration from the last seven days. Write scope.',
-    inputSchema: attemptPolicyInputSchema, annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => setSubmissionAttemptPolicy(input, props.session.email)))
-
-  registerTool('replay_submission_attempts', {
-    title: 'Replay independently labeled paid submission history',
-    description: 'Persist an audited replay against authoritative historical feedback and signed owner links. Supply actual paid agent IDs with reviewed expected classifications/throttles. Collection settings must match; unknown profiles are inconclusive. Does not change admission, agent verdicts, or scores. Write scope.',
-    inputSchema: attemptReplayInputSchema, annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => replaySubmissionAttempts(input, props.session.email)))
-
-  registerTool('appeal_submission_attempt', {
-    title: 'Permit a submission retry after operator review',
-    description: 'Audit an appeal for an exact predecessor and current policy revision. Supply agent_id, expected_policy_revision, reason and exact confirmation ALLOW SUBMISSION RETRY <agent_id>. This permits a following retry and does not release holds or change ownership, fees, scores or misconduct decisions. Write scope.',
-    inputSchema: attemptAppealInputSchema, annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => appealSubmissionAttempt(input, props.session.email)))
+  registerTool(
+    'get_submission_attempt',
+    {
+      title: 'Compare past paid submission archives',
+      description: 'Compare past paid archives on explicit operator request. Default reference is the latest earlier paid submission in the proven payer scope; supply an exact older reference to investigate a repack. Only direct mutually coldkey-signed links apply at the candidate timestamp. Reads at most two bounded objects; unavailable, changed or oversized artifacts are inconclusive. Classification never changes admission, holds, scores, source or integrity authority. No source text or persistent profile is returned.',
+      inputSchema: attemptLookupInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ agent_id, reference_agent_id }) =>
+      result(await fetchSubmissionAttempt(agent_id, reference_agent_id)),
+  )
 
   registerTool(
     'get_submission_cooldown',
