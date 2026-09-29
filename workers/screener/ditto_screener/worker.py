@@ -288,6 +288,9 @@ class ScreenerWorker:
             if fleet_release_probe is not None
             else collect_fleet_release(builtin_policy_version=SCREENING_POLICY_VERSION)
         )
+        # Start on the v7 wire so a rolling older Platform keeps accepting
+        # heartbeats; switch to signed fixture capability only after its ack.
+        self._fixture_protocol_adopted = False
         # A node can run multiple independent local workers. Their enrollment
         # identity remains the shared ``node_id`` while every heartbeat must
         # use its process identity, otherwise Platform overwrites concurrent
@@ -459,10 +462,20 @@ class ScreenerWorker:
             host_specs = self._host_specs
             protocol_version = (
                 _HEARTBEAT_PROTOCOL_VERSION
-                if host_specs is not None
-                else _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS
+                if host_specs is not None and self._fixture_protocol_adopted
+                else (
+                    7
+                    if host_specs is not None
+                    else _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS
+                )
             )
-            release = self._fleet_release if protocol_version >= 7 else None
+            release = (
+                self._fleet_release
+                if protocol_version >= 8
+                else self._fleet_release.model_copy(update={"source_fixture_v1": False})
+                if protocol_version >= 7
+                else None
+            )
             policy_version = self._heartbeat_policy_version
             signature = sign_heartbeat(
                 self._keypair,
@@ -497,6 +510,10 @@ class ScreenerWorker:
                 signature=signature,
             )
             response = await self._platform.submit_heartbeat(request)
+            if response.accepted:
+                self._fixture_protocol_adopted = getattr(
+                    response, "source_fixture_v1_heartbeat_supported", False
+                )
             if (
                 response.accepted
                 and response.lease_deadline is not None
@@ -510,6 +527,7 @@ class ScreenerWorker:
                     self._active_lease_wall = response.lease_deadline
                     self._publish_active_lease()
         except Exception as error:  # noqa: BLE001 - observability is best effort
+            self._fixture_protocol_adopted = False
             logger.warning("screener heartbeat failed (screening continues): %s", error)
         finally:
             # Throttle an older platform that has not deployed the optional

@@ -20,6 +20,7 @@ from ditto_screener.errors import PlatformError
 from ditto_screener.gate import BuiltImageArtifact, LeaseDeadline
 from ditto_screener.heartbeat import (
     DockerHealth,
+    HostSpecs,
     ReviewSettingsStatus,
     ScreenerHeartbeatResponse,
 )
@@ -189,6 +190,7 @@ class _FakePlatform:
         self.heartbeat_error: Exception | None = None
         self.artifact_error: Exception | None = None
         self.heartbeat_lease_deadline: datetime | None = None
+        self.heartbeat_fixture_supported = False
         self.artifact_calls: list[tuple[UUID, UUID | None]] = []
         self.image_uploads: list[dict[str, Any]] = []
         self.verification_receipts: list[dict[str, Any]] = []
@@ -212,6 +214,7 @@ class _FakePlatform:
             accepted=True,
             seen_at=datetime.now(UTC),
             lease_deadline=self.heartbeat_lease_deadline,
+            source_fixture_v1_heartbeat_supported=self.heartbeat_fixture_supported,
         )
 
     async def submit_shadow_review(self, agent_id: UUID, request: Any) -> Any:
@@ -322,6 +325,37 @@ async def test_configured_instance_id_distinguishes_local_worker_heartbeat(
     await worker._report_heartbeat("polling", force=True)
 
     assert platform.heartbeats[-1].instance_id == "subnet-screener-1-worker-2"
+
+
+async def test_fixture_heartbeat_capability_waits_for_platform_ack(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    worker = _worker(
+        make_config(node_id="subnet-screener-1"),
+        platform,
+        _FakeGate(_decision(ScreeningOutcome.PASS)),
+        host_specs_probe=lambda: HostSpecs(
+            cpu_count=4,
+            memory_total_mib=8000,
+            disk_total_gib=80,
+            architecture="x86_64",
+        ),
+    )
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 7
+    assert platform.heartbeats[-1].release.source_fixture_v1 is False
+    platform.heartbeat_fixture_supported = True
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 7
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 8
+    assert platform.heartbeats[-1].release.source_fixture_v1 is True
+    platform.heartbeat_error = RuntimeError("rolling old Platform")
+    await worker._report_heartbeat("polling", force=True)
+    platform.heartbeat_error = None
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 7
 
 
 def test_legacy_node_instance_id_derives_the_systemd_worker_index(

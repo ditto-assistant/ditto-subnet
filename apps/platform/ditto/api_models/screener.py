@@ -239,6 +239,7 @@ class ScreenerHeartbeatResponse(BaseModel):
     accepted: bool
     seen_at: datetime
     lease_deadline: datetime | None = None
+    source_fixture_v1_heartbeat_supported: bool = False
 
 
 class ShadowReviewUsage(BaseModel):

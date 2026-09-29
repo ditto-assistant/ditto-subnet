@@ -3280,6 +3280,7 @@ async def heartbeat(
         accepted=accepted,
         seen_at=seen_at,
         lease_deadline=renewed_lease_deadline,
+        source_fixture_v1_heartbeat_supported=True,
     )
 
 
