@@ -245,7 +245,10 @@ Only the scoped Cloudflare deployment token belongs in the GitHub environment.
    protected manual dispatch for an already published release. Ansible remains
    the first-boot/configuration path.
 5. Publish one screener image and verify the immutable digest registered in Platform.
-6. Exercise GCE worker scale `0 -> 1 -> 0` before retiring the pet screener.
+6. Exercise GCE worker scale-out `0 -> 1` and verify the desired target returns
+   to zero before retiring the pet screener. Physical scale-in remains deferred
+   until claims can be fenced throughout deletion; drain excess capacity under
+   operator control.
 
 Merging application source performs semantic release and automatic runtime
 deployment. Infrastructure remains separate: Terraform apply, first-boot
