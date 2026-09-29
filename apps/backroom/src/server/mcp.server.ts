@@ -1,6 +1,8 @@
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import {
+  v13BenignAttestationInputSchema,
+  v13GenerationGroupWriteInputSchema,
   listV13BenignApprovalsInputSchema,
   v13BenignApprovalLookupInputSchema,
   v13BenignApprovalWriteInputSchema,
@@ -9,6 +11,7 @@ import {
   v13ReplayPackageWriteInputSchema,
 } from '../lib/v13-private.schemas'
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
+import { attestV13BenignApproval, recordV13GenerationGroup, fetchV13TrustedBenignApproval } from './admin.service'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
@@ -377,6 +380,8 @@ export type BackroomEnv = {
 }
 
 export const WRITE_TOOL_NAMES = new Set([
+  'attest_v13_benign_approval',
+  'record_v13_private_generation_group',
   'advance_scored_policy_rescreen',
   'record_treasury_settings',
   'record_v13_benign_approval',
@@ -1464,6 +1469,24 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     async (input) => write(() => recordV13BenignApproval(props.session.email, input)),
   )
 
+  registerTool('get_v13_trusted_benign_approval', {
+    title: 'Get trusted V13 benign approval',
+    description: 'Read the exact control with two authenticated reviewer receipts and a current verified image. Fails closed without provenance.',
+    inputSchema: v13BenignApprovalLookupInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchV13TrustedBenignApproval(input)))
+
+  registerTool('attest_v13_benign_approval', {
+    title: 'Attest V13 benign control',
+    description: 'Attest an exact control as the signed-in reviewer. Two distinct reviewers are required before generation; no assertion or secret is returned.',
+    inputSchema: v13BenignAttestationInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => attestV13BenignApproval(props.session, input)))
+
+  registerTool('record_v13_private_generation_group', {
+    title: 'Record V13 private generation group',
+    description: 'Commit target/control digests as the signed-in generator. Platform atomically requires two authenticated reviewers and a distinct generator. No cases or verdict.',
+    inputSchema: v13GenerationGroupWriteInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => recordV13GenerationGroup(props.session, input)))
+
   registerTool(
     'get_v13_replay_private_group',
     {
@@ -1483,7 +1506,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       inputSchema: v13ReplayGroupWriteInputSchema,
       annotations: toolAnnotations('write', true),
     },
-    async (input) => write(() => recordV13ReplayPrivateGroup(props.session.email, input)),
+    async (input) => write(() => recordV13ReplayPrivateGroup(props.session, input)),
   )
 
   registerTool(

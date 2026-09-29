@@ -354,3 +354,11 @@ hitting its own match cap, and the manifest returns whole by default so no path
 hides behind an offset. `opaque_skipped` counts the members no search can
 reach — a `.onnx` or `.bin` weights file is never searched, and a search that
 never opened one cannot clear it.
+
+
+## Authenticated V13 benign-control generation
+
+Two signed-in reviewers call `attest_v13_benign_approval`; a different signed-in
+operator calls `record_v13_private_generation_group` or the replay equivalent.
+The server issues approval-bound assertions without exposing them to tool
+clients. See [the operator flow and configuration](../../platform/docs/v13-benign-provenance.md).

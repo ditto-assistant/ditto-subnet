@@ -1,9 +1,8 @@
 """Append-only, digest-only V13 pre-randomness generation registry.
 
-Recording a group is an audit event, not permission to issue seeds or clear a
-hold. A protected provisioner must call the trusted-approval read, which
-fails closed unless two distinct authenticated reviewers and the live image
-still match. ``X-Admin-Actor`` never upgrades a recorded approval.
+Group creation checks two authenticated reviewers, the live exact control,
+and an independently authenticated generator atomically before writing.
+Recording a group remains an audit event, not a terminal clearance.
 """
 
 from __future__ import annotations
@@ -27,15 +26,18 @@ from ditto.api_models.v13_private_generation import (
     V13GroupPackageView,
     V13KnownBenignApprovalRequest,
     V13KnownBenignApprovalView,
+    V13KnownBenignAttestationRequest,
     V13ReplayGenerationGroupView,
     V13ReplayGroupPackageView,
-    V13KnownBenignAttestationRequest,
     V13TrustedKnownBenignApproval,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.verification_replay import _binding_ok
-from ditto.api_server.v13_benign_identity import verify_v13_benign_assertion
+from ditto.api_server.v13_benign_identity import (
+    VerifiedBenignPrincipal,
+    verify_v13_benign_assertion,
+)
 from ditto.api_server.v13_benign_provenance import (
     generator_conflicts,
     load_trusted_known_benign_approval,
@@ -360,27 +362,48 @@ async def authorize_known_benign_generation(
     approval = await session.get(V13KnownBenignControlApproval, approval_id)
     if approval is None:
         raise HTTPException(status_code=404, detail="approval not found")
-    trusted = await load_trusted_known_benign_approval(session, approval)
+    trusted, _principal = await _authorize_generator(
+        session, approval, payload.assertion, request
+    )
+    return trusted
+
+
+async def _authorize_generator(
+    session: AsyncSession,
+    approval: V13KnownBenignControlApproval,
+    assertion: str,
+    request: Request,
+    *,
+    lock: bool = False,
+) -> tuple[V13TrustedKnownBenignApproval, VerifiedBenignPrincipal]:
+    """Shared preflight and mandatory write gate; never trust an actor header."""
+    trusted = await load_trusted_known_benign_approval(session, approval, lock=lock)
     principal = verify_v13_benign_assertion(
-        payload.assertion,
+        assertion,
         secret=request.app.state.config.v13_benign_attestation_secret,
-        approval_id=approval_id,
+        approval_id=approval.approval_id,
         evidence_sha256=approval.review_evidence_sha256,
         action="authorize-generation",
     )
-    emails = set(
-        await session.scalars(
-            select(V13KnownBenignAttestation.principal_email).where(
-                V13KnownBenignAttestation.approval_id == approval_id
-            )
+    reviewers = (
+        await session.execute(
+            select(
+                V13KnownBenignAttestation.principal_sub,
+                V13KnownBenignAttestation.principal_email,
+            ).where(V13KnownBenignAttestation.approval_id == approval.approval_id)
         )
-    )
-    if generator_conflicts(trusted, principal, reviewer_emails=emails):
+    ).all()
+    if generator_conflicts(
+        trusted,
+        principal,
+        reviewer_subs={row.principal_sub for row in reviewers},
+        reviewer_emails={row.principal_email for row in reviewers},
+    ):
         raise HTTPException(
             status_code=409,
             detail="generation principal also approved the control",
         )
-    return trusted
+    return trusted, principal
 
 
 @router.post("/groups", response_model=V13GenerationGroupView)
@@ -388,16 +411,15 @@ async def record_generation_start(
     payload: V13GenerationStartRequest,
     _admin: AdminDep,
     session: SessionDep,
-    x_admin_actor: Annotated[str | None, Header()] = None,
+    request: Request,
 ) -> V13GenerationGroupView:
     """Commit one target-specific, two-role event before any seed issuance."""
-    actor = _actor(x_admin_actor)
     if payload.profile_sha256 != V13_PRIVATE_PROFILE_SHA256:
         raise HTTPException(status_code=409, detail="V13 profile mismatch")
     try:
         async with session.begin():
             approval = await session.get(
-                V13KnownBenignControlApproval, payload.approval_id
+                V13KnownBenignControlApproval, payload.approval_id, with_for_update=True
             )
             target = await session.get(
                 Agent, payload.target_agent_id, with_for_update=True
@@ -413,6 +435,10 @@ async def record_generation_start(
             control_attempt = await session.get(
                 ScreeningAttempt, approval.attempt_id, with_for_update=True
             )
+            trusted, principal = await _authorize_generator(
+                session, approval, payload.generator_assertion, request, lock=True
+            )
+            actor = principal.email
             if (
                 control is None
                 or control_attempt is None
@@ -469,7 +495,7 @@ async def record_generation_start(
                     raise HTTPException(status_code=409, detail="generation conflicts")
                 return _group_view(existing)
             started_at = await _database_now(session)
-            if started_at <= approval.approved_at:
+            if started_at <= max(approval.approved_at, trusted.completed_at):
                 raise HTTPException(
                     status_code=409, detail="approval not prior to start"
                 )
@@ -762,10 +788,9 @@ async def record_replay_generation_start(
     payload: V13GenerationStartRequest,
     _admin: AdminDep,
     session: SessionDep,
-    x_admin_actor: Annotated[str | None, Header()] = None,
+    request: Request,
 ) -> V13ReplayGenerationGroupView:
     """Commit replay image and clean control before protected seed generation."""
-    actor = _actor(x_admin_actor)
     if payload.profile_sha256 != V13_PRIVATE_PROFILE_SHA256:
         raise HTTPException(409, "V13 profile mismatch")
     try:
@@ -784,7 +809,7 @@ async def record_replay_generation_start(
             ):
                 raise HTTPException(409, "replay image guard mismatch")
             approval = await session.get(
-                V13KnownBenignControlApproval, payload.approval_id
+                V13KnownBenignControlApproval, payload.approval_id, with_for_update=True
             )
             if approval is None:
                 raise HTTPException(404, "clean approval not found")
@@ -792,6 +817,10 @@ async def record_replay_generation_start(
             control_attempt = await session.get(
                 ScreeningAttempt, approval.attempt_id, with_for_update=True
             )
+            trusted, principal = await _authorize_generator(
+                session, approval, payload.generator_assertion, request, lock=True
+            )
+            actor = principal.email
             if (
                 control is None
                 or control_attempt is None
@@ -828,7 +857,7 @@ async def record_replay_generation_start(
             started_at = await _database_now(session)
             verified_at = replay.image_verified_at
             if verified_at is None or started_at <= max(
-                approval.approved_at, verified_at
+                approval.approved_at, trusted.completed_at, verified_at
             ):
                 raise HTTPException(
                     409, "approval or image verification not prior to start"

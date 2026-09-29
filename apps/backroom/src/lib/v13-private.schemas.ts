@@ -11,6 +11,38 @@ export const listV13BenignApprovalsInputSchema = z.object({
 
 export const v13BenignApprovalLookupInputSchema = z.object({ approvalId: id })
 
+export const v13BenignAttestationInputSchema =
+  v13BenignApprovalLookupInputSchema.extend({
+    reason: z.string().trim().min(8),
+    confirmation: z.literal('ATTEST V13 BENIGN CONTROL'),
+  })
+
+export const v13TrustedBenignApprovalSchema = z.object({
+  approval_id: id,
+  agent_id: id,
+  attempt_id: id,
+  artifact_sha256: sha,
+  image_sha256: sha,
+  profile_sha256: sha,
+  review_evidence_sha256: sha,
+  approval_receipt_sha256: sha,
+  approved_at: z.string(),
+  provenance_status: z.literal('two_person_authenticated'),
+  authenticated_reviewers: z.literal(2),
+  provenance_review_evidence_sha256: sha,
+  provenance_receipt_sha256: sha,
+  completed_at: z.string(),
+  reviewers: z
+    .array(
+      z.object({
+        principal_sub: z.string(),
+        assertion_sha256: sha,
+        attested_at: z.string(),
+      }),
+    )
+    .length(2),
+})
+
 export const v13BenignApprovalWriteInputSchema = z.object({
   agentId: id,
   attemptId: id,
@@ -52,6 +84,10 @@ export const v13ReplayGroupWriteInputSchema = z.object({
   profileSha256: sha,
   confirmation: z.literal('RECORD V13 REPLAY GENERATION'),
 })
+
+export const v13GenerationGroupWriteInputSchema = v13ReplayGroupWriteInputSchema
+  .omit({ replayId: true, confirmation: true })
+  .extend({ confirmation: z.literal('RECORD V13 GENERATION') })
 
 export const v13ReplayPackageWriteInputSchema = z.object({
   replayId: id,
@@ -118,18 +154,20 @@ export const v13PrivateStatisticsSchema = z.object({
   report: z.object({
     revision: z.literal('v13-private-paired-hoeffding-holm-report-v1'),
     status: z.enum(['signal', 'inconclusive']),
-    classes: z.array(z.object({
-      transformation_class: z.string(),
-      pairs: z.number().int().min(20),
-      target_degradation_bps: z.number(),
-      clean_degradation_bps: z.number(),
-      lower_confidence_bound_bps: z.number(),
-      holm_alpha: z.number(),
-      hoeffding_p_upper_bound: z.number(),
-      replicated_direction: z.boolean(),
-      clean_seed_criterion_met: z.boolean(),
-      criterion_met: z.boolean(),
-    })),
+    classes: z.array(
+      z.object({
+        transformation_class: z.string(),
+        pairs: z.number().int().min(20),
+        target_degradation_bps: z.number(),
+        clean_degradation_bps: z.number(),
+        lower_confidence_bound_bps: z.number(),
+        holm_alpha: z.number(),
+        hoeffding_p_upper_bound: z.number(),
+        replicated_direction: z.boolean(),
+        clean_seed_criterion_met: z.boolean(),
+        criterion_met: z.boolean(),
+      }),
+    ),
     policy_verification_complete: z.literal(false),
     terminal_eligible: z.literal(false),
   }),

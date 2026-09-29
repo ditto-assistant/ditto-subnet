@@ -89,12 +89,43 @@ def _assertion(
             :32
         ],
     }
-    encoded = base64.urlsafe_b64encode(
-        json.dumps(claims, separators=(",", ":")).encode()
-    ).decode().rstrip("=")
+    encoded = (
+        base64.urlsafe_b64encode(json.dumps(claims, separators=(",", ":")).encode())
+        .decode()
+        .rstrip("=")
+    )
     signed = f"v1.{encoded}"
     digest = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
     return f"{signed}.{digest}"
+
+
+async def _attest(client: httpx.AsyncClient, approval: dict, reviewer: int) -> None:
+    response = await client.post(
+        f"{_BASE}/known-benign-approvals/{approval['approval_id']}/attest",
+        json={
+            "assertion": _assertion(
+                approval["approval_id"],
+                approval["review_evidence_sha256"],
+                sub=f"reviewer-{reviewer}",
+                email=f"reviewer-{reviewer}@omniaura.ai",
+            ),
+            "reason": "independent review of this exact control",
+        },
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+
+
+def _generator(
+    approval: dict, *, sub: str = "generator", email: str = "generator@omniaura.ai"
+) -> str:
+    return _assertion(
+        approval["approval_id"],
+        approval["review_evidence_sha256"],
+        sub=sub,
+        email=email,
+        action="authorize-generation",
+    )
 
 
 def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
@@ -271,7 +302,44 @@ async def test_replay_generation_uses_independent_verified_image(
         "target_image_sha256": "f" * 64,
         "approval_id": approval.json()["approval_id"],
         "profile_sha256": V13_PRIVATE_PROFILE_SHA256,
+        "generator_assertion": _generator(approval.json()),
     }
+    for reviewer in (1, 2):
+        refused = await client.post(
+            f"{_BASE}/replays/{replay_id}/group", json=payload, headers=_HEADERS
+        )
+        assert refused.status_code == 409, refused.text
+        async with session_maker() as guard_session:
+            group_type = V13ReplayPrivateGenerationGroup
+            assert list(await guard_session.scalars(select(group_type))) == []
+        await _attest(client, approval.json(), reviewer)
+    missing_assertion = await client.post(
+        f"{_BASE}/replays/{replay_id}/group",
+        json={k: v for k, v in payload.items() if k != "generator_assertion"},
+        headers=_HEADERS,
+    )
+    assert missing_assertion.status_code == 422
+    for sub, email in (
+        ("reviewer-1", "changed@omniaura.ai"),
+        ("new-sub", "reviewer-2@omniaura.ai"),
+    ):
+        refused = await client.post(
+            f"{_BASE}/replays/{replay_id}/group",
+            json={
+                **payload,
+                "generator_assertion": _generator(
+                    approval.json(), sub=sub, email=email
+                ),
+            },
+            headers={**_HEADERS, "X-Admin-Actor": "spoofed-generator"},
+        )
+        assert refused.status_code == 409, refused.text
+    forged = await client.post(
+        f"{_BASE}/replays/{replay_id}/group",
+        json={**payload, "generator_assertion": _generator(approval.json())[:-1] + "!"},
+        headers=_HEADERS,
+    )
+    assert forged.status_code == 401, forged.text
     wrong = await client.post(
         f"{_BASE}/replays/{replay_id}/group",
         json={**payload, "target_image_sha256": "b" * 64},
@@ -283,6 +351,7 @@ async def test_replay_generation_uses_independent_verified_image(
     )
     assert created.status_code == 200, created.text
     group = created.json()
+    assert group["actor"] == "generator@omniaura.ai"
     assert group["status"] == "recorded_unverified"
     assert group["target_image_sha256"] == "f" * 64
     assert group["target_receipt_sha256"] != group["control_receipt_sha256"]
@@ -547,15 +616,54 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
         "target_image_sha256": "b" * 64,
         "approval_id": approved.json()["approval_id"],
         "profile_sha256": V13_PRIVATE_PROFILE_SHA256,
+        "generator_assertion": _generator(approved.json()),
     }
+    for reviewer in (1, 2):
+        refused = await client.post(
+            f"{_BASE}/groups", json=group_payload, headers=_HEADERS
+        )
+        assert refused.status_code == 409, refused.text
+        async with session_maker() as guard_session:
+            group_type = V13PrivateGenerationGroup
+            assert list(await guard_session.scalars(select(group_type))) == []
+        await _attest(client, approved.json(), reviewer)
+    missing_assertion = await client.post(
+        f"{_BASE}/groups",
+        json={k: v for k, v in group_payload.items() if k != "generator_assertion"},
+        headers=_HEADERS,
+    )
+    assert missing_assertion.status_code == 422
+    for sub, email in (
+        ("reviewer-1", "changed@omniaura.ai"),
+        ("new-sub", "reviewer-2@omniaura.ai"),
+    ):
+        refused = await client.post(
+            f"{_BASE}/groups",
+            json={
+                **group_payload,
+                "generator_assertion": _generator(
+                    approved.json(), sub=sub, email=email
+                ),
+            },
+            headers={**_HEADERS, "X-Admin-Actor": "spoofed-generator"},
+        )
+        assert refused.status_code == 409, refused.text
+    forged = await client.post(
+        f"{_BASE}/groups",
+        json={
+            **group_payload,
+            "generator_assertion": _generator(approved.json())[:-1] + "!",
+        },
+        headers=_HEADERS,
+    )
+    assert forged.status_code == 401, forged.text
     wrong_target = await client.post(
         f"{_BASE}/groups",
         json={**group_payload, "target_image_sha256": "f" * 64},
         headers={**_HEADERS, "X-Admin-Actor": "test:generator"},
     )
     assert wrong_target.status_code == 409
-    # X-Admin-Actor is an audit label, not an authenticated principal. The
-    # row remains recorded_unverified even when the labels match.
+    # The signed generator identity is authoritative despite matching actor labels.
     same_claimed_actor = await client.post(
         f"{_BASE}/groups", json=group_payload, headers=_HEADERS
     )
@@ -568,6 +676,7 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
     )
     assert started.status_code == 200, started.text
     body = started.json()
+    assert body["actor"] == "generator@omniaura.ai"
     assert body["status"] == "recorded_unverified"
     assert body["target_receipt_sha256"] != body["control_receipt_sha256"]
     assert datetime.fromisoformat(body["started_at"]) > datetime.fromisoformat(
@@ -773,9 +882,7 @@ async def test_trusted_control_requires_two_reviewers_and_live_image(
         headers=_HEADERS,
     )
     assert reused.status_code == 401
-    first = _assertion(
-        approval_id, "e" * 64, sub="google:one", email="one@example.com"
-    )
+    first = _assertion(approval_id, "e" * 64, sub="google:one", email="one@example.com")
     forged = await client.post(
         f"{_BASE}/known-benign-approvals/{approval_id}/attest",
         json={"assertion": first[:-8] + "00000000", "reason": "forged signature"},

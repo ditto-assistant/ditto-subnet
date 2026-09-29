@@ -1,4 +1,6 @@
 import '@tanstack/react-start/server-only'
+import type { BackroomSession } from '../lib/auth.types'
+import { mintV13BenignAssertion } from './v13-benign-identity.server'
 import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
 
 export async function previewTreasuryTopup(rawInput: unknown) {
@@ -55,6 +57,9 @@ export async function recordTreasurySettings(rawInput: unknown, actor: string) {
 }
 
 import {
+  v13BenignAttestationInputSchema,
+  v13TrustedBenignApprovalSchema,
+  v13GenerationGroupWriteInputSchema,
   listV13BenignApprovalsInputSchema,
   v13BenignApprovalLookupInputSchema,
   v13BenignApprovalSchema,
@@ -2454,6 +2459,38 @@ export async function recordV13BenignApproval(actor: string, rawInput: unknown) 
   return v13BenignApprovalSchema.parse(payload)
 }
 
+export async function fetchV13TrustedBenignApproval(rawInput: unknown) {
+  const input = v13BenignApprovalLookupInputSchema.parse(rawInput)
+  return v13TrustedBenignApprovalSchema.parse(await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/known-benign-approvals/${encodeURIComponent(input.approvalId)}/trusted`,
+  ))
+}
+
+export async function attestV13BenignApproval(session: BackroomSession, rawInput: unknown) {
+  const input = v13BenignAttestationInputSchema.parse(rawInput)
+  const approval = await fetchV13BenignApproval(input)
+  const assertion = mintV13BenignAssertion(session, approval, 'attest-known-benign')
+  return v13BenignApprovalSchema.parse(await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/known-benign-approvals/${encodeURIComponent(input.approvalId)}/attest`,
+    { method: 'POST', actor: session.email, body: { assertion, reason: input.reason } },
+  ))
+}
+
+export async function recordV13GenerationGroup(session: BackroomSession, rawInput: unknown) {
+  const input = v13GenerationGroupWriteInputSchema.parse(rawInput)
+  const approval = await fetchV13BenignApproval(input)
+  const generatorAssertion = mintV13BenignAssertion(session, approval, 'authorize-generation')
+  return v13GenerationGroupSchema.parse(await platformAdminRequest(
+    '/api/v1/admin/v13-private-generation/groups',
+    { method: 'POST', actor: session.email, body: {
+      target_agent_id: input.targetAgentId, target_attempt_id: input.targetAttemptId,
+      target_artifact_sha256: input.targetArtifactSha256, target_image_sha256: input.targetImageSha256,
+      approval_id: input.approvalId, profile_sha256: input.profileSha256,
+      generator_assertion: generatorAssertion,
+    } },
+  ))
+}
+
 export async function fetchV13ReplayPrivateGroup(rawInput: unknown) {
   const input = v13ReplayPrivateLookupInputSchema.parse(rawInput)
   const base = `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}`
@@ -2465,13 +2502,15 @@ export async function fetchV13ReplayPrivateGroup(rawInput: unknown) {
     : v13ReplayGroupSchema.parse(payload)
 }
 
-export async function recordV13ReplayPrivateGroup(actor: string, rawInput: unknown) {
+export async function recordV13ReplayPrivateGroup(session: BackroomSession, rawInput: unknown) {
   const input = v13ReplayGroupWriteInputSchema.parse(rawInput)
+  const approval = await fetchV13BenignApproval(input)
+  const generatorAssertion = mintV13BenignAssertion(session, approval, 'authorize-generation')
   const payload = await platformAdminRequest(
     `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}/group`,
     {
       method: 'POST',
-      actor,
+      actor: session.email,
       body: {
         target_agent_id: input.targetAgentId,
         target_attempt_id: input.targetAttemptId,
@@ -2479,6 +2518,7 @@ export async function recordV13ReplayPrivateGroup(actor: string, rawInput: unkno
         target_image_sha256: input.targetImageSha256,
         approval_id: input.approvalId,
         profile_sha256: input.profileSha256,
+        generator_assertion: generatorAssertion,
       },
     },
   )

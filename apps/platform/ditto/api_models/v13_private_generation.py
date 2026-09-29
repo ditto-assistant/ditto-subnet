@@ -73,6 +73,8 @@ class V13TrustedKnownBenignApproval(BaseModel):
 class V13GenerationStartRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+    generator_assertion: str = Field(min_length=20, max_length=2048)
+
     target_agent_id: UUID
     target_attempt_id: UUID
     target_artifact_sha256: str = Field(pattern=_SHA)

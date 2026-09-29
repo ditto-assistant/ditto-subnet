@@ -230,6 +230,7 @@ describe('Backroom MCP tools', () => {
         'get_screening_verification_readiness',
         'get_v13_private_generation_group',
         'get_v13_benign_approval',
+        'get_v13_trusted_benign_approval',
         'get_v13_replay_private_group',
         'get_v13_replay_private_receipt',
         'get_v13_replay_private_statistics',
@@ -282,6 +283,8 @@ describe('Backroom MCP tools', () => {
         'search_submissions',
         'summarize_screening_failures',
         'read_screening_source_file',
+        'attest_v13_benign_approval',
+        'record_v13_private_generation_group',
         'record_v13_benign_approval',
         'record_treasury_settings',
         'record_v13_replay_private_group',
@@ -418,7 +421,8 @@ describe('Backroom MCP tools', () => {
     // Naming the fleet-effective posture in its catalog line measures 174,513.
     // Main also adds the no-input validator-capacity read (#2036), and the
     // guarded verified V13 court-clear release adds a bounded writer entry.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(176_300)
+    // Three authenticated V13 tools measure 179,038 bytes against current main.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(179_600)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -452,8 +456,8 @@ describe('Backroom MCP tools', () => {
       // terminal-review eligibility reads (#2041) measure 31,038.
       // Naming the fleet-effective posture (protocol 28) measures 31,074;
       // main adds the validator-capacity summary (#2036) and the guarded
-      // verified V13 court-clear release summary.
-      31_500,
+      // verified V13 court-clear release summary. Authenticated V13 tools measure 31,753.
+      32_050,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

@@ -47,7 +47,10 @@ def _unavailable(detail: str) -> HTTPException:
 
 
 async def load_trusted_known_benign_approval(
-    session: AsyncSession, approval: V13KnownBenignControlApproval
+    session: AsyncSession,
+    approval: V13KnownBenignControlApproval,
+    *,
+    lock: bool = False,
 ) -> V13TrustedKnownBenignApproval:
     """Return a verified projection or refuse. Never reads ``approval.actor``."""
     agent = await session.get(Agent, approval.agent_id)
@@ -61,15 +64,16 @@ async def load_trusted_known_benign_approval(
         or agent.sha256.lower() != approval.artifact_sha256
     ):
         raise _unavailable("stale control attempt")
-    verified_image = await session.scalar(
-        select(ScreenedImageUpload.image_upload_id).where(
-            ScreenedImageUpload.agent_id == agent.agent_id,
-            ScreenedImageUpload.attempt_id == attempt.attempt_id,
-            ScreenedImageUpload.screener_hotkey == attempt.screener_hotkey,
-            ScreenedImageUpload.sha256 == approval.image_sha256,
-            ScreenedImageUpload.status == "verified",
-        )
+    image_query = select(ScreenedImageUpload.image_upload_id).where(
+        ScreenedImageUpload.agent_id == agent.agent_id,
+        ScreenedImageUpload.attempt_id == attempt.attempt_id,
+        ScreenedImageUpload.screener_hotkey == attempt.screener_hotkey,
+        ScreenedImageUpload.sha256 == approval.image_sha256,
+        ScreenedImageUpload.status == "verified",
     )
+    if lock:
+        image_query = image_query.with_for_update()
+    verified_image = await session.scalar(image_query)
     if verified_image is None:
         raise _unavailable("stale control image")
     reviewers = list(
@@ -145,7 +149,8 @@ def generator_conflicts(
     principal: VerifiedBenignPrincipal,
     *,
     reviewer_emails: set[str],
+    reviewer_subs: set[str],
 ) -> bool:
     """True when the generation principal is also an approving reviewer."""
     subs = {row.principal_sub for row in trusted.reviewers}
-    return principal.sub in subs or principal.email in reviewer_emails
+    return principal.sub in (subs | reviewer_subs) or principal.email in reviewer_emails
