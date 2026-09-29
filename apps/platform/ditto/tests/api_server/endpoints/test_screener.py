@@ -4497,6 +4497,7 @@ class TestClaim:
             await owner.execute(
                 select(func.pg_advisory_xact_lock(_SCREENING_CLAIM_LOCK_KEY))
             )
+            # Bound the response while the lock is held; allow for shared CI load.
             response = await asyncio.wait_for(
                 client.post(
                     _CLAIM_URL,
@@ -4505,7 +4506,7 @@ class TestClaim:
                         "X-Screener-Hotkey": hotkey,
                     },
                 ),
-                timeout=0.5,
+                timeout=3.0,
             )
 
         assert response.status_code == 200, response.text

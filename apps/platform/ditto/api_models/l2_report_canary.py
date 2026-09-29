@@ -57,7 +57,7 @@ class CanonicalFixtureReviewRequest(BaseModel):
 
     reviewer_evidence_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     reviewed_archive_sha256: Literal[
-        "6f0fb811e08558aab56f63dd13ea1d2e1462d85e711fd31b0362d0de5c611fef"
+        "a3dacec019ce5ea6694bfbeb7669a5f9109514c38c6de7000c8dfa3f3f0f57b6"
     ]
     reviewed_dockerfile_sha256: Literal[
         "d3a1a2a1e5d43b0465c28712457d95432942ac8f017fd10d538859a901a54641"
