@@ -110,6 +110,7 @@ struct ToolExecCtx {
     case_id: String,
     user_id: String,
     hop: AtomicI32,
+    effect_receipts_v1: bool,
 }
 
 /// A catalog tool built from a wire tool definition. It exposes the case's
@@ -145,40 +146,89 @@ impl Tool for WireTool {
     }
 
     async fn execute(&self, args: Value) -> HarnessResult<Value> {
-        // Each model-emitted call gets one observed endpoint attempt. A 5xx or
-        // returned error may follow an executed mutation, so replaying it with
-        // a new hop could perform the action twice.
+        // Each model-emitted call gets one operation identity. Only a validator
+        // that explicitly advertises V1 receipts may safely recover a lost
+        // response by retransmitting that same operation and hop.
         if let Some(ctx) = &self.exec {
+            let operation_id = ctx
+                .effect_receipts_v1
+                .then(|| uuid::Uuid::new_v4().to_string());
             let body = protocol::ToolExecRequest {
                 case_id: ctx.case_id.clone(),
                 user_id: ctx.user_id.clone(),
                 name: self.def.name.clone(),
                 args,
                 hop: ctx.hop.fetch_add(1, Ordering::SeqCst),
+                operation_id: operation_id.clone(),
+                effect_protocol: ctx
+                    .effect_receipts_v1
+                    .then(|| protocol::TOOL_EFFECT_PROTOCOL_V1.to_string()),
             };
-            match ctx.client.post(&ctx.endpoint).json(&body).send().await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if !status.is_success() {
-                        let response_body = resp.text().await.unwrap_or_default();
-                        return Ok(json!({
-                            "error": format!("tool endpoint returned {status}: {response_body}")
-                        }));
+            let max_attempts = if ctx.effect_receipts_v1 { 2 } else { 1 };
+            for attempt in 0..max_attempts {
+                match ctx.client.post(&ctx.endpoint).json(&body).send().await {
+                    Ok(resp) => {
+                        let status = resp.status();
+                        if !status.is_success() {
+                            if ctx.effect_receipts_v1 && status.is_server_error() && attempt == 0 {
+                                continue;
+                            }
+                            let response_body = resp.text().await.unwrap_or_default();
+                            return Ok(json!({
+                                "error": format!("tool endpoint returned {status}: {response_body}")
+                            }));
+                        }
+                        match resp.json::<protocol::ToolExecResponse>().await {
+                            Ok(r) => {
+                                if ctx.effect_receipts_v1 {
+                                    if r.operation_id != operation_id {
+                                        return Ok(
+                                            json!({ "error": "tool receipt operation mismatch" }),
+                                        );
+                                    }
+                                    match r.effect_state.as_deref() {
+                                        Some("applied") => {}
+                                        Some("not_applied") => {
+                                            return Ok(json!({
+                                                "error": if r.error.is_empty() { "tool effect not applied" } else { &r.error }
+                                            }))
+                                        }
+                                        _ => {
+                                            return Ok(
+                                                json!({ "error": "tool effect delivery unknown" }),
+                                            )
+                                        }
+                                    }
+                                }
+                                if !r.result.is_empty() {
+                                    return Ok(json!({ "result": r.result }));
+                                }
+                                if !r.error.is_empty() {
+                                    return Ok(json!({ "error": r.error }));
+                                }
+                                return Ok(json!({
+                                    "error": format!("tool endpoint returned an empty result for {}", self.def.name)
+                                }));
+                            }
+                            Err(err) => {
+                                if ctx.effect_receipts_v1 && attempt == 0 {
+                                    continue;
+                                }
+                                return Ok(
+                                    json!({ "error": format!("decode tool result: {err}") }),
+                                );
+                            }
+                        }
                     }
-                    match resp.json::<protocol::ToolExecResponse>().await {
-                        Ok(r) if !r.result.is_empty() => Ok(json!({ "result": r.result })),
-                        Ok(r) if !r.error.is_empty() => Ok(json!({ "error": r.error })),
-                        Ok(_) => Ok(json!({
-                            "error": format!(
-                                "tool endpoint returned an empty result for {}",
-                                self.def.name
-                            )
-                        })),
-                        Err(err) => Ok(json!({ "error": format!("decode tool result: {err}") })),
+                    Err(err) => {
+                        if ctx.effect_receipts_v1 && attempt == 0 {
+                            continue;
+                        }
+                        return Ok(json!({ "error": format!("tool endpoint unreachable: {err}") }));
                     }
                 }
-                Err(err) => Ok(json!({ "error": format!("tool endpoint unreachable: {err}") })),
             }
+            unreachable!("bounded tool effect attempts always return")
         } else {
             Ok(json!({
                 "status": "ok",
@@ -260,7 +310,32 @@ mod tool_exec_tests {
             case_id: "case-123".to_string(),
             user_id: "scored-user".to_string(),
             hop: AtomicI32::new(0),
+            effect_receipts_v1: false,
         })
+    }
+
+    async fn applied_but_first_response_lost(
+        State(calls): State<Arc<Mutex<Vec<protocol::ToolExecRequest>>>>,
+        Json(call): Json<protocol::ToolExecRequest>,
+    ) -> (StatusCode, Json<protocol::ToolExecResponse>) {
+        let attempt = {
+            let mut calls = calls.lock().expect("lock calls");
+            calls.push(call.clone());
+            calls.len()
+        };
+        if attempt == 1 {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(Default::default()));
+        }
+        (
+            StatusCode::OK,
+            Json(protocol::ToolExecResponse {
+                result: "effect applied once".to_string(),
+                operation_id: call.operation_id,
+                effect_state: Some("applied".to_string()),
+                replayed: true,
+                ..Default::default()
+            }),
+        )
     }
 
     fn wire_tool(exec: Arc<ToolExecCtx>) -> WireTool {
@@ -309,6 +384,38 @@ mod tool_exec_tests {
             .route("/tool", post(transient_status_then_success))
             .with_state(Arc::clone(&calls));
         assert_transient_not_replayed(app, calls, "503").await;
+    }
+
+    #[tokio::test]
+    async fn advertised_receipts_recover_the_same_operation_after_lost_response() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(applied_but_first_response_lost))
+            .with_state(Arc::clone(&calls));
+        let (endpoint, task) = serve(app).await;
+        let mut ctx = exec_context(endpoint);
+        Arc::get_mut(&mut ctx)
+            .expect("unshared context")
+            .effect_receipts_v1 = true;
+        let result = wire_tool(ctx)
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("execute tool");
+        task.abort();
+
+        assert_eq!(result["result"], "effect applied once");
+        let calls = calls.lock().expect("lock calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0], calls[1]);
+        assert_eq!(calls[0].hop, 0);
+        assert_eq!(
+            calls[0].effect_protocol.as_deref(),
+            Some(protocol::TOOL_EFFECT_PROTOCOL_V1)
+        );
+        assert!(calls[0]
+            .operation_id
+            .as_ref()
+            .is_some_and(|id| id.len() >= 16));
     }
 }
 
@@ -659,6 +766,8 @@ impl Baseline {
                 case_id: req.case_id.clone(),
                 user_id: user_id.clone(),
                 hop: AtomicI32::new(0),
+                effect_receipts_v1: req.tool_effect_protocol.as_deref()
+                    == Some(protocol::TOOL_EFFECT_PROTOCOL_V1),
             })
         });
 
