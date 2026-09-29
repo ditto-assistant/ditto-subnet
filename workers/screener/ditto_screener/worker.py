@@ -1161,11 +1161,11 @@ class ScreenerWorker:
                 )
                 # A definitive validation rejection or an auth-only failure
                 # can be reported immediately. A plain PlatformError may hide
-                # an accepted verdict, so leave its outcome to Platform.
+                # an accepted verdict. A 409 can follow an accepted request
+                # whose response was lost, so never replace that verdict.
                 fallback_reason = None
                 if isinstance(error, PlatformRejected) and error.status_code in {
                     400,
-                    409,
                     413,
                     422,
                 }:

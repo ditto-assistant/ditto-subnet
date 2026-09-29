@@ -59,13 +59,15 @@ instead of repeating the untrusted build.
 
 Verdict submission retries the same signed payload across transient HTTP,
 transport, and node-credential refresh failures. A missing signing key stops
-authentication retries immediately. A definitive 400, 409, 413, or 422 verdict
+authentication retries immediately. A definitive 400, 413, or 422 verdict
 rejection triggers one best-effort, signed infrastructure fallback for the same
 attempt (`worker-verdict-rejected`), with bounded private rejection diagnostics.
 Authentication failure before any verdict dispatch uses
-`worker-verdict-auth-failed`. A transport failure or exhausted transient retry
-may conceal an accepted verdict, so it never triggers a replacement. Platform
-can still refuse the fallback if the attempt has already closed.
+`worker-verdict-auth-failed`. A 409 conflict, transport failure or exhausted
+transient retry may conceal an accepted verdict, so it never triggers a
+replacement. In particular, a response lost after acceptance can be followed
+by a 409 when the same signed payload is retried after the agent changes state.
+Platform can still refuse the fallback if the attempt has already closed.
 
 Rust is the reference starter implementation, not a competition requirement.
 Python, TypeScript/JavaScript, Go, Rust, or any other implementation is accepted

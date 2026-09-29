@@ -24,7 +24,11 @@ class PlatformError(Exception):
 
 
 class PlatformRejected(PlatformError):
-    """Platform definitively refused a verdict, with bounded diagnostics."""
+    """A non-transient verdict response, with bounded diagnostics.
+
+    A conflict can follow an earlier accepted dispatch; the status alone does
+    not prove that replacing the original verdict is safe.
+    """
 
     def __init__(self, *, status_code: int, body: str) -> None:
         self.status_code = status_code
