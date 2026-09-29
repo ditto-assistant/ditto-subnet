@@ -1859,6 +1859,40 @@ async def test_policy_only_rescreen_starts_source_review_without_runtime(
     assert not any(call[0] in {"build", "run", "exec"} for call in docker_calls)
 
 
+async def test_source_only_fixture_builds_and_reviews_without_serving(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    events: list[str] = []
+    docker_calls: list[list[str]] = []
+    built_images: list[str] = []
+    tarball = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(docker_calls), tarball=tarball)
+    gate._policy = _review_engine()
+    gate._source_reviewer = _StubReviewer(events)  # type: ignore[assignment]
+
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=13,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            policy_version=13,
+            execution_namespace=uuid4(),
+            source_only_build=True,
+            record_built_image=built_images.append,
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert events == ["review_started", "review_finished"]
+    assert built_images == ["sha256:" + "34" * 32]
+    assert any(call[0] == "build" for call in docker_calls)
+    assert not any(
+        call[0] in {"create", "run", "start", "exec"} for call in docker_calls
+    )
+
+
 @pytest.mark.parametrize(
     ("policy_version", "expected", "settle_calls"),
     [
