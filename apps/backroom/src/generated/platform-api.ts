@@ -5208,7 +5208,11 @@ export interface paths {
         };
         /**
          * Screener Capacity Watchdog
-         * @description Tell the GCP-only watchdog whether the normal writer lease is stale.
+         * @description Publish controller health and policy-gated GCP safety-net activation.
+         *
+         *     The reason describes controller health; current operator routing and
+         *     primary admission can suppress activation even while the controller is
+         *     missing, stale or unready.
          */
         get: operations["screener_capacity_watchdog_api_v1_public_screener_capacity_watchdog_get"];
         put?: never;
