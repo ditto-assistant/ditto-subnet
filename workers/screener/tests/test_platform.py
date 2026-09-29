@@ -796,6 +796,35 @@ async def test_submit_result_raises_bounded_platform_rejection(
     assert str(raised.value) == f"verdict rejected ({status_code}): {body[:500]}"
 
 
+@pytest.mark.parametrize("status_code", [400, 413, 422])
+async def test_submit_result_rejection_after_lost_response_remains_ambiguous(
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            raise httpx.ReadError("accepted response lost", request=request)
+        return httpx.Response(status_code, text="retry rejected")
+
+    async def no_sleep(_delay: float) -> None:
+        pass
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformError) as raised:
+            await _submit_infra_verdict(client)
+
+    assert type(raised.value) is PlatformError
+    assert "uncertain dispatch" in str(raised.value)
+    assert len(requests) == 2
+    assert requests[0].content == requests[1].content
+
+
 @pytest.mark.parametrize("status_code", [408, 425, 429, 500, 503, None])
 async def test_submit_result_exhausted_transient_failure_remains_ambiguous(
     make_config: Callable[..., ScreenerConfig],

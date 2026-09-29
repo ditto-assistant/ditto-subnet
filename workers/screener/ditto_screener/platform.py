@@ -723,6 +723,7 @@ class PlatformClient:
         body = payload.model_dump(mode="json")
         last_error = "verdict submit did not run"
         request_sent = False
+        response_lost = False
         for retry_index in range(len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1):
             try:
                 headers = await self._auth_headers()
@@ -740,11 +741,19 @@ class PlatformClient:
                     request_sent = True
                     resp = await self._client.post(url, json=body, headers=headers)
                 except httpx.HTTPError as error:
+                    response_lost = True
                     last_error = f"verdict submit failed: {error}"
                 else:
                     if resp.status_code == 200:
                         return ScreenResultResponse.model_validate(resp.json())
                     if not _is_transient_platform_status(resp.status_code):
+                        # A previous dispatch may already have committed its
+                        # verdict. A later rejection cannot prove otherwise.
+                        if response_lost:
+                            raise PlatformError(
+                                f"verdict retry rejected ({resp.status_code}) "
+                                "after an uncertain dispatch"
+                            )
                         raise PlatformRejected(
                             status_code=resp.status_code, body=resp.text
                         )
