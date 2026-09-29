@@ -12,6 +12,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/scorer"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
 
 func addV10ProvenanceSession(broker *inferenceBroker, id string) *brokerSession {
@@ -127,6 +128,52 @@ func TestV10ToolRouteRequiresAndConsumesMatchingModelEmission(t *testing.T) {
 		after.MatchedToolCalls != 1 || after.UnmatchedToolCalls != 1 ||
 		!toolEvidenceComplete(after) || after.ToolFindings&toolFindingDuplicateExecution == 0 {
 		t.Fatalf("provenance counters=%+v", after)
+	}
+}
+
+func TestVersionedToolReceiptPassesThroughBrokerForOneModelEmission(t *testing.T) {
+	broker := newInferenceBroker(1)
+	const sessionID = "v10-receipt-pass-through"
+	session := addV10ProvenanceSession(broker, sessionID)
+	generation, _, err := broker.beginCaseSnapshot(sessionID, "case-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordV10ModelToolResponse(t, session, generation, `{
+		"choices":[{"message":{"tool_calls":[{
+			"id":"call-1","type":"function","function":{
+				"name":"set_theme","arguments":"{\"theme\":\"dark\"}"
+			}
+		}]}}]
+	}`)
+	endpoint := toolexec.NewServerWithEffectReceiptsV1()
+	endpoint.Register("case-a", toolexec.BuildFixture(7, protocol.ToolCase{ID: "case-a"}))
+	route, stop, err := broker.registerToolWithProvenance(endpoint, "192.0.2.20", false, true, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	call := protocol.ToolExecRequest{
+		CaseID: "case-a", UserID: "user-a", Name: "set_theme",
+		Args:        json.RawMessage(`{"theme":"dark"}`),
+		OperationID: "broker-operation-0001", EffectProtocol: protocol.ToolEffectProtocolV1,
+	}
+	response := postProvenanceTool(t, broker, route, "case-a", call)
+	if response.Code != http.StatusOK {
+		t.Fatalf("versioned tool status=%d body=%s", response.Code, response.Body.String())
+	}
+	var receipt protocol.ToolExecResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.OperationID != call.OperationID || receipt.EffectState != protocol.ToolEffectApplied || receipt.Replayed {
+		t.Fatalf("broker lost first operation receipt: %+v", receipt)
+	}
+	if got := len(endpoint.Observed("case-a")); got != 1 {
+		t.Fatalf("endpoint observed %d effects, want one", got)
+	}
+	if duplicate := postProvenanceTool(t, broker, route, "case-a", call); duplicate.Code != http.StatusConflict {
+		t.Fatalf("broker accepted replay without a fresh provenance rule: status=%d body=%s", duplicate.Code, duplicate.Body.String())
 	}
 }
 

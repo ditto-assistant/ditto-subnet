@@ -23,6 +23,8 @@
 package toolexec
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -766,6 +768,12 @@ type caseState struct {
 	mu       sync.Mutex
 	fixture  Fixture
 	observed []protocol.ObservedToolCall
+	receipts map[string]effectReceipt
+}
+
+type effectReceipt struct {
+	identity string
+	response protocol.ToolExecResponse
 }
 
 // Server is the validator-served mock tool endpoint for one run. Register every
@@ -773,12 +781,22 @@ type caseState struct {
 // harness via RunRequest.ToolEndpoint, then read back Observed(caseID) after the
 // case to score the authoritative trajectory.
 type Server struct {
-	mu    sync.RWMutex
-	cases map[string]*caseState
+	mu               sync.RWMutex
+	cases            map[string]*caseState
+	effectProtocolV1 bool
 }
 
 // NewServer returns an empty server (register cases before serving).
 func NewServer() *Server { return &Server{cases: map[string]*caseState{}} }
+
+// NewServerWithEffectReceiptsV1 enables the opt-in operation receipt path.
+// Production callers must not advertise it to harnesses until the broker and
+// scorer account for deduplicated attempts separately from applied effects.
+func NewServerWithEffectReceiptsV1() *Server {
+	s := NewServer()
+	s.effectProtocolV1 = true
+	return s
+}
 
 // Register installs a case's fixture. Safe to call before serving.
 func (s *Server) Register(caseID string, f Fixture) {
@@ -851,6 +869,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, protocol.ToolExecResponse{Error: "unknown case_id"})
 		return
 	}
+	if req.EffectProtocol != "" || req.OperationID != "" {
+		if !s.effectProtocolV1 || req.EffectProtocol != protocol.ToolEffectProtocolV1 {
+			writeJSON(w, http.StatusConflict, protocol.ToolExecResponse{Error: "tool effect protocol unavailable"})
+			return
+		}
+		s.serveEffectV1(w, cs, req)
+		return
+	}
 
 	cs.mu.Lock()
 	cs.observed = append(cs.observed, protocol.ObservedToolCall{Name: req.Name, Args: req.Args, Hop: req.Hop})
@@ -865,30 +891,112 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	cs.mu.Unlock()
 
-	// Error-recovery: the FIRST call to a content tool returns a transient error
-	// (recorded, so the trajectory shows the attempt). The needle is served only
-	// on the retry, so a harness that does not recover cannot answer.
+	writeJSON(w, http.StatusOK, fixtureToolResult(fixture, req, priorSameTool))
+}
+
+func fixtureToolResult(fixture Fixture, req protocol.ToolExecRequest, priorSameTool int) protocol.ToolExecResponse {
+	// The first content-tool call flakes before the fixture produces an effect.
 	if fixture.recovery && contentTools[req.Name] && priorSameTool == 0 {
-		writeJSON(w, http.StatusOK, protocol.ToolExecResponse{Error: "transient upstream error (503); retry"})
-		return
+		return protocol.ToolExecResponse{Error: "transient upstream error (503); retry"}
 	}
-
-	// Bench v13: a decoy that is not this case's bearer is "not configured",
-	// and a setter given an unlisted/invalid value is refused without echoing
-	// any canonical spelling. Both are recorded above as ordinary calls.
 	if msg, refused := fixture.unavailable(req.Name, req.Args); refused {
-		writeJSON(w, http.StatusOK, protocol.ToolExecResponse{Error: msg})
-		return
+		return protocol.ToolExecResponse{Error: msg}
 	}
-
 	result, ok := fixture.Result(req.Name, req.Args)
 	if !ok {
-		// A memory or unknown tool: the harness should not route it here. Record it
-		// (done above: it is part of the observed trajectory) but return an error.
-		writeJSON(w, http.StatusOK, protocol.ToolExecResponse{Error: "tool not available via this endpoint: " + req.Name})
+		return protocol.ToolExecResponse{Error: "tool not available via this endpoint: " + req.Name}
+	}
+	return protocol.ToolExecResponse{Result: result}
+}
+
+const maxEffectReceiptsPerCase = 128
+
+func operationIdentity(req protocol.ToolExecRequest) (string, bool) {
+	if len(req.OperationID) < 16 || len(req.OperationID) > 128 || req.Name == "" {
+		return "", false
+	}
+	for i := 0; i < len(req.OperationID); i++ {
+		c := req.OperationID[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return "", false
+		}
+	}
+	args := req.Args
+	if len(args) == 0 {
+		args = []byte("{}")
+	}
+	var obj map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(args))
+	decoder.UseNumber()
+	if err := decoder.Decode(&obj); err != nil || obj == nil {
+		return "", false
+	}
+	canonical, err := json.Marshal(struct {
+		UserID string         `json:"user_id"`
+		Name   string         `json:"name"`
+		Args   map[string]any `json:"args"`
+	}{req.UserID, req.Name, obj})
+	if err != nil {
+		return "", false
+	}
+	digest := sha256.Sum256(canonical)
+	return fmt.Sprintf("%x", digest), true
+}
+
+func (s *Server) serveEffectV1(w http.ResponseWriter, cs *caseState, req protocol.ToolExecRequest) {
+	identity, valid := operationIdentity(req)
+	if !valid {
+		writeJSON(w, http.StatusBadRequest, protocol.ToolExecResponse{
+			Error: "invalid operation identity", EffectState: protocol.ToolEffectNotApplied,
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, protocol.ToolExecResponse{Result: result})
+	cs.mu.Lock()
+	if prior, found := cs.receipts[req.OperationID]; found {
+		if prior.identity != identity {
+			cs.mu.Unlock()
+			writeJSON(w, http.StatusConflict, protocol.ToolExecResponse{
+				Error: "operation identity mismatch", OperationID: req.OperationID, EffectState: protocol.ToolEffectNotApplied,
+			})
+			return
+		}
+		response := prior.response
+		response.Replayed = true
+		cs.mu.Unlock()
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	if len(cs.receipts) >= maxEffectReceiptsPerCase {
+		cs.mu.Unlock()
+		writeJSON(w, http.StatusTooManyRequests, protocol.ToolExecResponse{
+			Error: "operation receipt capacity reached", OperationID: req.OperationID, EffectState: protocol.ToolEffectNotApplied,
+		})
+		return
+	}
+	priorSameTool := 0
+	for _, call := range cs.observed {
+		if call.Name == req.Name {
+			priorSameTool++
+		}
+	}
+	cs.observed = append(cs.observed, protocol.ObservedToolCall{Name: req.Name, Args: req.Args, Hop: req.Hop})
+	response := fixtureToolResult(cs.fixture, req, priorSameTool)
+	response.OperationID = req.OperationID
+	switch {
+	case response.Result != "" && response.Error == "":
+		response.EffectState = protocol.ToolEffectApplied
+		if cs.receipts == nil {
+			cs.receipts = make(map[string]effectReceipt)
+		}
+		cs.receipts[req.OperationID] = effectReceipt{identity: identity, response: response}
+	case response.Error != "":
+		response.EffectState = protocol.ToolEffectNotApplied
+	default:
+		response.EffectState = protocol.ToolEffectUnknown
+	}
+	cs.mu.Unlock()
+	writeJSON(w, http.StatusOK, response)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
