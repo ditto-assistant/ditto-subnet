@@ -3682,7 +3682,7 @@ async def test_admin_start_route_is_parameterised_by_version(
 
         # An unshipped version fails closed rather than opening a bad rollout.
         with pytest.raises(HTTPException) as exc_info:
-            await get_rollout(None, session, "14")
+            await get_rollout(None, session, "15")
         assert exc_info.value.status_code == 409
         with pytest.raises(HTTPException) as not_found:
             await get_rollout(None, session, "banana")

@@ -12366,7 +12366,7 @@ class TestTop5ConfirmationLane:
         assert {raw_cutoff, folded_entrant} <= cohort_ids
         assert len(cohort) == 6
 
-    @pytest.mark.parametrize("bench_version", [_BENCH_VERSION, 13])
+    @pytest.mark.parametrize("bench_version", [_BENCH_VERSION, 13, 14])
     async def test_stronger_same_owner_generation_can_catch_up_outside_raw_top_five(
         self,
         app: FastAPI,
@@ -12398,11 +12398,27 @@ class TestTop5ConfirmationLane:
             # support list even when the active scoring era is v13.
             for keypair in _KEYPAIRS:
                 capabilities = _scorer_capable_capabilities(
-                    now=datetime.now(UTC), versions=(7, bench_version)
+                    now=datetime.now(UTC),
+                    versions=(7, 13, 14) if bench_version == 14 else (7, bench_version),
                 )
                 scorer = capabilities["scorer_benchmarks"]
                 assert isinstance(scorer, dict)
                 scorer["deterministic_v13_datasets"] = True
+                if bench_version == 14:
+                    keys = ["BENCH_VERSION"]
+                    material = (
+                        "scored-runtime-env-v1\n14\n"
+                        + str(scorer["source_revision"])
+                        + "\n"
+                        + "\n".join(keys)
+                    )
+                    scorer["v14_scored_runtime_env"] = {
+                        "bench_version": 14,
+                        "scope": "scorer-injected-env-only",
+                        "source_revision": scorer["source_revision"],
+                        "injected_keys": keys,
+                        "sha256": hashlib.sha256(material.encode()).hexdigest(),
+                    }
                 await _seed_validator_heartbeat(
                     session_maker,
                     keypair=keypair,

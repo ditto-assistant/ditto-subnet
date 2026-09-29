@@ -533,8 +533,8 @@ async def test_control_offers_newer_contracts_without_moving_active_v8_authority
         "capable_validator_count": 0,
         "start_ready": False,
         "start_blockers": [
-            "benchmark v13 rollout requires at least 1 fresh, identity-matched "
-            "v13 scorer validators"
+            "benchmark v14 rollout requires at least 1 fresh, identity-matched "
+            "v14 scorer validators"
         ],
     }
 
