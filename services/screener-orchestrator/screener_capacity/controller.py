@@ -649,6 +649,37 @@ class GCPBootstrapTokenMinter:
         return token
 
 
+@dataclass(frozen=True)
+class ScaleInDeferral:
+    """A delivered GCE scale-in whose physical deletion is still deferred.
+
+    ``reason`` is None until a completed renew delivers the deferral event.
+    """
+
+    source: int
+    target: int
+    reason: str | None
+
+    def to_state(self) -> dict[str, Any]:
+        return {"from": self.source, "to": self.target, "reason": self.reason}
+
+    @classmethod
+    def from_state(cls, value: object) -> ScaleInDeferral | None:
+        """Rebuild the delivered deferral, or None when missing or malformed."""
+        if not isinstance(value, dict):
+            return None
+        source, target, reason = value.get("from"), value.get("to"), value.get("reason")
+        if (
+            not isinstance(source, int)
+            or isinstance(source, bool)
+            or not isinstance(target, int)
+            or isinstance(target, bool)
+            or not (reason is None or isinstance(reason, str))
+        ):
+            return None
+        return cls(source=source, target=target, reason=reason)
+
+
 def _load_state(path: Path) -> dict[str, Any]:
     try:
         loaded = json.loads(path.read_text()) if path.exists() else {}
@@ -978,15 +1009,26 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         # primary fails closed as usual.
         target = current_target
         reason = "PLATFORM_INVENTORY_UNAVAILABLE"
+    # A deferred scale-in republishes the same lower target on every pass until
+    # the group is drained. Its change and deferral were already delivered, so
+    # record them once per transition rather than once per pass.
+    delivered_deferral = ScaleInDeferral.from_state(state.get("gce_scale_in_deferral"))
+    continuing_deferral = (
+        delivered_deferral
+        if delivered_deferral is not None
+        and target < current_target
+        and (delivered_deferral.source, delivered_deferral.target)
+        == (current_target, target)
+        else None
+    )
+    target_changed_event = {
+        "event_type": "gce_target_changed",
+        "provider": "gcp",
+        "detail": f"GCE target {current_target} -> {target}",
+    }
     events: list[dict[str, Any]] = []
-    if target != current_target:
-        events.append(
-            {
-                "event_type": "gce_target_changed",
-                "provider": "gcp",
-                "detail": f"GCE target {current_target} -> {target}",
-            }
-        )
+    if target != current_target and continuing_deferral is None:
+        events.append(target_changed_event)
     failed_detail = f"{' and '.join(failed_reads)} read"
     if inventory_failures == 1:
         events.append(
@@ -1050,6 +1092,14 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     state = _load_state(settings.state_file)
     state["inventory_failures"] = inventory_failures
     state["last_fallback_reason"] = reason
+    state["gce_scale_in_deferral"] = (
+        (
+            continuing_deferral
+            or ScaleInDeferral(source=current_target, target=target, reason=None)
+        ).to_state()
+        if target < current_target
+        else None
+    )
     _write_state(settings.state_file, state)
     # Scale-in may defer indefinitely. Restore an autoscaler left OFF by an
     # interrupted prior mutation even when the desired target is lower.
@@ -1125,14 +1175,19 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         "last_provider_error_code": (None if provider_ready else provider_error_code),
         "last_provider_error_at": None if provider_ready else provider_error_at,
     }
+    deferral: ScaleInDeferral | None = None
     if scale_in_deferral is not None:
         # A deferral is not a provider failure. Keep publishing the lower
         # target: republishing the live fleet would reopen overflow claims the
         # fenced renew withdrew, even for a closed or unknown primary, while
         # existing leases complete either way.
-        completed.update(
-            fallback_reason="GCE_SCALE_IN_DEFERRED",
-            events=[
+        deferral = ScaleInDeferral(
+            source=current_target, target=target, reason=scale_in_deferral
+        )
+        completed["fallback_reason"] = "GCE_SCALE_IN_DEFERRED"
+        if deferral != continuing_deferral:
+            # A new target or deferral reason; an unchanged one was delivered.
+            completed["events"] = [
                 {
                     "event_type": "gce_scale_in_deferred",
                     "provider": "gcp",
@@ -1141,11 +1196,17 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                         f"{scale_in_deferral}"
                     ),
                 }
-            ],
-        )
+            ]
+    elif continuing_deferral is not None:
+        # The first renew omitted the change already delivered with an earlier
+        # deferral. This pass did not defer it, so record the change again.
+        completed["events"] = [target_changed_event]
     # Readiness describes a fully completed reconciliation pass. Persist it so
     # a failed pass cannot publish an optimistic heartbeat on the next retry.
     platform.renew(completed)
+    state = _load_state(settings.state_file)
+    state["gce_scale_in_deferral"] = deferral.to_state() if deferral else None
+    _write_state(settings.state_file, state)
     _persist_provider_state(
         settings.state_file,
         ready=provider_ready,

@@ -35,9 +35,11 @@ legacy hotkey has no per-instance claim fence. A deferral leaves the managed
 group unchanged while publishing the lower desired target, which blocks new
 claims for a fresh, ready controller. After controller authority expires,
 current-policy emergency fallback can admit claims again; no deletion is in
-progress. It records a `gce_scale_in_deferred` event with
-`GCE_SCALE_IN_DEFERRED` and is not a provider failure. Physical excess capacity
-requires a durable claim fence or an operator-controlled drain.
+progress. It publishes `GCE_SCALE_IN_DEFERRED` and is not a provider failure.
+The change and its `gce_scale_in_deferred` event are recorded once per
+deferral, not on every pass: a new target, current MIG size, or deferral
+reason records again. Physical excess capacity requires a durable claim fence
+or an operator-controlled drain.
 
 `SCREENING=0` (`screening_concurrency=0`) on the primary is an operator closure,
 not an outage: it is a global full stop recorded as
