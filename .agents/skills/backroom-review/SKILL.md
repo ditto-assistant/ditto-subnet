@@ -184,12 +184,20 @@ published policy or transfer a finding to another artifact.
 6. `open_ath_review` with the exact SHA-256 and score count, then
    `resolve_ath_review` `clear` or `reject`. Withdrawing an unsupported
    precautionary manual hold is neither of those: `preview_ath_hold_withdrawal`
-   then `withdraw_ath_hold` with confirmation `WITHDRAW ATH HOLD`. That
-   restores score and rank presentation and records `resolution=withdraw`.
-   It does not certify the artifact. Rewards follow the canonical operator
-   policy: off/shadow preserve payment; enforce withholds incomplete review
-   only once the live validator fleet supports the gate. Read the preview's
-   effective mode and reward outcome before executing.
+   then `withdraw_ath_hold` with confirmation `WITHDRAW ATH HOLD`. Only a
+   manual hold with no prior `clear` or `reject` on its review can be
+   withdrawn; `get_ath_review` reports `withdrawable` and the refusal. A
+   reopened ruling is settled by `clear` or `reject`, never withdrawn. Pass
+   the audit's `current_artifact_sha256` and `current_score_count` as the
+   guards, not `held_*`. A withdrawal restores score and rank presentation
+   and records `resolution=withdraw`. It does not certify the artifact.
+   Rewards follow the canonical operator policy: off/shadow preserve
+   payment. Under enforce, once the live validator fleet supports the gate,
+   `require_terminal_review` decides: on (the default) keeps the artifact
+   withheld as `unresolved_review` until a reopen and a `clear`/`reject`; off
+   pays it from the current window. Read the preview's effective mode and
+   reward outcome before executing. Withdrawn holds leave
+   `get_screening_review_queue`; page them with `list_withdrawn_ath_holds`.
 7. Write a specific miner-visible reason: pattern, file:line, which limb or
    engine test failed or passed, and the cited precedent.
 8. Re-read the agent. A timeout is ambiguous; verify before retrying.

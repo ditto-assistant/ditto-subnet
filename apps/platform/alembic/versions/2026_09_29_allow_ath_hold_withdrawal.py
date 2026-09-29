@@ -6,6 +6,15 @@ Create Date: 2026-09-29
 
 ``withdraw`` records that an operator removed an unsupported precautionary
 hold. It is not a policy clear and not a reject.
+
+Downgrade restores the two-value constraints and therefore fails while any
+``ath_reviews.resolution = 'withdraw'`` or ``ath_review_actions.action =
+'withdraw'`` row exists. That is deliberate: rewriting a withdrawal into a
+clear would certify an artifact nobody certified, rewriting it into a reject
+would record a violation nobody found, and deleting the ledger row would erase
+an audited operator action. An operator who must downgrade has to settle each
+withdrawn review first (reopen, then clear or reject) and decide what happens
+to its ``withdraw`` ledger rows; the migration will not choose for them.
 """
 
 from collections.abc import Sequence
@@ -59,6 +68,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The restored constraints intentionally make downgrade fail rather than
+    # rewrite or delete withdrawn reviews and their audited ledger rows. See
+    # the module docstring.
     op.execute(
         "ALTER TABLE ath_review_actions DROP CONSTRAINT ath_review_actions_action_check"
     )

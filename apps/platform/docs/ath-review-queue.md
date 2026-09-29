@@ -248,17 +248,51 @@ manual-admin-hold`) no longer has a supported opening rationale.
 `POST /admin/copy-reviews/{agent_id}/withdraw/preview` then
 `POST /admin/copy-reviews/{agent_id}/withdraw` records `resolution = withdraw`.
 
-The preview binds the review id, pending state, agent UUID, artifact SHA-256,
-score count, agent status, correction reason, and the resulting public crown.
-Execute re-reads those guards and refuses a stale or repeated request. The
-original reason, opener, timestamps, score rows, and action history stay.
+Only a hold that was never ruled on can be withdrawn. Both routes refuse (409
+"review has a prior clear/reject ruling; resolve it with clear or reject") once
+the review's action ledger carries any `clear` or `reject`, including after a
+reopen. A reopened reject is settled by another ruling: withdrawing it would
+restore a banned artifact and turn the reject into a withdrawal that the
+precedent search omits. A precautionary re-hold of a cleared artifact is also
+settled by `clear` or `reject`: withdrawing it would replace a terminal
+certification with an incomplete review. A withdrawn hold that is reopened has
+no ruling in its ledger, so it can be withdrawn again. Automated holds still
+leave through `clear` or `reject`.
+
+The guards are the **current** values: the artifact SHA-256 and the score
+count now, not the `held_*` evidence recorded when the review opened. Scores
+can arrive during a hold and a reopen records its own count.
+`GET /admin/copy-reviews/{agent_id}/audit` returns both, as `held_*` and
+`current_*`, plus `withdrawable` and the `withdrawal_refusal` the preview would
+return. Backroom offers the action only when `withdrawable` is true.
+
+The preview binds the operator, the review id and its lifecycle version (the
+action count, the newest action id and `reopened_at`), the agent UUID, the
+guards, the agent status, the correction reason, the effective emission
+policy, and the resulting public crown. Execute re-reads all of it under the
+review's row lock and refuses a stale or repeated request, including a token
+issued before the review was withdrawn and reopened. Policy drift and board
+drift return different 409 details. The original reason, opener, timestamps,
+score rows and action history stay. The withdraw action records the emission
+gate, policy revision and checksum, eligibility state, and reward outcome it
+ran under; the audit's `action_history` shows them.
+
 Score and rank presentation return to the pre-hold status. Withdrawal is not
 terminal certification: the shared emission evaluator treats it as incomplete
-review, using the operator-owned switches. `off` preserves payments; `shadow`
-records the unresolved posture while preserving payments; `enforce` withholds
-only when every live weight setter supports the gate, otherwise using shadow.
-An exact-artifact terminal clear takes effect from the next activation window.
-A sibling artifact's clear or reject is not consulted. The preview also binds
-the effective enforcement mode, policy revision and checksum; a changed policy
-requires a fresh preview. Automated holds still leave
-through `clear` or `reject`. Withdrawals are omitted from the precedent search.
+review, using the operator-owned switches (see
+[`emission-eligibility.md`](emission-eligibility.md#withdrawn-holds)). `off`
+preserves payments; `shadow` records the unresolved posture while preserving
+payments; `enforce` withholds only when every live weight setter supports the
+gate, otherwise using shadow. With `require_terminal_review` on, an enforced
+withdrawal stays withheld as `unresolved_review`; with it off, the withdrawal
+is eligible in the current window. An exact-artifact terminal clear takes
+effect from the next activation window. A sibling artifact's clear or reject is
+not consulted.
+
+A withdrawn review is `resolved`, so it leaves the pending queue and the MCP
+`get_screening_review_queue`. List withdrawn holds with
+`GET /admin/copy-reviews?status=resolved&resolution=withdraw&generation=all`,
+or Backroom's `list_withdrawn_ath_holds`. To give one a terminal ruling,
+reopen it with `open_ath_review` and then `clear` or `reject`. A later reopen
+reports the withdrawal as `superseded_resolution = withdraw`. Withdrawals are
+omitted from the precedent search: a withdrawal is a correction, not a holding.
