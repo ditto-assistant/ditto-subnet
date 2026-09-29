@@ -95,6 +95,13 @@ class ProviderRouting:
         )
 
 
+@dataclass(frozen=True)
+class NodeInventory:
+    states: dict[str, dict[str, Any]]
+    # None when Platform predates the count, so GCE attribution is unknown.
+    legacy_gcp_running_attempts: int | None
+
+
 def desired_slots(*, runnable: int, active: int, jobs_per_slot: int, cap: int) -> int:
     """Keep every active lease supplied and add bounded catch-up capacity."""
     if min(runnable, active, cap) < 0 or jobs_per_slot < 1:
@@ -388,6 +395,9 @@ class PlatformControl:
         )
 
     def node_states(self) -> dict[str, dict[str, Any]]:
+        return self.node_inventory().states
+
+    def node_inventory(self) -> NodeInventory:
         body = _json_request(
             "GET",
             f"{self._base}/api/v1/screener/controller/nodes"
@@ -407,22 +417,16 @@ class PlatformControl:
                 continue
             result[str(row["node_id"])] = row
             result[str(row["provider_resource_id"])] = row
-        return result
-
-    def drain_node(
-        self, *, node_id: str, epoch: str, reason: str = "capacity scale-down"
-    ) -> None:
-        _json_request(
-            "PUT",
-            f"{self._base}/api/v1/screener/controller/nodes/{node_id}",
-            token=self._token,
-            payload={
-                "environment": self.environment,
-                "status": "draining",
-                "reason": f"capacity controller {reason}",
-                "controller_epoch": epoch,
-            },
-            allow_not_found=True,
+        running = body.get("legacy_gcp_running_attempts")
+        return NodeInventory(
+            states=result,
+            legacy_gcp_running_attempts=(
+                running
+                if isinstance(running, int)
+                and not isinstance(running, bool)
+                and running >= 0
+                else None
+            ),
         )
 
 
@@ -508,6 +512,30 @@ class GCEFleet:
                 pending += 1
         return ProviderCounts(healthy=healthy, pending=pending, draining=draining)
 
+    def running_instances(self) -> set[str]:
+        """Name the running instances the managed group is not already changing."""
+        output = self._run(
+            "compute",
+            "instance-groups",
+            "managed",
+            "list-instances",
+            self.mig,
+            "--region",
+            self.region,
+            "--format=json(instance,instanceStatus,currentAction)",
+        )
+        try:
+            rows = json.loads(output)
+        except json.JSONDecodeError as error:
+            raise ControllerError("GCE instance list is invalid") from error
+        return {
+            str(row.get("instance", "")).rsplit("/", 1)[-1]
+            for row in (rows if isinstance(rows, list) else [])
+            if isinstance(row, dict)
+            and str(row.get("instanceStatus", "")).upper() == "RUNNING"
+            and str(row.get("currentAction", "")).upper() in {"NONE", ""}
+        } - {""}
+
     def _autoscaler_mode(self) -> str:
         output = self._run(
             "compute",
@@ -546,31 +574,44 @@ class GCEFleet:
         if self._autoscaler_mode() != self.WATCHDOG_MODE:
             self._set_autoscaler_mode("only-scale-out")
 
-    def resize(self, target: int) -> None:
+    def _paused_mutation(self, operation: str, *arguments: str) -> None:
         # Compute rejects manual resize while any autoscaler mode is active,
         # including ONLY_SCALE_OUT. Keep the emergency policy configured, pause
-        # it only around the fenced mutation and always restore it, even at
-        # zero capacity or after failure. Platform's watchdog gates the metric.
+        # it only around the fenced mutation and always restore it. Platform's
+        # policy-aware metric suppresses fallback at zero capacity.
+        mutation_error: ControllerError | None = None
         try:
             self._set_autoscaler_mode("off")
             self._run(
                 "compute",
                 "instance-groups",
                 "managed",
-                "resize",
+                operation,
                 self.mig,
                 "--region",
                 self.region,
-                "--size",
-                str(target),
+                *arguments,
             )
-        finally:
-            try:
-                self._set_autoscaler_mode("only-scale-out")
-            except ControllerError as restore_error:
-                raise ControllerError(
-                    "GCE autoscaler watchdog restore failed"
-                ) from restore_error
+        except ControllerError as error:
+            mutation_error = error
+        try:
+            self._set_autoscaler_mode("only-scale-out")
+        except ControllerError as restore_error:
+            raise ControllerError(
+                "GCE autoscaler watchdog restore failed"
+            ) from restore_error
+        if mutation_error is not None:
+            raise mutation_error
+
+    def resize(self, target: int) -> None:
+        self._paused_mutation("resize", "--size", str(target))
+
+    def delete_instances(self, names: list[str]) -> None:
+        """Delete named instances; the managed group shrinks by the same count."""
+        self._paused_mutation(
+            "delete-instances",
+            f"--instances={','.join(names)}",
+        )
 
 
 class GCPBootstrapTokenMinter:
@@ -746,6 +787,73 @@ def _record_provider_failure(
         )
     with contextlib.suppress(ControllerError):
         platform.renew(failed)
+
+
+def _plan_gce_scale_in(
+    platform: PlatformControl,
+    gce_fleet: GCEFleet,
+    *,
+    target: int,
+    current_target: int,
+    claims_fenced_at_zero: bool,
+) -> tuple[list[str], str | None]:
+    """Check whether scale-in is safe, or explain why it must wait.
+
+    Runs after the fenced renew. A GCE worker may have claimed since the first
+    inventory read, so leases are read again here. At zero a ready,
+    Hetzner-primary route's renew withdrew overflow claims; a GCP-first route
+    or an unready snapshot cannot safely fence them. Partial scale-in also
+    waits for a per-instance claim fence, since an idle heartbeat is not one.
+    """
+    try:
+        inventory = platform.node_inventory()
+    except ControllerError:
+        return [], "inventory_unavailable"
+    rows = {
+        str(row["node_id"]): row
+        for row in inventory.states.values()
+        if row.get("provider") == "gcp"
+    }
+    running = inventory.legacy_gcp_running_attempts
+    if target == 0:
+        if not claims_fenced_at_zero:
+            return [], "legacy_claims_not_fenced"
+        if running is None:
+            return [], "attribution_incomplete"
+        if running > 0 or any(row.get("active_lease") is True for row in rows.values()):
+            return [], "gce_active_lease"
+        members = gce_fleet.running_instances()
+        if len(members) != current_target or any(
+            (row := rows.get(member)) is None
+            or row.get("ready") is not True
+            or row.get("instance_busy") is not False
+            for member in members
+        ):
+            return [], "instance_inventory_incomplete"
+        return [], None
+    legacy = [row for row in rows.values() if row.get("instance_busy") is not None]
+    busy = sum(row["instance_busy"] is True for row in legacy)
+    if running is None or running > busy:
+        return [], "attribution_incomplete"
+    # A heartbeat stays ready for minutes after its VM is deleted, so only
+    # current managed-group members are candidates.
+    members = gce_fleet.running_instances()
+    idle = sorted(
+        (
+            row
+            for row in legacy
+            if row.get("ready") is True
+            and row.get("instance_busy") is False
+            and row["node_id"] in members
+        ),
+        key=lambda row: str(row.get("heartbeat_seen_at") or ""),
+    )
+    excess = current_target - target
+    if len(idle) < excess:
+        return [], "insufficient_idle_instances"
+    # The shared legacy hotkey can claim on any instance while target is
+    # nonzero. Deleting a merely idle instance can orphan a new lease.
+    return [], "per_instance_claim_fence_unavailable"
 
 
 def reconcile(settings: Settings) -> dict[str, Any]:
@@ -961,12 +1069,35 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 detail="GCE fallback scale-up failed",
             )
             raise
+    scale_in_deferral: str | None = None
     if target < current_target:
-        # Zero is intentional.  Scale-in happens only when active leases have
-        # fallen to zero because desired_slots includes every active lease.
+        # The overflow target ignores active leases, and the lease guard above
+        # used the first inventory read. The post-renew re-read below is the
+        # guard that keeps a screening GCE worker from being deleted.
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.resize(target)
+            instances, scale_in_deferral = _plan_gce_scale_in(
+                platform,
+                gce_fleet,
+                target=target,
+                current_target=current_target,
+                claims_fenced_at_zero=(
+                    starting_provider_ready
+                    and any(
+                        priority[0] == "hetzner"
+                        for priority in (
+                            provider_routing.build_provider_priority,
+                            provider_routing.runtime_provider_priority,
+                            provider_routing.source_review_provider_priority,
+                        )
+                    )
+                ),
+            )
+            if scale_in_deferral is None and target == 0:
+                # Every instance is idle, so the group may pick any of them.
+                gce_fleet.resize(target)
+            elif scale_in_deferral is None:
+                gce_fleet.delete_instances(instances)
         except ControllerError:
             _record_provider_failure(
                 platform,
@@ -985,6 +1116,24 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         "last_provider_error_code": (None if provider_ready else provider_error_code),
         "last_provider_error_at": None if provider_ready else provider_error_at,
     }
+    if scale_in_deferral is not None:
+        # A deferral is not a provider failure. Keep publishing the lower
+        # target: republishing the live fleet would reopen overflow claims the
+        # fenced renew withdrew, even for a closed or unknown primary, while
+        # existing leases complete either way.
+        completed.update(
+            fallback_reason="GCE_SCALE_IN_DEFERRED",
+            events=[
+                {
+                    "event_type": "gce_scale_in_deferred",
+                    "provider": "gcp",
+                    "detail": (
+                        f"GCE target {current_target} -> {target} deferred: "
+                        f"{scale_in_deferral}"
+                    ),
+                }
+            ],
+        )
     # Readiness describes a fully completed reconciliation pass. Persist it so
     # a failed pass cannot publish an optimistic heartbeat on the next retry.
     platform.renew(completed)

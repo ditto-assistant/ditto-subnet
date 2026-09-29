@@ -2187,6 +2187,99 @@ class TestFederatedScreenerNodes:
         assert nodes["open-node"]["admission_open"] is True
         assert nodes["open-node"]["ready"] is True
 
+    async def test_controller_nodes_attributes_legacy_gcp_instances(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        now = datetime.now(UTC)
+        enrolled_hotkey = "5EnrolledNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        await _seed_screener_node(
+            session_maker,
+            node_id="enrolled-node",
+            hotkey=enrolled_hotkey,
+            token="enrolled-node-token-at-least-32-characters",
+            screening_concurrency=1,
+        )
+        agent_ids: list[UUID] = []
+        for index, (hotkey, deadline) in enumerate(
+            (
+                (_SCREENER_HOTKEY, None),
+                (_SCREENER_HOTKEY, None),
+                (_SCREENER_HOTKEY, None),
+                (_SCREENER_HOTKEY, now - timedelta(minutes=1)),
+                (enrolled_hotkey, None),
+            )
+        ):
+            agent_ids.append(
+                await _seed_agent(
+                    session_maker,
+                    status=AgentStatus.SCREENING,
+                    name=f"attributed-agent-{index}",
+                    sha256=f"{index:064x}",
+                )
+            )
+            await _seed_running_attempt(
+                session_maker,
+                agent_id=agent_ids[-1],
+                screener_hotkey=hotkey,
+                started_at=now - timedelta(minutes=5),
+                deadline=deadline,
+            )
+        async with session_maker() as session, session.begin():
+            for hotkey, instance_id, state, active_agent_id in (
+                (enrolled_hotkey, "enrolled-node", "screening", agent_ids[4]),
+                (_SCREENER_HOTKEY, "ditto-screener-fleet-busy", "screening", None),
+                (
+                    _SCREENER_HOTKEY,
+                    "ditto-screener-fleet-claimed",
+                    "polling",
+                    agent_ids[1],
+                ),
+                (_SCREENER_HOTKEY, "ditto-screener-fleet-idle", "polling", None),
+            ):
+                session.add(
+                    ScreenerHeartbeat(
+                        screener_hotkey=hotkey,
+                        instance_id=instance_id,
+                        software_version="0.21.0",
+                        protocol_version=4,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        state=state,
+                        active_agent_id=active_agent_id,
+                        first_seen_at=now - timedelta(days=1),
+                        reported_at=now - timedelta(seconds=5),
+                        seen_at=now - timedelta(seconds=5),
+                        signature="ab" * 64,
+                    )
+                )
+
+        response = await client.get(
+            "/api/v1/screener/controller/nodes?environment=prod",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        # Expired leases and enrolled-node leases are not legacy GCP work.
+        assert body["legacy_gcp_running_attempts"] == 3
+        nodes = {node["node_id"]: node for node in body["nodes"]}
+        assert nodes["enrolled-node"]["instance_busy"] is None
+        assert nodes["ditto-screener-fleet-busy"]["instance_busy"] is True
+        assert nodes["ditto-screener-fleet-claimed"]["instance_busy"] is True
+        assert nodes["ditto-screener-fleet-idle"]["instance_busy"] is False
+        # The shared hotkey still marks every legacy row as leased.
+        assert nodes["ditto-screener-fleet-idle"]["active_lease"] is True
+
     async def test_watchdog_leaves_operator_admission_closure_stopped(
         self,
         app: FastAPI,

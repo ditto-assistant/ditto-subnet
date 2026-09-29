@@ -2174,6 +2174,7 @@ async def update_screener_node_status(
 
 @router.get("/controller/nodes", response_model=ScreenerControllerNodesResponse)
 async def list_controller_nodes(
+    request: Request,
     _controller: ControllerDep,
     session: SessionDep,
     environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod",
@@ -2193,13 +2194,17 @@ async def list_controller_nodes(
         select(ScreenerHeartbeat).order_by(ScreenerHeartbeat.seen_at.desc())
     ):
         heartbeats.setdefault((row.screener_hotkey, row.instance_id), row)
-    active_hotkeys = set(
+    running_hotkeys = list(
         await session.scalars(
             select(ScreeningAttempt.screener_hotkey).where(
                 ScreeningAttempt.status == "running",
                 ScreeningAttempt.deadline > now,
             )
         )
+    )
+    active_hotkeys = set(running_hotkeys)
+    legacy_gcp_running_attempts = running_hotkeys.count(
+        request.app.state.config.screener_auth.hotkey
     )
     response: list[ScreenerControllerNodeState] = []
     enrolled_instance_ids = {node.node_id for node in nodes}
@@ -2265,9 +2270,16 @@ async def list_controller_nodes(
                 active_lease=heartbeat.screener_hotkey in active_hotkeys,
                 screening_concurrency=1,
                 heartbeat_seen_at=seen_at,
+                instance_busy=(
+                    heartbeat.state == "screening"
+                    or heartbeat.active_agent_id is not None
+                ),
             )
         )
-    return ScreenerControllerNodesResponse(nodes=tuple(response))
+    return ScreenerControllerNodesResponse(
+        nodes=tuple(response),
+        legacy_gcp_running_attempts=legacy_gcp_running_attempts,
+    )
 
 
 def _review_settings_checksum(settings: ScreenerReviewSettings) -> str:
