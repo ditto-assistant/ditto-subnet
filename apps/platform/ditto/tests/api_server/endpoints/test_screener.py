@@ -4365,14 +4365,23 @@ class TestClaim:
             ("stale", "wrong-provider", False, False),
             ("stale", "capped-zero", False, False),
             ("missing", "gcp-first", True, True),
+            ("fresh-zero", "gcp-first", False, False),
+            ("fresh-zero-mismatch", "gcp-first", False, False),
+            ("fresh-target", "gcp-first", True, False),
             ("missing", "gcp-first-closed", False, False),
             ("missing", "mixed-gcp-first", True, True),
             ("missing", "mixed-gcp-first-closed", False, False),
             ("stale", "gcp-first-unknown", False, False),
             ("unready", "gcp-first-no-admission", False, False),
             ("stale", "retired-open", True, True),
+            ("fresh-zero", "retired-open", False, False),
+            ("fresh-zero-mismatch", "retired-open", False, False),
+            ("fresh-target", "retired-open", True, False),
             ("stale", "retired-closed", False, False),
             ("stale", "retired-unknown", False, False),
+            ("missing", "mixed-retired-open", True, True),
+            ("stale", "mixed-retired-closed", False, False),
+            ("stale", "mixed-retired-unknown", False, False),
         ],
     )
     async def test_legacy_gcp_and_watchdog_share_fallback_admission(
@@ -4387,7 +4396,12 @@ class TestClaim:
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         now = datetime.now(UTC)
-        if policy not in ("unknown", "retired-unknown", "gcp-first-unknown"):
+        if policy not in (
+            "unknown",
+            "retired-unknown",
+            "gcp-first-unknown",
+            "mixed-retired-unknown",
+        ):
             await _seed_hetzner_primary(
                 session_maker,
                 screening_concurrency=0 if "closed" in policy else 2,
@@ -4412,7 +4426,7 @@ class TestClaim:
                 "gcp"
                 if policy.startswith(("gcp-first", "mixed-gcp-first"))
                 else "targon"
-                if policy.startswith("retired-")
+                if policy.startswith(("retired-", "mixed-retired"))
                 else "hetzner"
             )
             priorities = [provider] if provider == "gcp" else [provider, "gcp"]
@@ -4428,6 +4442,8 @@ class TestClaim:
                         "build_provider_priority": (
                             ["gcp", "hetzner"]
                             if policy.startswith("mixed-gcp-first")
+                            else ["targon", "gcp"]
+                            if policy.startswith("mixed-retired")
                             else priorities
                         ),
                         "gce_overflow_enabled": (

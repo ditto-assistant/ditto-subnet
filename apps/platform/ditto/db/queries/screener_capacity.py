@@ -50,10 +50,10 @@ async def screener_gcp_fallback_allowed(
         settings.runtime_provider_priority,
         settings.source_review_provider_priority,
     )
-    # The controller prioritizes GCE when any lane is GCP-first. Keep the
-    # watchdog and claim gates aligned even for mixed lane ordering.
+    # The controller prioritizes GCE when any lane is GCP-first or still names
+    # retired Targon first. Keep both gates aligned for mixed lane ordering.
     if (
-        not any(lane[0] == "gcp" for lane in lanes)
+        not any(lane[0] in ("gcp", "targon") for lane in lanes)
         and any(lane[0] == "hetzner" for lane in lanes)
         and (
             not settings.gce_overflow_enabled

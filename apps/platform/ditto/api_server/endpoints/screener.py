@@ -295,14 +295,6 @@ async def _legacy_gcp_claim_is_authorized(
         session, environment="prod", settings=settings
     ):
         return False
-    lanes = (
-        settings.build_provider_priority,
-        settings.runtime_provider_priority,
-        settings.source_review_provider_priority,
-    )
-    if all(lane[0] != "hetzner" for lane in lanes):
-        return True
-
     snapshot = await session.scalar(
         select(ScreenerCapacitySnapshot)
         .where(ScreenerCapacitySnapshot.environment == "prod")
