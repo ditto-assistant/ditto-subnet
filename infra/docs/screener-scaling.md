@@ -20,32 +20,32 @@ controller:
    below `max(min_backlog, screening_concurrency * backlog_multiplier)`;
 5. adds only residual GCE capacity above that threshold, or full bounded GCE
    capacity when the primary is not ready;
-6. scales GCE down only after GCE-owned leases finish.
+6. publishes the lower desired GCE target when demand falls, while deferring
+   physical deletion until existing leases finish and new claims can be fenced
+   throughout it.
 
-Scale-in re-reads the node inventory after the fenced renew and immediately
-before any GCE mutation, because a GCE worker may claim after the first read.
-Scaling to zero resizes only when `legacy_gcp_running_attempts` is zero and every
-running managed-group member has a fresh idle heartbeat. The renew has already
-published target zero, which
-blocks new legacy claims on a Hetzner-primary route when the snapshot is ready.
-A GCP-first route or unready snapshot cannot establish that fence, so zero-target
-scale-in defers there. Partial scale-in also defers:
-an idle heartbeat cannot stop that instance from claiming before deletion, and
-the shared legacy hotkey has no per-instance claim fence. The controller still
-checks attribution and current managed-group members before reporting that
-deferral. A deferral leaves the managed
-group unchanged but keeps publishing the lower target, so it never reopens
-claims that the renew withdrew. It records a `gce_scale_in_deferred` event with
-`GCE_SCALE_IN_DEFERRED` and is not a provider failure; the next pass retries.
+The scale-in planner re-reads the node inventory after the fenced renew because
+a GCE worker may claim after the first read.
+Scaling to zero checks that `legacy_gcp_running_attempts` is zero and every
+running managed-group member has a fresh idle heartbeat. Even after a clean
+reread, it defers deletion: the ready controller snapshot blocks new legacy
+claims only until its 180-second lease expires, while the physical GCE resize
+can still be in progress. Partial scale-in also defers because the shared
+legacy hotkey has no per-instance claim fence. A deferral leaves the managed
+group unchanged while publishing the lower desired target, which blocks new
+claims for a fresh, ready controller. After controller authority expires,
+current-policy emergency fallback can admit claims again; no deletion is in
+progress. It records a `gce_scale_in_deferred` event with
+`GCE_SCALE_IN_DEFERRED` and is not a provider failure. Physical excess capacity
+requires a durable claim fence or an operator-controlled drain.
 
 `SCREENING=0` (`screening_concurrency=0`) on the primary is an operator closure,
 not an outage: it is a global full stop recorded as
 `HETZNER_PRIMARY_ADMISSION_CLOSED`, and GCE does not overflow it regardless of
 backlog, `gce_overflow_enabled`, or the host's readiness and heartbeat, so a
 host health failure cannot reopen screening. Reopening needs a deliberate
-`screening_concurrency >= 1` activation on the primary. Explicit GCP-first
-provider routing is a separate operator decision, takes precedence, and is the
-only outage failover for a closed primary. A primary the controller cannot vouch
+`screening_concurrency >= 1` activation on the primary. GCP-first provider
+routing cannot bypass this stop. A primary the controller cannot vouch
 for -- a failed node-inventory read, an omitted primary row, or a row without
 its admission setting -- also fails closed (`HETZNER_PRIMARY_UNKNOWN`), so an
 inventory outage cannot bypass an operator stop. Only a primary known to be
@@ -161,7 +161,9 @@ After `subnet-screener-1` is converged, use Backroom to:
    build/smoke lanes without memory or disk pressure; raise to three only after
    measured sandbox-plus-review memory leaves safe host margin;
 7. exercise one controlled stale-heartbeat event and one above-threshold queue,
-   proving GCE claims new work, preserves active leases, and returns to zero;
+   proving GCE claims new work and preserves active leases; verify the desired
+   target returns to zero, then drain physical excess capacity under operator
+   control;
 8. drain retired nested-Docker Targon worker nodes. Do not re-enable them.
 
 The exact Debian, inventory, vault, Ansible, activation, verification, and drain

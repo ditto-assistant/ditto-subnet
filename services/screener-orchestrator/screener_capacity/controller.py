@@ -801,9 +801,10 @@ def _plan_gce_scale_in(
 
     Runs after the fenced renew. A GCE worker may have claimed since the first
     inventory read, so leases are read again here. At zero a ready,
-    Hetzner-primary route's renew withdrew overflow claims; a GCP-first route
-    or an unready snapshot cannot safely fence them. Partial scale-in also
-    waits for a per-instance claim fence, since an idle heartbeat is not one.
+    Hetzner-primary route's renew withdraws overflow claims only until its
+    watchdog lease expires. A GCP-first route or an unready snapshot cannot
+    fence them even temporarily. Both zero and partial scale-in therefore
+    wait for a claim fence that outlives the physical GCE mutation.
     """
     try:
         inventory = platform.node_inventory()
@@ -830,7 +831,11 @@ def _plan_gce_scale_in(
             for member in members
         ):
             return [], "instance_inventory_incomplete"
-        return [], None
+        # The controller lease is only 180 seconds. GCE resize and deletion
+        # may still be in progress when it expires, at which point Platform
+        # can admit a new legacy claim on a VM being removed. An idle reread
+        # and the current lease cannot prove deletion safe.
+        return [], "durable_claim_fence_unavailable"
     legacy = [row for row in rows.values() if row.get("instance_busy") is not None]
     busy = sum(row["instance_busy"] is True for row in legacy)
     if running is None or running > busy:
@@ -1098,10 +1103,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                     )
                 ),
             )
-            if scale_in_deferral is None and target == 0:
-                # Every instance is idle, so the group may pick any of them.
-                gce_fleet.resize(target)
-            elif scale_in_deferral is None:
+            if scale_in_deferral is None and target > 0:
                 gce_fleet.delete_instances(instances)
         except ControllerError:
             _record_provider_failure(

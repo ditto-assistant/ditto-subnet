@@ -29,8 +29,10 @@ After deploying Platform and the controller together, verify the safety net in
 staging or a controlled production window: with an open primary and backlog,
 stop controller reconciliation for longer than its 180-second lease, observe
 MIG scale-out, a GCE worker heartbeat and a successful legacy claim, then resume
-the controller and verify the target returns to zero. Unit tests do not prove
-worker bootstrap or this deployment drill.
+the controller and verify it withdraws the desired GCE target. Physical scale-in
+is deferred until claims can be fenced throughout deletion, so drain and remove
+excess instances under operator control. Unit tests do not prove worker bootstrap
+or this deployment drill.
 
 Release images are built on the trusted GitHub runner from the exact release
 commit, pushed under a SHA tag, and registered with Platform by digest. The
