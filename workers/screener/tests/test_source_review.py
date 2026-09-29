@@ -888,6 +888,70 @@ def test_oversized_file_is_surfaced_as_opaque(tmp_path: Path) -> None:
     )
 
 
+_STARTER_MODEL = "fixtures/models/cross-encoder.onnx"
+
+
+def _stock_starter_model() -> bytes:
+    kit = Path(__file__).resolve().parents[3] / "miners" / "dittobench-starter-kit"
+    return (kit / _STARTER_MODEL).read_bytes()
+
+
+def test_review_leads_account_for_exact_starter_model(tmp_path: Path) -> None:
+    model = _stock_starter_model()
+    repo = TarSourceRepository(str(_archive_with(tmp_path, {_STARTER_MODEL: model})))
+    leads = repo.review_leads()
+    assert leads["truncated"] is False
+    assert leads["nontext"] == [
+        {
+            "path": _STARTER_MODEL,
+            "bytes": len(model),
+            "sha256": hashlib.sha256(model).hexdigest(),
+            "provenance": "starter_manifest_digest",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("models/cross-encoder.onnx", "stock"),
+        (_STARTER_MODEL, "flipped"),
+        (_STARTER_MODEL, "nul-prefixed"),
+        ("assets/model.bin", "nul-prefixed"),
+        ("src/table.rs", "text"),
+    ],
+)
+def test_review_leads_keep_unproven_oversized_member_truncated(
+    tmp_path: Path, path: str, payload: str
+) -> None:
+    flipped = bytearray(_stock_starter_model())
+    flipped[-1] ^= 0x01
+    raw = {
+        "stock": _stock_starter_model(),
+        "flipped": bytes(flipped),
+        "nul-prefixed": b"\x00" + b"x" * (2 * 1024 * 1024),
+        "text": b"answer\n" + b"x" * (2 * 1024 * 1024),
+    }[payload]
+    leads = TarSourceRepository(
+        str(_archive_with(tmp_path, {path: raw}))
+    ).review_leads()
+    assert leads["truncated"] is True
+    assert leads["nontext"] == []
+
+
+def test_review_leads_need_installed_manifest_for_starter_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty = tmp_path / "no-manifests"
+    empty.mkdir()
+    monkeypatch.setattr(source_review_module, "_STARTER_MANIFEST_DIR", empty)
+    leads = TarSourceRepository(
+        str(_archive_with(tmp_path, {_STARTER_MODEL: _stock_starter_model()}))
+    ).review_leads()
+    assert leads["truncated"] is True
+    assert leads["nontext"] == []
+
+
 def test_utf8_only_crate_reports_no_opaque_blobs(tmp_path: Path) -> None:
     repo = TarSourceRepository(str(_archive_with(tmp_path, {})))
     inventory = json.loads(repo.inventory())

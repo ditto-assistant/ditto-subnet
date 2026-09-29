@@ -266,6 +266,14 @@ _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
 _OPAQUE_SIZE_LIMIT = 2 * 1024 * 1024
+# The starter kit compiles one committed model larger than the lead-scan limit
+# into its reference service. Only that exact path whose SHA-256 matches an
+# installed provenance manifest is accounted for instead of marking the lead
+# scan truncated, the same rule tools/l2_analyzer.py applies. Every other
+# oversized member, including an unrecognized binary, still truncates.
+_STARTER_MODEL_PATH = "fixtures/models/cross-encoder.onnx"
+_MAX_STARTER_MODEL_BYTES = 20 * 1024 * 1024
+_STARTER_MANIFEST_DIR = Path(__file__).parent / "data"
 _MAX_TOOL_OUTPUT_CHARS = 48_000
 _MAX_TOTAL_TOOL_CHARS = 8_000_000
 _MAX_READ_LINES = 400
@@ -2635,6 +2643,7 @@ class TarSourceRepository:
         files_scanned = 0
         members_considered = 0
         truncated = False
+        nontext: list[dict[str, object]] = []
         with tarfile.open(self._archive_path, mode="r:gz") as archive:
             # Runtime sources get the bounded scan budget before docs, tests,
             # and other decoys, while the latter remain available to the broad
@@ -2646,7 +2655,11 @@ class TarSourceRepository:
             for name in ordered_names:
                 member_info = self._members[name]
                 if member_info.size > _OPAQUE_SIZE_LIMIT:
-                    truncated = True
+                    model = self._published_starter_model(archive, name)
+                    if model is None:
+                        truncated = True
+                    else:
+                        nontext.append(model)
                     continue
                 if members_considered >= _MAX_LEAD_SCAN_FILES:
                     truncated = True
@@ -2698,7 +2711,35 @@ class TarSourceRepository:
             "files_scanned": files_scanned,
             "members_considered": members_considered,
             "bytes_scanned": bytes_scanned,
+            "nontext": nontext,
             "truncated": truncated,
+        }
+
+    def _published_starter_model(
+        self, archive: tarfile.TarFile, name: str
+    ) -> dict[str, object] | None:
+        """Account for an oversized member only as the exact starter model."""
+        member_info = self._members[name]
+        if name != _STARTER_MODEL_PATH or member_info.size > _MAX_STARTER_MODEL_BYTES:
+            return None
+        digests = _starter_model_digests()
+        if not digests:
+            return None
+        extracted = archive.extractfile(archive.getmember(member_info.archive_name))
+        if extracted is None:
+            return None
+        digest = hashlib.sha256()
+        hashed = 0
+        while chunk := extracted.read(1024 * 1024):
+            hashed += len(chunk)
+            digest.update(chunk)
+        if hashed != member_info.size or digest.hexdigest() not in digests:
+            return None
+        return {
+            "path": name,
+            "bytes": member_info.size,
+            "sha256": digest.hexdigest(),
+            "provenance": "starter_manifest_digest",
         }
 
     @staticmethod
@@ -4482,6 +4523,22 @@ def _bounded_json(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _starter_model_digests() -> set[str]:
+    """Starter-model SHA-256 values published by every installed manifest."""
+    digests: set[str] = set()
+    try:
+        for path in sorted(_STARTER_MANIFEST_DIR.glob("starter-kit-provenance-*.json")):
+            files = _load_provenance_manifest(path)["files"]
+            if isinstance(files, dict) and isinstance(
+                files.get(_STARTER_MODEL_PATH), str
+            ):
+                digests.add(files[_STARTER_MODEL_PATH])
+    except (OSError, ValueError):
+        # An unreadable manifest set proves nothing; keep the member truncated.
+        return set()
+    return digests
 
 
 def _load_provenance_manifest(path: Path) -> dict[str, object]:
