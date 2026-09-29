@@ -584,13 +584,23 @@ type ObservedToolCall struct {
 	Hop  int             `json:"hop,omitempty"`
 }
 
+// BlockedToolCall is an advisory harness record of a model-selected call
+// stopped before the tool endpoint. It is never part of the observed execution
+// trajectory or a substitute for the validator's authoritative relay ledger.
+type BlockedToolCall struct {
+	Name  string          `json:"name"`
+	Args  json.RawMessage `json:"args,omitempty"`
+	State string          `json:"state"`
+}
+
 // RunResponse is what the harness returns for a case.
 type RunResponse struct {
-	FinalText    string             `json:"final_text"`
-	ToolCalls    []ObservedToolCall `json:"tool_calls"`
-	PromptTokens int64              `json:"prompt_tokens"`
-	OutputTokens int64              `json:"output_tokens"`
-	LatencyMs    int64              `json:"latency_ms"`
+	FinalText        string             `json:"final_text"`
+	ToolCalls        []ObservedToolCall `json:"tool_calls"`
+	BlockedToolCalls []BlockedToolCall  `json:"blocked_tool_calls,omitempty"`
+	PromptTokens     int64              `json:"prompt_tokens"`
+	OutputTokens     int64              `json:"output_tokens"`
+	LatencyMs        int64              `json:"latency_ms"`
 	// Answer is the harness's OPTIONAL short answer slot: the bare value the
 	// FinalText prose asserts (a name, a number, a comma-separated list). The
 	// deterministic grader matches the slot when present and falls back to

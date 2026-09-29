@@ -113,6 +113,7 @@ struct ToolExecCtx {
     hop: AtomicI32,
     effect_receipts_v1: bool,
     pending_effects: Mutex<HashMap<(String, String), String>>,
+    blocked_tool_calls: Mutex<Vec<protocol::BlockedToolCall>>,
 }
 
 impl ToolExecCtx {
@@ -201,6 +202,14 @@ impl Tool for WireTool {
             // applied an effect. Reserve before sending so even concurrent
             // identical model emissions cannot duplicate an unknown effect.
             if !ctx.effect_receipts_v1 && !ctx.reserve_legacy_effect(&key) {
+                ctx.blocked_tool_calls
+                    .lock()
+                    .expect("blocked tool calls lock")
+                    .push(protocol::BlockedToolCall {
+                        name: self.def.name.clone(),
+                        args: args.clone(),
+                        state: "blocked_before_execution".to_string(),
+                    });
                 return Ok(
                     json!({"error": "tool effect delivery unknown; cannot safely repeat without a receipt"}),
                 );
@@ -403,6 +412,7 @@ mod tool_exec_tests {
             hop: AtomicI32::new(0),
             effect_receipts_v1: false,
             pending_effects: Mutex::new(HashMap::new()),
+            blocked_tool_calls: Mutex::new(Vec::new()),
         })
     }
 
@@ -573,6 +583,17 @@ mod tool_exec_tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].args, json!({"theme": "dark"}));
         assert_eq!(calls[1].args, json!({"theme": "light"}));
+        let blocked = tool
+            .exec
+            .as_ref()
+            .expect("execution context")
+            .blocked_tool_calls
+            .lock()
+            .expect("blocked calls lock");
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].name, "set_theme");
+        assert_eq!(blocked[0].args, json!({"theme": "dark"}));
+        assert_eq!(blocked[0].state, "blocked_before_execution");
     }
 
     #[tokio::test]
@@ -1069,6 +1090,7 @@ impl Baseline {
                 effect_receipts_v1: req.tool_effect_protocol.as_deref()
                     == Some(protocol::TOOL_EFFECT_PROTOCOL_V1),
                 pending_effects: Mutex::new(HashMap::new()),
+                blocked_tool_calls: Mutex::new(Vec::new()),
             })
         });
 
@@ -1227,6 +1249,15 @@ impl Baseline {
             answer: v13::answer_slot(&final_text, answer_slot),
             final_text,
             tool_calls,
+            blocked_tool_calls: exec_ctx
+                .as_ref()
+                .map(|ctx| {
+                    ctx.blocked_tool_calls
+                        .lock()
+                        .expect("blocked tool calls lock")
+                        .clone()
+                })
+                .unwrap_or_default(),
             prompt_tokens,
             output_tokens,
             latency_ms,

@@ -206,12 +206,24 @@ pub struct ObservedToolCall {
     pub hop: i32,
 }
 
+/// Advisory record of a model-selected call stopped before the tool endpoint.
+/// It cannot grant execution credit; the validator's endpoint ledger is authoritative.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct BlockedToolCall {
+    pub name: String,
+    pub args: Value,
+    pub state: String,
+}
+
 /// What the harness returns for a case (Go: `RunResponse`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub struct RunResponse {
     pub final_text: String,
     pub tool_calls: Vec<ObservedToolCall>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_tool_calls: Vec<BlockedToolCall>,
     pub prompt_tokens: i64,
     pub output_tokens: i64,
     pub latency_ms: i64,
@@ -468,6 +480,11 @@ mod tests {
                 args: serde_json::json!({"query": "x"}),
                 hop: 0,
             }],
+            blocked_tool_calls: vec![BlockedToolCall {
+                name: "set_theme".into(),
+                args: serde_json::json!({"theme": "dark"}),
+                state: "blocked_before_execution".into(),
+            }],
             prompt_tokens: 10,
             output_tokens: 5,
             latency_ms: 42,
@@ -483,5 +500,6 @@ mod tests {
                 .expect("deserialize response without optional slots");
         assert_eq!(without_optional_slots.answer, None);
         assert_eq!(without_optional_slots.abstain, None);
+        assert!(without_optional_slots.blocked_tool_calls.is_empty());
     }
 }
