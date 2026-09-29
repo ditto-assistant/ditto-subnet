@@ -65,8 +65,12 @@ unready revision 0 (`PROVIDER_ROUTING_UNAVAILABLE`) and preserves the current
 MIG size until an authoritative routing read succeeds; it neither adds
 capacity nor deletes workers on an unknown route. A cached revision also
 preserves the current MIG size for the full routing outage, including after
-the transient hold expires. Node-inventory failures still follow the normal
-rules after the hold: an unknown primary fails closed. The first successfully
+the transient hold expires. After that hold, a routing or node-inventory read
+failure marks the controller unready so the independent watchdog can use
+current Platform policy to supply an open primary's backlog. A closed or
+unknown primary keeps the watchdog at zero. Node-inventory failures still
+follow the normal controller rules after the hold: an unknown primary fails
+closed. The first successfully
 fenced failing pass records a
 `platform_inventory_unavailable` event and the expiry records
 `platform_inventory_hold_expired`. A failed pre-event read or first fenced

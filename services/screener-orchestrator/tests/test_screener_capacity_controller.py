@@ -1478,6 +1478,11 @@ class CapacityDecisionTests(unittest.TestCase):
             self.assertEqual(gce.resized, [])
             self.assertEqual(renewed[0]["gce_target"], 0)
             self.assertEqual(renewed[0]["fallback_reason"], "HETZNER_PRIMARY_UNKNOWN")
+            self.assertFalse(snapshot["provider_ready"])
+            self.assertEqual(
+                snapshot["last_provider_error_code"],
+                "PLATFORM_INVENTORY_UNAVAILABLE",
+            )
             self.assertIn(
                 {
                     "event_type": "platform_inventory_hold_expired",
@@ -1487,7 +1492,7 @@ class CapacityDecisionTests(unittest.TestCase):
                 renewed[0]["events"],
             )
 
-    def test_persistent_routing_failure_keeps_target_with_cached_revision_and_ready(  # noqa: E501
+    def test_persistent_routing_failure_holds_target_and_wakes_watchdog(  # noqa: E501
         self,
     ) -> None:
         with TemporaryDirectory() as directory:
@@ -1524,8 +1529,11 @@ class CapacityDecisionTests(unittest.TestCase):
                 snapshot["fallback_reason"], "PROVIDER_ROUTING_UNAVAILABLE"
             )
             self.assertEqual(snapshot["provider_settings_revision"], 7)
-            self.assertTrue(snapshot["provider_ready"])
-            self.assertIsNone(snapshot["last_provider_error_code"])
+            self.assertFalse(snapshot["provider_ready"])
+            self.assertEqual(
+                snapshot["last_provider_error_code"],
+                "PROVIDER_ROUTING_UNAVAILABLE",
+            )
 
             # A preexisting positive target is held after the read hold
             # expires; a stale route cannot add or delete physical capacity.

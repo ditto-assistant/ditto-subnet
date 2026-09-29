@@ -923,8 +923,13 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     provider_success_at: str | None = None
     provider_error_code: str | None = None
     provider_error_at: str | None = None
-    if not provider_routing_available and cached_routing is None:
+    if not provider_routing_available and (cached_routing is None or not holding):
         provider_error_code = "PROVIDER_ROUTING_UNAVAILABLE"
+        provider_error_at = datetime.now(UTC).isoformat()
+    elif not node_states_available and not holding:
+        # After the transient hold, let the policy-aware watchdog supply an
+        # open primary's backlog while this controller lacks safe inventory.
+        provider_error_code = "PLATFORM_INVENTORY_UNAVAILABLE"
         provider_error_at = datetime.now(UTC).isoformat()
     gce_fleet = GCEFleet(
         project=settings.gce_project,
