@@ -339,6 +339,15 @@ def test_unknown_container_contract_detail_stays_public_safe() -> None:
             "a limited time, then held for an operator retry.",
         ),
         (
+            "screener error: private policy infrastructure unavailable "
+            "SECRET_FROM_WORKER",
+            "source-review-adjudicator-key-unavailable",
+            "Source review could not start on the screening node before "
+            "screening completed. This is operator-owned and is retried "
+            "automatically with backoff for a limited time, then held for an "
+            "operator retry.",
+        ),
+        (
             "build failed: [timeout after 2700s]\nSECRET_FROM_BUILD",
             "docker-build-timeout",
             "Docker image build exceeded the 45-minute build time limit. "
@@ -13516,11 +13525,21 @@ class TestQuarantineReviewContext:
             "agentic-source-review-tripwire"
         ]
 
+    @pytest.mark.parametrize(
+        "reason_code",
+        [
+            "source-review-model-response-invalid",
+            # An archive the court could not open, or a build-only claim with no
+            # reviewer: only the node key failure has its own automatic code.
+            "source-review-unavailable",
+        ],
+    )
     async def test_retryable_infra_tells_the_miner_manual_retry_is_required(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        reason_code: str,
     ) -> None:
         """The legacy worker outcome must describe the fail-closed policy."""
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -13536,7 +13555,7 @@ class TestQuarantineReviewContext:
                 passed=False,
                 attempt_id=attempt_id,
                 outcome="retryable_infra",
-                reason_code="source-review-model-response-invalid",
+                reason_code=reason_code,
             ),
         )
 
@@ -13551,7 +13570,7 @@ class TestQuarantineReviewContext:
             )
             attempt = await session.get(ScreeningAttempt, attempt_id)
             assert attempt is not None
-            assert attempt.reason_code == "source-review-model-response-invalid"
+            assert attempt.reason_code == reason_code
 
     @pytest.mark.parametrize(
         ("reason_code", "detail"),
@@ -13564,6 +13583,10 @@ class TestQuarantineReviewContext:
                 "worker-claim-not-started",
                 "screener error: ClaimResponseInvalid: screening claim response "
                 "invalid: items.0.name: Field required",
+            ),
+            (
+                "source-review-adjudicator-key-unavailable",
+                "screener error: private policy infrastructure unavailable",
             ),
         ],
     )

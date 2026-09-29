@@ -1,8 +1,8 @@
-"""The infra-failure partial index follows the retried reason codes (#2444).
+"""The infra-failure partial index follows the retried reason codes (#2444, #2449).
 
-Upgrade must rebuild ``screening_attempts_infra_failed_idx`` over all three retried
-codes; downgrade must restore the prior two-code predicate. Each direction leaves a
-valid index and can run again from its own result.
+Each upgrade must rebuild ``screening_attempts_infra_failed_idx`` over every
+retried code; each downgrade must restore the prior predicate. Each direction
+leaves a valid index and can run again from its own result.
 """
 
 from __future__ import annotations
@@ -10,11 +10,29 @@ from __future__ import annotations
 import os
 import subprocess
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-_PARENT = "e0f28816bca9"
-_NEW_CODE = "l2-runtime-evidence-unavailable"
+from ditto.db.queries.screening_infra_retry import INFRA_AUTO_RETRY_REASON_CODES
+
+# (revision to downgrade to, the code the next revision added, the codes it kept)
+_WIDENINGS = (
+    (
+        "e0f28816bca9",
+        "l2-runtime-evidence-unavailable",
+        ("docker-build-infrastructure", "worker-claim-not-started"),
+    ),
+    (
+        "5e2a8c4f9d17",
+        "source-review-adjudicator-key-unavailable",
+        (
+            "docker-build-infrastructure",
+            "worker-claim-not-started",
+            "l2-runtime-evidence-unavailable",
+        ),
+    ),
+)
 
 
 def _alembic(*args: str) -> None:
@@ -41,23 +59,29 @@ async def _index(engine: AsyncEngine) -> tuple[bool, str]:
     return bool(row[0]), str(row[1])
 
 
-async def test_infra_failed_index_round_trip(engine: AsyncEngine) -> None:
+def _names(predicate: str, code: str) -> bool:
+    return f"'{code}'" in predicate
+
+
+@pytest.mark.parametrize(("parent", "new_code", "kept"), _WIDENINGS)
+async def test_infra_failed_index_round_trip(
+    engine: AsyncEngine, parent: str, new_code: str, kept: tuple[str, ...]
+) -> None:
     try:
         valid, predicate = await _index(engine)
         assert valid
-        assert _NEW_CODE in predicate and "worker-claim-not-started" in predicate
+        assert all(_names(predicate, code) for code in INFRA_AUTO_RETRY_REASON_CODES)
 
-        _alembic("downgrade", _PARENT)
+        _alembic("downgrade", parent)
         valid, predicate = await _index(engine)
         assert valid
-        assert _NEW_CODE not in predicate
-        assert "docker-build-infrastructure" in predicate
-        assert "worker-claim-not-started" in predicate
+        assert not _names(predicate, new_code)
+        assert all(_names(predicate, code) for code in kept)
 
         _alembic("upgrade", "head")
         valid, predicate = await _index(engine)
         assert valid
-        assert _NEW_CODE in predicate and "worker-claim-not-started" in predicate
+        assert all(_names(predicate, code) for code in INFRA_AUTO_RETRY_REASON_CODES)
     finally:
         # Keep this worker database usable even when an assertion above fails.
         _alembic("upgrade", "head")

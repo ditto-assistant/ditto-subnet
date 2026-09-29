@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -17,6 +18,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from ditto_screener.adjudicator import SourceReviewAdjudicator
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.errors import (
     PlatformAuthOnlyFailure,
@@ -34,6 +36,7 @@ from ditto_screener.l2_review import L2RunResult, L2Usage
 from ditto_screener.platform import PlatformClient
 from ditto_screener.policy import (
     CORE_ONLY_MANIFEST,
+    SOURCE_REVIEW_KEY_UNAVAILABLE_CODE,
     PolicyEngine,
     PolicyEvidence,
     ScreeningDecision,
@@ -1297,6 +1300,39 @@ async def test_worker_prefers_the_deciding_reason_in_signed_verdicts(
     if outcome != ScreeningOutcome.RETRYABLE_INFRA:
         assert request.evidence is not None
         assert request.evidence[-1].code == "module-cleared"
+
+
+async def test_group_readable_court_key_submits_the_fleet_retry_code(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Any
+) -> None:
+    """A 0644 key on a node parks nothing: Platform retries the exact code."""
+    key = tmp_path / "adjudicator.key"
+    key.write_text("sk-test-private-adjudicator")
+    os.chmod(key, 0o644)
+    adjudication = await SourceReviewAdjudicator(
+        api_key_file=str(key), base_url="https://openrouter.test/api/v1"
+    ).adjudicate(str(tmp_path / "never-opened.tar.gz"), notes=[])
+    observation = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-oserror",
+        failure_disposition="retryable_infra",
+        adjudication=adjudication.model_dump(mode="json"),
+    )
+    decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        observation
+    )
+    platform = _FakePlatform([])
+    worker = _worker(make_config(), platform, _FakeGate(decision))
+
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+
+    assert len(platform.verdicts) == 1
+    request = _signed_request(platform.verdicts[0])
+    assert request.outcome == ScreenResultOutcome.RETRYABLE_INFRA
+    assert request.reason_code == SOURCE_REVIEW_KEY_UNAVAILABLE_CODE
 
 
 async def test_shadow_seed_observation_keeps_quarantine_verdict_signed(

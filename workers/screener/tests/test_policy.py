@@ -10,10 +10,13 @@ from uuid import UUID
 
 import pytest
 
+from ditto_screener.adjudicator import ADJUDICATOR_KEY_UNAVAILABLE_CODE
 from ditto_screener.policy import (
+    _COURT_KEY_UNAVAILABLE,
     _ORACLE_SYSTEM_PROMPT,
     CORE_ONLY_MANIFEST,
     HELD_SOURCE_REVIEW_CODES,
+    SOURCE_REVIEW_KEY_UNAVAILABLE_CODE,
     AgenticSourceReviewModule,
     BehavioralChallengePackModule,
     BehavioralOracleModule,
@@ -1800,6 +1803,83 @@ def test_unavailable_court_is_retryable_infra_not_a_hold_or_admission() -> None:
     )
     assert decision.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert decision.evidence[0].code == "source-review-unavailable"
+
+
+def _court_could_not_start(escalation_code: str) -> dict[str, object]:
+    return {
+        "decision": "escalate",
+        "reason": "Automated adjudication could not start; held for retry",
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v3-policy-v12",
+        "notes_considered": 0,
+        "escalation_code": escalation_code,
+    }
+
+
+# Only the node's key failure carries the fleet-owned code Platform retries
+# automatically; an archive the court could not open stays operator-retried.
+_COURT_START_FAILURES = (
+    (ADJUDICATOR_KEY_UNAVAILABLE_CODE, SOURCE_REVIEW_KEY_UNAVAILABLE_CODE),
+    ("adjudicator-unavailable", "source-review-unavailable"),
+)
+
+
+def test_policy_spells_the_court_key_code_as_the_adjudicator_does() -> None:
+    assert _COURT_KEY_UNAVAILABLE == ADJUDICATOR_KEY_UNAVAILABLE_CODE
+
+
+@pytest.mark.parametrize(("escalation_code", "reason_code"), _COURT_START_FAILURES)
+def test_preexecution_court_start_failure_names_whose_fault_it_is(
+    escalation_code: str, reason_code: str
+) -> None:
+    observation = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-oserror",
+        failure_disposition="retryable_infra",
+        adjudication=_court_could_not_start(escalation_code),
+    )
+    decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        observation
+    )
+    assert decision.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert decision.reason_code == reason_code
+    assert [item.code for item in decision.evidence] == [reason_code]
+
+
+@pytest.mark.parametrize(("escalation_code", "reason_code"), _COURT_START_FAILURES)
+async def test_source_review_court_start_failure_names_whose_fault_it_is(
+    escalation_code: str, reason_code: str
+) -> None:
+    """The live 2026-09-27 hold: an upstream error, then a court with no key."""
+
+    async def challenge(*_):  # type: ignore[no-untyped-def]
+        raise AssertionError
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="source-review-inconsistent-verdict",
+            failure_disposition="retryable_infra",
+            adjudication=_court_could_not_start(escalation_code),
+        )
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="court-start-failure",
+            module_specs=({"kind": "agentic_source_review"},),
+        ),
+        (AgenticSourceReviewModule(module_id="private-source-review"),),
+    )
+    decision = await engine.evaluate(_context(challenge, review))
+    assert decision.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert decision.reason_code == reason_code
+    assert decision.evidence[0].code == reason_code
 
 
 @pytest.mark.parametrize(

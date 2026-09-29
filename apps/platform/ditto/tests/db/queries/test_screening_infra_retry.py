@@ -70,7 +70,10 @@ _LANE = "buildkit"
 # mid-screen (orphaned lease); the worker raises PlatformError on its own checks
 # of the gate's decision (Platform request failed); the L2 cache lock is keyed on
 # the artifact and held by another review of it, which may overrun its deadline;
-# reviewer and model failures (source-review retryable infra).
+# reviewer and model failures (source-review retryable infra). The generic
+# ``source-review-unavailable`` also stays: a court that could not open the
+# archive and a build-only claim with no reviewer both produce it; only the node
+# key failure has its own automatic code.
 _MANUAL_RETRY_CODES = (
     "l2-late-result",
     "lease-budget-exhausted",
@@ -85,6 +88,7 @@ _MANUAL_RETRY_CODES = (
     "worker-platform-request-failed",
     "l2-cache-lock-timeout",
     "source-review-model-timeout",
+    "source-review-unavailable",
 )
 
 
@@ -399,6 +403,28 @@ async def test_worker_claim_not_started_is_auto_retried_after_backoff(
         provider=None,
         lane=None,
         reason_code="worker-claim-not-started",
+    )
+
+    assert await _claim(session_maker, now=failed_at + delay - _SECOND) == []
+    assert await _claim(session_maker, now=failed_at + delay + _SECOND) == [agent_id]
+    assert await _running(session_maker) == [agent_id]
+
+
+async def test_node_court_key_failure_is_auto_retried_after_backoff(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A node's unusable source-review court key parks nothing for good (#2449)."""
+    now = datetime.now(UTC)
+    attempt_id = uuid4()
+    delay = infra_retry_delay(1, attempt_id)
+    failed_at = now - timedelta(minutes=30)
+    agent_id = await _failing_agent(
+        session_maker,
+        finished_at=failed_at,
+        attempt_id=attempt_id,
+        provider=None,
+        lane=None,
+        reason_code="source-review-adjudicator-key-unavailable",
     )
 
     assert await _claim(session_maker, now=failed_at + delay - _SECOND) == []
@@ -841,19 +867,29 @@ async def test_breaker_does_not_merge_unknown_or_different_lanes(
     assert len({d.signature for d in plan.decisions.values()}) == 3
 
 
+@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
 async def test_breaker_keys_on_reason_code_alone_without_metadata(
-    session_maker: async_sessionmaker[AsyncSession],
+    session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:
     now = datetime.now(UTC)
     at = now - timedelta(hours=1)
     for _ in range(BREAKER_DISTINCT_AGENTS):
-        await _failing_agent(session_maker, finished_at=at, provider=None, lane=None)
+        await _failing_agent(
+            session_maker,
+            finished_at=at,
+            provider=None,
+            lane=None,
+            reason_code=reason_code,
+        )
 
     plan = await _plan(session_maker, now=now)
 
     (breaker,) = plan.breakers.values()
     assert breaker.open
-    assert breaker.signature == (_CODE, None, None)
+    assert breaker.signature == (reason_code, None, None)
+    # Past the open window, the breaker still admits one probe at a time.
+    assert {decision.state for decision in plan.decisions.values()} == {"probe_due"}
+    assert len(await _claim(session_maker, now=now, limit=BREAKER_DISTINCT_AGENTS)) == 1
 
 
 async def test_breaker_needs_distinct_agents_inside_the_window(
@@ -919,15 +955,20 @@ async def test_operator_manual_retry_bypasses_and_can_close_the_breaker(
 # --- bounds on automatic retries -------------------------------------------
 
 
+@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
 async def test_long_parked_agent_is_not_retried_automatically(
-    session_maker: async_sessionmaker[AsyncSession],
+    session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:
     now = datetime.now(UTC)
     old = await _failing_agent(
-        session_maker, finished_at=now - INFRA_AUTO_RETRY_MAX_AGE - _SECOND
+        session_maker,
+        finished_at=now - INFRA_AUTO_RETRY_MAX_AGE - _SECOND,
+        reason_code=reason_code,
     )
     recent = await _failing_agent(
-        session_maker, finished_at=now - INFRA_AUTO_RETRY_MAX_AGE + timedelta(hours=1)
+        session_maker,
+        finished_at=now - INFRA_AUTO_RETRY_MAX_AGE + timedelta(hours=1),
+        reason_code=reason_code,
     )
 
     assert old not in (await _plan(session_maker, now=now)).decisions
@@ -978,7 +1019,10 @@ async def test_deploy_does_not_bulk_retry_a_parked_cohort(
 
 
 async def _capped_agent(
-    session_maker: async_sessionmaker[AsyncSession], *, now: datetime
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    now: datetime,
+    reason_code: str = _CODE,
 ) -> UUID:
     agent_id = await _seed_agent(session_maker)
     for index in range(INFRA_AUTO_RETRY_MAX_STREAK):
@@ -986,15 +1030,17 @@ async def _capped_agent(
             session_maker,
             agent_id,
             finished_at=now - timedelta(hours=6) + timedelta(minutes=30 * index),
+            reason_code=reason_code,
         )
     return agent_id
 
 
+@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
 async def test_streak_cap_hands_the_agent_to_the_operator_without_a_verdict(
-    session_maker: async_sessionmaker[AsyncSession],
+    session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:
     now = datetime.now(UTC)
-    agent_id = await _capped_agent(session_maker, now=now)
+    agent_id = await _capped_agent(session_maker, now=now, reason_code=reason_code)
 
     decision = (await _plan(session_maker, now=now)).decisions[agent_id]
     assert decision.streak == INFRA_AUTO_RETRY_MAX_STREAK
@@ -1021,11 +1067,12 @@ async def test_streak_cap_hands_the_agent_to_the_operator_without_a_verdict(
         assert statuses == {"failed"}
 
 
+@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
 async def test_operator_retry_lifts_the_streak_cap(
-    session_maker: async_sessionmaker[AsyncSession],
+    session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:
     now = datetime.now(UTC)
-    agent_id = await _capped_agent(session_maker, now=now)
+    agent_id = await _capped_agent(session_maker, now=now, reason_code=reason_code)
     async with session_maker() as session, session.begin():
         latest = await session.scalar(
             select(ScreeningAttempt.attempt_id)
@@ -1054,7 +1101,7 @@ async def test_operator_retry_lifts_the_streak_cap(
         agent_id,
         status="failed",
         at=now + timedelta(minutes=5),
-        reason_code=_CODE,
+        reason_code=reason_code,
     )
     # The streak started over, so the agent is auto-retried again, not capped.
     decision = (await _plan(session_maker, now=now + timedelta(minutes=6))).decisions[

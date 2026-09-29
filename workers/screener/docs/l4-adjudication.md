@@ -81,7 +81,7 @@ is cheap to check, and every check is mechanical:
 | `cited-unread-source` | a location this adjudicator was never served |
 | `inadmissible-citations` | only comments, imports, braces, or test paths |
 | `verdict-contract-failed` | no published basis from the closed vocabulary |
-| `adjudicator-failed` / `adjudicator-unavailable` | the run itself did not complete |
+| `adjudicator-failed` / `adjudicator-unavailable` / `adjudicator-key-unavailable` | the run itself did not complete (the last: no usable key file on the node) |
 
 `cited-unread-source` is the load-bearing one. The repository tools report the
 line numbers they serve, so the host reads the served locations back out of the
