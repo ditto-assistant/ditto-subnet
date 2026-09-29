@@ -961,7 +961,7 @@ class CapacityDecisionTests(unittest.TestCase):
             operations=operations,
         )
 
-        self.assertEqual(operations, ["renew", "fence", "inventory", "renew"])
+        self.assertEqual(operations, ["renew", "fence", "fence", "inventory", "renew"])
         self.assertEqual(gce.resized, [])
         self.assertEqual(gce.deleted_instances, [])
         # The fenced renew stopped new claims before the re-read, and the
@@ -1015,9 +1015,10 @@ class CapacityDecisionTests(unittest.TestCase):
             gce, runnable=2, first=idle, second=idle, operations=operations
         )
 
-        self.assertEqual(operations, ["renew", "fence", "inventory", "renew"])
+        self.assertEqual(operations, ["renew", "fence", "fence", "inventory", "renew"])
         self.assertEqual(gce.resized, [])
         self.assertEqual(gce.target(), 2)
+        self.assertEqual(gce.watchdogs, [True])
         self.assertEqual(snapshot["gce_target"], 0)
         self.assertEqual(
             [event["detail"] for event in snapshot["events"]],
@@ -1155,7 +1156,7 @@ class CapacityDecisionTests(unittest.TestCase):
         self.assertEqual(snapshot["gce_target"], 1)
         self.assertEqual(
             operations,
-            ["renew", "fence", "inventory", "renew"],
+            ["renew", "fence", "fence", "inventory", "renew"],
         )
         self.assertEqual(
             [event["detail"] for event in snapshot["events"]],

@@ -1051,7 +1051,9 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     state["inventory_failures"] = inventory_failures
     state["last_fallback_reason"] = reason
     _write_state(settings.state_file, state)
-    if target == current_target:
+    # Scale-in may defer indefinitely. Restore an autoscaler left OFF by an
+    # interrupted prior mutation even when the desired target is lower.
+    if target <= current_target:
         try:
             platform.fence(epoch=settings.epoch)
             gce_fleet.ensure_watchdog()
