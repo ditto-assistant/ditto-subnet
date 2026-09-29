@@ -1043,6 +1043,24 @@ async def _seed_screener_node(
         )
 
 
+async def _seed_hetzner_primary(
+    maker: async_sessionmaker[AsyncSession], *, screening_concurrency: int = 2
+) -> None:
+    await _seed_screener_node(
+        maker,
+        node_id="subnet-screener-1",
+        hotkey="5PrimaryHetznerHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        token="primary-hetzner-token-at-least-32-characters",
+        screening_concurrency=screening_concurrency,
+    )
+    async with maker() as session, session.begin():
+        await session.execute(
+            update(ScreenerNode)
+            .where(ScreenerNode.node_id == "subnet-screener-1")
+            .values(provider="hetzner")
+        )
+
+
 def _bounded_review_audit(
     *, steps_used: int = 6, reason_code: str = "source-review-inconclusive"
 ) -> ScreenReviewAudit:
@@ -4041,6 +4059,7 @@ class TestClaim:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         """The shared GCP principal must not outrun a healthy Hetzner primary."""
+        await _seed_hetzner_primary(session_maker)
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         now = datetime.now(UTC)
         async with session_maker() as session, session.begin():
@@ -4117,60 +4136,149 @@ class TestClaim:
         assert admitted.json()["items"][0]["agent_id"] == str(agent_id)
         assert "X-Ditto-Claim-Empty-Reason" not in admitted.headers
 
-    async def test_legacy_gcp_claim_fails_closed_after_controller_lease_expires(
+    @pytest.mark.parametrize(
+        ("controller", "policy", "admitted", "fallback"),
+        [
+            ("missing", "open", True, True),
+            ("stale", "open", True, True),
+            ("unready", "open", True, True),
+            ("fresh-zero", "open", False, False),
+            ("fresh-target", "open", True, False),
+            ("fresh-mismatch", "open", False, False),
+            ("stale", "disabled", False, False),
+            ("missing", "disabled", False, False),
+            ("unready", "disabled", False, False),
+            ("stale", "closed", False, False),
+            ("missing", "closed", False, False),
+            ("unready", "closed", False, False),
+            ("fresh-target", "closed", False, False),
+            ("stale", "unknown", False, False),
+            ("missing", "unknown", False, False),
+            ("unready", "unknown", False, False),
+            ("stale", "no-admission", False, False),
+            ("stale", "other-environment", False, False),
+            ("stale", "wrong-provider", False, False),
+            ("stale", "capped-zero", False, False),
+            ("missing", "gcp-first", True, True),
+            ("stale", "retired-open", True, True),
+            ("stale", "retired-closed", False, False),
+            ("stale", "retired-unknown", False, False),
+        ],
+    )
+    async def test_legacy_gcp_and_watchdog_share_fallback_admission(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        controller: str,
+        policy: str,
+        admitted: bool,
+        fallback: bool,
     ) -> None:
-        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         now = datetime.now(UTC)
+        if policy not in ("unknown", "retired-unknown"):
+            await _seed_hetzner_primary(
+                session_maker,
+                screening_concurrency=0 if "closed" in policy else 2,
+            )
         async with session_maker() as session, session.begin():
+            primary = await session.get(ScreenerNode, "subnet-screener-1")
+            if primary is not None:
+                # Loss of host readiness must not suppress fallback for a
+                # primary whose admission the operator has left open.
+                primary.status = "draining"
+                if policy == "other-environment":
+                    primary.environment = "dev"
+                if policy == "wrong-provider":
+                    primary.provider = "gcp"
+                if policy == "no-admission":
+                    channels = await session.scalar(
+                        select(ScreenerNodeChannelSettingsRevision)
+                    )
+                    assert channels is not None
+                    await session.delete(channels)
+            provider = (
+                "gcp"
+                if policy == "gcp-first"
+                else "targon"
+                if policy.startswith("retired-")
+                else "hetzner"
+            )
+            priorities = [provider] if provider == "gcp" else [provider, "gcp"]
             session.add(
                 ScreenerProviderSettingsRevision(
                     environment="prod",
                     parent_revision=0,
                     settings={
-                        "runtime_provider_priority": ["hetzner", "gcp"],
-                        "source_review_provider_priority": ["hetzner", "gcp"],
-                        "build_provider_priority": ["hetzner", "gcp"],
-                        "gce_overflow_enabled": True,
+                        "runtime_provider_priority": priorities,
+                        "source_review_provider_priority": priorities,
+                        "build_provider_priority": priorities,
+                        "gce_overflow_enabled": (
+                            policy != "disabled" and provider == "hetzner"
+                        ),
                         "primary_node_id": "subnet-screener-1",
+                        "gce_overflow_max_instances": (
+                            0 if policy == "capped-zero" else 6
+                        ),
                     },
-                    reason="Exercise stale GCP overflow fence",
+                    reason="Exercise shared GCP watchdog and claim admission",
                     actor="test",
                 )
             )
-            session.add(
-                ScreenerCapacitySnapshot(
-                    environment="prod",
-                    controller_epoch="prod:expired",
-                    controller_source_sha="a" * 40,
-                    provider_settings_revision=1,
-                    provider_ready=True,
-                    controller_heartbeat_at=now - timedelta(minutes=4),
-                    controller_lease_expires_at=now - timedelta(seconds=1),
-                    runnable_backlog=1,
-                    active_leases=0,
-                    desired_slots=1,
-                    global_cap=6,
-                    targon_capability="nogo",
-                    targon_available=0,
-                    targon_healthy=0,
-                    targon_pending=0,
-                    targon_draining=0,
-                    gce_target=1,
-                    gce_healthy=1,
-                    gce_pending=0,
-                    gce_draining=0,
+            if controller != "missing":
+                payload = _capacity_payload("prod:test")
+                payload.pop("events")
+                session.add(
+                    ScreenerCapacitySnapshot(
+                        **{
+                            **payload,
+                            # Stale/unready recovery does not depend on the
+                            # obsolete target or provider revision.
+                            "provider_settings_revision": (
+                                1 if controller in ("fresh-zero", "fresh-target") else 0
+                            ),
+                            "provider_ready": controller != "unready",
+                            "controller_heartbeat_at": now,
+                            "controller_lease_expires_at": now
+                            + timedelta(seconds=-1 if controller == "stale" else 180),
+                            "gce_target": (
+                                1
+                                if controller in ("fresh-target", "fresh-mismatch")
+                                else 0
+                            ),
+                        }
+                    )
                 )
-            )
         _install_db(app, session_maker)
+        watchdog = await client.get(
+            "/api/v1/public/screener-capacity-watchdog?environment=prod"
+        )
+        assert watchdog.status_code == 200, watchdog.text
+        assert watchdog.json()["activate_fallback"] is fallback
+        assert watchdog.json()["reason"] == {
+            "missing": "controller_missing",
+            "stale": "controller_stale",
+            "unready": "provider_not_ready",
+        }.get(controller, "controller_fresh")
+        assert watchdog.json()["controller_stale"] is (
+            controller in ("missing", "stale")
+        )
+        assert watchdog.headers["Cache-Control"] == "no-store"
 
         response = await client.post(_CLAIM_URL)
 
         assert response.status_code == 200, response.text
-        assert response.json()["items"] == []
+        if admitted:
+            assert response.json()["items"][0]["agent_id"] == str(agent_id)
+            assert "X-Ditto-Claim-Empty-Reason" not in response.headers
+        else:
+            assert response.json()["items"] == []
+            assert response.headers["X-Ditto-Claim-Empty-Reason"] == "legacy_gcp_held"
+            async with session_maker() as session:
+                agent = await session.get(Agent, agent_id)
+                assert agent is not None
+                assert agent.status == AgentStatus.UPLOADED
 
     async def test_zero_admission_is_a_full_stop_for_automatic_retries(
         self,

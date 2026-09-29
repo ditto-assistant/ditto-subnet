@@ -508,25 +508,20 @@ class GCEFleet:
             mode,
         )
 
-    def ensure_watchdog(self, *, enabled: bool) -> None:
-        """Align the raw-queue watchdog with the controller's bounded target.
+    def ensure_watchdog(self) -> None:
+        """Keep the independent safety net ready, including at zero capacity.
 
-        The Google autoscaler sees only queue depth; it cannot prove that the
-        primary Hetzner node is ready or apply the overflow threshold.  It must
-        therefore stay off while this controller has selected zero GCE slots.
+        The metric publishes zero while Platform's watchdog suppresses fallback.
+        ONLY_SCALE_OUT cannot delete workers or race the controller's scale-in.
         """
-        desired_mode = self.WATCHDOG_MODE if enabled else "OFF"
-        if self._autoscaler_mode() != desired_mode:
-            self._set_autoscaler_mode("only-scale-out" if enabled else "off")
+        if self._autoscaler_mode() != self.WATCHDOG_MODE:
+            self._set_autoscaler_mode("only-scale-out")
 
-    def resize(self, target: int, *, watchdog_enabled: bool) -> None:
+    def resize(self, target: int) -> None:
         # Compute rejects manual resize while any autoscaler mode is active,
         # including ONLY_SCALE_OUT. Keep the emergency policy configured, pause
-        # it only around the fenced mutation. Restore it only when the bounded
-        # controller target is nonzero; otherwise the raw queue-depth signal
-        # would immediately recreate GCE workers that Hetzner is meant to
-        # handle.
-        resize_error: ControllerError | None = None
+        # it only around the fenced mutation and always restore it, even at
+        # zero capacity or after failure. Platform's watchdog gates the metric.
         try:
             self._set_autoscaler_mode("off")
             self._run(
@@ -540,16 +535,13 @@ class GCEFleet:
                 "--size",
                 str(target),
             )
-        except ControllerError as error:
-            resize_error = error
-        try:
-            self._set_autoscaler_mode("only-scale-out" if watchdog_enabled else "off")
-        except ControllerError as restore_error:
-            raise ControllerError(
-                "GCE autoscaler watchdog restore failed"
-            ) from restore_error
-        if resize_error is not None:
-            raise resize_error
+        finally:
+            try:
+                self._set_autoscaler_mode("only-scale-out")
+            except ControllerError as restore_error:
+                raise ControllerError(
+                    "GCE autoscaler watchdog restore failed"
+                ) from restore_error
 
 
 class GCPBootstrapTokenMinter:
@@ -848,11 +840,10 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     state = _load_state(settings.state_file)
     state["last_fallback_reason"] = reason
     _write_state(settings.state_file, state)
-    watchdog_enabled = target > 0
     if target == current_target:
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.ensure_watchdog(enabled=watchdog_enabled)
+            gce_fleet.ensure_watchdog()
         except ControllerError:
             _record_provider_failure(
                 platform,
@@ -866,7 +857,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         # Bring fallback capacity up before any later reconciliation work.
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.resize(target, watchdog_enabled=watchdog_enabled)
+            gce_fleet.resize(target)
             current_target = target
         except ControllerError:
             _record_provider_failure(
@@ -882,7 +873,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         # fallen to zero because desired_slots includes every active lease.
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.resize(target, watchdog_enabled=watchdog_enabled)
+            gce_fleet.resize(target)
         except ControllerError:
             _record_provider_failure(
                 platform,

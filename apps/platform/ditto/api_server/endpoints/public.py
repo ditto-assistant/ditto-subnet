@@ -425,6 +425,13 @@ from ditto.db.queries.scores import (
     v9_confirmation_policy_mode,
     v9_confirmation_public_projections,
 )
+from ditto.db.queries.screener_capacity import (
+    screener_fallback_active,
+    screener_gcp_fallback_allowed,
+)
+from ditto.db.queries.screener_provider_settings import (
+    resolve_screener_provider_settings,
+)
 from ditto.db.queries.screening import (
     LEASE_EXPIRED_REASON_CODE,
     PROVIDER_BACKOFF_REASON_CODES,
@@ -6853,40 +6860,34 @@ async def screener_capacity_watchdog(
     session: SessionDep,
     environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod",
 ) -> PublicScreenerWatchdogResponse:
-    """Tell the GCP-only watchdog whether the normal writer lease is stale."""
+    """Publish controller health and policy-gated GCP safety-net activation.
+
+    The reason describes controller health; current operator routing and
+    primary admission can suppress activation even while the controller is
+    missing, stale or unready.
+    """
     response.headers["Cache-Control"] = "no-store"
     now = datetime.now(UTC)
     snapshot = await session.get(ScreenerCapacitySnapshot, environment)
-    if snapshot is None:
-        return PublicScreenerWatchdogResponse(
-            generated_at=now,
-            controller_stale=True,
-            activate_fallback=True,
-            reason="controller_missing",
-            controller_epoch=None,
-            controller_source_sha=None,
-            provider_ready=False,
+    activate_fallback, reason = screener_fallback_active(snapshot, now)
+    stale = reason in ("controller_missing", "controller_stale")
+    if activate_fallback:
+        _, settings = await resolve_screener_provider_settings(
+            session, environment=environment
         )
-    expiry = snapshot.controller_lease_expires_at
-    if expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=UTC)
-    stale = now >= expiry
-    activate_fallback = stale or not snapshot.provider_ready
-    reason: Literal["controller_fresh", "controller_stale", "provider_not_ready"]
-    if stale:
-        reason = "controller_stale"
-    elif not snapshot.provider_ready:
-        reason = "provider_not_ready"
-    else:
-        reason = "controller_fresh"
+        activate_fallback = await screener_gcp_fallback_allowed(
+            session, environment=environment, settings=settings
+        )
     return PublicScreenerWatchdogResponse(
         generated_at=now,
         controller_stale=stale,
         activate_fallback=activate_fallback,
         reason=reason,
-        controller_epoch=snapshot.controller_epoch,
-        controller_source_sha=snapshot.controller_source_sha,
-        provider_ready=snapshot.provider_ready and not stale,
+        controller_epoch=snapshot.controller_epoch if snapshot is not None else None,
+        controller_source_sha=(
+            snapshot.controller_source_sha if snapshot is not None else None
+        ),
+        provider_ready=snapshot is not None and snapshot.provider_ready and not stale,
     )
 
 
