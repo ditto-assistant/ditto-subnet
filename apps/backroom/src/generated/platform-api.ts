@@ -29168,14 +29168,14 @@ export interface components {
         };
         /**
          * ScoredRuntimeEnvEvidence
-         * @description Version-bound keys reported by a descriptor-verified scorer.
+         * @description Keys reported by a descriptor-verified scorer for its V13 sandbox.
          */
         ScoredRuntimeEnvEvidence: {
             /**
              * Bench Version
-             * @enum {integer}
+             * @constant
              */
-            bench_version: 13 | 14;
+            bench_version: 13;
             /** Injected Keys */
             injected_keys: string[];
             /**
@@ -29255,7 +29255,7 @@ export interface components {
             status: "fresh_verified" | "legacy_v2" | "unreachable" | "identity_mismatch";
             /** Supported Bench Versions */
             supported_bench_versions: number[];
-            v14_scored_runtime_env?: components["schemas"]["ScoredRuntimeEnvEvidence"] | null;
+            v14_scored_runtime_env?: components["schemas"]["V14ScoredRuntimeEnvEvidence"] | null;
             v7_calibration?: components["schemas"]["V7InferenceCalibration"] | null;
         };
         /**
@@ -33667,6 +33667,32 @@ export interface components {
             packet: components["schemas"]["V13ScorerPacket"] | null;
             /** Paused */
             paused: boolean;
+        };
+        /**
+         * V14ScoredRuntimeEnvEvidence
+         * @description Keys reported by a descriptor-verified scorer for its v14 sandbox.
+         *
+         *     A separate type pins each capability slot to its version, so neither the
+         *     model nor the published schema accepts one version's packet in the other's
+         *     slot.
+         */
+        V14ScoredRuntimeEnvEvidence: {
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 14;
+            /** Injected Keys */
+            injected_keys: string[];
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "scorer-injected-env-only";
+            /** Sha256 */
+            sha256: string;
+            /** Source Revision */
+            source_revision: string;
         };
         /** V7InferenceCalibration */
         V7InferenceCalibration: {

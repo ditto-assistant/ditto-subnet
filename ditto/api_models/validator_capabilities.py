@@ -145,12 +145,12 @@ class V7InferenceCalibration(BaseModel):
         return self
 
 
-class ScoredRuntimeEnvEvidence(BaseModel):
-    """Version-bound keys reported by a descriptor-verified scorer."""
+class _ScoredRuntimeEnvEvidenceBase(BaseModel):
+    """Digest-bound scorer environment keys; each subclass pins one version."""
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
-    bench_version: Literal[13, 14]
+    bench_version: int
     scope: Literal["scorer-injected-env-only"]
     source_revision: Annotated[str, Field(pattern=_REVISION_PATTERN)]
     injected_keys: Annotated[
@@ -162,7 +162,7 @@ class ScoredRuntimeEnvEvidence(BaseModel):
     sha256: Annotated[str, Field(pattern=_SHA256_PATTERN)]
 
     @model_validator(mode="after")
-    def digest_matches_keys(self) -> ScoredRuntimeEnvEvidence:
+    def digest_matches_keys(self) -> _ScoredRuntimeEnvEvidenceBase:
         if (
             not self.injected_keys
             or tuple(sorted(set(self.injected_keys))) != self.injected_keys
@@ -181,6 +181,23 @@ class ScoredRuntimeEnvEvidence(BaseModel):
         return self
 
 
+class ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
+    """Keys reported by a descriptor-verified scorer for its V13 sandbox."""
+
+    bench_version: Literal[13]
+
+
+class V14ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
+    """Keys reported by a descriptor-verified scorer for its v14 sandbox.
+
+    A separate type pins each capability slot to its version, so neither the
+    model nor the published schema accepts one version's packet in the other's
+    slot.
+    """
+
+    bench_version: Literal[14]
+
+
 class ScorerBenchmarkCapability(BaseModel):
     """Identity-bound benchmark support observed from the scorer sidecar."""
 
@@ -194,7 +211,7 @@ class ScorerBenchmarkCapability(BaseModel):
     scored_runtime_env: ScoredRuntimeEnvEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
-    v14_scored_runtime_env: ScoredRuntimeEnvEvidence | None = Field(
+    v14_scored_runtime_env: V14ScoredRuntimeEnvEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     v7_calibration: V7InferenceCalibration | None = None
@@ -213,7 +230,6 @@ class ScorerBenchmarkCapability(BaseModel):
         if self.scored_runtime_env is not None and (
             self.status != "fresh_verified"
             or 13 not in versions
-            or self.scored_runtime_env.bench_version != 13
             or self.source_revision != self.scored_runtime_env.source_revision
         ):
             raise ValueError(
@@ -222,7 +238,6 @@ class ScorerBenchmarkCapability(BaseModel):
         if self.v14_scored_runtime_env is not None and (
             self.status != "fresh_verified"
             or 14 not in versions
-            or self.v14_scored_runtime_env.bench_version != 14
             or self.source_revision != self.v14_scored_runtime_env.source_revision
         ):
             raise ValueError("v14 runtime environment requires verified v14 identity")

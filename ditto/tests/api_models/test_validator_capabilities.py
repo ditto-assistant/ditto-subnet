@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -212,6 +213,43 @@ def test_deterministic_v13_capability_preserves_old_signatures_and_is_strict() -
             legacy
             | {"supported_bench_versions": (12,), "deterministic_v13_datasets": True}
         )
+
+
+def _runtime_env_packet(version: int) -> dict[str, object]:
+    keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
+    material = f"scored-runtime-env-v1\n{version}\n{_REVISION}\n" + "\n".join(keys)
+    return {
+        "bench_version": version,
+        "scope": "scorer-injected-env-only",
+        "source_revision": _REVISION,
+        "injected_keys": keys,
+        "sha256": hashlib.sha256(material.encode()).hexdigest(),
+    }
+
+
+def test_runtime_env_slots_are_pinned_to_their_benchmark_version() -> None:
+    """Each slot takes only its own version, in the model and in the schema."""
+    base = {
+        "status": "fresh_verified",
+        "supported_bench_versions": (13, 14),
+        "observed_at": 1,
+        "software_version": "1.2.3",
+        "source_revision": _REVISION,
+    }
+    slots = {"scored_runtime_env": 13, "v14_scored_runtime_env": 14}
+    schema = ScorerBenchmarkCapability.model_json_schema()
+    for slot, version in slots.items():
+        accepted = ScorerBenchmarkCapability.model_validate(
+            base | {slot: _runtime_env_packet(version)}
+        )
+        assert getattr(accepted, slot).bench_version == version
+        (other,) = set(slots.values()) - {version}
+        with pytest.raises(ValidationError):
+            ScorerBenchmarkCapability.model_validate(
+                base | {slot: _runtime_env_packet(other)}
+            )
+        ref = schema["properties"][slot]["anyOf"][0]["$ref"].rsplit("/", 1)[-1]
+        assert schema["$defs"][ref]["properties"]["bench_version"]["const"] == version
 
 
 def test_heartbeat_protocol_v7_requires_both_typed_identity_sections() -> None:

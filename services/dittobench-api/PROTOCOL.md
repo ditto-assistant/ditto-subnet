@@ -20,8 +20,10 @@ The generator identity is v14; the harness wire stays 9. Score gates, trusted
 efficiency, and LongMem/confirmation retain their prior contracts and postures.
 Capabilities add optional `v14_scored_runtime_env`, whose digest includes version
 14 and the binary source revision. The existing `scored_runtime_env` packet
-continues to describe version 13 with identical canonical bytes. Platform
-requires the v14 packet for v14 fleet readiness. No scorer image or version is
+continues to describe version 13 with identical canonical bytes. Each slot's
+schema pins its own `bench_version`, so a validator ignores a packet placed in
+the other version's slot. Platform requires the v14 packet for v14 fleet
+readiness and v14 canary issuance. No scorer image or version is
 activated by capability advertisement. See
 [the rollout plan](../../docs/benchmark-v14-rollout.md).
 

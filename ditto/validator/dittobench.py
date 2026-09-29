@@ -41,6 +41,7 @@ from ditto.api_models.validator_capabilities import (
     ScorerLivenessProbe,
     ScorerProbeOutcome,
     ScorerProbeReason,
+    V14ScoredRuntimeEnvEvidence,
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_confirmation import (
@@ -1114,6 +1115,8 @@ class DittobenchClient:
         scored_runtime_env = None
         if 13 in observed_versions and payload.get("scored_runtime_env") is not None:
             try:
+                # The v13 type pins bench_version, so a v14 packet in this
+                # legacy slot is invalid and ignored like any other bad packet.
                 candidate = ScoredRuntimeEnvEvidence.model_validate(
                     payload["scored_runtime_env"]
                 )
@@ -1129,14 +1132,11 @@ class DittobenchClient:
             and payload.get("v14_scored_runtime_env") is not None
         ):
             try:
-                candidate = ScoredRuntimeEnvEvidence.model_validate(
+                v14_candidate = V14ScoredRuntimeEnvEvidence.model_validate(
                     payload["v14_scored_runtime_env"]
                 )
-                if (
-                    candidate.bench_version == 14
-                    and candidate.source_revision == source_revision
-                ):
-                    v14_scored_runtime_env = candidate
+                if v14_candidate.source_revision == source_revision:
+                    v14_scored_runtime_env = v14_candidate
             except ValueError:
                 pass
         try:
