@@ -2510,7 +2510,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'register_canonical_starter_fixture',
     {
       title: 'Register canonical starter source fixture',
-      description: 'Stage only the packaged v0.325.3 public source bytes. No miner row, score or admission change. Requires backroom:write and confirmation.',
+      description: 'Stage only the packaged v0.330.0 public source bytes. No miner row, score or admission change. Requires backroom:write and confirmation.',
       inputSchema: registerCanonicalStarterInputSchema,
       annotations: toolAnnotations('write', true),
     },

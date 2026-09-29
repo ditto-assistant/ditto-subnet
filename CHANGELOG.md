@@ -2,6 +2,53 @@
 
 <!-- version list -->
 
+## v0.330.0 (2026-09-29)
+
+### Bug Fixes
+
+- **screener**: Check v13 lease freshness at claim receipt
+  ([#2526](https://github.com/ditto-assistant/ditto-subnet/pull/2526),
+  [`9c702f9`](https://github.com/ditto-assistant/ditto-subnet/commit/9c702f928255c2e2609eb6a60af4b5e77a2a8791))
+
+- **screener**: Classify L1 lease expiry during a model turn
+  ([#2518](https://github.com/ditto-assistant/ditto-subnet/pull/2518),
+  [`8199987`](https://github.com/ditto-assistant/ditto-subnet/commit/81999872f67d5835bed0c5ce17e5dbde82935162))
+
+- **screener**: Keep lease budgets live and start court clock at court start
+  ([#2521](https://github.com/ditto-assistant/ditto-subnet/pull/2521),
+  [`7b73bf5`](https://github.com/ditto-assistant/ditto-subnet/commit/7b73bf5083aed56ad065dcd79a5778d95c22a0b4))
+
+- **screener**: Preserve deciding reasons in signed verdicts
+  ([#2511](https://github.com/ditto-assistant/ditto-subnet/pull/2511),
+  [`1a759f1`](https://github.com/ditto-assistant/ditto-subnet/commit/1a759f1da71f3c9c7289b5538ba5395dbcc180ef))
+
+- **screener**: Prune fleet release artifacts safely
+  ([#2519](https://github.com/ditto-assistant/ditto-subnet/pull/2519),
+  [`5a43fd2`](https://github.com/ditto-assistant/ditto-subnet/commit/5a43fd23a6a89c420ea42ef37235de3e5dd69f37))
+
+- **screener**: Recover rejected verdicts and auth-only failures
+  ([#2523](https://github.com/ditto-assistant/ditto-subnet/pull/2523),
+  [`f4d79ba`](https://github.com/ditto-assistant/ditto-subnet/commit/f4d79baf6af9a9981ec52fddea894a4b8ea17f89))
+
+- **screener**: Settle durably claimed attempts
+  ([#2524](https://github.com/ditto-assistant/ditto-subnet/pull/2524),
+  [`298432f`](https://github.com/ditto-assistant/ditto-subnet/commit/298432fb84ceca094f84c7704b8d1ad63730119c))
+
+- **upload**: Expire signed upload requests after five minutes
+  ([#2353](https://github.com/ditto-assistant/ditto-subnet/pull/2353),
+  [`3e6e051`](https://github.com/ditto-assistant/ditto-subnet/commit/3e6e0514857e6ca2c97574c9db19b0e1f01ca474))
+
+### Features
+
+- **miner**: Bind uncertain tool retries across model turns
+  ([#2535](https://github.com/ditto-assistant/ditto-subnet/pull/2535),
+  [`575cd31`](https://github.com/ditto-assistant/ditto-subnet/commit/575cd317754db24b96009204ad73a7ac36b1c9aa))
+
+- **miner**: Consume opt-in tool effect receipts
+  ([#2534](https://github.com/ditto-assistant/ditto-subnet/pull/2534),
+  [`e2fe86a`](https://github.com/ditto-assistant/ditto-subnet/commit/e2fe86a8b152a9e2ca962e016b108ed091475e5a))
+
+
 ## v0.329.1 (2026-09-29)
 
 ### Bug Fixes
