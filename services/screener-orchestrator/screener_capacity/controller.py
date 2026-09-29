@@ -248,6 +248,90 @@ def _json_request(
         raise ControllerError("Platform returned invalid JSON") from error
 
 
+def _parse_provider_routing(body: object) -> ProviderRouting:
+    """Validate a provider-settings body from Platform or the state cache."""
+    if not isinstance(body, dict):
+        raise ControllerError("Platform provider settings response is invalid")
+    revision = body.get("revision")
+    values = body.get("settings")
+    if not isinstance(revision, int) or revision < 0 or not isinstance(values, dict):
+        raise ControllerError("Platform provider settings response is invalid")
+
+    def priority(
+        field: str,
+    ) -> tuple[Literal["hetzner", "targon", "gcp"], ...]:
+        raw = values.get(field)
+        if (
+            not isinstance(raw, list)
+            or not raw
+            or not all(
+                isinstance(item, str) and item in {"hetzner", "targon", "gcp"}
+                for item in raw
+            )
+            or len(raw) != len(set(raw))
+            or "gcp" not in raw
+        ):
+            raise ControllerError("Platform provider priority is invalid")
+        return cast(tuple[Literal["hetzner", "targon", "gcp"], ...], tuple(raw))
+
+    try:
+        overflow = OverflowPolicy(
+            enabled=bool(values["gce_overflow_enabled"]),
+            primary_node_id=(
+                str(values["primary_node_id"])
+                if values.get("primary_node_id") is not None
+                else None
+            ),
+            backlog_multiplier=int(values["gce_overflow_backlog_multiplier"]),
+            min_backlog=int(values["gce_overflow_min_backlog"]),
+            max_instances=int(values["gce_overflow_max_instances"]),
+        )
+    except (KeyError, TypeError, ValueError, OverflowError) as error:
+        raise ControllerError("Platform overflow settings are invalid") from error
+    if (
+        not 2 <= overflow.backlog_multiplier <= 20
+        or not 1 <= overflow.min_backlog <= 1000
+        or not 0 <= overflow.max_instances <= 32
+        or (overflow.enabled and not overflow.primary_node_id)
+    ):
+        raise ControllerError("Platform overflow settings are invalid")
+
+    return ProviderRouting(
+        revision=revision,
+        runtime_provider_priority=priority("runtime_provider_priority"),
+        source_review_provider_priority=priority("source_review_provider_priority"),
+        build_provider_priority=priority("build_provider_priority"),
+        overflow=overflow,
+    )
+
+
+def _routing_to_state(routing: ProviderRouting) -> dict[str, Any]:
+    """Serialize a routing revision in the Platform provider-settings shape."""
+    return {
+        "revision": routing.revision,
+        "settings": {
+            "runtime_provider_priority": list(routing.runtime_provider_priority),
+            "source_review_provider_priority": list(
+                routing.source_review_provider_priority
+            ),
+            "build_provider_priority": list(routing.build_provider_priority),
+            "gce_overflow_enabled": routing.overflow.enabled,
+            "primary_node_id": routing.overflow.primary_node_id,
+            "gce_overflow_backlog_multiplier": routing.overflow.backlog_multiplier,
+            "gce_overflow_min_backlog": routing.overflow.min_backlog,
+            "gce_overflow_max_instances": routing.overflow.max_instances,
+        },
+    }
+
+
+def _routing_from_state(value: object) -> ProviderRouting | None:
+    """Rebuild the cached routing, or None when it is missing or malformed."""
+    try:
+        return _parse_provider_routing(value)
+    except ControllerError:
+        return None
+
+
 class PlatformControl:
     def __init__(self, *, base_url: str, token: str, environment: str) -> None:
         self._base = base_url.rstrip("/")
@@ -282,65 +366,13 @@ class PlatformControl:
         return body
 
     def provider_routing(self) -> ProviderRouting:
-        body = _json_request(
-            "GET",
-            f"{self._base}/api/v1/screener/controller/provider-settings"
-            f"?environment={self.environment}",
-            token=self._token,
-        )
-        if not isinstance(body, dict):
-            raise ControllerError("Platform provider settings response is invalid")
-        revision = body.get("revision")
-        values = body.get("settings")
-        if (
-            not isinstance(revision, int)
-            or revision < 0
-            or not isinstance(values, dict)
-        ):
-            raise ControllerError("Platform provider settings response is invalid")
-
-        def priority(
-            field: str,
-        ) -> tuple[Literal["hetzner", "targon", "gcp"], ...]:
-            raw = values.get(field)
-            if (
-                not isinstance(raw, list)
-                or not raw
-                or not all(item in {"hetzner", "targon", "gcp"} for item in raw)
-                or len(raw) != len(set(raw))
-                or "gcp" not in raw
-            ):
-                raise ControllerError("Platform provider priority is invalid")
-            return cast(tuple[Literal["hetzner", "targon", "gcp"], ...], tuple(raw))
-
-        try:
-            overflow = OverflowPolicy(
-                enabled=bool(values["gce_overflow_enabled"]),
-                primary_node_id=(
-                    str(values["primary_node_id"])
-                    if values.get("primary_node_id") is not None
-                    else None
-                ),
-                backlog_multiplier=int(values["gce_overflow_backlog_multiplier"]),
-                min_backlog=int(values["gce_overflow_min_backlog"]),
-                max_instances=int(values["gce_overflow_max_instances"]),
+        return _parse_provider_routing(
+            _json_request(
+                "GET",
+                f"{self._base}/api/v1/screener/controller/provider-settings"
+                f"?environment={self.environment}",
+                token=self._token,
             )
-        except (KeyError, TypeError, ValueError) as error:
-            raise ControllerError("Platform overflow settings are invalid") from error
-        if (
-            not 2 <= overflow.backlog_multiplier <= 20
-            or not 1 <= overflow.min_backlog <= 1000
-            or not 0 <= overflow.max_instances <= 32
-            or (overflow.enabled and not overflow.primary_node_id)
-        ):
-            raise ControllerError("Platform overflow settings are invalid")
-
-        return ProviderRouting(
-            revision=revision,
-            runtime_provider_priority=priority("runtime_provider_priority"),
-            source_review_provider_priority=priority("source_review_provider_priority"),
-            build_provider_priority=priority("build_provider_priority"),
-            overflow=overflow,
         )
 
     def fence(self, *, epoch: str) -> None:
@@ -638,6 +670,9 @@ class Settings:
     gce_impersonate_service_account: str | None
     lock_file: Path
     dry_run: bool
+    # Consecutive passes that keep the GCE target while a Platform routing or
+    # node-inventory read fails, so a Platform deploy cannot flap the MIG.
+    inventory_failure_hold_passes: int = 4
 
 
 def _snapshot(
@@ -723,7 +758,9 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     demand = platform.demand(
         jobs_per_slot=settings.jobs_per_slot, cap=settings.global_cap
     )
+    state = _load_state(settings.state_file)
     provider_routing_available = True
+    cached_routing: ProviderRouting | None = None
     try:
         provider_routing = platform.provider_routing()
     except ControllerError:
@@ -731,7 +768,8 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         # admission is open. Keep existing capacity while recording the failure;
         # the policy-aware metric may activate fallback independently.
         provider_routing_available = False
-        provider_routing = ProviderRouting(
+        cached_routing = _routing_from_state(state.get("last_good_provider_routing"))
+        provider_routing = cached_routing or ProviderRouting(
             revision=0,
             runtime_provider_priority=("hetzner", "gcp"),
             source_review_provider_priority=("hetzner", "gcp"),
@@ -748,10 +786,36 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     except ControllerError:
         node_states_available = False
         node_states = {}
+    failed_reads = [
+        name
+        for name, available in (
+            ("routing", provider_routing_available),
+            ("nodes", node_states_available),
+        )
+        if not available
+    ]
+    prior_failures = state.get("inventory_failures")
+    if (
+        not isinstance(prior_failures, int)
+        or isinstance(prior_failures, bool)
+        or prior_failures < 0
+    ):
+        prior_failures = 0
+    inventory_failures = prior_failures + 1 if failed_reads else 0
+    holding = bool(failed_reads) and (
+        inventory_failures <= settings.inventory_failure_hold_passes
+    )
+    if not settings.dry_run:
+        # Keep the last good routing even if a later provider read fails. The
+        # failure count advances only once the first fenced renew delivers its
+        # transition events.
+        if provider_routing_available:
+            state["last_good_provider_routing"] = _routing_to_state(provider_routing)
+        _write_state(settings.state_file, state)
     provider_success_at: str | None = None
     provider_error_code: str | None = None
     provider_error_at: str | None = None
-    if not provider_routing_available:
+    if not provider_routing_available and cached_routing is None:
         provider_error_code = "PROVIDER_ROUTING_UNAVAILABLE"
         provider_error_at = datetime.now(UTC).isoformat()
     gce_fleet = GCEFleet(
@@ -774,6 +838,8 @@ def reconcile(settings: Settings) -> dict[str, Any]:
             global_cap=settings.global_cap,
         )
     else:
+        # A cached revision can retain claim compatibility, but cannot
+        # authorize a physical resize without a fresh policy read.
         target, reason = current_target, "PROVIDER_ROUTING_UNAVAILABLE"
     gce_has_active_lease = any(
         node.get("provider") == "gcp" and node.get("active_lease") is True
@@ -787,6 +853,13 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         # attempts belongs to GCE. Keep current capacity until the authoritative
         # inventory returns instead of guessing during scale-in.
         target = current_target
+    if holding:
+        # A Platform deploy or transient read failure must not flap the MIG in
+        # either direction. The hold never adds capacity, so a primary closure
+        # already observed keeps GCE at zero; once the hold expires an unknown
+        # primary fails closed as usual.
+        target = current_target
+        reason = "PLATFORM_INVENTORY_UNAVAILABLE"
     events: list[dict[str, Any]] = []
     if target != current_target:
         events.append(
@@ -794,6 +867,27 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 "event_type": "gce_target_changed",
                 "provider": "gcp",
                 "detail": f"GCE target {current_target} -> {target}",
+            }
+        )
+    failed_detail = f"{' and '.join(failed_reads)} read"
+    if inventory_failures == 1:
+        events.append(
+            {
+                "event_type": "platform_inventory_unavailable",
+                "provider": "gcp",
+                "detail": f"{failed_detail} failed"
+                + (f"; holding GCE target {current_target}" if holding else ""),
+            }
+        )
+    hold_passes = settings.inventory_failure_hold_passes
+    if hold_passes > 0 and inventory_failures == hold_passes + 1:
+        events.append(
+            {
+                "event_type": "platform_inventory_hold_expired",
+                "provider": "gcp",
+                "detail": (
+                    f"{failed_detail} still failing after {hold_passes} held passes"
+                ),
             }
         )
     last_reason = _load_state(settings.state_file).get("last_fallback_reason")
@@ -836,6 +930,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     # The renewed snapshot delivered any reason-change event; record the
     # reason now so a later failed mutation cannot repeat the transition.
     state = _load_state(settings.state_file)
+    state["inventory_failures"] = inventory_failures
     state["last_fallback_reason"] = reason
     _write_state(settings.state_file, state)
     if target == current_target:
@@ -884,6 +979,8 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     provider_ready = provider_error_code is None
     completed = {
         **snapshot,
+        # The fenced first renew already delivered this pass's events.
+        "events": [],
         "provider_ready": provider_ready,
         "last_provider_error_code": (None if provider_ready else provider_error_code),
         "last_provider_error_at": None if provider_ready else provider_error_at,
@@ -917,7 +1014,15 @@ def _settings(args: argparse.Namespace) -> Settings:
         gce_impersonate_service_account=args.gce_impersonate_service_account,
         lock_file=Path(args.lock_file),
         dry_run=args.dry_run,
+        inventory_failure_hold_passes=args.inventory_failure_hold_passes,
     )
+
+
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be at least 0")
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -928,6 +1033,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--global-cap", type=int, default=6)
     parser.add_argument("--jobs-per-slot", type=int, default=6)
     parser.add_argument("--interval-seconds", type=int, default=30)
+    parser.add_argument(
+        "--inventory-failure-hold-passes", type=_non_negative_int, default=4
+    )
     parser.add_argument(
         "--state-file", default="/var/lib/ditto-screener-capacity/state.json"
     )

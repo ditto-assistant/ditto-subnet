@@ -38,6 +38,24 @@ revision that still names the retired Targon provider first honors the same
 closed and unknown stops; its GCE fallback (`RETIRED_PROVIDER_ROUTING`) applies
 only to a primary known to be open.
 
+A Platform deploy or transient 5xx on the routing or node-inventory read must
+not flap the GCE MIG. The controller holds the current GCE target, in both
+directions, for `--inventory-failure-hold-passes` consecutive failing passes
+(default 4, about two minutes) and reports `PLATFORM_INVENTORY_UNAVAILABLE`. The
+hold never adds capacity. A routing read failure reuses the last good revision
+cached in the controller state file, so running GCE workers still match the
+Platform claim check. Without a cached revision, the controller publishes an
+unready revision 0 (`PROVIDER_ROUTING_UNAVAILABLE`) and preserves the current
+MIG size until an authoritative routing read succeeds; it neither adds
+capacity nor deletes workers on an unknown route. A cached revision also
+preserves the current MIG size for the full routing outage, including after
+the transient hold expires. Node-inventory failures still follow the normal
+rules after the hold: an unknown primary fails closed. The first successfully
+fenced failing pass records a
+`platform_inventory_unavailable` event and the expiry records
+`platform_inventory_hold_expired`. A failed pre-event read or first fenced
+renew leaves the transition pending for the next pass.
+
 Production uses `['hetzner', 'gcp']` for build, runtime smoke, and source review.
 The second entry means that separate GCE workers may claim still-unclaimed
 submissions when the capacity policy activates them. It does not mean a failed

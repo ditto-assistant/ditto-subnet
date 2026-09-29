@@ -11,7 +11,10 @@ private capacity VM. It reads the current provider-routing revision and node
 health, calculates the GCE target, acquires a fenced controller lease, and
 changes only that target. If a stored routing revision still selects the
 retired provider, it routes demand through GCE until an operator updates the
-revision. New routing writes cannot select that provider.
+revision. New routing writes cannot select that provider. A failed routing or
+node read holds the current target for a bounded number of passes instead of
+flapping the MIG; see
+[`infra/docs/screener-scaling.md`](../../infra/docs/screener-scaling.md).
 
 The GCE autoscaler stays in `ONLY_SCALE_OUT`, including at a zero target. The
 controller pauses it only for a fenced manual resize and restores it even if
