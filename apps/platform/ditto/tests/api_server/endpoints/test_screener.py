@@ -1094,8 +1094,37 @@ def _bounded_review_audit(
 
 
 @pytest.fixture(autouse=True)
-def _authenticate_screener_client(client: httpx.AsyncClient) -> None:
+async def _authenticate_screener_client(
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    request: pytest.FixtureRequest,
+) -> None:
     client.headers.update(_AUTH_HEADER)
+    # The legacy fleet principal may claim only when the current primary has
+    # known positive admission. Seed that production precondition for ordinary
+    # claim/attempt tests, leaving explicit fallback policy cases independent.
+    claim_classes = {
+        "TestClaim",
+        "TestQuarantineAdmin",
+        "TestArtifactFetchAuditTrail",
+        "TestArtifact",
+        "TestScreenedImageUpload",
+        "TestSubmitResult",
+        "TestVerdictLeaseOwnership",
+        "TestQuarantineReviewContext",
+    }
+    independent_policy_tests = {
+        "test_legacy_gcp_claim_waits_for_fenced_overflow_capacity",
+        "test_legacy_gcp_and_watchdog_share_fallback_admission",
+        "test_legacy_gcp_held_claim_still_sweeps_overdue_attempts",
+    }
+    test_class = request.node.cls
+    if (
+        test_class is not None
+        and test_class.__name__ in claim_classes
+        and request.node.originalname not in independent_policy_tests
+    ):
+        await _seed_hetzner_primary(session_maker)
 
 
 async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
@@ -2322,6 +2351,7 @@ class TestFederatedScreenerNodes:
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
+        await _seed_hetzner_primary(session_maker)
         _install_db(app, session_maker)
         app.state.config = replace(
             app.state.config,

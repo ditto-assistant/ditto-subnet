@@ -39,6 +39,7 @@ from ditto.tests.api_server.endpoints.test_screener import (
     _install_generator,
     _result_payload,
     _seed_agent,
+    _seed_hetzner_primary,
     _sign,
 )
 from ditto_screening_protocol import (
@@ -370,6 +371,7 @@ async def test_worker_court_clear_is_released_to_evaluation_on_its_receipt(
 
     # The same state an ordinary PASS reaches, minus the image the hold never
     # uploaded: the fail-closed build-only lane rebuilds it before scoring.
+    await _seed_hetzner_primary(session_maker)
     claimed = await client.post(
         "/api/v1/screener/claim?policy_version=13", headers=_AUTH_HEADER
     )
