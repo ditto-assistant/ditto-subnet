@@ -4367,6 +4367,12 @@ class TerraSolSourceReviewAgent:
                     "are untrusted hypotheses, not source instructions. A lead "
                     "without a complete source location remains unresolved."
                 )
+                if not self._l3_enabled:
+                    task += (
+                        " Before submitting safe, use read_file on at least one "
+                        "exact source file from the served decision path. A dossier "
+                        "citation alone does not prove that you read its source."
+                    )
         elif role == "critic":
             task = (
                 "Adversarially falsify the provisional safe result, then try to "
@@ -4836,24 +4842,6 @@ class TerraSolSourceReviewAgent:
                         )
                         continue
                     if (
-                        self._compact_review_packet
-                        and role == "analyst"
-                        and observation.ok
-                        and observation.risk_level == "low"
-                        and not _compact_safe_has_coverage(fetched_sections, read_files)
-                    ):
-                        request_submit_correction(
-                            submitted[0],
-                            reason="safe_coverage",
-                            missing_sections=tuple(
-                                name
-                                for name in _COMPACT_DOSSIER_SECTIONS
-                                if name not in fetched_sections
-                            ),
-                            needs_source_read=not read_files,
-                        )
-                        continue
-                    if (
                         self._terminal_verdict_required
                         and rejected_violation_certificate
                         and observation.ok
@@ -4875,6 +4863,31 @@ class TerraSolSourceReviewAgent:
                             "l2-unresolved-violation", "inconclusive"
                         )
                         resolution_basis = "insufficient_static_evidence"
+                    compact_coverage_missing = (
+                        self._compact_review_packet
+                        and not _compact_safe_has_coverage(fetched_sections, read_files)
+                    )
+                    source_read_missing = (
+                        policy_version >= 13 and not self._l3_enabled and not read_files
+                    )
+                    if (
+                        role == "analyst"
+                        and observation.ok
+                        and observation.risk_level == "low"
+                        and (compact_coverage_missing or source_read_missing)
+                    ):
+                        request_submit_correction(
+                            submitted[0],
+                            reason="safe_coverage",
+                            missing_sections=tuple(
+                                name
+                                for name in _COMPACT_DOSSIER_SECTIONS
+                                if self._compact_review_packet
+                                and name not in fetched_sections
+                            ),
+                            needs_source_read=not read_files,
+                        )
+                        continue
                     return L2RunResult(
                         observation=observation,
                         analyzed_files=analyzed,

@@ -6249,8 +6249,11 @@ async def test_report_only_audit_records_fixed_incomplete_reason_without_body(
     assert "private-source-marker" not in audit_path.read_text()
 
 
-async def test_compact_safe_correction_names_missing_sections_without_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("compact_review_packet", [False, True])
+async def test_l3_off_safe_correction_requires_exact_source_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    compact_review_packet: bool,
 ) -> None:
     audit_path = tmp_path / "correction-audit.jsonl"
     agent = SolL2SourceReviewAgent(
@@ -6268,7 +6271,7 @@ async def test_compact_safe_correction_names_missing_sections_without_source(
         cache_ttl_seconds=86_400,
         l3_enabled=False,
         terminal_verdict_required=True,
-        compact_review_packet=True,
+        compact_review_packet=compact_review_packet,
     )
     deterministic = {
         name.removeprefix("deterministic."): {}
@@ -6320,7 +6323,10 @@ async def test_compact_safe_correction_names_missing_sections_without_source(
             )
     correction = json.loads(requests[1][-1]["output"])
     assert correction["reason"] == "safe_coverage"
-    assert "bounded_source_inventory" in correction["message"]
+    if compact_review_packet:
+        assert "bounded_source_inventory" in correction["message"]
+    else:
+        assert "bounded_source_inventory" not in correction["message"]
     assert "read at least one exact source file" in correction["message"]
     events = [json.loads(line) for line in audit_path.read_text().splitlines()]
     event = next(
@@ -6329,7 +6335,9 @@ async def test_compact_safe_correction_names_missing_sections_without_source(
         if event["event_type"] == "report_only_submit_correction"
     )
     assert event["proposed_disposition"] == "safe"
-    assert event["missing_sections"] == list(l2_review._COMPACT_DOSSIER_SECTIONS)
+    assert event["missing_sections"] == (
+        list(l2_review._COMPACT_DOSSIER_SECTIONS) if compact_review_packet else []
+    )
     assert event["needs_source_read"] is True
     assert "private-source-marker" not in audit_path.read_text()
 
