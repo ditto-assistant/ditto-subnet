@@ -3,8 +3,8 @@
 ``clear`` would record a terminal certification and ``reject`` would record a
 violation. This route records ``withdraw`` instead: the opening rationale is
 retracted, the pre-hold score and rank presentation returns, and reward
-eligibility stays on the terminal exact-artifact gate. While that gate is
-unavailable the withdrawal fails closed on emissions.
+eligibility uses the canonical exact-artifact policy and fleet compatibility gate.
+A withdrawal does not certify a terminal clear.
 
 The preview token binds the operator, the review, the artifact guards, the
 public correction reason, and the board and emission effect. Execute re-reads
@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 import secrets
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
@@ -32,13 +33,13 @@ from ditto.api_models.admin_ath_hold_withdrawal import (
     AdminAthHoldWithdrawalPreviewRequest,
     AdminAthHoldWithdrawalPreviewResponse,
 )
+from ditto.api_models.emission_eligibility import AgentEmissionEligibility
 from ditto.api_server.ath_hold_withdrawal import (
     WITHDRAW_CONFIRMATION,
-    WithdrawalRewardDecision,
     is_manual_precautionary_hold,
-    withdrawal_reward_decision,
 )
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.emission_eligibility import classify, effective_policy
 from ditto.api_server.endpoints.admin_ath_rulings import (
     _crown_effect,
     read_board_snapshot,
@@ -52,7 +53,9 @@ from ditto.api_server.endpoints.admin_quarantine import (
     BATCH_PREVIEW_TTL,
     require_admin,
 )
+from ditto.api_server.endpoints.scoring import resolve_ledger_context
 from ditto.db.models import AgentStatus, AthReview, AthReviewAction, Score
+from ditto.db.queries.emission_eligibility import load_review_postures
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -151,7 +154,8 @@ async def _guarded_hold(
     payload: AdminAthHoldWithdrawalPreviewRequest,
     *,
     lock: bool,
-) -> tuple[AthReview, Any, int, str | None, WithdrawalRewardDecision]:
+    request: Request,
+) -> tuple[AthReview, Any, int, str | None, AgentEmissionEligibility]:
     """Re-read the hold and refuse any guard that no longer matches."""
     row = await _get_review(session, agent_id, lock=lock)
     if row is None:
@@ -188,9 +192,25 @@ async def _guarded_hold(
             status_code=409, detail="agent hold reason no longer matches review"
         )
     previous = await _previous_status(session, review)
-    decision = withdrawal_reward_decision(
+    now = datetime.now(UTC)
+    context = await resolve_ledger_context(request.app.state, session, now=now)
+    policy = effective_policy(
+        context.policy.reward_eligibility,
+        fleet_ready=context.reward_eligibility_fleet_ready,
+    )
+    postures = await load_review_postures(session, [agent.agent_id])
+    decision = classify(
         agent_id=agent.agent_id,
         artifact_sha256=agent.sha256,
+        bench_version=context.active_bench_version,
+        posture=replace(
+            postures[agent.agent_id],
+            review_status="resolved",
+            review_resolution="withdraw",
+            review_resolved_at=now,
+        ),
+        policy=policy,
+        now=now,
     )
     return review, agent, score_count, previous, decision
 
@@ -220,7 +240,7 @@ async def preview_ath_hold_withdrawal(
 ) -> AdminAthHoldWithdrawalPreviewResponse:
     actor = _require_actor(x_admin_actor)
     review, agent, score_count, previous, decision = await _guarded_hold(
-        session, agent_id, payload, lock=False
+        session, agent_id, payload, lock=False, request=request
     )
     board, after, would_change_crown = await _board_effect(session, request, agent)
     restored = _restored_status(previous)
@@ -244,7 +264,10 @@ async def preview_ath_hold_withdrawal(
         "would_change_crown": would_change_crown,
         "would_change_emission_crown": would_change_emission_crown,
         "emission_reward_eligible": decision.reward_eligible,
-        "emission_gate": decision.gate,
+        "emission_gate": decision.enforcement,
+        "eligibility_revision": decision.policy_revision,
+        "eligibility_checksum": decision.policy_checksum,
+        "eligibility_state": decision.state,
     }
     return AdminAthHoldWithdrawalPreviewResponse(
         agent_id=agent.agent_id,
@@ -257,9 +280,12 @@ async def preview_ath_hold_withdrawal(
         board_after=after.projection_model(),
         would_change_crown=would_change_crown,
         emission_reward_eligible=decision.reward_eligible,
-        emission_gate=decision.gate,
+        emission_gate=decision.enforcement,
         would_change_emission_crown=would_change_emission_crown,
-        emission_reason=decision.reason,
+        emission_reason=(
+            "Hold withdrawn without a misconduct finding or completed "
+            "certification. " + decision.reason
+        ),
         preview_token=_sign_preview(secret, token_payload, issued_at),
         expires_at=datetime.fromtimestamp(issued_at, UTC) + BATCH_PREVIEW_TTL,
     )
@@ -303,7 +329,7 @@ async def execute_ath_hold_withdrawal(
         )
     async with session.begin():
         review, agent, score_count, previous, decision = await _guarded_hold(
-            session, agent_id, payload, lock=True
+            session, agent_id, payload, lock=True, request=request
         )
         board, after, would_change_crown = await _board_effect(session, request, agent)
         restored = _restored_status(previous)
@@ -317,7 +343,10 @@ async def execute_ath_hold_withdrawal(
             or token.get("would_change_emission_crown") != would_change_emission_crown
             or token.get("restored_status") != restored
             or token.get("emission_reward_eligible") != decision.reward_eligible
-            or token.get("emission_gate") != decision.gate
+            or token.get("emission_gate") != decision.enforcement
+            or token.get("eligibility_revision") != decision.policy_revision
+            or token.get("eligibility_checksum") != decision.policy_checksum
+            or token.get("eligibility_state") != decision.state
         ):
             raise HTTPException(status_code=409, detail="board changed; preview again")
         now = datetime.now(UTC)
@@ -339,7 +368,10 @@ async def execute_ath_hold_withdrawal(
                     "sha256": agent.sha256,
                     "score_count": score_count,
                     "agent_status": payload.expected_agent_status,
-                    "emission_gate": decision.gate,
+                    "emission_gate": decision.enforcement,
+                    "eligibility_revision": decision.policy_revision,
+                    "eligibility_checksum": decision.policy_checksum,
+                    "eligibility_state": decision.state,
                     "emission_reward_eligible": decision.reward_eligible,
                 },
                 created_at=now,
@@ -361,6 +393,9 @@ async def execute_ath_hold_withdrawal(
         agent_status=agent.status.value,
         restored_status=restored,
         emission_reward_eligible=decision.reward_eligible,
-        emission_gate=decision.gate,
-        emission_reason=decision.reason,
+        emission_gate=decision.enforcement,
+        emission_reason=(
+            "Hold withdrawn without a misconduct finding or completed "
+            "certification. " + decision.reason
+        ),
     )

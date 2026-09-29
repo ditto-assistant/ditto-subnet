@@ -158,8 +158,9 @@ class EmissionEligibilitySettings(BaseModel):
 
     require_terminal_review: bool = True
     """Withhold while a review for this exact artifact is still open
-    (``ath_reviews.status = 'pending'``, including a stranded hold whose
-    ``agents.status`` has moved back to ``scored``)."""
+    (``ath_reviews.status = 'pending'`` or a resolved ``withdraw`` without
+    terminal certification, including a stranded hold whose ``agents.status``
+    has moved back to ``scored``)."""
 
     exclude_inconclusive: bool = True
     """Withhold on an inconclusive automated review. A budget outcome is not a

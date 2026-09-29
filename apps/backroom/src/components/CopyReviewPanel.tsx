@@ -276,7 +276,7 @@ export function CopyReviewPanel({
         },
       })
       setNotice(
-        `${result.review.agent_name} hold was withdrawn without a clearance or rejection. Emissions stay closed.`,
+        `${result.review.agent_name} hold was withdrawn without a clearance or rejection. ${result.emission_reward_eligible ? "Rewards follow the current policy." : "Rewards remain withheld by the current policy."}`,
       )
       setReason('')
       setWithdrawalPreview(null)
@@ -816,7 +816,7 @@ export function CopyReviewPanel({
                 <label className="flex items-center gap-2"><input type="radio" name="copy-review-resolution" checked={resolution === 'withdraw'} onChange={() => setResolution('withdraw')} />Withdraw hold</label>
               </div>
               {resolution === 'withdraw' ? (
-                <p className="text-xs text-[var(--muted)]">Withdraws an unsupported manual precautionary hold. This is not a clearance and does not grant emissions.</p>
+                <p className="text-xs text-[var(--muted)]">Withdraws an unsupported manual precautionary hold. This is not a clearance. Rewards follow the current emission policy; review the preview before confirming.</p>
               ) : null}
               <textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Miner-visible reason recorded with your operator identity (min 3 characters)" rows={2} className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm" />
               <button type="button" onClick={() => { if (resolution === 'withdraw') void beginWithdrawalPreview(); else setConfirmation('decision') }} disabled={reason.trim().length < 3} className={`rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 ${resolution === 'reject' ? 'bg-[var(--red-dim)] text-[var(--red)]' : 'bg-[var(--acid-dim)] text-[var(--acid)]'}`}>

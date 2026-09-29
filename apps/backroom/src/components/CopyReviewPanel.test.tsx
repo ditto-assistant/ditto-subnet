@@ -509,7 +509,7 @@ describe('CopyReviewPanel', () => {
       },
       would_change_crown: true,
       emission_reward_eligible: false,
-      emission_gate: 'unavailable',
+      emission_gate: 'enforce',
       would_change_emission_crown: false,
       emission_reason: 'Emission eligibility stays closed.',
       preview_token: 'preview-token-value',
@@ -520,7 +520,7 @@ describe('CopyReviewPanel', () => {
       agent_status: 'scored',
       restored_status: 'scored',
       emission_reward_eligible: false,
-      emission_gate: 'unavailable',
+      emission_gate: 'enforce',
       emission_reason: 'Emission eligibility stays closed.',
     })
     vi.mocked(listCopyReviews).mockResolvedValue(listResult([], 0))

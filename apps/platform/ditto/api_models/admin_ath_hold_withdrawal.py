@@ -41,7 +41,7 @@ class AdminAthHoldWithdrawalPreviewResponse(BaseModel):
     board_after: AdminAthRulingsBoardProjection
     would_change_crown: bool
     emission_reward_eligible: bool
-    emission_gate: Literal["unavailable"]
+    emission_gate: Literal["off", "shadow", "enforce"]
     would_change_emission_crown: bool
     emission_reason: str
     preview_token: str
@@ -61,5 +61,5 @@ class AdminAthHoldWithdrawalExecuteResponse(BaseModel):
     agent_status: str
     restored_status: Literal["scored", "live"]
     emission_reward_eligible: bool
-    emission_gate: Literal["unavailable"]
+    emission_gate: Literal["off", "shadow", "enforce"]
     emission_reason: str

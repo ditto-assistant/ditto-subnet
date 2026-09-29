@@ -60,7 +60,7 @@ class AgentReviewPosture:
     """``ath_reviews.status``: ``pending`` / ``resolved``, or ``None`` when this
     artifact was never held."""
     review_resolution: str | None = None
-    """``ath_reviews.resolution``: ``clear`` / ``reject``."""
+    """``ath_reviews.resolution``: ``clear`` / ``reject`` / ``withdraw``."""
     review_resolved_at: datetime | None = None
     review_kind: str | None = None
     """``ath_reviews.algorithm_provenance->>'review_kind'``."""

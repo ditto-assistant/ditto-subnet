@@ -186,8 +186,10 @@ published policy or transfer a finding to another artifact.
    precautionary manual hold is neither of those: `preview_ath_hold_withdrawal`
    then `withdraw_ath_hold` with confirmation `WITHDRAW ATH HOLD`. That
    restores score and rank presentation and records `resolution=withdraw`.
-   It does not certify the artifact, and it does not grant emissions while
-   the terminal exact-artifact review gate is unavailable.
+   It does not certify the artifact. Rewards follow the canonical operator
+   policy: off/shadow preserve payment; enforce withholds incomplete review
+   only once the live validator fleet supports the gate. Read the preview's
+   effective mode and reward outcome before executing.
 7. Write a specific miner-visible reason: pattern, file:line, which limb or
    engine test failed or passed, and the cited precedent.
 8. Re-read the agent. A timeout is ambiguous; verify before retrying.

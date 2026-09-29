@@ -14,8 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.ath_hold_withdrawal import (
     WITHDRAW_CONFIRMATION,
-    emission_withheld_agent_ids,
-    withdrawal_reward_decision,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.public import _ath_review_public_snapshot
@@ -155,9 +153,12 @@ async def test_pending_manual_hold_withdraws_without_clear_or_reject(
     preview = await _preview(client, agent_id, body)
     assert preview.status_code == 200, preview.text
     preview_body = preview.json()
-    assert preview_body["emission_reward_eligible"] is False
-    assert preview_body["emission_gate"] == "unavailable"
-    assert preview_body["would_change_emission_crown"] is False
+    assert preview_body["emission_reward_eligible"] is True
+    assert preview_body["emission_gate"] == "off"
+    assert (
+        preview_body["would_change_emission_crown"]
+        == preview_body["would_change_crown"]
+    )
     assert preview_body["restored_status"] == AgentStatus.SCORED
     assert (
         preview_body["board_after"]["ranked_count"]
@@ -173,8 +174,8 @@ async def test_pending_manual_hold_withdraws_without_clear_or_reject(
     assert result["review"]["resolution_reason"] == _REASON
     assert result["review"]["original"]["reason"].startswith("Manual precautionary")
     assert result["agent_status"] == AgentStatus.SCORED
-    assert result["emission_reward_eligible"] is False
-    assert result["emission_gate"] == "unavailable"
+    assert result["emission_reward_eligible"] is True
+    assert result["emission_gate"] == "off"
 
     async with maker() as session:
         review = await session.scalar(
@@ -192,7 +193,6 @@ async def test_pending_manual_hold_withdraws_without_clear_or_reject(
             select(func.count()).select_from(Score).where(Score.agent_id == agent_id)
         )
         ledger = await list_eligible_ledger(session)
-        withheld = await emission_withheld_agent_ids(session, [agent_id])
         assert review is not None
         assert review.status == "resolved"
         assert review.resolution == "withdraw"
@@ -201,7 +201,6 @@ async def test_pending_manual_hold_withdraws_without_clear_or_reject(
         assert [action.action for action in actions] == ["withdraw"]
         assert score_count == 3
         assert any(row.agent_id == agent_id for row in ledger)
-        assert withheld == {agent_id}
 
         @dataclass
         class _Row:
@@ -253,13 +252,27 @@ async def test_withdrawal_does_not_transfer_a_sibling_clearance(
         held = await session.get(Agent, agent_id)
         assert sibling is not None and sibling.resolution == "clear"
         assert held is not None
-        decision = withdrawal_reward_decision(
-            agent_id=agent_id, artifact_sha256=held.sha256
+        from ditto.api_models.emission_eligibility import EmissionEligibilitySettings
+        from ditto.api_server.emission_eligibility import (
+            ResolvedEligibilityPolicy,
+            classify,
         )
-        withheld = await emission_withheld_agent_ids(session, [agent_id, sibling_id])
+        from ditto.db.queries.emission_eligibility import load_review_postures
+
+        postures = await load_review_postures(session, [agent_id, sibling_id])
+        decision = classify(
+            agent_id=agent_id,
+            artifact_sha256=held.sha256,
+            bench_version=7,
+            posture=postures[agent_id],
+            policy=ResolvedEligibilityPolicy(
+                settings=EmissionEligibilitySettings(enforcement="enforce")
+            ),
+            now=datetime.now(UTC),
+        )
     assert decision.reward_eligible is False
-    assert decision.gate == "unavailable"
-    assert withheld == {agent_id}
+    assert decision.state == "unresolved_review"
+    assert postures[sibling_id].review_resolution == "clear"
 
     board = await client.get("/api/v1/public/leaderboard")
     assert board.status_code == 200, board.text
@@ -267,10 +280,8 @@ async def test_withdrawal_does_not_transfer_a_sibling_clearance(
     withdrawn = next(
         entry for entry in payload["entries"] if entry["agent_id"] == str(agent_id)
     )
-    assert withdrawn["emission_eligible"] is False
+    assert withdrawn.get("reward_eligibility") is None
     assert withdrawn["rank"] is not None
-    emissions = payload["emissions"]
-    assert emissions is None or emissions["champion_agent_id"] != str(agent_id)
 
 
 @pytest.mark.parametrize(

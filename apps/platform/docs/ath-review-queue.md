@@ -252,8 +252,13 @@ The preview binds the review id, pending state, agent UUID, artifact SHA-256,
 score count, agent status, correction reason, and the resulting public crown.
 Execute re-reads those guards and refuses a stale or repeated request. The
 original reason, opener, timestamps, score rows, and action history stay.
-Score and rank presentation return to the pre-hold status. Reward eligibility
-does not: until the terminal exact-artifact gate in #2041 can decide this
-exact artifact, the withdrawal stays out of the emission pool. A sibling
-artifact's clear or reject is not consulted. Automated holds still leave
+Score and rank presentation return to the pre-hold status. Withdrawal is not
+terminal certification: the shared emission evaluator treats it as incomplete
+review, using the operator-owned switches. `off` preserves payments; `shadow`
+records the unresolved posture while preserving payments; `enforce` withholds
+only when every live weight setter supports the gate, otherwise using shadow.
+An exact-artifact terminal clear takes effect from the next activation window.
+A sibling artifact's clear or reject is not consulted. The preview also binds
+the effective enforcement mode, policy revision and checksum; a changed policy
+requires a fresh preview. Automated holds still leave
 through `clear` or `reject`. Withdrawals are omitted from the precedent search.

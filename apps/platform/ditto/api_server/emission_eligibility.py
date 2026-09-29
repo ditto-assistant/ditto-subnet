@@ -196,7 +196,11 @@ def _state_for(
         # drifted back to scored. Never eligible, and never re-payable.
         return "review_rejected"
 
-    held = posture.review_status == "pending"
+    # Withdrawing the hold retracts its rationale, without completing review.
+    # The operator-owned switches apply just as they do to an open review.
+    held = posture.review_status == "pending" or (
+        posture.review_status == "resolved" and posture.review_resolution == "withdraw"
+    )
     reason_codes = {
         posture.active_quarantine_reason_code,
         posture.latest_attempt_reason_code,

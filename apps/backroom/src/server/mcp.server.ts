@@ -1233,7 +1233,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Withdraw precautionary ATH hold',
       description:
-        'Withdraw one previewed manual ATH hold. confirmation must be "WITHDRAW ATH HOLD". Restores rank without granting emissions. Requires backroom:write.',
+        'Withdraw one previewed manual ATH hold. confirmation must be "WITHDRAW ATH HOLD". Restores rank; rewards follow the fleet-effective emission policy. Requires backroom:write.',
       inputSchema: executeAthHoldWithdrawalInputSchema,
       annotations: toolAnnotations('write', true),
     },

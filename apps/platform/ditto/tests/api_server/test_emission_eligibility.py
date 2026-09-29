@@ -365,3 +365,24 @@ def test_every_state_has_source_free_miner_facing_text(state: str) -> None:
     lowered = reason.lower()
     for forbidden in ("sha256", "prompt", "threshold", "z-score", "cohort"):
         assert forbidden not in lowered
+
+
+@pytest.mark.parametrize("resolution", ["withdraw", "clear"])
+def test_withdrawal_never_receives_the_exact_artifact_clear_window(
+    resolution: str,
+) -> None:
+    agent_id = uuid4()
+    posture = AgentReviewPosture(
+        agent_id=agent_id,
+        review_status="resolved",
+        review_resolution=resolution,
+        review_resolved_at=_NOW,
+        passed_attempt_count=1,
+    )
+    during = _classify(posture)
+    assert during.reward_eligible is False
+    assert during.state == (
+        "unresolved_review" if resolution == "withdraw" else "awaiting_next_window"
+    )
+    later = _classify(posture, now=_NOW + timedelta(hours=1))
+    assert later.reward_eligible is (resolution == "clear")

@@ -8026,9 +8026,9 @@ export interface components {
             agent_status: string;
             /**
              * Emission Gate
-             * @constant
+             * @enum {string}
              */
-            emission_gate: "unavailable";
+            emission_gate: "off" | "shadow" | "enforce";
             /** Emission Reason */
             emission_reason: string;
             /** Emission Reward Eligible */
@@ -8074,9 +8074,9 @@ export interface components {
             board_before: components["schemas"]["AdminAthRulingsBoardProjection"];
             /**
              * Emission Gate
-             * @constant
+             * @enum {string}
              */
-            emission_gate: "unavailable";
+            emission_gate: "off" | "shadow" | "enforce";
             /** Emission Reason */
             emission_reason: string;
             /** Emission Reward Eligible */

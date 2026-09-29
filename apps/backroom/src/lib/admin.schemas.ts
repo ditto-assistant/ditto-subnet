@@ -7730,7 +7730,7 @@ export const previewAthHoldWithdrawalResponseSchema = z.object({
   board_after: athHoldWithdrawalBoardSchema,
   would_change_crown: z.boolean(),
   emission_reward_eligible: z.boolean(),
-  emission_gate: z.literal('unavailable'),
+  emission_gate: z.enum(['off', 'shadow', 'enforce']),
   would_change_emission_crown: z.boolean(),
   emission_reason: z.string(),
   preview_token: z.string().min(20),
@@ -7747,7 +7747,7 @@ export const executeAthHoldWithdrawalResponseSchema = z.object({
   agent_status: z.string(),
   restored_status: z.enum(['scored', 'live']),
   emission_reward_eligible: z.boolean(),
-  emission_gate: z.literal('unavailable'),
+  emission_gate: z.enum(['off', 'shadow', 'enforce']),
   emission_reason: z.string(),
 })
 

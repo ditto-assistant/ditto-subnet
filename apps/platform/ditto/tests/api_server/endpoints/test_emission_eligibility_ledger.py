@@ -1080,3 +1080,165 @@ class TestProvisionalIncumbent:
         assert emissions["champion_agent_id"] == str(leader)
         assert emissions["provisional_champion"] is False
         assert "reward_eligibility_mode" not in emissions
+
+
+@pytest.mark.parametrize(
+    ("mode", "protocol", "terminal", "effective", "paid"),
+    [
+        ("off", 28, True, "off", True),
+        ("shadow", 28, True, "shadow", True),
+        ("enforce", 28, True, "enforce", False),
+        ("enforce", 27, True, "shadow", True),
+        ("enforce", 28, False, "enforce", True),
+    ],
+)
+async def test_withdrawal_uses_one_policy_in_preview_board_and_signed_ledger(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+    mode: str,
+    protocol: int,
+    terminal: bool,
+    effective: str,
+    paid: bool,
+) -> None:
+    from ditto.tests.api_server.endpoints.test_admin_ath_hold_withdrawal import (
+        _TOKEN,
+        _execute,
+        _open_manual_hold,
+        _preview,
+        _preview_body,
+    )
+
+    _install(app, session_maker)
+    _install_chain(app)
+    app.state.config = replace(app.state.config, admin_api_token=_TOKEN)
+    leader, _runner = await _two_miners(session)
+    await _set_posture(session, enforcement=mode, require_terminal_review=terminal)
+    await _fleet(session, protocol=protocol, seen_at=datetime.now(UTC))
+    app.state.emission_eligibility.invalidate()
+    opened = await _open_manual_hold(client, leader, "ab" * 32)
+    body = _preview_body(opened, "ab" * 32)
+    preview = await _preview(client, leader, body)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["emission_gate"] == effective
+    assert preview.json()["emission_reward_eligible"] is paid
+    executed = await _execute(client, leader, body, preview.json()["preview_token"])
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["emission_reward_eligible"] is paid
+    ledger = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+    assert ledger.status_code == 200, ledger.text
+    assert (
+        any(row["agent_id"] == str(leader) for row in ledger.json()["entries"]) is paid
+    )
+    board = await client.get("/api/v1/public/leaderboard")
+    assert board.status_code == 200, board.text
+    row = next(row for row in board.json()["entries"] if row["agent_id"] == str(leader))
+    assert row["rank"] == 1
+    assert row["composite"] == pytest.approx(0.95)
+    if mode == "off":
+        assert row.get("reward_eligibility") is None
+    else:
+        record = row["reward_eligibility"]
+        assert record["enforcement"] == effective
+        assert record["reward_eligible"] is paid
+        assert record["state"] == ("unresolved_review" if terminal else "eligible")
+
+
+async def test_withdrawal_preview_rejects_policy_revision_change(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.tests.api_server.endpoints.test_admin_ath_hold_withdrawal import (
+        _TOKEN,
+        _execute,
+        _open_manual_hold,
+        _preview,
+        _preview_body,
+    )
+
+    _install(app, session_maker)
+    app.state.config = replace(app.state.config, admin_api_token=_TOKEN)
+    leader, _runner = await _two_miners(session)
+    opened = await _open_manual_hold(client, leader, "ab" * 32)
+    body = _preview_body(opened, "ab" * 32)
+    preview = await _preview(client, leader, body)
+    assert preview.status_code == 200, preview.text
+    # Still off, still payable, but the policy identity has changed.
+    await _set_posture(session, enforcement="off")
+    app.state.emission_eligibility.invalidate()
+    refused = await _execute(client, leader, body, preview.json()["preview_token"])
+    assert refused.status_code == 409, refused.text
+    async with session_maker() as read_session:
+        review = await read_session.scalar(
+            select(AthReview).where(AthReview.agent_id == leader)
+        )
+        assert review is not None and review.status == "pending"
+
+
+async def test_withdrawn_artifact_can_be_cleared_for_the_next_window(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.tests.api_server.endpoints.test_admin_ath_hold_withdrawal import (
+        _HEADERS,
+        _TOKEN,
+        _execute,
+        _open_manual_hold,
+        _preview,
+        _preview_body,
+    )
+
+    _install(app, session_maker)
+    _install_chain(app)
+    app.state.config = replace(app.state.config, admin_api_token=_TOKEN)
+    leader, runner = await _two_miners(session)
+    await _set_posture(session, enforcement="enforce")
+    await _fleet(session, seen_at=datetime.now(UTC))
+    app.state.emission_eligibility.invalidate()
+    opened = await _open_manual_hold(client, leader, "ab" * 32)
+    body = _preview_body(opened, "ab" * 32)
+    preview = await _preview(client, leader, body)
+    assert preview.status_code == 200, preview.text
+    withdrawn = await _execute(client, leader, body, preview.json()["preview_token"])
+    assert withdrawn.status_code == 200, withdrawn.text
+    reopened = await _open_manual_hold(client, leader, "ab" * 32)
+    assert reopened["reopened"] is True
+    cleared = await client.post(
+        f"/api/v1/admin/copy-reviews/{leader}/resolve",
+        json={
+            "resolution": "clear",
+            "reason": "Completed review of this exact artifact",
+        },
+        headers=_HEADERS,
+    )
+    assert cleared.status_code == 200, cleared.text
+    now = datetime.now(UTC)
+    context = await resolve_ledger_context(app.state, session, now=now)
+    current = await materialize_ledger_snapshot(
+        app.state,
+        session,
+        context=context,
+        now=now,
+        requesting_validator_hotkey=_VALIDATOR,
+    )
+    assert [entry.agent_id for entry in current.entries] == [runner]
+    assert current.reward_eligibility_records is not None
+    assert current.reward_eligibility_records[leader].state == "awaiting_next_window"
+    await session.rollback()
+    future = now + timedelta(hours=1)
+    await _fleet(session, seen_at=future)
+    context = await resolve_ledger_context(app.state, session, now=future)
+    following = await materialize_ledger_snapshot(
+        app.state,
+        session,
+        context=context,
+        now=future,
+        requesting_validator_hotkey=_VALIDATOR,
+    )
+    assert [entry.agent_id for entry in following.entries] == [leader, runner]

@@ -4092,7 +4092,9 @@ class PublicAgentSummary(BaseModel):
         str | None, Field(default=None, pattern=_SS58_PATTERN)
     ] = None
     review_reason: str | None = None
-    review_event: Literal["opened", "reopened", "cleared", "rejected", "withdrawn"] | None = None
+    review_event: (
+        Literal["opened", "reopened", "cleared", "rejected", "withdrawn"] | None
+    ) = None
     review_event_at: datetime | None = None
     review_original_reason: str | None = None
     review_opened_at: datetime | None = None
