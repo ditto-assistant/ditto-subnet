@@ -297,7 +297,7 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert "--to-latest" in deploy["run"]
 
 
-def test_release_auto_deploys_controller_from_exact_release() -> None:
+def test_release_auto_deploys_controller_only_for_opted_in_release_tag() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     deploy = workflow["jobs"]["deploy-screener-controller"]
 
@@ -308,6 +308,10 @@ def test_release_auto_deploys_controller_from_exact_release() -> None:
     ]
     assert "needs.plan.outputs.screener_orchestrator == 'true'" in deploy["if"]
     assert "vars.SCREENER_CAPACITY_CONTROLLER_ENABLED == 'true'" in deploy["if"]
+    assert "vars.SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG != ''" in deploy["if"]
+    assert (
+        "vars.SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG == needs.release.outputs.tag"
+    ) in deploy["if"]
     assert deploy["uses"] == "./.github/workflows/screener-controller-deploy.yml"
     assert deploy["with"]["revision"] == "${{ needs.release.outputs.commit_sha }}"
     assert deploy["secrets"] == "inherit"
@@ -1059,6 +1063,8 @@ def test_screener_delivery_conditions_preserve_required_gates(
         "needs.plan.outputs.screener": "true",
         "needs.plan.outputs.screener_orchestrator": "true",
         "vars.SCREENER_CAPACITY_CONTROLLER_ENABLED": "true",
+        "vars.SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG": "v0.331.0",
+        "needs.release.outputs.tag": "v0.331.0",
         "needs.deploy_platform.result": "success",
         "needs.build-submission-builder.result": builder_result,
         "needs.build-screener.result": "success",
@@ -1071,6 +1077,26 @@ def test_screener_delivery_conditions_preserve_required_gates(
     assert _release_condition_matches(
         jobs["assemble-screener-fleet-release"]["if"], values
     ) is (fleet_allowed and builder_result != "cancelled")
+
+
+@pytest.mark.parametrize("opt_in_tag", ["", "v0.330.0", "true"])
+def test_controller_release_does_not_deploy_without_exact_tag_opt_in(
+    opt_in_tag: str,
+) -> None:
+    jobs = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())["jobs"]
+    values = {
+        "needs.plan.result": "success",
+        "needs.release.result": "success",
+        "needs.release.outputs.released": "true",
+        "needs.plan.outputs.screener_orchestrator": "true",
+        "vars.SCREENER_CAPACITY_CONTROLLER_ENABLED": "true",
+        "vars.SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG": opt_in_tag,
+        "needs.release.outputs.tag": "v0.331.0",
+        "needs.deploy_platform.result": "success",
+    }
+    assert not _release_condition_matches(
+        jobs["deploy-screener-controller"]["if"], values
+    )
 
 
 def test_public_screener_dependency_needs_no_private_authentication() -> None:

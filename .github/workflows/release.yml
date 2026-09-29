@@ -971,6 +971,8 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
   deploy-screener-controller:
+    # A reviewed release tag must be opted in separately. The legacy ENABLED
+    # flag is already true in production, so it cannot authorize this rollout.
     needs: [plan, release, deploy_platform]
     if: >-
       always() &&
@@ -979,6 +981,8 @@ jobs:
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.screener_orchestrator == 'true' &&
       vars.SCREENER_CAPACITY_CONTROLLER_ENABLED == 'true' &&
+      vars.SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG != '' &&
+      vars.SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG == needs.release.outputs.tag &&
       (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
     permissions:
       contents: read

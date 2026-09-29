@@ -197,6 +197,15 @@ break-glass operator override: it intentionally bypasses
 `SCREENER_CAPACITY_CONTROLLER_ENABLED`, while still requiring the protected
 `prod` environment and an exact 40-character revision.
 
+Automatic capacity-controller deployment also requires the repository variable
+`SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG` to equal the exact semantic
+release tag emitted by that run. An absent, empty, or different tag skips the
+controller deploy even when `SCREENER_CAPACITY_CONTROLLER_ENABLED=true`.
+The screener owner must review the release and deliberately opt in to one tag;
+clear the variable after that release to prevent a later matching rerun. A
+manual controller dispatch remains the explicit path to deploy an already
+published exact release without enabling automatic deployment for later runs.
+
 ## Protected environment configuration
 
 The `prod` GitHub environment must allow only `main` and contain:
@@ -231,9 +240,10 @@ Only the scoped Cloudflare deployment token belongs in the GitHub environment.
    bearer secret version out of band.
 3. Deploy Platform from a reviewed release so the trusted-build queue migration
    and controller API exist.
-4. Enable and converge the capacity controller. Later semantic releases deploy
-   the unit automatically; Ansible remains the
-   first-boot/configuration path.
+4. Enable and converge the capacity controller. For a later semantic release,
+   opt in to its exact tag before automatic controller deployment, or use the
+   protected manual dispatch for an already published release. Ansible remains
+   the first-boot/configuration path.
 5. Publish one screener image and verify the immutable digest registered in Platform.
 6. Exercise GCE worker scale `0 -> 1 -> 0` before retiring the pet screener.
 
