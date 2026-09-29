@@ -547,9 +547,9 @@ export const l2ReportCanaryViewSchema = z.object({
 })
 
 export const canonicalStarterPreflightSchema = z.object({
-  release: z.literal('v0.330.0'),
-  release_commit: z.literal('7dafedb87125b4a22104d0903997c9f36976be3d'),
-  source_tree: z.literal('f13fe9215f531819d6e94c099b25eaa7545b715d'),
+  release: z.literal('v0.330.3'),
+  release_commit: z.literal('b20b065b133ecbe1a8e0e9c350169bfcb19e4be2'),
+  source_tree: z.literal('733904ee190b9a11e7d5023f83559cb48bac0d01'),
   archive_sha256: z.string().regex(/^[0-9a-f]{64}$/),
   archive_size_bytes: z.number().int().positive(),
   fixture: l2ReportCanaryViewSchema.nullable(),
@@ -567,7 +567,7 @@ export const registerCanonicalStarterInputSchema = z.object({
 export const reviewCanonicalStarterInputSchema = z.object({
   canaryId: z.string().uuid(),
   reviewerEvidenceSha256: z.string().regex(/^[0-9a-f]{64}$/),
-  reviewedArchiveSha256: z.literal('a3dacec019ce5ea6694bfbeb7669a5f9109514c38c6de7000c8dfa3f3f0f57b6'),
+  reviewedArchiveSha256: z.literal('047aaa870a6c6b8ea4da1da802792f3f44991e5c8d5698d6cb0be3334a8122d3'),
   reviewedDockerfileSha256: z.literal('d3a1a2a1e5d43b0465c28712457d95432942ac8f017fd10d538859a901a54641'),
   builtImageDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
   reviewerEvidenceUrl: z.string().url().startsWith('https://github.com/ditto-assistant/ditto-subnet/'),

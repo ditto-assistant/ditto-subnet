@@ -14433,7 +14433,7 @@ export interface components {
              * Reviewed Archive Sha256
              * @constant
              */
-            reviewed_archive_sha256: "a3dacec019ce5ea6694bfbeb7669a5f9109514c38c6de7000c8dfa3f3f0f57b6";
+            reviewed_archive_sha256: "047aaa870a6c6b8ea4da1da802792f3f44991e5c8d5698d6cb0be3334a8122d3";
             /**
              * Reviewed Dockerfile Sha256
              * @constant

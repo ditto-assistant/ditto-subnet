@@ -1,4 +1,4 @@
-"""Reproduce the public v0.330.0 starter source-control archive.
+"""Reproduce the public v0.330.3 starter source-control archive.
 
 Only the released tree is read. The exclusions match the starter's ``submit``
 command; no checkout state, generated files, credentials, or symlinks enter the
@@ -14,9 +14,9 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-RELEASE = "v0.330.0"
-COMMIT = "7dafedb87125b4a22104d0903997c9f36976be3d"
-TREE = "f13fe9215f531819d6e94c099b25eaa7545b715d"
+RELEASE = "v0.330.3"
+COMMIT = "b20b065b133ecbe1a8e0e9c350169bfcb19e4be2"
+TREE = "733904ee190b9a11e7d5023f83559cb48bac0d01"
 SUBDIR = "miners/dittobench-starter-kit"
 EXCLUDED_ROOTS = {".agents", ".claude", ".git", "target"}
 

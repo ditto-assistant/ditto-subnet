@@ -1,13 +1,13 @@
 # Public starter source control (issue #2515)
 
-This operator-only fixture is the unchanged public starter source at `v0.330.0`:
+This operator-only fixture is the unchanged public starter source at `v0.330.3`:
 
 | Identity | Pinned value |
 | --- | --- |
-| Release commit | `7dafedb87125b4a22104d0903997c9f36976be3d` |
-| `miners/dittobench-starter-kit` Git tree | `f13fe9215f531819d6e94c099b25eaa7545b715d` |
-| Reproducible submission archive SHA-256 | `a3dacec019ce5ea6694bfbeb7669a5f9109514c38c6de7000c8dfa3f3f0f57b6` |
-| Archive bytes | `4,914,769` |
+| Release commit | `b20b065b133ecbe1a8e0e9c350169bfcb19e4be2` |
+| `miners/dittobench-starter-kit` Git tree | `733904ee190b9a11e7d5023f83559cb48bac0d01` |
+| Reproducible submission archive SHA-256 | `047aaa870a6c6b8ea4da1da802792f3f44991e5c8d5698d6cb0be3334a8122d3` |
+| Archive bytes | `4,915,314` |
 | Dockerfile SHA-256 | `d3a1a2a1e5d43b0465c28712457d95432942ac8f017fd10d538859a901a54641` |
 
 The archive contains exact release file bytes and executable bits, with the
@@ -16,10 +16,10 @@ secrets, and generated tarballs). The packaging script normalizes tar metadata
 and gzip headers; no source file is edited. Reproduce it from a public checkout:
 
 ```sh
-git fetch origin tag v0.330.0
-git rev-parse 7dafedb87125b4a22104d0903997c9f36976be3d:miners/dittobench-starter-kit
-python3 scripts/package_canonical_starter_control.py /tmp/canonical-starter-v0.330.0.tgz
-shasum -a 256 /tmp/canonical-starter-v0.330.0.tgz
+git fetch origin tag v0.330.3
+git rev-parse b20b065b133ecbe1a8e0e9c350169bfcb19e4be2:miners/dittobench-starter-kit
+python3 scripts/package_canonical_starter_control.py /tmp/canonical-starter-v0.330.3.tgz
+shasum -a 256 /tmp/canonical-starter-v0.330.3.tgz
 ```
 
 The tree and archive digests must match the table. The same archive is packaged
