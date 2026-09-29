@@ -314,8 +314,42 @@ def test_release_auto_deploys_controller_only_for_opted_in_release_tag() -> None
     ) in deploy["if"]
     assert deploy["uses"] == "./.github/workflows/screener-controller-deploy.yml"
     assert deploy["with"]["revision"] == "${{ needs.release.outputs.commit_sha }}"
+    assert deploy["with"]["approved_tag"] == (
+        "${{ vars.SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG }}"
+    )
+    assert deploy["with"]["release_tag"] == "${{ needs.release.outputs.tag }}"
     assert deploy["secrets"] == "inherit"
     assert deploy["permissions"] == {"contents": "read", "id-token": "write"}
+
+
+def test_controller_deploy_rechecks_auto_opt_in_byte_for_byte_before_auth() -> None:
+    workflow = yaml.safe_load(
+        (WORKFLOW_DIR / "screener-controller-deploy.yml").read_text()
+    )
+    steps = workflow["jobs"]["deploy"]["steps"]
+    guard = _step(steps, "Verify automatic release tag opt-in")
+    assert guard["if"] == "github.event_name != 'workflow_dispatch'"
+    assert guard["env"] == {
+        "APPROVED_TAG": "${{ inputs.approved_tag }}",
+        "RELEASE_TAG": "${{ inputs.release_tag }}",
+    }
+    assert steps.index(guard) < next(
+        index
+        for index, step in enumerate(steps)
+        if str(step.get("uses", "")).startswith("google-github-actions/auth@")
+    )
+    for approved, expected_success in (
+        ("", False),
+        ("V0.331.0", False),
+        ("v0.331.0", True),
+    ):
+        result = subprocess.run(
+            ["bash", "-e", "-c", guard["run"]],
+            env=dict(os.environ, APPROVED_TAG=approved, RELEASE_TAG="v0.331.0"),
+            capture_output=True,
+            check=False,
+        )
+        assert (result.returncode == 0) is expected_success
 
 
 def test_platform_and_backroom_deploy_from_one_release_plan() -> None:

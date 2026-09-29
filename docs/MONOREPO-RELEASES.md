@@ -194,13 +194,18 @@ break-glass path for an exact non-release commit; using it delegates the
 exception to the protected environment reviewer and is never automatic.
 The capacity-controller workflow's direct manual dispatch is a separate
 break-glass operator override: it intentionally bypasses
-`SCREENER_CAPACITY_CONTROLLER_ENABLED`, while still requiring the protected
-`prod` environment and an exact 40-character revision.
+`SCREENER_CAPACITY_CONTROLLER_ENABLED` and the automatic tag opt-in, while
+still requiring repository Actions access, the `prod` environment's branch
+policy, and an exact 40-character revision. The current `prod` environment
+has no required reviewer; manual dispatch is an explicit operator action,
+not a separate approval gate.
 
 Automatic capacity-controller deployment also requires the repository variable
 `SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG` to equal the exact semantic
 release tag emitted by that run. An absent, empty, or different tag skips the
-controller deploy even when `SCREENER_CAPACITY_CONTROLLER_ENABLED=true`.
+controller deploy even when `SCREENER_CAPACITY_CONTROLLER_ENABLED=true`. The
+called workflow rechecks the tag byte-for-byte before authenticating because
+GitHub expression equality is case-insensitive.
 The screener owner must review the release and deliberately opt in to one tag;
 clear the variable after that release to prevent a later matching rerun. A
 manual controller dispatch remains the explicit path to deploy an already
