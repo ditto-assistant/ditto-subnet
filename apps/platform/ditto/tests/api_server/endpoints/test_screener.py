@@ -1098,6 +1098,7 @@ async def _authenticate_screener_client(
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
     request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client.headers.update(_AUTH_HEADER)
     # The legacy fleet principal may claim only when the current primary has
@@ -1117,13 +1118,29 @@ async def _authenticate_screener_client(
         "test_legacy_gcp_claim_waits_for_fenced_overflow_capacity",
         "test_legacy_gcp_and_watchdog_share_fallback_admission",
         "test_legacy_gcp_held_claim_still_sweeps_overdue_attempts",
+        "test_zero_admission_is_a_full_stop_for_automatic_retries",
     }
     test_class = request.node.cls
     if (
         test_class is not None
-        and test_class.__name__ in claim_classes
+        and (
+            test_class.__name__ in claim_classes
+            or request.node.originalname
+            == "test_watchdog_is_quiet_while_controller_lease_is_fresh"
+        )
         and request.node.originalname not in independent_policy_tests
     ):
+        from ditto.db.queries import screener_provider_settings as provider_settings
+
+        # Keep the default revision at zero for unrelated claim tests while
+        # giving its GCP-first route a real, open primary admission source.
+        monkeypatch.setattr(
+            provider_settings,
+            "DEFAULT_SCREENER_PROVIDER_SETTINGS",
+            provider_settings.DEFAULT_SCREENER_PROVIDER_SETTINGS.model_copy(
+                update={"primary_node_id": "subnet-screener-1"}
+            ),
+        )
         await _seed_hetzner_primary(session_maker)
 
 
@@ -2351,7 +2368,6 @@ class TestFederatedScreenerNodes:
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        await _seed_hetzner_primary(session_maker)
         _install_db(app, session_maker)
         app.state.config = replace(
             app.state.config,
