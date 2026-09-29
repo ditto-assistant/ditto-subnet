@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -12,18 +13,25 @@ from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
 from ditto_screener.config import ScreenerConfig
-from ditto_screener.errors import PlatformError
+from ditto_screener.errors import (
+    PlatformAuthOnlyFailure,
+    PlatformError,
+    PlatformRejected,
+)
 from ditto_screener.gate import BuiltImageArtifact, LeaseDeadline
 from ditto_screener.heartbeat import (
     DockerHealth,
+    HostSpecs,
     ReviewSettingsStatus,
     ScreenerHeartbeatResponse,
 )
 from ditto_screener.l2_review import L2RunResult, L2Usage
+from ditto_screener.platform import PlatformClient
 from ditto_screener.policy import (
     CORE_ONLY_MANIFEST,
     PolicyEngine,
@@ -32,8 +40,9 @@ from ditto_screener.policy import (
     ScreeningOutcome,
     SourceReviewObservation,
     core_decision,
+    is_held_source_review,
 )
-from ditto_screener.worker import ScreenerWorker
+from ditto_screener.worker import ScreenerWorker, _verdict_reason_code
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
@@ -101,6 +110,7 @@ class _FakeGate:
         self.bench_versions: list[int] = []
         self.shadow_result: Any = None
         self.applied_review_settings: list[Any] = []
+        self.received_at: list[int | None] = []
 
     def apply_review_settings(self, settings: Any) -> bool:
         self.applied_review_settings.append(settings)
@@ -123,9 +133,11 @@ class _FakeGate:
         deferred_source_review: bool = False,
         policy_version: int | None = None,
         bench_version: int | None = None,
+        scored_runtime_evidence_received_at: int | None = None,
         **_: Any,
     ) -> ScreeningDecision:
         self.calls.append(agent_id)
+        self.received_at.append(scored_runtime_evidence_received_at)
         self.deadlines.append(deadline)
         self.build_only_calls.append(build_only)
         self.policy_only_calls.append(policy_only)
@@ -154,14 +166,7 @@ class _FakeGate:
                     image_ref=f"ditto-screen/{agent_id}:latest",
                 )
             )
-        if (
-            self.result.outcome == ScreeningOutcome.QUARANTINE
-            and publish_held_image is not None
-            and any(
-                item.code == "adjudicated-source-review-escalate"
-                for item in self.result.evidence
-            )
-        ):
+        if publish_held_image is not None and is_held_source_review(self.result):
             await publish_held_image(
                 BuiltImageArtifact(
                     path="/tmp/fake-held-image.tar",
@@ -189,6 +194,7 @@ class _FakePlatform:
         self.heartbeat_error: Exception | None = None
         self.artifact_error: Exception | None = None
         self.heartbeat_lease_deadline: datetime | None = None
+        self.heartbeat_fixture_supported = False
         self.artifact_calls: list[tuple[UUID, UUID | None]] = []
         self.image_uploads: list[dict[str, Any]] = []
         self.verification_receipts: list[dict[str, Any]] = []
@@ -212,6 +218,7 @@ class _FakePlatform:
             accepted=True,
             seen_at=datetime.now(UTC),
             lease_deadline=self.heartbeat_lease_deadline,
+            source_fixture_v1_heartbeat_supported=self.heartbeat_fixture_supported,
         )
 
     async def submit_shadow_review(self, agent_id: UUID, request: Any) -> Any:
@@ -322,6 +329,37 @@ async def test_configured_instance_id_distinguishes_local_worker_heartbeat(
     await worker._report_heartbeat("polling", force=True)
 
     assert platform.heartbeats[-1].instance_id == "subnet-screener-1-worker-2"
+
+
+async def test_fixture_heartbeat_capability_waits_for_platform_ack(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    worker = _worker(
+        make_config(node_id="subnet-screener-1"),
+        platform,
+        _FakeGate(_decision(ScreeningOutcome.PASS)),
+        host_specs_probe=lambda: HostSpecs(
+            cpu_count=4,
+            memory_total_mib=8000,
+            disk_total_gib=80,
+            architecture="x86_64",
+        ),
+    )
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 7
+    assert platform.heartbeats[-1].release.source_fixture_v1 is False
+    platform.heartbeat_fixture_supported = True
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 7
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 8
+    assert platform.heartbeats[-1].release.source_fixture_v1 is True
+    platform.heartbeat_error = RuntimeError("rolling old Platform")
+    await worker._report_heartbeat("polling", force=True)
+    platform.heartbeat_error = None
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 7
 
 
 def test_legacy_node_instance_id_derives_the_systemd_worker_index(
@@ -806,17 +844,35 @@ async def test_v13_source_hold_uploads_image_evidence_without_passing(
 ) -> None:
     agent = uuid4()
     platform = _FakePlatform([])
-    decision = ScreeningDecision(
-        outcome=ScreeningOutcome.QUARANTINE,
-        detail="source review incomplete",
-        manifest_digest="ab" * 32,
-        evidence=(
-            PolicyEvidence(
-                "adjudication", "adjudicated-source-review-escalate", "held"
-            ),
+    # A court refusal carrying an L1/L2 finding, as the real policy emits it.
+    finding = SourceReviewFinding(
+        artifact_sha256="de" * 32,
+        prompt_revision="source-review-v2",
+        risk_level="high",
+        confidence=0.97,
+        categories=["cross_user_access"],
+        summary="Unverified cross-user lead held for the court.",
+    )
+    decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=finding.canonical_digest(),
+            categories=("cross_user_access",),
+            failure_disposition="inconclusive",
+            finding=finding.model_dump(mode="json"),
+            adjudication=SourceReviewAdjudication(
+                decision="escalate",
+                reason="the court timed out before a verified finding",
+                escalation_code="adjudicator-failed",
+                model="z-ai/glm-5.3-flash",
+                prompt_revision="adjudicator-v7-policy-v13",
+            ).model_dump(mode="json"),
         ),
         policy_version=13,
     )
+    assert decision.outcome == ScreeningOutcome.QUARANTINE
+    assert decision.finding is not None
     worker = _worker(make_config(), platform, _FakeGate(decision))
 
     await worker._screen_one(_item(agent), policy_version=13)
@@ -1162,6 +1218,87 @@ def _signed_request(verdict: dict[str, Any]) -> ScreenResultRequest:
     )
 
 
+@pytest.mark.parametrize(
+    ("outcome", "reason"),
+    [
+        (ScreenResultOutcome.PASS, "health-ok"),
+        (ScreenResultOutcome.PASS_INCONCLUSIVE, "source-review-inconclusive"),
+        (ScreenResultOutcome.QUARANTINE, "source-finding-held"),
+        (ScreenResultOutcome.INCONCLUSIVE, "source-review-inconclusive"),
+        (ScreenResultOutcome.RETRYABLE_INFRA, "source-review-unavailable"),
+    ],
+)
+def test_legacy_reason_ignores_shadow_seed_for_every_non_rejection(
+    outcome: ScreenResultOutcome, reason: str
+) -> None:
+    evidence = (
+        PolicyEvidence("review", reason, "deciding result"),
+        PolicyEvidence("stable-core", "seed-http-error", "shadow seed failed"),
+        PolicyEvidence("stable-core", "seed-envelope-usage", "sandbox headroom"),
+    )
+    assert _verdict_reason_code(outcome, evidence) == reason
+
+
+@pytest.mark.parametrize(
+    "outcome", [ScreenResultOutcome.INCONCLUSIVE, ScreenResultOutcome.QUARANTINE]
+)
+def test_legacy_reason_ignores_trailing_successful_challenge_observations(
+    outcome: ScreenResultOutcome,
+) -> None:
+    evidence = (
+        PolicyEvidence("review", "source-review-inconclusive", "deciding result"),
+        PolicyEvidence("oracle", "behavioral-oracle-passed", "oracle passed"),
+        PolicyEvidence("pack", "challenge-observed", "challenge completed"),
+    )
+    assert _verdict_reason_code(outcome, evidence) == "source-review-inconclusive"
+
+
+def test_legacy_reason_does_not_reintroduce_a_filtered_seed_observation() -> None:
+    evidence = (PolicyEvidence("stable-core", "seed-http-error", "shadow seed failed"),)
+    assert _verdict_reason_code(ScreenResultOutcome.RETRYABLE_INFRA, evidence) is None
+    assert (
+        _verdict_reason_code(ScreenResultOutcome.DETERMINISTIC_REJECT, evidence)
+        == "seed-http-error"
+    )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reason"),
+    [
+        (ScreeningOutcome.INCONCLUSIVE, "source-review-inconclusive"),
+        (ScreeningOutcome.RETRYABLE_INFRA, "source-review-unavailable"),
+        (ScreeningOutcome.QUARANTINE, "source-finding-held"),
+    ],
+)
+async def test_worker_prefers_the_deciding_reason_in_signed_verdicts(
+    make_config: Callable[..., ScreenerConfig], outcome: ScreeningOutcome, reason: str
+) -> None:
+    decision = core_decision(
+        outcome,
+        code=reason,
+        summary="source review did not resolve the submission",
+        detail="private policy review did not complete",
+    )
+    decision = _shadow_seed_evidence(decision)
+    decision = replace(
+        decision,
+        evidence=(
+            *decision.evidence,
+            PolicyEvidence("another-module", "module-cleared", "module cleared"),
+        ),
+    )
+    platform = _FakePlatform([])
+    worker = _worker(make_config(), platform, _FakeGate(decision))
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+    assert len(platform.verdicts) == 1
+    request = _signed_request(platform.verdicts[0])
+    assert request.outcome == ScreenResultOutcome(outcome.value)
+    assert request.reason_code == reason
+    if outcome != ScreeningOutcome.RETRYABLE_INFRA:
+        assert request.evidence is not None
+        assert request.evidence[-1].code == "module-cleared"
+
+
 async def test_shadow_seed_observation_keeps_quarantine_verdict_signed(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1395,12 +1532,16 @@ async def test_accepted_progress_heartbeat_renews_active_local_deadline(
     worker._active_progress_stage = "building"
     worker._job_started_at = int(datetime.now(UTC).timestamp())
     worker._active_lease_deadline = LeaseDeadline(asyncio.get_running_loop().time() + 1)
+    # Budgets carved from the lease (e.g. L1/L2 before the court reserve)
+    # must observe the same renewal.
+    derived = worker._active_lease_deadline.offset(30)
 
     await worker._report_heartbeat("screening", force=True)
 
     assert worker._active_lease_deadline.expires_at > (
         asyncio.get_running_loop().time() + 9 * 60
     )
+    assert derived.expires_at == worker._active_lease_deadline.expires_at - 30
 
 
 async def test_same_stage_heartbeat_follows_platform_lease_renewal(
@@ -1493,6 +1634,120 @@ async def test_verdict_platform_error_swallowed(
     assert platform.verdicts == []
 
 
+@pytest.mark.parametrize("status_code", [400, 413, 422, None])
+@pytest.mark.parametrize("fallback_fails", [False, True])
+async def test_definitive_verdict_failure_submits_one_attempt_bound_fallback(
+    make_config: Callable[..., ScreenerConfig],
+    status_code: int | None,
+    fallback_fails: bool,
+) -> None:
+    platform = _FakePlatform([])
+    worker = _worker(
+        make_config(), platform, _FakeGate(_decision(ScreeningOutcome.PASS))
+    )
+    item = _item(uuid4())
+    error = (
+        PlatformRejected(status_code=status_code, body="invalid signed review audit")
+        if status_code is not None
+        else PlatformAuthOnlyFailure("credential refresh failed")
+    )
+    original_submit = platform.submit_result
+    calls: list[dict[str, Any]] = []
+
+    async def submit(agent_id: UUID, **kwargs: Any):
+        calls.append({"agent_id": agent_id, **kwargs})
+        if len(calls) == 1:
+            raise error
+        if fallback_fails:
+            raise PlatformRejected(status_code=409, body="attempt already completed")
+        return await original_submit(agent_id, **kwargs)
+
+    platform.submit_result = submit  # type: ignore[method-assign]
+    await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
+
+    assert len(calls) == 2
+    verdict = calls[1]
+    request = _signed_request(verdict)
+    assert verdict["agent_id"] == item.agent_id
+    assert request.attempt_id == item.attempt_id
+    assert request.outcome == ScreenResultOutcome.RETRYABLE_INFRA
+    assert request.passed is False
+    assert request.reason_code == (
+        "worker-verdict-rejected"
+        if status_code is not None
+        else "worker-verdict-auth-failed"
+    )
+    assert request.private_failure_detail is not None
+    if status_code is not None:
+        assert str(status_code) in request.private_failure_detail
+        assert "invalid signed review audit" in request.private_failure_detail
+    else:
+        assert "no verdict request was sent" in request.private_failure_detail
+    assert worker._active_attempt_id is None
+    assert worker._active_agent_id is None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        PlatformError("verdict submit failed: response lost"),
+        PlatformError("verdict rejected (503): unavailable"),
+        PlatformRejected(status_code=401, body="unauthorized"),
+        PlatformRejected(status_code=409, body="agent no longer screenable"),
+    ],
+)
+async def test_ambiguous_or_unauthorized_verdict_failure_never_submits_fallback(
+    make_config: Callable[..., ScreenerConfig], error: PlatformError
+) -> None:
+    platform = _FakePlatform([])
+    platform.submit_result = AsyncMock(side_effect=error)
+    worker = _worker(
+        make_config(), platform, _FakeGate(_decision(ScreeningOutcome.PASS))
+    )
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+    assert platform.submit_result.await_count == 1
+    assert platform.verdicts == []
+
+
+async def test_accepted_verdict_with_lost_response_then_conflict_has_no_fallback(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A conflicting retry must never replace the original signed result."""
+    cfg = make_config()
+    platform = _FakePlatform([])
+    worker = _worker(cfg, platform, _FakeGate(_decision(ScreeningOutcome.PASS)))
+    item = _item(uuid4())
+    requests: list[httpx.Request] = []
+    accepted: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            # Platform commits the pass, but the connection loses its response.
+            accepted.update(json.loads(request.content))
+            raise httpx.ReadError("accepted response lost", request=request)
+        # The agent changed state before the idempotent retry arrived. The
+        # same 409 would also refuse any replacement infrastructure verdict.
+        return httpx.Response(409, text="agent no longer screenable")
+
+    monkeypatch.setattr(
+        "ditto_screener.platform._TRANSIENT_PLATFORM_RETRY_DELAYS", (0.0,)
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = PlatformClient(cfg, http)
+        platform.submit_result = client.submit_result  # type: ignore[method-assign]
+        await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
+
+    assert len(requests) == 2
+    assert requests[0].content == requests[1].content
+    assert accepted["attempt_id"] == str(item.attempt_id)
+    assert accepted["outcome"] == ScreenResultOutcome.PASS.value
+    assert accepted["passed"] is True
+    assert worker._active_attempt_id is None
+    assert worker._active_agent_id is None
+    assert platform.heartbeats[-1].state == "polling"
+
+
 async def test_pre_verdict_platform_error_posts_retryable_failure(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1575,6 +1830,48 @@ async def test_run_forever_drains_queue_then_stops(
     assert {v["agent_id"] for v in platform.verdicts} == {a1, a2}
 
 
+async def test_screen_one_passes_claim_receipt_time_to_gate(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+    await worker._screen_one(
+        _item(uuid4()), policy_version=SCREENING_POLICY_VERSION, received_at=1234
+    )
+    before = int(time.time())
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+    assert gate.received_at[0] == 1234
+    received = gate.received_at[1]
+    assert received is not None and before <= received <= int(time.time())
+
+
+async def test_every_item_of_one_claim_shares_its_receipt_time(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A later item's signed lease is judged from the claim, not its own start."""
+    first, second = uuid4(), uuid4()
+    platform = _FakePlatform([[_item(first), _item(second)]])
+    stop = asyncio.Event()
+    platform.stop_after_queue = stop
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    original = gate.screen
+
+    async def slow_screen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        if not gate.calls:
+            await asyncio.sleep(1.1)
+        return await original(*args, **kwargs)
+
+    gate.screen = slow_screen  # type: ignore[method-assign]
+    before = int(time.time())
+    worker = _worker(make_config(), platform, gate)
+    await asyncio.wait_for(worker.run_forever(stop), timeout=5.0)
+    assert gate.calls == [first, second]
+    assert gate.received_at[0] == gate.received_at[1]
+    received = gate.received_at[0]
+    assert received is not None and before <= received < int(time.time())
+
+
 async def test_stop_during_review_finishes_the_signed_verdict(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1591,7 +1888,161 @@ async def test_stop_during_review_finishes_the_signed_verdict(
     gate.screen = screen  # type: ignore[method-assign]
     worker = _worker(make_config(), platform, gate)
     await asyncio.wait_for(worker.run_forever(stop), timeout=2.0)
-    assert [verdict["agent_id"] for verdict in platform.verdicts] == [first]
+    assert gate.calls == [first]
+    assert [verdict["agent_id"] for verdict in platform.verdicts] == [first, second]
+    assert platform.verdicts[0]["passed"] is True
+    # The second lease was durable but never started: settle it, do not drop it.
+    _assert_claim_not_started(platform.verdicts[1], second)
+
+
+def _assert_claim_not_started(verdict: dict[str, Any], agent_id: UUID) -> None:
+    assert verdict["agent_id"] == agent_id
+    assert verdict["passed"] is False
+    assert verdict["outcome"] == ScreenResultOutcome.RETRYABLE_INFRA
+    assert verdict["reason_code"] == "worker-claim-not-started"
+    ScreenResultRequest(
+        screener_hotkey=_MINER,
+        **{key: value for key, value in verdict.items() if key != "agent_id"},
+    )
+
+
+async def test_no_claim_when_stopped_before_claim(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A drain SIGTERM during the pre-claim awaits must not take a lease."""
+    platform = _FakePlatform([[_item(uuid4())]])
+    stop = asyncio.Event()
+    original = platform.get_required_policy_version
+
+    async def required_policy() -> int:
+        stop.set()
+        return await original()
+
+    platform.get_required_policy_version = required_policy  # type: ignore[method-assign]
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+
+    assert await worker._sweep(stop) == 0
+    assert platform.claim_calls == 0
+    assert platform.verdicts == []
+    assert gate.calls == []
+
+
+async def test_stop_set_during_claim_still_screens_claimed_item(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent_id = uuid4()
+    item = _item(agent_id)
+    platform = _FakePlatform([[item]])
+    stop = asyncio.Event()
+    original = platform.claim_next
+
+    async def claim_next(**kwargs: Any) -> ScreenerQueueResponse:
+        stop.set()
+        return await original(**kwargs)
+
+    platform.claim_next = claim_next  # type: ignore[method-assign]
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+
+    assert await worker._sweep(stop) == 1
+    assert gate.calls == [agent_id]
+    assert len(platform.verdicts) == 1
+    assert platform.verdicts[0]["attempt_id"] == item.attempt_id
+    assert platform.verdicts[0]["passed"] is True
+
+
+async def test_policy_change_during_claim_fails_claimed_items_explicitly(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent_id = uuid4()
+    item = _item(agent_id, policy_version=SCREENING_FLOOR_POLICY_VERSION)
+    platform = _FakePlatform([])
+    platform.required_policy_version = SCREENING_FLOOR_POLICY_VERSION
+
+    async def claim_next(**_: Any) -> ScreenerQueueResponse:
+        platform.claim_calls += 1
+        return ScreenerQueueResponse(
+            items=[item],
+            count=1,
+            required_policy_version=SCREENING_FLOOR_POLICY_VERSION + 1,
+        )
+
+    platform.claim_next = claim_next  # type: ignore[method-assign]
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+
+    assert await worker._sweep(asyncio.Event()) == 0
+    assert gate.calls == []
+    assert platform.artifact_calls == []
+    assert len(platform.verdicts) == 1
+    verdict = platform.verdicts[0]
+    _assert_claim_not_started(verdict, agent_id)
+    assert verdict["attempt_id"] == item.attempt_id
+    # Platform binds the attempt to its claimed policy and accepts no other.
+    assert verdict["policy_version"] == SCREENING_FLOOR_POLICY_VERSION
+    assert (
+        "changed screening policy during claim" in (verdict["private_failure_detail"])
+    )
+
+
+async def test_out_of_range_item_policy_is_failed_not_dropped(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent_id = uuid4()
+    item = _item(agent_id, policy_version=SCREENING_POLICY_VERSION + 1)
+    platform = _FakePlatform([[item]])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+
+    assert await worker._sweep(asyncio.Event()) == 0
+    assert gate.calls == []
+    assert platform.artifact_calls == []
+    assert len(platform.verdicts) == 1
+    verdict = platform.verdicts[0]
+    _assert_claim_not_started(verdict, agent_id)
+    assert verdict["attempt_id"] == item.attempt_id
+    assert verdict["policy_version"] == SCREENING_POLICY_VERSION + 1
+    assert (
+        "outside this worker's supported range" in (verdict["private_failure_detail"])
+    )
+
+
+async def test_invalid_claim_response_fails_recoverable_attempts(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    from ditto_screener.platform import ClaimedAttemptRef, ClaimResponseInvalid
+
+    agent_id, attempt_id = uuid4(), uuid4()
+    platform = _FakePlatform([])
+
+    async def claim_next(**_: Any) -> ScreenerQueueResponse:
+        platform.claim_calls += 1
+        raise ClaimResponseInvalid(
+            "screening claim response invalid: items.0.name: Field required",
+            (
+                ClaimedAttemptRef(
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    policy_version=SCREENING_POLICY_VERSION,
+                ),
+                ClaimedAttemptRef(agent_id=uuid4()),
+            ),
+        )
+
+    platform.claim_next = claim_next  # type: ignore[method-assign]
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+
+    assert await worker._sweep(asyncio.Event()) == 0
+    assert gate.calls == []
+    # The ref without an attempt id has nothing to sign against.
+    assert len(platform.verdicts) == 1
+    verdict = platform.verdicts[0]
+    _assert_claim_not_started(verdict, agent_id)
+    assert verdict["attempt_id"] == attempt_id
+    assert verdict["policy_version"] == SCREENING_POLICY_VERSION
+    assert "claim response invalid" in verdict["private_failure_detail"]
 
 
 async def test_local_drain_lease_follows_heartbeat_renewal_and_clears(

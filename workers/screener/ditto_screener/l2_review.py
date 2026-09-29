@@ -2651,7 +2651,7 @@ class L2AuditJournal:
             os.close(fd)
 
 
-def _signed_runtime_lease_matches(
+def _signed_runtime_lease_rejection(
     lease: ScoredRuntimeEvidenceLease | None,
     *,
     attempt_id: UUID,
@@ -2659,17 +2659,80 @@ def _signed_runtime_lease_matches(
     policy_version: int,
     required: bool,
     max_age_seconds: int = 300,
-) -> bool:
+    received_at: int | None = None,
+) -> str | None:
+    """Return the first clause the signed lease fails, or None when usable.
+
+    Freshness is anchored at claim receipt, not at use. Platform certified the
+    scorer cohort when it issued the lease, so a long build or L1 pass cannot
+    age an otherwise exact lease out mid-attempt. Identity binding is checked
+    at every use. Without a receipt time the current clock is the anchor.
+    """
     if lease is None:
-        return not (policy_version >= 13 and required)
-    age_seconds = int(time.time()) - lease.observed_at
-    return (
-        policy_version == 13
-        and lease.attempt_id == attempt_id
-        and lease.artifact_sha256 == artifact_sha256
-        and lease.policy_version == policy_version
-        and -300 <= age_seconds <= max_age_seconds
+        return "missing" if policy_version >= 13 and required else None
+    if policy_version != 13 or lease.policy_version != policy_version:
+        return "policy"
+    if lease.attempt_id != attempt_id:
+        return "attempt_id"
+    if lease.artifact_sha256 != artifact_sha256:
+        return "artifact"
+    anchor = int(time.time()) if received_at is None else received_at
+    age_seconds = anchor - lease.observed_at
+    if age_seconds < -300:
+        return "age_future"
+    if age_seconds > max_age_seconds:
+        return "age_stale"
+    return None
+
+
+def _missing_lease_is_fleet_owned(
+    clause: str | None, *, policy_version: int, bench_version: int | None
+) -> bool:
+    """Whether an absent lease can only mean the scorer cohort was unavailable.
+
+    Platform issues a lease for every V13 arrival under policy 13 while the
+    pinned cohort is healthy, so its absence there is fleet infrastructure and
+    is retried automatically. Any other arrival lacks a lease for a reason of
+    its own; retrying it would only loop, so it keeps the inconclusive hold. A
+    present lease that fails identity or freshness is always that hold too.
+    """
+    return clause == "missing" and policy_version == 13 and bench_version == 13
+
+
+def _log_runtime_lease_hold(
+    lease: ScoredRuntimeEvidenceLease | None,
+    *,
+    attempt_id: UUID,
+    clause: str,
+    max_age_seconds: int,
+    received_at: int | None,
+) -> None:
+    anchor = int(time.time()) if received_at is None else received_at
+    logger.warning(
+        "L2 runtime evidence hold attempt_id=%s lease_present=%s age_seconds=%s "
+        "max_age_seconds=%d clause=%s",
+        attempt_id,
+        lease is not None,
+        None if lease is None else anchor - lease.observed_at,
+        max_age_seconds,
+        clause,
     )
+
+
+def _deadline_before(deadline: float, seconds: float) -> float:
+    """``deadline - seconds``, still following a renewable lease."""
+    offset = getattr(deadline, "offset", None)
+    return deadline - seconds if offset is None else offset(seconds)
+
+
+def _deadline_capped(deadline: float, not_after: float) -> float:
+    """The earlier deadline, still following a renewable lease up to the cap.
+
+    ``min()`` would hand back the lease object itself, which a later renewal
+    could push past a layer's own timeout.
+    """
+    cap = getattr(deadline, "cap", None)
+    return min(deadline, not_after) if cap is None else cap(not_after)
 
 
 class TerraSolSourceReviewAgent:
@@ -2793,14 +2856,18 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         on_l3_start: Callable[[], None] | None = None,
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
+        scored_runtime_evidence_received_at: int | None = None,
+        bench_version: int | None = None,
     ) -> L2RunResult:
         started = time.monotonic()
         local_deadline = asyncio.get_running_loop().time() + self._timeout_seconds
         effective_deadline = (
-            local_deadline if deadline is None else min(local_deadline, deadline)
+            local_deadline
+            if deadline is None
+            else _deadline_capped(deadline, local_deadline)
         )
         runtime_evidence: dict[str, object] | None = None
-        if not _signed_runtime_lease_matches(
+        lease_rejection = _signed_runtime_lease_rejection(
             scored_runtime_evidence,
             attempt_id=attempt_id,
             artifact_sha256=artifact_sha256,
@@ -2808,10 +2875,26 @@ class TerraSolSourceReviewAgent:
             required=self._require_signed_runtime_lease
             or (policy_version >= 13 and not self._l3_enabled),
             max_age_seconds=self._signed_runtime_lease_max_age_seconds,
-        ):
+            received_at=scored_runtime_evidence_received_at,
+        )
+        if lease_rejection is not None:
+            _log_runtime_lease_hold(
+                scored_runtime_evidence,
+                attempt_id=attempt_id,
+                clause=lease_rejection,
+                max_age_seconds=self._signed_runtime_lease_max_age_seconds,
+                received_at=scored_runtime_evidence_received_at,
+            )
             result = L2RunResult(
                 observation=_failure(
-                    "l2-runtime-evidence-unavailable", "pass_inconclusive"
+                    "l2-runtime-evidence-unavailable",
+                    "retryable_infra"
+                    if _missing_lease_is_fleet_owned(
+                        lease_rejection,
+                        policy_version=policy_version,
+                        bench_version=bench_version,
+                    )
+                    else "pass_inconclusive",
                 ),
                 analyzed_files=(),
                 causal_path=(),
@@ -5496,10 +5579,58 @@ class LayeredSourceReviewAgent:
         self._shadow_results: dict[UUID, L2RunResult] = {}
         self._preview_l1_results: dict[UUID, SourceReviewObservation] = {}
 
+    def _requires_signed_runtime_lease(self, policy_version: int) -> bool:
+        return getattr(self._l2, "_require_signed_runtime_lease", False) or (
+            policy_version >= 13 and getattr(self._l2, "_l3_enabled", True) is False
+        )
+
     def _runtime_evidence_hold(
-        self, *, policy_version: int, review_disabled: bool
-    ) -> SourceReviewObservation:
-        """Account for a V13 hold before either paid review stage starts."""
+        self,
+        lease: ScoredRuntimeEvidenceLease | None,
+        *,
+        attempt_id: UUID,
+        artifact_sha256: str,
+        policy_version: int,
+        received_at: int | None,
+        bench_version: int | None,
+    ) -> SourceReviewObservation | None:
+        """Hold a V13 review before either paid stage starts, or return None."""
+        requires_lease = self._requires_signed_runtime_lease(policy_version)
+        max_age_seconds = getattr(
+            self._l2, "_signed_runtime_lease_max_age_seconds", 300
+        )
+        review_disabled = (
+            policy_version == 13 and requires_lease and self._mode == "off"
+        )
+        clause = (
+            "review_disabled"
+            if review_disabled
+            else _signed_runtime_lease_rejection(
+                lease,
+                attempt_id=attempt_id,
+                artifact_sha256=artifact_sha256,
+                policy_version=policy_version,
+                required=requires_lease,
+                max_age_seconds=max_age_seconds,
+                received_at=received_at,
+            )
+        )
+        if clause is None or (requires_lease and self._mode == "shadow"):
+            return None
+        _log_runtime_lease_hold(
+            lease,
+            attempt_id=attempt_id,
+            clause=clause,
+            max_age_seconds=max_age_seconds,
+            received_at=received_at,
+        )
+        if _missing_lease_is_fleet_owned(
+            clause, policy_version=policy_version, bench_version=bench_version
+        ):
+            # The pinned scorer cohort was unavailable at claim. Nothing
+            # reviewed the artifact and no paid stage ran, so retry it as fleet
+            # infrastructure instead of parking the submission as inconclusive.
+            return _failure("l2-runtime-evidence-unavailable", "retryable_infra")
         audit = ScreenReviewAudit(
             stage="l2",
             reason_code="l2-runtime-evidence-unavailable",
@@ -5528,36 +5659,38 @@ class LayeredSourceReviewAgent:
             review_audit=audit.model_dump(mode="json"),
         )
 
-    def _exploration_deadline(self, deadline: float | None) -> float | None:
-        """Reserve court time without zeroing exploration on a short lease."""
-        if deadline is None or self._adjudicator is None:
-            return deadline
-        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
-        effective_reserve = min(
-            self._adjudicator_reserve_seconds,
-            remaining / 2.0,
-        )
-        return deadline - effective_reserve
+    def _exploration_deadline(
+        self, deadline: float | None
+    ) -> tuple[float | None, float]:
+        """Reserve court time without zeroing exploration on a short lease.
 
-    def _court_deadline(
-        self,
-        deadline: float | None,
-        review_deadline: float | None,
-    ) -> float | None:
-        """Give L4 its reserved window, never the remainder of the lease.
-
-        ``review_deadline`` partitions a short lease between the exploratory
-        layers and the court.  Handing the court the parent deadline again
-        erased that partition whenever L1/L2 finished quickly: a sequence of
-        slow but individually-bounded model turns could consume the build and
-        verdict-reporting time.  The court may still use its full reserved
-        duration from the moment it starts, but its timeout cannot grow into
-        the rest of the lease.
+        Returns the exploratory layers' deadline and the court's reserve in
+        seconds. The exploration deadline stays a fixed distance before a
+        renewable lease, so heartbeat renewals reach L1/L2 rather than
+        inflating the court's window.
         """
-        if deadline is None or review_deadline is None:
+        if deadline is None or self._adjudicator is None:
+            return deadline, 0.0
+        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+        reserve = min(self._adjudicator_reserve_seconds, remaining / 2.0)
+        return _deadline_before(deadline, reserve), reserve
+
+    @staticmethod
+    def _court_deadline(deadline: float | None, reserve: float) -> float | None:
+        """Give L4 its reserved window from the moment it starts.
+
+        ``reserve`` partitions a short lease between the exploratory layers
+        and the court.  Handing the court the parent deadline again erased
+        that partition whenever L1/L2 finished quickly: a sequence of slow but
+        individually-bounded model turns could consume the build and
+        verdict-reporting time.  Measured when the court starts, it gets
+        ``min(reserve, time left on the lease)``: a slow L2 cannot eat into
+        the court's window, and a lease renewal cannot grow it past the
+        reserve.
+        """
+        if deadline is None or reserve <= 0:
             return deadline
-        reserve = max(0.0, deadline - review_deadline)
-        return min(deadline, asyncio.get_running_loop().time() + reserve)
+        return _deadline_capped(deadline, asyncio.get_running_loop().time() + reserve)
 
     def pop_shadow_result(self, attempt_id: UUID) -> L2RunResult | None:
         """Consume shadow telemetry or an isolated enforce-preview result."""
@@ -5666,29 +5799,19 @@ class LayeredSourceReviewAgent:
         deadline: float | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
+        scored_runtime_evidence_received_at: int | None = None,
+        bench_version: int | None = None,
     ) -> SourceReviewObservation:
-        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False) or (
-            policy_version >= 13 and getattr(self._l2, "_l3_enabled", True) is False
-        )
-        lease_matches = _signed_runtime_lease_matches(
+        hold = self._runtime_evidence_hold(
             scored_runtime_evidence,
             attempt_id=attempt_id,
             artifact_sha256=artifact_sha256,
             policy_version=policy_version,
-            required=requires_lease,
-            max_age_seconds=getattr(
-                self._l2, "_signed_runtime_lease_max_age_seconds", 300
-            ),
+            received_at=scored_runtime_evidence_received_at,
+            bench_version=bench_version,
         )
-        if (not lease_matches and not (requires_lease and self._mode == "shadow")) or (
-            policy_version == 13 and requires_lease and self._mode == "off"
-        ):
-            return self._runtime_evidence_hold(
-                policy_version=policy_version,
-                review_disabled=policy_version == 13
-                and requires_lease
-                and self._mode == "off",
-            )
+        if hold is not None:
+            return hold
 
         def report_l1(completed: int, total: int) -> None:
             if progress is not None:
@@ -5696,10 +5819,11 @@ class LayeredSourceReviewAgent:
 
         # L4 is the terminal court, so the exploratory stages may not consume
         # its entire wall-clock allowance.  They share a deadline shortened by
-        # the configured court timeout; L4 receives the original deadline and
-        # can therefore decide from whatever durable notes/finding exist when
-        # L1/L2 run out of time.
-        review_deadline = self._exploration_deadline(deadline)
+        # the configured court timeout; L4 receives that reserve from the
+        # moment it starts, within the original deadline, and can therefore
+        # decide from whatever durable notes/finding exist when L1/L2 run out
+        # of time.
+        review_deadline, court_reserve = self._exploration_deadline(deadline)
         # A longer report-only lease reserves a separate L2 window. Bound L1
         # to its own configured aggregate timeout so a slow but legitimate L1
         # cannot consume the entire lease before L2 starts. Shorter ordinary
@@ -5709,7 +5833,9 @@ class LayeredSourceReviewAgent:
         if isinstance(l1_timeout, (int, float)) and l1_timeout > 0:
             bounded = asyncio.get_running_loop().time() + l1_timeout
             l1_deadline = (
-                bounded if review_deadline is None else min(review_deadline, bounded)
+                bounded
+                if review_deadline is None
+                else _deadline_capped(review_deadline, bounded)
             )
         l1 = await self._l1.review(
             archive_path,
@@ -5726,8 +5852,11 @@ class LayeredSourceReviewAgent:
             progress=progress,
             deadline=deadline,
             review_deadline=review_deadline,
+            court_reserve_seconds=court_reserve,
             policy_version=policy_version,
             scored_runtime_evidence=scored_runtime_evidence,
+            scored_runtime_evidence_received_at=scored_runtime_evidence_received_at,
+            bench_version=bench_version,
         )
 
     async def resolve_lead(
@@ -5740,38 +5869,34 @@ class LayeredSourceReviewAgent:
         progress: Callable[[int, int], None] | None = None,
         deadline: float | None = None,
         review_deadline: float | None = None,
+        court_reserve_seconds: float | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
+        scored_runtime_evidence_received_at: int | None = None,
+        bench_version: int | None = None,
     ) -> SourceReviewObservation:
         """Resolve a precomputed, artifact-bound L1 lead without rerunning L1."""
-        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False) or (
-            policy_version >= 13 and getattr(self._l2, "_l3_enabled", True) is False
-        )
-        lease_matches = _signed_runtime_lease_matches(
+        requires_lease = self._requires_signed_runtime_lease(policy_version)
+        hold = self._runtime_evidence_hold(
             scored_runtime_evidence,
             attempt_id=attempt_id,
             artifact_sha256=artifact_sha256,
             policy_version=policy_version,
-            required=requires_lease,
-            max_age_seconds=getattr(
-                self._l2, "_signed_runtime_lease_max_age_seconds", 300
-            ),
+            received_at=scored_runtime_evidence_received_at,
+            bench_version=bench_version,
         )
-        if (not lease_matches and not (requires_lease and self._mode == "shadow")) or (
-            policy_version == 13 and requires_lease and self._mode == "off"
-        ):
-            return self._runtime_evidence_hold(
-                policy_version=policy_version,
-                review_disabled=policy_version == 13
-                and requires_lease
-                and self._mode == "off",
-            )
+        if hold is not None:
+            return hold
         l1 = l1_observation
         if self._capture_enforce_result:
             self._preview_l1_results[attempt_id] = l1
-        if review_deadline is None and deadline is not None and self._adjudicator:
-            review_deadline = self._exploration_deadline(deadline)
-        court_deadline = self._court_deadline(deadline, review_deadline)
+        if court_reserve_seconds is None:
+            # Static preflight enters here without ``review()``'s partition.
+            derived_deadline, court_reserve_seconds = self._exploration_deadline(
+                deadline
+            )
+            if review_deadline is None and self._adjudicator:
+                review_deadline = derived_deadline
         always_escalate = (
             (policy_version == 13 and requires_lease)
             or self._always_escalate
@@ -5802,7 +5927,7 @@ class LayeredSourceReviewAgent:
             adjudicated = await self._adjudicate(
                 observation,
                 archive_path=archive_path,
-                deadline=court_deadline,
+                deadline=self._court_deadline(deadline, court_reserve_seconds),
                 policy_version=policy_version,
             )
             report(10)
@@ -5821,6 +5946,8 @@ class LayeredSourceReviewAgent:
             policy_version=policy_version,
             on_l3_start=lambda: report(8),
             scored_runtime_evidence=scored_runtime_evidence,
+            scored_runtime_evidence_received_at=scored_runtime_evidence_received_at,
+            bench_version=bench_version,
         )
         report(9)
         if self._capture_enforce_result:

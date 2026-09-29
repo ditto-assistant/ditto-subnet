@@ -28,7 +28,7 @@ already owns it — nothing is duplicated into a new status column.
 | `review_rejected` | `ath_reviews.resolution = 'reject'` | Adjudicated against this artifact. Never eligible, never re-payable. |
 | `review_escalated` | latest `ath_copy_court_recommendations.verdict = 'escalate'`, or `algorithm_provenance.review_kind = 'anomalous_score'` | The platform declined to decide mechanically; an operator must rule. |
 | `review_inconclusive` | `reason_code` in `source-review-inconclusive`, `repeatedly-inconclusive` | Mandatory verification did not finish. **Not a finding** (#2077); the published reason says so. |
-| `review_infrastructure_failed` | `reason_code` in `INFRA_AUTO_RETRY_REASON_CODES` + `PROVIDER_BACKOFF_REASON_CODES`, with a failed/expired latest attempt | Ditto's build or provider failed. **Never a miner violation** (#2051); retried automatically by `screening_infra_retry`. |
+| `review_infrastructure_failed` | `reason_code` in `INFRA_AUTO_RETRY_REASON_CODES` + `PROVIDER_BACKOFF_REASON_CODES`, with a failed/expired latest attempt | Ditto's build, provider, or claim handling failed. **Never a miner violation** (#2051); retried automatically by `screening_infra_retry`. |
 | `unresolved_review` | `ath_reviews.status = 'pending'`, any kind | The generic open hold, including a stranded one. |
 | `review_missing` | no `passed` screening attempt | Only when the operator sets `require_completed_review` (off by default). |
 | `awaiting_next_window` | `resolved_at >= window_start` on a `clear` | Cleared, and starting at the next window. |

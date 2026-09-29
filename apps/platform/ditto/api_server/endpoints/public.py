@@ -425,6 +425,13 @@ from ditto.db.queries.scores import (
     v9_confirmation_policy_mode,
     v9_confirmation_public_projections,
 )
+from ditto.db.queries.screener_capacity import (
+    screener_fallback_active,
+    screener_gcp_fallback_allowed,
+)
+from ditto.db.queries.screener_provider_settings import (
+    resolve_screener_provider_settings,
+)
 from ditto.db.queries.screening import (
     LEASE_EXPIRED_REASON_CODE,
     PROVIDER_BACKOFF_REASON_CODES,
@@ -6853,40 +6860,34 @@ async def screener_capacity_watchdog(
     session: SessionDep,
     environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod",
 ) -> PublicScreenerWatchdogResponse:
-    """Tell the GCP-only watchdog whether the normal writer lease is stale."""
+    """Publish controller health and policy-gated GCP safety-net activation.
+
+    The reason describes controller health; current operator routing and
+    primary admission can suppress activation even while the controller is
+    missing, stale or unready.
+    """
     response.headers["Cache-Control"] = "no-store"
     now = datetime.now(UTC)
     snapshot = await session.get(ScreenerCapacitySnapshot, environment)
-    if snapshot is None:
-        return PublicScreenerWatchdogResponse(
-            generated_at=now,
-            controller_stale=True,
-            activate_fallback=True,
-            reason="controller_missing",
-            controller_epoch=None,
-            controller_source_sha=None,
-            provider_ready=False,
+    activate_fallback, reason = screener_fallback_active(snapshot, now)
+    stale = reason in ("controller_missing", "controller_stale")
+    if activate_fallback:
+        _, settings = await resolve_screener_provider_settings(
+            session, environment=environment
         )
-    expiry = snapshot.controller_lease_expires_at
-    if expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=UTC)
-    stale = now >= expiry
-    activate_fallback = stale or not snapshot.provider_ready
-    reason: Literal["controller_fresh", "controller_stale", "provider_not_ready"]
-    if stale:
-        reason = "controller_stale"
-    elif not snapshot.provider_ready:
-        reason = "provider_not_ready"
-    else:
-        reason = "controller_fresh"
+        activate_fallback = await screener_gcp_fallback_allowed(
+            session, environment=environment, settings=settings
+        )
     return PublicScreenerWatchdogResponse(
         generated_at=now,
         controller_stale=stale,
         activate_fallback=activate_fallback,
         reason=reason,
-        controller_epoch=snapshot.controller_epoch,
-        controller_source_sha=snapshot.controller_source_sha,
-        provider_ready=snapshot.provider_ready and not stale,
+        controller_epoch=snapshot.controller_epoch if snapshot is not None else None,
+        controller_source_sha=(
+            snapshot.controller_source_sha if snapshot is not None else None
+        ),
+        provider_ready=snapshot is not None and snapshot.provider_ready and not stale,
     )
 
 
@@ -7510,16 +7511,27 @@ async def agent_summary(
     )
 
 
+# An L1 model turn that timed out with lease time left. Operator-retried, so
+# it reports parked rather than stuck. ``source-review-retryable-infra`` is the
+# code's historical spelling, kept so older rows still render (#2458).
+_SOURCE_REVIEW_MODEL_TIMEOUT_REASON_CODES = (
+    "source-review-model-timeout",
+    "source-review-retryable-infra",
+)
+
 # The lane each Ditto-side admission failure stopped in. Any other reason code
 # names no lane the public pipeline can vouch for.
 _ADMISSION_LANE_BY_REASON_CODE: dict[str, PublicAdmissionLane] = {
     "docker-build-infrastructure": "build",
+    # Settled before the artifact was fetched; the retry starts at the build.
+    "worker-claim-not-started": "build",
     "targon-build-unavailable": "build",
     "cloudrun-build-unavailable": "build",
     "targon-runtime-unavailable": "runtime_smoke",
     "cloudrun-runtime-unavailable": "runtime_smoke",
     "targon-source-review-unavailable": "source_review",
-    "source-review-retryable-infra": "source_review",
+    **dict.fromkeys(_SOURCE_REVIEW_MODEL_TIMEOUT_REASON_CODES, "source_review"),
+    "l2-runtime-evidence-unavailable": "source_review",
 }
 
 
@@ -7624,7 +7636,9 @@ async def agent_pipeline(
             )
             if overridden is not None:
                 retry_state = "retry_queued"
-            elif latest_attempt.reason_code == "source-review-retryable-infra":
+            elif (
+                latest_attempt.reason_code in _SOURCE_REVIEW_MODEL_TIMEOUT_REASON_CODES
+            ):
                 retry_state = "parked"
             elif scheduled is not None and scheduled.state != "capped":
                 # Automatic, bounded retry: the miner sees the earliest start

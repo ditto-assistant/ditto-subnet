@@ -13,6 +13,7 @@ import contextlib
 import fcntl
 import logging
 import os
+import re
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ditto_screener.enrollment import (
     NodeCredential,
@@ -28,7 +30,12 @@ from ditto_screener.enrollment import (
     refresh_signing_message,
     store_node_credential,
 )
-from ditto_screener.errors import PlatformError
+from ditto_screener.errors import (
+    PlatformAuthOnlyFailure,
+    PlatformAuthUnavailable,
+    PlatformError,
+    PlatformRejected,
+)
 from ditto_screener.heartbeat import (
     ScreenerHeartbeatRequest,
     ScreenerHeartbeatResponse,
@@ -53,6 +60,7 @@ from ditto_screening_protocol import (
     ScreenedImageUploadRequest,
     ScreenedImageUploadResponse,
     ScreenerQueueResponse,
+    ScreenerReviewSettingsOverride,
     ScreenEvidenceItem,
     ScreenResultOutcome,
     ScreenResultRequest,
@@ -122,6 +130,48 @@ def _credential_needs_rotation(credential: NodeCredential) -> bool:
 
 def _is_transient_platform_status(status_code: int) -> bool:
     return status_code in {408, 425, 429} or status_code >= 500
+
+
+_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
+)
+
+
+class ClaimedAttemptRef(BaseModel):
+    """What settling one claimed attempt needs, read leniently from a claim.
+
+    Field names and defaults match ``ScreenerQueueItem``; everything else in
+    the item is ignored, so a wire-contract skew elsewhere in the item still
+    leaves the attempt recoverable.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    attempt_id: UUID | None = None
+    policy_version: int | None = None
+    build_only: bool = False
+    deferred_source_review: bool = False
+    policy_only: bool = False
+    review_settings_override: ScreenerReviewSettingsOverride | None = None
+
+
+class _ClaimedAttemptRefs(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    items: list[ClaimedAttemptRef]
+
+
+class ClaimResponseInvalid(PlatformError):
+    """A claim Platform committed but this build could not parse.
+
+    ``attempts`` are the leases recovered from the response, which the worker
+    must settle instead of leaving them to the orphan sweeper.
+    """
+
+    def __init__(self, message: str, attempts: tuple[ClaimedAttemptRef, ...]) -> None:
+        super().__init__(message)
+        self.attempts = attempts
 
 
 class PlatformClient:
@@ -259,7 +309,7 @@ class PlatformClient:
                 self._headers["Authorization"] = f"Bearer {credential.api_token}"
                 return dict(self._headers)
             if self._keypair is None:
-                raise PlatformError(
+                raise PlatformAuthUnavailable(
                     "enrolled node cannot rotate without its signing key"
                 )
             refresh_id = credential.pending_refresh_id or uuid4()
@@ -504,7 +554,25 @@ class PlatformClient:
             )
         # The nested signed V13 runtime lease keeps UUID fields strict. Parse
         # the HTTP JSON bytes as JSON, where UUID strings are the wire form.
-        return ScreenerQueueResponse.model_validate_json(resp.content)
+        try:
+            return ScreenerQueueResponse.model_validate_json(resp.content)
+        except ValidationError as error:
+            # Platform committed these leases before answering. Recover what
+            # settling them needs rather than losing the attempt ids here.
+            problems = "; ".join(
+                f"{'.'.join(map(str, problem['loc']))}: {problem['msg']}"
+                for problem in error.errors(include_url=False, include_input=False)[:3]
+            )
+            message = f"screening claim response invalid: {problems}"
+            try:
+                refs = _ClaimedAttemptRefs.model_validate_json(resp.content).items
+            except ValidationError:
+                logger.error(
+                    "unrecoverable screening claim response; ids=%s",
+                    ",".join(sorted(set(_UUID_RE.findall(resp.text)))),
+                )
+                raise ClaimResponseInvalid(message, ()) from error
+            raise ClaimResponseInvalid(message, tuple(refs)) from error
 
     async def get_artifact(
         self, agent_id: UUID, *, attempt_id: UUID | None = None
@@ -717,20 +785,47 @@ class PlatformClient:
         )
         body = payload.model_dump(mode="json")
         last_error = "verdict submit did not run"
+        request_sent = False
+        response_lost = False
         for retry_index in range(len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1):
             try:
-                resp = await self._client.post(
-                    url, json=body, headers=await self._auth_headers()
-                )
-            except httpx.HTTPError as error:
-                last_error = f"verdict submit failed: {error}"
-                transient = True
+                headers = await self._auth_headers()
+            except PlatformAuthUnavailable as error:
+                last_error = f"verdict auth refresh failed: {error}"
+                if not request_sent:
+                    raise PlatformAuthOnlyFailure(last_error) from error
+                raise PlatformError(last_error) from error
+            except PlatformError as error:
+                last_error = f"verdict auth refresh failed: {error}"
             else:
-                if resp.status_code == 200:
-                    return ScreenResultResponse.model_validate(resp.json())
-                last_error = f"verdict rejected ({resp.status_code}): {resp.text[:200]}"
-                transient = _is_transient_platform_status(resp.status_code)
-            if not transient or retry_index >= len(_TRANSIENT_PLATFORM_RETRY_DELAYS):
+                try:
+                    # Once dispatched, a transport failure may hide a committed
+                    # verdict. Later auth failures must not erase that ambiguity.
+                    request_sent = True
+                    resp = await self._client.post(url, json=body, headers=headers)
+                except httpx.HTTPError as error:
+                    response_lost = True
+                    last_error = f"verdict submit failed: {error}"
+                else:
+                    if resp.status_code == 200:
+                        return ScreenResultResponse.model_validate(resp.json())
+                    if not _is_transient_platform_status(resp.status_code):
+                        # A previous dispatch may already have committed its
+                        # verdict. A later rejection cannot prove otherwise.
+                        if response_lost:
+                            raise PlatformError(
+                                f"verdict retry rejected ({resp.status_code}) "
+                                "after an uncertain dispatch"
+                            )
+                        raise PlatformRejected(
+                            status_code=resp.status_code, body=resp.text
+                        )
+                    last_error = (
+                        f"verdict rejected ({resp.status_code}): {resp.text[:200]}"
+                    )
+            if retry_index >= len(_TRANSIENT_PLATFORM_RETRY_DELAYS):
+                if not request_sent:
+                    raise PlatformAuthOnlyFailure(last_error)
                 raise PlatformError(last_error)
             delay = _TRANSIENT_PLATFORM_RETRY_DELAYS[retry_index]
             logger.warning(

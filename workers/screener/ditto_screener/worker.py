@@ -20,7 +20,7 @@ import os
 import re
 import socket
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -28,7 +28,11 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from pydantic import ValidationError
 
 from ditto_screener import __version__
-from ditto_screener.errors import PlatformError
+from ditto_screener.errors import (
+    PlatformAuthOnlyFailure,
+    PlatformError,
+    PlatformRejected,
+)
 from ditto_screener.gate import LeaseDeadline
 from ditto_screener.heartbeat import (
     DockerHealth,
@@ -43,6 +47,7 @@ from ditto_screener.heartbeat import (
     collect_host_specs,
     probe_docker_health,
 )
+from ditto_screener.platform import ClaimedAttemptRef, ClaimResponseInvalid
 from ditto_screener.policy import (
     PolicyEvidence,
     ScreeningOutcome,
@@ -95,6 +100,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 EXACT_CROSS_MINER_DUPLICATE = "exact-cross-miner-duplicate"
+# A durable claim this worker settled before fetching or running anything of
+# the artifact. Platform retries it automatically (INFRA_AUTO_RETRY_REASON_CODES).
+CLAIM_NOT_STARTED_REASON_CODE = "worker-claim-not-started"
 
 
 # Shadow mode appends this after the deciding evidence. It records sandbox
@@ -110,35 +118,30 @@ def _verdict_reason_code(
     outcome: ScreenResultOutcome,
     evidence: tuple[PolicyEvidence, ...],
 ) -> str | None:
-    """Pick the public reason from evidence that actually decided the outcome.
+    """Infer a reason for legacy decisions without an explicit deciding code.
 
     Seed observations are appended last so they survive the evidence cap.
     Treating that tail as the reason relabels a quarantine or pass as a seed
-    failure and, when private feedback is attached, makes ``ScreenResultRequest``
-    reject the verdict.
+    failure. Seed probes decide only deterministic rejections; successful
+    oracle observations cannot explain a quarantine or inconclusive outcome.
     """
     if outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
         return "source-review-inconclusive"
     if not evidence:
         return None
-    shadow_seed = outcome not in {
-        ScreenResultOutcome.DETERMINISTIC_REJECT,
-        ScreenResultOutcome.RETRYABLE_INFRA,
-        ScreenResultOutcome.INCONCLUSIVE,
-    }
+    shadow_seed = outcome != ScreenResultOutcome.DETERMINISTIC_REJECT
     for item in reversed(evidence):
         if item.code == _SEED_ENVELOPE_OBSERVATION:
             continue
         if shadow_seed and item.code.startswith("seed-"):
             continue
+        if outcome in {
+            ScreenResultOutcome.QUARANTINE,
+            ScreenResultOutcome.INCONCLUSIVE,
+        } and item.code in {"behavioral-oracle-passed", "challenge-observed"}:
+            continue
         return item.code
-    if outcome in {
-        ScreenResultOutcome.QUARANTINE,
-        ScreenResultOutcome.INCONCLUSIVE,
-        ScreenResultOutcome.DETERMINISTIC_REJECT,
-        ScreenResultOutcome.RETRYABLE_INFRA,
-    }:
-        return evidence[-1].code
+    # No deciding evidence remains; do not reintroduce an observation as a reason.
     return None
 
 
@@ -190,7 +193,7 @@ def _private_failure_feedback(detail: str, reason_code: str | None) -> str:
 
 # v6 adds the announced host specs (CPU/RAM/disk). A worker that cannot read
 # its own hardware still reports at v5 rather than going dark.
-_HEARTBEAT_PROTOCOL_VERSION = 7
+_HEARTBEAT_PROTOCOL_VERSION = 8
 _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS = 5
 _SYSTEMD_WORKER_CGROUP = re.compile(
     r"(?:^|/)ditto-screener-worker@([1-9][0-9]*)\.service(?:/|$)"
@@ -288,6 +291,9 @@ class ScreenerWorker:
             if fleet_release_probe is not None
             else collect_fleet_release(builtin_policy_version=SCREENING_POLICY_VERSION)
         )
+        # Start on the v7 wire so a rolling older Platform keeps accepting
+        # heartbeats; switch to signed fixture capability only after its ack.
+        self._fixture_protocol_adopted = False
         # A node can run multiple independent local workers. Their enrollment
         # identity remains the shared ``node_id`` while every heartbeat must
         # use its process identity, otherwise Platform overwrites concurrent
@@ -459,10 +465,20 @@ class ScreenerWorker:
             host_specs = self._host_specs
             protocol_version = (
                 _HEARTBEAT_PROTOCOL_VERSION
-                if host_specs is not None
-                else _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS
+                if host_specs is not None and self._fixture_protocol_adopted
+                else (
+                    7
+                    if host_specs is not None
+                    else _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS
+                )
             )
-            release = self._fleet_release if protocol_version >= 7 else None
+            release = (
+                self._fleet_release
+                if protocol_version >= 8
+                else self._fleet_release.model_copy(update={"source_fixture_v1": False})
+                if protocol_version >= 7
+                else None
+            )
             policy_version = self._heartbeat_policy_version
             signature = sign_heartbeat(
                 self._keypair,
@@ -497,6 +513,10 @@ class ScreenerWorker:
                 signature=signature,
             )
             response = await self._platform.submit_heartbeat(request)
+            if response.accepted:
+                self._fixture_protocol_adopted = getattr(
+                    response, "source_fixture_v1_heartbeat_supported", False
+                )
             if (
                 response.accepted
                 and response.lease_deadline is not None
@@ -510,6 +530,7 @@ class ScreenerWorker:
                     self._active_lease_wall = response.lease_deadline
                     self._publish_active_lease()
         except Exception as error:  # noqa: BLE001 - observability is best effort
+            self._fixture_protocol_adopted = False
             logger.warning("screener heartbeat failed (screening continues): %s", error)
         finally:
             # Throttle an older platform that has not deployed the optional
@@ -577,16 +598,39 @@ class ScreenerWorker:
             # Correct the startup/previous-policy heartbeat before claiming so
             # the capacity controller can admit this node during a rollback.
             await self._report_heartbeat("polling", force=True)
-        queue = await self._platform.claim_next(
-            policy_version=screen_version,
-            review_settings=review_settings,
-            instance_id=self._instance_id,
-        )
+        # A drain's SIGTERM can land during any await above. Once claim_next
+        # returns the lease is durable, so a stopping worker must not claim.
+        if stop.is_set():
+            return 0
+        try:
+            queue = await self._platform.claim_next(
+                policy_version=screen_version,
+                review_settings=review_settings,
+                instance_id=self._instance_id,
+            )
+        except ClaimResponseInvalid as error:
+            logger.error("%s", error)
+            await self._fail_unstarted_claims(
+                error.attempts,
+                policy_version=screen_version,
+                review_settings=review_settings,
+                error=error,
+            )
+            return 0
+        claim_received_at = int(time.time())
         if queue.required_policy_version != required_policy:
-            raise PlatformError(
+            policy_changed = PlatformError(
                 "platform changed screening policy during claim: expected "
                 f"{required_policy}, received {queue.required_policy_version}"
             )
+            logger.warning("%s", policy_changed)
+            await self._fail_unstarted_claims(
+                queue.items,
+                policy_version=screen_version,
+                review_settings=review_settings,
+                error=policy_changed,
+            )
+            return 0
         if not queue.items:
             from ditto_screener.l2_report_canary import consume as consume_l2_canary
 
@@ -642,23 +686,39 @@ class ScreenerWorker:
                 await heartbeat
         logger.info("screener sweep: %d agent(s) to screen", len(queue.items))
         done = 0
-        for item in queue.items:
-            if stop.is_set():
-                break
+        for index, item in enumerate(queue.items):
+            # The first claimed item is always screened, even when stop arrived
+            # during the claim: _screen_one publishes the lease the drain waits
+            # on. Any further item has not started and is settled instead.
             item_policy_version = item.policy_version or screen_version
-            if not (
+            unstarted_error: PlatformError | None = None
+            if index and stop.is_set():
+                unstarted_error = PlatformError(
+                    "screener worker stopped before starting this claimed attempt"
+                )
+            elif not (
                 SCREENING_FLOOR_POLICY_VERSION
                 <= item_policy_version
                 <= SCREENING_POLICY_VERSION
             ):
-                raise PlatformError(
+                unstarted_error = PlatformError(
                     "claimed item policy is outside this worker's supported range: "
                     f"{item_policy_version}"
                 )
+                logger.warning("%s", unstarted_error)
+            if unstarted_error is not None:
+                await self._fail_unstarted_claims(
+                    queue.items[index:],
+                    policy_version=screen_version,
+                    review_settings=review_settings,
+                    error=unstarted_error,
+                )
+                return done
             await self._screen_one(
                 item,
                 policy_version=item_policy_version,
                 normal_review_settings=review_settings,
+                received_at=claim_received_at,
             )
             done += 1
         return done
@@ -669,11 +729,22 @@ class ScreenerWorker:
         *,
         policy_version: int,
         normal_review_settings: EffectiveReviewSettings | None = None,
+        received_at: int | None = None,
     ) -> None:
-        """Gate one agent and post its signed verdict. Never raises."""
+        """Gate one agent and post its signed verdict. Never raises.
+
+        ``received_at`` is when the claim carrying ``item`` arrived. Its signed
+        runtime lease is checked for freshness against that time once, not
+        against the clock at each later use.
+        """
         agent_id = item.agent_id
         if item.attempt_id is None:
-            logger.error("claimed agent_id=%s without a screening attempt id", agent_id)
+            # Platform creates an attempt for every claim; without one there
+            # is nothing to screen under or sign a result against.
+            logger.error(
+                "claimed agent_id=%s without a screening attempt id; skipping it",
+                agent_id,
+            )
             return
         attempt_id = item.attempt_id
         self._active_agent_id = agent_id
@@ -681,6 +752,8 @@ class ScreenerWorker:
         self._active_lease_wall = item.lease_deadline
         self._active_attempt_id = attempt_id
         self._job_started_at = int(time.time())
+        if received_at is None:
+            received_at = self._job_started_at
         self._set_progress("preparing")
         heartbeat_stop = asyncio.Event()
         heartbeat_task = asyncio.create_task(
@@ -864,6 +937,7 @@ class ScreenerWorker:
                         deferred_source_review=item.deferred_source_review,
                         policy_version=policy_version,
                         scored_runtime_evidence=item.scored_runtime_evidence,
+                        scored_runtime_evidence_received_at=received_at,
                     )
             if result.policy_version != policy_version:
                 raise PlatformError(
@@ -941,7 +1015,9 @@ class ScreenerWorker:
                     "build-only screen produced a quarantine outcome for "
                     f"agent_id={agent_id}"
                 )
-            reason_code = _verdict_reason_code(typed_outcome, result.evidence)
+            reason_code = result.reason_code or _verdict_reason_code(
+                typed_outcome, result.evidence
+            )
             private_failure_detail: str | None = None
             private_failure_log_tail: str | None = None
             if _attach_private_failure_feedback(typed_outcome, reason_code):
@@ -1152,12 +1228,31 @@ class ScreenerWorker:
             )
         except PlatformError as error:
             if result_submission_started:
-                # A late/conflicting verdict (409) or exhausted transient retry:
-                # the original signed request may already have reached Platform.
-                # Never replace it with a different fallback verdict.
                 logger.warning(
                     "verdict for agent_id=%s not applied: %s", agent_id, error
                 )
+                # A definitive validation rejection or an auth-only failure
+                # can be reported immediately. A plain PlatformError may hide
+                # an accepted verdict. A 409 can follow an accepted request
+                # whose response was lost, so never replace that verdict.
+                fallback_reason = None
+                if isinstance(error, PlatformRejected) and error.status_code in {
+                    400,
+                    413,
+                    422,
+                }:
+                    fallback_reason = "worker-verdict-rejected"
+                elif isinstance(error, PlatformAuthOnlyFailure):
+                    fallback_reason = "worker-verdict-auth-failed"
+                if fallback_reason is not None:
+                    await self._submit_claim_failure(
+                        item=item,
+                        attempt_id=attempt_id,
+                        policy_version=policy_version,
+                        effective_review_settings=effective_review_settings,
+                        reason_code=fallback_reason,
+                        error=error,
+                    )
             else:
                 # A claim is already durable. Returning to polling without a
                 # terminal result makes Platform infer worker-lease-orphaned
@@ -1219,10 +1314,43 @@ class ScreenerWorker:
                 self._gate.apply_review_settings(normal_review_settings)
             await self._report_heartbeat("polling", force=True)
 
+    async def _fail_unstarted_claims(
+        self,
+        items: Sequence[ScreenerQueueItem | ClaimedAttemptRef],
+        *,
+        policy_version: int,
+        review_settings: EffectiveReviewSettings,
+        error: Exception,
+    ) -> None:
+        """Settle claims this worker will not screen instead of dropping them.
+
+        Each lease is durable once ``claim_next`` returns. Dropped, it stays
+        ``running`` until Platform infers ``worker-lease-orphaned`` and parks
+        the agent for a manual retry. Nothing of the artifact was fetched or
+        run, so this fleet-owned code is retried automatically. Each result is
+        signed under the attempt's own policy, the only one Platform accepts.
+        """
+        for item in items:
+            if item.attempt_id is None:
+                logger.error(
+                    "claimed agent_id=%s without a screening attempt id; "
+                    "nothing to settle",
+                    item.agent_id,
+                )
+                continue
+            await self._submit_claim_failure(
+                item=item,
+                attempt_id=item.attempt_id,
+                policy_version=item.policy_version or policy_version,
+                effective_review_settings=review_settings,
+                reason_code=CLAIM_NOT_STARTED_REASON_CODE,
+                error=error,
+            )
+
     async def _submit_claim_failure(
         self,
         *,
-        item: ScreenerQueueItem,
+        item: ScreenerQueueItem | ClaimedAttemptRef,
         attempt_id: UUID,
         policy_version: int,
         effective_review_settings: EffectiveReviewSettings,

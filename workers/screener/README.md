@@ -57,6 +57,18 @@ digest, byte size, immutable Docker image ID, and image reference into the
 canonical signed verdict. Validators can therefore load the screened image
 instead of repeating the untrusted build.
 
+Verdict submission retries the same signed payload across transient HTTP,
+transport, and node-credential refresh failures. A missing signing key stops
+authentication retries immediately. A definitive 400, 413, or 422 verdict
+rejection triggers one best-effort, signed infrastructure fallback for the same
+attempt (`worker-verdict-rejected`), with bounded private rejection diagnostics.
+Authentication failure before any verdict dispatch uses
+`worker-verdict-auth-failed`. A 409 conflict, transport failure or exhausted
+transient retry may conceal an accepted verdict, so it never triggers a
+replacement. In particular, a response lost after acceptance can be followed
+by a 409 when the same signed payload is retried after the agent changes state.
+Platform can still refuse the fallback if the attempt has already closed.
+
 Rust is the reference starter implementation, not a competition requirement.
 Python, TypeScript/JavaScript, Go, Rust, or any other implementation is accepted
 when its root `Dockerfile` builds an image that serves the same `/health`,
@@ -208,6 +220,19 @@ Required values are supplied through the production host's protected
   cohort lease for the exact attempt and artifact. Set on the Platform process
   and on the signed screener workers.
   Leave it off for legacy screening; never treat an absent lease as CLEAR.
+  V13 with L3 off requires the lease without this flag. Freshness is checked
+  against claim receipt, not against each later use, so a long build or L1
+  pass cannot age out a lease Platform just certified. A present lease that is
+  stale at receipt or bound to another attempt, artifact, or policy is held
+  inconclusive. A V13 arrival under policy 13 with no lease means the pinned
+  scorer cohort was unavailable: that is retryable infrastructure,
+  `l2-runtime-evidence-unavailable`, which Platform retries automatically, and
+  Platform withholds such claims while the cohort is down. Any other arrival
+  without a lease (for example a non-V13 arrival during an open rollout) keeps
+  the inconclusive hold, so a per-agent cause never loops through that retry.
+- `SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS` (default `300`, 1-3600):
+  oldest signed cohort observation accepted at claim receipt. The report-only
+  L2 canary uses the same receipt-anchored rule.
 - `SCREENER_STATIC_PREFLIGHT_V2_MODE`: `off` (default), `shadow`, or `enforce`.
   `off` and `shadow` preserve the v1 decisive result; `shadow` additionally
   computes the reachability-and-causality v2 candidate for comparison.

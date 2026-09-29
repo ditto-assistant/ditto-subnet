@@ -149,12 +149,19 @@ class ScreenerControllerNodeState(BaseModel):
     admission_open: bool = True
     image_reference: str | None = None
     heartbeat_seen_at: datetime | None = None
+    # Legacy GCP fleet rows share one hotkey, so active_lease marks every row
+    # while any of them screens. This comes from the instance's own heartbeat
+    # and is null for enrolled nodes.
+    instance_busy: bool | None = None
 
 
 class ScreenerControllerNodesResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     nodes: tuple[ScreenerControllerNodeState, ...]
+    # Running, unexpired attempts on the shared legacy GCP hotkey. More than
+    # the busy legacy rows means a claim has not yet been heartbeated.
+    legacy_gcp_running_attempts: Annotated[int, Field(ge=0)]
 
 
 class ScreenerCapacityEventRequest(BaseModel):

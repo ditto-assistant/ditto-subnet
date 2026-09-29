@@ -181,7 +181,7 @@ class TestWithheldClasses:
             AgentReviewPosture(
                 agent_id=uuid4(),
                 latest_attempt_status="failed",
-                latest_attempt_reason_code="source-review-retryable-infra",
+                latest_attempt_reason_code="source-review-model-timeout",
             )
         )
         assert record.state == "review_infrastructure_failed"

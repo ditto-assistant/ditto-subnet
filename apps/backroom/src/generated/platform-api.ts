@@ -1971,6 +1971,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-l2-report-canaries/fixture/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Canonical Fixture Preflight
+         * @description Expose the pinned public source and current object before any queue write.
+         */
+        get: operations["get_canonical_fixture_preflight_api_v1_admin_screener_l2_report_canaries_fixture_preflight_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screener-l2-report-canaries/fixture/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register Canonical Fixture
+         * @description Stage exact public source without creating a miner or screening attempt.
+         */
+        post: operations["register_canonical_fixture_api_v1_admin_screener_l2_report_canaries_fixture_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screener-l2-report-canaries/fixture/{canary_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review Canonical Fixture
+         * @description Require a second authenticated operator's served-path evidence.
+         */
+        post: operations["review_canonical_fixture_api_v1_admin_screener_l2_report_canaries_fixture__canary_id__review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screener-l2-report-canaries/fixture/{canary_id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Schedule Canonical Fixture
+         * @description Queue one source-only report; no submission or admission state changes.
+         */
+        post: operations["schedule_canonical_fixture_api_v1_admin_screener_l2_report_canaries_fixture__canary_id__schedule_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-l2-report-canaries/preflight/{agent_id}/{source_attempt_id}": {
         parameters: {
             query?: never;
@@ -5242,7 +5322,11 @@ export interface paths {
         };
         /**
          * Screener Capacity Watchdog
-         * @description Tell the GCP-only watchdog whether the normal writer lease is stale.
+         * @description Publish controller health and policy-gated GCP safety-net activation.
+         *
+         *     The reason describes controller health; current operator routing and
+         *     primary admission can suppress activation even while the controller is
+         *     missing, stale or unready.
          */
         get: operations["screener_capacity_watchdog_api_v1_public_screener_capacity_watchdog_get"];
         put?: never;
@@ -6538,7 +6622,7 @@ export interface paths {
          *
          *     1. Form fields auto-validated by FastAPI regex (already done by
          *        the time this body runs; malformed input returns 422).
-         *     2. Signature over ``f"{hotkey}:{sha256}"`` (CPU only, no I/O; 400).
+         *     2. Fresh domain-separated upload signature (CPU only, no I/O; 400).
          *     3. Hotkey registered on the configured netuid (1 Pylon call;
          *        400 if absent, 503 if chain unreachable).
          *     4. Stream tar bytes: size cap (413) + sha256 re-verify (400).
@@ -14420,6 +14504,13 @@ export interface components {
             sha256: string;
             /** Signature */
             signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid4
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
         };
         /**
          * BurnSettings
@@ -14452,6 +14543,53 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["BurnSettings"];
+        };
+        /** CanonicalFixtureRegisterRequest */
+        CanonicalFixtureRegisterRequest: {
+            /**
+             * Confirm Report Only
+             * @constant
+             */
+            confirm_report_only: true;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Target Node Id */
+            target_node_id: string;
+        };
+        /** CanonicalFixtureReviewRequest */
+        CanonicalFixtureReviewRequest: {
+            /** Built Image Digest */
+            built_image_digest: string;
+            /**
+             * Confirm Candidate Review
+             * @constant
+             */
+            confirm_candidate_review: true;
+            /**
+             * Reviewed Archive Sha256
+             * @constant
+             */
+            reviewed_archive_sha256: "2f14f77cc8e21b57e96f304f3b621d9919e9af802076928a27301d57aa956d7e";
+            /**
+             * Reviewed Dockerfile Sha256
+             * @constant
+             */
+            reviewed_dockerfile_sha256: "d3a1a2a1e5d43b0465c28712457d95432942ac8f017fd10d538859a901a54641";
+            /** Reviewer Evidence Sha256 */
+            reviewer_evidence_sha256: string;
+            /** Reviewer Evidence Url */
+            reviewer_evidence_url: string;
+        };
+        /** CanonicalFixtureScheduleRequest */
+        CanonicalFixtureScheduleRequest: {
+            /**
+             * Confirm Report Only
+             * @constant
+             */
+            confirm_report_only: true;
         };
         /**
          * CaseCatalog
@@ -20076,6 +20214,11 @@ export interface components {
             builtin_policy_version: number;
             /** Revision */
             revision?: string | null;
+            /**
+             * Source Fixture V1
+             * @default false
+             */
+            source_fixture_v1: boolean;
             /** Version */
             version?: string | null;
         };
@@ -21381,6 +21524,16 @@ export interface components {
              * Format: uuid
              */
             source_attempt_id: string;
+            /** Source Attestation */
+            source_attestation?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Source Kind
+             * @default submission
+             * @enum {string}
+             */
+            source_kind: "submission" | "canonical_starter_fixture";
         };
         /** L2CanaryCompleteRequest */
         L2CanaryCompleteRequest: {
@@ -21484,11 +21637,8 @@ export interface components {
         };
         /** L2CanaryView */
         L2CanaryView: {
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
+            /** Agent Id */
+            agent_id: string | null;
             /** Artifact Sha256 */
             artifact_sha256: string;
             /**
@@ -21508,9 +21658,11 @@ export interface components {
             /** Error Code */
             error_code: string | null;
             /** Expected Agent Status */
-            expected_agent_status: string;
+            expected_agent_status: string | null;
             /** Expected Score Count */
-            expected_score_count: number;
+            expected_score_count: number | null;
+            /** Fixture Key */
+            fixture_key?: string | null;
             /** Lease Expires At */
             lease_expires_at: string | null;
             /** Report */
@@ -21529,15 +21681,18 @@ export interface components {
              * @enum {string}
              */
             run_mode: "source_only" | "full_runtime";
-            /**
-             * Source Attempt Id
-             * Format: uuid
-             */
-            source_attempt_id: string;
+            /** Source Attempt Id */
+            source_attempt_id: string | null;
             /** Source Attestation */
             source_attestation?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Source Kind
+             * @default submission
+             * @enum {string}
+             */
+            source_kind: "submission" | "canonical_starter_fixture";
             /** Status */
             status: string;
             /** Target Node Id */
@@ -23583,12 +23738,13 @@ export interface components {
          * @description Live admission state for a submission still in build & admission.
          *
          *     Failed cost-bearing attempts never retry automatically, except a Docker build
-         *     infrastructure failure. ``parked`` names a source-review/provider failure
-         *     (including OpenRouter throttling), while ``stuck`` names another Ditto-owned
-         *     infrastructure failure. Both require a guarded Backroom retry.
+         *     infrastructure failure or a claim the worker released before starting it.
+         *     ``parked`` names a source-review/provider failure (including OpenRouter
+         *     throttling), while ``stuck`` names another Ditto-owned infrastructure
+         *     failure. Both require a guarded Backroom retry.
          *     ``retry_queued`` means a retry is waiting for a screener slot: either that
-         *     exact retry was authorized, or (with ``next_retry_at`` set) a Docker build
-         *     infrastructure failure is retried automatically with backoff, no earlier than
+         *     exact retry was authorized, or (with ``next_retry_at`` set) one of those
+         *     automatic infrastructure failures is retried with backoff, no earlier than
          *     that time. After too many consecutive failures, or a long park, it reports
          *     ``stuck`` and needs a guarded retry like any other.
          *
@@ -29941,6 +30097,8 @@ export interface components {
             heartbeat_seen_at?: string | null;
             /** Image Reference */
             image_reference?: string | null;
+            /** Instance Busy */
+            instance_busy?: boolean | null;
             /** Node Id */
             node_id: string;
             /**
@@ -29965,6 +30123,8 @@ export interface components {
         };
         /** ScreenerControllerNodesResponse */
         ScreenerControllerNodesResponse: {
+            /** Legacy Gcp Running Attempts */
+            legacy_gcp_running_attempts: number;
             /** Nodes */
             nodes: components["schemas"]["ScreenerControllerNodeState"][];
         };
@@ -30045,6 +30205,11 @@ export interface components {
              * Format: date-time
              */
             seen_at: string;
+            /**
+             * Source Fixture V1 Heartbeat Supported
+             * @default false
+             */
+            source_fixture_v1_heartbeat_supported: boolean;
         };
         /** ScreenerNodeAdminStatusWriteRequest */
         ScreenerNodeAdminStatusWriteRequest: {
@@ -32720,8 +32885,8 @@ export interface components {
          * UploadCheckRequest
          * @description Body of ``POST /upload/check``.
          *
-         *     The signature is over the UTF-8 bytes of ``f"{hotkey}:{sha256}"``,
-         *     produced by the hotkey's keypair (sr25519 by default).
+         *     The hotkey signs the domain-separated upload v2 payload containing the
+         *     digest, Unix timestamp, and random request nonce.
          */
         UploadCheckRequest: {
             /**
@@ -32748,6 +32913,13 @@ export interface components {
             sha256: string;
             /** Signature */
             signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid4
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
         };
         /**
          * UploadCheckResponse
@@ -38986,6 +39158,148 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["L2CanaryScheduleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["L2CanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_canonical_fixture_preflight_api_v1_admin_screener_l2_report_canaries_fixture_preflight_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_canonical_fixture_api_v1_admin_screener_l2_report_canaries_fixture_register_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CanonicalFixtureRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["L2CanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_canonical_fixture_api_v1_admin_screener_l2_report_canaries_fixture__canary_id__review_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                canary_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CanonicalFixtureReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["L2CanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    schedule_canonical_fixture_api_v1_admin_screener_l2_report_canaries_fixture__canary_id__schedule_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                canary_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CanonicalFixtureScheduleRequest"];
             };
         };
         responses: {

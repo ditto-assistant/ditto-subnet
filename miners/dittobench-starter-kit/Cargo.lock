@@ -898,11 +898,12 @@ dependencies = [
 [[package]]
 name = "ditto-harness"
 version = "0.1.0"
-source = "git+https://github.com/ditto-assistant/ditto-harness?rev=e58b08aed57d68c3e0d05e7b616a635f73812c89#e58b08aed57d68c3e0d05e7b616a635f73812c89"
+source = "git+https://github.com/ditto-assistant/ditto-harness?rev=b2c647b6e061ba415c9846fd2fafa5cb34cf3d98#b2c647b6e061ba415c9846fd2fafa5cb34cf3d98"
 dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "http",
  "reqwest 0.12.28",
  "rig-core",
  "serde",

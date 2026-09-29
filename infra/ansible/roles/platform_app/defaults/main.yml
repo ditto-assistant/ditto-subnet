@@ -243,6 +243,7 @@ secret_github_deploy_key: platform-github-deploy-key
 # Shared with trusted internal operator tools. The value already exists in
 # Secret Manager; Terraform only grants this VM's runtime identity read access.
 secret_admin_api_token: ADMIN_API_PASSWORD
+secret_backroom_platform_operator_proof: ""
 # Separate bearer used only by the provider-mutating capacity controller.
 secret_screener_controller_api_token: ""
 

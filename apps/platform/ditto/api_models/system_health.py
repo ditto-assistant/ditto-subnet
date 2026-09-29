@@ -158,13 +158,16 @@ class FleetRelease(BaseModel):
         ]
         | None
     ) = None
+    source_fixture_v1: bool = False
 
 
-def fleet_release_signing_token(release: FleetRelease | None) -> str:
+def fleet_release_signing_token(
+    release: FleetRelease | None, *, protocol_version: int = 7
+) -> str:
     """Return an unambiguous bounded token for a heartbeat signature payload."""
     if release is None:
         return "-"
-    return ",".join(
+    values = [
         str(value) if value is not None else "-"
         for value in (
             release.builtin_policy_version,
@@ -172,7 +175,10 @@ def fleet_release_signing_token(release: FleetRelease | None) -> str:
             release.version,
             release.activated_at,
         )
-    )
+    ]
+    if protocol_version >= 8:
+        values.append("1" if release.source_fixture_v1 else "0")
+    return ",".join(values)
 
 
 def fleet_release_from_heartbeat_envelope(raw: dict | None) -> FleetRelease | None:

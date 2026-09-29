@@ -258,6 +258,21 @@ descriptor has been extracted and checked. The host timer then:
    `current`, and starts the new release; and
 6. restores the previous link and active analyzer image if a worker fails to start.
 
+The updater also bounds its own disk use under `/opt/ditto/screener-fleet`. A
+failed preparation removes its `releases/<sha>.staging.<pid>` checkout on exit,
+and each run sweeps any staging checkout an earlier run abandoned. After a
+successful activation, and never after a rollback, it removes superseded
+`releases/<sha>` directories. It records the previous release in the managed
+release state and keeps that rollback target, the current release, and every
+release a live worker process still runs from, such as a held review. Later
+timer ticks retry pruning after held workers exit or a transient lookup fails.
+If the previous release identity is missing (including older managed state) or
+a live worker's release cannot be resolved, it skips release pruning for that
+run. It then prunes only untagged analyzer images labelled
+`ai.heyditto.screener.sha` on the rootless daemon. Pruning is best-effort and
+never fails an activation. The BuildKit cache has its own timer (see
+[`infra/docs/screener-scaling.md`](../infra/docs/screener-scaling.md)).
+
 The host stores no GitHub token or CI SSH private key. Inspect the last accepted
 descriptor and timer state without printing a secret:
 

@@ -28,6 +28,7 @@ from ditto.db.models import (
     ScreeningQuarantineResolution,
     ScreeningReviewEvent,
 )
+from ditto.db.queries import screener_provider_settings as provider_settings
 from ditto.tests.api_server.endpoints.test_screener import (
     _ADMIN_HEADERS,
     _AUTH_HEADER,
@@ -39,6 +40,7 @@ from ditto.tests.api_server.endpoints.test_screener import (
     _install_generator,
     _result_payload,
     _seed_agent,
+    _seed_hetzner_primary,
     _sign,
 )
 from ditto_screening_protocol import (
@@ -253,6 +255,7 @@ async def test_worker_court_clear_is_released_to_evaluation_on_its_receipt(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Worker clear -> held quarantine -> verified release -> build-only claim."""
     generator = _FakeGenerator()
@@ -370,6 +373,14 @@ async def test_worker_court_clear_is_released_to_evaluation_on_its_receipt(
 
     # The same state an ordinary PASS reaches, minus the image the hold never
     # uploaded: the fail-closed build-only lane rebuilds it before scoring.
+    monkeypatch.setattr(
+        provider_settings,
+        "DEFAULT_SCREENER_PROVIDER_SETTINGS",
+        provider_settings.DEFAULT_SCREENER_PROVIDER_SETTINGS.model_copy(
+            update={"primary_node_id": "subnet-screener-1"}
+        ),
+    )
+    await _seed_hetzner_primary(session_maker)
     claimed = await client.post(
         "/api/v1/screener/claim?policy_version=13", headers=_AUTH_HEADER
     )

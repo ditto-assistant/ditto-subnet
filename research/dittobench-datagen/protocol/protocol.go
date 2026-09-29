@@ -510,7 +510,13 @@ type RunRequest struct {
 	// omitted for v2-v6 so their historical harness wire request stays frozen.
 	BenchVersion int    `json:"bench_version,omitempty"`
 	ToolEndpoint string `json:"tool_endpoint,omitempty"`
-	UserID       string `json:"user_id,omitempty"`
+	// ToolEffectProtocol is an additive endpoint capability. Empty means the
+	// historical result/error wire with no idempotency guarantee. A validator
+	// may advertise ToolEffectProtocolV1 only after its broker and endpoint both
+	// implement operation-bound receipts; merely accepting the fields is not an
+	// advertisement.
+	ToolEffectProtocol string `json:"tool_effect_protocol,omitempty"`
+	UserID             string `json:"user_id,omitempty"`
 	// InferenceBaseURL is a validator-minted, case-scoped relay URL for this
 	// case. Below v13, model calls through it are attributed to the case even
 	// while several /run overlap; it carries attribution only and opens no
@@ -539,7 +545,20 @@ type ToolExecRequest struct {
 	Name   string          `json:"name"`
 	Args   json.RawMessage `json:"args,omitempty"`
 	Hop    int             `json:"hop,omitempty"`
+	// OperationID is a caller-minted effect identity for the opt-in V1 path.
+	// Reuse it only to recover the same uncertain operation, never for a new
+	// separately authorized effect.
+	OperationID    string `json:"operation_id,omitempty"`
+	EffectProtocol string `json:"effect_protocol,omitempty"`
 }
+
+const ToolEffectProtocolV1 = "operation-receipt-v1"
+
+const (
+	ToolEffectApplied    = "applied"
+	ToolEffectNotApplied = "not_applied"
+	ToolEffectUnknown    = "unknown"
+)
 
 // ToolExecResponse is the mock result the validator returns for a ToolExecRequest.
 // Result is the tool's output the harness should reason over (a web snippet, a
@@ -549,6 +568,13 @@ type ToolExecRequest struct {
 type ToolExecResponse struct {
 	Result string `json:"result"`
 	Error  string `json:"error,omitempty"`
+	// These fields are present only on the opt-in V1 endpoint path. Applied
+	// means the endpoint committed the effect and cached this operation's
+	// receipt; not_applied means it did not. A transport failure has no receipt
+	// and must be treated as delivery-unknown by the caller.
+	OperationID string `json:"operation_id,omitempty"`
+	EffectState string `json:"effect_state,omitempty"`
+	Replayed    bool   `json:"replayed,omitempty"`
 }
 
 // ObservedToolCall is a tool call the harness made.
@@ -558,13 +584,23 @@ type ObservedToolCall struct {
 	Hop  int             `json:"hop,omitempty"`
 }
 
+// BlockedToolCall is an advisory harness record of a model-selected call
+// stopped before the tool endpoint. It is never part of the observed execution
+// trajectory or a substitute for the validator's authoritative relay ledger.
+type BlockedToolCall struct {
+	Name  string          `json:"name"`
+	Args  json.RawMessage `json:"args,omitempty"`
+	State string          `json:"state"`
+}
+
 // RunResponse is what the harness returns for a case.
 type RunResponse struct {
-	FinalText    string             `json:"final_text"`
-	ToolCalls    []ObservedToolCall `json:"tool_calls"`
-	PromptTokens int64              `json:"prompt_tokens"`
-	OutputTokens int64              `json:"output_tokens"`
-	LatencyMs    int64              `json:"latency_ms"`
+	FinalText        string             `json:"final_text"`
+	ToolCalls        []ObservedToolCall `json:"tool_calls"`
+	BlockedToolCalls []BlockedToolCall  `json:"blocked_tool_calls,omitempty"`
+	PromptTokens     int64              `json:"prompt_tokens"`
+	OutputTokens     int64              `json:"output_tokens"`
+	LatencyMs        int64              `json:"latency_ms"`
 	// Answer is the harness's OPTIONAL short answer slot: the bare value the
 	// FinalText prose asserts (a name, a number, a comma-separated list). The
 	// deterministic grader matches the slot when present and falls back to
@@ -671,8 +707,18 @@ type ClaimProvenanceSummary struct {
 }
 
 type ToolProvenanceEvidence struct {
-	ModelEmitted             int      `json:"model_emitted"`
-	EndpointAttempts         int      `json:"endpoint_attempts"`
+	ModelEmitted     int `json:"model_emitted"`
+	EndpointAttempts int `json:"endpoint_attempts"`
+	// V1-only endpoint evidence. EffectAttempts counts validated operation-ID
+	// POSTs, including cached reads; NewHopReplays are the subset of cached
+	// reads on a different model-emitted hop; SameHopRetries are retries after
+	// a confirmed not_applied response. AppliedEffects counts first commits
+	// only. These counts are signed with the case report.
+	EffectAttempts           int      `json:"effect_attempts,omitempty"`
+	ReceiptReplays           int      `json:"receipt_replays,omitempty"`
+	NewHopReplays            int      `json:"new_hop_replays,omitempty"`
+	SameHopRetries           int      `json:"same_hop_retries,omitempty"`
+	AppliedEffects           int      `json:"applied_effects,omitempty"`
 	Matched                  int      `json:"matched"`
 	Unmatched                int      `json:"unmatched"`
 	ModelSelectedNotExecuted int      `json:"model_selected_not_executed"`
@@ -844,6 +890,11 @@ type ToolProvenanceSummary struct {
 	IncompleteCases          int `json:"incomplete_cases"`
 	ModelEmitted             int `json:"model_emitted"`
 	EndpointAttempts         int `json:"endpoint_attempts"`
+	EffectAttempts           int `json:"effect_attempts,omitempty"`
+	ReceiptReplays           int `json:"receipt_replays,omitempty"`
+	NewHopReplays            int `json:"new_hop_replays,omitempty"`
+	SameHopRetries           int `json:"same_hop_retries,omitempty"`
+	AppliedEffects           int `json:"applied_effects,omitempty"`
 	Matched                  int `json:"matched"`
 	Unmatched                int `json:"unmatched"`
 	ModelSelectedNotExecuted int `json:"model_selected_not_executed"`

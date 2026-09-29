@@ -637,10 +637,14 @@ class ScreeningAttempt(Base):
             "screening_attempts_infra_failed_idx",
             "finished_at",
             postgresql_where=text(
-                "status = 'failed' AND reason_code = 'docker-build-infrastructure'"
+                "status = 'failed' AND reason_code IN "
+                "('docker-build-infrastructure', 'worker-claim-not-started', "
+                "'l2-runtime-evidence-unavailable')"
             ),
             sqlite_where=text(
-                "status = 'failed' AND reason_code = 'docker-build-infrastructure'"
+                "status = 'failed' AND reason_code IN "
+                "('docker-build-infrastructure', 'worker-claim-not-started', "
+                "'l2-runtime-evidence-unavailable')"
             ),
         ),
         Index(
@@ -7043,16 +7047,19 @@ class ScreenerL2ReportCanary(Base):
 
     canary_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
     request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
-    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
-    source_attempt_id: Mapped[UUID] = mapped_column(
-        SaUUID(as_uuid=True), nullable=False
+    # A public source fixture has no miner Agent or ScreeningAttempt row.
+    agent_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    source_attempt_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    source_kind: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="submission"
     )
+    fixture_key: Mapped[str | None] = mapped_column(Text)
     artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
     bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
     target_node_id: Mapped[str] = mapped_column(Text, nullable=False)
-    expected_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
-    expected_score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_agent_status: Mapped[str | None] = mapped_column(Text)
+    expected_score_count: Mapped[int | None] = mapped_column(Integer)
     review_label: Mapped[str] = mapped_column(Text, nullable=False)
     run_mode: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="source_only"
@@ -7091,10 +7098,21 @@ class ScreenerL2ReportCanary(Base):
             name="screener_l2_canary_v13_check",
         ),
         CheckConstraint(
-            "expected_score_count >= 0", name="screener_l2_canary_scores_check"
+            "expected_score_count IS NULL OR expected_score_count >= 0",
+            name="screener_l2_canary_scores_check",
         ),
         CheckConstraint(
-            "review_label IN ('candidate_clear', 'known_reject')",
+            "(source_kind = 'submission' AND agent_id IS NOT NULL AND "
+            "source_attempt_id IS NOT NULL AND fixture_key IS NULL AND "
+            "expected_agent_status IS NOT NULL AND expected_score_count IS NOT NULL) "
+            "OR (source_kind = 'canonical_starter_fixture' AND agent_id IS NULL AND "
+            "source_attempt_id IS NULL AND fixture_key IS NOT NULL AND "
+            "expected_agent_status IS NULL AND expected_score_count IS NULL AND "
+            "run_mode = 'source_only')",
+            name="screener_l2_canary_source_kind_check",
+        ),
+        CheckConstraint(
+            "review_label IN ('unreviewed', 'candidate_clear', 'known_reject')",
             name="screener_l2_canary_label_check",
         ),
         CheckConstraint(
@@ -7102,7 +7120,8 @@ class ScreenerL2ReportCanary(Base):
             name="run_mode_check",
         ),
         CheckConstraint(
-            "status IN ('queued', 'leased', 'succeeded', 'incomplete', 'expired')",
+            "status IN ('awaiting_review', 'ready', 'queued', 'leased', "
+            "'succeeded', 'incomplete', 'expired')",
             name="screener_l2_canary_status_check",
         ),
         CheckConstraint(
@@ -7115,6 +7134,12 @@ class ScreenerL2ReportCanary(Base):
             name="screener_l2_canary_runtime_check",
         ),
         Index("screener_l2_canary_queue_idx", "target_node_id", "status", "created_at"),
+        Index(
+            "screener_l2_canary_fixture_key_idx",
+            "fixture_key",
+            unique=True,
+            postgresql_where=text("fixture_key IS NOT NULL"),
+        ),
         Index(
             "screener_l2_canary_one_active_source_idx",
             "source_attempt_id",

@@ -492,9 +492,11 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(AgentNotScreenableError)
     async def _agent_not_screenable_handler(
-        _request: Request, exc: AgentNotScreenableError
+        request: Request, exc: AgentNotScreenableError
     ) -> JSONResponse:
-        logger.info(f"agent not in screenable state: {exc}")
+        logger.warning(
+            "agent not in screenable state path=%s: %s", request.url.path, exc
+        )
         return envelope_response(
             409, ERROR_CODE_AGENT_NOT_SCREENABLE, "agent is not screenable"
         )

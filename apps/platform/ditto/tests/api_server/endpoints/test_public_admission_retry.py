@@ -109,11 +109,24 @@ async def _seed_failed_attempt(
     return attempt_id
 
 
+@pytest.mark.parametrize(
+    ("reason_code", "infrastructure"),
+    [
+        ("source-review-model-timeout", True),
+        # Historical spelling: still parked in the source-review lane, no
+        # longer a live backoff code (#2458).
+        ("source-review-retryable-infra", False),
+    ],
+)
 async def test_source_review_failure_reports_parked_without_retry_time(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    reason_code: str,
+    infrastructure: bool,
 ) -> None:
     agent_id = await _seed_agent(
-        maker, name="retry-visible", status=AgentStatus.SCREENING_FAILED
+        maker, name=f"retry-visible-{reason_code}", status=AgentStatus.SCREENING_FAILED
     )
     now = datetime.now(UTC)
     finished_at = now - timedelta(minutes=3)
@@ -122,7 +135,7 @@ async def test_source_review_failure_reports_parked_without_retry_time(
         agent_id=agent_id,
         finished_at=finished_at,
         deadline=now + timedelta(minutes=40),
-        reason_code="source-review-retryable-infra",
+        reason_code=reason_code,
     )
     _install(app, maker)
 
@@ -132,8 +145,9 @@ async def test_source_review_failure_reports_parked_without_retry_time(
     assert retry is not None
     assert retry["state"] == "parked"
     assert retry["attempt_count"] == 1
-    assert retry["last_failure_infrastructure"] is True
+    assert retry["last_failure_infrastructure"] is infrastructure
     assert retry["next_retry_at"] is None
+    assert retry["lane"] == "source_review"
 
 
 async def test_operator_override_reports_immediate_eligibility(
@@ -482,6 +496,7 @@ async def test_running_attempt_reports_only_an_evidenced_lane(
         ("docker-build-infrastructure", "build"),
         ("cloudrun-build-unavailable", "build"),
         ("targon-runtime-unavailable", "runtime_smoke"),
+        ("source-review-model-timeout", "source_review"),
         ("source-review-retryable-infra", "source_review"),
         ("executor-isolation-unavailable", None),
     ],
@@ -543,6 +558,8 @@ def test_every_infrastructure_retry_code_names_a_lane() -> None:
     assert set(_ADMISSION_LANE_BY_REASON_CODE) == {
         *PROVIDER_BACKOFF_REASON_CODES,
         *INFRA_AUTO_RETRY_REASON_CODES,
+        # Historical spelling of source-review-model-timeout (#2458).
+        "source-review-retryable-infra",
     }
 
 

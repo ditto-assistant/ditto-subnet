@@ -20,16 +20,32 @@ controller:
    below `max(min_backlog, screening_concurrency * backlog_multiplier)`;
 5. adds only residual GCE capacity above that threshold, or full bounded GCE
    capacity when the primary is not ready;
-6. scales GCE down only after GCE-owned leases finish.
+6. publishes the lower desired GCE target when demand falls, while deferring
+   physical deletion until existing leases finish and new claims can be fenced
+   throughout it.
+
+The scale-in planner re-reads the node inventory after the fenced renew because
+a GCE worker may claim after the first read.
+Scaling to zero checks that `legacy_gcp_running_attempts` is zero and every
+running managed-group member has a fresh idle heartbeat. Even after a clean
+reread, it defers deletion: the ready controller snapshot blocks new legacy
+claims only until its 180-second lease expires, while the physical GCE resize
+can still be in progress. Partial scale-in also defers because the shared
+legacy hotkey has no per-instance claim fence. A deferral leaves the managed
+group unchanged while publishing the lower desired target, which blocks new
+claims for a fresh, ready controller. After controller authority expires,
+current-policy emergency fallback can admit claims again; no deletion is in
+progress. It records a `gce_scale_in_deferred` event with
+`GCE_SCALE_IN_DEFERRED` and is not a provider failure. Physical excess capacity
+requires a durable claim fence or an operator-controlled drain.
 
 `SCREENING=0` (`screening_concurrency=0`) on the primary is an operator closure,
 not an outage: it is a global full stop recorded as
 `HETZNER_PRIMARY_ADMISSION_CLOSED`, and GCE does not overflow it regardless of
 backlog, `gce_overflow_enabled`, or the host's readiness and heartbeat, so a
 host health failure cannot reopen screening. Reopening needs a deliberate
-`screening_concurrency >= 1` activation on the primary. Explicit GCP-first
-provider routing is a separate operator decision, takes precedence, and is the
-only outage failover for a closed primary. A primary the controller cannot vouch
+`screening_concurrency >= 1` activation on the primary. GCP-first provider
+routing cannot bypass this stop. A primary the controller cannot vouch
 for -- a failed node-inventory read, an omitted primary row, or a row without
 its admission setting -- also fails closed (`HETZNER_PRIMARY_UNKNOWN`), so an
 inventory outage cannot bypass an operator stop. Only a primary known to be
@@ -37,6 +53,28 @@ open but unready is a host failure that overflows to GCE. A stale routing
 revision that still names the retired Targon provider first honors the same
 closed and unknown stops; its GCE fallback (`RETIRED_PROVIDER_ROUTING`) applies
 only to a primary known to be open.
+
+A Platform deploy or transient 5xx on the routing or node-inventory read must
+not flap the GCE MIG. The controller holds the current GCE target, in both
+directions, for `--inventory-failure-hold-passes` consecutive failing passes
+(default 4, about two minutes) and reports `PLATFORM_INVENTORY_UNAVAILABLE`. The
+hold never adds capacity. A routing read failure reuses the last good revision
+cached in the controller state file, so running GCE workers still match the
+Platform claim check. Without a cached revision, the controller publishes an
+unready revision 0 (`PROVIDER_ROUTING_UNAVAILABLE`) and preserves the current
+MIG size until an authoritative routing read succeeds; it neither adds
+capacity nor deletes workers on an unknown route. A cached revision also
+preserves the current MIG size for the full routing outage, including after
+the transient hold expires. After that hold, a routing or node-inventory read
+failure marks the controller unready so the independent watchdog can use
+current Platform policy to supply an open primary's backlog. A closed or
+unknown primary keeps the watchdog at zero. Node-inventory failures still
+follow the normal controller rules after the hold: an unknown primary fails
+closed. The first successfully
+fenced failing pass records a
+`platform_inventory_unavailable` event and the expiry records
+`platform_inventory_hold_expired`. A failed pre-event read or first fenced
+renew leaves the transition pending for the next pass.
 
 Production uses `['hetzner', 'gcp']` for build, runtime smoke, and source review.
 The second entry means that separate GCE workers may claim still-unclaimed
@@ -123,7 +161,9 @@ After `subnet-screener-1` is converged, use Backroom to:
    build/smoke lanes without memory or disk pressure; raise to three only after
    measured sandbox-plus-review memory leaves safe host margin;
 7. exercise one controlled stale-heartbeat event and one above-threshold queue,
-   proving GCE claims new work, preserves active leases, and returns to zero;
+   proving GCE claims new work and preserves active leases; verify the desired
+   target returns to zero, then drain physical excess capacity under operator
+   control;
 8. drain retired nested-Docker Targon worker nodes. Do not re-enable them.
 
 The exact Debian, inventory, vault, Ansible, activation, verification, and drain

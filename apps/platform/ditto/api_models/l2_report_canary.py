@@ -44,17 +44,50 @@ class L2CanaryScheduleRequest(BaseModel):
         return self
 
 
+class CanonicalFixtureRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    request_id: Annotated[UUID, Field(strict=False)]
+    target_node_id: Annotated[str, Field(min_length=1, max_length=63)]
+    confirm_report_only: Literal[True]
+
+
+class CanonicalFixtureReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    reviewer_evidence_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    reviewed_archive_sha256: Literal[
+        "2f14f77cc8e21b57e96f304f3b621d9919e9af802076928a27301d57aa956d7e"
+    ]
+    reviewed_dockerfile_sha256: Literal[
+        "d3a1a2a1e5d43b0465c28712457d95432942ac8f017fd10d538859a901a54641"
+    ]
+    built_image_digest: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    reviewer_evidence_url: Annotated[
+        str, Field(pattern=r"^https://github\.com/ditto-assistant/ditto-subnet/")
+    ]
+    confirm_candidate_review: Literal[True]
+
+
+class CanonicalFixtureScheduleRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    confirm_report_only: Literal[True]
+
+
 class L2CanaryView(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     canary_id: UUID
     request_id: UUID
-    agent_id: UUID
-    source_attempt_id: UUID
+    agent_id: UUID | None
+    source_attempt_id: UUID | None
+    source_kind: Literal["submission", "canonical_starter_fixture"] = "submission"
+    fixture_key: str | None = None
     artifact_sha256: str
     target_node_id: str
-    expected_agent_status: str
-    expected_score_count: int
+    expected_agent_status: str | None
+    expected_score_count: int | None
     review_label: str
     run_mode: Literal["source_only", "full_runtime"]
     source_attestation: dict | None = None
@@ -100,6 +133,8 @@ class L2CanaryClaimResponse(BaseModel):
     bench_version: int
     policy_version: int
     run_mode: Literal["source_only", "full_runtime"] = "source_only"
+    source_kind: Literal["submission", "canonical_starter_fixture"] = "submission"
+    source_attestation: dict | None = None
     miner_hotkey: str
     lease_token: str
     lease_expires_at: datetime

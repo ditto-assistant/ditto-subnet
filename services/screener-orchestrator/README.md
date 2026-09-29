@@ -11,7 +11,28 @@ private capacity VM. It reads the current provider-routing revision and node
 health, calculates the GCE target, acquires a fenced controller lease, and
 changes only that target. If a stored routing revision still selects the
 retired provider, it routes demand through GCE until an operator updates the
-revision. New routing writes cannot select that provider.
+revision. New routing writes cannot select that provider. A failed routing or
+node read holds the current target for a bounded number of passes instead of
+flapping the MIG; see
+[`infra/docs/screener-scaling.md`](../../infra/docs/screener-scaling.md).
+
+The GCE autoscaler stays in `ONLY_SCALE_OUT`, including at a zero target. The
+controller pauses it only for a fenced manual resize and restores it even if
+the resize fails. The independent queue metric publishes zero while Platform
+reports a fresh, ready controller. Missing, expired or unready controllers
+activate the metric and permit authenticated legacy GCP claims through the
+same fallback predicate. Current provider policy still disables overflow for
+a closed or unknown Hetzner primary, including when GCP is first in the provider
+route. A fresh controller retains authority over the bounded GCE target.
+
+After deploying Platform and the controller together, verify the safety net in
+staging or a controlled production window: with an open primary and backlog,
+stop controller reconciliation for longer than its 180-second lease, observe
+MIG scale-out, a GCE worker heartbeat and a successful legacy claim, then resume
+the controller and verify it withdraws the desired GCE target. Physical scale-in
+is deferred until claims can be fenced throughout deletion, so drain and remove
+excess instances under operator control. Unit tests do not prove worker bootstrap
+or this deployment drill.
 
 Release images are built on the trusted GitHub runner from the exact release
 commit, pushed under a SHA tag, and registered with Platform by digest. The

@@ -40,6 +40,10 @@ else
 fi
 HELD_WORKERS="$STATE_DIR/held-workers"
 DRAIN_POLL_SECONDS="${SCREENER_FLEET_DRAIN_POLL_SECONDS:-3}"
+PROC_ROOT="${SCREENER_FLEET_PROC_ROOT:-/proc}"
+# The release checkout being prepared. errexit skips RETURN traps, so the EXIT
+# trap owns its removal; it is cleared once the checkout is promoted.
+STAGING_DIR=''
 
 log() { printf 'screener-fleet-auto-update: %s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
@@ -120,8 +124,7 @@ prepare_release() {
     return 0
   fi
   local staging="${release_dir}.staging.$$"
-  cleanup_staging() { rm -rf -- "$staging"; }
-  trap cleanup_staging RETURN
+  STAGING_DIR="$staging"
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0750 "$staging"
   if ! run_as_service git clone --filter=blob:none --no-checkout "$REPOSITORY_URL" "$staging/src"; then
     return 1
@@ -139,7 +142,30 @@ prepare_release() {
   run_as_service "$staging/worker-venv/bin/python" \
     "$staging/src/workers/screener/scripts/verify-installed-signing-contract.py"
   mv "$staging" "$release_dir"
-  trap - RETURN
+  STAGING_DIR=''
+}
+
+cleanup_staging_on_exit() { [ -z "$STAGING_DIR" ] || rm -rf -- "$STAGING_DIR"; }
+
+arm_staging_cleanup() {
+  trap cleanup_staging_on_exit EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+}
+
+# Holding the update lock means no other updater owns a staging checkout, so
+# anything left here was abandoned by a run that died before its EXIT trap.
+sweep_staging() {
+  local entry removed=0
+  for entry in "$RELEASES_DIR"/*.staging.*; do
+    [[ "${entry##*/}" =~ ^[0-9a-f]{40}\.staging\.[0-9]+$ ]] || continue
+    if rm -rf -- "$entry"; then
+      removed=$((removed + 1))
+    else
+      log "could not remove stale staging dir $entry"
+    fi
+  done
+  [ "$removed" -eq 0 ] || log "removed $removed stale release staging dir(s)"
 }
 
 prepare_l2_analyzer() {
@@ -388,6 +414,7 @@ restore_fleet_after_abort() {
     "$SYSTEMCTL" start --no-block "ditto-screener-worker@$index.service"
   done
   write_drain_status aborted "exit $status"
+  cleanup_staging_on_exit
   exit "$status"
 }
 
@@ -398,7 +425,86 @@ arm_fleet_restore() {
 }
 
 disarm_fleet_restore() {
-  trap - EXIT TERM INT
+  arm_staging_cleanup
+}
+
+# Keep the activated release, the previous one (the next update's rollback
+# target), and any release a live worker still runs from: a held review keeps
+# its pre-flip checkout until it exits. Workers start in `current`, so their
+# resolved /proc cwd and exe name the release they started on. Any doubt
+# about a live worker skips pruning for this run. Callers use `||`, which
+# disables errexit here, so every failure is handled explicitly.
+prune_releases() {
+  local previous="$1" keep=' ' target releases indexes index pid link path entry name
+  case "$previous" in
+    none) ;;
+    releases/*)
+      if ! [[ "$previous" =~ ^releases/[0-9a-f]{40}$ ]]; then
+        log "previous release is unknown; not pruning"
+        return 0
+      fi
+      keep+="${previous##*/} "
+      ;;
+    *) log "previous release is unknown; not pruning"; return 0 ;;
+  esac
+  target="$(readlink "$CURRENT_LINK")" || { log "current release is unreadable; not pruning"; return 0; }
+  if ! [[ "$target" =~ ^releases/[0-9a-f]{40}$ ]]; then
+    log "current release is invalid; not pruning"
+    return 0
+  fi
+  keep+="${target##*/} "
+  releases="$(readlink -f "$RELEASES_DIR")" || return 1
+  indexes="$(worker_indexes)" || { log "workers could not be listed; not pruning"; return 0; }
+  for index in $indexes; do
+    pid="$("$SYSTEMCTL" show -p MainPID --value "ditto-screener-worker@$index.service")" || pid=''
+    if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+      log "worker $index MainPID is unknown; not pruning"
+      return 0
+    fi
+    [ "$pid" != 0 ] || continue
+    for link in cwd exe; do
+      if ! path="$(readlink -e "$PROC_ROOT/$pid/$link")"; then
+        log "worker $index process $pid $link is unreadable; not pruning"
+        return 0
+      fi
+      case "$path" in
+        "$releases"/*)
+          name="${path#"$releases"/}"
+          keep+="${name%%/*} "
+          ;;
+      esac
+    done
+  done
+  for entry in "$RELEASES_DIR"/*; do
+    name="${entry##*/}"
+    [[ "$name" =~ ^[0-9a-f]{40}$ ]] || continue
+    [[ "$keep" != *" $name "* ]] || continue
+    if rm -rf -- "$entry"; then
+      log "pruned superseded release $name"
+    else
+      log "prune failed: $entry"
+    fi
+  done
+}
+
+# Moving :active leaves the previous analyzer image untagged. Remove only
+# untagged analyzer images; Docker keeps any image a container still uses.
+prune_analyzer_images() {
+  run_rootless_as_service docker image prune --force --filter dangling=true \
+    --filter label=ai.heyditto.screener.sha >/dev/null
+}
+
+prune_activated_release() {
+  local previous revision target
+  previous="$(manifest_value "$MANAGED_FILE" PREVIOUS_RELEASE)"
+  revision="$(manifest_value "$MANAGED_FILE" REVISION)"
+  target="$(readlink "$CURRENT_LINK")" || target=''
+  if [[ "$revision" =~ ^[0-9a-f]{40}$ ]] && [ "$target" = "releases/$revision" ]; then
+    prune_releases "$previous" || log "release pruning failed"
+  else
+    log "managed and current releases differ; not pruning releases"
+  fi
+  prune_analyzer_images || log "analyzer image pruning failed"
 }
 
 activate_release() {
@@ -451,16 +557,17 @@ activate_release() {
   fi
   disarm_fleet_restore
   umask 077
-  printf 'DESCRIPTOR=%s\nREVISION=%s\nVERSION=%s\nBUILDER_IMAGE=%s\nUPDATED_AT=%s\n' \
+  printf 'DESCRIPTOR=%s\nREVISION=%s\nVERSION=%s\nBUILDER_IMAGE=%s\nPREVIOUS_RELEASE=%s\nUPDATED_AT=%s\n' \
     "$exact" "$revision" "$(manifest_value "$STATE_DIR/candidate.env" FLEET_VERSION)" \
-    "$builder" "$(date +%s)" >"$MANAGED_FILE"
+    "$builder" "${old_target:-none}" "$(date +%s)" >"$MANAGED_FILE"
   rm -f "$FAILED_CANDIDATE_FILE"
   run_rootless_as_service docker image rm "$l2_candidate" >/dev/null 2>&1 || true
   log "activated $revision from authenticated descriptor $exact"
+  prune_activated_release
 }
 
-# Test-only entrypoints: exercise the real drain and start logic against a
-# fake systemctl. Production units never set this variable.
+# Test-only entrypoints: exercise the real drain, start, preparation, and
+# pruning logic against fake commands. Production units never set this variable.
 case "${SCREENER_FLEET_TEST_ENTRYPOINT:-}" in
   '') ;;
   stop_fleet)
@@ -471,6 +578,28 @@ case "${SCREENER_FLEET_TEST_ENTRYPOINT:-}" in
     ;;
   start_fleet)
     start_fleet || exit 1
+    exit 0
+    ;;
+  prepare_release)
+    arm_staging_cleanup
+    prepare_release "$SCREENER_FLEET_TEST_REVISION" \
+      "$RELEASES_DIR/$SCREENER_FLEET_TEST_REVISION"
+    exit 0
+    ;;
+  sweep_staging)
+    sweep_staging
+    exit 0
+    ;;
+  prune_releases)
+    prune_releases "${SCREENER_FLEET_TEST_PREVIOUS:-}" || exit 1
+    exit 0
+    ;;
+  prune_analyzer_images)
+    prune_analyzer_images
+    exit 0
+    ;;
+  prune_activated_release)
+    prune_activated_release
     exit 0
     ;;
   *) die "unknown test entrypoint" ;;
@@ -492,12 +621,15 @@ install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0750 "$RELEASES_DIR"
 install -d -o root -g root -m 0700 "$STATE_DIR"
 exec {lock_fd}>"$LOCK_FILE"
 flock -n "$lock_fd" || { log "another update is active"; exit 0; }
+arm_staging_cleanup
+sweep_staging
 
 exact="$(resolve_descriptor)"
 if [ -f "$FAILED_CANDIDATE_FILE" ] && [ "$(cat "$FAILED_CANDIDATE_FILE")" = "$exact" ]; then
   die "candidate is suppressed after a failed activation; remove $FAILED_CANDIDATE_FILE to retry"
 fi
 if [ -f "$MANAGED_FILE" ] && [ "$(manifest_value "$MANAGED_FILE" DESCRIPTOR)" = "$exact" ]; then
+  prune_activated_release
   log "already running authenticated descriptor $exact"
   exit 0
 fi

@@ -23,6 +23,7 @@ import httpx
 import pytest
 
 import ditto_screener.l2_review as l2_review
+from ditto_screener.gate import LeaseDeadline
 from ditto_screener.heartbeat import source_review_progress_stage
 from ditto_screener.l2_review import (
     _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK,
@@ -861,6 +862,28 @@ class _FakeL2:
         return self.result
 
 
+def _signed_lease(
+    *, observed_at: int, artifact_sha256: str = "c" * 64
+) -> ScoredRuntimeEvidenceLease:
+    revision = "a" * 40
+    keys = ("DITTOBENCH_DB", "DITTOBENCH_MODEL")
+    return ScoredRuntimeEvidenceLease(
+        attempt_id=ATTEMPT,
+        artifact_sha256=artifact_sha256,
+        policy_version=13,
+        bench_version=13,
+        scorer_source_revision=revision,
+        release_descriptor_digest="sha256:" + "d" * 64,
+        scorer_image_digest="sha256:" + "e" * 64,
+        scorer_env_sha256=hashlib.sha256(
+            ("scored-runtime-env-v1\n13\n" + revision + "\n" + "\n".join(keys)).encode()
+        ).hexdigest(),
+        injected_keys=keys,
+        validator_count=3,
+        observed_at=observed_at,
+    )
+
+
 async def test_required_lease_holds_before_l1_or_l4_can_clear() -> None:
     l1 = _FakeL1(_l1("low", clearance_certified=True))
     l2 = _FakeL2(_model_result(_safe()))
@@ -871,9 +894,11 @@ async def test_required_lease_holds_before_l1_or_l4_can_clear() -> None:
         "unused",
         artifact_sha256="c" * 64,
         attempt_id=ATTEMPT,
-        scored_runtime_evidence=None,
+        policy_version=13,
+        scored_runtime_evidence=_signed_lease(observed_at=int(time.time()) - 400),
     )
 
+    assert l1.calls == l2.calls == 0
     assert result.error_code == "l2-runtime-evidence-unavailable"
     assert result.failure_disposition == "pass_inconclusive"
     audit = ScreenReviewAudit.model_validate(result.review_audit)
@@ -991,6 +1016,244 @@ async def test_required_lease_shadow_records_hold_without_applying_it(
     assert shadow is not None
     assert shadow.observation.error_code == "l2-runtime-evidence-unavailable"
     assert shadow.observation.failure_disposition == "pass_inconclusive"
+
+
+async def test_shadow_mode_tolerates_missing_lease() -> None:
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="shadow")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+        scored_runtime_evidence=None,
+    )
+
+    assert result.ok
+    assert l1.calls == 1
+
+
+async def test_lease_fresh_at_receipt_survives_long_l1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received_at = 1_800_000_000
+    lease = _signed_lease(observed_at=received_at - 200)
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+    # Build, serve and L1 have run for 25 minutes since the claim arrived.
+    monkeypatch.setattr(l2_review.time, "time", lambda: received_at + 1_500.0)
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+        scored_runtime_evidence=lease,
+        scored_runtime_evidence_received_at=received_at,
+    )
+
+    assert result.ok
+    assert l1.calls == 1
+    assert l2.calls == 1
+
+
+async def test_lease_stale_at_receipt_holds(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    received_at = 1_800_000_000
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+    monkeypatch.setattr(l2_review.time, "time", lambda: received_at + 5.0)
+
+    with caplog.at_level("WARNING", logger=l2_review.logger.name):
+        result = await layered.review(
+            "unused",
+            artifact_sha256="c" * 64,
+            attempt_id=ATTEMPT,
+            policy_version=13,
+            scored_runtime_evidence=_signed_lease(observed_at=received_at - 400),
+            scored_runtime_evidence_received_at=received_at,
+        )
+
+    assert l1.calls == l2.calls == 0
+    assert result.error_code == "l2-runtime-evidence-unavailable"
+    assert result.failure_disposition == "pass_inconclusive"
+    audit = ScreenReviewAudit.model_validate(result.review_audit)
+    assert audit.cause_detail == "lease_unavailable"
+    assert any(
+        f"attempt_id={ATTEMPT}" in record.getMessage()
+        and "lease_present=True" in record.getMessage()
+        and "age_seconds=400" in record.getMessage()
+        and "max_age_seconds=300" in record.getMessage()
+        and "clause=age_stale" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(
+    ("update", "clause"),
+    [
+        ({"attempt_id": UUID(int=1)}, "attempt_id"),
+        ({"artifact_sha256": "d" * 64}, "artifact"),
+        ({"policy_version": 12}, "policy"),
+    ],
+)
+async def test_v13_lease_identity_mismatch_still_holds(
+    update: dict[str, object], clause: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    received_at = int(time.time())
+    lease = _signed_lease(observed_at=received_at).model_copy(update=update)
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    with caplog.at_level("WARNING", logger=l2_review.logger.name):
+        result = await layered.review(
+            "unused",
+            artifact_sha256="c" * 64,
+            attempt_id=ATTEMPT,
+            policy_version=13,
+            scored_runtime_evidence=lease,
+            scored_runtime_evidence_received_at=received_at,
+        )
+
+    assert l1.calls == l2.calls == 0
+    assert result.failure_disposition == "pass_inconclusive"
+    assert any(f"clause={clause}" in record.getMessage() for record in caplog.records)
+
+
+async def test_missing_lease_is_retryable_infra(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    with caplog.at_level("WARNING", logger=l2_review.logger.name):
+        reviewed = await layered.review(
+            "unused",
+            artifact_sha256="c" * 64,
+            attempt_id=ATTEMPT,
+            policy_version=13,
+            scored_runtime_evidence=None,
+            bench_version=13,
+        )
+    resolved = await layered.resolve_lead(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1("high"),
+        policy_version=13,
+        scored_runtime_evidence=None,
+        bench_version=13,
+    )
+
+    for observation in (reviewed, resolved):
+        assert observation.error_code == "l2-runtime-evidence-unavailable"
+        assert observation.failure_disposition == "retryable_infra"
+        # No paid stage started, so nothing is accounted as a review audit.
+        assert observation.review_audit is None
+    assert l1.calls == l2.calls == 0
+    assert any(
+        "lease_present=False" in record.getMessage()
+        and "clause=missing" in record.getMessage()
+        for record in caplog.records
+    )
+
+    sol = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    sol._l3_enabled = False
+
+    async def must_not_run(*_args: object, **_kwargs: object) -> L2RunResult:
+        raise AssertionError("model must not run without the signed lease")
+
+    monkeypatch.setattr(sol, "_review_uncached", must_not_run)
+    direct = await sol.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+        policy_version=13,
+        scored_runtime_evidence=None,
+        bench_version=13,
+    )
+    assert direct.observation.error_code == "l2-runtime-evidence-unavailable"
+    assert direct.observation.failure_disposition == "retryable_infra"
+
+
+@pytest.mark.parametrize("bench_version", [12, 14, None])
+async def test_missing_lease_for_a_non_v13_arrival_keeps_the_inconclusive_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bench_version: int | None
+) -> None:
+    """A per-agent cause must not enter the fleet infrastructure auto-retry."""
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    held = await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+        scored_runtime_evidence=None,
+        bench_version=bench_version,
+    )
+
+    assert l1.calls == l2.calls == 0
+    assert held.error_code == "l2-runtime-evidence-unavailable"
+    assert held.failure_disposition == "pass_inconclusive"
+    audit = ScreenReviewAudit.model_validate(held.review_audit)
+    assert audit.cause_detail == "lease_unavailable"
+
+    sol = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    sol._l3_enabled = False
+
+    async def must_not_run(*_args: object, **_kwargs: object) -> L2RunResult:
+        raise AssertionError("model must not run without the signed lease")
+
+    monkeypatch.setattr(sol, "_review_uncached", must_not_run)
+    direct = await sol.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+        policy_version=13,
+        scored_runtime_evidence=None,
+        bench_version=bench_version,
+    )
+    assert direct.observation.failure_disposition == "pass_inconclusive"
+
+
+async def test_v13_review_disabled_keeps_its_inconclusive_hold() -> None:
+    l1 = _FakeL1(_l1("low"))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._l3_enabled = False
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="off")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+        scored_runtime_evidence=None,
+    )
+
+    assert result.failure_disposition == "pass_inconclusive"
+    audit = ScreenReviewAudit.model_validate(result.review_audit)
+    assert audit.cause_detail == "review_disabled"
 
 
 async def test_clean_l1_skips_sol() -> None:
@@ -7027,11 +7290,13 @@ class _FakeAdjudicator:
         self.seen_notes: tuple[Any, ...] = ()
         self.seen_finding: Any = None
         self.deadline: float | None = None
+        self.started_at: float | None = None
         self.policy_version: int | None = None
         self._decision = decision
 
     async def adjudicate(self, _archive: str, **kwargs: Any) -> Any:
         self.calls += 1
+        self.started_at = asyncio.get_running_loop().time()
         self.seen_notes = tuple(kwargs.get("notes") or ())
         self.seen_finding = kwargs.get("finding")
         self.deadline = kwargs.get("deadline")
@@ -7261,6 +7526,186 @@ async def test_l2_wall_clock_timeout_still_hands_off_to_l4(tmp_path: Path) -> No
     assert court.calls == 1
     assert result.adjudication is not None
     assert result.adjudication["decision"] == "clear"
+
+
+class _SlowFakeL2(_FakeL2):
+    def __init__(
+        self,
+        result: L2RunResult,
+        *,
+        delay: float,
+        before_return: Any = None,
+    ) -> None:
+        super().__init__(result)
+        self.delay = delay
+        self.before_return = before_return
+
+    async def review(self, *args: Any, **kwargs: Any) -> L2RunResult:
+        await asyncio.sleep(self.delay)
+        if self.before_return is not None:
+            self.before_return()
+        return await super().review(*args, **kwargs)
+
+
+class _RenewingFakeL1(_FakeL1):
+    def __init__(self, result: SourceReviewObservation, renew: Any) -> None:
+        super().__init__(result)
+        self.renew = renew
+        self.remaining_after_renewal: float | None = None
+
+    async def review(self, *args: Any, **kwargs: Any) -> SourceReviewObservation:
+        observation = await super().review(*args, **kwargs)
+        self.renew()
+        assert self.deadline is not None
+        self.remaining_after_renewal = self.deadline - asyncio.get_running_loop().time()
+        return observation
+
+
+def _court_layered(
+    court: _FakeAdjudicator,
+    reserve: float,
+    *,
+    l1: _FakeL1 | None = None,
+    l2: _FakeL2 | None = None,
+) -> LayeredSourceReviewAgent:
+    return LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=l1 or _FakeL1(_l1("medium")),
+        l2=l2 or _FakeL2(_model_result(_safe())),
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+        adjudicator_reserve_seconds=reserve,
+    )
+
+
+async def test_exploration_deadline_follows_lease_renewal() -> None:
+    layered = _court_layered(_FakeAdjudicator(), 600)
+    loop = asyncio.get_running_loop()
+    deadline = LeaseDeadline(loop.time() + 540)
+
+    review_deadline, reserve = layered._exploration_deadline(deadline)
+
+    assert reserve == pytest.approx(270, abs=0.1)
+    assert review_deadline is not None
+    assert review_deadline - loop.time() == pytest.approx(270, abs=0.1)
+    deadline.renew(loop.time() + 2_000)
+    assert review_deadline - loop.time() == pytest.approx(1_730, abs=0.1)
+
+
+async def test_l1_deadline_renews_mid_review() -> None:
+    loop = asyncio.get_running_loop()
+    deadline = LeaseDeadline(loop.time() + 540)
+    l1 = _RenewingFakeL1(_l1("medium"), lambda: deadline.renew(loop.time() + 2_000))
+    l2 = _FakeL2(_model_result(_safe()))
+    layered = _court_layered(_FakeAdjudicator(), 600, l1=l1, l2=l2)
+
+    await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, deadline=deadline
+    )
+
+    assert l1.remaining_after_renewal == pytest.approx(1_730, abs=0.1)
+    assert l2.deadline is not None
+    assert l2.deadline - loop.time() == pytest.approx(1_730, abs=0.1)
+
+
+async def test_l1_renewal_stays_capped_by_its_own_timeout() -> None:
+    loop = asyncio.get_running_loop()
+    deadline = LeaseDeadline(loop.time() + 540)
+    l1 = _RenewingFakeL1(_l1("medium"), lambda: deadline.renew(loop.time() + 2_000))
+    l1._timeout_seconds = 600  # type: ignore[attr-defined]
+    layered = _court_layered(_FakeAdjudicator(), 600, l1=l1)
+
+    await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, deadline=deadline
+    )
+
+    assert l1.remaining_after_renewal == pytest.approx(600, abs=0.1)
+
+
+async def test_court_window_stays_at_reserve_after_mid_l1_renew() -> None:
+    loop = asyncio.get_running_loop()
+    deadline = LeaseDeadline(loop.time() + 540)
+    court = _FakeAdjudicator()
+    l1 = _RenewingFakeL1(_l1("medium"), lambda: deadline.renew(loop.time() + 2_000))
+    layered = _court_layered(court, 600, l1=l1)
+
+    await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, deadline=deadline
+    )
+
+    assert court.calls == 1
+    assert court.deadline is not None and court.started_at is not None
+    assert court.deadline - court.started_at == pytest.approx(270, abs=0.1)
+
+
+async def test_court_gets_full_reserve_after_slow_l2() -> None:
+    court = _FakeAdjudicator()
+    l2 = _SlowFakeL2(_model_result(_safe()), delay=0.6)
+    layered = _court_layered(court, 0.4, l2=l2)
+
+    await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        deadline=asyncio.get_running_loop().time() + 2,
+    )
+
+    assert court.calls == 1
+    assert court.deadline is not None and court.started_at is not None
+    assert court.deadline - court.started_at == pytest.approx(0.4, abs=0.05)
+
+
+async def test_court_deadline_never_exceeds_parent_lease() -> None:
+    court = _FakeAdjudicator()
+    l2 = _SlowFakeL2(_model_result(_safe()), delay=0.7)
+    layered = _court_layered(court, 0.8, l2=l2)
+    deadline = asyncio.get_running_loop().time() + 1
+
+    await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, deadline=deadline
+    )
+
+    assert court.calls == 1
+    assert court.deadline is not None and court.started_at is not None
+    assert court.deadline <= deadline
+    assert court.deadline - court.started_at > 0
+
+
+async def test_court_reserve_ignores_lease_renewal() -> None:
+    loop = asyncio.get_running_loop()
+    deadline = LeaseDeadline(loop.time() + 2)
+    court = _FakeAdjudicator()
+    l2 = _SlowFakeL2(
+        _model_result(_safe()),
+        delay=0.6,
+        before_return=lambda: deadline.renew(loop.time() + 60),
+    )
+    layered = _court_layered(court, 0.4, l2=l2)
+
+    await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, deadline=deadline
+    )
+
+    assert court.calls == 1
+    assert court.deadline is not None and court.started_at is not None
+    assert court.deadline - court.started_at == pytest.approx(0.4, abs=0.05)
+
+
+async def test_preflight_resolve_lead_gets_full_court_reserve() -> None:
+    court = _FakeAdjudicator()
+    l2 = _SlowFakeL2(_model_result(_safe()), delay=0.6)
+    layered = _court_layered(court, 0.4, l2=l2)
+
+    await layered.resolve_lead(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1("medium"),
+        deadline=asyncio.get_running_loop().time() + 2,
+    )
+
+    assert court.calls == 1
+    assert court.deadline is not None and court.started_at is not None
+    assert court.deadline - court.started_at == pytest.approx(0.4, abs=0.05)
 
 
 @pytest.mark.parametrize("policy_version", (10, 11))

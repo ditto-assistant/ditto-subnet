@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -23,24 +24,31 @@ BUILDER_IMAGE = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/"
     "submission-builder@sha256:" + "b" * 64
 )
+BUILDER_FALLBACK = ROOT / "release/screener-fleet-builder.digest"
 
 
 def _render(
-    tmp_path: Path, *, builder_image: str = BUILDER_IMAGE
+    tmp_path: Path,
+    *,
+    builder_image: str | None = BUILDER_IMAGE,
+    fallback_file: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    command = [
+        sys.executable,
+        str(BUILDER),
+        "--output",
+        str(tmp_path / "release"),
+        "--version",
+        "1.2.3",
+        "--revision",
+        REVISION,
+    ]
+    if builder_image is not None:
+        command.extend(["--submission-builder-image", builder_image])
+    if fallback_file is not None:
+        command.extend(["--submission-builder-fallback-file", str(fallback_file)])
     return subprocess.run(
-        [
-            sys.executable,
-            str(BUILDER),
-            "--output",
-            str(tmp_path / "release"),
-            "--version",
-            "1.2.3",
-            "--revision",
-            REVISION,
-            "--submission-builder-image",
-            builder_image,
-        ],
+        command,
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -78,6 +86,92 @@ def test_release_builder_rejects_mutable_or_wrong_builder(
     assert not (tmp_path / "release/manifest.env").exists()
 
 
+def _validate_with_host_script(script: Path, manifest: Path) -> None:
+    text = script.read_text()
+    functions = []
+    for name in ("manifest_value", "is_builder_digest", "validate_manifest"):
+        match = re.search(rf"^{name}\(\) \{{\n.*?^\}}", text, re.MULTILINE | re.DOTALL)
+        if match is not None:
+            functions.append(match.group())
+    harness = (
+        "set -euo pipefail\nEXPECTED_FORMAT_VERSION=1\nEXPECTED_UPDATE_PROTOCOL=1\n"
+        + "\n".join(functions)
+        + '\nvalidate_manifest "$1"\n'
+    )
+    result = subprocess.run(
+        ["bash", "-c", harness, "validate", str(manifest)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, (script, result.stderr)
+
+
+@pytest.mark.parametrize("primary", [None, "", "invalid", "submission-builder:latest"])
+def test_release_builder_fallback_is_accepted_by_both_host_validators(
+    tmp_path: Path, primary: str | None
+) -> None:
+    result = _render(tmp_path, builder_image=primary, fallback_file=BUILDER_FALLBACK)
+
+    assert result.returncode == 0, result.stderr
+    assert "::warning::" in result.stdout
+    assert str(BUILDER_FALLBACK) in result.stdout
+    manifest = tmp_path / "release/manifest.env"
+    assert len(manifest.read_text().splitlines()) == 5
+    assert (
+        f"SUBMISSION_BUILDER_IMAGE={BUILDER_FALLBACK.read_text().strip()}\n"
+        in manifest.read_text()
+    )
+    for script in (
+        UPDATER,
+        ROOT / "workers/screener/scripts/pull-screener-release.sh",
+    ):
+        _validate_with_host_script(script, manifest)
+
+
+@pytest.mark.parametrize("fallback_contents", [BUILDER_IMAGE[:-64] + "c" * 64, "bad"])
+def test_release_builder_prefers_valid_job_image(
+    tmp_path: Path, fallback_contents: str
+) -> None:
+    fallback = tmp_path / "fallback.digest"
+    fallback.write_text(fallback_contents + "\n")
+    result = _render(tmp_path, fallback_file=fallback)
+
+    assert result.returncode == 0, result.stderr
+    assert "::warning::" not in result.stdout
+    assert (
+        f"SUBMISSION_BUILDER_IMAGE={BUILDER_IMAGE}\n"
+        in (tmp_path / "release/manifest.env").read_text()
+    )
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [None, b"", b"submission-builder:latest\n", b"\xff", b"bad\nbad\n"],
+)
+def test_release_builder_refuses_missing_or_invalid_fallback(
+    tmp_path: Path, contents: bytes | None
+) -> None:
+    fallback = tmp_path / "fallback.digest"
+    if contents is not None:
+        fallback.write_bytes(contents)
+    result = _render(tmp_path, builder_image="", fallback_file=fallback)
+
+    assert result.returncode != 0
+    assert "::warning::" not in result.stdout
+    assert not (tmp_path / "release/manifest.env").exists()
+
+
+def test_committed_builder_fallback_is_one_immutable_reference() -> None:
+    contents = BUILDER_FALLBACK.read_text()
+    assert len(contents.splitlines()) == 1
+    assert re.fullmatch(
+        r"us-central1-docker\.pkg\.dev/ditto-app-dev/ditto-public-builders/"
+        r"submission-builder@sha256:[0-9a-f]{64}\n",
+        contents,
+    )
+
+
 def test_updater_authenticates_before_fetch_or_drain() -> None:
     updater = UPDATER.read_text()
 
@@ -95,7 +189,7 @@ def test_updater_authenticates_before_fetch_or_drain() -> None:
     assert 'setpriv --reuid="$SERVICE_USER"' in updater
     assert 'env HOME="$FLEET_ROOT"' in updater
     assert "runuser" not in updater
-    assert "trap cleanup_staging RETURN" in updater
+    assert "trap cleanup_staging_on_exit EXIT" in updater
     assert updater.count("venv --relocatable") == 1
     assert updater.count("sync --frozen --no-editable") == 1
     activation = updater[updater.index("activate_release()") :]
@@ -740,6 +834,364 @@ def test_timeout_sigterm_during_drain_restores_signed_workers(
     recorded = log.read_text().splitlines()
     assert "start --no-block ditto-screener-fleet-agent.service" not in recorded
     assert "interrupted-review" not in log.read_text()
+
+
+# Release preparation doubles. FAKE_FAIL names the one step that fails:
+# clone, fetch, cat-file, merge-base, checkout, rev-parse (reports another
+# commit), sync, or verify.
+_FAKE_GIT = r"""#!/bin/sh
+printf '%s\n' "$*" >>"$FAKE_RELEASE_LOG"
+[ "$1" = -C ] && shift 2
+if [ "$1" = rev-parse ]; then
+  [ "${FAKE_FAIL:-}" = rev-parse ] && echo 0000000000000000000000000000000000000000 \
+    || printf '%s\n' "$SCREENER_FLEET_TEST_REVISION"
+  exit 0
+fi
+[ "${FAKE_FAIL:-}" != "$1" ] || exit 1
+[ "$1" != clone ] || { for dest; do :; done; mkdir -p "$dest/.git"; }
+"""
+_FAKE_UV = r"""#!/bin/sh
+printf 'uv %s\n' "$*" >>"$FAKE_RELEASE_LOG"
+case "$1" in
+  venv)
+    mkdir -p "$3/bin"
+    {
+      echo '#!/bin/sh'
+      echo 'echo "python $*" >>"$FAKE_RELEASE_LOG"'
+      echo '[ "${FAKE_FAIL:-}" != verify ]'
+    } >"$3/bin/python"
+    chmod +x "$3/bin/python"
+    ;;
+  sync)
+    [ -z "${FAKE_SYNC_SLEEP:-}" ] || sleep "$FAKE_SYNC_SLEEP"
+    [ "${FAKE_FAIL:-}" != sync ] || exit 1
+    ;;
+esac
+"""
+_FAKE_SETPRIV = r"""#!/bin/sh
+while [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
+"""
+_FAKE_DOCKER = r"""#!/bin/sh
+printf 'DOCKER_HOST=%s %s\n' "${DOCKER_HOST:-}" "$*" >>"$FAKE_RELEASE_LOG"
+"""
+
+
+def _release_harness(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
+    env, _units, _state, _log = _fleet_harness(tmp_path)
+    bin_dir = tmp_path / "bin"
+    for name, body in (
+        ("git", _FAKE_GIT),
+        ("uv", _FAKE_UV),
+        ("setpriv", _FAKE_SETPRIV),
+        ("docker", _FAKE_DOCKER),
+    ):
+        (bin_dir / name).write_text(body)
+        (bin_dir / name).chmod(0o755)
+    releases = tmp_path / "fleet-root/releases"
+    releases.mkdir(parents=True)
+    log = tmp_path / "release.log"
+    log.write_text("")
+    env.update(
+        {
+            "FAKE_RELEASE_LOG": str(log),
+            "SCREENER_FLEET_ROOT": str(tmp_path / "fleet-root"),
+            "SCREENER_FLEET_RELEASES_DIR": str(releases),
+            "SCREENER_FLEET_CURRENT_LINK": str(tmp_path / "fleet-root/current"),
+            "SCREENER_FLEET_UV_BIN": str(bin_dir / "uv"),
+            "SCREENER_FLEET_TEST_REVISION": REVISION,
+            "SCREENER_FLEET_PROC_ROOT": str(tmp_path / "proc"),
+        }
+    )
+    return env, releases, log
+
+
+def _staging_dirs(releases: Path) -> list[str]:
+    return sorted(path.name for path in releases.glob("*.staging.*"))
+
+
+def test_prepare_success_promotes_the_staged_release(tmp_path: Path) -> None:
+    env, releases, _log = _release_harness(tmp_path)
+
+    result = _run(env, "prepare_release")
+
+    assert result.returncode == 0, result.stderr
+    assert (releases / REVISION / "worker-venv/bin/python").exists()
+    assert _staging_dirs(releases) == []
+
+
+@pytest.mark.parametrize(
+    ("step", "marker"),
+    [
+        ("fetch", "fetch --force origin"),
+        ("cat-file", "cat-file -e"),
+        ("merge-base", "merge-base --is-ancestor"),
+        ("checkout", "checkout --detach"),
+        ("rev-parse", "rev-parse HEAD"),
+        ("sync", "uv sync --frozen"),
+        ("verify", "verify-installed-signing-contract.py"),
+    ],
+)
+def test_prepare_failure_after_clone_leaves_no_staging_dir(
+    tmp_path: Path, step: str, marker: str
+) -> None:
+    """errexit skips RETURN traps; the EXIT trap must remove the staging dir."""
+    env, releases, log = _release_harness(tmp_path)
+    env["FAKE_FAIL"] = step
+
+    result = _run(env, "prepare_release")
+
+    assert result.returncode != 0
+    assert marker in log.read_text()
+    assert _staging_dirs(releases) == []
+    assert not (releases / REVISION).exists()
+
+
+def test_prepare_clone_failure_leaves_no_staging_dir(tmp_path: Path) -> None:
+    env, releases, log = _release_harness(tmp_path)
+    env["FAKE_FAIL"] = "clone"
+
+    result = _run(env, "prepare_release")
+
+    assert result.returncode != 0
+    assert "clone --filter=blob:none" in log.read_text()
+    assert _staging_dirs(releases) == []
+    assert not (releases / REVISION).exists()
+
+
+def test_sigterm_during_prepare_leaves_no_staging_dir(tmp_path: Path) -> None:
+    """systemd's TimeoutStartSec SIGTERM must still run the staging cleanup."""
+    env, releases, log = _release_harness(tmp_path)
+    env["FAKE_SYNC_SLEEP"] = "1"
+    process = subprocess.Popen(
+        ["bash", str(UPDATER)],
+        env={**env, "SCREENER_FLEET_TEST_ENTRYPOINT": "prepare_release"},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while "uv sync" not in log.read_text():
+            assert time.monotonic() < deadline, "prepare never reached uv sync"
+            time.sleep(0.05)
+        process.send_signal(signal.SIGTERM)
+        process.communicate(timeout=30)
+    finally:
+        if process.poll() is None:
+            process.kill()
+    assert process.returncode == 143
+    assert _staging_dirs(releases) == []
+    assert not (releases / REVISION).exists()
+
+
+def test_failing_merge_base_never_activates_release(tmp_path: Path) -> None:
+    """The provenance checks must stay under errexit, never inside a condition."""
+    env, releases, log = _release_harness(tmp_path)
+    env["FAKE_FAIL"] = "merge-base"
+
+    result = _run(env, "prepare_release")
+
+    assert result.returncode != 0
+    recorded = log.read_text()
+    assert "checkout --detach" not in recorded
+    assert "uv venv" not in recorded
+    assert not (releases / REVISION).exists()
+    updater = UPDATER.read_text()
+    assert '\nprepare_release "$revision" "$RELEASES_DIR/$revision"\n' in updater
+    staged = updater[
+        updater.index('STAGING_DIR="$staging"') : updater.index("STAGING_DIR=''\n}")
+    ]
+    assert staged.count("if !") == 1  # only the clone, which returns 1
+    assert "||" not in staged
+    assert "&&" not in staged
+    assert "RETURN" not in staged
+
+
+def test_startup_sweeps_stale_staging_dirs(tmp_path: Path) -> None:
+    env, releases, _log = _release_harness(tmp_path)
+    for name in (f"{REVISION}.staging.123", f"{'b' * 40}.staging.456"):
+        (releases / name / "src").mkdir(parents=True)
+    (releases / REVISION / "src").mkdir(parents=True)
+    (releases / "notes.staging.1").mkdir()
+
+    result = _run(env, "sweep_staging")
+
+    assert result.returncode == 0, result.stderr
+    assert sorted(path.name for path in releases.iterdir()) == [
+        REVISION,
+        "notes.staging.1",
+    ]
+    assert "removed 2 stale release staging dir(s)" in result.stderr
+    updater = UPDATER.read_text()
+    main = updater[updater.index('flock -n "$lock_fd"') :]
+    assert main.index("arm_staging_cleanup") < main.index("sweep_staging")
+    assert main.index("sweep_staging") < main.index("resolve_descriptor")
+
+
+def _proc_entry(tmp_path: Path, pid: int, cwd: Path | None) -> None:
+    entry = tmp_path / "proc" / str(pid)
+    entry.mkdir(parents=True)
+    interpreter = tmp_path / "python3"
+    interpreter.touch()
+    (entry / "exe").symlink_to(interpreter)
+    if cwd is not None:
+        (entry / "cwd").symlink_to(cwd)
+
+
+def _pruning_fleet(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
+    env, releases, _log = _release_harness(tmp_path)
+    units = Path(env["FAKE_UNITS"])
+    for revision in ("b", "c", "d", "e", "f"):
+        (releases / (revision * 40) / "src/workers/screener").mkdir(parents=True)
+    (releases / "notes").mkdir()
+    (releases / f"{'e' * 40}.staging.7").mkdir()
+    (tmp_path / "fleet-root/current").symlink_to(f"releases/{'c' * 40}")
+    # Worker 1 runs the activated release, worker 2 is a held review still on
+    # an older release, and worker 3 is not running.
+    for index, pid in ((1, 101), (2, 102), (3, 0)):
+        unit = f"ditto-screener-worker@{index}.service"
+        (units / f"{unit}.state").write_text("active" if pid else "inactive")
+        (units / f"{unit}.pid").write_text(str(pid))
+    _proc_entry(tmp_path, 101, tmp_path / "fleet-root/current/src/workers/screener")
+    env["SCREENER_FLEET_TEST_PREVIOUS"] = f"releases/{'b' * 40}"
+    return env, releases, units
+
+
+def test_prune_keeps_current_previous_and_held_worker_releases(
+    tmp_path: Path,
+) -> None:
+    env, releases, _units = _pruning_fleet(tmp_path)
+    _proc_entry(tmp_path, 102, releases / ("d" * 40) / "src/workers/screener")
+
+    result = _run(env, "prune_releases")
+
+    assert result.returncode == 0, result.stderr
+    assert sorted(path.name for path in releases.iterdir()) == [
+        "b" * 40,
+        "c" * 40,
+        "d" * 40,
+        f"{'e' * 40}.staging.7",
+        "notes",
+    ]
+    assert f"pruned superseded release {'e' * 40}" in result.stderr
+
+
+def test_prune_skips_when_worker_cwd_unreadable(tmp_path: Path) -> None:
+    """A live worker whose release cannot be resolved blocks the whole prune."""
+    env, releases, _units = _pruning_fleet(tmp_path)
+    _proc_entry(tmp_path, 102, None)
+
+    result = _run(env, "prune_releases")
+
+    assert result.returncode == 0, result.stderr
+    assert "worker 2 process 102 cwd is unreadable; not pruning" in result.stderr
+    assert (releases / ("e" * 40)).exists()
+    assert (releases / ("f" * 40)).exists()
+
+
+def test_prune_retry_after_held_worker_exits(
+    tmp_path: Path,
+) -> None:
+    env, releases, units = _pruning_fleet(tmp_path)
+    _proc_entry(tmp_path, 102, releases / ("d" * 40) / "src/workers/screener")
+    state = Path(env["SCREENER_FLEET_UPDATE_STATE_DIR"])
+    state.joinpath("managed-release.env").write_text(
+        f"DESCRIPTOR=example@sha256:{'a' * 64}\n"
+        f"REVISION={'c' * 40}\n"
+        f"PREVIOUS_RELEASE=releases/{'b' * 40}\n"
+    )
+
+    first = _run(env, "prune_activated_release")
+    assert first.returncode == 0, first.stderr
+    assert (releases / ("d" * 40)).exists()
+    assert not (releases / ("e" * 40)).exists()
+
+    (units / "ditto-screener-worker@2.service.pid").write_text("0")
+    second = _run(env, "prune_activated_release")
+    assert second.returncode == 0, second.stderr
+    assert sorted(path.name for path in releases.iterdir()) == [
+        "b" * 40,
+        "c" * 40,
+        f"{'e' * 40}.staging.7",
+        "notes",
+    ]
+
+
+def test_already_current_tick_skips_release_deletion_without_previous_identity(
+    tmp_path: Path,
+) -> None:
+    env, releases, _units = _pruning_fleet(tmp_path)
+    _proc_entry(tmp_path, 102, releases / ("d" * 40) / "src/workers/screener")
+    state = Path(env["SCREENER_FLEET_UPDATE_STATE_DIR"])
+    state.joinpath("managed-release.env").write_text(
+        f"DESCRIPTOR=older-release\nREVISION={'c' * 40}\n"
+    )
+
+    result = _run(env, "prune_activated_release")
+
+    assert result.returncode == 0, result.stderr
+    assert "previous release is unknown; not pruning" in result.stderr
+    assert (releases / ("e" * 40)).exists()
+    assert (releases / ("f" * 40)).exists()
+
+
+def test_already_current_tick_skips_release_deletion_after_link_drift(
+    tmp_path: Path,
+) -> None:
+    env, releases, _units = _pruning_fleet(tmp_path)
+    _proc_entry(tmp_path, 102, releases / ("d" * 40) / "src/workers/screener")
+    state = Path(env["SCREENER_FLEET_UPDATE_STATE_DIR"])
+    state.joinpath("managed-release.env").write_text(
+        f"REVISION={'a' * 40}\nPREVIOUS_RELEASE=releases/{'b' * 40}\n"
+    )
+
+    result = _run(env, "prune_activated_release")
+
+    assert result.returncode == 0, result.stderr
+    assert "managed and current releases differ; not pruning releases" in result.stderr
+    assert (releases / ("e" * 40)).exists()
+    assert (releases / ("f" * 40)).exists()
+
+
+def test_rollback_path_does_not_prune() -> None:
+    """Rollback never prunes; activated releases may retry best-effort cleanup."""
+    updater = UPDATER.read_text()
+    activation = updater[updater.index("activate_release()") :]
+    rollback = activation[
+        activation.index("if ! start_fleet; then") : activation.index(
+            "  fi\n  disarm_fleet_restore"
+        )
+    ]
+    assert "prune" not in rollback
+    success = activation[activation.index('rm -f "$FAILED_CANDIDATE_FILE"') :]
+    assert "prune_activated_release" in success
+    assert "prune_analyzer_images || log" in updater
+    assert updater.count('prune_releases "$previous"') == 1
+    restore = updater[
+        updater.index("restore_fleet_after_abort()") : updater.index(
+            "arm_fleet_restore()"
+        )
+    ]
+    assert restore.index("cleanup_staging_on_exit") < restore.index('exit "$status"')
+
+
+def test_analyzer_prune_is_dangling_and_label_filtered(tmp_path: Path) -> None:
+    env, _releases, log = _release_harness(tmp_path)
+
+    result = _run(env, "prune_analyzer_images")
+
+    assert result.returncode == 0, result.stderr
+    assert log.read_text().splitlines() == [
+        "DOCKER_HOST=unix:///run/ditto-screener-docker/docker.sock image prune "
+        "--force --filter dangling=true --filter label=ai.heyditto.screener.sha"
+    ]
+    updater = UPDATER.read_text()
+    assert "image prune --all" not in updater
+    assert "prune -a" not in updater
+    assert "system prune" not in updater
+    assert updater.count("image prune") == 1
 
 
 def test_drain_timeouts_outlast_the_longest_review() -> None:

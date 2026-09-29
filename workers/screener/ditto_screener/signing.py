@@ -228,7 +228,9 @@ def heartbeat_signing_message(
         if protocol_version >= 6:
             fields.append(host_specs_signing_token(host_specs))
         if protocol_version >= 7:
-            fields.append(fleet_release_signing_token(release))
+            fields.append(
+                fleet_release_signing_token(release, protocol_version=protocol_version)
+            )
         fields.append(str(timestamp))
         return ("ditto-screener-heartbeat:v4:" + ":".join(fields)).encode()
     if protocol_version >= 3:

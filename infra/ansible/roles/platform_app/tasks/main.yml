@@ -194,6 +194,28 @@
     platform_secrets: "{{ dict(platform_secret_reads.results | map(attribute='item.key') | zip(platform_secret_reads.results | map(attribute='stdout'))) }}"
   no_log: true
 
+- name: Read optional Backroom operator proof secret from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_backroom_platform_operator_proof }} --project={{ gcp_project }}"
+  register: platform_backroom_operator_proof_read
+  changed_when: false
+  no_log: true
+  when: secret_backroom_platform_operator_proof | length > 0
+
+- name: Refuse an invalid configured Backroom operator proof secret
+  ansible.builtin.assert:
+    that:
+      - platform_backroom_operator_proof_read.stdout is match('^[0-9a-f]{64}$')
+    fail_msg: "Configured Backroom operator proof secret must be exactly 64 lowercase hex bytes"
+  no_log: true
+  when:
+    - secret_backroom_platform_operator_proof | length > 0
+
+- name: Install Backroom operator proof secret
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'backroom_platform_operator_proof': platform_backroom_operator_proof_read.stdout}) }}"
+  no_log: true
+  when: secret_backroom_platform_operator_proof | length > 0
+
 # Optional secrets: only read when a host names the Secret Manager id, so an
 # unactivated host renders DITTO_LINK_CLIENT_SECRET= and DITTO_ROUTER_API_KEY= empty.
 - name: Read Ditto link client secret from Secret Manager

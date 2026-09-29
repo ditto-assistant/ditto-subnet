@@ -137,6 +137,10 @@ pub struct RunRequest {
     /// memory-only practice may omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_endpoint: Option<String>,
+    /// Opt-in operation receipts. Absent on legacy endpoints; never infer
+    /// idempotency merely because the endpoint accepts these wire fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_effect_protocol: Option<String>,
     /// Optional (observed execution): the memory graph this case must be answered from
     /// (multi-graph isolation). Mirrors the `user_id` the haystack was seeded
     /// under; answer only from this user's memory, never leak another user's
@@ -164,7 +168,13 @@ pub struct ToolExecRequest {
     pub args: Value,
     #[serde(default)]
     pub hop: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_protocol: Option<String>,
 }
+
+pub const TOOL_EFFECT_PROTOCOL_V1: &str = "operation-receipt-v1";
 
 /// The mock result the validator returns for a [`ToolExecRequest`] (Go:
 /// `ToolExecResponse`). `result` is the tool output to reason over; `error` is
@@ -177,6 +187,12 @@ pub struct ToolExecResponse {
     pub result: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_state: Option<String>,
+    #[serde(default)]
+    pub replayed: bool,
 }
 
 /// A tool call the harness made (Go: `ObservedToolCall`).
@@ -190,12 +206,24 @@ pub struct ObservedToolCall {
     pub hop: i32,
 }
 
+/// Advisory record of a model-selected call stopped before the tool endpoint.
+/// It cannot grant execution credit; the validator's endpoint ledger is authoritative.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct BlockedToolCall {
+    pub name: String,
+    pub args: Value,
+    pub state: String,
+}
+
 /// What the harness returns for a case (Go: `RunResponse`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub struct RunResponse {
     pub final_text: String,
     pub tool_calls: Vec<ObservedToolCall>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_tool_calls: Vec<BlockedToolCall>,
     pub prompt_tokens: i64,
     pub output_tokens: i64,
     pub latency_ms: i64,
@@ -285,6 +313,7 @@ mod tests {
             assert!(obj.contains_key(key), "missing key {key}");
         }
         assert_eq!(obj["bench_version"], ACTIVE_BENCH_VERSION);
+        assert!(obj.get("tool_effect_protocol").is_none());
         assert!(!obj.contains_key("tool_endpoint"));
         assert!(!obj.contains_key("user_id"));
     }
@@ -409,6 +438,8 @@ mod tests {
             name: "search_web".into(),
             args: serde_json::json!({"query": "x"}),
             hop: 0,
+            operation_id: None,
+            effect_protocol: None,
         };
         let back: ToolExecRequest =
             serde_json::from_str(&serde_json::to_string(&req).expect("ser")).expect("de");
@@ -423,6 +454,21 @@ mod tests {
         )
         .expect("de");
         assert_eq!(err.result, "");
+
+        let versioned: RunRequest = serde_json::from_str(
+            r#"{"case_id":"c2","system_prompt":"","user_input":"","tool_effect_protocol":"operation-receipt-v1"}"#,
+        )
+        .expect("parse advertised effect capability");
+        assert_eq!(
+            versioned.tool_effect_protocol.as_deref(),
+            Some(TOOL_EFFECT_PROTOCOL_V1)
+        );
+        let receipt: ToolExecResponse = serde_json::from_str(
+            r#"{"result":"done","operation_id":"operation-first-0001","effect_state":"applied","replayed":true}"#,
+        )
+        .expect("parse applied receipt");
+        assert_eq!(receipt.effect_state.as_deref(), Some("applied"));
+        assert!(receipt.replayed);
     }
 
     #[test]
@@ -433,6 +479,11 @@ mod tests {
                 name: "search_web".into(),
                 args: serde_json::json!({"query": "x"}),
                 hop: 0,
+            }],
+            blocked_tool_calls: vec![BlockedToolCall {
+                name: "set_theme".into(),
+                args: serde_json::json!({"theme": "dark"}),
+                state: "blocked_before_execution".into(),
             }],
             prompt_tokens: 10,
             output_tokens: 5,
@@ -449,5 +500,6 @@ mod tests {
                 .expect("deserialize response without optional slots");
         assert_eq!(without_optional_slots.answer, None);
         assert_eq!(without_optional_slots.abstain, None);
+        assert!(without_optional_slots.blocked_tool_calls.is_empty());
     }
 }

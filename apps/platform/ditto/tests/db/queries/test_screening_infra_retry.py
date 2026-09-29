@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import Table, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.db.models import (
@@ -82,7 +84,7 @@ _MANUAL_RETRY_CODES = (
     "worker-lease-orphaned",
     "worker-platform-request-failed",
     "l2-cache-lock-timeout",
-    "source-review-retryable-infra",
+    "source-review-model-timeout",
 )
 
 
@@ -357,15 +359,19 @@ def test_infra_code_is_split_from_the_park_cap_tuple() -> None:
 # --- per-artifact retry ---------------------------------------------------
 
 
+@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
 async def test_infra_failure_is_held_for_its_backoff_then_retried(
-    session_maker: async_sessionmaker[AsyncSession],
+    session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:
     now = datetime.now(UTC)
     attempt_id = uuid4()
     delay = infra_retry_delay(1, attempt_id)
     failed_at = now - timedelta(minutes=30)
     agent_id = await _failing_agent(
-        session_maker, finished_at=failed_at, attempt_id=attempt_id
+        session_maker,
+        finished_at=failed_at,
+        attempt_id=attempt_id,
+        reason_code=reason_code,
     )
 
     assert await _claim(session_maker, now=failed_at + delay - _SECOND) == []
@@ -375,6 +381,28 @@ async def test_infra_failure_is_held_for_its_backoff_then_retried(
         agent = await session.get(Agent, agent_id)
         assert agent is not None
         assert agent.status == AgentStatus.SCREENING
+    assert await _running(session_maker) == [agent_id]
+
+
+async def test_worker_claim_not_started_is_auto_retried_after_backoff(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A durable claim the worker settled before touching the artifact (#2446)."""
+    now = datetime.now(UTC)
+    attempt_id = uuid4()
+    delay = infra_retry_delay(1, attempt_id)
+    failed_at = now - timedelta(minutes=30)
+    agent_id = await _failing_agent(
+        session_maker,
+        finished_at=failed_at,
+        attempt_id=attempt_id,
+        provider=None,
+        lane=None,
+        reason_code="worker-claim-not-started",
+    )
+
+    assert await _claim(session_maker, now=failed_at + delay - _SECOND) == []
+    assert await _claim(session_maker, now=failed_at + delay + _SECOND) == [agent_id]
     assert await _running(session_maker) == [agent_id]
 
 
@@ -393,6 +421,29 @@ async def test_artifact_dependent_codes_stay_parked(
         agent = await session.get(Agent, agent_id)
         assert agent is not None
         assert agent.status == AgentStatus.SCREENING_FAILED
+
+
+async def test_inconclusive_runtime_evidence_hold_stays_parked(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A present lease that failed its checks is a verdict, not infrastructure.
+
+    The worker reports it INCONCLUSIVE, which Platform stores as an ``expired``
+    attempt; only the retryable no-lease failure is retried automatically.
+    """
+    now = datetime.now(UTC)
+    agent_id = await _seed_agent(session_maker)
+    await _add_attempt(
+        session_maker,
+        agent_id,
+        status="expired",
+        started_at=now - timedelta(hours=3),
+        finished_at=now - timedelta(hours=2),
+        reason_code="l2-runtime-evidence-unavailable",
+    )
+
+    assert agent_id not in (await _plan(session_maker, now=now)).decisions
+    assert await _claim(session_maker, now=now) == []
 
 
 async def test_streak_doubles_per_consecutive_failure_and_caps(
@@ -1158,11 +1209,36 @@ async def test_partial_index_predicate_matches_the_scan_query(
     assert "screening_attempts_infra_failed_idx" in plan, plan
 
 
-def test_partial_index_covers_exactly_one_reason_code() -> None:
-    assert len(INFRA_AUTO_RETRY_REASON_CODES) == 1, (
-        "The partial index screening_attempts_infra_failed_idx (models.py, its "
-        "migration, and screening_infra_retry._infra_failure_filters) names one "
-        "reason code; update all three together with INFRA_AUTO_RETRY_REASON_CODES"
+def _predicate_reason_codes(predicate: str) -> set[str]:
+    return set(re.findall(r"'([a-z0-9-]+)'", predicate)) - {"failed"}
+
+
+async def test_partial_index_covers_exactly_the_auto_retry_codes(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """models.py and the migrated index name exactly the retried codes."""
+    expected = set(INFRA_AUTO_RETRY_REASON_CODES)
+    index = next(
+        index
+        for index in cast(Table, ScreeningAttempt.__table__).indexes
+        if index.name == "screening_attempts_infra_failed_idx"
+    )
+    for dialect in ("postgresql", "sqlite"):
+        predicate = str(index.dialect_options[dialect]["where"])
+        assert _predicate_reason_codes(predicate) == expected, (
+            f"models.py {dialect}_where must name INFRA_AUTO_RETRY_REASON_CODES"
+        )
+    async with session_maker() as session:
+        migrated = await session.scalar(
+            text(
+                "SELECT indexdef FROM pg_indexes "
+                "WHERE indexname = 'screening_attempts_infra_failed_idx'"
+            )
+        )
+    assert migrated is not None
+    assert _predicate_reason_codes(migrated) == expected, (
+        "add an Alembic migration that rebuilds the partial index with "
+        "INFRA_AUTO_RETRY_REASON_CODES"
     )
 
 

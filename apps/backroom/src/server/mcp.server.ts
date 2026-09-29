@@ -123,6 +123,9 @@ import {
   l2ReportCanaryLookupInputSchema,
   l2ReportCanaryPreflightInputSchema,
   scheduleL2ReportCanaryInputSchema,
+  registerCanonicalStarterInputSchema,
+  reviewCanonicalStarterInputSchema,
+  scheduleCanonicalStarterInputSchema,
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
   confirmationSeedAnchorsInputSchema,
@@ -290,6 +293,10 @@ import {
   fetchL2ReportCanary,
   fetchL2ReportCanaryPreflight,
   scheduleL2ReportCanary,
+  fetchCanonicalStarterPreflight,
+  registerCanonicalStarter,
+  reviewCanonicalStarter,
+  scheduleCanonicalStarter,
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
   fetchConfirmationSeedAnchors,
@@ -387,6 +394,9 @@ export const WRITE_TOOL_NAMES = new Set([
   'record_v13_replay_private_group',
   'register_v13_replay_private_package',
   'schedule_l2_report_canary',
+  'register_canonical_starter_fixture',
+  'review_canonical_starter_fixture',
+  'schedule_canonical_starter_fixture',
   'create_screener_bootstrap_grant',
   'set_screener_provider_settings',
   'set_screener_node_channel_settings',
@@ -740,6 +750,14 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Rotate the exact pinned V13 cohort to a unanimously signed packet after all V13 tickets drain; preserves pin history.',
   schedule_l2_report_canary:
     'Queue one isolated exact-artifact report on an enrolled Hetzner node. source_only is the default; full_runtime additionally runs private challenges in a separate Docker namespace. Neither mode changes screening, scoring, or quarantine.',
+  get_canonical_starter_fixture_preflight:
+    'Read the pinned public starter tree and archive, independent review provenance, object integrity and scheduling readiness.',
+  register_canonical_starter_fixture:
+    'Stage the exact released public starter source as an operator-only fixture without a miner submission.',
+  review_canonical_starter_fixture:
+    'Record an independent exact-source and served-path candidate review with its public evidence digest and image digest.',
+  schedule_canonical_starter_fixture:
+    'Queue one bounded source-only report after independent review; no screening, score or admission authority.',
   get_copy_court_settings:
     'Read the copy-hold triage court posture and revision history.',
   get_confirmation_seed_anchors:
@@ -2345,7 +2363,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening infrastructure retries',
       description:
-        'Read how Platform is retrying screening attempts that failed on Ditto infrastructure (docker-build-infrastructure), and why an agent is or is not being retried. Returns the effective policy (backoff base/cap, jitter, max age, max consecutive failures, breaker threshold/window/open/probe durations, all in seconds); a summary with a count per state (backoff, breaker_held, probe_due, due, capped), not_admitted, aged_out_agents, open_breakers, half_open_breakers and breakers_total; the parked agents (agent id, latest attempt id, reason code, provider/lane, consecutive failure count, failed_at, backoff_until, next_retry_at, state, breaker_phase, admitted, claim_outlook), earliest next_retry_at first; and each signature\'s circuit breaker (phase, opened_at, open_until, last_probe_at, next_probe_at, parked agents). Everything is derived from screening attempt history at read time and nothing is stored, so it can lag a claim that lands a moment later. Agents in the capped state, and aged_out_agents (parked on an infrastructure failure older than the max age with no operator retry; counted, not listed individually), are never retried automatically and wait for an operator retry. The breaker is per signature (reason code, provider, lane), and a breaker with a known provider holds and probes only workers on that provider: a worker on another provider can still claim those agents by backoff alone (that run is not a probe), while a signature with no provider holds every worker. This view is computed with no particular claimant, so breaker_held and waiting_breaker mean held for workers on the signature\'s provider. Breaker phase is computed at read time: open while now < open_until, half_open after that until a probe recovers or the failures age out of the history window (probes are allowed, nothing is held for that lane), closed otherwise; a half_open breaker with no parked agents is history, not a live hold. parked_agents counts agents parked now, not historical failures. claim_outlook ready means admitted with the backoff and breaker hold elapsed; the claim may still skip it (one probe per signature per pass, ownership rules); not_admitted, needs_operator, waiting_backoff and waiting_breaker (held for workers on that provider) say why not. Rows are bounded (agents_limit, breakers_limit); the summary counts everything and *_truncated says when rows were cut. Carries no error text, source, or miner identity. Requires backroom:read and changes nothing.',
+        'Read how Platform is retrying screening attempts that failed on Ditto infrastructure (the policy auto_retry_reason_codes: docker-build-infrastructure, worker-claim-not-started, and l2-runtime-evidence-unavailable when no signed scorer-cohort lease was available at claim), and why an agent is or is not being retried. Returns the effective policy (backoff base/cap, jitter, max age, max consecutive failures, breaker threshold/window/open/probe durations, all in seconds); a summary with a count per state (backoff, breaker_held, probe_due, due, capped), not_admitted, aged_out_agents, open_breakers, half_open_breakers and breakers_total; the parked agents (agent id, latest attempt id, reason code, provider/lane, consecutive failure count, failed_at, backoff_until, next_retry_at, state, breaker_phase, admitted, claim_outlook), earliest next_retry_at first; and each signature\'s circuit breaker (phase, opened_at, open_until, last_probe_at, next_probe_at, parked agents). Everything is derived from screening attempt history at read time and nothing is stored, so it can lag a claim that lands a moment later. Agents in the capped state, and aged_out_agents (parked on an infrastructure failure older than the max age with no operator retry; counted, not listed individually), are never retried automatically and wait for an operator retry. The breaker is per signature (reason code, provider, lane), and a breaker with a known provider holds and probes only workers on that provider: a worker on another provider can still claim those agents by backoff alone (that run is not a probe), while a signature with no provider holds every worker. This view is computed with no particular claimant, so breaker_held and waiting_breaker mean held for workers on the signature\'s provider. Breaker phase is computed at read time: open while now < open_until, half_open after that until a probe recovers or the failures age out of the history window (probes are allowed, nothing is held for that lane), closed otherwise; a half_open breaker with no parked agents is history, not a live hold. parked_agents counts agents parked now, not historical failures. claim_outlook ready means admitted with the backoff and breaker hold elapsed; the claim may still skip it (one probe per signature per pass, ownership rules); not_admitted, needs_operator, waiting_backoff and waiting_breaker (held for workers on that provider) say why not. Rows are bounded (agents_limit, breakers_limit); the summary counts everything and *_truncated says when rows were cut. Carries no error text, source, or miner identity. Requires backroom:read and changes nothing.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreeningInfraRetries()),
@@ -2506,6 +2524,50 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => scheduleL2ReportCanary(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_canonical_starter_fixture_preflight',
+    {
+      title: 'Get canonical starter fixture preflight',
+      description: 'Read exact public release and archive identity, current object integrity, reviewer provenance and readiness. Requires backroom:read.',
+      inputSchema: z.object({}),
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchCanonicalStarterPreflight()),
+  )
+
+  registerTool(
+    'register_canonical_starter_fixture',
+    {
+      title: 'Register canonical starter source fixture',
+      description: 'Stage only the packaged v0.330.5 public source bytes. No miner row, score or admission change. Requires backroom:write and confirmation.',
+      inputSchema: registerCanonicalStarterInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => registerCanonicalStarter(input, props.session.email)),
+  )
+
+  registerTool(
+    'review_canonical_starter_fixture',
+    {
+      title: 'Attest canonical starter served path',
+      description: 'A different signed-in operator binds a public exact-source and served-path review digest plus built image digest. Candidate only; no clear authority. Requires backroom:write and confirmation.',
+      inputSchema: reviewCanonicalStarterInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => reviewCanonicalStarter(input, props.session.email)),
+  )
+
+  registerTool(
+    'schedule_canonical_starter_fixture',
+    {
+      title: 'Schedule canonical starter source report',
+      description: 'Queue one report-only source_only L1/L2 run after independent review and adopted worker preflight. No verdict or submission mutation. Requires backroom:write and confirmation.',
+      inputSchema: scheduleCanonicalStarterInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => scheduleCanonicalStarter(input, props.session.email)),
   )
 
   registerTool(

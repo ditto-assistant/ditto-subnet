@@ -28,6 +28,7 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SCREENER_IMAGE_BUILD_MEMORY",
         "SCREENER_V13_RUNTIME_RECEIPTS_MODE",
         "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE",
+        "SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS",
         "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS",
         "NETUID",
     ):
@@ -95,6 +96,18 @@ def test_signed_runtime_lease_requires_explicit_opt_in(
     _base_env(monkeypatch)
     monkeypatch.setenv("SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE", "true")
     assert parse_screener_config_from_env().require_signed_runtime_lease is True
+
+
+def test_signed_runtime_lease_max_age_is_configurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _base_env(monkeypatch)
+    assert parse_screener_config_from_env().signed_runtime_lease_max_age_seconds == 300
+    monkeypatch.setenv("SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS", "600")
+    assert parse_screener_config_from_env().signed_runtime_lease_max_age_seconds == 600
+    monkeypatch.setenv("SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS", "0")
+    with pytest.raises(ScreenerConfigError, match="MAX_AGE_SECONDS"):
+        parse_screener_config_from_env()
 
 
 def test_image_build_memory_additively_replaces_legacy_name(

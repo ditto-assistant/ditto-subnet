@@ -249,6 +249,7 @@ mod tests {
                     ..ObservedToolCall::default()
                 })
                 .collect(),
+            blocked_tool_calls: Vec::new(),
             prompt_tokens: 0,
             output_tokens: 0,
             latency_ms: latency,

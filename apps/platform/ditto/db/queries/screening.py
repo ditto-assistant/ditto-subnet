@@ -144,10 +144,11 @@ PROVIDER_BACKOFF_REASON_CODES = (
     "targon-source-review-unavailable",
     "cloudrun-build-unavailable",
     "cloudrun-runtime-unavailable",
-    # The agentic reviewer reported a pre-verdict failure it marked
-    # retryable_infra; immediate reclaim would hot-loop against the same
-    # broken court, so hold the retry briefly before re-queueing.
-    "source-review-retryable-infra",
+    # An L1 model turn timed out while the lease still had time (lease expiry
+    # reports source-review-lease-budget-exhausted instead); immediate reclaim
+    # would hot-loop against the same broken court, so hold the retry briefly
+    # before re-queueing.
+    "source-review-model-timeout",
 )
 # How long a provider-backoff failure waits after its FAILURE before the agent
 # is claimable again, capped by the attempt deadline. Backing off to the full

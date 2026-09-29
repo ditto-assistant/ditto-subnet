@@ -108,6 +108,7 @@ from ditto.db.models import (
     ScreeningReviewWindow,
     ScreeningVerificationReceipt,
     SubmissionImageBuild,
+    SubmissionSourceReview,
     TrustedImageBuild,
     ValidatorQueueWithdrawal,
     ValidatorTicket,
@@ -131,6 +132,7 @@ from ditto.tests.legacy_era import retired_era_writes_allowed
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     AdjudicationCompletionReceipt,
+    ScoredRuntimeEvidenceLease,
     ScreenResultOutcome,
     ScreenReviewAudit,
     SourceReviewAdjudication,
@@ -327,6 +329,14 @@ def test_unknown_container_contract_detail_stays_public_safe() -> None:
             "Docker build infrastructure failed before screening completed. This "
             "is operator-owned and is retried automatically with backoff for a "
             "limited time, then held for an operator retry.",
+        ),
+        (
+            "screener error: PlatformError: platform changed screening policy "
+            "during claim: expected 12, received 13 SECRET_FROM_WORKER",
+            "worker-claim-not-started",
+            "The screening worker released this submission before starting it. "
+            "This is operator-owned and is retried automatically with backoff for "
+            "a limited time, then held for an operator retry.",
         ),
         (
             "build failed: [timeout after 2700s]\nSECRET_FROM_BUILD",
@@ -703,6 +713,8 @@ def _heartbeat_payload(
                     "activated_at",
                 )
             )
+            if protocol_version >= 8:
+                release_token += ",1" if release.get("source_fixture_v1") else ",0"
         message = (
             "ditto-screener-heartbeat:v4:"
             f"{_SCREENER_HOTKEY}:0.4.2:{protocol_version}:"
@@ -1043,6 +1055,24 @@ async def _seed_screener_node(
         )
 
 
+async def _seed_hetzner_primary(
+    maker: async_sessionmaker[AsyncSession], *, screening_concurrency: int = 2
+) -> None:
+    await _seed_screener_node(
+        maker,
+        node_id="subnet-screener-1",
+        hotkey="5PrimaryHetznerHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        token="primary-hetzner-token-at-least-32-characters",
+        screening_concurrency=screening_concurrency,
+    )
+    async with maker() as session, session.begin():
+        await session.execute(
+            update(ScreenerNode)
+            .where(ScreenerNode.node_id == "subnet-screener-1")
+            .values(provider="hetzner")
+        )
+
+
 def _bounded_review_audit(
     *, steps_used: int = 6, reason_code: str = "source-review-inconclusive"
 ) -> ScreenReviewAudit:
@@ -1065,8 +1095,54 @@ def _bounded_review_audit(
 
 
 @pytest.fixture(autouse=True)
-def _authenticate_screener_client(client: httpx.AsyncClient) -> None:
+async def _authenticate_screener_client(
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client.headers.update(_AUTH_HEADER)
+    # The legacy fleet principal may claim only when the current primary has
+    # known positive admission. Seed that production precondition for ordinary
+    # claim/attempt tests, leaving explicit fallback policy cases independent.
+    claim_classes = {
+        "TestClaim",
+        "TestQuarantineAdmin",
+        "TestArtifactFetchAuditTrail",
+        "TestArtifact",
+        "TestScreenedImageUpload",
+        "TestSubmitResult",
+        "TestVerdictLeaseOwnership",
+        "TestQuarantineReviewContext",
+    }
+    independent_policy_tests = {
+        "test_legacy_gcp_claim_waits_for_fenced_overflow_capacity",
+        "test_legacy_gcp_and_watchdog_share_fallback_admission",
+        "test_legacy_gcp_held_claim_still_sweeps_overdue_attempts",
+        "test_zero_admission_is_a_full_stop_for_automatic_retries",
+    }
+    test_class = request.node.cls
+    if (
+        test_class is not None
+        and (
+            test_class.__name__ in claim_classes
+            or request.node.originalname
+            == "test_watchdog_is_quiet_while_controller_lease_is_fresh"
+        )
+        and request.node.originalname not in independent_policy_tests
+    ):
+        from ditto.db.queries import screener_provider_settings as provider_settings
+
+        # Keep the default revision at zero for unrelated claim tests while
+        # giving its GCP-first route a real, open primary admission source.
+        monkeypatch.setattr(
+            provider_settings,
+            "DEFAULT_SCREENER_PROVIDER_SETTINGS",
+            provider_settings.DEFAULT_SCREENER_PROVIDER_SETTINGS.model_copy(
+                update={"primary_node_id": "subnet-screener-1"}
+            ),
+        )
+        await _seed_hetzner_primary(session_maker)
 
 
 async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
@@ -2158,6 +2234,99 @@ class TestFederatedScreenerNodes:
         assert nodes["open-node"]["admission_open"] is True
         assert nodes["open-node"]["ready"] is True
 
+    async def test_controller_nodes_attributes_legacy_gcp_instances(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        now = datetime.now(UTC)
+        enrolled_hotkey = "5EnrolledNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        await _seed_screener_node(
+            session_maker,
+            node_id="enrolled-node",
+            hotkey=enrolled_hotkey,
+            token="enrolled-node-token-at-least-32-characters",
+            screening_concurrency=1,
+        )
+        agent_ids: list[UUID] = []
+        for index, (hotkey, deadline) in enumerate(
+            (
+                (_SCREENER_HOTKEY, None),
+                (_SCREENER_HOTKEY, None),
+                (_SCREENER_HOTKEY, None),
+                (_SCREENER_HOTKEY, now - timedelta(minutes=1)),
+                (enrolled_hotkey, None),
+            )
+        ):
+            agent_ids.append(
+                await _seed_agent(
+                    session_maker,
+                    status=AgentStatus.SCREENING,
+                    name=f"attributed-agent-{index}",
+                    sha256=f"{index:064x}",
+                )
+            )
+            await _seed_running_attempt(
+                session_maker,
+                agent_id=agent_ids[-1],
+                screener_hotkey=hotkey,
+                started_at=now - timedelta(minutes=5),
+                deadline=deadline,
+            )
+        async with session_maker() as session, session.begin():
+            for hotkey, instance_id, state, active_agent_id in (
+                (enrolled_hotkey, "enrolled-node", "screening", agent_ids[4]),
+                (_SCREENER_HOTKEY, "ditto-screener-fleet-busy", "screening", None),
+                (
+                    _SCREENER_HOTKEY,
+                    "ditto-screener-fleet-claimed",
+                    "polling",
+                    agent_ids[1],
+                ),
+                (_SCREENER_HOTKEY, "ditto-screener-fleet-idle", "polling", None),
+            ):
+                session.add(
+                    ScreenerHeartbeat(
+                        screener_hotkey=hotkey,
+                        instance_id=instance_id,
+                        software_version="0.21.0",
+                        protocol_version=4,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        state=state,
+                        active_agent_id=active_agent_id,
+                        first_seen_at=now - timedelta(days=1),
+                        reported_at=now - timedelta(seconds=5),
+                        seen_at=now - timedelta(seconds=5),
+                        signature="ab" * 64,
+                    )
+                )
+
+        response = await client.get(
+            "/api/v1/screener/controller/nodes?environment=prod",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        # Expired leases and enrolled-node leases are not legacy GCP work.
+        assert body["legacy_gcp_running_attempts"] == 3
+        nodes = {node["node_id"]: node for node in body["nodes"]}
+        assert nodes["enrolled-node"]["instance_busy"] is None
+        assert nodes["ditto-screener-fleet-busy"]["instance_busy"] is True
+        assert nodes["ditto-screener-fleet-claimed"]["instance_busy"] is True
+        assert nodes["ditto-screener-fleet-idle"]["instance_busy"] is False
+        # The shared hotkey still marks every legacy row as leased.
+        assert nodes["ditto-screener-fleet-idle"]["active_lease"] is True
+
     async def test_watchdog_leaves_operator_admission_closure_stopped(
         self,
         app: FastAPI,
@@ -3071,6 +3240,38 @@ class TestHeartbeat:
         response = await client.post("/api/v1/screener/heartbeat", json=payload)
         assert response.status_code == 401, response.text
 
+    async def test_v8_fixture_capability_is_signed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        payload = _heartbeat_payload(
+            protocol_version=8,
+            instance_id="subnet-screener-1-worker-1",
+            review_settings=_V5_REVIEW_SETTINGS,
+            host_specs={
+                "cpu_count": 4,
+                "memory_total_mib": 8000,
+                "disk_total_gib": 80,
+                "architecture": "x86_64",
+            },
+            release={
+                "builtin_policy_version": SCREENING_POLICY_VERSION,
+                "source_fixture_v1": True,
+            },
+        )
+        accepted = await client.post("/api/v1/screener/heartbeat", json=payload)
+        assert accepted.status_code == 200, accepted.text
+        tampered = dict(payload)
+        tampered["release"] = {
+            "builtin_policy_version": SCREENING_POLICY_VERSION,
+            "source_fixture_v1": False,
+        }
+        refused = await client.post("/api/v1/screener/heartbeat", json=tampered)
+        assert refused.status_code == 401, refused.text
+
     async def test_v7_requires_the_release_it_announces(
         self,
         app: FastAPI,
@@ -3781,6 +3982,29 @@ class TestQueue:
             headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
         )
         assert controller_nodes.status_code == 200, controller_nodes.text
+        review_id = uuid4()
+        job_token = "legacy-off-source-review-job-token"
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                SubmissionSourceReview(
+                    review_id=review_id,
+                    agent_id=agent_id,
+                    attempt_id=UUID(claim.json()["items"][0]["attempt_id"]),
+                    environment="prod",
+                    artifact_sha256=_SHA256,
+                    status="running",
+                    job_token_hash=hashlib.sha256(job_token.encode()).hexdigest(),
+                    job_token_expires_at=now + timedelta(minutes=10),
+                    lease_expires_at=now + timedelta(minutes=10),
+                )
+            )
+        source = await client.get(
+            f"/api/v1/screener/submission-source-reviews/{review_id}/source",
+            headers={"Authorization": f"Bearer {job_token}"},
+        )
+        assert source.status_code == 200, source.text
+        assert source.json()["artifact_sha256"] == _SHA256
 
     async def test_dedicated_screener_needs_no_validator_permit(
         self,
@@ -4041,6 +4265,7 @@ class TestClaim:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         """The shared GCP principal must not outrun a healthy Hetzner primary."""
+        await _seed_hetzner_primary(session_maker)
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         now = datetime.now(UTC)
         async with session_maker() as session, session.begin():
@@ -4117,60 +4342,176 @@ class TestClaim:
         assert admitted.json()["items"][0]["agent_id"] == str(agent_id)
         assert "X-Ditto-Claim-Empty-Reason" not in admitted.headers
 
-    async def test_legacy_gcp_claim_fails_closed_after_controller_lease_expires(
+    @pytest.mark.parametrize(
+        ("controller", "policy", "admitted", "fallback"),
+        [
+            ("missing", "open", True, True),
+            ("stale", "open", True, True),
+            ("unready", "open", True, True),
+            ("fresh-zero", "open", False, False),
+            ("fresh-target", "open", True, False),
+            ("fresh-mismatch", "open", False, False),
+            ("stale", "disabled", False, False),
+            ("missing", "disabled", False, False),
+            ("unready", "disabled", False, False),
+            ("stale", "closed", False, False),
+            ("missing", "closed", False, False),
+            ("unready", "closed", False, False),
+            ("fresh-target", "closed", False, False),
+            ("stale", "unknown", False, False),
+            ("missing", "unknown", False, False),
+            ("unready", "unknown", False, False),
+            ("stale", "no-admission", False, False),
+            ("stale", "other-environment", False, False),
+            ("stale", "wrong-provider", False, False),
+            ("stale", "capped-zero", False, False),
+            ("missing", "gcp-first", True, True),
+            ("fresh-zero", "gcp-first", False, False),
+            ("fresh-zero-mismatch", "gcp-first", False, False),
+            ("fresh-target", "gcp-first", True, False),
+            ("missing", "gcp-first-closed", False, False),
+            ("missing", "mixed-gcp-first", True, True),
+            ("missing", "mixed-gcp-first-closed", False, False),
+            ("stale", "gcp-first-unknown", False, False),
+            ("unready", "gcp-first-no-admission", False, False),
+            ("stale", "retired-open", True, True),
+            ("fresh-zero", "retired-open", False, False),
+            ("fresh-zero-mismatch", "retired-open", False, False),
+            ("fresh-target", "retired-open", True, False),
+            ("stale", "retired-closed", False, False),
+            ("stale", "retired-unknown", False, False),
+            ("missing", "mixed-retired-open", True, True),
+            ("stale", "mixed-retired-closed", False, False),
+            ("stale", "mixed-retired-unknown", False, False),
+        ],
+    )
+    async def test_legacy_gcp_and_watchdog_share_fallback_admission(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        controller: str,
+        policy: str,
+        admitted: bool,
+        fallback: bool,
     ) -> None:
-        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         now = datetime.now(UTC)
+        if policy not in (
+            "unknown",
+            "retired-unknown",
+            "gcp-first-unknown",
+            "mixed-retired-unknown",
+        ):
+            await _seed_hetzner_primary(
+                session_maker,
+                screening_concurrency=0 if "closed" in policy else 2,
+            )
         async with session_maker() as session, session.begin():
+            primary = await session.get(ScreenerNode, "subnet-screener-1")
+            if primary is not None:
+                # Loss of host readiness must not suppress fallback for a
+                # primary whose admission the operator has left open.
+                primary.status = "draining"
+                if policy == "other-environment":
+                    primary.environment = "dev"
+                if policy == "wrong-provider":
+                    primary.provider = "gcp"
+                if policy in ("no-admission", "gcp-first-no-admission"):
+                    channels = await session.scalar(
+                        select(ScreenerNodeChannelSettingsRevision)
+                    )
+                    assert channels is not None
+                    await session.delete(channels)
+            provider = (
+                "gcp"
+                if policy.startswith(("gcp-first", "mixed-gcp-first"))
+                else "targon"
+                if policy.startswith(("retired-", "mixed-retired"))
+                else "hetzner"
+            )
+            priorities = [provider] if provider == "gcp" else [provider, "gcp"]
+            if policy.startswith("mixed-gcp-first"):
+                priorities = ["hetzner", "gcp"]
             session.add(
                 ScreenerProviderSettingsRevision(
                     environment="prod",
                     parent_revision=0,
                     settings={
-                        "runtime_provider_priority": ["hetzner", "gcp"],
-                        "source_review_provider_priority": ["hetzner", "gcp"],
-                        "build_provider_priority": ["hetzner", "gcp"],
-                        "gce_overflow_enabled": True,
+                        "runtime_provider_priority": priorities,
+                        "source_review_provider_priority": priorities,
+                        "build_provider_priority": (
+                            ["gcp", "hetzner"]
+                            if policy.startswith("mixed-gcp-first")
+                            else ["targon", "gcp"]
+                            if policy.startswith("mixed-retired")
+                            else priorities
+                        ),
+                        "gce_overflow_enabled": (
+                            policy != "disabled" and provider == "hetzner"
+                        ),
                         "primary_node_id": "subnet-screener-1",
+                        "gce_overflow_max_instances": (
+                            0 if policy == "capped-zero" else 6
+                        ),
                     },
-                    reason="Exercise stale GCP overflow fence",
+                    reason="Exercise shared GCP watchdog and claim admission",
                     actor="test",
                 )
             )
-            session.add(
-                ScreenerCapacitySnapshot(
-                    environment="prod",
-                    controller_epoch="prod:expired",
-                    controller_source_sha="a" * 40,
-                    provider_settings_revision=1,
-                    provider_ready=True,
-                    controller_heartbeat_at=now - timedelta(minutes=4),
-                    controller_lease_expires_at=now - timedelta(seconds=1),
-                    runnable_backlog=1,
-                    active_leases=0,
-                    desired_slots=1,
-                    global_cap=6,
-                    targon_capability="nogo",
-                    targon_available=0,
-                    targon_healthy=0,
-                    targon_pending=0,
-                    targon_draining=0,
-                    gce_target=1,
-                    gce_healthy=1,
-                    gce_pending=0,
-                    gce_draining=0,
+            if controller != "missing":
+                payload = _capacity_payload("prod:test")
+                payload.pop("events")
+                session.add(
+                    ScreenerCapacitySnapshot(
+                        **{
+                            **payload,
+                            # Stale/unready recovery does not depend on the
+                            # obsolete target or provider revision.
+                            "provider_settings_revision": (
+                                1 if controller in ("fresh-zero", "fresh-target") else 0
+                            ),
+                            "provider_ready": controller != "unready",
+                            "controller_heartbeat_at": now,
+                            "controller_lease_expires_at": now
+                            + timedelta(seconds=-1 if controller == "stale" else 180),
+                            "gce_target": (
+                                1
+                                if controller in ("fresh-target", "fresh-mismatch")
+                                else 0
+                            ),
+                        }
+                    )
                 )
-            )
         _install_db(app, session_maker)
+        watchdog = await client.get(
+            "/api/v1/public/screener-capacity-watchdog?environment=prod"
+        )
+        assert watchdog.status_code == 200, watchdog.text
+        assert watchdog.json()["activate_fallback"] is fallback
+        assert watchdog.json()["reason"] == {
+            "missing": "controller_missing",
+            "stale": "controller_stale",
+            "unready": "provider_not_ready",
+        }.get(controller, "controller_fresh")
+        assert watchdog.json()["controller_stale"] is (
+            controller in ("missing", "stale")
+        )
+        assert watchdog.headers["Cache-Control"] == "no-store"
 
         response = await client.post(_CLAIM_URL)
 
         assert response.status_code == 200, response.text
-        assert response.json()["items"] == []
+        if admitted:
+            assert response.json()["items"][0]["agent_id"] == str(agent_id)
+            assert "X-Ditto-Claim-Empty-Reason" not in response.headers
+        else:
+            assert response.json()["items"] == []
+            assert response.headers["X-Ditto-Claim-Empty-Reason"] == "legacy_gcp_held"
+            async with session_maker() as session:
+                agent = await session.get(Agent, agent_id)
+                assert agent is not None
+                assert agent.status == AgentStatus.UPLOADED
 
     async def test_zero_admission_is_a_full_stop_for_automatic_retries(
         self,
@@ -4430,6 +4771,7 @@ class TestClaim:
             await owner.execute(
                 select(func.pg_advisory_xact_lock(_SCREENING_CLAIM_LOCK_KEY))
             )
+            # Bound the response while the lock is held; allow for shared CI load.
             response = await asyncio.wait_for(
                 client.post(
                     _CLAIM_URL,
@@ -4438,7 +4780,7 @@ class TestClaim:
                         "X-Screener-Hotkey": hotkey,
                     },
                 ),
-                timeout=0.5,
+                timeout=3.0,
             )
 
         assert response.status_code == 200, response.text
@@ -5659,6 +6001,300 @@ class TestClaim:
             assert attempt is not None
             assert attempt.review_settings_revision == claimed_revision_id
             assert attempt.review_settings_checksum == claimed_checksum
+
+    @staticmethod
+    async def _bind_settings(
+        session_maker: async_sessionmaker[AsyncSession],
+        settings: ScreenerReviewSettings,
+    ) -> dict[str, str | int]:
+        """Publish ``settings`` globally and return the matching claim binding."""
+        checksum = _review_settings_checksum(settings)
+        async with session_maker() as session, session.begin():
+            revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=settings.model_dump(mode="json"),
+                checksum=checksum,
+                reason="signed runtime lease claim test",
+                actor="test",
+            )
+            session.add(revision)
+            await session.flush()
+            revision_id = revision.revision
+        return {
+            "policy_version": SCREENING_POLICY_VERSION,
+            "review_settings_revision": revision_id,
+            "review_settings_instance_id": "ditto-screener-fleet-test",
+            "review_settings_scope": "*",
+            "review_settings_checksum": checksum,
+        }
+
+    @staticmethod
+    async def _claim_v13_bound(
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        binding: dict[str, str | int],
+        *,
+        lease_available: bool,
+        bench_version: int = 13,
+        bench_versions: dict[UUID, int] | None = None,
+        limit: int = 1,
+    ) -> httpx.Response:
+        """Claim policy-13 attempts under ``binding`` with a controlled lease."""
+        monkeypatch.setattr(
+            "ditto.db.queries.screening.effective_screening_policy_version",
+            lambda: 13,
+        )
+
+        async def arrival(_session: AsyncSession, *, agent: Agent) -> int:
+            return (bench_versions or {}).get(agent.agent_id, bench_version)
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.screener.arrival_bench_version", arrival
+        )
+
+        async def lease_lookup(
+            _session: AsyncSession,
+            *,
+            attempt_id: UUID,
+            artifact_sha256: str,
+            policy_version: int,
+            bench_version: int,
+        ) -> ScoredRuntimeEvidenceLease | None:
+            if not lease_available or policy_version != 13 or bench_version != 13:
+                return None
+            revision = "a" * 40
+            keys = ("DITTOBENCH_MODEL",)
+            return ScoredRuntimeEvidenceLease(
+                attempt_id=attempt_id,
+                artifact_sha256=artifact_sha256,
+                policy_version=13,
+                bench_version=13,
+                scorer_source_revision=revision,
+                release_descriptor_digest="sha256:" + "b" * 64,
+                scorer_image_digest="sha256:" + "c" * 64,
+                scorer_env_sha256=hashlib.sha256(
+                    (
+                        "scored-runtime-env-v1\n13\n"
+                        + revision
+                        + "\n"
+                        + "\n".join(keys)
+                    ).encode()
+                ).hexdigest(),
+                injected_keys=keys,
+                validator_count=3,
+                observed_at=int(datetime.now(UTC).timestamp()),
+            )
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.screener.scored_runtime_evidence_for_lease",
+            lease_lookup,
+        )
+        return await client.post(
+            "/api/v1/screener/claim",
+            params={**binding, "limit": limit},
+            headers=_AUTH_HEADER,
+        )
+
+    @staticmethod
+    async def _assert_still_queued(
+        session_maker: async_sessionmaker[AsyncSession], agent_id: UUID
+    ) -> None:
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempts = list(
+                await session.scalars(
+                    select(ScreeningAttempt).where(
+                        ScreeningAttempt.agent_id == agent_id
+                    )
+                )
+            )
+        assert agent is not None
+        assert agent.status == AgentStatus.UPLOADED
+        assert attempts == []
+
+    async def test_claim_withholds_v13_attempt_without_cohort_lease_when_l3_disabled(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        binding = await self._bind_settings(
+            session_maker, ScreenerReviewSettings(mode="enforce", l3_enabled=False)
+        )
+
+        with caplog.at_level(logging.WARNING, logger="ditto.api_server.endpoints"):
+            withheld = await self._claim_v13_bound(
+                client, monkeypatch, binding, lease_available=False
+            )
+
+        assert withheld.status_code == 200, withheld.text
+        assert withheld.json()["items"] == []
+        assert withheld.headers["X-Ditto-Claim-Empty-Reason"] == (
+            "scorer_cohort_unavailable"
+        )
+        assert any(
+            "scorer_cohort_unavailable" in record.getMessage()
+            and str(agent_id) in record.getMessage()
+            and "reason=no_cohort_packet" in record.getMessage()
+            for record in caplog.records
+        )
+        await self._assert_still_queued(session_maker, agent_id)
+
+        # Once the cohort can certify the lease, the same agent is leased with it.
+        leased = await self._claim_v13_bound(
+            client, monkeypatch, binding, lease_available=True
+        )
+        assert leased.status_code == 200, leased.text
+        item = leased.json()["items"][0]
+        assert item["agent_id"] == str(agent_id)
+        assert item["policy_version"] == 13
+        assert item["scored_runtime_evidence"]["attempt_id"] == item["attempt_id"]
+
+    async def test_non_v13_arrival_at_the_head_does_not_stall_the_queue(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A per-agent missing lease is leased as before, never withheld.
+
+        Withholding it would roll back every claim while that agent stays at
+        the head of the queue, starving the V13 arrivals behind it.
+        """
+        now = datetime.now(UTC)
+        head = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="non-v13-head",
+            sha256="1" * 64,
+            created_at=now - timedelta(hours=2),
+        )
+        behind = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="v13-behind",
+            sha256="2" * 64,
+            created_at=now - timedelta(hours=1),
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        binding = await self._bind_settings(
+            session_maker, ScreenerReviewSettings(mode="enforce", l3_enabled=False)
+        )
+
+        claimed = []
+        with caplog.at_level(logging.WARNING, logger="ditto.api_server.endpoints"):
+            for _ in range(2):
+                response = await self._claim_v13_bound(
+                    client,
+                    monkeypatch,
+                    binding,
+                    lease_available=True,
+                    bench_versions={head: 12},
+                )
+                assert response.status_code == 200, response.text
+                assert "X-Ditto-Claim-Empty-Reason" not in response.headers
+                claimed.extend(response.json()["items"])
+
+        assert [item["agent_id"] for item in claimed] == [str(head), str(behind)]
+        # The head keeps main's behaviour: leased without a lease, so the
+        # worker holds it inconclusive instead of retrying a per-agent cause.
+        assert claimed[0]["bench_version"] == 12
+        assert claimed[0]["scored_runtime_evidence"] is None
+        assert claimed[1]["bench_version"] == 13
+        assert (
+            claimed[1]["scored_runtime_evidence"]["attempt_id"]
+            == (claimed[1]["attempt_id"])
+        )
+        assert not any(
+            "scorer_cohort_unavailable" in record.getMessage()
+            for record in caplog.records
+        )
+
+    async def test_missing_cohort_lease_does_not_roll_back_other_batch_items(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        now = datetime.now(UTC)
+        v13 = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="v13-unavailable",
+            sha256="3" * 64,
+            created_at=now - timedelta(hours=2),
+        )
+        v12 = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="v12-behind",
+            sha256="4" * 64,
+            created_at=now - timedelta(hours=1),
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        binding = await self._bind_settings(
+            session_maker, ScreenerReviewSettings(mode="enforce", l3_enabled=False)
+        )
+
+        response = await self._claim_v13_bound(
+            client,
+            monkeypatch,
+            binding,
+            lease_available=False,
+            bench_versions={v12: 12},
+            limit=2,
+        )
+
+        assert response.status_code == 200, response.text
+        assert "X-Ditto-Claim-Empty-Reason" not in response.headers
+        items = response.json()["items"]
+        assert [item["agent_id"] for item in items] == [str(v13), str(v12)]
+        assert all(item["scored_runtime_evidence"] is None for item in items)
+        assert all(item["attempt_id"] for item in items)
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            ScreenerReviewSettings(mode="enforce", l3_enabled=True),
+            ScreenerReviewSettings(mode="shadow", l3_enabled=False),
+        ],
+        ids=["l3-enabled", "l2-shadow"],
+    )
+    async def test_claim_returns_attempt_without_lease_when_not_required(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        settings: ScreenerReviewSettings,
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await self._claim_v13_bound(
+            client,
+            monkeypatch,
+            await self._bind_settings(session_maker, settings),
+            lease_available=False,
+        )
+
+        assert response.status_code == 200, response.text
+        item = response.json()["items"][0]
+        assert item["agent_id"] == str(agent_id)
+        assert item["policy_version"] == 13
+        assert item["scored_runtime_evidence"] is None
 
     async def test_integrity_double_check_runs_on_the_pinned_stronger_posture(
         self,
@@ -9180,7 +9816,7 @@ class TestQuarantineAdmin:
                     deadline=now + timedelta(minutes=50),
                     finished_at=now,
                     public_reason="Screening was interrupted; manual retry required",
-                    reason_code="source-review-retryable-infra",
+                    reason_code="source-review-model-timeout",
                 )
             )
             canary_revision_id = canary_revision.revision
@@ -11695,6 +12331,7 @@ class TestSubmitResult:
             "source-review-lease-budget-exhausted",
             "behavioral-oracle-passed",
             "l2-model-inconclusive",
+            "source-review-inconclusive",
         ],
     )
     async def test_v13_inconclusive_with_review_audit_persists(
@@ -11713,20 +12350,34 @@ class TestSubmitResult:
         _install_db(app, session_maker)
         _install_chain(app)
         audit = _bounded_review_audit(reason_code=reason_code)
-
+        payload = _result_payload(
+            agent_id,
+            passed=False,
+            policy_version=13,
+            attempt_id=attempt_id,
+            outcome="inconclusive",
+            manifest_digest="12" * 32,
+            reason_code=reason_code,
+            review_audit_digest=audit.canonical_digest(),
+            review_audit=audit.model_dump(mode="json"),
+        )
+        if reason_code == "source-review-inconclusive":
+            # The worker retains later oracle observations while signing the
+            # reason from the source reviewer that decided INCONCLUSIVE.
+            payload["evidence"] = [
+                {
+                    "module_id": "private-source-review",
+                    "code": reason_code,
+                    "summary": "bounded source review exhausted",
+                },
+                {
+                    "module_id": "oracle",
+                    "code": "behavioral-oracle-passed",
+                    "summary": "behavioral oracle completed",
+                },
+            ]
         response = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/result",
-            json=_result_payload(
-                agent_id,
-                passed=False,
-                policy_version=13,
-                attempt_id=attempt_id,
-                outcome="inconclusive",
-                manifest_digest="12" * 32,
-                reason_code=reason_code,
-                review_audit_digest=audit.canonical_digest(),
-                review_audit=audit.model_dump(mode="json"),
-            ),
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
         )
 
         assert response.status_code == 200, response.text
@@ -11741,6 +12392,7 @@ class TestSubmitResult:
             )
             assert agent is not None and agent.status == AgentStatus.SCREENING_FAILED
             assert attempt is not None and attempt.status == "expired"
+            assert attempt.reason_code == reason_code
             assert quarantine is not None
             assert quarantine.reason_code == reason_code
             assert quarantine.review_audit_digest == audit.canonical_digest()
@@ -12901,11 +13553,27 @@ class TestQuarantineReviewContext:
             assert attempt is not None
             assert attempt.reason_code == "source-review-model-response-invalid"
 
-    async def test_docker_build_infrastructure_promises_only_the_automatic_retry(
+    @pytest.mark.parametrize(
+        ("reason_code", "detail"),
+        [
+            (
+                "docker-build-infrastructure",
+                "screener error: Docker build infrastructure: daemon down",
+            ),
+            (
+                "worker-claim-not-started",
+                "screener error: ClaimResponseInvalid: screening claim response "
+                "invalid: items.0.name: Field required",
+            ),
+        ],
+    )
+    async def test_fleet_owned_infrastructure_promises_only_the_automatic_retry(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        reason_code: str,
+        detail: str,
     ) -> None:
         """The miner-facing text must match what the claim path really does."""
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -12921,8 +13589,8 @@ class TestQuarantineReviewContext:
                 passed=False,
                 attempt_id=attempt_id,
                 outcome="retryable_infra",
-                reason_code="docker-build-infrastructure",
-                detail="screener error: Docker build infrastructure: daemon down",
+                reason_code=reason_code,
+                detail=detail,
             ),
         )
 
@@ -12936,7 +13604,7 @@ class TestQuarantineReviewContext:
             attempt = await session.get(ScreeningAttempt, attempt_id)
             assert attempt is not None
             assert attempt.status == "failed"
-            assert attempt.reason_code == "docker-build-infrastructure"
+            assert attempt.reason_code == reason_code
             assert attempt.public_reason == refreshed.screening_reason
 
     async def test_withdrawn_agent_is_not_promised_an_automatic_retry(

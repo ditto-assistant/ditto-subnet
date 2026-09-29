@@ -299,7 +299,6 @@ _SOURCE_REVIEW_FAILURE_CODES: Mapping[str, str] = {
     ),
     # The reviewer exhausted a budget we set. Not infrastructure: the submission
     # was too large or too deep to review within the configured bounds.
-    "source reviewer exceeded lease budget": "lease-budget-exhausted",
     "source reviewer exceeded read budget": "read-budget-exhausted",
     "source reviewer exceeded step budget": "step-budget-exhausted",
     # The upstream model misbehaved (truncated completion, malformed tool call,
@@ -399,6 +398,9 @@ _RETRYABLE_MODEL_ERROR_TYPES = frozenset(
 # source turns can exceed 45 seconds even on a healthy provider; that cap
 # caused two timeouts and a failed review within a 600-second aggregate budget.
 _MAX_COMPLETION_REQUEST_SECONDS = 180.0
+# A model-turn timeout this close to the aggregate lease deadline is the lease
+# running out, not a provider fault that leaves the review time to continue.
+_LEASE_EXPIRY_SLACK_SECONDS = 1.0
 
 
 def _retryable_model_error_type(payload: object) -> str | None:
@@ -3634,6 +3636,18 @@ class OpenRouterSourceReviewAgent:
         runtime_source_read = False
         schema_repair_turn = False
         last_schema_error: ValueError | None = None
+
+        def lease_exhausted(step: int) -> SourceReviewBudgetExhausted:
+            return SourceReviewBudgetExhausted(
+                "source-review-lease-budget-exhausted",
+                max_steps=self._max_steps,
+                steps_used=min(step, self._max_steps),
+                read_bytes_used=delivered,
+                read_files_used=len(read_files),
+                max_read_bytes=self._max_read_bytes,
+                policy_version=policy_version,
+            )
+
         if progress is not None:
             progress(0, self._max_steps)
         async with httpx.AsyncClient(
@@ -3647,10 +3661,14 @@ class OpenRouterSourceReviewAgent:
                 # aggregate bound, max_steps slow turns could each run the full
                 # per-request timeout and outlive the screening lease.
                 request_timeout = self._timeout_seconds
+                lease_bounded_turn = False
                 if deadline is not None:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
-                        raise ValueError("source reviewer exceeded lease budget")
+                        raise lease_exhausted(_step)
+                    lease_bounded_turn = remaining <= min(
+                        self._timeout_seconds, self._max_completion_request_seconds
+                    )
                     request_timeout = min(request_timeout, remaining)
                 assessment_phase = (
                     _coverage_complete(notes)
@@ -3675,19 +3693,32 @@ class OpenRouterSourceReviewAgent:
                             ),
                         }
                     )
-                message = await self._completion_message(
-                    client,
-                    api_key,
-                    _compacted_review_messages(messages, notes),
-                    timeout=request_timeout,
-                    reasoning_effort=_phase_reasoning_effort(
-                        self._reasoning_effort, assessment=assessment_phase
-                    ),
-                    tools=_source_review_tools_for_policy(
-                        policy_version, final_turn=final_turn
-                    ),
-                    tool_choice="required" if final_turn else "auto",
-                )
+                try:
+                    message = await self._completion_message(
+                        client,
+                        api_key,
+                        _compacted_review_messages(messages, notes),
+                        timeout=request_timeout,
+                        reasoning_effort=_phase_reasoning_effort(
+                            self._reasoning_effort, assessment=assessment_phase
+                        ),
+                        tools=_source_review_tools_for_policy(
+                            policy_version, final_turn=final_turn
+                        ),
+                        tool_choice="required" if final_turn else "auto",
+                    )
+                except (TimeoutError, httpx.TimeoutException) as error:
+                    # Only a turn whose effective timeout was shortened by
+                    # the lease can exhaust that budget. A provider request
+                    # cap can expire with less than a second left on the lease.
+                    if (
+                        lease_bounded_turn
+                        and deadline is not None
+                        and deadline - asyncio.get_running_loop().time()
+                        < _LEASE_EXPIRY_SLACK_SECONDS
+                    ):
+                        raise lease_exhausted(_step) from error
+                    raise
                 messages.append(message)
                 tool_calls = message.get("tool_calls")
                 if not isinstance(tool_calls, list) or not tool_calls:
@@ -3853,7 +3884,7 @@ class OpenRouterSourceReviewAgent:
                 )
                 if remaining_timeout <= 0:
                     raise TimeoutError(
-                        "source review model retry exceeded lease budget"
+                        "source review model retry exceeded request budget"
                     )
             payload: object | None = None
             try:
@@ -3984,6 +4015,10 @@ def _source_review_failure_code(error: BaseException) -> str:
     """
     if isinstance(error, httpx.HTTPStatusError):
         return f"source-review-http-{error.response.status_code}"
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)):
+        # A model turn timed out while the lease still had time; lease expiry
+        # is raised as ``SourceReviewBudgetExhausted`` instead.
+        return "source-review-model-timeout"
     message = str(error).strip()
     suffix = _SOURCE_REVIEW_FAILURE_CODES.get(message)
     if suffix is None and message.startswith("source review category "):

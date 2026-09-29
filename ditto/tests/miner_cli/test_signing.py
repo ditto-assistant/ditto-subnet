@@ -2,7 +2,7 @@
 
 Three invariants pinned:
 
-- The payload bytes are exactly ``f"{hotkey}:{sha256}"`` encoded UTF-8
+- The payload bytes include the domain, hotkey, digest, timestamp, and nonce
   (matches the server's ``_verify_signature`` at
   ``ditto/api_server/endpoints/upload.py:198``).
 - ``sign_upload_payload`` returns a 128-hex string matching the
@@ -14,6 +14,8 @@ Three invariants pinned:
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import bittensor
 
 from ditto.miner_cli.models import WalletHandle
@@ -21,6 +23,9 @@ from ditto.miner_cli.signing import (
     build_upload_payload,
     sign_upload_payload,
 )
+
+_NONCE = UUID("123e4567-e89b-42d3-a456-426614174000")
+_TIMESTAMP = 1_798_000_000
 
 
 def _make_test_keypair() -> bittensor.Keypair:
@@ -36,17 +41,30 @@ class TestBuildUploadPayload:
         payload = build_upload_payload(
             hotkey_ss58="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
             sha256_hex="deadbeef" * 8,
+            signature_timestamp=_TIMESTAMP,
+            signature_nonce=_NONCE,
         )
 
-        assert payload == b"5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY:" + (
-            b"deadbeef" * 8
+        assert payload == (
+            b"ditto-upload-v2:5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY:"
+            + b"deadbeef" * 8
+            + b":1798000000:123e4567-e89b-42d3-a456-426614174000"
         )
 
-    def test_payload_does_not_include_a_version_field(self) -> None:
-        """Regression guard: spec drift would re-add ``:{version}`` here.
-        Server verifier expects exactly two colon-separated fields."""
-        payload = build_upload_payload(hotkey_ss58="5G...", sha256_hex="abc")
-        assert payload.count(b":") == 1
+    def test_payload_changes_with_nonce_and_time(self) -> None:
+        payload = build_upload_payload(
+            hotkey_ss58="5G...",
+            sha256_hex="abc",
+            signature_timestamp=_TIMESTAMP,
+            signature_nonce=_NONCE,
+        )
+        assert payload.count(b":") == 4
+        assert payload != build_upload_payload(
+            hotkey_ss58="5G...",
+            sha256_hex="abc",
+            signature_timestamp=_TIMESTAMP + 1,
+            signature_nonce=_NONCE,
+        )
 
 
 class TestSignUploadPayload:
@@ -66,6 +84,8 @@ class TestSignUploadPayload:
             handle=handle,
             live_wallet=_LiveWallet(),  # type: ignore[arg-type]
             sha256_hex="deadbeef" * 8,
+            signature_timestamp=_TIMESTAMP,
+            signature_nonce=_NONCE,
         )
 
         assert len(sig_hex) == 128
@@ -93,9 +113,13 @@ class TestSignUploadPayload:
             handle=handle,
             live_wallet=_LiveWallet(),  # type: ignore[arg-type]
             sha256_hex=sha256_hex,
+            signature_timestamp=_TIMESTAMP,
+            signature_nonce=_NONCE,
         )
 
         # Mirror server-side verifier verbatim.
-        server_payload = f"{handle.hotkey_ss58}:{sha256_hex}".encode()
+        server_payload = (
+            f"ditto-upload-v2:{handle.hotkey_ss58}:{sha256_hex}:{_TIMESTAMP}:{_NONCE}"
+        ).encode("ascii")
         server_keypair = bittensor.Keypair(ss58_address=handle.hotkey_ss58)
         assert server_keypair.verify(server_payload, bytes.fromhex(sig_hex)) is True

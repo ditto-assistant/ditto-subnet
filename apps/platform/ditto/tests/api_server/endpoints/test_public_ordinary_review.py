@@ -142,7 +142,7 @@ async def test_failed_agent_reports_infrastructure_backoff(
                 started_at=now - timedelta(minutes=3),
                 deadline=now + timedelta(hours=1),
                 finished_at=now - timedelta(minutes=2),
-                reason_code="source-review-retryable-infra",
+                reason_code="source-review-model-timeout",
             )
         )
     _install(app, maker)

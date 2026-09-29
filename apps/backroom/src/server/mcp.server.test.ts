@@ -194,6 +194,7 @@ describe('Backroom MCP tools', () => {
         'get_screener_fanout_shadow',
         'get_l2_report_canary',
         'get_l2_report_canary_preflight',
+        'get_canonical_starter_fixture_preflight',
         'get_conversation_assessments',
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
@@ -311,6 +312,9 @@ describe('Backroom MCP tools', () => {
         'rescreen_rejected_submission',
         'retry_failed_screening_now',
         'schedule_l2_report_canary',
+        'register_canonical_starter_fixture',
+        'review_canonical_starter_fixture',
+        'schedule_canonical_starter_fixture',
         'retry_trusted_image_build',
         'expire_running_screening',
         'reject_screening_submission',
@@ -420,8 +424,10 @@ describe('Backroom MCP tools', () => {
     // Naming the fleet-effective posture in its catalog line measures 174,513.
     // Main also adds the no-input validator-capacity read (#2036), and the
     // guarded verified V13 court-clear release adds a bounded writer entry.
-    // Manual hold preview/withdraw tools measure 178,586 bytes on current main.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(179_100)
+    // Four canonical starter fixture controls bring the measured catalog to
+    // 179,468 bytes. Manual hold preview/withdraw tools bring it to 182,192;
+    // retain about 0.5 KB headroom.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(182_700)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -455,8 +461,10 @@ describe('Backroom MCP tools', () => {
       // terminal-review eligibility reads (#2041) measure 31,038.
       // Naming the fleet-effective posture (protocol 28) measures 31,074;
       // main adds the validator-capacity summary (#2036) and the guarded
-      // verified V13 court-clear release summary. Manual hold tools measure 31,625.
-      31_900,
+      // verified V13 court-clear release summary.
+      // Four fixture tool summaries bring the measured total to 31,772.
+      // Manual hold preview/withdraw summaries bring it to 32,072.
+      32_300,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

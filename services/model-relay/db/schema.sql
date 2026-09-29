@@ -4137,14 +4137,14 @@ CREATE TABLE public.screener_heartbeats (
 CREATE TABLE public.screener_l2_report_canaries (
     canary_id uuid NOT NULL,
     request_id uuid NOT NULL,
-    agent_id uuid NOT NULL,
-    source_attempt_id uuid NOT NULL,
+    agent_id uuid,
+    source_attempt_id uuid,
     artifact_sha256 text NOT NULL,
     policy_version integer NOT NULL,
     bench_version integer NOT NULL,
     target_node_id text NOT NULL,
-    expected_agent_status text NOT NULL,
-    expected_score_count integer NOT NULL,
+    expected_agent_status text,
+    expected_score_count integer,
     review_label text NOT NULL,
     status text DEFAULT 'queued'::text NOT NULL,
     claimed_instance_id text,
@@ -4159,12 +4159,15 @@ CREATE TABLE public.screener_l2_report_canaries (
     completed_at timestamp with time zone,
     run_mode text DEFAULT 'source_only'::text NOT NULL,
     source_attestation jsonb,
+    source_kind text DEFAULT 'submission'::text NOT NULL,
+    fixture_key text,
     CONSTRAINT ck_screener_l2_report_canaries_run_mode_check CHECK ((run_mode = ANY (ARRAY['source_only'::text, 'full_runtime'::text]))),
-    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_label_check CHECK ((review_label = ANY (ARRAY['candidate_clear'::text, 'known_reject'::text]))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_label_check CHECK ((review_label = ANY (ARRAY['unreviewed'::text, 'candidate_clear'::text, 'known_reject'::text]))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_runtime_check CHECK (((runtime_evidence_sha256 IS NULL) OR (runtime_evidence_sha256 ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_scores_check CHECK ((expected_score_count >= 0)),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_scores_check CHECK (((expected_score_count IS NULL) OR (expected_score_count >= 0))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_sha_check CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'succeeded'::text, 'incomplete'::text, 'expired'::text]))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_sourc_7561 CHECK ((((source_kind = 'submission'::text) AND (agent_id IS NOT NULL) AND (source_attempt_id IS NOT NULL) AND (fixture_key IS NULL) AND (expected_agent_status IS NOT NULL) AND (expected_score_count IS NOT NULL)) OR ((source_kind = 'canonical_starter_fixture'::text) AND (agent_id IS NULL) AND (source_attempt_id IS NULL) AND (fixture_key IS NOT NULL) AND (expected_agent_status IS NULL) AND (expected_score_count IS NULL) AND (run_mode = 'source_only'::text)))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_status_check CHECK ((status = ANY (ARRAY['awaiting_review'::text, 'ready'::text, 'queued'::text, 'leased'::text, 'succeeded'::text, 'incomplete'::text, 'expired'::text]))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_token_check CHECK (((lease_token_hash IS NULL) OR (lease_token_hash ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_v13_check CHECK (((policy_version = 13) AND (bench_version = 13)))
 );
@@ -9318,6 +9321,13 @@ CREATE INDEX screener_heartbeats_seen_at_idx ON public.screener_heartbeats USING
 
 
 --
+-- Name: screener_l2_canary_fixture_key_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX screener_l2_canary_fixture_key_idx ON public.screener_l2_report_canaries USING btree (fixture_key) WHERE (fixture_key IS NOT NULL);
+
+
+--
 -- Name: screener_l2_canary_one_active_source_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9391,7 +9401,7 @@ CREATE INDEX screening_attempts_agent_started_idx ON public.screening_attempts U
 -- Name: screening_attempts_infra_failed_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = 'docker-build-infrastructure'::text));
+CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = ANY (ARRAY['docker-build-infrastructure'::text, 'worker-claim-not-started'::text, 'l2-runtime-evidence-unavailable'::text])));
 
 
 --

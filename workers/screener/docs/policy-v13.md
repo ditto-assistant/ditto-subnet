@@ -923,8 +923,9 @@ may produce `CLEAR`, and none of them may submit a passing verdict:
   decisive finding;
 - `source-review-invalid-risk` — the reviewer returned an unusable risk level;
 - `source-review-inconsistent-verdict` — the reviewer contradicted itself;
-- `adjudicated-source-review-escalate` — adjudication ended without a
-  finalized, verified finding;
+- `source-review-adjudication-refused` — adjudication ended without a
+  finalized, verified finding (Platform stores it as the reason code
+  `adjudicated-source-review-escalate`);
 - `behavioral-oracle-inconclusive` and `challenge-inconclusive` — an explicitly
   required targeted behavioral audit produced no usable observation; and
 - `source-review-unavailable` — review infrastructure was unreachable.
@@ -941,6 +942,13 @@ Each resolves through the retry and deadline procedure and then terminates as:
 An adjudicator that fails without a finding records only that adjudication did
 not complete. It is neither clearance evidence nor rejection evidence, and it
 may never be reported as cheating.
+
+A held court reject or refusal (worker evidence `source-review-adjudicated`,
+with `source-review-adjudication-refused` for a refusal) retains the built
+image as supplemental evidence bound to the screening attempt, never to the
+agent, so artifact-bound verification can proceed without a rebuild.
+`adjudicated-source-review-*` is Platform's stored reason code, not worker
+evidence.
 
 A targeted behavioral-oracle pass does not substitute for an undecided source
 or build check.

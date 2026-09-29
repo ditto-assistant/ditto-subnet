@@ -2625,7 +2625,8 @@ async def test_each_source_review_completion_has_a_short_hard_timeout(
     )
 
     assert attempts == 3
-    assert observation.error_code == "source-review-timeouterror"
+    assert observation.error_code == "source-review-model-timeout"
+    assert observation.failure_disposition == "retryable_infra"
 
 
 async def test_default_source_turn_allows_delayed_success_with_retry_headroom(
@@ -3855,7 +3856,7 @@ def test_written_policy_v13_forbids_every_non_decisive_admission() -> None:
         "source-review-inconclusive",
         "source-review-invalid-risk",
         "source-review-inconsistent-verdict",
-        "adjudicated-source-review-escalate",
+        "source-review-adjudication-refused",
         "behavioral-oracle-inconclusive",
         "challenge-inconclusive",
         "source-review-unavailable",
@@ -4278,6 +4279,99 @@ async def test_expired_lease_deadline_stops_review_before_first_call(
     assert calls == 0
     assert not observation.ok
     assert observation.error_code == "source-review-lease-budget-exhausted"
+    assert observation.review_audit is not None
+    assert observation.review_audit["stage"] == "l1"
+    assert observation.review_audit["reason_code"] == (
+        "source-review-lease-budget-exhausted"
+    )
+    assert observation.review_audit["steps_used"] == 0
+
+
+async def test_deadline_expiry_mid_turn_is_lease_budget(tmp_path: Path) -> None:
+    """The lease normally ends inside a model turn, not at a turn boundary."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            await asyncio.Event().wait()
+        tool_calls = [
+            _note_call("n1", "cleared", "Entrypoint routes to a genuine model call."),
+            _note_call("n2", "cleared", "Tool dispatch executes model-authored calls."),
+            _note_call("n3", "cleared", "Answer construction forwards model text."),
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=5,
+        max_steps=4,
+        transport=httpx.MockTransport(handler),
+        transport_retry_delays=(),
+    )
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+        deadline=asyncio.get_running_loop().time() + 0.3,
+    )
+
+    assert calls == 2
+    assert not observation.ok
+    assert observation.error_code == "source-review-lease-budget-exhausted"
+    # The ledger decides, exactly as for a step or read budget.
+    assert observation.failure_disposition == "pass_inconclusive"
+    assert len(observation.notes) == 3
+    assert observation.review_audit is not None
+    assert observation.review_audit["stage"] == "l1"
+    assert observation.review_audit["reason_code"] == (
+        "source-review-lease-budget-exhausted"
+    )
+    assert 1 <= observation.review_audit["steps_used"] <= 4
+
+
+async def test_provider_timeout_with_open_lease_stays_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(source_review_module, "_MAX_COMPLETION_REQUEST_SECONDS", 0.05)
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() {}")),
+        artifact_sha256=_SHA,
+        # The request cap fires with <1 s left on the lease. It remains a
+        # provider timeout because the lease did not bound this model turn.
+        deadline=asyncio.get_running_loop().time() + 0.5,
+    )
+
+    assert not observation.ok
+    assert observation.error_code == "source-review-model-timeout"
+    assert observation.failure_disposition == "retryable_infra"
+    assert observation.review_audit is None
 
 
 async def test_transient_openrouter_failure_recovers_in_same_turn(

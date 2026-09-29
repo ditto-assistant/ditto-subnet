@@ -48,6 +48,16 @@ An explicit `request_operator_review` model tool call is recorded as
 failures keep their distinct codes. All of these outcomes remain holds. The
 operator-request code does not certify that evidence was actually missing.
 
+## Lease budget
+
+When review starts, the court reserve is fixed at `adjudicator_reserve_seconds`,
+or half the remaining lease if that is less. L1 and L2 run until that reserve
+before the lease deadline. Their deadline follows heartbeat renewals and stays
+within each layer's own timeout. The court's clock starts when the court
+starts, not when L2 starts. It gets the reserve or the time left on the lease,
+whichever is shorter. A slow L2 cannot shrink that window, and a renewal cannot
+make it longer than the reserve.
+
 ## What it adjudicates
 
 Only an outcome that would otherwise WAIT:

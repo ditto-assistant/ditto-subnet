@@ -226,8 +226,8 @@ class ScreenerConfig:
     Seeded from ``SCREENER_L2_ALWAYS_ESCALATE``; a bound reviewer revision can
     only turn it on for one posture (the integrity double-check), never off.
     """
-    # Only the isolated report-only canary widens this to its 45-minute lease.
     signed_runtime_lease_max_age_seconds: int = 300
+    """Oldest signed cohort observation accepted, measured at claim receipt."""
     adjudicator_max_completion_tokens: int | None = None
     """L4-only output cap; None inherits the existing L2 completion cap."""
     l2_max_completion_request_seconds: float | None = None
@@ -494,6 +494,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         require_signed_runtime_lease=_parse_bool(
             "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE", False
         ),
+        signed_runtime_lease_max_age_seconds=_parse_int(
+            "SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS", "300"
+        ),
         adjudicator_max_completion_tokens=_parse_optional_int(
             "SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS"
         ),
@@ -585,6 +588,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if config.l2_review_mode not in {"off", "shadow", "enforce"}:
         raise ScreenerConfigError(
             "SCREENER_L2_REVIEW_MODE must be off, shadow, or enforce"
+        )
+    if not 1 <= config.signed_runtime_lease_max_age_seconds <= 3_600:
+        raise ScreenerConfigError(
+            "SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS must be between 1 and 3600"
         )
     if config.l2_review_model not in {
         "openai/gpt-5.6-terra",
