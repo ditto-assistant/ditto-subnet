@@ -40,8 +40,8 @@ async def screener_gcp_fallback_allowed(
 ) -> bool:
     """Never let a controller outage bypass the current operator stop.
 
-    Explicit GCP-first routing is the operator's outage override. Hetzner
-    overflow and retired-provider routing require a known, open primary;
+    Explicit GCP-first routing selects GCE after admission is open. Hetzner
+    overflow and retired-provider routing also require a known, open primary;
     readiness and heartbeat loss are host failures, not admission closures.
     Read current settings rather than a potentially stale controller snapshot.
     """
@@ -50,12 +50,16 @@ async def screener_gcp_fallback_allowed(
         settings.runtime_provider_priority,
         settings.source_review_provider_priority,
     )
-    if all(lane[0] != "hetzner" for lane in lanes) and any(
+    explicit_gcp_first = all(lane[0] != "hetzner" for lane in lanes) and any(
         lane[0] == "gcp" for lane in lanes
-    ):
-        return True
-    if any(lane[0] == "hetzner" for lane in lanes) and (
-        not settings.gce_overflow_enabled or settings.gce_overflow_max_instances == 0
+    )
+    if (
+        not explicit_gcp_first
+        and any(lane[0] == "hetzner" for lane in lanes)
+        and (
+            not settings.gce_overflow_enabled
+            or settings.gce_overflow_max_instances == 0
+        )
     ):
         return False
     if settings.primary_node_id is None:
@@ -73,4 +77,6 @@ async def screener_gcp_fallback_allowed(
     if revision is None or revision.environment != environment:
         return False
     channels = ScreenerNodeChannelSettings.model_validate(revision.settings)
+    # Route priority can change where admitted work runs; it cannot reopen an
+    # operator's zero-admission stop or an unknown primary.
     return channels.screening_concurrency > 0

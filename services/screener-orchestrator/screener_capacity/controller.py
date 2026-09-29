@@ -117,10 +117,7 @@ def gce_overflow_target(
 ) -> tuple[int, str]:
     """Choose GCE only for an explicit GCP route, outage, or queue overflow.
 
-    Precedence: explicit operator GCP routing wins, and it is the only outage
-    failover for a closed or unknown primary; a stale revision that still names
-    the retired Targon provider does not bypass the stop and falls back to GCE
-    only for a primary known to be open. Then a primary whose admission is
+    A primary whose admission is
     known to be closed (``admission_open`` false, or ``screening_concurrency ==
     0`` from a Platform that predates that field) is an operator closure: a
     global full stop that GCE never overflows, whatever the backlog,
@@ -133,8 +130,6 @@ def gce_overflow_target(
     """
     if jobs_per_slot < 1 or global_cap < 0:
         raise ValueError("capacity inputs are out of range")
-    if routing.gcp_first:
-        return min(global_cap, demand.desired), "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
     primary = primary_node or {}
     primary_ready = primary.get("status") == "active" and primary.get("ready") is True
     screening_concurrency = int(primary.get("screening_concurrency", 0))
@@ -142,10 +137,16 @@ def gce_overflow_target(
     if admission_open is None and "screening_concurrency" in primary:
         # Platform releases before admission_open still report concurrency.
         admission_open = screening_concurrency > 0
-    if admission_open is False:
+    if admission_open is False or (
+        "screening_concurrency" in primary and screening_concurrency == 0
+    ):
         # A known operator closure holds through any host health change, so a
         # failed heartbeat cannot reopen screening through GCE.
         return 0, "HETZNER_PRIMARY_ADMISSION_CLOSED"
+    if admission_open is None:
+        return 0, "HETZNER_PRIMARY_UNKNOWN"
+    if routing.gcp_first:
+        return min(global_cap, demand.desired), "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
     if any(
         priority and priority[0] == "targon"
         for priority in (
@@ -156,8 +157,6 @@ def gce_overflow_target(
     ):
         # A stale revision naming the retired provider still falls back to GCE,
         # but only behind the same operator stop: never for an unknown primary.
-        if admission_open is None:
-            return 0, "HETZNER_PRIMARY_UNKNOWN"
         return min(global_cap, demand.desired), "RETIRED_PROVIDER_ROUTING"
     policy = routing.overflow
     if not routing.hetzner_first or not policy.enabled:
@@ -165,8 +164,6 @@ def gce_overflow_target(
     cap = min(global_cap, policy.max_instances)
     if cap == 0:
         return 0, "GCE_OVERFLOW_CAPPED_AT_ZERO"
-    if admission_open is None:
-        return 0, "HETZNER_PRIMARY_UNKNOWN"
     if not primary_ready:
         return min(cap, demand.desired), "HETZNER_PRIMARY_UNAVAILABLE"
     threshold = max(
@@ -730,15 +727,15 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     try:
         provider_routing = platform.provider_routing()
     except ControllerError:
-        # Platform is deployed before the controller in the normal release, but
-        # a rolling boundary or transient read failure must leave GCE as the
-        # bounded fallback until a routing revision can be read.
+        # Without the current routing revision we cannot prove that operator
+        # admission is open. Keep existing capacity while recording the failure;
+        # the policy-aware metric may activate fallback independently.
         provider_routing_available = False
         provider_routing = ProviderRouting(
             revision=0,
-            runtime_provider_priority=("gcp",),
-            source_review_provider_priority=("gcp",),
-            build_provider_priority=("gcp",),
+            runtime_provider_priority=("hetzner", "gcp"),
+            source_review_provider_priority=("hetzner", "gcp"),
+            build_provider_priority=("hetzner", "gcp"),
         )
     node_states_available = True
     try:
@@ -768,15 +765,16 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     provider_success_at = datetime.now(UTC).isoformat()
 
     primary_node = node_states.get(provider_routing.overflow.primary_node_id or "")
-    target, reason = gce_overflow_target(
-        demand=demand,
-        routing=provider_routing,
-        primary_node=primary_node,
-        jobs_per_slot=settings.jobs_per_slot,
-        global_cap=settings.global_cap,
-    )
-    if not provider_routing_available:
-        reason = "PROVIDER_ROUTING_UNAVAILABLE"
+    if provider_routing_available:
+        target, reason = gce_overflow_target(
+            demand=demand,
+            routing=provider_routing,
+            primary_node=primary_node,
+            jobs_per_slot=settings.jobs_per_slot,
+            global_cap=settings.global_cap,
+        )
+    else:
+        target, reason = current_target, "PROVIDER_ROUTING_UNAVAILABLE"
     gce_has_active_lease = any(
         node.get("provider") == "gcp" and node.get("active_lease") is True
         for node in node_states.values()

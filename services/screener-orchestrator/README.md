@@ -19,8 +19,8 @@ the resize fails. The independent queue metric publishes zero while Platform
 reports a fresh, ready controller. Missing, expired or unready controllers
 activate the metric and permit authenticated legacy GCP claims through the
 same fallback predicate. Current provider policy still disables overflow for
-a closed or unknown Hetzner primary; explicit GCP-first routing is the operator
-override. A fresh controller retains authority over the bounded GCE target.
+a closed or unknown Hetzner primary, including when GCP is first in the provider
+route. A fresh controller retains authority over the bounded GCE target.
 
 After deploying Platform and the controller together, verify the safety net in
 staging or a controlled production window: with an open primary and backlog,

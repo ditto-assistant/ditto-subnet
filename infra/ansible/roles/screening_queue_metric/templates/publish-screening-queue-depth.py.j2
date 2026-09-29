@@ -42,15 +42,29 @@ def fallback_depth(counts: dict, watchdog: dict) -> int:
     return max(0, waiting) + max(0, active)
 
 
-def main() -> int:
-    counts = json.loads(_get(ACTIVITY_URL)).get("status_counts", {})
-    watchdog = json.loads(_get(WATCHDOG_URL))
+def _read_fallback_depth() -> tuple[int, str]:
     # A fresh fenced controller owns both providers and therefore suppresses
     # this independent signal. A missing, stale or unready controller may wake
     # GCE only when Platform's current operator policy permits fallback.
     # In-flight work remains included once fallback is active so the watchdog
     # never under-supplies leases it did not create.
-    depth = fallback_depth(counts, watchdog)
+    # When either Platform read fails, publish an explicit zero instead of
+    # leaving the autoscaler with its last positive queue-depth point.
+    try:
+        activity = json.loads(_get(ACTIVITY_URL))
+        watchdog = json.loads(_get(WATCHDOG_URL))
+        if not isinstance(activity, dict) or not isinstance(watchdog, dict):
+            raise ValueError("invalid Platform response")
+        counts = activity.get("status_counts", {})
+        if not isinstance(counts, dict):
+            raise ValueError("invalid activity counts")
+        return fallback_depth(counts, watchdog), str(watchdog.get("reason", "invalid"))
+    except (OSError, ValueError, TypeError):
+        return 0, "platform_read_failed"
+
+
+def main() -> int:
+    depth, reason = _read_fallback_depth()
 
     project = _get(PROJECT_URL, {"Metadata-Flavor": "Google"}).decode()
     token = json.loads(_get(METADATA_TOKEN_URL, {"Metadata-Flavor": "Google"}))[
@@ -83,7 +97,6 @@ def main() -> int:
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         resp.read()
-    reason = str(watchdog.get("reason", "invalid"))
     print(
         f"published {METRIC_TYPE} env={METRIC_ENV} depth={depth} "
         f"watchdog={reason}"

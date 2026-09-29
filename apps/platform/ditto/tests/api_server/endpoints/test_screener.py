@@ -4160,6 +4160,9 @@ class TestClaim:
             ("stale", "wrong-provider", False, False),
             ("stale", "capped-zero", False, False),
             ("missing", "gcp-first", True, True),
+            ("missing", "gcp-first-closed", False, False),
+            ("stale", "gcp-first-unknown", False, False),
+            ("unready", "gcp-first-no-admission", False, False),
             ("stale", "retired-open", True, True),
             ("stale", "retired-closed", False, False),
             ("stale", "retired-unknown", False, False),
@@ -4177,7 +4180,7 @@ class TestClaim:
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         now = datetime.now(UTC)
-        if policy not in ("unknown", "retired-unknown"):
+        if policy not in ("unknown", "retired-unknown", "gcp-first-unknown"):
             await _seed_hetzner_primary(
                 session_maker,
                 screening_concurrency=0 if "closed" in policy else 2,
@@ -4192,7 +4195,7 @@ class TestClaim:
                     primary.environment = "dev"
                 if policy == "wrong-provider":
                     primary.provider = "gcp"
-                if policy == "no-admission":
+                if policy in ("no-admission", "gcp-first-no-admission"):
                     channels = await session.scalar(
                         select(ScreenerNodeChannelSettingsRevision)
                     )
@@ -4200,7 +4203,7 @@ class TestClaim:
                     await session.delete(channels)
             provider = (
                 "gcp"
-                if policy == "gcp-first"
+                if policy.startswith("gcp-first")
                 else "targon"
                 if policy.startswith("retired-")
                 else "hetzner"
