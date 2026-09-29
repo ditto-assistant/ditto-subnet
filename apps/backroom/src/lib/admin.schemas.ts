@@ -510,6 +510,7 @@ export const scheduleL2ReportCanaryInputSchema = z.object({
   runMode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   historicalRulingKind: z.enum(['ath_clear', 'screening_reject']).optional(),
   historicalRulingId: z.string().uuid().optional(),
+  reviewSettingsRevision: z.number().int().positive().optional(),
   confirmation: z.literal('QUEUE REPORT ONLY L2 CANARY'),
 }).superRefine((input, ctx) => {
   if ((input.historicalRulingKind === undefined) !== (input.historicalRulingId === undefined)) {
@@ -537,6 +538,12 @@ export const l2ReportCanaryViewSchema = z.object({
   review_label: z.string(),
   run_mode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   source_attestation: z.record(z.string(), z.unknown()).nullable().optional(),
+  // Scheduled l2-report-canary* posture pin, and the posture the claim bound.
+  review_settings_revision: z.number().int().positive().nullable().optional(),
+  review_settings_scope: z.string().nullable().optional(),
+  review_settings_checksum: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
+  settings_revision: z.number().int().nonnegative().nullable().optional(),
+  settings_checksum: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
   status: z.string(),
   claimed_instance_id: z.string().nullable(),
   lease_expires_at: z.string().nullable().optional(),

@@ -9,7 +9,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ditto_screening_protocol import ScoredRuntimeEvidenceLease
+from ditto_screening_protocol import (
+    ScoredRuntimeEvidenceLease,
+    ScreenerReviewSettingsOverride,
+)
 
 
 class L2CanaryScheduleRequest(BaseModel):
@@ -29,6 +32,9 @@ class L2CanaryScheduleRequest(BaseModel):
     run_mode: Literal["source_only", "full_runtime"] = "source_only"
     historical_ruling_kind: Literal["ath_clear", "screening_reject"] | None = None
     historical_ruling_id: Annotated[UUID | None, Field(strict=False)] = None
+    # Run under this immutable ``l2-report-canary*`` revision instead of the
+    # claiming worker's node-effective posture. Omitted keeps today's behaviour.
+    review_settings_revision: Annotated[int | None, Field(ge=1)] = None
     confirm_report_only: Literal[True]
 
     @model_validator(mode="after")
@@ -91,6 +97,12 @@ class L2CanaryView(BaseModel):
     review_label: str
     run_mode: Literal["source_only", "full_runtime"]
     source_attestation: dict | None = None
+    # Scheduled posture pin (all three or none) and the posture the claim bound.
+    review_settings_revision: int | None = None
+    review_settings_scope: str | None = None
+    review_settings_checksum: str | None = None
+    settings_revision: int | None = None
+    settings_checksum: str | None = None
     status: str
     claimed_instance_id: str | None
     lease_expires_at: datetime | None
@@ -121,6 +133,9 @@ class L2CanaryClaimRequest(BaseModel):
     instance_id: Annotated[str, Field(min_length=1, max_length=63)]
     settings_revision: Annotated[int, Field(ge=0)]
     settings_checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    # A rolling older worker omits this and would ignore a pinned posture, so
+    # Platform leases pinned canaries only to workers that declare support.
+    accepts_review_settings_override: bool = False
 
 
 class L2CanaryClaimResponse(BaseModel):
@@ -140,6 +155,9 @@ class L2CanaryClaimResponse(BaseModel):
     lease_expires_at: datetime
     download_url: str
     scored_runtime_evidence: ScoredRuntimeEvidenceLease
+    # The scheduled posture pin. The worker applies it to this canary's own
+    # gate only; its primary gate and next production claim are unaffected.
+    review_settings_override: ScreenerReviewSettingsOverride | None = None
 
 
 class L2CanaryCompleteRequest(BaseModel):

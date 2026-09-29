@@ -744,7 +744,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   rotate_v13_scorer_cohort:
     'Rotate the exact pinned V13 cohort to a unanimously signed packet after all V13 tickets drain; preserves pin history.',
   schedule_l2_report_canary:
-    'Queue one isolated exact-artifact report on an enrolled Hetzner node. source_only is the default; full_runtime additionally runs private challenges in a separate Docker namespace. Neither mode changes screening, scoring, or quarantine.',
+    'Queue one isolated exact-artifact report on an enrolled Hetzner node. source_only is the default; full_runtime additionally runs private challenges in a separate Docker namespace. Neither mode changes screening, scoring, or quarantine. reviewSettingsRevision pins an l2-report-canary-* posture; never use node scopes.',
   get_canonical_starter_fixture_preflight:
     'Read the pinned public starter tree and archive, independent review provenance, object integrity and scheduling readiness.',
   register_canonical_starter_fixture:
@@ -2487,7 +2487,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'schedule_l2_report_canary',
     {
       title: 'Schedule report-only L2 canary',
-      description: 'Queue a single report-only V13 L2 audit on an enrolled Hetzner node. An older null-SHA attempt requires historicalRulingKind and historicalRulingId: the ruling SHA and current stored object are verified, but this does not establish what the old attempt executed. The status and score count must still match. requestId is the idempotency key; use a new requestId for an append-only replay after a terminal result. candidate_clear is not a certified benign label. Requires backroom:write and confirmation "QUEUE REPORT ONLY L2 CANARY".',
+      description: 'Queue a single report-only V13 L2 audit on an enrolled Hetzner node. An older null-SHA attempt requires historicalRulingKind and historicalRulingId: the ruling SHA and current stored object are verified, but this does not establish what the old attempt executed. The status and score count must still match. requestId is the idempotency key; use a new requestId for an append-only replay after a terminal result. candidate_clear is not a certified benign label. Without reviewSettingsRevision the canary runs under the claiming node\'s effective review settings. To test a different posture, write it with apply_screener_review_settings to a scope named l2-report-canary or l2-report-canary-<name> and pass that revision here; Platform refuses *, bootstrap, node, worker, and inherit revisions, and the claiming worker applies the pin to this canary only. Never write a node or worker scope for an experiment: production screening on that node resolves it. The view reports the pin and the claim-bound settings_revision. Requires backroom:write and confirmation "QUEUE REPORT ONLY L2 CANARY".',
       inputSchema: scheduleL2ReportCanaryInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2627,7 +2627,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Apply screener review settings',
       description:
-        'Write one L1/L2/L3 source-review revision. Confirmation is APPLY SCREENER REVIEW {scope} {MODE}. Scope integrity-double-check is the top-five integrity double-check posture: no worker runs it by default, Platform pins it to each double-check deep pass, and it must be mode=enforce with l3_enabled and policy_manifest_profile=l1_l2 before queue policy integrity_double_check_mode=enforce is accepted. Use it for the stronger reviewer (for example l2_model openai/gpt-5.6-sol, l2_always_escalate=true, larger budgets). l2_always_escalate sends every L1 result through L2/L3 and can only add escalation to a worker, never remove its env default. Requires backroom:write.',
+        'Write one L1/L2/L3 source-review revision. Confirmation is APPLY SCREENER REVIEW {scope} {MODE}. Scope integrity-double-check is the top-five integrity double-check posture: no worker runs it by default, Platform pins it to each double-check deep pass, and it must be mode=enforce with l3_enabled and policy_manifest_profile=l1_l2 before queue policy integrity_double_check_mode=enforce is accepted. Use it for the stronger reviewer (for example l2_model openai/gpt-5.6-sol, l2_always_escalate=true, larger budgets). l2_always_escalate sends every L1 result through L2/L3 and can only add escalation to a worker, never remove its env default. Scopes l2-report-canary and l2-report-canary-<name> hold report-only L2 canary postures: no worker runs them, and schedule_l2_report_canary binds one to a canary through reviewSettingsRevision. Write canary experiments only there; a node or worker scope is that node\'s production posture. Requires backroom:write.',
       inputSchema: applyScreenerReviewSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },

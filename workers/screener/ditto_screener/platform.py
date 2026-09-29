@@ -603,7 +603,12 @@ class PlatformClient:
         settings_revision: int,
         settings_checksum: str,
     ) -> dict[str, Any] | None:
-        """Claim an isolated, non-authoritative L2 audit only when idle."""
+        """Claim an isolated, non-authoritative L2 audit only when idle.
+
+        The settings are this worker's node-effective posture. The worker also
+        declares that it applies a canary's pinned posture, so Platform may
+        lease it a pinned canary even while that node posture is not current.
+        """
         url = f"{self._base}{_PREFIX}/l2-report-canaries/claim"
         try:
             resp = await self._client.post(
@@ -612,6 +617,7 @@ class PlatformClient:
                     "instance_id": instance_id,
                     "settings_revision": settings_revision,
                     "settings_checksum": settings_checksum,
+                    "accepts_review_settings_override": True,
                 },
                 headers=await self._auth_headers(),
             )

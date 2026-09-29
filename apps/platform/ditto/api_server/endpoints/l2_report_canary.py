@@ -26,6 +26,12 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryScheduleRequest,
     L2CanaryView,
 )
+from ditto.api_models.screener_review_settings import (
+    L2_REPORT_CANARY_SCOPE_PREFIX,
+    EffectiveScreenerReviewSettings,
+    ScreenerReviewSettings,
+    is_l2_report_canary_scope,
+)
 from ditto.api_models.system_health import fleet_release_from_heartbeat_envelope
 from ditto.api_server.canonical_starter_control import (
     ARCHIVE_BYTES,
@@ -56,10 +62,12 @@ from ditto.db.models import (
     ScreenerHeartbeat,
     ScreenerL2ReportCanary,
     ScreenerNode,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     ScreeningReviewEvent,
 )
 from ditto.db.queries.benchmark_rollout import arrival_bench_version
+from ditto_screening_protocol import ScreenerReviewSettingsOverride
 
 admin_router = APIRouter(prefix="/admin/screener-l2-report-canaries", tags=["admin"])
 screener_router = APIRouter(prefix="/screener/l2-report-canaries", tags=["screener"])
@@ -102,6 +110,95 @@ def _utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
+def _canary_posture(
+    revision: ScreenerReviewSettingsRevision,
+) -> EffectiveScreenerReviewSettings | None:
+    """Return a canary-namespace revision as a posture, or ``None`` if unusable."""
+    if (
+        not is_l2_report_canary_scope(revision.scope)
+        or revision.settings.get("mode") == "inherit"
+    ):
+        return None
+    try:
+        settings = ScreenerReviewSettings.model_validate_json(
+            json.dumps(revision.settings)
+        )
+    except ValueError:
+        return None
+    return EffectiveScreenerReviewSettings(
+        revision=revision.revision,
+        scope=revision.scope,
+        settings=settings,
+        checksum=revision.checksum,
+    )
+
+
+async def _schedulable_review_settings_pin(
+    session: AsyncSession, revision: int
+) -> EffectiveScreenerReviewSettings:
+    """Accept only an isolated canary posture, never one production resolves."""
+    row = await session.get(ScreenerReviewSettingsRevision, revision)
+    if row is None:
+        raise HTTPException(404, "review settings revision not found")
+    if not is_l2_report_canary_scope(row.scope):
+        raise HTTPException(
+            422,
+            "canary review settings must use an "
+            f"{L2_REPORT_CANARY_SCOPE_PREFIX}* scope, not {row.scope!r}",
+        )
+    if row.settings.get("mode") == "inherit":
+        raise HTTPException(422, "canary review settings cannot inherit")
+    # Workers resolve their own instance scope and their enrolled node scope,
+    # so a canary scope that also names a live identity is production posture.
+    if (
+        await session.get(ScreenerNode, row.scope) is not None
+        or await session.scalar(
+            select(ScreenerHeartbeat.instance_id)
+            .where(ScreenerHeartbeat.instance_id == row.scope)
+            .limit(1)
+        )
+        is not None
+    ):
+        raise HTTPException(409, "canary review settings scope names a screener")
+    posture = _canary_posture(row)
+    if posture is None:
+        raise HTTPException(422, "canary review settings revision is invalid")
+    return posture
+
+
+async def _claimable_review_settings_pin(
+    session: AsyncSession, row: ScreenerL2ReportCanary
+) -> EffectiveScreenerReviewSettings | None:
+    """Re-read a stamped pin; ``None`` when the revision no longer matches it."""
+    if row.review_settings_revision is None:
+        return None
+    revision = await session.get(
+        ScreenerReviewSettingsRevision, row.review_settings_revision
+    )
+    if (
+        revision is None
+        or revision.scope != row.review_settings_scope
+        or revision.checksum != row.review_settings_checksum
+    ):
+        return None
+    return _canary_posture(revision)
+
+
+async def _pinned_canary_queued(session: AsyncSession, *, node_id: str) -> bool:
+    return (
+        await session.scalar(
+            select(ScreenerL2ReportCanary.canary_id)
+            .where(
+                ScreenerL2ReportCanary.target_node_id == node_id,
+                ScreenerL2ReportCanary.status == "queued",
+                ScreenerL2ReportCanary.review_settings_revision.is_not(None),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def _view(row: ScreenerL2ReportCanary) -> L2CanaryView:
     return L2CanaryView(
         canary_id=row.canary_id,
@@ -119,6 +216,11 @@ def _view(row: ScreenerL2ReportCanary) -> L2CanaryView:
         review_label=row.review_label,
         run_mode=cast(Literal["source_only", "full_runtime"], row.run_mode),
         source_attestation=row.source_attestation,
+        review_settings_revision=row.review_settings_revision,
+        review_settings_scope=row.review_settings_scope,
+        review_settings_checksum=row.review_settings_checksum,
+        settings_revision=row.settings_revision,
+        settings_checksum=row.settings_checksum,
         status=row.status,
         claimed_instance_id=row.claimed_instance_id,
         lease_expires_at=row.lease_expires_at,
@@ -497,6 +599,7 @@ async def schedule_l2_report_canary(
                 or existing.policy_version != payload.policy_version
                 or existing.expected_agent_status != payload.expected_agent_status
                 or existing.expected_score_count != payload.expected_score_count
+                or existing.review_settings_revision != payload.review_settings_revision
                 or (existing.source_attestation or {}).get("kind")
                 != payload.historical_ruling_kind
                 or (existing.source_attestation or {}).get("ruling_id")
@@ -519,6 +622,13 @@ async def schedule_l2_report_canary(
             session, node=node, now=datetime.now(UTC)
         ):
             raise HTTPException(409, "full-runtime canary worker not adopted")
+        pin = (
+            await _schedulable_review_settings_pin(
+                session, payload.review_settings_revision
+            )
+            if payload.review_settings_revision is not None
+            else None
+        )
         # Serialize two distinct request ids for the same source attempt before
         # the partial unique index supplies its final database backstop.
         await session.scalar(
@@ -549,6 +659,9 @@ async def schedule_l2_report_canary(
             expected_score_count=payload.expected_score_count,
             review_label=payload.review_label,
             run_mode=payload.run_mode,
+            review_settings_revision=pin.revision if pin is not None else None,
+            review_settings_scope=pin.scope if pin is not None else None,
+            review_settings_checksum=pin.checksum if pin is not None else None,
             status="queued",
         )
         if payload.historical_ruling_id is not None:
@@ -820,9 +933,17 @@ async def claim_l2_report_canary(
         effective = await _resolve_effective_review_settings(
             session, instance_id=payload.instance_id, enrolled_node_id=node_id
         )
-        if (
-            effective.revision != payload.settings_revision
-            or effective.checksum != payload.settings_checksum
+        # An unpinned canary runs under the worker's node-effective posture, so
+        # it still requires that posture to be current. A pinned canary carries
+        # its own posture and stays claimable by a worker whose node revision
+        # moved, but only by a worker that declares it applies the pin.
+        node_settings_current = (
+            effective.revision == payload.settings_revision
+            and effective.checksum == payload.settings_checksum
+        )
+        if not node_settings_current and not (
+            payload.accepts_review_settings_override
+            and await _pinned_canary_queued(session, node_id=node_id)
         ):
             raise HTTPException(
                 status_code=409, detail="canary review settings changed"
@@ -880,6 +1001,14 @@ async def claim_l2_report_canary(
         )
         if active:
             queued = queued.where(ScreenerL2ReportCanary.run_mode == "source_only")
+        if not payload.accepts_review_settings_override:
+            queued = queued.where(
+                ScreenerL2ReportCanary.review_settings_revision.is_(None)
+            )
+        elif not node_settings_current:
+            queued = queued.where(
+                ScreenerL2ReportCanary.review_settings_revision.is_not(None)
+            )
         if not await _full_runtime_worker_ready(
             session, node=node, now=now, instance_id=payload.instance_id
         ):
@@ -904,6 +1033,27 @@ async def claim_l2_report_canary(
         )
         if row is None:
             return None
+        bound_revision = payload.settings_revision
+        bound_checksum = payload.settings_checksum
+        lease_settings = effective.settings
+        override: ScreenerReviewSettingsOverride | None = None
+        if row.review_settings_revision is not None:
+            pinned = await _claimable_review_settings_pin(session, row)
+            if pinned is None:
+                # Terminal, like source drift: a 409 would roll back and leave
+                # this row at the head of the node's queue on every claim.
+                row.status = "incomplete"
+                row.error_code = "review-settings-pin-drift"
+                row.completed_at = now
+                return None
+            bound_revision = pinned.revision
+            bound_checksum = pinned.checksum
+            lease_settings = pinned.settings
+            override = ScreenerReviewSettingsOverride(
+                revision=pinned.revision,
+                scope=pinned.scope,
+                checksum=pinned.checksum,
+            )
         agent = None
         if row.source_kind == "canonical_starter_fixture":
             if not _fixture_attestation_valid(row) or not await _fixture_object_matches(
@@ -947,8 +1097,8 @@ async def claim_l2_report_canary(
         token = secrets.token_urlsafe(32)
         row.status = "leased"
         row.claimed_instance_id = payload.instance_id
-        row.settings_revision = payload.settings_revision
-        row.settings_checksum = payload.settings_checksum
+        row.settings_revision = bound_revision
+        row.settings_checksum = bound_checksum
         row.runtime_evidence_sha256 = hashlib.sha256(
             json.dumps(
                 evidence.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
@@ -956,10 +1106,8 @@ async def claim_l2_report_canary(
         ).hexdigest()
         row.lease_token_hash = hashlib.sha256(token.encode()).hexdigest()
         row.lease_expires_at = now + _canary_lease(
-            source_review_timeout_seconds=(
-                effective.settings.source_review_timeout_seconds
-            ),
-            l2_timeout_seconds=effective.settings.timeout_seconds,
+            source_review_timeout_seconds=lease_settings.source_review_timeout_seconds,
+            l2_timeout_seconds=lease_settings.timeout_seconds,
             run_mode=row.run_mode,
             source_kind=row.source_kind,
         )
@@ -993,6 +1141,7 @@ async def claim_l2_report_canary(
             lease_expires_at=row.lease_expires_at,
             download_url=url,
             scored_runtime_evidence=evidence,
+            review_settings_override=override,
         )
 
 

@@ -21337,6 +21337,11 @@ export interface components {
         };
         /** L2CanaryClaimRequest */
         L2CanaryClaimRequest: {
+            /**
+             * Accepts Review Settings Override
+             * @default false
+             */
+            accepts_review_settings_override: boolean;
             /** Instance Id */
             instance_id: string;
             /** Settings Checksum */
@@ -21373,6 +21378,7 @@ export interface components {
             miner_hotkey: string;
             /** Policy Version */
             policy_version: number;
+            review_settings_override?: components["schemas"]["ScreenerReviewSettingsOverride"] | null;
             /**
              * Run Mode
              * @default source_only
@@ -21482,6 +21488,8 @@ export interface components {
              * @enum {string}
              */
             review_label: "candidate_clear" | "known_reject";
+            /** Review Settings Revision */
+            review_settings_revision?: number | null;
             /**
              * Run Mode
              * @default source_only
@@ -21537,11 +21545,21 @@ export interface components {
             request_id: string;
             /** Review Label */
             review_label: string;
+            /** Review Settings Checksum */
+            review_settings_checksum?: string | null;
+            /** Review Settings Revision */
+            review_settings_revision?: number | null;
+            /** Review Settings Scope */
+            review_settings_scope?: string | null;
             /**
              * Run Mode
              * @enum {string}
              */
             run_mode: "source_only" | "full_runtime";
+            /** Settings Checksum */
+            settings_checksum?: string | null;
+            /** Settings Revision */
+            settings_revision?: number | null;
             /** Source Attempt Id */
             source_attempt_id: string | null;
             /** Source Attestation */

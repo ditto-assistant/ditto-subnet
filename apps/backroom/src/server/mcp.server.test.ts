@@ -423,7 +423,8 @@ describe('Backroom MCP tools', () => {
     // Main also adds the no-input validator-capacity read (#2036), and the
     // guarded verified V13 court-clear release adds a bounded writer entry.
     // Four canonical starter fixture controls bring the measured catalog to
-    // 179,468 bytes; retain about 0.5 KB headroom.
+    // 179,468 bytes; retain about 0.5 KB headroom. The optional canary
+    // review-posture pin (reviewSettingsRevision) measures 179,642.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(180_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
@@ -460,6 +461,7 @@ describe('Backroom MCP tools', () => {
       // main adds the validator-capacity summary (#2036) and the guarded
       // verified V13 court-clear release summary.
       // Four fixture tool summaries bring the measured total to 31,772.
+      // The canary review-posture pin clause measures 31,854.
       32_000,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
@@ -2428,6 +2430,86 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  it('schedules a report canary pinned to an isolated review posture', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const canaryId = '33333333-3333-4333-8333-333333333333'
+    const requestId = '44444444-4444-4444-8444-444444444444'
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const sourceAttemptId = '22222222-2222-4222-8222-222222222222'
+    const view = {
+      canary_id: canaryId,
+      request_id: requestId,
+      agent_id: agentId,
+      source_attempt_id: sourceAttemptId,
+      artifact_sha256: 'a'.repeat(64),
+      target_node_id: 'subnet-screener-1',
+      expected_agent_status: 'rejected',
+      expected_score_count: 0,
+      review_label: 'known_reject',
+      run_mode: 'source_only',
+      review_settings_revision: 141,
+      review_settings_scope: 'l2-report-canary-ctl137',
+      review_settings_checksum: 'c'.repeat(64),
+      settings_revision: null,
+      settings_checksum: null,
+      status: 'queued',
+      claimed_instance_id: null,
+      lease_expires_at: null,
+      report: null,
+      error_code: null,
+      created_at: '2026-09-29T00:00:00Z',
+      completed_at: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(view))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'schedule_l2_report_canary',
+        arguments: {
+          requestId,
+          agentId,
+          sourceAttemptId,
+          artifactSha256: 'a'.repeat(64),
+          expectedAgentStatus: 'rejected',
+          expectedScoreCount: 0,
+          targetNodeId: 'subnet-screener-1',
+          reviewLabel: 'known_reject',
+          reviewSettingsRevision: 141,
+          confirmation: 'QUEUE REPORT ONLY L2 CANARY',
+        },
+      })
+      expect(response.isError).not.toBe(true)
+      // The pin survives Backroom's response parsing for later diagnosis.
+      expect(readJsonResult(response)).toMatchObject({
+        review_settings_revision: 141,
+        review_settings_scope: 'l2-report-canary-ctl137',
+        review_settings_checksum: 'c'.repeat(64),
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries')
+      expect(init.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        request_id: requestId,
+        review_settings_revision: 141,
+        confirm_report_only: true,
+      })
+
+      const help = readJsonResult(
+        await client.callTool({
+          name: 'get_backroom_tool_help',
+          arguments: { tool: 'schedule_l2_report_canary' },
+        }),
+      ) as { summary: string; guidance: string }
+      expect(help.summary).toContain('reviewSettingsRevision')
+      expect(help.guidance).toContain('l2-report-canary-<name>')
+      expect(help.guidance).toContain('Never write a node or worker scope for an experiment')
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('applies the conversation switch with the authenticated operator identity', async () => {
