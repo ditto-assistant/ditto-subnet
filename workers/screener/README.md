@@ -57,6 +57,16 @@ digest, byte size, immutable Docker image ID, and image reference into the
 canonical signed verdict. Validators can therefore load the screened image
 instead of repeating the untrusted build.
 
+Verdict submission retries the same signed payload across transient HTTP,
+transport, and node-credential refresh failures. A missing signing key stops
+authentication retries immediately. A definitive 400, 409, 413, or 422 verdict
+rejection triggers one best-effort, signed infrastructure fallback for the same
+attempt (`worker-verdict-rejected`), with bounded private rejection diagnostics.
+Authentication failure before any verdict dispatch uses
+`worker-verdict-auth-failed`. A transport failure or exhausted transient retry
+may conceal an accepted verdict, so it never triggers a replacement. Platform
+can still refuse the fallback if the attempt has already closed.
+
 Rust is the reference starter implementation, not a competition requirement.
 Python, TypeScript/JavaScript, Go, Rust, or any other implementation is accepted
 when its root `Dockerfile` builds an image that serves the same `/health`,

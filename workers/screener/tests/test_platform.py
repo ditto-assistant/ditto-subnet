@@ -22,7 +22,12 @@ from ditto_screener.enrollment import (
     load_node_credential,
     store_node_credential,
 )
-from ditto_screener.errors import PlatformError
+from ditto_screener.errors import (
+    PlatformAuthOnlyFailure,
+    PlatformAuthUnavailable,
+    PlatformError,
+    PlatformRejected,
+)
 from ditto_screener.heartbeat import ScreenerHeartbeatRequest
 from ditto_screener.platform import (
     _TRANSIENT_PLATFORM_RETRY_DELAYS,
@@ -756,6 +761,195 @@ async def test_submit_result_does_not_retry_conflict(
             )
 
     assert calls == 1
+
+
+async def _submit_infra_verdict(client: PlatformClient):
+    return await client.submit_result(
+        _AGENT,
+        signature="ab" * 64,
+        passed=False,
+        policy_version=SCREENING_POLICY_VERSION,
+        attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+        outcome=ScreenResultOutcome.RETRYABLE_INFRA,
+    )
+
+
+@pytest.mark.parametrize("status_code", [400, 409, 413, 422])
+async def test_submit_result_raises_bounded_platform_rejection(
+    make_config: Callable[..., ScreenerConfig], status_code: int
+) -> None:
+    requests: list[httpx.Request] = []
+    body = "validation refused: " + "x" * 600
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(status_code, text=body)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformRejected) as raised:
+            await _submit_infra_verdict(client)
+
+    assert len(requests) == 1
+    assert raised.value.status_code == status_code
+    assert raised.value.body == body[:500]
+    assert str(raised.value) == f"verdict rejected ({status_code}): {body[:500]}"
+
+
+@pytest.mark.parametrize("status_code", [408, 425, 429, 500, 503, None])
+async def test_submit_result_exhausted_transient_failure_remains_ambiguous(
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int | None,
+) -> None:
+    requests: list[httpx.Request] = []
+    delays: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if status_code is None:
+            raise httpx.ReadError("response lost", request=request)
+        return httpx.Response(status_code, text="temporary failure")
+
+    async def no_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformError) as raised:
+            await _submit_infra_verdict(client)
+
+    assert type(raised.value) is PlatformError
+    assert len(requests) == len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1
+    assert delays == list(_TRANSIENT_PLATFORM_RETRY_DELAYS)
+    assert all(request.content == requests[0].content for request in requests)
+
+
+@pytest.mark.parametrize("previous_dispatch", [False, True])
+@pytest.mark.parametrize("permanent", [False, True])
+async def test_submit_result_auth_exhaustion_tracks_any_previous_dispatch(
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    previous_dispatch: bool,
+    permanent: bool,
+) -> None:
+    auth_calls = 0
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise httpx.ReadError("response lost", request=request)
+
+    client, http = _make_client(make_config(), handler)
+
+    async def auth_headers() -> dict[str, str]:
+        nonlocal auth_calls
+        auth_calls += 1
+        if previous_dispatch and auth_calls == 1:
+            return {}
+        if permanent:
+            raise PlatformAuthUnavailable("signing key missing")
+        raise PlatformError("credential refresh rejected (503)")
+
+    async def no_sleep(_delay: float) -> None:
+        pass
+
+    monkeypatch.setattr(client, "_auth_headers", auth_headers)
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    async with http:
+        with pytest.raises(PlatformError) as raised:
+            await _submit_infra_verdict(client)
+
+    assert auth_calls == (
+        1 + int(previous_dispatch)
+        if permanent
+        else len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1
+    )
+    assert len(requests) == int(previous_dispatch)
+    if previous_dispatch:
+        assert type(raised.value) is PlatformError
+    else:
+        assert isinstance(raised.value, PlatformAuthOnlyFailure)
+        assert "no verdict request was sent" in str(raised.value)
+
+
+@pytest.mark.parametrize("missing_keypair", [False, True])
+async def test_submit_result_retries_real_credential_refresh_unless_key_missing(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_keypair: bool,
+) -> None:
+    credential_file = tmp_path / "node.json"
+    credential = NodeCredential(
+        environment="test",
+        node_id="ditto-screener-test",
+        provider="test",
+        provider_resource_id="resource-test",
+        screener_hotkey=make_config().screener_hotkey,
+        mnemonic=(
+            "bottom drive obey lake curtain smoke basket hold race lonely fit walk"
+        ),
+        api_token="old-node-token-at-least-43-characters-xxxxxxxx",
+        expires_at=datetime.now(UTC) + timedelta(minutes=1),
+    )
+    store_node_credential(credential_file, credential)
+    refresh_ids: list[str] = []
+    verdicts: list[httpx.Request] = []
+    delays: list[float] = []
+    new_token = "new-node-token-at-least-43-characters-xxxxxxxx"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/nodes/refresh"):
+            refresh_ids.append(json.loads(request.content)["refresh_id"])
+            if len(refresh_ids) == 1:
+                return httpx.Response(503, text="temporary refresh failure")
+            return httpx.Response(
+                200,
+                json={
+                    "api_token": new_token,
+                    "expires_at": (datetime.now(UTC) + timedelta(hours=6)).isoformat(),
+                },
+            )
+        assert request.headers["Authorization"] == f"Bearer {new_token}"
+        verdicts.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "agent_id": str(_AGENT),
+                "status": "screening_failed",
+                "accepted": True,
+            },
+        )
+
+    class Keypair:
+        def sign(self, _message: bytes) -> bytes:
+            return b"a" * 64
+
+    async def no_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    cfg = make_config(node_credential_file=str(credential_file))
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = PlatformClient(cfg, http, keypair=None if missing_keypair else Keypair())
+    async with http:
+        if missing_keypair:
+            with pytest.raises(PlatformAuthOnlyFailure) as raised:
+                await _submit_infra_verdict(client)
+            assert isinstance(raised.value.__cause__, PlatformAuthUnavailable)
+            assert delays == []
+            assert refresh_ids == []
+            assert verdicts == []
+        else:
+            response = await _submit_infra_verdict(client)
+            assert response.status.value == "screening_failed"
+            assert len(verdicts) == 1
+            assert len(refresh_ids) == 2
+            assert refresh_ids[0] == refresh_ids[1]
+            assert delays == [_TRANSIENT_PLATFORM_RETRY_DELAYS[0]]
+            assert load_node_credential(credential_file).pending_refresh_id is None
 
 
 async def test_upload_screened_image_streams_exact_metadata_and_bytes(
