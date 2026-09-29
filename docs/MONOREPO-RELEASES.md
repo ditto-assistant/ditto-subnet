@@ -208,8 +208,9 @@ called workflow rechecks the tag byte-for-byte before authenticating because
 GitHub expression equality is case-insensitive.
 The screener owner must review the release and deliberately opt in to one tag;
 clear the variable after that release to prevent a later matching rerun. A
-manual controller dispatch remains the explicit path to deploy an already
-published exact release without enabling automatic deployment for later runs.
+manual controller dispatch remains the explicit path to deploy an exact
+main-ancestry commit without enabling automatic deployment for later runs;
+it does not require that commit to have a published release tag.
 
 ## Protected environment configuration
 
