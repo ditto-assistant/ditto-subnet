@@ -6,6 +6,9 @@ import {
   selectActiveBenchmark,
   fetchAthReview,
   fetchAthPrecedents,
+  fetchWithdrawnAthHolds,
+  previewAthHoldWithdrawal,
+  executeAthHoldWithdrawal,
   fetchBenchmarkRolloutControl,
   fetchCopyReviews,
   fetchBenchmarkContractRefresh,
@@ -2826,6 +2829,120 @@ describe('copy review admin service', () => {
       `https://platform-api.heyditto.ai/api/v1/admin/copy-reviews/${review.agent_id}/audit`,
       expect.any(Object),
     )
+  })
+
+  it('carries the current withdrawal guards and a withdraw action\'s reward posture', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      Response.json({
+        review: { ...review, status: 'resolved', resolution: 'withdraw', resolution_reason: 'withdrawn' },
+        agent_status: 'scored',
+        held_artifact_sha256: 'ab'.repeat(32),
+        held_score_count: 3,
+        current_artifact_sha256: 'ab'.repeat(32),
+        current_score_count: 4,
+        withdrawable: false,
+        withdrawal_refusal: 'review already withdrawn',
+        previous_status: 'scored',
+        opened_by: 'operator@example.com',
+        action_history: [{
+          action: 'withdraw',
+          reason: 'withdrawn',
+          actor: 'operator@example.com',
+          created_at: '2026-09-29T12:00:00Z',
+          previous_status: 'scored',
+          artifact_sha256: 'ab'.repeat(32),
+          score_count: 4,
+          emission_gate: 'enforce',
+          eligibility_revision: 3,
+          eligibility_checksum: 'cd'.repeat(32),
+          eligibility_state: 'unresolved_review',
+          emission_reward_eligible: false,
+        }],
+      }),
+    ))
+
+    const result = await fetchAthReview({ agentId: review.agent_id })
+
+    expect(result.held_score_count).toBe(3)
+    expect(result.current_score_count).toBe(4)
+    expect(result.withdrawable).toBe(false)
+    expect(result.withdrawal_refusal).toBe('review already withdrawn')
+    expect(result.action_history[0]).toMatchObject({
+      emission_gate: 'enforce',
+      eligibility_revision: 3,
+      eligibility_state: 'unresolved_review',
+      emission_reward_eligible: false,
+    })
+  })
+
+  it('lists withdrawn holds that left the pending queue', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        items: [{ ...review, status: 'resolved', resolution: 'withdraw', resolution_reason: 'withdrawn' }],
+        count: 1,
+        limit: 50,
+        offset: 0,
+        generation: 'all',
+        active_bench_version: 8,
+        resolution: 'withdraw',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await fetchWithdrawnAthHolds(50, 0)
+
+    expect(result.resolution).toBe('withdraw')
+    expect(result.items[0]?.resolution).toBe('withdraw')
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/copy-reviews?status=resolved&resolution=withdraw&generation=all&limit=50&offset=0',
+      expect.any(Object),
+    )
+  })
+
+  it('gives the withdrawal execute at least the preview\'s time budget', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+    // Spies persist across this file's tests; count only this test's calls.
+    timeoutSpy.mockClear()
+    const guards = {
+      agentId: review.agent_id,
+      reviewId: review.review_id,
+      expectedSha256: 'ab'.repeat(32),
+      expectedScoreCount: 3,
+      expectedAgentStatus: 'ath_pending_review',
+      reason: 'Precautionary hold withdrawn',
+    }
+    const board = {
+      bench_version: 8, read_at: '2026-09-29T12:00:00Z', ranked_count: 1,
+      champion_agent_id: null, champion_hotkey: null, champion_score: null,
+      raw_leader_agent_id: null, raw_leader_score: null, fingerprint: 'f',
+    }
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({
+        agent_id: review.agent_id, review_id: review.review_id,
+        artifact_sha256: 'ab'.repeat(32), score_count: 3,
+        agent_status: 'ath_pending_review', restored_status: 'scored',
+        board_before: board, board_after: board, would_change_crown: false,
+        emission_reward_eligible: true, emission_gate: 'off',
+        would_change_emission_crown: false, emission_reason: 'off',
+        preview_token: 'signed-preview-token-value', expires_at: '2026-09-29T12:10:00Z',
+      }))
+      .mockResolvedValueOnce(Response.json({
+        review: { ...review, status: 'resolved', resolution: 'withdraw', resolution_reason: 'withdrawn' },
+        agent_status: 'scored', restored_status: 'scored',
+        emission_reward_eligible: true, emission_gate: 'off', emission_reason: 'off',
+      })))
+
+    await previewAthHoldWithdrawal(guards, 'operator@example.com')
+    await executeAthHoldWithdrawal(
+      { ...guards, previewToken: 'signed-preview-token-value', confirmation: 'WITHDRAW ATH HOLD' },
+      'operator@example.com',
+    )
+
+    expect(timeoutSpy).toHaveBeenNthCalledWith(1, 60_000)
+    expect(timeoutSpy).toHaveBeenNthCalledWith(2, 120_000)
   })
 
   it('searches resolved ATH holdings as precedents', async () => {

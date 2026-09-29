@@ -167,6 +167,7 @@ import {
   fetchQuarantineBaselineDiff,
   fetchQuarantineBaselineDiffFile,
   fetchAthReviewQueue,
+  fetchWithdrawnAthHolds,
   fetchQuarantineSourceExcerpt,
   fetchQuarantineSourceFiles,
   searchQuarantineSource,
@@ -1037,6 +1038,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'list_withdrawn_ath_holds',
+    {
+      title: 'List withdrawn ATH holds',
+      description:
+        'Page withdrawn manual ATH holds (resolution=withdraw), oldest hold first. They left the pending queue uncertified: enforce with require_terminal_review keeps them withheld as unresolved_review. Settle one with open_ath_review, then resolve_ath_review. Requires backroom:read.',
+      inputSchema: MCP_PAGINATION_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit, offset }) =>
+      result(compactAthReviewQueue(await fetchWithdrawnAthHolds(limit, offset))),
+  )
+
+  registerTool(
     'list_screening_quarantines',
     {
       title: 'List screening quarantines',
@@ -1182,7 +1196,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get ATH review',
       description:
-        'Explain why one agent is or was held in ath_pending_review. Returns the public operator reason, review kind and status, opener, exact held artifact SHA-256 and score-count guard, previous agent status, any resolution, and the append-only action history. After a withdrawn resolution and reopen, `review.original.reason` is the current reconsideration reason and the `superseded_*` fields the withdrawn decision, as history. Requires backroom:read.',
+        'Explain why one agent is or was held in ath_pending_review. Returns the public operator reason, review kind and status, opener, the held_* SHA-256 and score count recorded at opening, the current_* values withdrawal guards compare, withdrawable with any refusal, previous agent status, any resolution, and the action history. After a reopen, `review.original.reason` is the current reason and `superseded_*` the prior decision, as history. Requires backroom:read.',
       inputSchema: getAthReviewInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1238,7 +1252,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Preview precautionary ATH hold withdrawal',
       description:
-        'Dry-run one manual precautionary ATH withdrawal. Returns the crown, emission effect, and preview token. Requires backroom:read.',
+        'Dry-run one manual precautionary ATH withdrawal. Guards are CURRENT values: pass get_ath_review current_artifact_sha256 and current_score_count, not held_*. 409 once the review has any clear/reject. Returns crown, emission effect, preview token. Requires backroom:read.',
       inputSchema: previewAthHoldWithdrawalInputSchema,
       annotations: toolAnnotations('read'),
     },

@@ -2287,6 +2287,29 @@ export async function fetchAthReviewQueue(
   return copyReviewListSchema.parse(payload)
 }
 
+/**
+ * Withdrawn manual ATH holds, oldest hold first.
+ *
+ * A withdrawal resolves the review, so the row leaves the pending queue above,
+ * but it is not a terminal certification: under `enforce` with
+ * `require_terminal_review` the artifact stays withheld as `unresolved_review`.
+ * This is the read that keeps those rows visible. Generation is pinned to `all`
+ * for the queue's reason: a withdrawn row can predate the active benchmark.
+ */
+export async function fetchWithdrawnAthHolds(limit: number, offset: number) {
+  const query = new URLSearchParams({
+    status: 'resolved',
+    resolution: 'withdraw',
+    generation: 'all',
+    limit: String(limit),
+    offset: String(offset),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/copy-reviews?${query.toString()}`,
+  )
+  return copyReviewListSchema.parse(payload)
+}
+
 export async function resolveCopyReview(rawInput: unknown, actor: string) {
   const input = resolveCopyReviewInputSchema.parse(rawInput)
   const payload = await platformAdminRequest(
@@ -2337,6 +2360,11 @@ export async function executeAthHoldWithdrawal(rawInput: unknown, actor: string)
         preview_token: input.previewToken,
         confirmation: input.confirmation,
       },
+      // Execute re-reads the hold, the policy and the board under the review
+      // lock, which is more work than the preview it confirms. Match the
+      // rulings execute rather than the 20s default, so a slow but landed
+      // withdrawal is not reported as a failure the operator then retries.
+      timeoutMs: 120_000,
     },
   )
   invalidateCopyReviewsCache()
