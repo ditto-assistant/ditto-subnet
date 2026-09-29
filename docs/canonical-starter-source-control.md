@@ -55,12 +55,22 @@ artifact, or storage credential.
    and `inconclusive` as **report-only** evidence. They do not post a screening
    verdict, approve a miner, change a score, resolve quarantine, or open
    production admission. The unchanged direct-clear floor is 0.98.
-6. Under the same adopted reviewer revision, use the existing
-   `get_l2_report_canary_preflight` and `schedule_l2_report_canary` for the
-   exact-source V13 I4 scorer-field control
-   `215745b1-83f6-4a2a-b41e-10a795c614db`, subject to fresh attempt, SHA,
-   status, score, and ruling guards. It must remain a HOLD before considering
-   production review settings. A hold is not an automatic rejection.
+6. Under the same adopted reviewer revision, pair the fixture with a verified
+   exact-source V13 violation control that remains a HOLD. The historical I4
+   scorer-field control was `logan` agent
+   `9b4e59a6-4f55-4a4a-a764-5904e20d0556`, screening attempt
+   `43adb1ce-7fa4-4d53-941e-41efda150402`, and current artifact SHA-256
+   `d07f953dc18a3e6ee198fc2bd61fa38e025661ce86fe4fd8642a989a6a9dd74b`.
+   The historical report-only canary `215745b1-83f6-4a2a-b41e-10a795c614db`
+   is a canary ID, **not** a submission ID. Its recorded guard was rejected
+   status, zero score rows, and screening-reject ruling
+   `5bdc0a2a-9cec-45fd-bff4-3afbb2a624fd`. The old attempt has no recorded
+   artifact SHA, so any fresh source-only run must use that ruling's
+   `current-object-only; historical execution unverified` attestation. Recheck
+   the current agent, attempt, stored SHA, status, score count, and ruling with
+   public Backroom preflight before scheduling; do not reuse the historical
+   canary UUID as the agent ID or claim it proves historical execution bytes.
+   A source HOLD is not an automatic rejection.
 
 The two fixture writes and schedule use a short-lived HMAC over actor, route,
 method, and body from the authenticated Backroom session. Platform rejects
