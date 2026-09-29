@@ -117,10 +117,7 @@ def gce_overflow_target(
 ) -> tuple[int, str]:
     """Choose GCE only for an explicit GCP route, outage, or queue overflow.
 
-    Precedence: explicit operator GCP routing wins, and it is the only outage
-    failover for a closed or unknown primary; a stale revision that still names
-    the retired Targon provider does not bypass the stop and falls back to GCE
-    only for a primary known to be open. Then a primary whose admission is
+    A primary whose admission is
     known to be closed (``admission_open`` false, or ``screening_concurrency ==
     0`` from a Platform that predates that field) is an operator closure: a
     global full stop that GCE never overflows, whatever the backlog,
@@ -133,8 +130,6 @@ def gce_overflow_target(
     """
     if jobs_per_slot < 1 or global_cap < 0:
         raise ValueError("capacity inputs are out of range")
-    if routing.gcp_first:
-        return min(global_cap, demand.desired), "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
     primary = primary_node or {}
     primary_ready = primary.get("status") == "active" and primary.get("ready") is True
     screening_concurrency = int(primary.get("screening_concurrency", 0))
@@ -142,10 +137,16 @@ def gce_overflow_target(
     if admission_open is None and "screening_concurrency" in primary:
         # Platform releases before admission_open still report concurrency.
         admission_open = screening_concurrency > 0
-    if admission_open is False:
+    if admission_open is False or (
+        "screening_concurrency" in primary and screening_concurrency == 0
+    ):
         # A known operator closure holds through any host health change, so a
         # failed heartbeat cannot reopen screening through GCE.
         return 0, "HETZNER_PRIMARY_ADMISSION_CLOSED"
+    if admission_open is None:
+        return 0, "HETZNER_PRIMARY_UNKNOWN"
+    if routing.gcp_first:
+        return min(global_cap, demand.desired), "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
     if any(
         priority and priority[0] == "targon"
         for priority in (
@@ -156,8 +157,6 @@ def gce_overflow_target(
     ):
         # A stale revision naming the retired provider still falls back to GCE,
         # but only behind the same operator stop: never for an unknown primary.
-        if admission_open is None:
-            return 0, "HETZNER_PRIMARY_UNKNOWN"
         return min(global_cap, demand.desired), "RETIRED_PROVIDER_ROUTING"
     policy = routing.overflow
     if not routing.hetzner_first or not policy.enabled:
@@ -165,8 +164,6 @@ def gce_overflow_target(
     cap = min(global_cap, policy.max_instances)
     if cap == 0:
         return 0, "GCE_OVERFLOW_CAPPED_AT_ZERO"
-    if admission_open is None:
-        return 0, "HETZNER_PRIMARY_UNKNOWN"
     if not primary_ready:
         return min(cap, demand.desired), "HETZNER_PRIMARY_UNAVAILABLE"
     threshold = max(
@@ -508,25 +505,20 @@ class GCEFleet:
             mode,
         )
 
-    def ensure_watchdog(self, *, enabled: bool) -> None:
-        """Align the raw-queue watchdog with the controller's bounded target.
+    def ensure_watchdog(self) -> None:
+        """Keep the independent safety net ready, including at zero capacity.
 
-        The Google autoscaler sees only queue depth; it cannot prove that the
-        primary Hetzner node is ready or apply the overflow threshold.  It must
-        therefore stay off while this controller has selected zero GCE slots.
+        The metric publishes zero while Platform's watchdog suppresses fallback.
+        ONLY_SCALE_OUT cannot delete workers or race the controller's scale-in.
         """
-        desired_mode = self.WATCHDOG_MODE if enabled else "OFF"
-        if self._autoscaler_mode() != desired_mode:
-            self._set_autoscaler_mode("only-scale-out" if enabled else "off")
+        if self._autoscaler_mode() != self.WATCHDOG_MODE:
+            self._set_autoscaler_mode("only-scale-out")
 
-    def resize(self, target: int, *, watchdog_enabled: bool) -> None:
+    def resize(self, target: int) -> None:
         # Compute rejects manual resize while any autoscaler mode is active,
         # including ONLY_SCALE_OUT. Keep the emergency policy configured, pause
-        # it only around the fenced mutation. Restore it only when the bounded
-        # controller target is nonzero; otherwise the raw queue-depth signal
-        # would immediately recreate GCE workers that Hetzner is meant to
-        # handle.
-        resize_error: ControllerError | None = None
+        # it only around the fenced mutation and always restore it, even at
+        # zero capacity or after failure. Platform's watchdog gates the metric.
         try:
             self._set_autoscaler_mode("off")
             self._run(
@@ -540,16 +532,13 @@ class GCEFleet:
                 "--size",
                 str(target),
             )
-        except ControllerError as error:
-            resize_error = error
-        try:
-            self._set_autoscaler_mode("only-scale-out" if watchdog_enabled else "off")
-        except ControllerError as restore_error:
-            raise ControllerError(
-                "GCE autoscaler watchdog restore failed"
-            ) from restore_error
-        if resize_error is not None:
-            raise resize_error
+        finally:
+            try:
+                self._set_autoscaler_mode("only-scale-out")
+            except ControllerError as restore_error:
+                raise ControllerError(
+                    "GCE autoscaler watchdog restore failed"
+                ) from restore_error
 
 
 class GCPBootstrapTokenMinter:
@@ -738,15 +727,15 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     try:
         provider_routing = platform.provider_routing()
     except ControllerError:
-        # Platform is deployed before the controller in the normal release, but
-        # a rolling boundary or transient read failure must leave GCE as the
-        # bounded fallback until a routing revision can be read.
+        # Without the current routing revision we cannot prove that operator
+        # admission is open. Keep existing capacity while recording the failure;
+        # the policy-aware metric may activate fallback independently.
         provider_routing_available = False
         provider_routing = ProviderRouting(
             revision=0,
-            runtime_provider_priority=("gcp",),
-            source_review_provider_priority=("gcp",),
-            build_provider_priority=("gcp",),
+            runtime_provider_priority=("hetzner", "gcp"),
+            source_review_provider_priority=("hetzner", "gcp"),
+            build_provider_priority=("hetzner", "gcp"),
         )
     node_states_available = True
     try:
@@ -776,15 +765,16 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     provider_success_at = datetime.now(UTC).isoformat()
 
     primary_node = node_states.get(provider_routing.overflow.primary_node_id or "")
-    target, reason = gce_overflow_target(
-        demand=demand,
-        routing=provider_routing,
-        primary_node=primary_node,
-        jobs_per_slot=settings.jobs_per_slot,
-        global_cap=settings.global_cap,
-    )
-    if not provider_routing_available:
-        reason = "PROVIDER_ROUTING_UNAVAILABLE"
+    if provider_routing_available:
+        target, reason = gce_overflow_target(
+            demand=demand,
+            routing=provider_routing,
+            primary_node=primary_node,
+            jobs_per_slot=settings.jobs_per_slot,
+            global_cap=settings.global_cap,
+        )
+    else:
+        target, reason = current_target, "PROVIDER_ROUTING_UNAVAILABLE"
     gce_has_active_lease = any(
         node.get("provider") == "gcp" and node.get("active_lease") is True
         for node in node_states.values()
@@ -848,11 +838,10 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     state = _load_state(settings.state_file)
     state["last_fallback_reason"] = reason
     _write_state(settings.state_file, state)
-    watchdog_enabled = target > 0
     if target == current_target:
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.ensure_watchdog(enabled=watchdog_enabled)
+            gce_fleet.ensure_watchdog()
         except ControllerError:
             _record_provider_failure(
                 platform,
@@ -866,7 +855,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         # Bring fallback capacity up before any later reconciliation work.
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.resize(target, watchdog_enabled=watchdog_enabled)
+            gce_fleet.resize(target)
             current_target = target
         except ControllerError:
             _record_provider_failure(
@@ -882,7 +871,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         # fallen to zero because desired_slots includes every active lease.
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.resize(target, watchdog_enabled=watchdog_enabled)
+            gce_fleet.resize(target)
         except ControllerError:
             _record_provider_failure(
                 platform,

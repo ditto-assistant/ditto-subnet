@@ -208,6 +208,10 @@ from ditto.db.queries.moderation_audit import (
     ACTION_ARTIFACT_SUPERSESSION,
     record_moderation_audit_if_enabled,
 )
+from ditto.db.queries.screener_capacity import (
+    screener_fallback_active,
+    screener_gcp_fallback_allowed,
+)
 from ditto.db.queries.screener_node_settings import (
     resolve_screener_node_channel_settings,
 )
@@ -277,20 +281,20 @@ async def _required_policy(
 async def _legacy_gcp_claim_is_authorized(
     session: AsyncSession, *, now: datetime
 ) -> bool:
-    """Keep the shared GCP principal behind the fenced overflow decision.
+    """Route authenticated legacy GCP workers through the watchdog safety net.
 
-    Registered nodes carry a provider identity and are admitted by the
-    per-node channel limits below. The pre-node GCP fleet instead shares the
-    legacy principal, so it has no node identity to route. It remains the
-    dispatcher for GCP and enrolled-fleet configurations, but must
-    wait behind every Hetzner-primary lane until the current controller
-    snapshot has requested GCP overflow. A stale, unready, or superseded
-    snapshot deliberately fails closed: existing leases can still complete,
-    but GCP cannot take new primary work away from Hetzner.
+    A missing, stale or unready controller permits GCP overflow only while
+    current operator policy allows it. Fresh, ready controllers still own the
+    bounded target and must match the current provider revision. Registered
+    nodes retain their separate per-node admission limits below.
     """
     revision, settings = await resolve_screener_provider_settings(
         session, environment="prod"
     )
+    if not await screener_gcp_fallback_allowed(
+        session, environment="prod", settings=settings
+    ):
+        return False
     lanes = (
         settings.build_provider_priority,
         settings.runtime_provider_priority,
@@ -298,24 +302,17 @@ async def _legacy_gcp_claim_is_authorized(
     )
     if all(lane[0] != "hetzner" for lane in lanes):
         return True
-    if not settings.gce_overflow_enabled:
-        return False
 
     snapshot = await session.scalar(
         select(ScreenerCapacitySnapshot)
         .where(ScreenerCapacitySnapshot.environment == "prod")
         .with_for_update()
     )
-    if snapshot is None or not snapshot.provider_ready:
-        return False
-    lease_expiry = snapshot.controller_lease_expires_at
-    if lease_expiry.tzinfo is None:
-        lease_expiry = lease_expiry.replace(tzinfo=UTC)
-    return (
-        snapshot.provider_settings_revision == revision
-        and now < lease_expiry
-        and snapshot.gce_target > 0
-    )
+    fallback_active, _ = screener_fallback_active(snapshot, now)
+    if fallback_active:
+        return True
+    assert snapshot is not None
+    return snapshot.provider_settings_revision == revision and snapshot.gce_target > 0
 
 
 # How long a pre-signed artifact URL stays valid (mirrors the validator's).
