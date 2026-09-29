@@ -152,20 +152,20 @@ async def test_fixture_capability_uses_signed_protocol_not_version_string(
             )
         )
     async with session_maker() as session:
-        node = await session.get(ScreenerNode, node_id)
-        assert node is not None
+        node_before = await session.get(ScreenerNode, node_id)
+        assert node_before is not None
         assert not await endpoints._fixture_worker_ready(
-            session, node=node, now=now, instance_id=instance
+            session, node=node_before, now=now, instance_id=instance
         )
     async with session_maker() as session, session.begin():
         heartbeat = await session.get(ScreenerHeartbeat, (hotkey, instance))
         assert heartbeat is not None
         heartbeat.protocol_version = 8
     async with session_maker() as session:
-        node = await session.get(ScreenerNode, node_id)
-        assert node is not None
+        node_after = await session.get(ScreenerNode, node_id)
+        assert node_after is not None
         assert await endpoints._fixture_worker_ready(
-            session, node=node, now=now, instance_id=instance
+            session, node=node_after, now=now, instance_id=instance
         )
 
 
@@ -220,6 +220,7 @@ async def test_fixture_requires_distinct_review_and_one_schedule(
         )
     assert registered.status == "awaiting_review"
     assert registered.agent_id is None and registered.source_attempt_id is None
+    assert registered.source_attestation is not None
     assert registered.source_attestation["source_tree"] == starter.SOURCE_TREE
     review_body = {
         "reviewer_evidence_sha256": "a" * 64,

@@ -906,10 +906,8 @@ async def claim_l2_report_canary(
             return None
         agent = None
         if row.source_kind == "canonical_starter_fixture":
-            if (
-                storage is None
-                or not _fixture_attestation_valid(row)
-                or not await _fixture_object_matches(storage)
+            if not _fixture_attestation_valid(row) or not await _fixture_object_matches(
+                storage
             ):
                 row.status = "incomplete"
                 row.error_code = "fixture-source-drift"
@@ -967,9 +965,13 @@ async def claim_l2_report_canary(
         )
         # URL issuance is scoped to this canary, not to a running screening attempt.
         if agent is None:
-            assert row.fixture_key is not None
+            key = row.fixture_key
+            if key is None:
+                raise HTTPException(409, "fixture object key missing")
+        else:
+            key = _artifact_key(agent.agent_id)
         url = await storage.presigned_get_url(
-            key=row.fixture_key if agent is None else _artifact_key(agent.agent_id),
+            key=key,
             expires_in=900,
         )
         return L2CanaryClaimResponse(
@@ -1033,8 +1035,10 @@ async def complete_l2_report_canary(
         ):
             raise HTTPException(status_code=409, detail="canary lease expired")
         if row.source_kind == "canonical_starter_fixture":
-            if not _fixture_attestation_valid(row) or not await _fixture_object_matches(
-                storage
+            if (
+                storage is None
+                or not _fixture_attestation_valid(row)
+                or not await _fixture_object_matches(storage)
             ):
                 raise HTTPException(409, "fixture source changed")
         else:

@@ -1482,7 +1482,8 @@ class BuildGate:
                         summary="policy-only rescreen could not start source review",
                         detail="screener error: source review was not initialized",
                     )
-                review_task = asyncio.create_task(review_factory())
+                source_review_task = asyncio.create_task(review_factory())
+                review_task = source_review_task
 
                 async def unavailable_challenge(
                     _challenge_id: str,
@@ -1670,7 +1671,7 @@ class BuildGate:
                 async def source_fixture_review():  # type: ignore[no-untyped-def]
                     nonlocal in_policy_phase
                     in_policy_phase = True
-                    return await review_task
+                    return await source_review_task
 
                 context = PolicyContext(
                     agent_id=agent_id,

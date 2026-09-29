@@ -202,6 +202,7 @@ paths = [
   "apps/platform/docker/**",
   "apps/platform/docs/**",
   "apps/platform/scripts/**",
+  "scripts/package_canonical_starter_control.py",
   "apps/platform/.env.example",
   "apps/platform/.gitignore",
   "apps/platform/.gitleaks.toml",

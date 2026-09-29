@@ -23,7 +23,7 @@ from ditto_screener.review_settings import bootstrap_review_settings
 from ditto_screening_protocol import ScoredRuntimeEvidenceLease
 
 
-def test_public_fixture_certificate_needs_both_reviews_and_same_built_image() -> None:
+def test_public_fixture_certificate_records_independent_built_image() -> None:
     image = "sha256:" + "a" * 64
     claim = SimpleNamespace(
         canary_id=uuid4(),
@@ -67,6 +67,123 @@ def test_public_fixture_certificate_needs_both_reviews_and_same_built_image() ->
     )
     assert changed["control_result"] == "certificate"
     assert changed["built_image_digest"] != image
+
+
+@pytest.mark.asyncio
+async def test_public_fixture_claim_uses_isolated_source_build_without_verdict(
+    make_config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config()
+    settings = bootstrap_review_settings(config)
+    canary_id, agent_id, attempt_id = uuid4(), uuid4(), uuid4()
+    archive_sha = "b" * 64
+    image = "sha256:" + "a" * 64
+    revision = "a" * 40
+    keys = ("SAFE_KEY",)
+    packet = ScoredRuntimeEvidenceLease(
+        attempt_id=attempt_id,
+        artifact_sha256=archive_sha,
+        policy_version=13,
+        bench_version=13,
+        scorer_source_revision=revision,
+        release_descriptor_digest="sha256:" + "c" * 64,
+        scorer_image_digest="sha256:" + "d" * 64,
+        scorer_env_sha256=hashlib.sha256(
+            ("scored-runtime-env-v1\n13\n" + revision + "\n" + "\n".join(keys)).encode()
+        ).hexdigest(),
+        injected_keys=keys,
+        validator_count=3,
+        observed_at=int(datetime.now(UTC).timestamp()),
+    )
+    claim = {
+        "canary_id": str(canary_id),
+        "agent_id": str(agent_id),
+        "source_attempt_id": str(attempt_id),
+        "artifact_sha256": archive_sha,
+        "bench_version": 13,
+        "policy_version": 13,
+        "run_mode": "source_only",
+        "source_kind": "canonical_starter_fixture",
+        "source_attestation": {"archive_sha256": archive_sha},
+        "miner_hotkey": "operator-source-fixture",
+        "lease_token": "token",
+        "lease_expires_at": (datetime.now(UTC) + timedelta(minutes=100)).isoformat(),
+        "download_url": "https://example.test/fixture",
+        "scored_runtime_evidence": packet.model_dump(mode="json"),
+    }
+    completions = []
+
+    class Platform:
+        async def claim_l2_report_canary(self, **_kwargs):
+            return claim
+
+        async def complete_l2_report_canary(self, *_args, **kwargs):
+            completions.append(kwargs)
+
+        async def submit_result(self, *_args, **_kwargs):
+            raise AssertionError("fixture posted an authoritative verdict")
+
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="low",
+        finding_digest=None,
+        categories=(),
+        clearance_certified=True,
+    )
+
+    class Gate:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def screen(self, **kwargs):
+            assert kwargs["source_only_build"] is True
+            assert kwargs["execution_namespace"] == canary_id
+            assert kwargs["policy_only"] is False
+            assert kwargs.get("publish_image") is None
+            assert kwargs.get("publish_held_image") is None
+            assert kwargs.get("record_runtime_verification") is None
+            kwargs["record_built_image"](image)
+            return core_decision(
+                ScreeningOutcome.PASS,
+                code="source-clear",
+                summary="source-only clear",
+                detail="source-only clear",
+                policy_version=13,
+            )
+
+        def pop_shadow_review(self, _attempt_id):
+            return L2RunResult(
+                observation=observation,
+                analyzed_files=(),
+                causal_path=(),
+                tools=(),
+                usage=L2Usage(),
+                cache_hit=False,
+            )
+
+        def pop_preview_l1_review(self, _attempt_id):
+            return observation
+
+    monkeypatch.setattr(l2_report_canary, "BuildGate", Gate)
+    monkeypatch.setattr(
+        l2_report_canary, "load_policy_engine", lambda *_a, **_kw: object()
+    )
+    assert await l2_report_canary.consume(
+        config=config,
+        platform=Platform(),
+        primary_gate=SimpleNamespace(_client=object(), _journal=object()),
+        settings=settings,
+        instance_id="fixture-worker-1",
+    )
+    assert len(completions) == 1
+    assert completions[0]["status"] == "succeeded"
+    report = completions[0]["report"]
+    assert report["authority"] == "none"
+    assert report["source_kind"] == "canonical_starter_fixture"
+    assert report["source_attestation"] == claim["source_attestation"]
+    assert report["built_image_digest"] == image
+    assert report["control_result"] == "certificate"
+    assert report["challenge_status"] == "not_run"
 
 
 @pytest.mark.asyncio
