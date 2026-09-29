@@ -591,7 +591,7 @@ mod tool_exec_tests {
             .lock()
             .expect("blocked calls lock");
         assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].name, "set_theme");
+        assert_eq!(blocked[0].name, "search_web");
         assert_eq!(blocked[0].args, json!({"theme": "dark"}));
         assert_eq!(blocked[0].state, "blocked_before_execution");
     }
