@@ -1172,6 +1172,8 @@ async def test_withdrawal_preview_rejects_policy_revision_change(
     app.state.emission_eligibility.invalidate()
     refused = await _execute(client, leader, body, preview.json()["preview_token"])
     assert refused.status_code == 409, refused.text
+    assert "emission eligibility policy changed" in refused.text
+    assert "board changed" not in refused.text
     async with session_maker() as read_session:
         review = await read_session.scalar(
             select(AthReview).where(AthReview.agent_id == leader)
