@@ -8547,6 +8547,39 @@ class TestQuarantineAdmin:
         assert wrong_owner.status_code == 404
         assert missing_actor.status_code == 422
 
+        inconclusive_audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-model-inconclusive",
+            prompt_revision="l2-v13",
+            max_steps=256,
+            steps_used=7,
+            model_disposition="inconclusive",
+            resolution_basis="insufficient_static_evidence",
+            dossier_complete=False,
+            model_categories=["benchmark_emulation"],
+            model_inconclusive_invariants=["i5_production_engine"],
+            model_evidence_count=1,
+            model_causal_role_count=2,
+        )
+        async with session_maker() as session, session.begin():
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            assert quarantine is not None
+            quarantine.review_audit = inconclusive_audit.model_dump(mode="json")
+            quarantine.review_audit_digest = inconclusive_audit.canonical_digest()
+        updated = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/attempts/"
+            f"{attempt_id}/failure-diagnostic",
+            headers=headers,
+        )
+        assert updated.status_code == 200
+        assert updated.json()["l2_review_diagnostic"] == inconclusive_audit.model_dump(
+            mode="json"
+        )
+
     async def test_lists_text_free_l4_outcomes_with_honest_missing_success_trace(
         self,
         app: FastAPI,
