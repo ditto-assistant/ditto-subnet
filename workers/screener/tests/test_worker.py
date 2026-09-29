@@ -20,6 +20,7 @@ from ditto_screener.errors import PlatformError
 from ditto_screener.gate import BuiltImageArtifact, LeaseDeadline
 from ditto_screener.heartbeat import (
     DockerHealth,
+    HostSpecs,
     ReviewSettingsStatus,
     ScreenerHeartbeatResponse,
 )
@@ -32,6 +33,7 @@ from ditto_screener.policy import (
     ScreeningOutcome,
     SourceReviewObservation,
     core_decision,
+    is_held_source_review,
 )
 from ditto_screener.worker import ScreenerWorker, _verdict_reason_code
 from ditto_screening_protocol import (
@@ -154,14 +156,7 @@ class _FakeGate:
                     image_ref=f"ditto-screen/{agent_id}:latest",
                 )
             )
-        if (
-            self.result.outcome == ScreeningOutcome.QUARANTINE
-            and publish_held_image is not None
-            and any(
-                item.code == "adjudicated-source-review-escalate"
-                for item in self.result.evidence
-            )
-        ):
+        if publish_held_image is not None and is_held_source_review(self.result):
             await publish_held_image(
                 BuiltImageArtifact(
                     path="/tmp/fake-held-image.tar",
@@ -189,6 +184,7 @@ class _FakePlatform:
         self.heartbeat_error: Exception | None = None
         self.artifact_error: Exception | None = None
         self.heartbeat_lease_deadline: datetime | None = None
+        self.heartbeat_fixture_supported = False
         self.artifact_calls: list[tuple[UUID, UUID | None]] = []
         self.image_uploads: list[dict[str, Any]] = []
         self.verification_receipts: list[dict[str, Any]] = []
@@ -212,6 +208,7 @@ class _FakePlatform:
             accepted=True,
             seen_at=datetime.now(UTC),
             lease_deadline=self.heartbeat_lease_deadline,
+            source_fixture_v1_heartbeat_supported=self.heartbeat_fixture_supported,
         )
 
     async def submit_shadow_review(self, agent_id: UUID, request: Any) -> Any:
@@ -322,6 +319,37 @@ async def test_configured_instance_id_distinguishes_local_worker_heartbeat(
     await worker._report_heartbeat("polling", force=True)
 
     assert platform.heartbeats[-1].instance_id == "subnet-screener-1-worker-2"
+
+
+async def test_fixture_heartbeat_capability_waits_for_platform_ack(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    worker = _worker(
+        make_config(node_id="subnet-screener-1"),
+        platform,
+        _FakeGate(_decision(ScreeningOutcome.PASS)),
+        host_specs_probe=lambda: HostSpecs(
+            cpu_count=4,
+            memory_total_mib=8000,
+            disk_total_gib=80,
+            architecture="x86_64",
+        ),
+    )
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 7
+    assert platform.heartbeats[-1].release.source_fixture_v1 is False
+    platform.heartbeat_fixture_supported = True
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 7
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 8
+    assert platform.heartbeats[-1].release.source_fixture_v1 is True
+    platform.heartbeat_error = RuntimeError("rolling old Platform")
+    await worker._report_heartbeat("polling", force=True)
+    platform.heartbeat_error = None
+    await worker._report_heartbeat("polling", force=True)
+    assert platform.heartbeats[-1].protocol_version == 7
 
 
 def test_legacy_node_instance_id_derives_the_systemd_worker_index(
@@ -806,17 +834,35 @@ async def test_v13_source_hold_uploads_image_evidence_without_passing(
 ) -> None:
     agent = uuid4()
     platform = _FakePlatform([])
-    decision = ScreeningDecision(
-        outcome=ScreeningOutcome.QUARANTINE,
-        detail="source review incomplete",
-        manifest_digest="ab" * 32,
-        evidence=(
-            PolicyEvidence(
-                "adjudication", "adjudicated-source-review-escalate", "held"
-            ),
+    # A court refusal carrying an L1/L2 finding, as the real policy emits it.
+    finding = SourceReviewFinding(
+        artifact_sha256="de" * 32,
+        prompt_revision="source-review-v2",
+        risk_level="high",
+        confidence=0.97,
+        categories=["cross_user_access"],
+        summary="Unverified cross-user lead held for the court.",
+    )
+    decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=finding.canonical_digest(),
+            categories=("cross_user_access",),
+            failure_disposition="inconclusive",
+            finding=finding.model_dump(mode="json"),
+            adjudication=SourceReviewAdjudication(
+                decision="escalate",
+                reason="the court timed out before a verified finding",
+                escalation_code="adjudicator-failed",
+                model="z-ai/glm-5.3-flash",
+                prompt_revision="adjudicator-v7-policy-v13",
+            ).model_dump(mode="json"),
         ),
         policy_version=13,
     )
+    assert decision.outcome == ScreeningOutcome.QUARANTINE
+    assert decision.finding is not None
     worker = _worker(make_config(), platform, _FakeGate(decision))
 
     await worker._screen_one(_item(agent), policy_version=13)

@@ -2969,7 +2969,11 @@ def _heartbeat_signing_message(payload: ScreenerHeartbeatRequest) -> bytes:
         if payload.protocol_version >= 6:
             fields.append(host_specs_signing_token(payload.host_specs))
         if payload.protocol_version >= 7:
-            fields.append(fleet_release_signing_token(payload.release))
+            fields.append(
+                fleet_release_signing_token(
+                    payload.release, protocol_version=payload.protocol_version
+                )
+            )
         fields.append(str(payload.timestamp))
         return ("ditto-screener-heartbeat:v4:" + ":".join(fields)).encode()
     if payload.protocol_version >= 3:
@@ -3190,7 +3194,7 @@ async def heartbeat(
                 else None
             ),
             release=(
-                request_body.release.model_dump(mode="json")
+                request_body.release.model_dump(mode="json", exclude_defaults=True)
                 if request_body.release is not None
                 else None
             ),
@@ -3276,6 +3280,7 @@ async def heartbeat(
         accepted=accepted,
         seen_at=seen_at,
         lease_deadline=renewed_lease_deadline,
+        source_fixture_v1_heartbeat_supported=True,
     )
 
 

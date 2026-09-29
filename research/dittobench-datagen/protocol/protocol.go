@@ -510,7 +510,13 @@ type RunRequest struct {
 	// omitted for v2-v6 so their historical harness wire request stays frozen.
 	BenchVersion int    `json:"bench_version,omitempty"`
 	ToolEndpoint string `json:"tool_endpoint,omitempty"`
-	UserID       string `json:"user_id,omitempty"`
+	// ToolEffectProtocol is an additive endpoint capability. Empty means the
+	// historical result/error wire with no idempotency guarantee. A validator
+	// may advertise ToolEffectProtocolV1 only after its broker and endpoint both
+	// implement operation-bound receipts; merely accepting the fields is not an
+	// advertisement.
+	ToolEffectProtocol string `json:"tool_effect_protocol,omitempty"`
+	UserID             string `json:"user_id,omitempty"`
 	// InferenceBaseURL is a validator-minted, case-scoped relay URL for this
 	// case. Below v13, model calls through it are attributed to the case even
 	// while several /run overlap; it carries attribution only and opens no
@@ -539,7 +545,20 @@ type ToolExecRequest struct {
 	Name   string          `json:"name"`
 	Args   json.RawMessage `json:"args,omitempty"`
 	Hop    int             `json:"hop,omitempty"`
+	// OperationID is a caller-minted effect identity for the opt-in V1 path.
+	// Reuse it only to recover the same uncertain operation, never for a new
+	// separately authorized effect.
+	OperationID    string `json:"operation_id,omitempty"`
+	EffectProtocol string `json:"effect_protocol,omitempty"`
 }
+
+const ToolEffectProtocolV1 = "operation-receipt-v1"
+
+const (
+	ToolEffectApplied    = "applied"
+	ToolEffectNotApplied = "not_applied"
+	ToolEffectUnknown    = "unknown"
+)
 
 // ToolExecResponse is the mock result the validator returns for a ToolExecRequest.
 // Result is the tool's output the harness should reason over (a web snippet, a
@@ -549,6 +568,13 @@ type ToolExecRequest struct {
 type ToolExecResponse struct {
 	Result string `json:"result"`
 	Error  string `json:"error,omitempty"`
+	// These fields are present only on the opt-in V1 endpoint path. Applied
+	// means the endpoint committed the effect and cached this operation's
+	// receipt; not_applied means it did not. A transport failure has no receipt
+	// and must be treated as delivery-unknown by the caller.
+	OperationID string `json:"operation_id,omitempty"`
+	EffectState string `json:"effect_state,omitempty"`
+	Replayed    bool   `json:"replayed,omitempty"`
 }
 
 // ObservedToolCall is a tool call the harness made.

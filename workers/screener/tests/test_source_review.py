@@ -3855,7 +3855,7 @@ def test_written_policy_v13_forbids_every_non_decisive_admission() -> None:
         "source-review-inconclusive",
         "source-review-invalid-risk",
         "source-review-inconsistent-verdict",
-        "adjudicated-source-review-escalate",
+        "source-review-adjudication-refused",
         "behavioral-oracle-inconclusive",
         "challenge-inconclusive",
         "source-review-unavailable",

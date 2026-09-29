@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
 
@@ -12,6 +13,7 @@ import pytest
 from ditto_screener.policy import (
     _ORACLE_SYSTEM_PROMPT,
     CORE_ONLY_MANIFEST,
+    HELD_SOURCE_REVIEW_CODES,
     AgenticSourceReviewModule,
     BehavioralChallengePackModule,
     BehavioralOracleModule,
@@ -29,6 +31,7 @@ from ditto_screener.policy import (
     SourceReviewObservation,
     TimingRelayRiskModule,
     core_decision,
+    is_held_source_review,
     load_policy_engine,
 )
 from ditto_screening_protocol import (
@@ -1834,3 +1837,83 @@ def test_refused_court_holds_for_an_operator_instead_of_admitting(
         "source-review-adjudicated",
         "source-review-adjudication-refused",
     ]
+
+
+@pytest.mark.parametrize(
+    ("policy_version", "court_decision", "with_finding", "advisory", "held"),
+    [
+        (13, "reject", False, False, True),
+        (13, "reject", True, False, True),
+        (13, "escalate", False, False, True),
+        (13, "escalate", True, False, True),
+        (13, "clear", False, False, False),
+        (13, "clear", False, True, False),
+        (13, None, True, False, False),
+        (12, "reject", True, False, False),
+        (12, "escalate", False, False, False),
+    ],
+)
+async def test_held_source_review_keys_on_emitted_court_evidence(
+    policy_version: int,
+    court_decision: str | None,
+    with_finding: bool,
+    advisory: bool,
+    held: bool,
+) -> None:
+    """Only a v13 court reject or refusal hold keeps its built image."""
+    finding = _finding_payload("high") if with_finding else None
+    adjudication = (
+        None
+        if court_decision is None
+        else {
+            "decision": court_decision,
+            "reason": "final court decision",
+            "model": "z-ai/glm-5.3-flash",
+            "prompt_revision": "adjudicator-v3-policy-v13",
+            "notes_considered": 1,
+            "escalation_code": (
+                "adjudicator-failed" if court_decision == "escalate" else None
+            ),
+        }
+    )
+    observation = SourceReviewObservation(
+        ok=court_decision is None,
+        risk_level="high" if court_decision is None else None,
+        finding_digest=(
+            None
+            if finding is None
+            else SourceReviewFinding.model_validate(finding).canonical_digest()
+        ),
+        categories=("provider_bypass",) if court_decision is None else (),
+        failure_disposition=None if court_decision is None else "inconclusive",
+        finding=finding,
+        adjudication=adjudication,
+    )
+
+    async def challenge(*_):  # type: ignore[no-untyped-def]
+        raise AssertionError("no behavioral pack is configured")
+
+    async def review() -> SourceReviewObservation:
+        return observation
+
+    decision = await load_policy_engine(None).evaluate(
+        _context(challenge, review, policy_version=policy_version)
+    )
+    if advisory:
+        # The gate's image-binding advisory keeps the court clear attached.
+        decision = replace(
+            decision,
+            outcome=ScreeningOutcome.QUARANTINE,
+            evidence=(
+                *decision.evidence,
+                PolicyEvidence("stable-core", "image-binding-heuristic", "opaque"),
+            ),
+        )
+
+    assert decision.outcome == ScreeningOutcome.QUARANTINE
+    assert decision.adjudication == adjudication
+    assert is_held_source_review(decision) is held
+    if court_decision is not None:
+        # Every code the module emits on an adjudicated hold is recognised.
+        assert decision.evidence[0].code in HELD_SOURCE_REVIEW_CODES
+    assert "adjudicated-source-review-escalate" not in HELD_SOURCE_REVIEW_CODES

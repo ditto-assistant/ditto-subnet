@@ -615,6 +615,30 @@ def _court_unavailable(adjudication: Mapping[str, object]) -> bool:
     return adjudication.get("escalation_code") == "adjudicator-unavailable"
 
 
+_ADJUDICATED_CODE = "source-review-adjudicated"
+_ADJUDICATION_REFUSED_CODE = "source-review-adjudication-refused"
+# Worker evidence on a court-adjudicated hold. Platform derives its stored
+# ``adjudicated-source-review-*`` reason_code later; the worker never emits it.
+HELD_SOURCE_REVIEW_CODES = frozenset({_ADJUDICATED_CODE, _ADJUDICATION_REFUSED_CODE})
+
+
+def is_held_source_review(decision: ScreeningDecision) -> bool:
+    """True for a v13 court reject or refusal hold that keeps its built image.
+
+    The image is supplemental evidence bound to the attempt, never to the
+    agent. A court ``clear`` is excluded: it only stays held pending v13
+    verification or on an image-provenance warning, where the image is the
+    thing in doubt.
+    """
+    return (
+        decision.policy_version == 13
+        and decision.outcome == ScreeningOutcome.QUARANTINE
+        and decision.adjudication is not None
+        and decision.adjudication.get("decision") != "clear"
+        and any(item.code in HELD_SOURCE_REVIEW_CODES for item in decision.evidence)
+    )
+
+
 def _refusal_evidence(
     module_id: str, adjudication: Mapping[str, object]
 ) -> PolicyEvidence:
@@ -622,7 +646,7 @@ def _refusal_evidence(
     code = str(adjudication.get("escalation_code") or "court-refused")
     return PolicyEvidence(
         module_id,
-        "source-review-adjudication-refused",
+        _ADJUDICATION_REFUSED_CODE,
         f"automated adjudication refused ({code}); held for operator review",
     )
 
@@ -660,7 +684,7 @@ class AgenticSourceReviewModule(_BaseModule):
             evidence = (
                 PolicyEvidence(
                     self.module_id,
-                    "source-review-adjudicated",
+                    _ADJUDICATED_CODE,
                     "final source-review adjudication completed",
                 ),
             )
@@ -1495,7 +1519,7 @@ class PolicyEngine:
             evidence: tuple[PolicyEvidence, ...] = (
                 PolicyEvidence(
                     "agentic-preexecution-review",
-                    "source-review-adjudicated",
+                    _ADJUDICATED_CODE,
                     "final source-review adjudication completed",
                 ),
             )
@@ -1920,6 +1944,7 @@ def _is_sha256(value: str) -> bool:
 __all__ = [
     "CORE_ONLY_MANIFEST",
     "DEFAULT_V8_MANIFEST",
+    "HELD_SOURCE_REVIEW_CODES",
     "ChallengeObservation",
     "PolicyContext",
     "PolicyEngine",
@@ -1930,5 +1955,6 @@ __all__ = [
     "ScreeningDecision",
     "ScreeningOutcome",
     "core_decision",
+    "is_held_source_review",
     "load_policy_engine",
 ]

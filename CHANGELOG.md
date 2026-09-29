@@ -2,6 +2,42 @@
 
 <!-- version list -->
 
+## v0.329.0 (2026-09-29)
+
+### Features
+
+- **backroom**: Stage managed operator proof binding
+  ([#2532](https://github.com/ditto-assistant/ditto-subnet/pull/2532),
+  [`1e1d04d`](https://github.com/ditto-assistant/ditto-subnet/commit/1e1d04d811e3c52b82cf8ffd3ce30c8cc1dcfcf4))
+
+
+## v0.328.0 (2026-09-29)
+
+### Features
+
+- Add report-only canonical starter source control
+  ([#2525](https://github.com/ditto-assistant/ditto-subnet/pull/2525),
+  [`c7767c9`](https://github.com/ditto-assistant/ditto-subnet/commit/c7767c912914d423a315a97d1dbca82f3eef5524))
+
+
+## v0.327.0 (2026-09-29)
+
+### Features
+
+- **v13**: Bind tool receipt retries to model emissions
+  ([#2531](https://github.com/ditto-assistant/ditto-subnet/pull/2531),
+  [`f3a9f9b`](https://github.com/ditto-assistant/ditto-subnet/commit/f3a9f9b7620eeb2111d55807c2f12ecbaf21eaf7))
+
+
+## v0.326.0 (2026-09-29)
+
+### Features
+
+- **bench**: Add opt-in tool effect receipts
+  ([#2530](https://github.com/ditto-assistant/ditto-subnet/pull/2530),
+  [`9071006`](https://github.com/ditto-assistant/ditto-subnet/commit/9071006739c9ccba16df352f734255b1bea4c248))
+
+
 ## v0.325.3 (2026-09-28)
 
 ### Bug Fixes
