@@ -272,7 +272,9 @@ async def test_mixed_queue_reports_every_state_and_breaker(
     # Unrecovered breakers (open, half-open) sort before closed ones.
     phases = [row["phase"] != "closed" for row in body["breakers"]]
     assert phases == sorted(phases, reverse=True)
-    retry_times = [row["next_retry_at"] for row in body["agents"]]
+    retry_times = [
+        datetime.fromisoformat(row["next_retry_at"]) for row in body["agents"]
+    ]
     assert retry_times == sorted(retry_times)
     # No failure text, source, or miner identity leaks into the view.
     assert {"miner_hotkey", "public_reason", "error"}.isdisjoint(body["agents"][0])
