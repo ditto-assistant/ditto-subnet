@@ -174,6 +174,11 @@ impl Tool for WireTool {
                                 continue;
                             }
                             let response_body = resp.text().await.unwrap_or_default();
+                            if ctx.effect_receipts_v1 {
+                                return Ok(json!({
+                                    "error": format!("tool effect delivery unknown: endpoint returned {status}: {response_body}")
+                                }));
+                            }
                             return Ok(json!({
                                 "error": format!("tool endpoint returned {status}: {response_body}")
                             }));
@@ -214,6 +219,11 @@ impl Tool for WireTool {
                                 if ctx.effect_receipts_v1 && attempt == 0 {
                                     continue;
                                 }
+                                if ctx.effect_receipts_v1 {
+                                    return Ok(json!({
+                                        "error": format!("tool effect delivery unknown: decode tool result: {err}")
+                                    }));
+                                }
                                 return Ok(
                                     json!({ "error": format!("decode tool result: {err}") }),
                                 );
@@ -223,6 +233,11 @@ impl Tool for WireTool {
                     Err(err) => {
                         if ctx.effect_receipts_v1 && attempt == 0 {
                             continue;
+                        }
+                        if ctx.effect_receipts_v1 {
+                            return Ok(json!({
+                                "error": format!("tool effect delivery unknown: endpoint unreachable: {err}")
+                            }));
                         }
                         return Ok(json!({ "error": format!("tool endpoint unreachable: {err}") }));
                     }
@@ -351,6 +366,14 @@ mod tool_exec_tests {
         })
     }
 
+    async fn effect_applied_but_receipt_unavailable(
+        State(calls): State<Arc<Mutex<Vec<protocol::ToolExecRequest>>>>,
+        Json(call): Json<protocol::ToolExecRequest>,
+    ) -> StatusCode {
+        calls.lock().expect("lock calls").push(call);
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+
     fn wire_tool(exec: Arc<ToolExecCtx>) -> WireTool {
         WireTool {
             def: ToolDefinition {
@@ -450,6 +473,32 @@ mod tool_exec_tests {
 
         assert_eq!(result["error"], "tool receipt operation mismatch");
         assert_eq!(calls.lock().expect("lock calls").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn exhausted_receipt_retry_reports_unknown_delivery() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(effect_applied_but_receipt_unavailable))
+            .with_state(Arc::clone(&calls));
+        let (endpoint, task) = serve(app).await;
+        let mut ctx = exec_context(endpoint);
+        Arc::get_mut(&mut ctx)
+            .expect("unshared context")
+            .effect_receipts_v1 = true;
+        let result = wire_tool(ctx)
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("execute tool");
+        task.abort();
+
+        assert!(result["error"]
+            .as_str()
+            .expect("tool error")
+            .contains("tool effect delivery unknown"));
+        let calls = calls.lock().expect("lock calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0], calls[1]);
     }
 }
 
