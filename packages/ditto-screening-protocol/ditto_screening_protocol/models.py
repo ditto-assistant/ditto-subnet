@@ -1150,6 +1150,16 @@ class ScreenReviewAudit(BaseModel):
     # absent fields out of the digest so older signed audits still validate.
     model_disposition: Literal["inconclusive"] | None = None
     resolution_basis: Literal["insufficient_static_evidence"] | None = None
+    dossier_complete: bool | None = None
+    model_categories: Annotated[
+        list[Annotated[str, Field(pattern=r"^[a-z][a-z_]{0,63}$")]],
+        Field(max_length=8),
+    ] | None = None
+    model_inconclusive_invariants: Annotated[
+        list[SourceReviewInvariant], Field(max_length=8)
+    ] | None = None
+    model_evidence_count: Annotated[int | None, Field(ge=0, le=16)] = None
+    model_causal_role_count: Annotated[int | None, Field(ge=0, le=16)] = None
     model_steps_observed: Annotated[int | None, Field(ge=0, le=10_000)] = None
     tool_calls_observed: Annotated[int | None, Field(ge=0, le=10_000)] = None
     budget_stop_reason: (
@@ -1192,6 +1202,11 @@ class ScreenReviewAudit(BaseModel):
         diagnostic_fields = {
             "model_disposition",
             "resolution_basis",
+            "dossier_complete",
+            "model_categories",
+            "model_inconclusive_invariants",
+            "model_evidence_count",
+            "model_causal_role_count",
             "model_steps_observed",
             "tool_calls_observed",
             "budget_stop_reason",

@@ -3094,6 +3094,34 @@ class TerraSolSourceReviewAgent:
                 # The model's bounded disposition is operational evidence, not
                 # a policy verdict. Carry only fixed labels and observed counts
                 # over the signed review channel; source and prompts stay local.
+                model_audit = result.observation.inconclusive_model_audit
+                model_categories = None
+                model_inconclusive_invariants = None
+                model_evidence_count = None
+                model_causal_role_count = None
+                if isinstance(model_audit, Mapping):
+                    categories = model_audit.get("categories")
+                    decisions = model_audit.get("invariants")
+                    evidence = model_audit.get("evidence")
+                    causal_path = model_audit.get("causal_path")
+                    if isinstance(categories, list):
+                        model_categories = sorted(
+                            {item for item in categories if isinstance(item, str)}
+                        )
+                    if isinstance(decisions, list):
+                        model_inconclusive_invariants = sorted(
+                            {
+                                decision["invariant"]
+                                for decision in decisions
+                                if isinstance(decision, Mapping)
+                                and decision.get("disposition") == "inconclusive"
+                                and isinstance(decision.get("invariant"), str)
+                            }
+                        )
+                    if isinstance(evidence, list):
+                        model_evidence_count = len(evidence)
+                    if isinstance(causal_path, list):
+                        model_causal_role_count = len(causal_path)
                 audit = ScreenReviewAudit(
                     stage="l2",
                     reason_code="l2-model-inconclusive",
@@ -3103,6 +3131,11 @@ class TerraSolSourceReviewAgent:
                     steps_used=min(len(result.response_models), self._max_steps),
                     model_disposition="inconclusive",
                     resolution_basis="insufficient_static_evidence",
+                    dossier_complete=result.dossier_complete,
+                    model_categories=model_categories,
+                    model_inconclusive_invariants=model_inconclusive_invariants,
+                    model_evidence_count=model_evidence_count,
+                    model_causal_role_count=model_causal_role_count,
                     model_steps_observed=len(result.response_models),
                     tool_calls_observed=len(result.tools),
                     budget_stop_reason="none",

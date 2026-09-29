@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.330.7 (2026-09-29)
+
+### Bug Fixes
+
+- **screener**: Sign bounded L2 inconclusive evidence labels
+  ([#2569](https://github.com/ditto-assistant/ditto-subnet/pull/2569),
+  [`fc85dc3`](https://github.com/ditto-assistant/ditto-subnet/commit/fc85dc31d14addb949a68910e6142167044103ca))
+
+
 ## v0.330.6 (2026-09-29)
 
 ### Bug Fixes

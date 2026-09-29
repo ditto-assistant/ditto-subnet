@@ -3300,7 +3300,20 @@ async def test_terminal_l2_model_inconclusive_carries_bounded_signed_audit(
 
     async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
         return L2RunResult(
-            observation=l2_review._failure("l2-model-inconclusive", "inconclusive"),
+            observation=replace(
+                l2_review._failure("l2-model-inconclusive", "inconclusive"),
+                inconclusive_model_audit={
+                    "categories": ["benchmark_emulation"],
+                    "evidence": [{"path": "src/main.rs"}],
+                    "causal_path": [{"role": "decision"}],
+                    "invariants": [
+                        {
+                            "invariant": "i5_production_engine",
+                            "disposition": "inconclusive",
+                        }
+                    ],
+                },
+            ),
             analyzed_files=(),
             causal_path=(),
             tools=("read_file", "search", "submit_review"),
@@ -3325,6 +3338,13 @@ async def test_terminal_l2_model_inconclusive_carries_bounded_signed_audit(
     assert audit.model_steps_observed == 2
     assert audit.tool_calls_observed == 3
     assert audit.budget_stop_reason == "none"
+    assert audit.dossier_complete is True
+    assert audit.model_categories == ["benchmark_emulation"]
+    assert audit.model_inconclusive_invariants == [
+        SourceReviewInvariant.PRODUCTION_ENGINE
+    ]
+    assert audit.model_evidence_count == 1
+    assert audit.model_causal_role_count == 1
     assert "read_file" not in json.dumps(audit.model_dump(mode="json"))
 
 

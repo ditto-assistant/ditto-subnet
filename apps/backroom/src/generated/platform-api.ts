@@ -29659,6 +29659,8 @@ export interface components {
             cause_detail?: ("lease_unavailable" | "review_disabled") | null;
             /** Cost Usd Used */
             cost_usd_used?: number | null;
+            /** Dossier Complete */
+            dossier_complete?: boolean | null;
             /** Elapsed Ms */
             elapsed_ms?: number | null;
             /** Final Stage */
@@ -29679,8 +29681,16 @@ export interface components {
             max_read_bytes?: number | null;
             /** Max Steps */
             max_steps: number;
+            /** Model Categories */
+            model_categories?: string[] | null;
+            /** Model Causal Role Count */
+            model_causal_role_count?: number | null;
             /** Model Disposition */
             model_disposition?: "inconclusive" | null;
+            /** Model Evidence Count */
+            model_evidence_count?: number | null;
+            /** Model Inconclusive Invariants */
+            model_inconclusive_invariants?: components["schemas"]["SourceReviewInvariant"][] | null;
             /** Model Steps Observed */
             model_steps_observed?: number | null;
             /** Model Tool Failure Subcode */

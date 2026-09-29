@@ -2291,6 +2291,26 @@ describe('screen review audit schema', () => {
     expect(() => screenReviewAuditSchema.parse({ ...audit, output_tokens_used: 1_000_001 })).toThrow()
   })
 
+  it('preserves bounded inconclusive choices without accepting source text', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l2-model-inconclusive', prompt_revision: 'l2-v13',
+      max_steps: 256, steps_used: 7, dossier_complete: false,
+      model_categories: ['benchmark_emulation'],
+      model_inconclusive_invariants: ['i5_production_engine'],
+      model_evidence_count: 1, model_causal_role_count: 2,
+    }
+    expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_categories: ['src/secret.py'],
+    })).toThrow()
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_inconclusive_invariants: ['private finding'],
+    })).toThrow()
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_evidence_count: 17,
+    })).toThrow()
+  })
+
   it('preserves exact V13 preflight cause and budgets in Backroom diagnostics', () => {
     const audit = {
       stage: 'l2', reason_code: 'l2-runtime-evidence-unavailable', prompt_revision: 'l2-v13',
