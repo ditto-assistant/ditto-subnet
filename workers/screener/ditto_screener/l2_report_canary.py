@@ -36,6 +36,8 @@ class L2CanaryClaim(BaseModel):
     bench_version: int
     policy_version: int
     run_mode: Literal["source_only", "full_runtime"] = "source_only"
+    source_kind: Literal["submission", "canonical_starter_fixture"] = "submission"
+    source_attestation: dict | None = None
     miner_hotkey: str
     lease_token: str
     lease_expires_at: datetime
@@ -46,7 +48,7 @@ class L2CanaryClaim(BaseModel):
 def _identity_report(
     claim: L2CanaryClaim, settings: EffectiveReviewSettings
 ) -> dict[str, Any]:
-    return {
+    report = {
         "kind": "l2_report_canary_v1",
         "authority": "none",
         "review_mode": "enforce_preview",
@@ -64,6 +66,11 @@ def _identity_report(
             mode="json"
         ),
     }
+    if getattr(claim, "source_kind", "submission") == "canonical_starter_fixture":
+        report["source_kind"] = "canonical_starter_fixture"
+        report["source_attestation"] = claim.source_attestation
+        report["control_result"] = "inconclusive"
+    return report
 
 
 def _report(
@@ -73,6 +80,7 @@ def _report(
     l2_result: Any | None,
     settings: EffectiveReviewSettings,
     l1_observation: Any | None = None,
+    built_image_digest: str | None = None,
 ) -> dict[str, Any]:
     report = _identity_report(claim, settings)
     if l1_observation is not None:
@@ -145,6 +153,18 @@ def _report(
         "analyst_finding": l2_result.analyst_finding,
         "analyst_summary": l2_result.analyst_summary,
     }
+    if getattr(claim, "source_kind", "submission") == "canonical_starter_fixture":
+        report["built_image_digest"] = built_image_digest
+        if (
+            str(decision.outcome) == "pass"
+            and l1_observation is not None
+            and l1_observation.clearance_certified
+            and observation.clearance_certified
+            and built_image_digest is not None
+        ):
+            report["control_result"] = "certificate"
+        elif str(decision.outcome) in {"quarantine", "deterministic_reject"}:
+            report["control_result"] = "hold"
     return report
 
 
@@ -259,6 +279,12 @@ async def consume(
         # Both isolated modes need the exact L1 lead paired with the L2 audit.
         capture_enforce_result=True,
     )
+    built_image_digest: str | None = None
+
+    def record_built_image(digest: str) -> None:
+        nonlocal built_image_digest
+        built_image_digest = digest
+
     try:
         decision = await gate.screen(
             agent_id=claim.agent_id,
@@ -272,9 +298,17 @@ async def consume(
             scored_runtime_evidence=claim.scored_runtime_evidence,
             progress=progress,
             execution_namespace=(
-                claim.canary_id if claim.run_mode == "full_runtime" else None
+                claim.canary_id
+                if claim.run_mode == "full_runtime"
+                or claim.source_kind == "canonical_starter_fixture"
+                else None
             ),
-            policy_only=claim.run_mode == "source_only",
+            policy_only=(
+                claim.run_mode == "source_only"
+                and claim.source_kind != "canonical_starter_fixture"
+            ),
+            source_only_build=claim.source_kind == "canonical_starter_fixture",
+            record_built_image=record_built_image,
         )
         l2_result = gate.pop_shadow_review(claim.source_attempt_id)
         l1_observation = gate.pop_preview_l1_review(claim.source_attempt_id)
@@ -284,6 +318,7 @@ async def consume(
             l2_result=l2_result,
             settings=settings,
             l1_observation=l1_observation,
+            built_image_digest=built_image_digest,
         )
         status = "succeeded" if l2_result is not None else "incomplete"
         error_code = None if l2_result is not None else "l2-not-run"

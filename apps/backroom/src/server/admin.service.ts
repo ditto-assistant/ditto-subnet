@@ -348,6 +348,10 @@ import {
   l2ReportCanaryPreflightViewSchema,
   scheduleL2ReportCanaryInputSchema,
   l2ReportCanaryViewSchema,
+  canonicalStarterPreflightSchema,
+  registerCanonicalStarterInputSchema,
+  reviewCanonicalStarterInputSchema,
+  scheduleCanonicalStarterInputSchema,
   screenerPolicyManifestControlSchema,
   copyCourtControlSchema,
   applyCopyCourtSettingsInputSchema,
@@ -700,6 +704,53 @@ export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
       confirm_report_only: true,
     },
   })
+  return l2ReportCanaryViewSchema.parse(payload)
+}
+
+export async function fetchCanonicalStarterPreflight() {
+  const payload = await platformAdminRequest(
+    '/api/v1/admin/screener-l2-report-canaries/fixture/preflight',
+  )
+  return canonicalStarterPreflightSchema.parse(payload)
+}
+
+export async function registerCanonicalStarter(rawInput: unknown, actor: string) {
+  const input = registerCanonicalStarterInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    '/api/v1/admin/screener-l2-report-canaries/fixture/register',
+    {
+      method: 'POST', actor, operatorProof: true,
+      body: { request_id: input.requestId, target_node_id: input.targetNodeId, confirm_report_only: true },
+    },
+  )
+  return l2ReportCanaryViewSchema.parse(payload)
+}
+
+export async function reviewCanonicalStarter(rawInput: unknown, actor: string) {
+  const input = reviewCanonicalStarterInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/fixture/${input.canaryId}/review`,
+    {
+      method: 'POST', actor, operatorProof: true,
+      body: {
+        reviewer_evidence_sha256: input.reviewerEvidenceSha256,
+        reviewed_archive_sha256: input.reviewedArchiveSha256,
+        reviewed_dockerfile_sha256: input.reviewedDockerfileSha256,
+        built_image_digest: input.builtImageDigest,
+        reviewer_evidence_url: input.reviewerEvidenceUrl,
+        confirm_candidate_review: true,
+      },
+    },
+  )
+  return l2ReportCanaryViewSchema.parse(payload)
+}
+
+export async function scheduleCanonicalStarter(rawInput: unknown, actor: string) {
+  const input = scheduleCanonicalStarterInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/fixture/${input.canaryId}/schedule`,
+    { method: 'POST', actor, operatorProof: true, body: { confirm_report_only: true } },
+  )
   return l2ReportCanaryViewSchema.parse(payload)
 }
 

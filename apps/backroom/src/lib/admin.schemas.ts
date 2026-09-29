@@ -526,12 +526,14 @@ export const scheduleL2ReportCanaryInputSchema = z.object({
 export const l2ReportCanaryViewSchema = z.object({
   canary_id: z.string().uuid(),
   request_id: z.string().uuid(),
-  agent_id: z.string().uuid(),
-  source_attempt_id: z.string().uuid(),
+  agent_id: z.string().uuid().nullable(),
+  source_attempt_id: z.string().uuid().nullable(),
+  source_kind: z.enum(['submission', 'canonical_starter_fixture']).default('submission'),
+  fixture_key: z.string().nullable().optional(),
   artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
   target_node_id: z.string(),
-  expected_agent_status: z.string(),
-  expected_score_count: z.number().int().nonnegative(),
+  expected_agent_status: z.string().nullable(),
+  expected_score_count: z.number().int().nonnegative().nullable(),
   review_label: z.string(),
   run_mode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   source_attestation: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -542,6 +544,39 @@ export const l2ReportCanaryViewSchema = z.object({
   error_code: z.string().nullable(),
   created_at: z.string(),
   completed_at: z.string().nullable(),
+})
+
+export const canonicalStarterPreflightSchema = z.object({
+  release: z.literal('v0.325.3'),
+  release_commit: z.literal('7b297ae96488cfa4790b8b9d9b788cc82c7d0442'),
+  source_tree: z.literal('7c8044a1cc77e342b5f58a24fe31c9a86cc4fd6b'),
+  archive_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  archive_size_bytes: z.number().int().positive(),
+  fixture: l2ReportCanaryViewSchema.nullable(),
+  stored_object_matches: z.boolean(),
+  fixture_capable_worker_ready: z.boolean(),
+  can_schedule: z.boolean(),
+})
+
+export const registerCanonicalStarterInputSchema = z.object({
+  requestId: z.string().uuid(),
+  targetNodeId: z.string().min(1).max(63),
+  confirmation: z.literal('REGISTER PUBLIC STARTER SOURCE FIXTURE'),
+})
+
+export const reviewCanonicalStarterInputSchema = z.object({
+  canaryId: z.string().uuid(),
+  reviewerEvidenceSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  reviewedArchiveSha256: z.literal('6f0fb811e08558aab56f63dd13ea1d2e1462d85e711fd31b0362d0de5c611fef'),
+  reviewedDockerfileSha256: z.literal('d3a1a2a1e5d43b0465c28712457d95432942ac8f017fd10d538859a901a54641'),
+  builtImageDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+  reviewerEvidenceUrl: z.string().url().startsWith('https://github.com/ditto-assistant/ditto-subnet/'),
+  confirmation: z.literal('ATTEST PUBLIC STARTER SERVED PATH'),
+})
+
+export const scheduleCanonicalStarterInputSchema = z.object({
+  canaryId: z.string().uuid(),
+  confirmation: z.literal('QUEUE PUBLIC STARTER SOURCE CONTROL'),
 })
 
 export const screenerFanoutShadowReviewSchema = z.object({

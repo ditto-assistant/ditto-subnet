@@ -23,6 +23,52 @@ from ditto_screener.review_settings import bootstrap_review_settings
 from ditto_screening_protocol import ScoredRuntimeEvidenceLease
 
 
+def test_public_fixture_certificate_needs_both_reviews_and_same_built_image() -> None:
+    image = "sha256:" + "a" * 64
+    claim = SimpleNamespace(
+        canary_id=uuid4(),
+        agent_id=uuid4(),
+        source_attempt_id=uuid4(),
+        artifact_sha256="b" * 64,
+        policy_version=13,
+        run_mode="source_only",
+        source_kind="canonical_starter_fixture",
+        source_attestation={"built_image_digest": image},
+        scored_runtime_evidence=SimpleNamespace(model_dump=lambda **_: {}),
+    )
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="low",
+        finding_digest=None,
+        categories=(),
+        clearance_certified=True,
+    )
+    l2 = L2RunResult(
+        observation=observation,
+        analyzed_files=(),
+        causal_path=(),
+        tools=(),
+        usage=L2Usage(),
+        cache_hit=False,
+    )
+    inputs = {
+        "claim": claim,
+        "decision": SimpleNamespace(outcome="pass", evidence=()),
+        "l2_result": l2,
+        "l1_observation": observation,
+        "settings": SimpleNamespace(revision=1, checksum="c" * 64),
+    }
+    matched = l2_report_canary._report(**inputs, built_image_digest=image)
+    assert matched["authority"] == "none"
+    assert matched["control_result"] == "certificate"
+    assert matched["source_attestation"] == claim.source_attestation
+    changed = l2_report_canary._report(
+        **inputs, built_image_digest="sha256:" + "d" * 64
+    )
+    assert changed["control_result"] == "certificate"
+    assert changed["built_image_digest"] != image
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("run_mode", "lease_minutes"),

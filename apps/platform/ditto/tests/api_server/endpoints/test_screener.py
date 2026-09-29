@@ -703,6 +703,8 @@ def _heartbeat_payload(
                     "activated_at",
                 )
             )
+            if protocol_version >= 8:
+                release_token += ",1" if release.get("source_fixture_v1") else ",0"
         message = (
             "ditto-screener-heartbeat:v4:"
             f"{_SCREENER_HOTKEY}:0.4.2:{protocol_version}:"
@@ -3070,6 +3072,38 @@ class TestHeartbeat:
         payload["release"] = {"builtin_policy_version": SCREENING_POLICY_VERSION + 5}
         response = await client.post("/api/v1/screener/heartbeat", json=payload)
         assert response.status_code == 401, response.text
+
+    async def test_v8_fixture_capability_is_signed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        payload = _heartbeat_payload(
+            protocol_version=8,
+            instance_id="subnet-screener-1-worker-1",
+            review_settings=_V5_REVIEW_SETTINGS,
+            host_specs={
+                "cpu_count": 4,
+                "memory_total_mib": 8000,
+                "disk_total_gib": 80,
+                "architecture": "x86_64",
+            },
+            release={
+                "builtin_policy_version": SCREENING_POLICY_VERSION,
+                "source_fixture_v1": True,
+            },
+        )
+        accepted = await client.post("/api/v1/screener/heartbeat", json=payload)
+        assert accepted.status_code == 200, accepted.text
+        tampered = dict(payload)
+        tampered["release"] = {
+            "builtin_policy_version": SCREENING_POLICY_VERSION,
+            "source_fixture_v1": False,
+        }
+        refused = await client.post("/api/v1/screener/heartbeat", json=tampered)
+        assert refused.status_code == 401, refused.text
 
     async def test_v7_requires_the_release_it_announces(
         self,

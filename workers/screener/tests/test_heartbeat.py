@@ -459,4 +459,4 @@ def test_collect_fleet_release_never_fails_the_heartbeat(tmp_path) -> None:
         release_env_file=str(env),
         module_path="/srv/ditto/ditto_screener/heartbeat.py",
     )
-    assert release == FleetRelease(builtin_policy_version=12)
+    assert release == FleetRelease(builtin_policy_version=12, source_fixture_v1=True)

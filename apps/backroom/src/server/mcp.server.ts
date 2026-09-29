@@ -121,6 +121,9 @@ import {
   l2ReportCanaryLookupInputSchema,
   l2ReportCanaryPreflightInputSchema,
   scheduleL2ReportCanaryInputSchema,
+  registerCanonicalStarterInputSchema,
+  reviewCanonicalStarterInputSchema,
+  scheduleCanonicalStarterInputSchema,
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
   confirmationSeedAnchorsInputSchema,
@@ -286,6 +289,10 @@ import {
   fetchL2ReportCanary,
   fetchL2ReportCanaryPreflight,
   scheduleL2ReportCanary,
+  fetchCanonicalStarterPreflight,
+  registerCanonicalStarter,
+  reviewCanonicalStarter,
+  scheduleCanonicalStarter,
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
   fetchConfirmationSeedAnchors,
@@ -383,6 +390,9 @@ export const WRITE_TOOL_NAMES = new Set([
   'record_v13_replay_private_group',
   'register_v13_replay_private_package',
   'schedule_l2_report_canary',
+  'register_canonical_starter_fixture',
+  'review_canonical_starter_fixture',
+  'schedule_canonical_starter_fixture',
   'create_screener_bootstrap_grant',
   'set_screener_provider_settings',
   'set_screener_node_channel_settings',
@@ -735,6 +745,14 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Rotate the exact pinned V13 cohort to a unanimously signed packet after all V13 tickets drain; preserves pin history.',
   schedule_l2_report_canary:
     'Queue one isolated exact-artifact report on an enrolled Hetzner node. source_only is the default; full_runtime additionally runs private challenges in a separate Docker namespace. Neither mode changes screening, scoring, or quarantine.',
+  get_canonical_starter_fixture_preflight:
+    'Read the pinned public starter tree and archive, independent review provenance, object integrity and scheduling readiness.',
+  register_canonical_starter_fixture:
+    'Stage the exact released public starter source as an operator-only fixture without a miner submission.',
+  review_canonical_starter_fixture:
+    'Record an independent exact-source and served-path candidate review with its public evidence digest and image digest.',
+  schedule_canonical_starter_fixture:
+    'Queue one bounded source-only report after independent review; no screening, score or admission authority.',
   get_copy_court_settings:
     'Read the copy-hold triage court posture and revision history.',
   get_confirmation_seed_anchors:
@@ -2475,6 +2493,50 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => scheduleL2ReportCanary(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_canonical_starter_fixture_preflight',
+    {
+      title: 'Get canonical starter fixture preflight',
+      description: 'Read exact public release and archive identity, current object integrity, reviewer provenance and readiness. Requires backroom:read.',
+      inputSchema: z.object({}),
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchCanonicalStarterPreflight()),
+  )
+
+  registerTool(
+    'register_canonical_starter_fixture',
+    {
+      title: 'Register canonical starter source fixture',
+      description: 'Stage only the packaged v0.325.3 public source bytes. No miner row, score or admission change. Requires backroom:write and confirmation.',
+      inputSchema: registerCanonicalStarterInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => registerCanonicalStarter(input, props.session.email)),
+  )
+
+  registerTool(
+    'review_canonical_starter_fixture',
+    {
+      title: 'Attest canonical starter served path',
+      description: 'A different signed-in operator binds a public exact-source and served-path review digest plus built image digest. Candidate only; no clear authority. Requires backroom:write and confirmation.',
+      inputSchema: reviewCanonicalStarterInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => reviewCanonicalStarter(input, props.session.email)),
+  )
+
+  registerTool(
+    'schedule_canonical_starter_fixture',
+    {
+      title: 'Schedule canonical starter source report',
+      description: 'Queue one report-only source_only L1/L2 run after independent review and adopted worker preflight. No verdict or submission mutation. Requires backroom:write and confirmation.',
+      inputSchema: scheduleCanonicalStarterInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => scheduleCanonicalStarter(input, props.session.email)),
   )
 
   registerTool(

@@ -190,7 +190,7 @@ def _private_failure_feedback(detail: str, reason_code: str | None) -> str:
 
 # v6 adds the announced host specs (CPU/RAM/disk). A worker that cannot read
 # its own hardware still reports at v5 rather than going dark.
-_HEARTBEAT_PROTOCOL_VERSION = 7
+_HEARTBEAT_PROTOCOL_VERSION = 8
 _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS = 5
 _SYSTEMD_WORKER_CGROUP = re.compile(
     r"(?:^|/)ditto-screener-worker@([1-9][0-9]*)\.service(?:/|$)"

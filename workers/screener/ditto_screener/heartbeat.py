@@ -149,6 +149,7 @@ class FleetRelease(BaseModel):
     revision: Annotated[str, Field(pattern=_RELEASE_REVISION_PATTERN)] | None = None
     version: Annotated[str, Field(pattern=_RELEASE_VERSION_PATTERN)] | None = None
     activated_at: Annotated[int, Field(ge=0)] | None = None
+    source_fixture_v1: bool = False
 
 
 class ScreenerProgress(BaseModel):
@@ -319,11 +320,13 @@ def host_specs_signing_token(specs: HostSpecs | None) -> str:
     )
 
 
-def fleet_release_signing_token(release: FleetRelease | None) -> str:
+def fleet_release_signing_token(
+    release: FleetRelease | None, *, protocol_version: int = 7
+) -> str:
     """Return the canonical v7 token for the announced build identity."""
     if release is None:
         return "-"
-    return ",".join(
+    values = [
         str(value) if value is not None else "-"
         for value in (
             release.builtin_policy_version,
@@ -331,7 +334,10 @@ def fleet_release_signing_token(release: FleetRelease | None) -> str:
             release.version,
             release.activated_at,
         )
-    )
+    ]
+    if protocol_version >= 8:
+        values.append("1" if release.source_fixture_v1 else "0")
+    return ",".join(values)
 
 
 def screener_progress_signing_token(progress: ScreenerProgress | None) -> str:
@@ -485,6 +491,7 @@ def collect_fleet_release(
             revision=revision,
             version=version or None,
             activated_at=activated_at,
+            source_fixture_v1=True,
         )
     except Exception:  # noqa: BLE001 - fleet telemetry never blocks screening
         return FleetRelease(builtin_policy_version=builtin_policy_version)
