@@ -45,6 +45,7 @@ locals {
   platform_secret_ids = concat(
     [
       "ADMIN_API_PASSWORD",
+      google_secret_manager_secret.backroom_platform_operator_proof.secret_id,
       google_secret_manager_secret.db_password.secret_id,
       google_secret_manager_secret.hmac_secret.secret_id,
       google_secret_manager_secret.moderation_audit_signing_key.secret_id,
@@ -521,6 +522,20 @@ resource "google_secret_manager_secret" "backblaze_key_id" {
 resource "google_secret_manager_secret" "backblaze_application_key" {
   project   = var.project
   secret_id = "platform-backblaze-application-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# Value is installed separately after operator approval. Platform reads it only
+# when the matching Ansible host variable is enabled; Backroom receives the
+# same value as an encrypted Worker binding through its activation script.
+resource "google_secret_manager_secret" "backroom_platform_operator_proof" {
+  project   = var.project
+  secret_id = "backroom-platform-operator-proof"
   replication {
     auto {}
   }

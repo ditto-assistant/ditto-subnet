@@ -68,3 +68,28 @@ plain or forged `X-Admin-Actor` strings. Both services require the same
 `BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET` (at least 32 characters); absent
 configuration disables fixture mutations. Provisioning that secret, any
 production setting change, and either live control are separate operator gates.
+
+The managed provisioning path is staged separately from this fixture code:
+
+1. Apply the reviewed `backroom-platform-operator-proof` Secret Manager
+   container and its Platform read grants through protected Terraform. Install
+   a fresh 32-byte random value encoded as exactly 64 lowercase hex characters,
+   with no newline, as a Secret Manager version without printing it.
+2. After the value exists, set
+   `secret_backroom_platform_operator_proof: backroom-platform-operator-proof`
+   for the production Platform host and converge the managed Ansible role. An
+   unset host variable renders an empty binding and keeps the fixture writes
+   disabled. Any value outside the exact 64-character hex format fails
+   convergence.
+3. From an authenticated operator environment with Cloudflare deployment
+   rights and `BACKROOM_OAUTH_KV_ID`, use a clean exact semantic-release tag
+   to run `apps/backroom/scripts/install-operator-proof-binding.sh` with its
+   exact confirmation argument. The script reads the same Secret Manager value
+   into a temporary mode-0600 file, injects the OAuth KV id into a temporary
+   Wrangler config, and sends the secret to Wrangler through standard input.
+   Wrangler deploys a new Worker version immediately; the script removes both
+   temporary files and never prints the secret. Add the encrypted binding to
+   Wrangler's required list only after both services have adopted it.
+4. Recheck Backroom fixture preflight and a deliberately unauthorized write
+   before any real registration. Keep production screening admission at zero
+   until the separate safe-control and known-violation evidence gates pass.
