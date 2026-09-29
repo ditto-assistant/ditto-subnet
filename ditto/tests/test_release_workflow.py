@@ -1,6 +1,10 @@
+import json
+import os
+import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
 import yaml
 
 from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
@@ -301,7 +305,6 @@ def test_release_auto_deploys_controller_from_exact_release() -> None:
         "plan",
         "release",
         "deploy_platform",
-        "build-submission-builder",
     ]
     assert "needs.plan.outputs.screener_orchestrator == 'true'" in deploy["if"]
     assert "vars.SCREENER_CAPACITY_CONTROLLER_ENABLED == 'true'" in deploy["if"]
@@ -789,12 +792,13 @@ def test_screener_release_build_registers_exact_digest_with_platform() -> None:
     assert job["needs"] == ["plan", "release", "deploy_platform"]
 
 
-def test_submission_builder_is_immutable_and_gates_controller_deploy() -> None:
+def test_submission_builder_is_immutable_and_does_not_gate_delivery() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
     builder = jobs["build-submission-builder"]
     publish = _step(builder["steps"], "Publish the attempt-scoped Kaniko runner")
     controller = jobs["deploy-screener-controller"]
+    fleet = jobs["assemble-screener-fleet-release"]
 
     assert builder["needs"] == ["plan", "release", "deploy_platform"]
     assert "needs.release.outputs.released == 'true'" in builder["if"]
@@ -808,8 +812,265 @@ def test_submission_builder_is_immutable_and_gates_controller_deploy() -> None:
     assert 'docker push "$image"' in publish["run"]
     assert "gcloud artifacts docker tags add" in publish["run"]
     assert "GCP_SUBNET_BUILD_SA" in str(builder)
-    assert "build-submission-builder" in controller["needs"]
-    assert "needs.build-submission-builder.result == 'success'" in controller["if"]
+    assert "build-submission-builder" not in controller["needs"]
+    assert "needs.build-submission-builder.result" not in controller["if"]
+    assert "build-submission-builder" in fleet["needs"]
+    assert "needs.build-submission-builder.result != 'cancelled'" in fleet["if"]
+    assert "needs.build-submission-builder.result == 'success'" not in fleet["if"]
+    assert "continue-on-error" not in builder
+    render = _step(fleet["steps"], "Render the immutable fleet manifest")
+    assert (
+        '--submission-builder-image "${BUILDER_DIGEST:+'
+        '$SUBMISSION_BUILDER_REPOSITORY@$BUILDER_DIGEST}"' in render["run"]
+    )
+    assert (
+        "--submission-builder-fallback-file release/screener-fleet-builder.digest"
+        in render["run"]
+    )
+    assert 'test "$(grep -c' in render["run"] and ')" = 5' in render["run"]
+
+
+def test_fleet_fallback_uses_protected_registry_auth_before_publication() -> None:
+    jobs = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())["jobs"]
+    fleet = jobs["assemble-screener-fleet-release"]
+    steps = fleet["steps"]
+    render = _step(steps, "Render the immutable fleet manifest")
+    auth = _step(steps, "Authenticate fallback image verification")
+    setup = _step(steps, "Set up gcloud for fallback image verification")
+    verify = _step(steps, "Verify the exact fallback builder image exists")
+    build = _step(steps, "Build and publish the immutable fleet descriptor")
+    promote = _step(steps, "Authenticate and promote the exact fleet descriptor")
+    builder_auth = next(
+        step
+        for step in jobs["build-submission-builder"]["steps"]
+        if str(step.get("uses", "")).startswith("google-github-actions/auth@")
+    )
+
+    assert fleet["environment"] == "prod"
+    assert fleet["permissions"]["id-token"] == "write"
+    assert auth["uses"] == builder_auth["uses"]
+    assert auth["with"] == {
+        **builder_auth["with"],
+        "token_format": "access_token",
+        "create_credentials_file": False,
+        "export_environment_variables": False,
+    }
+    assert str(setup["uses"]).startswith("google-github-actions/setup-gcloud@")
+    assert render["id"] == "fleet_manifest"
+    assert '--github-output "$GITHUB_OUTPUT"' in render["run"]
+    for step in (auth, setup, verify):
+        assert step["if"] == "steps.fleet_manifest.outputs.builder_source == 'fallback'"
+        assert "continue-on-error" not in step
+    assert verify["env"]["BUILDER_IMAGE"] == (
+        "${{ steps.fleet_manifest.outputs.builder_image }}"
+    )
+    assert auth["id"] == "fallback_registry_auth"
+    assert verify["env"]["REGISTRY_ACCESS_TOKEN"] == (
+        "${{ steps.fallback_registry_auth.outputs.access_token }}"
+    )
+    assert [
+        steps.index(step) for step in (render, auth, setup, verify, build, promote)
+    ] == (
+        sorted(
+            steps.index(step) for step in (render, auth, setup, verify, build, promote)
+        )
+    )
+    assert "if" not in build and "if" not in promote
+
+
+@pytest.mark.parametrize(
+    ("builder_digest", "registry_result", "registry_status", "can_publish"),
+    [
+        ("sha256:" + "b" * 64, "", 1, True),  # Valid job image skips the lookup.
+        ("", "exact", 0, True),
+        ("invalid", "exact", 0, True),
+        ("", "", 1, False),  # Missing image or denied registry request.
+        ("invalid", "", 1, False),
+        ("", "", 0, False),
+        ("", "sha256:" + "c" * 64, 0, False),
+    ],
+)
+def test_fleet_fallback_registry_lookup_gates_publication(
+    tmp_path: Path,
+    builder_digest: str,
+    registry_result: str,
+    registry_status: int,
+    can_publish: bool,
+) -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    steps = workflow["jobs"]["assemble-screener-fleet-release"]["steps"]
+    render = _step(steps, "Render the immutable fleet manifest")
+    verify = _step(steps, "Verify the exact fallback builder image exists")
+    root = RELEASE_WORKFLOW_PATH.parents[2]
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/build-screener-fleet-release.py").symlink_to(
+        root / "scripts/build-screener-fleet-release.py"
+    )
+    (tmp_path / "release").mkdir()
+    fallback = (root / "release/screener-fleet-builder.digest").read_text().strip()
+    (tmp_path / "release/screener-fleet-builder.digest").write_text(fallback + "\n")
+    outputs = tmp_path / "github-output"
+    marker = tmp_path / "published"
+    calls = tmp_path / "registry-calls.json"
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gcloud = bin_dir / "gcloud"
+    gcloud.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['GCLOUD_CALLS']).write_text(json.dumps(sys.argv[1:]))\n"
+        "token = Path(sys.argv[sys.argv.index('--access-token-file') + 1])\n"
+        "assert token.read_text() == 'fake-registry-token'\n"
+        "assert token.stat().st_mode & 0o777 == 0o600\n"
+        "print(os.environ['REGISTRY_DIGEST'])\n"
+        "sys.exit(int(os.environ['REGISTRY_STATUS']))\n"
+    )
+    gcloud.chmod(0o755)
+    env = {
+        **os.environ,
+        **workflow["env"],
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "BUILDER_DIGEST": builder_digest,
+        "GITHUB_OUTPUT": str(outputs),
+        "RUNNER_TEMP": str(runner_temp),
+        "REGISTRY_ACCESS_TOKEN": "fake-registry-token",
+        "GCLOUD_CALLS": str(calls),
+        "REGISTRY_DIGEST": (
+            fallback.rsplit("@", 1)[1]
+            if registry_result == "exact"
+            else registry_result
+        ),
+        "REGISTRY_STATUS": str(registry_status),
+        "PROMOTION_MARKER": str(marker),
+    }
+    render_script = render["run"].replace(
+        "${{ needs.release.outputs.version }}", "1.2.3"
+    )
+    render_script = render_script.replace(
+        "${{ needs.release.outputs.commit_sha }}", "a" * 40
+    )
+    rendered = subprocess.run(
+        ["bash", "-e", "-c", render_script],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    selected = dict(line.split("=", 1) for line in outputs.read_text().splitlines())
+    manifest = (tmp_path / "build/screener-fleet-release/manifest.env").read_text()
+    assert f"SUBMISSION_BUILDER_IMAGE={selected['builder_image']}\n" in manifest
+    assert len(manifest.splitlines()) == 5
+    condition = {
+        "steps.fleet_manifest.outputs.builder_source": selected["builder_source"]
+    }
+    should_verify = _release_condition_matches(verify["if"], condition)
+    for name in (
+        "Authenticate fallback image verification",
+        "Set up gcloud for fallback image verification",
+    ):
+        assert _release_condition_matches(_step(steps, name)["if"], condition) == (
+            should_verify
+        )
+    script = verify["run"] if should_verify else ""
+    published = subprocess.run(
+        ["bash", "-e", "-c", script + '\nprintf promoted > "$PROMOTION_MARKER"\n'],
+        env={**env, "BUILDER_IMAGE": selected["builder_image"]},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert (published.returncode == 0) is can_publish, published.stderr
+    assert marker.exists() is can_publish
+    assert calls.exists() is should_verify
+    assert list(runner_temp.iterdir()) == []
+    if should_verify:
+        assert selected["builder_source"] == "fallback"
+        arguments = json.loads(calls.read_text())
+        assert arguments[:8] == [
+            "artifacts",
+            "docker",
+            "images",
+            "describe",
+            fallback,
+            "--project",
+            "ditto-app-dev",
+            "--format=value(image_summary.digest)",
+        ]
+        assert arguments[8] == "--access-token-file"
+        assert Path(arguments[9]).parent == runner_temp
+        assert arguments[10:] == ["--quiet"]
+    else:
+        assert selected["builder_source"] == "job"
+        assert selected["builder_image"] == (
+            f"{workflow['env']['SUBMISSION_BUILDER_REPOSITORY']}@{builder_digest}"
+        )
+
+
+def _release_condition_matches(condition: str, values: dict[str, str]) -> bool:
+    # Evaluate the boolean subset used by these jobs after substituting fixed
+    # test values. This exercises the workflow's guard, including always(),
+    # rather than relying only on the presence of individual status strings.
+    for key in sorted(values, key=len, reverse=True):
+        condition = condition.replace(key, repr(values[key]))
+    condition = condition.replace("always()", "True")
+    condition = condition.replace("&&", " and ").replace("||", " or ")
+    return bool(eval(" ".join(condition.split()), {"__builtins__": {}}, {}))
+
+
+@pytest.mark.parametrize(
+    "builder_result", ["success", "failure", "skipped", "cancelled"]
+)
+@pytest.mark.parametrize(
+    ("overrides", "controller_allowed", "fleet_allowed"),
+    [
+        ({}, True, True),
+        ({"needs.plan.result": "failure"}, False, False),
+        ({"needs.release.result": "failure"}, False, False),
+        ({"needs.release.outputs.released": "false"}, False, False),
+        ({"needs.build-screener.result": "failure"}, True, False),
+        ({"needs.deploy_platform.result": "failure"}, False, True),
+        ({"needs.deploy_platform.result": "skipped"}, True, True),
+        (
+            {
+                "needs.plan.outputs.screener": "false",
+                "needs.build-screener.result": "skipped",
+            },
+            True,
+            True,
+        ),
+    ],
+)
+def test_screener_delivery_conditions_preserve_required_gates(
+    builder_result: str,
+    overrides: dict[str, str],
+    controller_allowed: bool,
+    fleet_allowed: bool,
+) -> None:
+    jobs = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())["jobs"]
+    values = {
+        "needs.plan.result": "success",
+        "needs.release.result": "success",
+        "needs.release.outputs.released": "true",
+        "needs.plan.outputs.screener": "true",
+        "needs.plan.outputs.screener_orchestrator": "true",
+        "vars.SCREENER_CAPACITY_CONTROLLER_ENABLED": "true",
+        "needs.deploy_platform.result": "success",
+        "needs.build-submission-builder.result": builder_result,
+        "needs.build-screener.result": "success",
+        **overrides,
+    }
+    assert (
+        _release_condition_matches(jobs["deploy-screener-controller"]["if"], values)
+        is controller_allowed
+    )
+    assert _release_condition_matches(
+        jobs["assemble-screener-fleet-release"]["if"], values
+    ) is (fleet_allowed and builder_result != "cancelled")
 
 
 def test_public_screener_dependency_needs_no_private_authentication() -> None:
