@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -23,24 +24,31 @@ BUILDER_IMAGE = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/"
     "submission-builder@sha256:" + "b" * 64
 )
+BUILDER_FALLBACK = ROOT / "release/screener-fleet-builder.digest"
 
 
 def _render(
-    tmp_path: Path, *, builder_image: str = BUILDER_IMAGE
+    tmp_path: Path,
+    *,
+    builder_image: str | None = BUILDER_IMAGE,
+    fallback_file: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    command = [
+        sys.executable,
+        str(BUILDER),
+        "--output",
+        str(tmp_path / "release"),
+        "--version",
+        "1.2.3",
+        "--revision",
+        REVISION,
+    ]
+    if builder_image is not None:
+        command.extend(["--submission-builder-image", builder_image])
+    if fallback_file is not None:
+        command.extend(["--submission-builder-fallback-file", str(fallback_file)])
     return subprocess.run(
-        [
-            sys.executable,
-            str(BUILDER),
-            "--output",
-            str(tmp_path / "release"),
-            "--version",
-            "1.2.3",
-            "--revision",
-            REVISION,
-            "--submission-builder-image",
-            builder_image,
-        ],
+        command,
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -76,6 +84,92 @@ def test_release_builder_rejects_mutable_or_wrong_builder(
 
     assert result.returncode != 0
     assert not (tmp_path / "release/manifest.env").exists()
+
+
+def _validate_with_host_script(script: Path, manifest: Path) -> None:
+    text = script.read_text()
+    functions = []
+    for name in ("manifest_value", "is_builder_digest", "validate_manifest"):
+        match = re.search(rf"^{name}\(\) \{{\n.*?^\}}", text, re.MULTILINE | re.DOTALL)
+        if match is not None:
+            functions.append(match.group())
+    harness = (
+        "set -euo pipefail\nEXPECTED_FORMAT_VERSION=1\nEXPECTED_UPDATE_PROTOCOL=1\n"
+        + "\n".join(functions)
+        + '\nvalidate_manifest "$1"\n'
+    )
+    result = subprocess.run(
+        ["bash", "-c", harness, "validate", str(manifest)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, (script, result.stderr)
+
+
+@pytest.mark.parametrize("primary", [None, "", "invalid", "submission-builder:latest"])
+def test_release_builder_fallback_is_accepted_by_both_host_validators(
+    tmp_path: Path, primary: str | None
+) -> None:
+    result = _render(tmp_path, builder_image=primary, fallback_file=BUILDER_FALLBACK)
+
+    assert result.returncode == 0, result.stderr
+    assert "::warning::" in result.stdout
+    assert str(BUILDER_FALLBACK) in result.stdout
+    manifest = tmp_path / "release/manifest.env"
+    assert len(manifest.read_text().splitlines()) == 5
+    assert (
+        f"SUBMISSION_BUILDER_IMAGE={BUILDER_FALLBACK.read_text().strip()}\n"
+        in manifest.read_text()
+    )
+    for script in (
+        UPDATER,
+        ROOT / "workers/screener/scripts/pull-screener-release.sh",
+    ):
+        _validate_with_host_script(script, manifest)
+
+
+@pytest.mark.parametrize("fallback_contents", [BUILDER_IMAGE[:-64] + "c" * 64, "bad"])
+def test_release_builder_prefers_valid_job_image(
+    tmp_path: Path, fallback_contents: str
+) -> None:
+    fallback = tmp_path / "fallback.digest"
+    fallback.write_text(fallback_contents + "\n")
+    result = _render(tmp_path, fallback_file=fallback)
+
+    assert result.returncode == 0, result.stderr
+    assert "::warning::" not in result.stdout
+    assert (
+        f"SUBMISSION_BUILDER_IMAGE={BUILDER_IMAGE}\n"
+        in (tmp_path / "release/manifest.env").read_text()
+    )
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [None, b"", b"submission-builder:latest\n", b"\xff", b"bad\nbad\n"],
+)
+def test_release_builder_refuses_missing_or_invalid_fallback(
+    tmp_path: Path, contents: bytes | None
+) -> None:
+    fallback = tmp_path / "fallback.digest"
+    if contents is not None:
+        fallback.write_bytes(contents)
+    result = _render(tmp_path, builder_image="", fallback_file=fallback)
+
+    assert result.returncode != 0
+    assert "::warning::" not in result.stdout
+    assert not (tmp_path / "release/manifest.env").exists()
+
+
+def test_committed_builder_fallback_is_one_immutable_reference() -> None:
+    contents = BUILDER_FALLBACK.read_text()
+    assert len(contents.splitlines()) == 1
+    assert re.fullmatch(
+        r"us-central1-docker\.pkg\.dev/ditto-app-dev/ditto-public-builders/"
+        r"submission-builder@sha256:[0-9a-f]{64}\n",
+        contents,
+    )
 
 
 def test_updater_authenticates_before_fetch_or_drain() -> None:

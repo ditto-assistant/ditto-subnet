@@ -971,7 +971,7 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
   deploy-screener-controller:
-    needs: [plan, release, deploy_platform, build-submission-builder]
+    needs: [plan, release, deploy_platform]
     if: >-
       always() &&
       needs.plan.result == 'success' &&
@@ -979,7 +979,6 @@ jobs:
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.screener_orchestrator == 'true' &&
       vars.SCREENER_CAPACITY_CONTROLLER_ENABLED == 'true' &&
-      needs.build-submission-builder.result == 'success' &&
       (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
     permissions:
       contents: read
@@ -1102,7 +1101,7 @@ jobs:
       needs.release.result == 'success' &&
       needs.release.outputs.released == 'true' &&
       (needs.plan.outputs.screener == 'true' || needs.plan.outputs.screener_orchestrator == 'true') &&
-      needs.build-submission-builder.result == 'success' &&
+      needs.build-submission-builder.result != 'cancelled' &&
       (needs.build-screener.result == 'success' ||
        (needs.plan.outputs.screener != 'true' && needs.build-screener.result == 'skipped'))
     runs-on: ubuntu-24.04
@@ -1141,7 +1140,8 @@ jobs:
             --version "${{ needs.release.outputs.version }}" \
             --revision "${{ needs.release.outputs.commit_sha }}" \
             --update-protocol "$SCREENER_FLEET_UPDATE_PROTOCOL" \
-            --submission-builder-image "$SUBMISSION_BUILDER_REPOSITORY@$BUILDER_DIGEST"
+            --submission-builder-image "${BUILDER_DIGEST:+$SUBMISSION_BUILDER_REPOSITORY@$BUILDER_DIGEST}" \
+            --submission-builder-fallback-file release/screener-fleet-builder.digest
           test "$(grep -c '^' build/screener-fleet-release/manifest.env)" = 5
 
       - name: Build and publish the immutable fleet descriptor
