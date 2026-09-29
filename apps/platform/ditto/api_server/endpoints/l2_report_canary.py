@@ -906,8 +906,10 @@ async def claim_l2_report_canary(
             return None
         agent = None
         if row.source_kind == "canonical_starter_fixture":
-            if not _fixture_attestation_valid(row) or not await _fixture_object_matches(
-                storage
+            if (
+                storage is None
+                or not _fixture_attestation_valid(row)
+                or not await _fixture_object_matches(storage)
             ):
                 row.status = "incomplete"
                 row.error_code = "fixture-source-drift"
@@ -999,7 +1001,7 @@ async def complete_l2_report_canary(
     request: Request,
     _screener: ScreenerDep,
     session: SessionDep,
-    storage: Annotated[S3StorageClient, Depends(get_storage_client)],
+    storage: Annotated[S3StorageClient | None, Depends(get_storage_client)] = None,
 ) -> L2CanaryCompleteResponse:
     node_id = getattr(request.state, "screener_node_id", None)
     now = datetime.now(UTC)
