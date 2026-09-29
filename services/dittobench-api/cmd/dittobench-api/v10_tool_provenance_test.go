@@ -346,6 +346,20 @@ func TestV13ToolReceiptNewHopIsOneAppliedEffectInSignedProvenance(t *testing.T) 
 	}
 }
 
+func TestV13ConfirmedNotAppliedSameHopRetryKeepsOneModelEmission(t *testing.T) {
+	observed := []protocol.ObservedToolCall{{Name: "search_web"}, {Name: "search_web"}}
+	evidence := &protocol.ToolProvenanceEvidence{
+		ModelEmitted: 1, EndpointAttempts: 2, Matched: 1, Complete: true,
+		EffectAttempts: 2, SameHopRetries: 1, AppliedEffects: 1,
+	}
+	graded := applyV10ToolProvenance(protocol.BenchVersionV13, scorer.ScopeScored,
+		protocol.CaseScore{Kind: protocol.KindTool, ToolScore: 1},
+		protocol.RunResponse{ToolCalls: observed}, observed, runner.CaseExecution{ToolProvenance: evidence})
+	if graded.ToolScore != 1 || graded.ToolProvenance == nil || !graded.ToolProvenance.Complete {
+		t.Fatalf("confirmed not-applied recovery lost credit: %+v", graded)
+	}
+}
+
 func TestV13ToolReceiptRecoveryRejectsChangedIdentity(t *testing.T) {
 	broker := newInferenceBroker(1)
 	const sessionID = "v13-receipt-identity"

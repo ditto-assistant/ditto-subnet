@@ -701,11 +701,13 @@ type ToolProvenanceEvidence struct {
 	EndpointAttempts int `json:"endpoint_attempts"`
 	// V1-only endpoint evidence. EffectAttempts counts validated operation-ID
 	// POSTs, including cached reads; NewHopReplays are the subset of cached
-	// reads on a different model-emitted hop. AppliedEffects counts first
-	// commits only. These counts are signed with the case report.
+	// reads on a different model-emitted hop; SameHopRetries are retries after
+	// a confirmed not_applied response. AppliedEffects counts first commits
+	// only. These counts are signed with the case report.
 	EffectAttempts           int      `json:"effect_attempts,omitempty"`
 	ReceiptReplays           int      `json:"receipt_replays,omitempty"`
 	NewHopReplays            int      `json:"new_hop_replays,omitempty"`
+	SameHopRetries           int      `json:"same_hop_retries,omitempty"`
 	AppliedEffects           int      `json:"applied_effects,omitempty"`
 	Matched                  int      `json:"matched"`
 	Unmatched                int      `json:"unmatched"`
@@ -881,6 +883,7 @@ type ToolProvenanceSummary struct {
 	EffectAttempts           int `json:"effect_attempts,omitempty"`
 	ReceiptReplays           int `json:"receipt_replays,omitempty"`
 	NewHopReplays            int `json:"new_hop_replays,omitempty"`
+	SameHopRetries           int `json:"same_hop_retries,omitempty"`
 	AppliedEffects           int `json:"applied_effects,omitempty"`
 	Matched                  int `json:"matched"`
 	Unmatched                int `json:"unmatched"`

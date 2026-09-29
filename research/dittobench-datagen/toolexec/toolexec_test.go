@@ -291,7 +291,7 @@ func TestEffectReceiptV1RecoversOnlyAfterNotAppliedAndLegacyFailsClosed(t *testi
 	if status, out := post(ts.URL); status != http.StatusOK || out.EffectState != "applied" || out.Result == "" {
 		t.Fatalf("same-ID retry status=%d receipt=%+v", status, out)
 	}
-	if got := s.EffectAccounting(c.ID); got != (EffectAccounting{Attempts: 2, AppliedEffects: 1}) {
+	if got := s.EffectAccounting(c.ID); got != (EffectAccounting{Attempts: 2, SameHopRetries: 1, AppliedEffects: 1}) {
 		t.Fatalf("not-applied recovery accounting=%+v", got)
 	}
 	if got := len(s.Observed(c.ID)); got != 2 {

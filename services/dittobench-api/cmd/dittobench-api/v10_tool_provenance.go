@@ -16,6 +16,7 @@ func attachEffectAccounting(evidence *protocol.ToolProvenanceEvidence, accountin
 	evidence.EffectAttempts = accounting.Attempts
 	evidence.ReceiptReplays = accounting.ReceiptReplays
 	evidence.NewHopReplays = accounting.NewHopReplays
+	evidence.SameHopRetries = accounting.SameHopRetries
 	evidence.AppliedEffects = accounting.AppliedEffects
 }
 
@@ -60,11 +61,12 @@ func applyV10ToolProvenance(
 	if len(response.ToolCalls) > 0 && evidence.Matched == 0 {
 		appendToolFinding(evidence, "untrusted_self_report_only")
 	}
-	// A new-hop cached receipt consumes a fresh model emission but does not
-	// reapply the effect or append another endpoint execution to observed.
-	expectedMatched := len(observed) + evidence.NewHopReplays
+	// A new-hop cached receipt consumes a fresh model emission without another
+	// execution. A same-hop retry after confirmed not_applied executes again
+	// without consuming another model emission. Both preserve one effect.
+	expectedMatched := len(observed) - evidence.SameHopRetries + evidence.NewHopReplays
 	if evidence.Matched != expectedMatched || evidence.NewHopReplays > evidence.ReceiptReplays ||
-		evidence.AppliedEffects > evidence.EffectAttempts {
+		evidence.SameHopRetries > len(observed) || evidence.AppliedEffects > evidence.EffectAttempts {
 		evidence.Complete = false
 		appendToolFinding(evidence, "provenance_execution_count_mismatch")
 	}
@@ -109,6 +111,7 @@ func summarizeV10ToolProvenance(
 		summary.EffectAttempts += evidence.EffectAttempts
 		summary.ReceiptReplays += evidence.ReceiptReplays
 		summary.NewHopReplays += evidence.NewHopReplays
+		summary.SameHopRetries += evidence.SameHopRetries
 		summary.AppliedEffects += evidence.AppliedEffects
 		summary.Matched += evidence.Matched
 		summary.Unmatched += evidence.Unmatched

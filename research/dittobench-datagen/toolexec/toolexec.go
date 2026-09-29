@@ -769,10 +769,17 @@ type caseState struct {
 	fixture        Fixture
 	observed       []protocol.ObservedToolCall
 	receipts       map[string]effectReceipt
+	pending        map[string]effectPending
 	effectAttempts int
 	receiptReplays int
 	newHopReplays  int
+	sameHopRetries int
 	appliedEffects int
+}
+
+type effectPending struct {
+	identity string
+	lastHop  int
 }
 
 type effectReceipt struct {
@@ -787,6 +794,7 @@ type EffectAccounting struct {
 	Attempts       int
 	ReceiptReplays int
 	NewHopReplays  int
+	SameHopRetries int
 	AppliedEffects int
 }
 
@@ -852,7 +860,7 @@ func (s *Server) EffectAccounting(caseID string) EffectAccounting {
 	}
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	return EffectAccounting{cs.effectAttempts, cs.receiptReplays, cs.newHopReplays, cs.appliedEffects}
+	return EffectAccounting{cs.effectAttempts, cs.receiptReplays, cs.newHopReplays, cs.sameHopRetries, cs.appliedEffects}
 }
 
 // ObservedAction reports whether the harness executed the named tool for a
@@ -1005,12 +1013,25 @@ func (s *Server) serveEffectV1(w http.ResponseWriter, cs *caseState, req protoco
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
-	if len(cs.receipts) >= maxEffectReceiptsPerCase {
+	_, pendingOperation := cs.pending[req.OperationID]
+	if !pendingOperation && len(cs.receipts)+len(cs.pending) >= maxEffectReceiptsPerCase {
 		cs.mu.Unlock()
 		writeJSON(w, http.StatusTooManyRequests, protocol.ToolExecResponse{
 			Error: "operation receipt capacity reached", OperationID: req.OperationID, EffectState: protocol.ToolEffectNotApplied,
 		})
 		return
+	}
+	if prior, found := cs.pending[req.OperationID]; found {
+		if prior.identity != identity {
+			cs.mu.Unlock()
+			writeJSON(w, http.StatusConflict, protocol.ToolExecResponse{
+				Error: "operation identity mismatch", OperationID: req.OperationID, EffectState: protocol.ToolEffectNotApplied,
+			})
+			return
+		}
+		if prior.lastHop == req.Hop {
+			cs.sameHopRetries++
+		}
 	}
 	priorSameTool := 0
 	for _, call := range cs.observed {
@@ -1028,11 +1049,21 @@ func (s *Server) serveEffectV1(w http.ResponseWriter, cs *caseState, req protoco
 			cs.receipts = make(map[string]effectReceipt)
 		}
 		cs.receipts[req.OperationID] = effectReceipt{identity: identity, response: response, lastHop: req.Hop}
+		delete(cs.pending, req.OperationID)
 		cs.appliedEffects++
 	case response.Error != "":
 		response.EffectState = protocol.ToolEffectNotApplied
+		if cs.pending == nil {
+			cs.pending = make(map[string]effectPending)
+		}
+		cs.pending[req.OperationID] = effectPending{identity: identity, lastHop: req.Hop}
 	default:
 		response.EffectState = protocol.ToolEffectUnknown
+		if cs.receipts == nil {
+			cs.receipts = make(map[string]effectReceipt)
+		}
+		cs.receipts[req.OperationID] = effectReceipt{identity: identity, response: response, lastHop: req.Hop}
+		delete(cs.pending, req.OperationID)
 	}
 	cs.mu.Unlock()
 	writeJSON(w, http.StatusOK, response)
