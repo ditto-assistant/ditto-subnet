@@ -697,8 +697,8 @@ type ClaimProvenanceSummary struct {
 }
 
 type ToolProvenanceEvidence struct {
-	ModelEmitted             int      `json:"model_emitted"`
-	EndpointAttempts         int      `json:"endpoint_attempts"`
+	ModelEmitted     int `json:"model_emitted"`
+	EndpointAttempts int `json:"endpoint_attempts"`
 	// V1-only endpoint evidence. EffectAttempts counts validated operation-ID
 	// POSTs, including cached reads; NewHopReplays are the subset of cached
 	// reads on a different model-emitted hop. AppliedEffects counts first
