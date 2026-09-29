@@ -127,6 +127,23 @@ class PolicyEvidence:
             raise ValueError("evidence digest must be lowercase SHA-256 hex")
 
 
+def _bounded_reason_evidence(
+    evidence: Sequence[PolicyEvidence],
+    *,
+    reason_code: str | None,
+    limit: int = _MAX_EVIDENCE,
+) -> tuple[PolicyEvidence, ...]:
+    """Retain the deciding observation when bounding an evidence prefix."""
+    bounded = tuple(evidence[:limit])
+    if reason_code is not None and not any(
+        item.code == reason_code for item in bounded
+    ):
+        deciding = next((item for item in evidence if item.code == reason_code), None)
+        if deciding is not None:
+            bounded = (*bounded[:-1], deciding)
+    return bounded
+
+
 @dataclass(frozen=True)
 class ScreeningDecision:
     """Outcome returned by the stable core plus private policy engine."""
@@ -1397,7 +1414,7 @@ class PolicyEngine:
         policy_version: int = SCREENING_POLICY_VERSION,
         reason_code: str | None = None,
     ) -> ScreeningDecision:
-        bounded = tuple(evidence[:_MAX_EVIDENCE])
+        bounded = _bounded_reason_evidence(evidence, reason_code=reason_code)
         detail = ""
         if outcome == ScreeningOutcome.RETRYABLE_INFRA:
             detail = "screener error: private policy infrastructure unavailable"

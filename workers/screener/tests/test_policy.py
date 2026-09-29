@@ -16,8 +16,11 @@ from ditto_screener.policy import (
     BehavioralChallengePackModule,
     BehavioralOracleModule,
     ChallengeObservation,
+    ModuleDisposition,
+    ModuleResult,
     PolicyContext,
     PolicyEngine,
+    PolicyEvidence,
     PolicyManifest,
     ReviewJournal,
     ScreeningDecision,
@@ -240,6 +243,56 @@ async def test_challenge_pack_reason_is_the_failed_challenge_after_success(
         "challenge-http-503",
     ]
     assert decision.reason_code == "challenge-http-503"
+
+
+@pytest.mark.parametrize("earlier_records", [15, 16, 20])
+async def test_terminal_review_reason_retains_its_evidence_after_prior_modules(
+    earlier_records: int,
+) -> None:
+    class PriorEvidenceModule:
+        module_id = "prior-audit"
+        phase = "selector"
+        clears_selection = False
+
+        async def evaluate(self, context: PolicyContext) -> ModuleResult:
+            assert context.agent_id == _AGENT
+            return ModuleResult(
+                ModuleDisposition.CLEAR,
+                tuple(
+                    PolicyEvidence(self.module_id, f"prior-{i}", "earlier observation")
+                    for i in range(earlier_records)
+                ),
+            )
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l2-review-unavailable",
+            failure_disposition="inconclusive",
+        )
+
+    async def challenge(*_args: object) -> ChallengeObservation:
+        raise AssertionError("terminal source review must stop before challenge")
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="bounded-terminal-reason",
+            module_specs=({"kind": "prior-audit"}, {"kind": "agentic_source_review"}),
+        ),
+        (PriorEvidenceModule(), AgenticSourceReviewModule(module_id="terminal-review")),
+    )
+    decision = await engine.evaluate(_context(challenge, review, policy_version=13))
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert decision.reason_code == "l2-review-unavailable"
+    assert len(decision.evidence) == 16
+    assert decision.evidence[-1].module_id == "terminal-review"
+    assert decision.evidence[-1].code == decision.reason_code
+    assert [item.code for item in decision.evidence[:-1]] == [
+        f"prior-{i}" for i in range(15)
+    ]
 
 
 @pytest.mark.parametrize("reason", ["", "A", "bad/code", "a" * 65, "valid-code\n"])

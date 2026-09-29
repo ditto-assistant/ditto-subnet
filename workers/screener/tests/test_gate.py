@@ -2570,6 +2570,45 @@ def test_image_binding_advisory_preserves_an_existing_quarantine_reason() -> Non
     assert result.evidence[-1].code == "image-binding-heuristic"
 
 
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        ScreeningOutcome.PASS,
+        ScreeningOutcome.PASS_INCONCLUSIVE,
+        ScreeningOutcome.QUARANTINE,
+    ],
+)
+@pytest.mark.parametrize("record_count", [1, 16])
+def test_image_binding_advisory_preserves_the_deciding_reason_and_record(
+    outcome: ScreeningOutcome, record_count: int
+) -> None:
+    reason = "source-review-step-budget-exhausted"
+    deciding = PolicyEvidence("source-review", reason, "source review exhausted")
+    decision = ScreeningDecision(
+        outcome=outcome,
+        detail="",
+        manifest_digest="ab" * 32,
+        reason_code=reason,
+        review_audit={"stage": "l1", "reason_code": reason},
+        evidence=(
+            *(
+                PolicyEvidence("prior-audit", f"prior-{i}", "earlier observation")
+                for i in range(record_count - 1)
+            ),
+            deciding,
+        ),
+    )
+    result = gate_module._with_image_binding_advisory(decision, "image needs review")
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert result.reason_code == reason
+    assert result.review_audit == decision.review_audit
+    assert deciding in result.evidence
+    assert result.evidence[-1].code == "image-binding-heuristic"
+    assert len(result.evidence) == min(record_count + 1, 16)
+    assert decision.outcome == outcome
+    assert decision.evidence[-1] == deciding
+
+
 async def test_build_only_skips_image_binding_advisory_and_passes(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

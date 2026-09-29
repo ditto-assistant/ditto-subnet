@@ -91,6 +91,7 @@ from ditto_screener.policy import (
     ReviewJournal,
     ScreeningDecision,
     ScreeningOutcome,
+    _bounded_reason_evidence,
     load_policy_engine,
     source_review_low_clearance_allowed,
 )
@@ -556,7 +557,11 @@ def _with_image_binding_advisory(
     }:
         return decision
     evidence = (
-        *decision.evidence[:15],
+        *_bounded_reason_evidence(
+            decision.evidence,
+            reason_code=decision.reason_code,
+            limit=_MAX_EVIDENCE - 1,
+        ),
         PolicyEvidence("stable-core", "image-binding-heuristic", advisory[:240]),
     )
     return ScreeningDecision(
@@ -569,11 +574,7 @@ def _with_image_binding_advisory(
         adjudication=decision.adjudication,
         review_notes=decision.review_notes,
         policy_version=decision.policy_version,
-        reason_code=(
-            decision.reason_code
-            if decision.outcome == ScreeningOutcome.QUARANTINE
-            else "image-binding-heuristic"
-        ),
+        reason_code=decision.reason_code or "image-binding-heuristic",
     )
 
 
