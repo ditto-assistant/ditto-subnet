@@ -338,6 +338,19 @@ mod tool_exec_tests {
         )
     }
 
+    async fn mismatched_applied_receipt(
+        State(calls): State<Arc<Mutex<Vec<protocol::ToolExecRequest>>>>,
+        Json(call): Json<protocol::ToolExecRequest>,
+    ) -> Json<protocol::ToolExecResponse> {
+        calls.lock().expect("lock calls").push(call);
+        Json(protocol::ToolExecResponse {
+            result: "untrusted result".to_string(),
+            operation_id: Some("different-operation-0001".to_string()),
+            effect_state: Some("applied".to_string()),
+            ..Default::default()
+        })
+    }
+
     fn wire_tool(exec: Arc<ToolExecCtx>) -> WireTool {
         WireTool {
             def: ToolDefinition {
@@ -416,6 +429,27 @@ mod tool_exec_tests {
             .operation_id
             .as_ref()
             .is_some_and(|id| id.len() >= 16));
+    }
+
+    #[tokio::test]
+    async fn advertised_receipts_reject_a_different_operation_id() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(mismatched_applied_receipt))
+            .with_state(Arc::clone(&calls));
+        let (endpoint, task) = serve(app).await;
+        let mut ctx = exec_context(endpoint);
+        Arc::get_mut(&mut ctx)
+            .expect("unshared context")
+            .effect_receipts_v1 = true;
+        let result = wire_tool(ctx)
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("execute tool");
+        task.abort();
+
+        assert_eq!(result["error"], "tool receipt operation mismatch");
+        assert_eq!(calls.lock().expect("lock calls").len(), 1);
     }
 }
 
