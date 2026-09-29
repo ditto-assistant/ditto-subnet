@@ -1024,7 +1024,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Copy Reviews */
+        /**
+         * List Copy Reviews
+         * @description Page ATH reviews by status, scoring generation, kind and resolution.
+         *
+         *     ``status=resolved&resolution=withdraw`` is how an operator finds withdrawn
+         *     manual holds: they are ``resolved`` so they leave the pending queue, yet
+         *     uncertified, so ``enforce`` with ``require_terminal_review`` still
+         *     withholds them.
+         */
         get: operations["list_copy_reviews_api_v1_admin_copy_reviews_get"];
         put?: never;
         post?: never;
@@ -1087,6 +1095,10 @@ export interface paths {
         /**
          * Get Copy Review Audit
          * @description Return the durable reason and attribution needed to explain an ATH hold.
+         *
+         *     ``held_*`` are the opening evidence; ``current_*`` are the values the
+         *     withdraw guards compare now, and ``withdrawable`` applies the withdraw
+         *     preview's own refusal rule.
          */
         get: operations["get_copy_review_audit_api_v1_admin_copy_reviews__agent_id__audit_get"];
         put?: never;
@@ -9492,6 +9504,16 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Eligibility Checksum */
+            eligibility_checksum?: string | null;
+            /** Eligibility Revision */
+            eligibility_revision?: number | null;
+            /** Eligibility State */
+            eligibility_state?: string | null;
+            /** Emission Gate */
+            emission_gate?: ("off" | "shadow" | "enforce") | null;
+            /** Emission Reward Eligible */
+            emission_reward_eligible?: boolean | null;
             /** Previous Status */
             previous_status?: string | null;
             /** Reason */
@@ -9508,6 +9530,10 @@ export interface components {
             action_history?: components["schemas"]["AdminCopyReviewAction"][];
             /** Agent Status */
             agent_status: string;
+            /** Current Artifact Sha256 */
+            current_artifact_sha256?: string | null;
+            /** Current Score Count */
+            current_score_count?: number | null;
             /** Held Artifact Sha256 */
             held_artifact_sha256?: string | null;
             /** Held Score Count */
@@ -9517,6 +9543,13 @@ export interface components {
             /** Previous Status */
             previous_status?: string | null;
             review: components["schemas"]["AdminCopyReviewItem"];
+            /**
+             * Withdrawable
+             * @default false
+             */
+            withdrawable: boolean;
+            /** Withdrawal Refusal */
+            withdrawal_refusal?: string | null;
         };
         /**
          * AdminCopyReviewComparisonUnavailable
@@ -9630,7 +9663,7 @@ export interface components {
             /** Superseded Reason */
             superseded_reason?: string | null;
             /** Superseded Resolution */
-            superseded_resolution?: ("clear" | "reject") | null;
+            superseded_resolution?: ("clear" | "reject" | "withdraw") | null;
             /** Superseded Resolution Reason */
             superseded_resolution_reason?: string | null;
         };
@@ -9700,6 +9733,8 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+            /** Resolution */
+            resolution?: ("clear" | "reject" | "withdraw") | null;
             /** Review Kind */
             review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
             /** Rollout Bench Version */
@@ -37485,6 +37520,7 @@ export interface operations {
                 include?: "current_comparison" | null;
                 generation?: "active" | "rollout" | "history" | "all";
                 review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
+                resolution?: ("clear" | "reject" | "withdraw") | null;
             };
             header?: {
                 authorization?: string | null;

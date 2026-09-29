@@ -32,7 +32,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
-from ditto.api_models.emission_eligibility import EmissionEligibilitySettings
+from ditto.api_models.emission_eligibility import (
+    WITHDRAWN_REVIEW_REASON,
+    EmissionEligibilitySettings,
+)
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.emission_eligibility import eligibility_checksum
 from ditto.api_server.endpoints.scoring import (
@@ -1144,6 +1147,12 @@ async def test_withdrawal_uses_one_policy_in_preview_board_and_signed_ledger(
         assert record["enforcement"] == effective
         assert record["reward_eligible"] is paid
         assert record["state"] == ("unresolved_review" if terminal else "eligible")
+        if terminal:
+            assert record["reason"] == WITHDRAWN_REVIEW_REASON
+            assert "still open" not in record["reason"]
+    reason = preview.json()["emission_reason"]
+    assert "Review is terminal" not in reason
+    assert ("withheld" in reason) is (not paid)
 
 
 async def test_withdrawal_preview_rejects_policy_revision_change(

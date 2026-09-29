@@ -9,8 +9,8 @@ cannot overwrite it, and a reopen also has to NULL ``resolution`` /
 
 That leaves the append-only ``ath_review_actions`` ledger as the only place the
 current state of a reopened hold is written down: the newest ``reopen`` action
-carries the reconsideration reason, and the ``clear`` / ``reject`` action before
-it carries the decision that was withdrawn.
+carries the reconsideration reason, and the ``clear`` / ``reject`` /
+``withdraw`` action before it carries the decision that was superseded.
 
 The public activity projection already followed that ledger; the operator queue
 and audit projections did not, so a submission whose rejection had been
@@ -37,7 +37,10 @@ AthReasonSource = Literal["original_hold", "reconsideration"]
 DEFAULT_OPEN_REASON = "Submission routed to ATH review."
 DEFAULT_RESOLVED_REASON = "ATH review resolved."
 
-_RESOLUTION_ACTIONS = ("clear", "reject")
+_RESOLUTION_ACTIONS = ("clear", "reject", "withdraw")
+"""Every terminal ledger action a reopen can supersede."""
+
+AthSupersededResolution = Literal["clear", "reject", "withdraw"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,9 +59,11 @@ class AthReviewLifecycle:
     so a consumer can label it as history instead of losing it.
     """
 
-    superseded_resolution: Literal["clear", "reject"] | None = None
+    superseded_resolution: AthSupersededResolution | None = None
+    """The terminal decision the newest reopen superseded, including a
+    ``withdraw`` of an earlier precautionary hold."""
     superseded_resolution_reason: str | None = None
-    """The withdrawn decision's own public reason, read back from the ledger.
+    """The superseded decision's own public reason, read back from the ledger.
 
     ``ath_reviews.resolution_reason`` is NULLed by the reopen, so a pending
     reopened review has no other durable copy of it.
@@ -131,7 +136,7 @@ def derive_ath_review_lifecycle(
 def _withdrawn_action(
     actions: Sequence[AthReviewAction] | None, reopen: AthReviewAction
 ) -> AthReviewAction | None:
-    """The newest clear/reject recorded before ``reopen`` — what it withdrew."""
+    """The newest clear/reject/withdraw before ``reopen`` — what it superseded."""
     if not actions:
         return None
     withdrawn: AthReviewAction | None = None
@@ -148,11 +153,15 @@ def _withdrawn_action(
 
 def _withdrawn_resolution(
     actions: Sequence[AthReviewAction] | None, reopen: AthReviewAction
-) -> Literal["clear", "reject"] | None:
+) -> AthSupersededResolution | None:
     withdrawn = _withdrawn_action(actions, reopen)
     if withdrawn is None:
         return None
-    return "reject" if withdrawn.action == "reject" else "clear"
+    if withdrawn.action == "reject":
+        return "reject"
+    if withdrawn.action == "withdraw":
+        return "withdraw"
+    return "clear"
 
 
 def _withdrawn_reason(

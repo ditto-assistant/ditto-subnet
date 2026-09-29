@@ -84,7 +84,8 @@ are the review vocabulary this repository already uses:
 ``review_infrastructure_failed`` is
 ``screening_infra_retry.INFRA_AUTO_RETRY_REASON_CODES``, ``review_escalated`` is
 the copy-hold court's ``escalate`` verdict or an ``anomalous_score`` hold, and
-``unresolved_review`` is a pending ``ath_reviews`` row of any kind.
+``unresolved_review`` is a pending ``ath_reviews`` row of any kind or a resolved
+``withdraw``: a withdrawn precautionary hold is not a terminal review.
 """
 
 WITHHELD_STATES: frozenset[str] = frozenset(
@@ -139,6 +140,17 @@ STATE_REASONS: dict[str, str] = {
 """Miner-facing text, one per state. Public surfaces publish these verbatim so
 the board, the submission page and Backroom cannot disagree about *why* a score
 is not yet earning. No source, prompt, or reviewer output appears here."""
+
+WITHDRAWN_REVIEW_REASON = (
+    "The precautionary review hold on this exact artifact was withdrawn without "
+    "a finding, but its review was not completed. The score and its rank stand; "
+    "emissions wait for a terminal review decision."
+)
+"""Miner-facing text for ``unresolved_review`` reached through a withdrawal.
+
+The state is the same one an open review takes, but "still open" would
+contradict the public ``review_event`` of ``withdrawn``. Same table rules as
+:data:`STATE_REASONS`: fixed text, no source or reviewer output."""
 
 
 class EmissionEligibilitySettings(BaseModel):
@@ -268,7 +280,9 @@ class AgentEmissionEligibility(BaseModel):
     enforcement: EligibilityEnforcement
     state: EligibilityState
     reason: str
-    """Miner-facing text from :data:`STATE_REASONS`; never reviewer output."""
+    """Miner-facing text from :data:`STATE_REASONS` (or
+    :data:`WITHDRAWN_REVIEW_REASON` for a withdrawn hold); never reviewer
+    output."""
     reward_eligible: bool
     """Whether this artifact earns emissions under the *current* posture.
 

@@ -13,7 +13,10 @@ from fastapi import FastAPI
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ditto.api_models.emission_eligibility import EmissionEligibilitySettings
+from ditto.api_models.emission_eligibility import (
+    WITHDRAWN_REVIEW_REASON,
+    EmissionEligibilitySettings,
+)
 from ditto.api_server.ath_hold_withdrawal import (
     WITHDRAW_CONFIRMATION,
 )
@@ -287,6 +290,8 @@ async def test_withdrawal_does_not_transfer_a_sibling_clearance(
     assert record["enforcement"] == "enforce"
     assert record["state"] == "unresolved_review"
     assert record["reward_eligible"] is False
+    # Withheld like an open review, but never described as "still open".
+    assert record["reason"] == WITHDRAWN_REVIEW_REASON
     # The sibling's own clear still certifies the sibling, and only the sibling.
     async with maker() as session:
         postures = await load_review_postures(session, [agent_id, sibling_id])
@@ -955,3 +960,232 @@ async def test_off_mode_emission_reason_never_claims_a_terminal_review(
     executed = await _execute(client, agent_id, body, preview.json()["preview_token"])
     assert executed.status_code == 200, executed.text
     assert executed.json()["emission_reason"] == reason
+
+
+async def _add_score(maker: async_sessionmaker[AsyncSession], agent_id: UUID) -> None:
+    """A late validator report; the score endpoint accepts one during a hold."""
+    async with maker() as session, session.begin():
+        session.add(
+            Score(
+                agent_id=agent_id,
+                validator_hotkey="validator-late",
+                run_id=f"late-{agent_id.hex[:8]}",
+                signature=None,
+                seed=7,
+                bench_version=MIN_SCOREABLE_BENCH_VERSION,
+                composite=0.97,
+                tool_mean=0.97,
+                memory_mean=0.90,
+                median_ms=100,
+                n=114,
+                details={},
+                generated_at=_T0 + timedelta(hours=1),
+            )
+        )
+
+
+async def _audit(client: httpx.AsyncClient, agent_id: UUID) -> dict:
+    audit = await client.get(
+        f"/api/v1/admin/copy-reviews/{agent_id}/audit", headers=_HEADERS
+    )
+    assert audit.status_code == 200, audit.text
+    return audit.json()
+
+
+def _audit_guards(audit: dict, reason: str = _REASON) -> dict:
+    """Exactly what Backroom sends: the audit's current guards, not the held ones."""
+    return {
+        "review_id": audit["review"]["review_id"],
+        "expected_sha256": audit["current_artifact_sha256"],
+        "expected_score_count": audit["current_score_count"],
+        "expected_agent_status": audit["agent_status"],
+        "reason": reason,
+    }
+
+
+async def test_audit_reports_the_current_guards_after_a_score_arrives(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id, sha256 = await _seed_scored(maker)
+    _install(app, maker)
+    await _open_manual_hold(client, agent_id, sha256)
+    await _add_score(maker, agent_id)
+
+    audit = await _audit(client, agent_id)
+    assert audit["held_score_count"] == 3
+    assert audit["current_score_count"] == 4
+    assert audit["held_artifact_sha256"] == audit["current_artifact_sha256"] == sha256
+    assert audit["withdrawable"] is True
+    assert audit["withdrawal_refusal"] is None
+
+    held = {**_audit_guards(audit), "expected_score_count": audit["held_score_count"]}
+    stale = await _preview(client, agent_id, held)
+    assert stale.status_code == 409
+    assert "score count changed" in stale.text
+    body = _audit_guards(audit)
+    preview = await _preview(client, agent_id, body)
+    assert preview.status_code == 200, preview.text
+    executed = await _execute(client, agent_id, body, preview.json()["preview_token"])
+    assert executed.status_code == 200, executed.text
+
+
+async def test_audit_guards_follow_a_reopen_of_a_withdrawn_hold(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id, sha256 = await _seed_scored(maker)
+    _install(app, maker)
+    opened = await _open_manual_hold(client, agent_id, sha256)
+    body = _preview_body(opened, sha256)
+    first = await _execute(
+        client, agent_id, body, await _preview_token(client, agent_id, body)
+    )
+    assert first.status_code == 200, first.text
+    await _add_score(maker, agent_id)
+    await _reopen(client, agent_id, sha256, "Re-held after a retest", score_count=4)
+
+    audit = await _audit(client, agent_id)
+    assert audit["held_score_count"] == 3
+    assert audit["current_score_count"] == 4
+    assert audit["withdrawable"] is True
+    preview = await _preview(client, agent_id, _audit_guards(audit))
+    assert preview.status_code == 200, preview.text
+
+
+async def test_audit_says_why_a_hold_cannot_be_withdrawn(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    ruled_id, ruled_sha = await _seed_scored(maker)
+    automated_id, automated_sha = await _seed_scored(
+        maker, status=AgentStatus.ATH_PENDING_REVIEW, hotkey="5Automated"
+    )
+    async with maker() as session, session.begin():
+        automated = await session.get(Agent, automated_id)
+        assert automated is not None
+        automated.review_reason = "Score-finalization copy hold"
+        session.add(
+            AthReview(
+                review_id=uuid4(),
+                agent_id=automated_id,
+                status="pending",
+                opened_at=_T0,
+                original_reason=automated.review_reason,
+                original_policy_version=8,
+                original_evidence={"sha256": automated_sha, "score_count": 3},
+                algorithm_provenance={"snapshot": "score-finalization"},
+            )
+        )
+    _install(app, maker)
+    await _open_manual_hold(client, ruled_id, ruled_sha)
+    await _resolve(client, ruled_id, "clear", "Certified clear of this artifact")
+    await _reopen(client, ruled_id, ruled_sha, "Precautionary re-hold")
+
+    for agent_id, refusal in (
+        (ruled_id, _PRIOR_RULING),
+        (automated_id, "only a manual precautionary hold can be withdrawn"),
+    ):
+        audit = await _audit(client, agent_id)
+        assert audit["withdrawable"] is False
+        assert refusal in audit["withdrawal_refusal"]
+        preview = await _preview(client, agent_id, _audit_guards(audit))
+        assert preview.status_code == 409
+        assert refusal in preview.text
+
+
+async def test_withdrawn_holds_are_listed_by_resolution(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A withdrawn hold leaves the pending queue but stays findable."""
+    withdrawn_id, withdrawn_sha = await _seed_scored(maker)
+    cleared_id, cleared_sha = await _seed_scored(maker, hotkey="5Cleared")
+    pending_id, pending_sha = await _seed_scored(maker, hotkey="5Pending")
+    _install(app, maker)
+    body = _preview_body(
+        await _open_manual_hold(client, withdrawn_id, withdrawn_sha), withdrawn_sha
+    )
+    executed = await _execute(
+        client, withdrawn_id, body, await _preview_token(client, withdrawn_id, body)
+    )
+    assert executed.status_code == 200, executed.text
+    await _open_manual_hold(client, cleared_id, cleared_sha)
+    await _resolve(client, cleared_id, "clear", "Certified clear of this artifact")
+    await _open_manual_hold(client, pending_id, pending_sha)
+
+    async def _listed(**params: str) -> dict:
+        listing = await client.get(
+            "/api/v1/admin/copy-reviews",
+            params={"generation": "all", **params},
+            headers=_HEADERS,
+        )
+        assert listing.status_code == 200, listing.text
+        return listing.json()
+
+    queue = await _listed(status="pending")
+    assert [item["agent_id"] for item in queue["items"]] == [str(pending_id)]
+    withdrawn = await _listed(status="resolved", resolution="withdraw")
+    assert withdrawn["resolution"] == "withdraw"
+    assert withdrawn["count"] == 1
+    [row] = withdrawn["items"]
+    assert row["agent_id"] == str(withdrawn_id)
+    assert row["resolution"] == "withdraw"
+    assert row["resolution_reason"] == _REASON
+    cleared = await _listed(status="resolved", resolution="clear")
+    assert [item["agent_id"] for item in cleared["items"]] == [str(cleared_id)]
+    everything = await _listed(status="all")
+    assert everything["resolution"] is None
+    assert everything["count"] == 3
+    invalid = await client.get(
+        "/api/v1/admin/copy-reviews",
+        params={"resolution": "withdrawn"},
+        headers=_HEADERS,
+    )
+    assert invalid.status_code == 422
+
+
+async def test_withdraw_audit_projects_the_recorded_reward_posture(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id, sha256 = await _seed_scored(maker)
+    _install(app, maker)
+    body = _preview_body(await _open_manual_hold(client, agent_id, sha256), sha256)
+    preview = await _preview(client, agent_id, body)
+    assert preview.status_code == 200, preview.text
+    executed = await _execute(client, agent_id, body, preview.json()["preview_token"])
+    assert executed.status_code == 200, executed.text
+
+    audit = await _audit(client, agent_id)
+    assert audit["withdrawable"] is False
+    assert audit["withdrawal_refusal"] == "review already withdrawn"
+    [withdrawal] = audit["action_history"]
+    assert withdrawal["action"] == "withdraw"
+    assert withdrawal["previous_status"] == AgentStatus.SCORED
+    assert withdrawal["artifact_sha256"] == sha256
+    assert withdrawal["score_count"] == 3
+    assert withdrawal["emission_gate"] == preview.json()["emission_gate"] == "off"
+    assert withdrawal["emission_reward_eligible"] is True
+    assert withdrawal["eligibility_state"] == "eligible"
+    assert isinstance(withdrawal["eligibility_revision"], int)
+    assert isinstance(withdrawal["eligibility_checksum"], str)
+    assert withdrawal["eligibility_checksum"]
+
+
+async def test_reopen_after_a_withdrawal_reports_the_superseded_withdrawal(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id, sha256 = await _seed_scored(maker)
+    _install(app, maker)
+    body = _preview_body(await _open_manual_hold(client, agent_id, sha256), sha256)
+    executed = await _execute(
+        client, agent_id, body, await _preview_token(client, agent_id, body)
+    )
+    assert executed.status_code == 200, executed.text
+    await _reopen(client, agent_id, sha256, "Re-held on new evidence")
+
+    item = await client.get(f"/api/v1/admin/copy-reviews/{agent_id}", headers=_HEADERS)
+    assert item.status_code == 200, item.text
+    original = item.json()["original"]
+    assert original["reason_source"] == "reconsideration"
+    assert original["reason"] == "Re-held on new evidence"
+    assert original["superseded_resolution"] == "withdraw"
+    assert original["superseded_resolution_reason"] == _REASON
+    audit = await _audit(client, agent_id)
+    assert audit["review"]["original"]["superseded_resolution"] == "withdraw"

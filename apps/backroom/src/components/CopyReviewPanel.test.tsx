@@ -250,6 +250,28 @@ describe('CopyReviewPanel', () => {
     ).toBeDefined()
   })
 
+  it('labels a re-hold of a withdrawn manual hold as superseding the withdrawal', () => {
+    const withdrawalProse = 'Precautionary hold withdrawn. No misconduct finding.'
+    const reheld = item({
+      original: {
+        ...eligible.original,
+        review_kind: 'benchmark_overfit',
+        reason: 'Re-held on new evidence',
+        reason_source: 'reconsideration',
+        superseded_reason: 'Manual precautionary hold',
+        superseded_resolution: 'withdraw',
+        superseded_resolution_reason: withdrawalProse,
+        superseded_at: '2026-09-23T05:36:00Z',
+      },
+    })
+    render(<CopyReviewPanel {...panelProps} initialItems={[reheld]} initialBulkEligibleCount={0} readOnly />)
+
+    expect(screen.getByText('Re-held after a withdrawn hold')).toBeDefined()
+    fireEvent.click(screen.getByText(/held-agent/))
+    expect(screen.getByText(new RegExp(`Hold withdrawn: ${withdrawalProse}`))).toBeDefined()
+    expect(screen.queryByText(/Cleared: /)).toBeNull()
+  })
+
   it('leaves an ordinary hold reason unlabelled', () => {
     render(<CopyReviewPanel {...panelProps} initialItems={[eligible]} initialBulkEligibleCount={1} readOnly />)
     expect(screen.queryByText('Prior rejection withdrawn')).toBeNull()
@@ -474,6 +496,10 @@ describe('CopyReviewPanel', () => {
       agent_status: 'ath_pending_review',
       held_artifact_sha256: 'ab'.repeat(32),
       held_score_count: 3,
+      current_artifact_sha256: 'ab'.repeat(32),
+      current_score_count: 3,
+      withdrawable: true,
+      withdrawal_refusal: null,
       previous_status: 'scored',
       opened_by: 'operator',
       action_history: [],

@@ -1,7 +1,7 @@
 import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, Gavel, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { AthReviewKind, CopyReviewConsoleItem, CopyReviewGeneration, CopyReviewResolution } from '../lib/admin.schemas'
+import type { AthReviewKind, CopyReviewConsoleItem, CopyReviewDecision, CopyReviewGeneration, CopyReviewResolution } from '../lib/admin.schemas'
 import { ATH_HOLD_WITHDRAWAL_CONFIRMATION } from '../lib/admin.schemas'
 import { decideCopyReview, executeAthHoldWithdrawalFn, getAthReview, listCopyReviews, openAthReview, previewAthHoldWithdrawalFn } from '../server/admin.functions'
 import { CopyReviewSourceDiff } from './CopyReviewSourceDiff'
@@ -54,7 +54,14 @@ function supersededLabel(item: Pick<CopyReviewConsoleItem, 'original'>): string 
   const withdrawn = item.original.superseded_resolution
   if (withdrawn === 'reject') return 'Prior rejection withdrawn'
   if (withdrawn === 'clear') return 'Prior clear withdrawn'
+  if (withdrawn === 'withdraw') return 'Re-held after a withdrawn hold'
   return 'Prior decision withdrawn'
+}
+
+const SUPERSEDED_DECISION_LABEL: Record<CopyReviewDecision, string> = {
+  clear: 'Cleared',
+  reject: 'Rejected',
+  withdraw: 'Hold withdrawn',
 }
 
 function matchedSubmissionPhrase(item: Pick<CopyReviewConsoleItem, 'miner_hotkey' | 'original'>): string | null {
@@ -610,7 +617,7 @@ export function CopyReviewPanel({
                     </dt>
                     <dd className="mt-1">
                       {selected.original.superseded_resolution
-                        ? `${selected.original.superseded_resolution === 'reject' ? 'Rejected' : 'Cleared'}: ${selected.original.superseded_resolution_reason ?? 'reason not recorded'}`
+                        ? `${SUPERSEDED_DECISION_LABEL[selected.original.superseded_resolution]}: ${selected.original.superseded_resolution_reason ?? 'reason not recorded'}`
                         : 'Prior decision withdrawn; reason not recorded'}
                     </dd>
                     {selected.original.superseded_reason ? (

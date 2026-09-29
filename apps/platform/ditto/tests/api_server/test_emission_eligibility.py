@@ -26,6 +26,7 @@ import pytest
 from ditto.api_models.emission_eligibility import (
     DEFAULT_SETTINGS,
     STATE_REASONS,
+    WITHDRAWN_REVIEW_REASON,
     EmissionEligibilitySettings,
     eligibility_checksum,
     next_window_start,
@@ -355,9 +356,9 @@ class TestLedgerEvaluation:
         }
 
 
-@pytest.mark.parametrize("state", sorted(STATE_REASONS))
+@pytest.mark.parametrize("state", [*sorted(STATE_REASONS), "withdrawn"])
 def test_every_state_has_source_free_miner_facing_text(state: str) -> None:
-    reason = STATE_REASONS[state]
+    reason = WITHDRAWN_REVIEW_REASON if state == "withdrawn" else STATE_REASONS[state]
     assert reason.endswith(".")
     assert len(reason) > 40
     # These strings render on the public board. Nothing that could leak a
@@ -386,3 +387,32 @@ def test_withdrawal_never_receives_the_exact_artifact_clear_window(
     )
     later = _classify(posture, now=_NOW + timedelta(hours=1))
     assert later.reward_eligible is (resolution == "clear")
+
+
+@pytest.mark.parametrize(
+    ("status", "resolution", "expected"),
+    [
+        ("resolved", "withdraw", WITHDRAWN_REVIEW_REASON),
+        ("pending", None, STATE_REASONS["unresolved_review"]),
+    ],
+)
+@pytest.mark.parametrize("enforcement", ["shadow", "enforce"])
+def test_a_withdrawn_hold_is_never_described_as_still_open(
+    status: str, resolution: str | None, expected: str, enforcement: str
+) -> None:
+    """Same withheld state, but the public ``review_event`` reads ``withdrawn``."""
+    record = _classify(
+        AgentReviewPosture(
+            agent_id=uuid4(),
+            review_status=status,
+            review_resolution=resolution,
+            review_resolved_at=_NOW if status == "resolved" else None,
+            passed_attempt_count=1,
+        ),
+        policy=_policy(enforcement),
+    )
+    assert record.state == "unresolved_review"
+    assert record.reason == expected
+    if resolution == "withdraw":
+        assert "still open" not in record.reason
+        assert "withdrawn" in record.reason

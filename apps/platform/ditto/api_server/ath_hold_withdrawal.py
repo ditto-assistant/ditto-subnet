@@ -119,4 +119,9 @@ def withdrawal_emission_reason(decision: AgentEmissionEligibility) -> str:
             f"{decision.state} without withholding, so the score still earns "
             "emissions."
         )
+    if decision.state == "unresolved_review":
+        return (
+            f"{_WITHDRAWN_PREFIX} Emissions stay withheld as unresolved_review "
+            "until the hold is reopened and cleared or rejected."
+        )
     return f"{_WITHDRAWN_PREFIX} {decision.reason}"
