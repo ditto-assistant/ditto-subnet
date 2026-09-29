@@ -2023,6 +2023,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		caseToolEndpoint := toolEndpoint.forCase(c.ID, toolRunUserID)
 		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, c.ID, caseToolEndpoint, toolRunUserID))
 		observed := toolSrv.Observed(c.ID)
+		attachEffectAccounting(execution.ToolProvenance, toolSrv.EffectAccounting(c.ID))
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
 		cs = applyV10ToolProvenance(req.BenchVersion, scope, cs, resp, observed, execution)
 		cs = applyV13RestraintProvenance(req.BenchVersion, c, cs, execution)
@@ -2194,6 +2195,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			caseToolEndpoint := toolEndpoint.forCase(mc.ID, uid)
 			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, mc.ID, caseToolEndpoint, uid))
 			observedCalls := toolSrv.Observed(mc.ID)
+			attachEffectAccounting(execution.ToolProvenance, toolSrv.EffectAccounting(mc.ID))
 			resp = withObservedTrajectory(resp, observedCalls)
 			gradedResp := resp
 			projected := projectedHarnessCase{Response: resp, Observed: observedCalls}

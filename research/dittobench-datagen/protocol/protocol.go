@@ -699,6 +699,14 @@ type ClaimProvenanceSummary struct {
 type ToolProvenanceEvidence struct {
 	ModelEmitted             int      `json:"model_emitted"`
 	EndpointAttempts         int      `json:"endpoint_attempts"`
+	// V1-only endpoint evidence. EffectAttempts counts validated operation-ID
+	// POSTs, including cached reads; NewHopReplays are the subset of cached
+	// reads on a different model-emitted hop. AppliedEffects counts first
+	// commits only. These counts are signed with the case report.
+	EffectAttempts           int      `json:"effect_attempts,omitempty"`
+	ReceiptReplays           int      `json:"receipt_replays,omitempty"`
+	NewHopReplays            int      `json:"new_hop_replays,omitempty"`
+	AppliedEffects           int      `json:"applied_effects,omitempty"`
 	Matched                  int      `json:"matched"`
 	Unmatched                int      `json:"unmatched"`
 	ModelSelectedNotExecuted int      `json:"model_selected_not_executed"`
@@ -870,6 +878,10 @@ type ToolProvenanceSummary struct {
 	IncompleteCases          int `json:"incomplete_cases"`
 	ModelEmitted             int `json:"model_emitted"`
 	EndpointAttempts         int `json:"endpoint_attempts"`
+	EffectAttempts           int `json:"effect_attempts,omitempty"`
+	ReceiptReplays           int `json:"receipt_replays,omitempty"`
+	NewHopReplays            int `json:"new_hop_replays,omitempty"`
+	AppliedEffects           int `json:"applied_effects,omitempty"`
 	Matched                  int `json:"matched"`
 	Unmatched                int `json:"unmatched"`
 	ModelSelectedNotExecuted int `json:"model_selected_not_executed"`
