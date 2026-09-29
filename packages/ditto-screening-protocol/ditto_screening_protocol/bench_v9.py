@@ -137,7 +137,7 @@ def _apply_gate_factor_micros(ordinary_micros: int, factor_bps: int) -> int:
 
 
 
-V9EvidenceBenchVersion = Literal[9, 10, 11, 12, 13]
+V9EvidenceBenchVersion = Literal[9, 10, 11, 12, 13, 14]
 """Benchmark epochs whose scores carry the signed v9 base-evidence stack.
 
 Every layer that parses, re-derives, or *projects* that evidence must pin this
@@ -153,7 +153,8 @@ Backroom ``bench_version`` enums, and the ``bench_versions.json`` contract
 golden that ``ditto/tests/test_bench_version_pins.py`` diffs against the Go,
 Rust, and TypeScript layers all derive from it (#1519). v13 (#1518) joined it
 with the typed-semantic contract; the v13 gates ship behind shadow switches and
-activation stays a separate Platform rollout step.
+activation stays a separate Platform rollout step. V14 (#2508) carries the
+same evidence stack with action-scoped declarative over-call scoring.
 """
 
 V9_EVIDENCE_BENCH_VERSIONS: tuple[int, ...] = get_args(V9EvidenceBenchVersion)

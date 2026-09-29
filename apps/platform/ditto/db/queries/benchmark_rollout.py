@@ -1421,9 +1421,13 @@ def verified_scorer_for_version(
         or version not in scorer.supported_bench_versions
     ):
         return None
-    # V13 has not activated publicly. Its corrected deterministic candidate
-    # must not be scheduled onto a scorer that only knows the earlier canary.
-    if version == 13 and not scorer.deterministic_v13_datasets:
+    # Typed-semantic epochs retain the deterministic v13 generation surface;
+    # an earlier canary scorer cannot serve these contracts.
+    if version >= 13 and not scorer.deterministic_v13_datasets:
+        return None
+    # A v14 target needs its own version-bound environment packet. The
+    # historical v13 packet stays immutable and cannot qualify a v14 rollout.
+    if version == 14 and scorer.v14_scored_runtime_env is None:
         return None
     if version >= 9 and not _scorer_meets_version_floor(
         heartbeat,

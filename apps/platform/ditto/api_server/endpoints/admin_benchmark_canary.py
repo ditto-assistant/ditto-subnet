@@ -273,7 +273,7 @@ async def issue_benchmark_canary(
             ) from exc
         if not capabilities.ticket_inference or heartbeat.protocol_version < 11:
             raise HTTPException(409, "validator lacks ticket inference capability")
-        if payload.bench_version == 13 and (
+        if payload.bench_version >= 13 and (
             capabilities.scorer_benchmarks is None
             or not capabilities.scorer_benchmarks.deterministic_v13_datasets
         ):

@@ -12395,8 +12395,10 @@ def _install_generator(app: FastAPI, generator: object) -> None:
 
 
 class TestPublicDatasetReveal:
+    @pytest.mark.parametrize("bench_version", [13, 14])
     async def test_v13_reveal_waits_for_work_set_closure(
         self,
+        bench_version: int,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
@@ -12409,7 +12411,7 @@ class TestPublicDatasetReveal:
                 select(Score).where(Score.agent_id == UUID(agent_id))
             )
             for score in scores:
-                score.bench_version = 13
+                score.bench_version = bench_version
         _install_db(app, session_maker)
         generator = _FakeRevealGenerator()
         _install_generator(app, generator)

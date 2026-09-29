@@ -192,6 +192,7 @@ def test_deterministic_v13_capability_preserves_old_signatures_and_is_strict() -
     }
     baseline = ScorerBenchmarkCapability.model_validate(legacy)
     assert "deterministic_v13_datasets" not in baseline.model_dump(mode="json")
+    assert "v14_scored_runtime_env" not in baseline.model_dump(mode="json")
     assert (
         baseline.model_dump_json()
         == ScorerBenchmarkCapability.model_validate(

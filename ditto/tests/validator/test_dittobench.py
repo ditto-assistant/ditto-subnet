@@ -886,6 +886,48 @@ async def test_binary_derived_revision_matching_the_pin_is_verified() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verified_v14_scorer_packet_is_separate_from_v13() -> None:
+    keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
+    packet = {
+        "bench_version": 14,
+        "scope": "scorer-injected-env-only",
+        "source_revision": _REVISION,
+        "injected_keys": keys,
+        "sha256": hashlib.sha256(
+            (
+                "scored-runtime-env-v1\n14\n" + _REVISION + "\n" + "\n".join(keys)
+            ).encode()
+        ).hexdigest(),
+    }
+    client, http = _capability_client(
+        {
+            **_STAMPED,
+            "supported_bench_versions": [13, 14],
+            "features": ["v13-deterministic-enterprise-v1"],
+            "v14_scored_runtime_env": packet,
+        }
+    )
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (13, 14)
+    assert observed.v14_scored_runtime_env is not None
+    assert observed.v14_scored_runtime_env.sha256 == packet["sha256"]
+    assert observed.scored_runtime_env is None
+    bad = {**packet, "sha256": "0" * 64}
+    client, http = _capability_client(
+        {
+            **_STAMPED,
+            "supported_bench_versions": [13, 14],
+            "v14_scored_runtime_env": bad,
+        }
+    )
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+    assert observed.v14_scored_runtime_env is None
+
+
+@pytest.mark.asyncio
 async def test_verified_v13_scorer_packet_enters_signed_capability() -> None:
     keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
     material = "scored-runtime-env-v1\n13\n" + _REVISION + "\n" + "\n".join(keys)

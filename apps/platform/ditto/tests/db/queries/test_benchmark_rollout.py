@@ -123,14 +123,14 @@ _Seeded = TypeVar("_Seeded")
 
 
 async def test_newest_contract_is_a_target_not_an_activation() -> None:
-    # v13 is the newest shipped contract. Shipping it makes it a discoverable
+    # v14 is the newest shipped contract. Shipping it makes it a discoverable
     # rollout target and moves CANARY/CURRENT (discovery metadata); it does not
     # activate it or move weight authority, which stays on the durable ledger.
-    contract = benchmark_contract(13)
+    contract = benchmark_contract(14)
     assert contract.minimum_screening_policy_version == 9
     assert contract.requires_screened_image is True
     assert latest_benchmark_contract() == contract
-    assert CANARY_BENCH_VERSION == 13
+    assert CANARY_BENCH_VERSION == 14
     assert DEFAULT_BENCH_VERSION == 2
     assert LEGACY_BENCH_VERSION == 2
 
@@ -241,7 +241,7 @@ async def test_admin_status_read_does_not_start_rollout(
         # A target must be both above the active version and at or above the
         # floor. Shipping v8 through v11 makes each discoverable as a target but
         # does not create or activate a rollout.
-        assert control["available_target_versions"] == [8, 9, 10, 11, 12, 13]
+        assert control["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14]
         contracts = control["contracts"]
         assert isinstance(contracts, list)
         assert [item["version"] for item in contracts] == [
@@ -257,6 +257,7 @@ async def test_admin_status_read_does_not_start_rollout(
             11,
             12,
             13,
+            14,
         ]
         assert control["status"] == "inactive"
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))
@@ -280,8 +281,21 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
             # Model a current scorer that retains every shipped rollout
             # contract. Individual tests narrow this list when they need to
             # exercise a missing-version boundary.
-            "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12, 13],
+            "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12, 13, 14],
             "deterministic_v13_datasets": True,
+            "v14_scored_runtime_env": {
+                "bench_version": 14,
+                "scope": "scorer-injected-env-only",
+                "source_revision": revision,
+                "injected_keys": ["DITTOBENCH_DB", "DITTOBENCH_MODEL"],
+                "sha256": hashlib.sha256(
+                    (
+                        "scored-runtime-env-v1\n14\n"
+                        + revision
+                        + "\nDITTOBENCH_DB\nDITTOBENCH_MODEL"
+                    ).encode()
+                ).hexdigest(),
+            },
             "observed_at": int(now.timestamp()),
             "software_version": "1.3.0",
             "source_revision": revision,
@@ -2737,6 +2751,7 @@ def _post_v7_capabilities(now: datetime) -> tuple[dict, dict]:
     scorer = capabilities["scorer_benchmarks"]
     scorer["supported_bench_versions"] = [8, 9, 10]
     scorer.pop("deterministic_v13_datasets", None)
+    scorer.pop("v14_scored_runtime_env", None)
     scorer.pop("v7_calibration")
     return capabilities, stack
 
@@ -2841,6 +2856,35 @@ async def test_v9_rollout_rejects_the_fixed_medium_v8_route(
             )
 
 
+async def test_v14_requires_its_own_verified_scorer_packet() -> None:
+    now = datetime.now(UTC)
+    heartbeat = _heartbeat(
+        "v14-candidate", now, versions=[7, 13, 14], protocol_version=18
+    )
+    assert heartbeat.capabilities is not None
+    scorer = heartbeat.capabilities["scorer_benchmarks"]
+    scorer.pop("v14_scored_runtime_env", None)
+    assert heartbeat_supports_version(heartbeat, now=now, version=13)
+    assert not heartbeat_supports_version(heartbeat, now=now, version=14)
+    revision = scorer["source_revision"]
+    keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
+    packet = {
+        "bench_version": 14,
+        "scope": "scorer-injected-env-only",
+        "source_revision": revision,
+        "injected_keys": keys,
+        "sha256": hashlib.sha256(
+            ("scored-runtime-env-v1\n14\n" + revision + "\n" + "\n".join(keys)).encode()
+        ).hexdigest(),
+    }
+    scorer["v14_scored_runtime_env"] = packet
+    assert heartbeat_supports_version(heartbeat, now=now, version=14)
+    scorer["v14_scored_runtime_env"] = {**packet, "bench_version": 13}
+    assert not heartbeat_supports_version(heartbeat, now=now, version=14)
+    scorer["v14_scored_runtime_env"] = {**packet, "sha256": "0" * 64}
+    assert not heartbeat_supports_version(heartbeat, now=now, version=14)
+
+
 def test_v13_requires_exact_deterministic_contract_capability() -> None:
     now = datetime.now(UTC)
     heartbeat = _heartbeat(
@@ -2862,6 +2906,8 @@ def _heartbeat(
     capabilities, stack = _capabilities(now)
     capabilities["scorer_benchmarks"]["supported_bench_versions"] = versions
     capabilities["scorer_benchmarks"]["deterministic_v13_datasets"] = 13 in versions
+    if 14 not in versions:
+        capabilities["scorer_benchmarks"].pop("v14_scored_runtime_env", None)
     if 7 not in versions:
         capabilities["scorer_benchmarks"].pop("v7_calibration", None)
         capabilities["ticket_inference"] = False
@@ -3111,6 +3157,7 @@ async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
     assert capabilities is not None
     scorer = capabilities["scorer_benchmarks"]
     scorer["supported_bench_versions"] = [8]
+    scorer.pop("v14_scored_runtime_env", None)
     scorer.pop("v7_calibration")
 
     assert heartbeat_supports_version(heartbeat, now=now, version=8)

@@ -61,8 +61,8 @@ func TestCapabilitiesReportBoundReleaseIdentity(t *testing.T) {
 			want = append(want, version)
 		}
 	}
-	if want[len(want)-1] != protocol.BenchVersionV13 {
-		t.Fatalf("newest advertised candidate = %d, want v13 (issue #1519 scorer half)", want[len(want)-1])
+	if want[len(want)-1] != protocol.BenchVersionV14 {
+		t.Fatalf("newest advertised candidate = %d, want v14 (issue #2508 scorer half)", want[len(want)-1])
 	}
 	if len(got.SupportedBenchVersions) != len(want) {
 		t.Fatalf("wrong supported versions: %v (want %v)", got.SupportedBenchVersions, want)
@@ -86,6 +86,10 @@ func TestScoredRuntimeEnvEvidenceUsesRunningScorerContract(t *testing.T) {
 	evidence := s.scoredRuntimeEnvEvidence()
 	if evidence == nil || evidence.BenchVersion != 13 || evidence.SourceRevision != testSourceRevision {
 		t.Fatalf("missing bound environment evidence: %+v", evidence)
+	}
+	v14 := s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV14)
+	if v14 == nil || v14.BenchVersion != 14 || v14.SourceRevision != evidence.SourceRevision || v14.SHA256 == evidence.SHA256 {
+		t.Fatalf("v14 must carry a separate version-bound packet: %+v", v14)
 	}
 	want := harnessSandboxEnv(map[string]string{"DITTOBENCH_COMPLETION_LOG": "/tmp/leak"}, protocol.BenchVersionV13)
 	if _, present := want["DITTOBENCH_COMPLETION_LOG"]; present {
@@ -164,7 +168,7 @@ func TestV9AndV10CapabilitiesShareQualityAuthorityWithoutChangingCurrentVersion(
 		}
 	}
 	got := capabilitiesOf(t, &server{softwareVersion: "0.10.0", sourceRevision: testSourceRevision})
-	want := []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12, protocol.BenchVersionV13}
+	want := []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12, protocol.BenchVersionV13, protocol.BenchVersionV14}
 	if !reflect.DeepEqual(got.SupportedBenchVersions, want) {
 		t.Fatalf("supported versions = %v, want %v", got.SupportedBenchVersions, want)
 	}

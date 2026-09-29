@@ -1273,7 +1273,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -1802,7 +1803,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -2423,7 +2425,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -2555,7 +2558,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -2920,7 +2924,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -3400,7 +3405,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -4176,7 +4182,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -4797,7 +4804,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -4929,7 +4937,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -5294,7 +5303,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -7388,7 +7398,10 @@
       "ScoredRuntimeEnvEvidence": {
         "properties": {
           "bench_version": {
-            "const": 13,
+            "enum": [
+              13,
+              14
+            ],
             "type": "integer"
           },
           "injected_keys": {
@@ -7504,6 +7517,17 @@
               "type": "integer"
             },
             "type": "array"
+          },
+          "v14_scored_runtime_env": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ScoredRuntimeEnvEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "v7_calibration": {
             "anyOf": [

@@ -8463,10 +8463,13 @@ async def agent_dataset(
         if row.scores
         else await active_bench_version(session)
     )
-    if dataset_bench_version == 13:
+    if dataset_bench_version >= 13:
         raise HTTPException(
             status_code=409,
-            detail="V13 dataset reveal requires private work-set closure",
+            detail=(
+                f"V{dataset_bench_version} dataset reveal "
+                "requires private work-set closure"
+            ),
             headers={"Cache-Control": "no-store"},
         )
     try:

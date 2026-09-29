@@ -7,6 +7,24 @@ starter kit **byte-for-byte**.
 
 All payloads are JSON over HTTP.
 
+## Bench v14 declarative over-call contract
+
+V14 preserves v2–v13 scoring, including v13's whole-case declarative exclusion.
+Each observed `conversational-declarative` case counts in v14's memory over-call
+rate. Only `save_memory`, `update_memory`, and `delete_memory` are authorized
+persistence actions on that category; memory reads and no calls are unpenalized.
+Unrelated actions, alone or mixed with persistence calls, count once per case.
+Lifecycle-write cases remain outside the rate at every version.
+
+The generator identity is v14; the harness wire stays 9. Score gates, trusted
+efficiency, and LongMem/confirmation retain their prior contracts and postures.
+Capabilities add optional `v14_scored_runtime_env`, whose digest includes version
+14 and the binary source revision. The existing `scored_runtime_env` packet
+continues to describe version 13 with identical canonical bytes. Platform
+requires the v14 packet for v14 fleet readiness. No scorer image or version is
+activated by capability advertisement. See
+[the rollout plan](../../docs/benchmark-v14-rollout.md).
+
 ## Benchmark-version negotiation (validator control plane)
 
 The benchmark contract is a deliberate input, never inferred from a dataset

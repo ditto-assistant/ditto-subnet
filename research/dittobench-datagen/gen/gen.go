@@ -172,7 +172,8 @@ func ProfileForVersion(runSize string, benchVersion int) (Profile, bool) {
 		// v11 and v12 keep v10's run-size envelopes; their difficulty comes
 		// from the generator contract, not from scale.
 		profiles = profilesV10
-	case protocol.BenchVersionV13:
+	case protocol.BenchVersionV13, protocol.BenchVersionV14:
+		// v14 changes only action-scoped over-call scoring and seed identity.
 		profiles = profilesV13
 	default:
 		return Profile{}, false

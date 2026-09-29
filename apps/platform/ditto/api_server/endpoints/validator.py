@@ -4095,16 +4095,20 @@ async def request_job(
             # The post-commit block hash keeps the seed unpredictable; binding
             # the validator hotkey makes it distinct and publicly reproducible.
             # Persist the pin on the ticket so retries cannot rotate datasets.
-            if ticket.bench_version == 13 and ticket.seed is None:
+            if ticket.bench_version >= 13 and ticket.seed is None:
                 if heartbeat is None or not heartbeat_supports_version(
-                    heartbeat, now=now, version=13
+                    heartbeat, now=now, version=ticket.bench_version
                 ):
                     raise HTTPException(
-                        503, "deterministic V13 scorer capability is unavailable"
+                        503,
+                        f"deterministic V{ticket.bench_version} scorer capability "
+                        "is unavailable",
                     )
                 if seed_block_hash is None or generator.run_size is None:
                     raise HTTPException(
-                        503, "deterministic V13 seed binding is unavailable"
+                        503,
+                        f"deterministic V{ticket.bench_version} seed binding "
+                        "is unavailable",
                     )
             if seed_block_hash is not None and generator.run_size is not None:
                 expected_seed = derive_validator_seed(
@@ -5761,12 +5765,16 @@ async def request_top5_confirmation_job(
             bench_version=canonical_version,
         )
         if canonical_version >= 3:
-            if canonical_version == 13 and (
+            if canonical_version >= 13 and (
                 heartbeat is None
-                or not heartbeat_supports_version(heartbeat, now=now, version=13)
+                or not heartbeat_supports_version(
+                    heartbeat, now=now, version=canonical_version
+                )
             ):
                 raise HTTPException(
-                    503, "deterministic V13 scorer capability is unavailable"
+                    503,
+                    f"deterministic V{canonical_version} scorer capability "
+                    "is unavailable",
                 )
             if generator.run_size is None:
                 raise HTTPException(
@@ -7968,7 +7976,7 @@ async def _mirror_late_transcript(
 
 async def _score_uses_private_dataset(session: AsyncSession, score: Score) -> bool:
     """Preserve the submit-transcript privacy rule for every public mirror."""
-    if score.bench_version == 13:
+    if score.bench_version >= 13:
         return True
     dataset_sha = (
         score.details.get("dataset_sha256") if isinstance(score.details, dict) else None

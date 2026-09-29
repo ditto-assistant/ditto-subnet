@@ -146,11 +146,11 @@ class V7InferenceCalibration(BaseModel):
 
 
 class ScoredRuntimeEnvEvidence(BaseModel):
-    """Keys reported by a descriptor-verified scorer for its V13 sandbox."""
+    """Version-bound keys reported by a descriptor-verified scorer."""
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
-    bench_version: Literal[13]
+    bench_version: Literal[13, 14]
     scope: Literal["scorer-injected-env-only"]
     source_revision: Annotated[str, Field(pattern=_REVISION_PATTERN)]
     injected_keys: Annotated[
@@ -171,7 +171,7 @@ class ScoredRuntimeEnvEvidence(BaseModel):
                 "scorer injected keys must be nonempty, sorted, and unique"
             )
         material = (
-            "scored-runtime-env-v1\n13\n"
+            f"scored-runtime-env-v1\n{self.bench_version}\n"
             + self.source_revision
             + "\n"
             + "\n".join(self.injected_keys)
@@ -194,6 +194,9 @@ class ScorerBenchmarkCapability(BaseModel):
     scored_runtime_env: ScoredRuntimeEnvEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    v14_scored_runtime_env: ScoredRuntimeEnvEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     v7_calibration: V7InferenceCalibration | None = None
     private_datasets: bool = Field(default=False, exclude_if=lambda value: not value)
     deterministic_v13_datasets: bool = Field(
@@ -210,11 +213,19 @@ class ScorerBenchmarkCapability(BaseModel):
         if self.scored_runtime_env is not None and (
             self.status != "fresh_verified"
             or 13 not in versions
+            or self.scored_runtime_env.bench_version != 13
             or self.source_revision != self.scored_runtime_env.source_revision
         ):
             raise ValueError(
                 "scored runtime environment requires verified V13 identity"
             )
+        if self.v14_scored_runtime_env is not None and (
+            self.status != "fresh_verified"
+            or 14 not in versions
+            or self.v14_scored_runtime_env.bench_version != 14
+            or self.source_revision != self.v14_scored_runtime_env.source_revision
+        ):
+            raise ValueError("v14 runtime environment requires verified v14 identity")
         if self.deterministic_v13_datasets and (
             self.status != "fresh_verified" or 13 not in versions
         ):

@@ -7590,7 +7590,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /** Case Set Sha256 */
             case_set_sha256: string;
             /** Contract Version */
@@ -18116,7 +18116,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             composite_policy: components["schemas"]["ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -18161,7 +18161,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /** Checksum */
             checksum: string;
             composite: components["schemas"]["ConfirmationCompositeProfile"];
@@ -21961,7 +21961,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /** Case Set Digest */
             case_set_digest: string;
             /** Dataset Revision */
@@ -24778,7 +24778,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /**
              * Bundle Id
              * Format: uuid
@@ -27707,7 +27707,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             score_gates: components["schemas"]["PublicV9ScoreGateEvidence"];
         };
         /**
@@ -29168,14 +29168,14 @@ export interface components {
         };
         /**
          * ScoredRuntimeEnvEvidence
-         * @description Keys reported by a descriptor-verified scorer for its V13 sandbox.
+         * @description Version-bound keys reported by a descriptor-verified scorer.
          */
         ScoredRuntimeEnvEvidence: {
             /**
              * Bench Version
-             * @constant
+             * @enum {integer}
              */
-            bench_version: 13;
+            bench_version: 13 | 14;
             /** Injected Keys */
             injected_keys: string[];
             /**
@@ -29255,6 +29255,7 @@ export interface components {
             status: "fresh_verified" | "legacy_v2" | "unreachable" | "identity_mismatch";
             /** Supported Bench Versions */
             supported_bench_versions: number[];
+            v14_scored_runtime_env?: components["schemas"]["ScoredRuntimeEnvEvidence"] | null;
             v7_calibration?: components["schemas"]["V7InferenceCalibration"] | null;
         };
         /**
@@ -33717,7 +33718,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Effective Composite Micros */
@@ -33810,7 +33811,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             composite_policy: components["schemas"]["V9ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -33903,7 +33904,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /**
              * Bundle Id
              * Format: uuid
@@ -34216,7 +34217,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             claim_provenance?: components["schemas"]["V13ClaimProvenanceGate"] | null;
             inference_latency?: components["schemas"]["V12InferenceLatencyGate"] | null;
             model_dependence?: components["schemas"]["V12ModelDependenceGate"] | null;
