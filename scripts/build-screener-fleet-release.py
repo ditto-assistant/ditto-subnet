@@ -39,6 +39,7 @@ def main() -> None:
     parser.add_argument("--update-protocol", default="1")
     parser.add_argument("--submission-builder-image", default="")
     parser.add_argument("--submission-builder-fallback-file", type=Path)
+    parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
 
     if not VERSION_RE.fullmatch(args.version):
@@ -67,6 +68,11 @@ def main() -> None:
     (args.output / "manifest.env").write_text(
         "".join(f"{key}={value}\n" for key, value in values.items())
     )
+    if args.github_output is not None:
+        # Both values are validated single-line strings. Report the actual
+        # selection so workflow verification cannot diverge from the manifest.
+        with args.github_output.open("a", encoding="utf-8") as output:
+            output.write(f"builder_source={source}\nbuilder_image={builder_image}\n")
 
 
 if __name__ == "__main__":

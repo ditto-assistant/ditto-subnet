@@ -37,8 +37,13 @@ existing hosts can accept them: a valid job digest wins, otherwise the producer
 uses `release/screener-fleet-builder.digest` and emits a warning. Builder failure
 or skip does not block descriptor promotion; cancellation still stops it. The
 builder job continues to report its own failures. If neither reference is
-valid, descriptor publication stops. Update the fallback only from an immutable
-builder reference in a published fleet descriptor or Artifact Registry.
+valid, descriptor publication stops. Before publishing a fallback descriptor,
+the protected `prod` job authenticates through the existing build WIF identity
+and checks that the exact selected digest still exists in Artifact Registry.
+A missing image, lookup failure, or mismatched digest stops publication; a
+valid builder-job image skips this extra verification. Update the fallback only
+from an immutable builder reference in a published fleet descriptor or Artifact
+Registry.
 
 The `Release` workflow first rejects a merge that a newer queued `main` push
 already superseded. For the current merge, affected root surfaces and every

@@ -1,3 +1,6 @@
+import json
+import os
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -825,6 +828,187 @@ def test_submission_builder_is_immutable_and_does_not_gate_delivery() -> None:
         in render["run"]
     )
     assert 'test "$(grep -c' in render["run"] and ')" = 5' in render["run"]
+
+
+def test_fleet_fallback_uses_protected_registry_auth_before_publication() -> None:
+    jobs = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())["jobs"]
+    fleet = jobs["assemble-screener-fleet-release"]
+    steps = fleet["steps"]
+    render = _step(steps, "Render the immutable fleet manifest")
+    auth = _step(steps, "Authenticate fallback image verification")
+    setup = _step(steps, "Set up gcloud for fallback image verification")
+    verify = _step(steps, "Verify the exact fallback builder image exists")
+    build = _step(steps, "Build and publish the immutable fleet descriptor")
+    promote = _step(steps, "Authenticate and promote the exact fleet descriptor")
+    builder_auth = next(
+        step
+        for step in jobs["build-submission-builder"]["steps"]
+        if str(step.get("uses", "")).startswith("google-github-actions/auth@")
+    )
+
+    assert fleet["environment"] == "prod"
+    assert fleet["permissions"]["id-token"] == "write"
+    assert auth["uses"] == builder_auth["uses"]
+    assert auth["with"] == {
+        **builder_auth["with"],
+        "token_format": "access_token",
+        "create_credentials_file": False,
+        "export_environment_variables": False,
+    }
+    assert str(setup["uses"]).startswith("google-github-actions/setup-gcloud@")
+    assert render["id"] == "fleet_manifest"
+    assert '--github-output "$GITHUB_OUTPUT"' in render["run"]
+    for step in (auth, setup, verify):
+        assert step["if"] == "steps.fleet_manifest.outputs.builder_source == 'fallback'"
+        assert "continue-on-error" not in step
+    assert verify["env"]["BUILDER_IMAGE"] == (
+        "${{ steps.fleet_manifest.outputs.builder_image }}"
+    )
+    assert auth["id"] == "fallback_registry_auth"
+    assert verify["env"]["REGISTRY_ACCESS_TOKEN"] == (
+        "${{ steps.fallback_registry_auth.outputs.access_token }}"
+    )
+    assert [
+        steps.index(step) for step in (render, auth, setup, verify, build, promote)
+    ] == (
+        sorted(
+            steps.index(step) for step in (render, auth, setup, verify, build, promote)
+        )
+    )
+    assert "if" not in build and "if" not in promote
+
+
+@pytest.mark.parametrize(
+    ("builder_digest", "registry_result", "registry_status", "can_publish"),
+    [
+        ("sha256:" + "b" * 64, "", 1, True),  # Valid job image skips the lookup.
+        ("", "exact", 0, True),
+        ("invalid", "exact", 0, True),
+        ("", "", 1, False),  # Missing image or denied registry request.
+        ("invalid", "", 1, False),
+        ("", "", 0, False),
+        ("", "sha256:" + "c" * 64, 0, False),
+    ],
+)
+def test_fleet_fallback_registry_lookup_gates_publication(
+    tmp_path: Path,
+    builder_digest: str,
+    registry_result: str,
+    registry_status: int,
+    can_publish: bool,
+) -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    steps = workflow["jobs"]["assemble-screener-fleet-release"]["steps"]
+    render = _step(steps, "Render the immutable fleet manifest")
+    verify = _step(steps, "Verify the exact fallback builder image exists")
+    root = RELEASE_WORKFLOW_PATH.parents[2]
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/build-screener-fleet-release.py").symlink_to(
+        root / "scripts/build-screener-fleet-release.py"
+    )
+    (tmp_path / "release").mkdir()
+    fallback = (root / "release/screener-fleet-builder.digest").read_text().strip()
+    (tmp_path / "release/screener-fleet-builder.digest").write_text(fallback + "\n")
+    outputs = tmp_path / "github-output"
+    marker = tmp_path / "published"
+    calls = tmp_path / "registry-calls.json"
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gcloud = bin_dir / "gcloud"
+    gcloud.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['GCLOUD_CALLS']).write_text(json.dumps(sys.argv[1:]))\n"
+        "token = Path(sys.argv[sys.argv.index('--access-token-file') + 1])\n"
+        "assert token.read_text() == 'fake-registry-token'\n"
+        "assert token.stat().st_mode & 0o777 == 0o600\n"
+        "print(os.environ['REGISTRY_DIGEST'])\n"
+        "sys.exit(int(os.environ['REGISTRY_STATUS']))\n"
+    )
+    gcloud.chmod(0o755)
+    env = {
+        **os.environ,
+        **workflow["env"],
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "BUILDER_DIGEST": builder_digest,
+        "GITHUB_OUTPUT": str(outputs),
+        "RUNNER_TEMP": str(runner_temp),
+        "REGISTRY_ACCESS_TOKEN": "fake-registry-token",
+        "GCLOUD_CALLS": str(calls),
+        "REGISTRY_DIGEST": (
+            fallback.rsplit("@", 1)[1]
+            if registry_result == "exact"
+            else registry_result
+        ),
+        "REGISTRY_STATUS": str(registry_status),
+        "PROMOTION_MARKER": str(marker),
+    }
+    render_script = render["run"].replace(
+        "${{ needs.release.outputs.version }}", "1.2.3"
+    )
+    render_script = render_script.replace(
+        "${{ needs.release.outputs.commit_sha }}", "a" * 40
+    )
+    rendered = subprocess.run(
+        ["bash", "-e", "-c", render_script],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    selected = dict(line.split("=", 1) for line in outputs.read_text().splitlines())
+    manifest = (tmp_path / "build/screener-fleet-release/manifest.env").read_text()
+    assert f"SUBMISSION_BUILDER_IMAGE={selected['builder_image']}\n" in manifest
+    assert len(manifest.splitlines()) == 5
+    condition = {
+        "steps.fleet_manifest.outputs.builder_source": selected["builder_source"]
+    }
+    should_verify = _release_condition_matches(verify["if"], condition)
+    for name in (
+        "Authenticate fallback image verification",
+        "Set up gcloud for fallback image verification",
+    ):
+        assert _release_condition_matches(_step(steps, name)["if"], condition) == (
+            should_verify
+        )
+    script = verify["run"] if should_verify else ""
+    published = subprocess.run(
+        ["bash", "-e", "-c", script + '\nprintf promoted > "$PROMOTION_MARKER"\n'],
+        env={**env, "BUILDER_IMAGE": selected["builder_image"]},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert (published.returncode == 0) is can_publish, published.stderr
+    assert marker.exists() is can_publish
+    assert calls.exists() is should_verify
+    assert list(runner_temp.iterdir()) == []
+    if should_verify:
+        assert selected["builder_source"] == "fallback"
+        arguments = json.loads(calls.read_text())
+        assert arguments[:8] == [
+            "artifacts",
+            "docker",
+            "images",
+            "describe",
+            fallback,
+            "--project",
+            "ditto-app-dev",
+            "--format=value(image_summary.digest)",
+        ]
+        assert arguments[8] == "--access-token-file"
+        assert Path(arguments[9]).parent == runner_temp
+        assert arguments[10:] == ["--quiet"]
+    else:
+        assert selected["builder_source"] == "job"
+        assert selected["builder_image"] == (
+            f"{workflow['env']['SUBMISSION_BUILDER_REPOSITORY']}@{builder_digest}"
+        )
 
 
 def _release_condition_matches(condition: str, values: dict[str, str]) -> bool:
