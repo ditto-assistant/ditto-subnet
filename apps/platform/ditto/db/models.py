@@ -7097,9 +7097,15 @@ class ScreenerL2ReportCanary(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(["target_node_id"], ["screener_nodes.node_id"]),
+        # The stamped scope must be the pinned revision's own scope (through
+        # the unique ``(scope, revision)`` index), so the CHECK below guards
+        # the revision actually pinned, not only a copied label.
         ForeignKeyConstraint(
-            ["review_settings_revision"],
-            ["screener_review_settings_revisions.revision"],
+            ["review_settings_scope", "review_settings_revision"],
+            [
+                "screener_review_settings_revisions.scope",
+                "screener_review_settings_revisions.revision",
+            ],
             ondelete="RESTRICT",
             name="screener_l2_canary_review_settings_revision_fkey",
         ),
@@ -7109,7 +7115,8 @@ class ScreenerL2ReportCanary(Base):
         ),
         # Verbatim from 2026_09_29_bind_l2_canary_review_settings_pin.py. The
         # scope clause is the database backstop that a pin can never name a
-        # production (``*``, node, or worker) scope.
+        # production (``*``, node, or worker) scope; it admits exactly what
+        # ``is_l2_report_canary_scope`` admits.
         CheckConstraint(
             "(review_settings_revision IS NULL "
             "AND review_settings_scope IS NULL "
@@ -7118,8 +7125,7 @@ class ScreenerL2ReportCanary(Base):
             "AND review_settings_scope IS NOT NULL "
             "AND review_settings_checksum IS NOT NULL "
             "AND review_settings_revision > 0 "
-            "AND (review_settings_scope = 'l2-report-canary' "
-            "OR review_settings_scope LIKE 'l2-report-canary-%') "
+            "AND review_settings_scope ~ '^l2-report-canary(-|$)' "
             "AND review_settings_checksum ~ '^[0-9a-f]{64}$')",
             name="review_settings_pin_check",
         ),

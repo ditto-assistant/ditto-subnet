@@ -53,7 +53,11 @@ L2_REPORT_CANARY_SCOPE_PREFIX = "l2-report-canary"
 
 
 def is_l2_report_canary_scope(scope: str) -> bool:
-    """Whether ``scope`` names an isolated report-only canary posture."""
+    """Whether ``scope`` names an isolated report-only canary posture.
+
+    The canary table's ``review_settings_pin_check`` spells the same set as
+    ``~ '^l2-report-canary(-|$)'``; a migration test pins the two together.
+    """
     return scope == L2_REPORT_CANARY_SCOPE_PREFIX or scope.startswith(
         f"{L2_REPORT_CANARY_SCOPE_PREFIX}-"
     )

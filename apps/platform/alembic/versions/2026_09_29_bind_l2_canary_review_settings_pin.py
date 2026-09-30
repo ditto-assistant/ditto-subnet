@@ -6,11 +6,16 @@ that production screening on that node also resolves. A canary now records an
 immutable ``l2-report-canary*`` revision at scheduling time and runs under it.
 
 The CHECK keeps the three pin columns all-or-nothing and refuses any scope
-outside the canary namespace, so a pin can never name ``*``, ``bootstrap``, a
-node, or a worker scope even if application validation regresses.
+outside the canary namespace. The foreign key references the revision through
+its unique ``(scope, revision)`` index, so the stamped scope is the pinned
+revision's own scope. Together they keep a pin from ever naming ``*``,
+``bootstrap``, a node, or a worker scope even if application validation
+regresses, and they refuse deleting a pinned revision or moving it to another
+scope.
 
 Revision ID: 111add4c7a2a
 Revises: 5e2a8c4f9d17
+Create Date: 2026-09-29
 """
 
 from collections.abc import Sequence
@@ -39,10 +44,13 @@ def upgrade() -> None:
         _FKEY,
         _TABLE,
         "screener_review_settings_revisions",
-        ["review_settings_revision"],
-        ["revision"],
+        ["review_settings_scope", "review_settings_revision"],
+        ["scope", "revision"],
         ondelete="RESTRICT",
     )
+    # An anchored regex rather than LIKE, as elsewhere in this schema: it
+    # admits exactly ``l2-report-canary`` and ``l2-report-canary-<anything>``,
+    # the set ``is_l2_report_canary_scope`` admits.
     op.create_check_constraint(
         op.f(_CHECK),
         _TABLE,
@@ -53,8 +61,7 @@ def upgrade() -> None:
         "AND review_settings_scope IS NOT NULL "
         "AND review_settings_checksum IS NOT NULL "
         "AND review_settings_revision > 0 "
-        "AND (review_settings_scope = 'l2-report-canary' "
-        "OR review_settings_scope LIKE 'l2-report-canary-%') "
+        "AND review_settings_scope ~ '^l2-report-canary(-|$)' "
         "AND review_settings_checksum ~ '^[0-9a-f]{64}$')",
     )
 

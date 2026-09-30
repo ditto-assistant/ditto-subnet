@@ -4164,7 +4164,7 @@ CREATE TABLE public.screener_l2_report_canaries (
     review_settings_revision integer,
     review_settings_scope text,
     review_settings_checksum text,
-    CONSTRAINT ck_screener_l2_report_canaries_review_settings_pin_check CHECK ((((review_settings_revision IS NULL) AND (review_settings_scope IS NULL) AND (review_settings_checksum IS NULL)) OR ((review_settings_revision IS NOT NULL) AND (review_settings_scope IS NOT NULL) AND (review_settings_checksum IS NOT NULL) AND (review_settings_revision > 0) AND ((review_settings_scope = 'l2-report-canary'::text) OR (review_settings_scope ~~ 'l2-report-canary-%'::text)) AND (review_settings_checksum ~ '^[0-9a-f]{64}$'::text)))),
+    CONSTRAINT ck_screener_l2_report_canaries_review_settings_pin_check CHECK ((((review_settings_revision IS NULL) AND (review_settings_scope IS NULL) AND (review_settings_checksum IS NULL)) OR ((review_settings_revision IS NOT NULL) AND (review_settings_scope IS NOT NULL) AND (review_settings_checksum IS NOT NULL) AND (review_settings_revision > 0) AND (review_settings_scope ~ '^l2-report-canary(-|$)'::text) AND (review_settings_checksum ~ '^[0-9a-f]{64}$'::text)))),
     CONSTRAINT ck_screener_l2_report_canaries_run_mode_check CHECK ((run_mode = ANY (ARRAY['source_only'::text, 'full_runtime'::text]))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_label_check CHECK ((review_label = ANY (ARRAY['unreviewed'::text, 'candidate_clear'::text, 'known_reject'::text]))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_runtime_check CHECK (((runtime_evidence_sha256 IS NULL) OR (runtime_evidence_sha256 ~ '^[0-9a-f]{64}$'::text))),
@@ -11324,7 +11324,7 @@ ALTER TABLE ONLY public.screener_heartbeats
 --
 
 ALTER TABLE ONLY public.screener_l2_report_canaries
-    ADD CONSTRAINT screener_l2_canary_review_settings_revision_fkey FOREIGN KEY (review_settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
+    ADD CONSTRAINT screener_l2_canary_review_settings_revision_fkey FOREIGN KEY (review_settings_scope, review_settings_revision) REFERENCES public.screener_review_settings_revisions(scope, revision) ON DELETE RESTRICT;
 
 
 --

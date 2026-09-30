@@ -1,8 +1,9 @@
 """The report-only canary posture pin round-trips and guards its scope (#2448).
 
 Upgrade adds an all-or-nothing pin whose scope must live in the
-``l2-report-canary`` namespace, so even a regressed scheduler cannot bind a
-canary to ``*``, ``bootstrap``, or a node scope. Downgrade removes it cleanly.
+``l2-report-canary`` namespace and must be the pinned revision's own scope, so
+even a regressed scheduler cannot bind a canary to ``*``, ``bootstrap``, or a
+node scope. Downgrade removes it cleanly.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener_review_settings import (
     ScreenerReviewSettings,
+    is_l2_report_canary_scope,
     review_settings_checksum,
 )
 from ditto.db.models import (
@@ -174,6 +176,18 @@ async def test_review_settings_pin_round_trip_and_scope_guard(
                     revision=revisions[scope],
                     scope=scope,
                 )
+        # Nor by stamping a canary scope beside a production revision: the
+        # stamped scope must be the pinned revision's own scope.
+        for scope in ("*", node_id):
+            with pytest.raises(IntegrityError):
+                await _insert_canary(
+                    session_maker,
+                    node_id=node_id,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    revision=revisions[scope],
+                    scope=canary_scope,
+                )
         # All three pin fields or none. SQL CHECKs pass on NULL, so each
         # partial shape must be refused explicitly.
         partial_pins: tuple[tuple[int | None, str | None, str | None], ...] = (
@@ -209,20 +223,94 @@ async def test_review_settings_pin_round_trip_and_scope_guard(
             scope=None,
             checksum=None,
         )
-        # A pinned revision cannot be deleted out from under its canary.
-        async with session_maker() as session:
-            with pytest.raises(IntegrityError):
-                async with session.begin():
-                    await session.execute(
-                        text(
-                            "DELETE FROM screener_review_settings_revisions "
-                            "WHERE revision = :revision"
-                        ),
-                        {"revision": revisions[canary_scope]},
-                    )
+        # A pinned revision cannot be deleted, or moved to another scope, out
+        # from under its canary.
+        for statement in (
+            "DELETE FROM screener_review_settings_revisions WHERE revision = :revision",
+            "UPDATE screener_review_settings_revisions "
+            "SET scope = 'l2-report-canary-moved' WHERE revision = :revision",
+        ):
+            async with session_maker() as session:
+                with pytest.raises(IntegrityError):
+                    async with session.begin():
+                        await session.execute(
+                            text(statement), {"revision": revisions[canary_scope]}
+                        )
 
         # Downgrade drops the pin even with pinned rows present.
         _alembic("downgrade", _PARENT)
         assert await _pin_columns(engine) == set()
     finally:
         _alembic("upgrade", "head")
+
+
+# Scopes probing the edges of the namespace. The two ``l2X...``/``l2_...``
+# spellings are the ones a reader who mistakes the hyphens for LIKE's ``_``
+# wildcard would expect the database to admit.
+_SCOPE_PROBES = (
+    "l2-report-canary",
+    "l2-report-canary-",
+    "l2-report-canary-ctl137",
+    "l2-report-canary-a.b_c",
+    "l2-report-canary--x",
+    "l2-report-canary-%",
+    "l2-report-canaryctl137",
+    "l2-report-canary_ctl137",
+    "l2-report-canary%",
+    "l2-report-canar",
+    "l2XreportXcanary-evil",
+    "l2_report_canary-evil",
+    "l2-report_canary-x",
+    "L2-report-canary-x",
+    "xl2-report-canary-x",
+    " l2-report-canary-x",
+    "l2-report-canary\n",
+    "bootstrap",
+    "integrity-double-check",
+)
+
+
+async def test_pin_scope_check_admits_exactly_the_application_namespace(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The CHECK and ``is_l2_report_canary_scope`` accept the same scopes.
+
+    Scheduling validates with the Python predicate; the CHECK is the database
+    backstop. If the two ever disagree, one of them is not guarding what the
+    other promises.
+    """
+    node_id, agent_id, attempt_id, _ = await _seed_source(session_maker)
+    settings = ScreenerReviewSettings(mode="enforce")
+    accepted: dict[str, bool] = {}
+    for index, scope in enumerate(_SCOPE_PROBES, start=1):
+        async with session_maker() as session, session.begin():
+            row = ScreenerReviewSettingsRevision(
+                parent_revision=index,
+                scope=scope,
+                settings=settings.model_dump(mode="json"),
+                checksum=review_settings_checksum(settings),
+                reason="pin scope namespace probe",
+                actor="test",
+            )
+            session.add(row)
+            await session.flush()
+            revision = row.revision
+        try:
+            await _insert_canary(
+                session_maker,
+                node_id=node_id,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                revision=revision,
+                scope=scope,
+            )
+        except IntegrityError:
+            accepted[scope] = False
+        else:
+            accepted[scope] = True
+    assert accepted == {
+        scope: is_l2_report_canary_scope(scope) for scope in _SCOPE_PROBES
+    }
+    assert accepted["l2-report-canary"] and accepted["l2-report-canary-ctl137"]
+    assert not accepted["l2XreportXcanary-evil"]
+    assert not accepted["l2_report_canary-evil"]
