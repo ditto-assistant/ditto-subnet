@@ -427,11 +427,12 @@ describe('Backroom MCP tools', () => {
     // guarded verified V13 court-clear release adds a bounded writer entry.
     // Four canonical starter fixture controls bring the measured catalog to
     // 179,468 bytes. The optional canary review-posture pin
-    // (reviewSettingsRevision) measures 179,642. Manual hold preview/withdraw
+    // (reviewSettingsRevision) measured 179,642; the node canary cap (#2447)
+    // adds one required setting and catalog note. Manual hold preview/withdraw
     // tools, the paginated list_withdrawn_ath_holds read and the current-guard
-    // notes on get_ath_review and preview_ath_hold_withdrawal measure 183,274
-    // together; retain about 0.5 KB headroom.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(183_800)
+    // notes on get_ath_review and preview_ath_hold_withdrawal bring the
+    // measured catalog to 183,401; retain about 0.5 KB headroom.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(183_900)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -467,10 +468,11 @@ describe('Backroom MCP tools', () => {
       // main adds the validator-capacity summary (#2036) and the guarded
       // verified V13 court-clear release summary.
       // Four fixture tool summaries bring the measured total to 31,772.
-      // The canary review-posture pin clause measures 31,854. Manual hold
+      // The canary review-posture pin clause measured 31,854; the node
+      // canary cap (#2447) also adds a short catalog note. Manual hold
       // preview/withdraw summaries, the withdrawn-holds read and the
-      // current-guard wording measure 32,587 together.
-      32_800,
+      // current-guard wording bring the measured total to 32,629.
+      32_850,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -2414,6 +2416,11 @@ describe('Backroom MCP tools', () => {
       expect(help.guidance).toContain('a worker on another provider can still claim those agents by backoff alone')
       expect(help.guidance).toContain('holds every worker')
       expect(help.guidance).toContain('aged_out_agents')
+      expect(help.guidance).toContain('source-review-adjudicator-key-unavailable')
+      expect(help.guidance).toContain('screening-lane signature')
+      // half_open still holds all but one probe per signature per interval.
+      expect(help.guidance).not.toContain('nothing is held')
+      expect(help.guidance).toContain('its other agents stay held')
     } finally {
       await client.close()
       await server.close()
@@ -2662,11 +2669,12 @@ describe('Backroom MCP tools', () => {
       build_concurrency: 1,
       runtime_concurrency: 1,
       source_review_concurrency: 1,
+      canary_concurrency: 0,
     }
     const reason = 'Start the approved one-slot Hetzner production canary'
     const confirmation =
       'APPLY SCREENER NODE subnet-screener-1 ' +
-      'SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1'
+      'SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1 CANARY=0'
     const control = {
       current: {
         environment: 'prod',
@@ -2685,6 +2693,7 @@ describe('Backroom MCP tools', () => {
         build_active: 0,
         runtime_active: 0,
         source_review_active: 0,
+        canary_active: 0,
       },
     }
     const fetchMock = vi
@@ -10216,4 +10225,119 @@ describe('Backroom MCP tools', () => {
     await client.close()
     await server.close()
   })
+  it('reads a pre-canary Platform node control with Platform defaults', async () => {
+    // Platform and Backroom deploy in parallel. A Platform build without the
+    // canary cap omits it; Backroom's read schema supplies Platform's own
+    // defaults instead of failing the capacity read.
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const revision = {
+      environment: 'prod',
+      node_id: 'subnet-screener-1',
+      revision: 3,
+      parent_revision: 2,
+      settings: {
+        screening_concurrency: 2,
+        sandbox_slots: 2,
+        build_concurrency: 2,
+        runtime_concurrency: 2,
+        source_review_concurrency: 2,
+      },
+      reason: 'Open two production lanes on the primary',
+      actor: 'operator@example.com',
+      created_at: '2026-09-28T00:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        snapshot: null,
+        nodes: [],
+        events: [],
+        node_controls: [
+          {
+            current: revision,
+            history: [revision],
+            usage: {
+              screening_active: 1,
+              sandbox_active: 0,
+              build_active: 0,
+              runtime_active: 0,
+              source_review_active: 0,
+            },
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_screener_capacity', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        node_controls: [
+          {
+            current: { revision: 3, settings: { canary_concurrency: 1 } },
+            history: [{ settings: { canary_concurrency: 1 } }],
+            usage: { screening_active: 1, canary_active: 0, canary_queued: 0 },
+          },
+        ],
+      })
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('requires the report-only canary cap on node concurrency writes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const tool = (await client.listTools()).tools.find(
+        (candidate) => candidate.name === 'set_screener_node_channel_settings',
+      )
+      expect(tool?.description).toContain('report-only L2 canary cap')
+      const settingsSchema = (
+        tool?.inputSchema.properties as Record<string, { required?: string[] }>
+      ).settings
+      expect(settingsSchema.required).toContain('canary_concurrency')
+      const help = async (name: string) =>
+        (
+          readJsonResult(
+            await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool: name } }),
+          ) as { guidance: string }
+        ).guidance
+      const writeHelp = await help('set_screener_node_channel_settings')
+      expect(writeHelp).toContain('Supply all six limits')
+      expect(writeHelp).toContain('only while admission is open')
+      expect(writeHelp).toContain(
+        'min(canary_concurrency, 4, fresh workers minus screening_concurrency)',
+      )
+      expect(await help('get_screener_capacity')).toContain('usage.canary_active')
+
+      const response = await client.callTool({
+        name: 'set_screener_node_channel_settings',
+        arguments: {
+          nodeId: 'subnet-screener-1',
+          expectedRevision: 0,
+          settings: {
+            screening_concurrency: 1,
+            sandbox_slots: 1,
+            build_concurrency: 1,
+            runtime_concurrency: 1,
+            source_review_concurrency: 1,
+          },
+          reason: 'Start the approved one-slot Hetzner production canary',
+          confirmation:
+            'APPLY SCREENER NODE subnet-screener-1 ' +
+            'SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1 CANARY=1',
+        },
+      })
+      expect(response.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
 })

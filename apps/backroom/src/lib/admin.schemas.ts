@@ -730,6 +730,14 @@ export const screenerNodeChannelSettingsSchema = z.object({
   build_concurrency: z.number().int().min(0).max(16),
   runtime_concurrency: z.number().int().min(0).max(16),
   source_review_concurrency: z.number().int().min(0).max(32),
+  // Report-only L2 canaries; Platform applies it only while admission is open.
+  canary_concurrency: z.number().int().min(0).max(8),
+})
+
+// Writes must name every limit. A Platform build that predates the canary cap
+// omits it on reads, so fill Platform's own default rather than fail the panel.
+const screenerNodeChannelSettingsReadSchema = screenerNodeChannelSettingsSchema.extend({
+  canary_concurrency: screenerNodeChannelSettingsSchema.shape.canary_concurrency.default(1),
 })
 
 export const screenerNodeChannelSettingsRevisionSchema = z.object({
@@ -737,7 +745,7 @@ export const screenerNodeChannelSettingsRevisionSchema = z.object({
   node_id: z.string().min(1),
   revision: z.number().int().nonnegative(),
   parent_revision: z.number().int().nonnegative(),
-  settings: screenerNodeChannelSettingsSchema,
+  settings: screenerNodeChannelSettingsReadSchema,
   reason: z.string().min(1),
   actor: z.string().min(1),
   created_at: z.string().nullable(),
@@ -752,6 +760,8 @@ export const screenerNodeChannelSettingsControlSchema = z.object({
     build_active: z.number().int().nonnegative(),
     runtime_active: z.number().int().nonnegative(),
     source_review_active: z.number().int().nonnegative(),
+    canary_active: z.number().int().nonnegative().default(0),
+    canary_queued: z.number().int().nonnegative().default(0),
   }).nullable(),
 })
 
@@ -813,7 +823,7 @@ export function screenerNodeChannelSettingsConfirmation(
   nodeId: string,
   settings: z.infer<typeof screenerNodeChannelSettingsSchema>,
 ) {
-  const confirmation = `APPLY SCREENER NODE ${nodeId} SCREENING=${settings.screening_concurrency} SANDBOX=${settings.sandbox_slots} BUILD=${settings.build_concurrency} RUNTIME=${settings.runtime_concurrency} SOURCE_REVIEW=${settings.source_review_concurrency}`
+  const confirmation = `APPLY SCREENER NODE ${nodeId} SCREENING=${settings.screening_concurrency} SANDBOX=${settings.sandbox_slots} BUILD=${settings.build_concurrency} RUNTIME=${settings.runtime_concurrency} SOURCE_REVIEW=${settings.source_review_concurrency} CANARY=${settings.canary_concurrency}`
   // Mirrors Platform: closing admission stops this node from taking production work.
   return settings.screening_concurrency === 0
     ? `${confirmation} CLOSE PRODUCTION ADMISSION`

@@ -23883,9 +23883,11 @@ export interface components {
          * PublicAdmissionRetry
          * @description Live admission state for a submission still in build & admission.
          *
-         *     Failed cost-bearing attempts never retry automatically, except a Docker build
-         *     infrastructure failure or a claim the worker released before starting it.
-         *     ``parked`` names a source-review/provider failure (including OpenRouter
+         *     Failed cost-bearing attempts never retry automatically, except a Ditto-owned
+         *     failure that never judged the artifact: a Docker build infrastructure
+         *     failure, a claim the worker released before starting it, missing scorer
+         *     runtime evidence, or a screening node whose source-review court could not
+         *     start. ``parked`` names a source-review/provider failure (including OpenRouter
          *     throttling), while ``stuck`` names another Ditto-owned infrastructure
          *     failure. Both require a guarded Backroom retry.
          *     ``retry_queued`` means a retry is waiting for a screener slot: either that
@@ -30404,6 +30406,13 @@ export interface components {
          *     limits allow operators to reserve or disable a lane, while ``sandbox_slots``
          *     prevents both lanes from consuming twice the physical host capacity.
          *     Source review is CPU-light and has its own independent limit.
+         *
+         *     ``canary_concurrency`` caps report-only L2 canaries on the node, but only
+         *     while production admission is open (``screening_concurrency > 0``). Even
+         *     then a canary never takes one of the ``screening_concurrency`` workers
+         *     reserved for production. With admission closed the canary lane keeps its
+         *     legacy heartbeat-bounded cap. Revisions written before the field existed
+         *     load with the default of one.
          */
         ScreenerNodeChannelSettings: {
             /**
@@ -30411,6 +30420,11 @@ export interface components {
              * @default 0
              */
             build_concurrency: number;
+            /**
+             * Canary Concurrency
+             * @default 1
+             */
+            canary_concurrency: number;
             /**
              * Runtime Concurrency
              * @default 0
@@ -30484,6 +30498,16 @@ export interface components {
              * @default 0
              */
             build_active: number;
+            /**
+             * Canary Active
+             * @default 0
+             */
+            canary_active: number;
+            /**
+             * Canary Queued
+             * @default 0
+             */
+            canary_queued: number;
             /**
              * Runtime Active
              * @default 0

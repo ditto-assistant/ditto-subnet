@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v0.331.5 (2026-09-30)
+
+### Bug Fixes
+
+- **platform**: Rebase bounded court-key retry after canary pin migration
+  ([#2599](https://github.com/ditto-assistant/ditto-subnet/pull/2599),
+  [`8cb1407`](https://github.com/ditto-assistant/ditto-subnet/commit/8cb1407a48c114e484ae14b018acf41d43799ef4))
+
+- **platform**: Reserve production workers from report canaries after pinning
+  ([#2598](https://github.com/ditto-assistant/ditto-subnet/pull/2598),
+  [`086e572`](https://github.com/ditto-assistant/ditto-subnet/commit/086e572eaa522a51cb9a353a2938b0d8e6fa46ce))
+
+
+## v0.331.4 (2026-09-30)
+
+### Bug Fixes
+
+- Redact public continual retest seeds
+  ([#2595](https://github.com/ditto-assistant/ditto-subnet/pull/2595),
+  [`acf5f5d`](https://github.com/ditto-assistant/ditto-subnet/commit/acf5f5debe9414cd296c8f9f5d882f406872bed7))
+
+- **platform**: Bind L2 report canaries to a pinned review-settings revision
+  ([#2562](https://github.com/ditto-assistant/ditto-subnet/pull/2562),
+  [`614deee`](https://github.com/ditto-assistant/ditto-subnet/commit/614deee804f8de248f0453740bde8b8903305b9c))
+
+- **screener**: Retain served Rust cfg test citations
+  ([`84fbf51`](https://github.com/ditto-assistant/ditto-subnet/commit/84fbf51a27c4f66ca8f922083b9b1abd6834e0c6))
+
+- **validator**: Reject ledger rows below the signed-receipt contract
+  ([#2592](https://github.com/ditto-assistant/ditto-subnet/pull/2592),
+  [`0dd32f3`](https://github.com/ditto-assistant/ditto-subnet/commit/0dd32f3e296e52a3f89c10f4ce075488de7ac22b))
+
+
 ## v0.331.3 (2026-09-30)
 
 ### Bug Fixes

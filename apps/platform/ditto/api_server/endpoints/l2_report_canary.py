@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
@@ -28,6 +30,7 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryScheduleRequest,
     L2CanaryView,
 )
+from ditto.api_models.screener_node_settings import ScreenerNodeChannelSettings
 from ditto.api_models.screener_review_settings import (
     L2_REPORT_CANARY_SCOPE_PREFIX,
     EffectiveScreenerReviewSettings,
@@ -35,6 +38,7 @@ from ditto.api_models.screener_review_settings import (
     is_l2_report_canary_scope,
 )
 from ditto.api_models.system_health import fleet_release_from_heartbeat_envelope
+from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.canonical_starter_control import (
     ARCHIVE_BYTES,
     ARCHIVE_SHA256,
@@ -69,6 +73,13 @@ from ditto.db.models import (
     ScreeningReviewEvent,
 )
 from ditto.db.queries.benchmark_rollout import arrival_bench_version
+from ditto.db.queries.screener_node_settings import (
+    resolve_screener_node_channel_settings,
+)
+from ditto.db.queries.screening import (
+    claim_canary_scopes,
+    has_claimable_screening_work,
+)
 from ditto_screening_protocol import ScreenerReviewSettingsOverride
 
 admin_router = APIRouter(prefix="/admin/screener-l2-report-canaries", tags=["admin"])
@@ -87,6 +98,13 @@ _FULL_RUNTIME_OVERHEAD = timedelta(minutes=60)
 _FULL_RUNTIME_MIN_RELEASE = (0, 317, 2)
 _MAX_PARALLEL_SOURCE_ONLY = 4
 _WORKER_HEARTBEAT_MAX_AGE = timedelta(minutes=5)
+# Idle workers poll every 30 seconds, so a node that keeps holding queued
+# canaries for production would otherwise log twice a minute per worker.
+_PRODUCTION_HOLD_LOG_INTERVAL_SECONDS = 60.0
+# Monotonic time of the last production-hold log line per (node, reason).
+_production_hold_logged_at: dict[tuple[str, str], float] = {}
+
+logger = logging.getLogger(__name__)
 
 
 def _canary_lease(
@@ -421,6 +439,87 @@ async def _fixture_worker_ready(
         if release is not None and release.source_fixture_v1:
             return True
     return False
+
+
+async def _fresh_worker_ids(
+    session: AsyncSession, *, node: ScreenerNode, now: datetime
+) -> set[str]:
+    """Node worker instances with a fresh polling or screening heartbeat."""
+    return set(
+        await session.scalars(
+            select(ScreenerHeartbeat.instance_id).where(
+                ScreenerHeartbeat.screener_hotkey == node.screener_hotkey,
+                ScreenerHeartbeat.instance_id.like(f"{node.node_id}-worker-%"),
+                ScreenerHeartbeat.seen_at >= now - _WORKER_HEARTBEAT_MAX_AGE,
+                ScreenerHeartbeat.state.in_(("polling", "screening")),
+            )
+        )
+    )
+
+
+async def _canary_yields_to_production(
+    session: AsyncSession,
+    *,
+    node: ScreenerNode,
+    limits: ScreenerNodeChannelSettings,
+    instance_id: str,
+    active: int,
+    review_settings_scopes: frozenset[str] | None,
+    now: datetime,
+) -> bool:
+    """Hold a leasable canary while this node's production admission is open.
+
+    The production claim budget counts only screening attempts, so a canary
+    that takes the worker production needs delays a fresh upload by up to one
+    canary lease. With admission open, a canary therefore waits while fresh
+    production work is claimable by this worker, and it may never occupy one
+    of the ``screening_concurrency`` fresh workers kept for production. The
+    caller holds the node row lock, so ``active`` cannot race another canary
+    claim, and has already selected the row it would lease, so a hold is
+    decided and logged only for a canary this worker could otherwise take.
+    """
+    healthy_workers = await _fresh_worker_ids(session, node=node, now=now)
+    reserve_cap = min(
+        limits.canary_concurrency,
+        _MAX_PARALLEL_SOURCE_ONLY,
+        max(0, len(healthy_workers) - limits.screening_concurrency),
+    )
+    if await has_claimable_screening_work(
+        session,
+        now=now,
+        review_settings_scopes=review_settings_scopes,
+        netuid=expected_netuid(),
+    ):
+        reason = "production-claimable"
+    elif instance_id not in healthy_workers or active >= reserve_cap:
+        # A worker without a fresh heartbeat is not counted in the
+        # reservation, so it cannot prove a production worker stays free.
+        reason = "production-reserved"
+    else:
+        return False
+    key = (node.node_id, reason)
+    logged_at = _production_hold_logged_at.get(key)
+    monotonic_now = time.monotonic()
+    if (
+        logged_at is None
+        or monotonic_now - logged_at >= _PRODUCTION_HOLD_LOG_INTERVAL_SECONDS
+    ):
+        _production_hold_logged_at[key] = monotonic_now
+        logger.info(
+            "report-only L2 canary held for production node_id=%s "
+            "instance_id=%s reason=%s screening_concurrency=%d "
+            "canary_concurrency=%d healthy_workers=%d active=%d "
+            "claimant_fresh=%s",
+            node.node_id,
+            instance_id,
+            reason,
+            limits.screening_concurrency,
+            limits.canary_concurrency,
+            len(healthy_workers),
+            active,
+            instance_id in healthy_workers,
+        )
+    return True
 
 
 async def _score_count(session: AsyncSession, agent_id: UUID) -> int:
@@ -1063,22 +1162,19 @@ async def claim_l2_report_canary(
             )
         if any(row.claimed_instance_id == payload.instance_id for row in active):
             return None
-        # Keep private-challenge runs isolated. Preserve the legacy first lease
-        # without requiring a heartbeat; additional source-only leases require
-        # fresh worker heartbeats and the node lock serializes their count.
+        # Keep private-challenge runs isolated.
         if any(row.run_mode == "full_runtime" for row in active):
             return None
-        if active:
-            healthy_workers = set(
-                await session.scalars(
-                    select(ScreenerHeartbeat.instance_id).where(
-                        ScreenerHeartbeat.screener_hotkey == node.screener_hotkey,
-                        ScreenerHeartbeat.instance_id.like(f"{node_id}-worker-%"),
-                        ScreenerHeartbeat.seen_at >= now - _WORKER_HEARTBEAT_MAX_AGE,
-                        ScreenerHeartbeat.state.in_(("polling", "screening")),
-                    )
-                )
-            )
+        _, limits = await resolve_screener_node_channel_settings(
+            session, node_id=node_id
+        )
+        admission_open = limits.screening_concurrency > 0
+        if not admission_open and active:
+            # Admission is closed, so canaries may use workers production
+            # cannot. Preserve the legacy first lease without requiring a
+            # heartbeat; additional source-only leases require fresh worker
+            # heartbeats and the node lock serializes their count.
+            healthy_workers = await _fresh_worker_ids(session, node=node, now=now)
             if payload.instance_id not in healthy_workers or len(active) >= min(
                 _MAX_PARALLEL_SOURCE_ONLY, len(healthy_workers)
             ):
@@ -1090,6 +1186,35 @@ async def claim_l2_report_canary(
             .with_for_update(skip_locked=True)
         )
         if row is None:
+            return None
+        # Production admission is open: decide the hold on the exact row this
+        # worker would lease, after every queue filter above, so a canary it
+        # cannot take never holds or logs, and before any drift guard spends a
+        # storage read on a row that will wait. Keep new queue filters on
+        # ``queued`` and new per-row lease checks below this point.
+        if admission_open and await _canary_yields_to_production(
+            session,
+            node=node,
+            limits=limits,
+            instance_id=payload.instance_id,
+            active=len(active),
+            # The pinned retries a production claim from this worker could
+            # bind, as ``resolve_claim_binding`` derives them.
+            review_settings_scopes=claim_canary_scopes(
+                (
+                    (
+                        effective.revision,
+                        payload.instance_id,
+                        effective.scope,
+                        effective.checksum,
+                    )
+                    if effective.revision >= 1
+                    else None
+                ),
+                enrolled_node_id=node_id,
+            ),
+            now=now,
+        ):
             return None
         bound_revision = payload.settings_revision
         bound_checksum = payload.settings_checksum

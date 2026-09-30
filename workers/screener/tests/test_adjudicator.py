@@ -15,6 +15,7 @@ import pytest
 
 import ditto_screener.adjudicator as adjudicator_module
 from ditto_screener.adjudicator import (
+    ADJUDICATOR_KEY_UNAVAILABLE_CODE,
     ADJUDICATOR_PROMPT_REVISION,
     SourceReviewAdjudicator,
     _adjudicator_tools_for_policy,
@@ -2856,6 +2857,52 @@ async def test_a_missing_key_clears_rather_than_punishing_the_miner(
 
     assert result.decision == "escalate"
     assert result.clear_clause is None
+
+
+def _duplicate_path_archive(tmp_path: Path) -> str:
+    """An archive the miner controls and the court refuses to open."""
+    path = tmp_path / "duplicate.tar.gz"
+    with tarfile.open(path, "w:gz") as archive:
+        for _ in range(2):
+            member = tarfile.TarInfo("src/main.rs")
+            member.size = 2
+            archive.addfile(member, io.BytesIO(b"{}"))
+    return str(path)
+
+
+@pytest.mark.parametrize("key_state", ["unset", "missing", "group-readable", "short"])
+async def test_an_unusable_node_key_is_named_apart_from_the_archive(
+    tmp_path: Path, key_state: str
+) -> None:
+    """Only node configuration reaches the key code, whatever the archive holds."""
+    key = tmp_path / "key"
+    if key_state == "group-readable":
+        key.write_text("sk-test-private-adjudicator")
+        os.chmod(key, 0o644)
+    elif key_state == "short":
+        key.write_text("sk-short")
+        os.chmod(key, 0o600)
+    adjudicator = SourceReviewAdjudicator(
+        api_key_file=None if key_state == "unset" else str(key),
+        base_url="https://openrouter.test/api/v1",
+    )
+
+    for archive in (_archive(tmp_path), _duplicate_path_archive(tmp_path)):
+        result = await adjudicator.adjudicate(archive, notes=[_CONCERN])
+
+        assert result.decision == "escalate"
+        assert result.escalation_code == ADJUDICATOR_KEY_UNAVAILABLE_CODE
+
+
+async def test_an_archive_the_court_cannot_open_is_not_the_node_key_code(
+    tmp_path: Path,
+) -> None:
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(lambda _request: httpx.Response(500))
+    ).adjudicate(_duplicate_path_archive(tmp_path), notes=[_CONCERN])
+
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-unavailable"
 
 
 async def test_a_wall_clock_timeout_clears_rather_than_holding(
