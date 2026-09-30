@@ -9,7 +9,7 @@ import pytest
 
 from ditto.tests.test_collector_automation import policy
 from ditto.treasury.collector import Observation, SignedOperation
-from ditto.treasury.collector_chain import PublicCollectorChain
+from ditto.treasury.collector_chain import NoCredentialRedirect, PublicCollectorChain
 
 
 def event(module, name, attrs, index=0, phase="ApplyExtrinsic"):
@@ -288,3 +288,10 @@ def test_only_raw_absent_sponsorship_is_accepted():
         rpc_request=lambda *_: {"result": None},
     )
     adapter(s).assert_no_sponsor(p, p.transfer_delegate, "b101")
+
+
+def test_credential_redirect_is_refused_without_forwarding_authorization():
+    with pytest.raises(RuntimeError, match="redirect refused"):
+        NoCredentialRedirect().redirect_request(
+            None, None, 302, None, None, "https://attacker.invalid"
+        )

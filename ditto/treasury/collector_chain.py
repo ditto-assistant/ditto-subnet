@@ -13,7 +13,7 @@ import re
 from dataclasses import fields
 from importlib.metadata import version
 from pathlib import Path
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from ditto.treasury.collector import (
     CollectorPolicy,
@@ -29,6 +29,18 @@ FINNEY_GENESIS = "0x2f0555cc76fc2840a25a6ea3b9637146806f1f44b090c175ffde2a7e5ab3
 # Official compressed v470 WASM bytes independently matched to finalized :code.
 # See docs/service-collector-automation.md for artifact/source fingerprints.
 AUDITED_CODE_HASH = "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47"
+
+
+class NoCredentialRedirect(HTTPRedirectHandler):
+    def redirect_request(self, _req, _fp, _code, _msg, _headers, _newurl):
+        raise RuntimeError("credential endpoint redirect refused")
+
+
+def credential_request(request, *, timeout):
+    # Environment proxies must not redirect IMDS tokens or authorization.
+    return build_opener(ProxyHandler({}), NoCredentialRedirect()).open(
+        request, timeout=timeout
+    )
 
 
 def unwrap(value):
@@ -380,7 +392,7 @@ class PublicCollectorChain:
             "http://metadata.google.internal/computeMetadata/v1/instance/name",
             headers={"Metadata-Flavor": "Google"},
         )
-        with urlopen(request, timeout=3) as response:  # noqa: S310 -- fixed GCE metadata
+        with credential_request(request, timeout=3) as response:
             if response.read(128).decode() != host:
                 raise ValueError("delegate confined to dedicated signer host")
         principal = getattr(policy, f"{self.role}_service_account")
@@ -394,7 +406,7 @@ class PublicCollectorChain:
                 + path,
                 headers={"Metadata-Flavor": "Google"},
             )
-            with urlopen(request, timeout=3) as response:  # noqa: S310 -- fixed GCE metadata
+            with credential_request(request, timeout=3) as response:
                 return response.read(4096)
 
         if metadata("email").decode().strip() != principal:
@@ -405,7 +417,7 @@ class PublicCollectorChain:
                 f"https://secretmanager.googleapis.com/v1/projects/{policy.gcp_project}/secrets/sn118-collector-{self.role}-delegate/versions/{secret_version}:access",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            with urlopen(request, timeout=15) as response:  # noqa: S310 -- fixed Google Secret Manager
+            with credential_request(request, timeout=15) as response:
                 payload = json.loads(response.read(8192))["payload"]
             mnemonic = base64.b64decode(payload["data"], validate=True).decode().strip()
         except Exception:
