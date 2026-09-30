@@ -5086,7 +5086,7 @@ class TestIndependentWeightLoop:
 
         assert await worker._weight_restart_delay() == 30.0
 
-    async def test_weight_restart_holds_the_local_guard_after_a_recent_attempt(
+    async def test_weight_restart_holds_the_full_epoch_despite_a_short_chain_guard(
         self,
     ) -> None:
         worker = self._restart_worker()
@@ -5095,18 +5095,18 @@ class TestIndependentWeightLoop:
 
         delay = await worker._weight_restart_delay()
 
-        assert 499.0 <= delay <= 500.0
+        assert 3499.0 <= delay <= 3500.0
 
-    async def test_weight_restart_keeps_the_full_cadence_when_chain_reads_fail(
+    async def test_weight_restart_honours_a_chain_floor_above_the_configured_epoch(
         self,
     ) -> None:
         worker = self._restart_worker()
-        worker._chain_min_epoch_seconds = AsyncMock(side_effect=RuntimeError("rpc"))  # type: ignore[method-assign]
+        worker._chain_min_epoch_seconds = AsyncMock(return_value=4320.0)  # type: ignore[method-assign]
         worker._last_weight_attempt_at = time.monotonic()
 
         delay = await worker._weight_restart_delay()
 
-        assert 3599.0 <= delay <= 3600.0
+        assert 4319.0 <= delay <= 4320.0
 
     async def test_king_event_never_bypasses_local_commit_reveal_floor(self) -> None:
         config = _config()

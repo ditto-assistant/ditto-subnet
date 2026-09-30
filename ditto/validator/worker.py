@@ -4372,19 +4372,16 @@ class ValidatorWorker:
         """Seconds to wait before restarting a crashed weight loop.
 
         A fresh loop trusts ``_seconds_until_weight_window``, which fails open
-        to 0 when ``LastUpdate`` is unreadable, so an attempt just before the
-        crash must still hold the local resubmit guard.
+        to 0 when ``LastUpdate`` is unreadable, so like a drain resume it waits
+        out the rest of the full epoch since the last attempt.
         """
         delay = float(self._config.sweep_seconds)
         if self._last_weight_attempt_at is None:
             return delay
-        epoch_seconds = float(self._config.epoch_seconds)
-        try:
-            epoch_seconds = max(epoch_seconds, await self._chain_min_epoch_seconds())
-            guard = await self._local_resubmit_guard_seconds(epoch_seconds)
-        except Exception:  # noqa: BLE001 - keep the full cadence if chain reads fail
-            guard = epoch_seconds
-        remaining = guard - (time.monotonic() - self._last_weight_attempt_at)
+        epoch_seconds = max(
+            float(self._config.epoch_seconds), await self._chain_min_epoch_seconds()
+        )
+        remaining = epoch_seconds - (time.monotonic() - self._last_weight_attempt_at)
         return max(delay, remaining)
 
     async def _run_weight_epochs(
