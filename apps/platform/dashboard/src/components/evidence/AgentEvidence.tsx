@@ -79,6 +79,8 @@ type RankedEntry = LeaderboardEntry & { rank?: number | null };
 /** Board fields the confirmation-retest section reads (continual fold). */
 interface BoardConfirmationFields {
   confirmation_seed_depth?: number | null;
+  confirmation_seed_composites?: number[] | null;
+  completed_wave_composites?: number[] | null;
   completed_wave_count?: number | null;
   aggregate_method?: string | null;
   aggregate_sample_count?: number | null;
@@ -566,32 +568,22 @@ function ConfirmationScores(props: {
   );
   const activeVersion = () => Number(props.pipeline.active_bench_version);
   const benchBadge = () => benchmarkVersionLabel(benchmarkVersionKey(activeVersion()));
-  const confirmationSeedMedians = createMemo(() => {
-    const bySeed = new Map<string, number[]>();
-    for (const score of props.pipeline.confirmation_scores || []) {
-      if (Number(score.bench_version) !== activeVersion() || score.seed == null) continue;
-      const value = Number(score.composite);
-      if (!Number.isFinite(value)) continue;
-      const key = String(score.seed);
-      bySeed.set(key, [...(bySeed.get(key) || []), value]);
-    }
-    return [...bySeed.entries()]
-      .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
-      .map(([, values]): number => {
-        const sortedValues = [...values].sort((left, right) => left - right);
-        const middle = Math.floor(sortedValues.length / 2);
-        return sortedValues.length % 2
-          ? sortedValues[middle]!
-          : (sortedValues[middle - 1]! + sortedValues[middle]!) / 2;
-      });
-  });
+  // The leaderboard already publishes folded per-wave composites. Rebuilding
+  // these from public score rows would require exposing reusable seed IDs.
+  const confirmationSeedMedians = createMemo(() =>
+    (boardEntry()?.confirmation_seed_composites || []).filter(Number.isFinite),
+  );
   const completedWaves = createMemo(() => {
-    const count = Number(boardEntry()?.completed_wave_count) || 0;
     return boardEntry()?.aggregate_method === "continual_mean"
-      ? confirmationSeedMedians().slice(0, count)
+      ? (boardEntry()?.completed_wave_composites || []).filter(Number.isFinite)
       : [];
   });
-  const pendingSeeds = confirmationSeedMedians;
+  const pendingScores = createMemo(() =>
+    (props.pipeline.confirmation_scores || [])
+      .filter((score) => Number(score.bench_version) === activeVersion())
+      .map((score) => Number(score.composite))
+      .filter(Number.isFinite),
+  );
   const counts = createMemo(() =>
     retestAttemptCounts(
       (props.pipeline.validation_attempts || []).filter(
@@ -603,7 +595,7 @@ function ConfirmationScores(props: {
   // are append-only and were never deleted, they are merely waiting on a
   // cohort-wide shared seed. Keep the section when any exist.
   const pendingDepth = () =>
-    Math.max(Number(boardEntry()?.confirmation_seed_depth) || 0, pendingSeeds().length);
+    Math.max(Number(boardEntry()?.confirmation_seed_depth) || 0, confirmationSeedMedians().length);
   const aggregateDepth = () => Number(boardEntry()?.completed_wave_count) || 0;
   const excludedDepth = () => Math.max(0, pendingDepth() - aggregateDepth());
   const visible = () =>
@@ -621,7 +613,7 @@ function ConfirmationScores(props: {
     if (counts().expired) bits.push(counts().expired + " expired");
     return bits;
   };
-  const visibleSamples = () => (completedWaves().length ? completedWaves() : pendingSeeds());
+  const visibleSamples = () => (completedWaves().length ? completedWaves() : pendingScores());
   const sampleMean = () => {
     const samples = visibleSamples();
     return samples.length

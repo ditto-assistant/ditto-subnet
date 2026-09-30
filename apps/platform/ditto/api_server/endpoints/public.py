@@ -17,6 +17,8 @@ validator-gated ``/scoring/scores`` reads:
   public on-chain identity) and the raw ``seed`` so anyone can reproduce and audit
   a score; because the platform draws the seed after screening, publishing it
   post-hoc never lets a miner pre-overfit. It still omits the per-case answer key.
+  Continual retest seeds are reused across a cohort and are never published;
+  only their score aggregates are public.
   See ``docs/public-telemetry.md``.
 
 Responses are cacheable (``max-age=30``) so a CDN / the dashboard can front this
@@ -8156,7 +8158,6 @@ async def agent_pipeline(
         confirmation_scores=[
             PublicConfirmationScore(
                 composite=score.composite,
-                seed=str(score.seed),
                 validator_hotkey=score.validator_hotkey,
                 bench_version=score.bench_version,
                 accepted_at=score.created_at,

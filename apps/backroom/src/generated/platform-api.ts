@@ -24823,7 +24823,7 @@ export interface components {
         };
         /**
          * PublicConfirmationScore
-         * @description One append-only shared-seed score from a continual top-five retest.
+         * @description One append-only continual retest score, without its reusable seed.
          */
         PublicConfirmationScore: {
             /**
@@ -24835,11 +24835,6 @@ export interface components {
             bench_version: number;
             /** Composite */
             composite: number;
-            /**
-             * Seed
-             * @description Exact decimal shared seed, encoded without JS rounding.
-             */
-            seed: string;
             /** Validator Hotkey */
             validator_hotkey: string;
         };

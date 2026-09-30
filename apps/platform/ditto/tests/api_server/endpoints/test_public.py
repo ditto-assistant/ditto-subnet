@@ -11150,17 +11150,32 @@ class TestPublicActivity:
             )
         _install_db(app, session_maker)
 
-        body = (await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")).json()
+        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        assert response.status_code == 200
+        body = response.json()
 
         assert body["score_count"] == body["quorum"] == 3
         assert len(body["provisional_scores"]) == 3
-        assert [
-            (score["seed"], score["composite"]) for score in body["confirmation_scores"]
-        ] == [
-            ("111", pytest.approx(0.94)),
-            ("222", pytest.approx(0.95)),
+        assert all("seed" in score for score in body["provisional_scores"])
+        assert [score["composite"] for score in body["confirmation_scores"]] == [
+            pytest.approx(0.94),
+            pytest.approx(0.95),
         ]
+        assert all("seed" not in score for score in body["confirmation_scores"])
         assert all("run_id" not in score for score in body["confirmation_scores"])
+        # The public projection redacts the reusable CRN seed; the append-only
+        # internal ledger still retains it for validator assignment and audit.
+        async with session_maker() as session:
+            from ditto.db.models import ConfirmationScore
+
+            saved = list(
+                await session.scalars(
+                    select(ConfirmationScore)
+                    .where(ConfirmationScore.agent_id == agent_id)
+                    .order_by(ConfirmationScore.seed)
+                )
+            )
+            assert [score.seed for score in saved] == [111, 222]
         assert {
             attempt["validator_hotkey"]: attempt["purpose"]
             for attempt in body["validation_attempts"]

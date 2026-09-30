@@ -8587,10 +8587,10 @@ export const scoreLeaderboardPageSchema = z.object({
  * throws on `JSON.stringify` without a custom replacer.
  *
  * This also matches the platform's own precedent: the pipeline endpoint already
- * declares `PublicProvisionalScore.seed` / `PublicConfirmationScore.seed` as
- * `str` with pattern `^\d+$` and the comment "Encoded as a string to avoid
- * JavaScript integer rounding". The score endpoints Backroom reads simply never
- * got the same treatment.
+ * declares `PublicProvisionalScore.seed` as `str` with pattern `^\d+$` and
+ * the comment "Encoded as a string to avoid JavaScript integer rounding".
+ * Reusable confirmation seeds are intentionally absent from public responses.
+ * The score endpoints Backroom reads simply never got the same treatment.
  *
  * Platform seeds are non-negative (`derive_seed` masks to 63 bits), but the
  * column is a signed `BigInteger`, so a leading `-` is accepted rather than

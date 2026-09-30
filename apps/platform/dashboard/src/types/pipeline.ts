@@ -283,11 +283,10 @@ export interface AcceptedScore {
   gate_evidence?: GateEvidence | null;
 }
 
-/** A shared-seed continual top-five retest result. */
+/** A continual top-five retest result. Reusable seed identifiers stay private. */
 export interface ConfirmationScore {
   composite: number;
   bench_version?: number | null;
-  seed?: string | number;
   validator_hotkey?: string;
   accepted_at?: string | null;
 }

@@ -3887,16 +3887,9 @@ class PublicInferenceRun(BaseModel):
 
 
 class PublicConfirmationScore(BaseModel):
-    """One append-only shared-seed score from a continual top-five retest."""
+    """One append-only continual retest score, without its reusable seed."""
 
     composite: Annotated[float, Field(ge=0.0, le=1.0)]
-    seed: Annotated[
-        str,
-        Field(
-            pattern=r"^\d+$",
-            description="Exact decimal shared seed, encoded without JS rounding.",
-        ),
-    ]
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     bench_version: Annotated[int, Field(ge=1)]
     accepted_at: datetime
