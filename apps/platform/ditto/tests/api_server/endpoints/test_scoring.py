@@ -67,9 +67,10 @@ _BENCH_VERSION = 7
 @pytest.mark.asyncio
 async def test_protocol_28_requester_cannot_read_capped_pin() -> None:
     now = datetime.now(UTC)
-    session = SimpleNamespace(
-        get=AsyncMock(return_value=SimpleNamespace(protocol_version=28, seen_at=now))
+    heartbeat_get = AsyncMock(
+        return_value=SimpleNamespace(protocol_version=28, seen_at=now)
     )
+    session = cast(AsyncSession, SimpleNamespace(get=heartbeat_get))
     ledger = LedgerResponse(entries=[], count=0, statistical_band_mode="capped")
 
     with pytest.raises(HTTPException) as rejected:
@@ -78,7 +79,7 @@ async def test_protocol_28_requester_cannot_read_capped_pin() -> None:
         )
     assert rejected.value.status_code == 428
 
-    session.get.return_value.protocol_version = 29
+    heartbeat_get.return_value.protocol_version = 29
     assert (
         await scoring_mod._require_statistical_cap_requester(
             session, _VALIDATOR_HOTKEY, ledger, now=now
