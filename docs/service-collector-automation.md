@@ -122,7 +122,7 @@ monitor fees, and budget this separately from custody and revocation.
 The root-owned systemd templates are deployment preparation only. The enabled
 policy must be approved and signed offline before initial journals are created.
 As each dedicated signer user, initialize once using
-`scripts/collector_automation.py --role <role> --policy <public-envelope.json>
+`scripts/treasury_collector.py --role <role> --policy <public-envelope.json>
 --policy-sha256 <approved-digest> --journal <role-private-directory>/journal.db
 --initialize-journal`. This command performs no network/signing operation.
 
