@@ -1472,6 +1472,7 @@ async def test_pinned_canary_claims_under_pinned_revision_not_node_effective(
         ("prefix-lookalike", 422),
         ("inherit", 422),
         ("live-identity", 409),
+        ("enrolled-node", 409),
         ("missing", 404),
     ],
 )
@@ -1492,6 +1493,7 @@ async def test_schedule_rejects_production_or_inherit_pin_scope(
         "prefix-lookalike": "l2-report-canaryctl137",
         "inherit": canary_scope,
         "live-identity": canary_scope,
+        "enrolled-node": canary_scope,
         "missing": canary_scope,
     }[case]
     revision = 2_000_000_000
@@ -1504,11 +1506,26 @@ async def test_schedule_rejects_production_or_inherit_pin_scope(
             ),
         )
     if case == "live-identity":
-        # A worker that heartbeats under the scope resolves it as its own
-        # production posture, whatever the scope is called.
+        # A worker that heartbeats under the scope, or a node enrolled under
+        # it, is refused so the canary scope never doubles as an identity.
         await _seed_heartbeats(
             session_maker, hotkey=f"hotkey-{node_id}", instance_ids=[scope]
         )
+    if case == "enrolled-node":
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreenerNode(
+                    environment="prod",
+                    node_id=scope,
+                    provider="hetzner",
+                    provider_resource_id=scope,
+                    screener_hotkey=f"hotkey-{scope}",
+                    token_hash="f" * 64,
+                    token_expires_at=datetime.now(UTC) + timedelta(hours=1),
+                    status="active",
+                    capacity=1,
+                )
+            )
     _pin_evidence(monkeypatch, sha)
     async with session_maker() as session:
         with pytest.raises(HTTPException) as rejected:
@@ -1711,3 +1728,80 @@ async def test_pinned_canary_waits_for_a_pin_capable_worker(
     assert current.canary_id == scheduled["pinned"].canary_id
     assert current.review_settings_override is not None
     assert current.review_settings_override.revision == pin_revision
+
+
+@pytest.mark.asyncio
+async def test_stale_worker_skips_older_unpinned_row_for_a_pinned_one(
+    session_maker: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A worker whose node posture Platform no longer serves may run a pinned
+    # canary, which carries its own posture, but never the older unpinned row
+    # at the head of the queue: that row would run and be stamped under a
+    # posture Platform has already replaced.
+    node_id, agent_id, (plain_attempt, pinned_attempt), sha = await _seed_pin_source(
+        session_maker, attempts=2
+    )
+    await _seed_heartbeats(
+        session_maker,
+        hotkey=f"hotkey-{node_id}",
+        instance_ids=[f"{node_id}-worker-1", f"{node_id}-worker-2"],
+    )
+    scope = f"l2-report-canary-{uuid4().hex[:8]}"
+    pin_revision, _ = await _seed_revision(
+        session_maker, scope=scope, settings=ScreenerReviewSettings(mode="enforce")
+    )
+    _node_posture(monkeypatch)
+    _pin_evidence(monkeypatch, sha)
+    scheduled: dict[str, Any] = {}
+    for name, attempt_id, revision in (
+        ("plain", plain_attempt, None),
+        ("pinned", pinned_attempt, pin_revision),
+    ):
+        async with session_maker() as session:
+            scheduled[name] = await endpoints.schedule_l2_report_canary(
+                _pin_schedule_request(
+                    node_id,
+                    agent_id,
+                    attempt_id,
+                    sha,
+                    review_settings_revision=revision,
+                ),
+                None,
+                session,
+                _pin_storage(),
+                "operator@example.com",
+            )
+    stale = await _pin_claim(
+        session_maker,
+        node_id,
+        settings_revision=_NODE_REVISION + 1,
+        accepts_override=True,
+    )
+    assert stale is not None
+    assert stale.canary_id == scheduled["pinned"].canary_id
+    assert stale.review_settings_override is not None
+    async with session_maker() as session:
+        plain = await session.get(ScreenerL2ReportCanary, scheduled["plain"].canary_id)
+    assert plain is not None
+    assert (plain.status, plain.settings_revision) == ("queued", None)
+    # Once the pinned row is leased, the stale worker gets the node-settings
+    # refusal rather than the unpinned row.
+    with pytest.raises(HTTPException) as refused:
+        await _pin_claim(
+            session_maker,
+            node_id,
+            settings_revision=_NODE_REVISION + 1,
+            accepts_override=True,
+            worker=2,
+        )
+    assert refused.value.status_code == 409
+    current = await _pin_claim(
+        session_maker,
+        node_id,
+        settings_revision=_NODE_REVISION,
+        accepts_override=True,
+        worker=2,
+    )
+    assert current is not None
+    assert current.canary_id == scheduled["plain"].canary_id
+    assert current.review_settings_override is None

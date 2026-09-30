@@ -11,7 +11,7 @@ from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.l2_report_canary import (
@@ -183,6 +183,52 @@ async def _claimable_review_settings_pin(
     ):
         return None
     return _canary_posture(revision)
+
+
+async def _claimable_queue_filters(
+    session: AsyncSession,
+    *,
+    node: ScreenerNode,
+    payload: L2CanaryClaimRequest,
+    node_settings_current: bool,
+    source_only: bool,
+    now: datetime,
+) -> list[ColumnElement[bool]]:
+    """Filters selecting the queued rows on ``node`` this claimant may lease.
+
+    Any check that asks whether a canary is waiting for this claimant must use
+    these same filters, so it never counts a row the claimant cannot take: a
+    pinned row for a worker that does not apply pins, an unpinned row for a
+    worker whose node posture is stale, or a full-runtime or fixture row for a
+    worker not ready for it.
+    """
+    filters: list[ColumnElement[bool]] = [
+        ScreenerL2ReportCanary.target_node_id == node.node_id,
+        ScreenerL2ReportCanary.status == "queued",
+    ]
+    if source_only:
+        filters.append(ScreenerL2ReportCanary.run_mode == "source_only")
+    if not payload.accepts_review_settings_override:
+        # A rolling older worker would run a pinned row under its node posture.
+        filters.append(ScreenerL2ReportCanary.review_settings_revision.is_(None))
+    elif not node_settings_current:
+        # A stale node posture may run only a row that carries its own posture.
+        filters.append(ScreenerL2ReportCanary.review_settings_revision.is_not(None))
+    if not await _full_runtime_worker_ready(
+        session, node=node, now=now, instance_id=payload.instance_id
+    ):
+        # Leave full-runtime rows for an adopted worker rather than returning
+        # nothing: scheduling accepts any adopted worker on the node, so the
+        # oldest row may be one this caller can never take, and it must not
+        # block the source-only rows queued behind it.
+        filters.append(ScreenerL2ReportCanary.run_mode != "full_runtime")
+    if not await _fixture_worker_ready(
+        session, node=node, now=now, instance_id=payload.instance_id
+    ):
+        filters.append(
+            ScreenerL2ReportCanary.source_kind != "canonical_starter_fixture"
+        )
+    return filters
 
 
 async def _pinned_canary_queued(session: AsyncSession, *, node_id: str) -> bool:
@@ -996,41 +1042,19 @@ async def claim_l2_report_canary(
                 _MAX_PARALLEL_SOURCE_ONLY, len(healthy_workers)
             ):
                 return None
-        queued = select(ScreenerL2ReportCanary).where(
-            ScreenerL2ReportCanary.target_node_id == node_id,
-            ScreenerL2ReportCanary.status == "queued",
-        )
-        if active:
-            queued = queued.where(ScreenerL2ReportCanary.run_mode == "source_only")
-        if not payload.accepts_review_settings_override:
-            queued = queued.where(
-                ScreenerL2ReportCanary.review_settings_revision.is_(None)
-            )
-        elif not node_settings_current:
-            queued = queued.where(
-                ScreenerL2ReportCanary.review_settings_revision.is_not(None)
-            )
-        if not await _full_runtime_worker_ready(
-            session, node=node, now=now, instance_id=payload.instance_id
-        ):
-            # Leave full-runtime rows for an adopted worker rather than
-            # returning nothing: scheduling accepts any adopted worker on the
-            # node, so the oldest row may be one this caller can never take,
-            # and it must not block the source-only rows queued behind it.
-            queued = queued.where(ScreenerL2ReportCanary.run_mode != "full_runtime")
-        if not await _fixture_worker_ready(
+        claimable = await _claimable_queue_filters(
             session,
             node=node,
+            payload=payload,
+            node_settings_current=node_settings_current,
+            source_only=bool(active),
             now=now,
-            instance_id=payload.instance_id,
-        ):
-            queued = queued.where(
-                ScreenerL2ReportCanary.source_kind != "canonical_starter_fixture"
-            )
+        )
         row = await session.scalar(
-            queued.order_by(ScreenerL2ReportCanary.created_at).with_for_update(
-                skip_locked=True
-            )
+            select(ScreenerL2ReportCanary)
+            .where(*claimable)
+            .order_by(ScreenerL2ReportCanary.created_at)
+            .with_for_update(skip_locked=True)
         )
         if row is None:
             return None
