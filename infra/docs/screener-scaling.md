@@ -108,8 +108,27 @@ Different submissions move through those stages concurrently.
 
 A revisioned write requires compare-and-swap, an audit reason, and an exact
 confirmation string covering all three lists and the overflow policy. Node
-screening, shared sandbox, build, runtime, and review ceilings have a separate
-append-only control. New nodes default to zero capacity.
+screening, shared sandbox, build, runtime, and review ceilings, plus the
+report-only canary cap, have a separate append-only control. New nodes default
+to zero capacity.
+
+`canary_concurrency` (0 through 8, default 1) applies only while the node's
+production admission is open. A report-only L2 canary then waits while a fresh
+upload or an authorized retry is claimable by that worker's production claim,
+and it never takes one of the `screening_concurrency` freshly heartbeating
+workers kept for production. Work the production claim would skip, such as a
+copy deferred behind its earlier owner or a retry pinned to another scope's
+review posture, does not hold canaries. The effective cap is
+`min(canary_concurrency, 4, fresh workers - screening_concurrency)`, so
+`screening_concurrency` at or above the worker count holds canaries entirely.
+With admission closed, canaries keep their legacy cap of `min(4, fresh
+workers)`. Revisions written before the field existed read as 1.
+`get_screener_capacity` reports unexpired canary leases as
+`usage.canary_active` and waiting canaries as `usage.canary_queued`. Platform
+logs `report-only L2 canary held for production` with
+`reason=production-claimable` or `reason=production-reserved` at most once a
+minute per node and reason, and only when a worker could otherwise lease a
+queued canary.
 
 ## Capacity event retention
 
@@ -162,13 +181,13 @@ After `subnet-screener-1` is converged, use Backroom to:
    cold build, smoke, failed-build/no-review, and failed-smoke/no-review probes
    pass (shadow mode);
 3. append the one-lane canary setting
-   `SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1`;
+   `SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1 CANARY=1`;
 4. set all three provider lists to `['hetzner', 'gcp']` and enable overflow for
    `subnet-screener-1` at multiplier 3, minimum backlog 12, maximum 6;
 5. prove one production build -> smoke -> source-review sequence and one
    build failure that never obtains a review lease;
 6. raise the 64 GB node to
-   `SCREENING=2 SANDBOX=2 BUILD=2 RUNTIME=2 SOURCE_REVIEW=2`, set the private
+   `SCREENING=2 SANDBOX=2 BUILD=2 RUNTIME=2 SOURCE_REVIEW=2 CANARY=1`, set the private
    inventory to two worker processes, and prove two simultaneous cold
    build/smoke lanes without memory or disk pressure; raise to three only after
    measured sandbox-plus-review memory leaves safe host margin;

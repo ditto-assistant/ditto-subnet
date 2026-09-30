@@ -15,6 +15,13 @@ class ScreenerNodeChannelSettings(BaseModel):
     limits allow operators to reserve or disable a lane, while ``sandbox_slots``
     prevents both lanes from consuming twice the physical host capacity.
     Source review is CPU-light and has its own independent limit.
+
+    ``canary_concurrency`` caps report-only L2 canaries on the node, but only
+    while production admission is open (``screening_concurrency > 0``). Even
+    then a canary never takes one of the ``screening_concurrency`` workers
+    reserved for production. With admission closed the canary lane keeps its
+    legacy heartbeat-bounded cap. Revisions written before the field existed
+    load with the default of one.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
@@ -24,6 +31,7 @@ class ScreenerNodeChannelSettings(BaseModel):
     build_concurrency: Annotated[int, Field(ge=0, le=16)] = 0
     runtime_concurrency: Annotated[int, Field(ge=0, le=16)] = 0
     source_review_concurrency: Annotated[int, Field(ge=0, le=32)] = 0
+    canary_concurrency: Annotated[int, Field(ge=0, le=8)] = 1
 
     @model_validator(mode="after")
     def validate_shared_sandbox(self) -> ScreenerNodeChannelSettings:
@@ -72,6 +80,11 @@ class ScreenerNodeChannelUsage(BaseModel):
     build_active: Annotated[int, Field(ge=0)] = 0
     runtime_active: Annotated[int, Field(ge=0)] = 0
     source_review_active: Annotated[int, Field(ge=0)] = 0
+    # Unexpired report-only L2 canary leases targeting the node.
+    canary_active: Annotated[int, Field(ge=0)] = 0
+    # Report-only L2 canaries queued for the node. With admission open they
+    # wait while production can claim work or needs the free workers.
+    canary_queued: Annotated[int, Field(ge=0)] = 0
 
 
 class ScreenerNodeChannelSettingsWriteRequest(BaseModel):
@@ -105,7 +118,8 @@ def node_channel_settings_confirmation(
         f"SANDBOX={settings.sandbox_slots} "
         f"BUILD={settings.build_concurrency} "
         f"RUNTIME={settings.runtime_concurrency} "
-        f"SOURCE_REVIEW={settings.source_review_concurrency}"
+        f"SOURCE_REVIEW={settings.source_review_concurrency} "
+        f"CANARY={settings.canary_concurrency}"
     )
     if settings.screening_concurrency == 0:
         # Closing admission stops this node from taking production work.

@@ -324,7 +324,10 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
         "build_concurrency": 0,
         "runtime_concurrency": 0,
         "source_review_concurrency": 0,
+        "canary_concurrency": 1,
     }
+    assert initial.json()["usage"]["canary_active"] == 0
+    assert initial.json()["usage"]["canary_queued"] == 0
 
     settings = {
         "screening_concurrency": 8,
@@ -332,6 +335,7 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
         "build_concurrency": 3,
         "runtime_concurrency": 3,
         "source_review_concurrency": 6,
+        "canary_concurrency": 2,
     }
     applied = await client.post(
         path,
@@ -345,7 +349,7 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
             "confirmation": (
                 "APPLY SCREENER NODE subnet-screener-1 SCREENING=8 "
                 "SANDBOX=3 BUILD=3 "
-                "RUNTIME=3 SOURCE_REVIEW=6"
+                "RUNTIME=3 SOURCE_REVIEW=6 CANARY=2"
             ),
         },
     )
@@ -364,7 +368,7 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
             "confirmation": (
                 "APPLY SCREENER NODE subnet-screener-1 SCREENING=8 "
                 "SANDBOX=3 BUILD=3 "
-                "RUNTIME=3 SOURCE_REVIEW=6"
+                "RUNTIME=3 SOURCE_REVIEW=6 CANARY=2"
             ),
         },
     )
@@ -387,7 +391,7 @@ _OPEN_NODE_SETTINGS = dict.fromkeys(
 )
 _CLOSE_CONFIRMATION = (
     "APPLY SCREENER NODE subnet-screener-1 SCREENING=0 SANDBOX=4 BUILD=4 "
-    "RUNTIME=4 SOURCE_REVIEW=4 CLOSE PRODUCTION ADMISSION"
+    "RUNTIME=4 SOURCE_REVIEW=4 CANARY=1 CLOSE PRODUCTION ADMISSION"
 )
 _CLOSE_ADMISSION = {
     "environment": "prod",
@@ -453,7 +457,7 @@ async def test_closing_last_node_with_backlog_needs_only_explicit_confirmation(
     open_settings = ScreenerNodeChannelSettings(**_OPEN_NODE_SETTINGS)
     assert node_channel_settings_confirmation("subnet-screener-1", open_settings) == (
         "APPLY SCREENER NODE subnet-screener-1 SCREENING=4 SANDBOX=4 BUILD=4 "
-        "RUNTIME=4 SOURCE_REVIEW=4"
+        "RUNTIME=4 SOURCE_REVIEW=4 CANARY=1"
     )
     _install(app, session_maker)
     await _seed_open_primary(session_maker)
@@ -478,6 +482,125 @@ async def test_closing_last_node_with_backlog_needs_only_explicit_confirmation(
     closed = await client.post(path, headers=_HEADERS, json=_CLOSE_ADMISSION)
     assert closed.status_code == 200, closed.text
     assert closed.json()["settings"]["screening_concurrency"] == 0
+
+
+async def test_legacy_node_revision_reads_one_canary_and_counts_canary_leases(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.api_models.agent_status import AgentStatus
+    from ditto.db.models import ScreenerL2ReportCanary, ScreeningAttempt
+    from ditto.db.queries.screener_node_settings import (
+        resolve_screener_node_channel_settings,
+    )
+    from ditto.tests.api_server.endpoints.test_screener import _seed_agent
+
+    _install(app, session_maker)
+    # The seeded revision is stored JSON written before canary_concurrency.
+    await _seed_open_primary(session_maker)
+    assert "canary_concurrency" not in _OPEN_NODE_SETTINGS
+    async with session_maker() as session:
+        revision, limits = await resolve_screener_node_channel_settings(
+            session, node_id="subnet-screener-1"
+        )
+    assert revision == 1
+    assert limits.canary_concurrency == 1
+
+    sha = "e" * 64
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.REJECTED, sha256=sha)
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        attempt_ids = [uuid4() for _ in range(3)]
+        for attempt_id in attempt_ids:
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    artifact_sha256=sha,
+                    screener_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
+                    policy_version=13,
+                    status="rejected",
+                    started_at=now - timedelta(minutes=1),
+                    deadline=now,
+                    finished_at=now,
+                )
+            )
+        await session.flush()
+        # One live lease, one lease past its deadline, one still queued.
+        for attempt_id, status, lease_expires_at in (
+            (attempt_ids[0], "leased", now + timedelta(minutes=30)),
+            (attempt_ids[1], "leased", now - timedelta(minutes=1)),
+            (attempt_ids[2], "queued", None),
+        ):
+            session.add(
+                ScreenerL2ReportCanary(
+                    canary_id=uuid4(),
+                    request_id=uuid4(),
+                    agent_id=agent_id,
+                    source_attempt_id=attempt_id,
+                    artifact_sha256=sha,
+                    policy_version=13,
+                    bench_version=13,
+                    target_node_id="subnet-screener-1",
+                    expected_agent_status="rejected",
+                    expected_score_count=0,
+                    review_label="known_reject",
+                    run_mode="source_only",
+                    status=status,
+                    claimed_instance_id=(
+                        "subnet-screener-1-worker-1" if status == "leased" else None
+                    ),
+                    lease_expires_at=lease_expires_at,
+                )
+            )
+
+    path = "/api/v1/admin/screener-nodes/subnet-screener-1/channel-settings"
+    control = await client.get(path, headers=_HEADERS)
+    assert control.status_code == 200, control.text
+    assert control.json()["current"]["settings"]["canary_concurrency"] == 1
+    assert control.json()["usage"]["canary_active"] == 1
+    assert control.json()["usage"]["canary_queued"] == 1
+
+    # The confirmation must name the canary cap the revision will store,
+    # including the default an operator did not type.
+    legacy_confirmation = (
+        "APPLY SCREENER NODE subnet-screener-1 SCREENING=4 SANDBOX=4 BUILD=4 "
+        "RUNTIME=4 SOURCE_REVIEW=4"
+    )
+    write = {
+        "environment": "prod",
+        "expected_revision": 1,
+        "settings": _OPEN_NODE_SETTINGS,
+        "reason": "Reapply the primary limits after the canary field",
+        "actor": "operator@example.com",
+        "confirmation": legacy_confirmation,
+    }
+    refused = await client.post(path, headers=_HEADERS, json=write)
+    assert refused.status_code == 409
+    assert f"{legacy_confirmation} CANARY=1" in refused.text
+    applied = await client.post(
+        path,
+        headers=_HEADERS,
+        json={
+            **write,
+            "settings": {**_OPEN_NODE_SETTINGS, "canary_concurrency": 0},
+            "confirmation": f"{legacy_confirmation} CANARY=0",
+        },
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["settings"]["canary_concurrency"] == 0
+    too_many = await client.post(
+        path,
+        headers=_HEADERS,
+        json={
+            **write,
+            "expected_revision": 2,
+            "settings": {**_OPEN_NODE_SETTINGS, "canary_concurrency": 9},
+            "confirmation": f"{legacy_confirmation} CANARY=9",
+        },
+    )
+    assert too_many.status_code == 422
 
 
 async def test_independent_replay_capacity_is_guarded_and_audited(
@@ -1027,7 +1150,7 @@ async def test_hetzner_job_claim_does_not_preclaim_signed_worker_attempt(
             "actor": "operator@example.com",
             "confirmation": (
                 "APPLY SCREENER NODE subnet-screener-1 SCREENING=1 "
-                "SANDBOX=0 BUILD=0 RUNTIME=0 SOURCE_REVIEW=0"
+                "SANDBOX=0 BUILD=0 RUNTIME=0 SOURCE_REVIEW=0 CANARY=1"
             ),
         },
     )

@@ -424,7 +424,8 @@ describe('Backroom MCP tools', () => {
     // guarded verified V13 court-clear release adds a bounded writer entry.
     // Four canonical starter fixture controls bring the measured catalog to
     // 179,468 bytes; retain about 0.5 KB headroom. The optional canary
-    // review-posture pin (reviewSettingsRevision) measures 179,642.
+    // review-posture pin (reviewSettingsRevision) measured 179,642;
+    // node canary cap (#2447) adds one required setting and catalog note.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(180_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
@@ -461,7 +462,8 @@ describe('Backroom MCP tools', () => {
       // main adds the validator-capacity summary (#2036) and the guarded
       // verified V13 court-clear release summary.
       // Four fixture tool summaries bring the measured total to 31,772.
-      // The canary review-posture pin clause measures 31,854.
+      // The canary review-posture pin clause measured 31,854; the node
+      // canary cap (#2447) also adds a short catalog note.
       32_000,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
