@@ -5567,6 +5567,18 @@
         "default": false,
         "type": "boolean"
       },
+      "statistical_band_mode": {
+        "anyOf": [
+          {
+            "const": "capped",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "tie_weighting_mode": {
         "anyOf": [
           {

@@ -123,7 +123,12 @@ from ditto import __version__
 # held incumbent out of the pool until every recently-live weight setter
 # reports v28+, because a v27 validator ignores the additive field and would
 # crown and pay the runner-up instead.
-HEARTBEAT_PROTOCOL_VERSION = 28
+# v29 consumes ``LedgerResponse.statistical_band_mode=capped``. The marker
+# caps paired tie/cohort comparisons and unpaired dethrone/contested bands at
+# twice the KOTH margin. A v28 validator ignores the additive marker and folds
+# the historical bands, so Platform must withhold it until every recently-live
+# weight setter reports v29+. Heartbeat signing bytes are unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 29
 
 
 @dataclass(frozen=True)

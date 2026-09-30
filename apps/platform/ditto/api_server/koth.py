@@ -285,7 +285,10 @@ def emission_set(projection: KothProjection | None) -> tuple[KothEntry, ...]:
 
 
 def emission_shares(
-    projection: KothProjection | None, *, tie_pooling: bool = False
+    projection: KothProjection | None,
+    *,
+    tie_pooling: bool = False,
+    statistical_band_cap: bool = False,
 ) -> tuple[float, ...]:
     """Return occupied rank shares, optionally pooled across evidence ties."""
     members = emission_set(projection)
@@ -296,7 +299,9 @@ def emission_shares(
     while start < len(members):
         anchor = members[start]
         end = start + 1
-        while end < len(members) and _weight_tied(members[end], anchor):
+        while end < len(members) and _weight_tied(
+            members[end], anchor, statistical_band_cap=statistical_band_cap
+        ):
             end += 1
         if end - start > 1:
             average = sum(shares[start:end]) / (end - start)
@@ -311,6 +316,7 @@ def emission_allocation(
     *,
     tie_pooling: bool = False,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> EmissionAllocation:
     """Return the exact validator payout mode, membership, and shares.
 
@@ -324,7 +330,10 @@ def emission_allocation(
         return EmissionAllocation(mode="ranked", members=(), shares=())
     if tie_pooling:
         ceiling_cohort = _score_ceiling_cohort(
-            entries, projection, ceiling_band_clamp=ceiling_band_clamp
+            entries,
+            projection,
+            ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
         )
         if ceiling_cohort:
             share = 1.0 / len(ceiling_cohort)
@@ -336,7 +345,11 @@ def emission_allocation(
     return EmissionAllocation(
         mode="ranked",
         members=emission_set(projection),
-        shares=emission_shares(projection, tie_pooling=tie_pooling),
+        shares=emission_shares(
+            projection,
+            tie_pooling=tie_pooling,
+            statistical_band_cap=statistical_band_cap,
+        ),
     )
 
 
@@ -345,6 +358,7 @@ def _score_ceiling_cohort(
     projection: KothProjection,
     *,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> tuple[KothEntry, ...]:
     # Curve-v3 protocol 21 has no continuous adjusted-score ceiling: quality is
     # the primary order and efficiency only breaks an exact quality tie.
@@ -362,7 +376,10 @@ def _score_ceiling_cohort(
     if challenger is None:
         return ()
     decision = _dethrone_decision(
-        challenger, projection.champion, ceiling_band_clamp=ceiling_band_clamp
+        challenger,
+        projection.champion,
+        ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     )
     if not decision.ceiling_deadlocked:
         return ()
@@ -370,7 +387,7 @@ def _score_ceiling_cohort(
     anchor = ranked[0]
     cohort = [anchor]
     for entry in ranked[1:]:
-        if not _weight_tied(entry, anchor):
+        if not _weight_tied(entry, anchor, statistical_band_cap=statistical_band_cap):
             break
         cohort.append(entry)
     return tuple(cohort) if len(cohort) > 1 else ()
@@ -381,6 +398,7 @@ def champion_defense(
     projection: KothProjection | None,
     *,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> DethroneDecision | None:
     """What the best rival miner currently needs to take the crown.
 
@@ -409,7 +427,10 @@ def champion_defense(
     if challenger is None:
         return None
     return _dethrone_decision(
-        challenger, projection.champion, ceiling_band_clamp=ceiling_band_clamp
+        challenger,
+        projection.champion,
+        ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     )
 
 
@@ -630,11 +651,15 @@ def _quality_primary_efficiency_active(entries: Iterable[KothEntry]) -> bool:
     return any(_bounded_efficiency_factor(entry) is not None for entry in entries)
 
 
-def _indifference_band(margin: float, statistical: float | None) -> float:
-    """``max(margin, statistical)``, with the statistical term capped."""
+def _indifference_band(
+    margin: float, statistical: float | None, *, capped: bool = True
+) -> float:
+    """``max(margin, statistical)``; cap when that fold branch calls for it."""
     if statistical is None:
         return margin
-    return max(margin, min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin))
+    if capped:
+        statistical = min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin)
+    return max(margin, statistical)
 
 
 def _dethrone_composite(entry: KothEntry, *, quality_primary: bool) -> float:
@@ -667,6 +692,7 @@ def project_koth(
     *,
     distinct_hotkeys: bool = False,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
 ) -> KothProjection | None:
     """Return the champion and participation tail for an eligible score pool.
@@ -709,7 +735,10 @@ def project_koth(
         challengers = ordered[1:]
     for challenger in challengers:
         if _dethrone_decision(
-            challenger, champion, ceiling_band_clamp=ceiling_band_clamp
+            challenger,
+            champion,
+            ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
         ).dethrones:
             champion = challenger
 
@@ -734,7 +763,10 @@ def project_koth(
         None
         if raw_leader.agent_id == champion.agent_id
         else _dethrone_decision(
-            raw_leader, champion, ceiling_band_clamp=ceiling_band_clamp
+            raw_leader,
+            champion,
+            ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
         )
     )
     return KothProjection(
@@ -996,7 +1028,9 @@ def _paired_statistic(
     )
 
 
-def _weight_tied(candidate: KothEntry, anchor: KothEntry) -> bool:
+def _weight_tied(
+    candidate: KothEntry, anchor: KothEntry, *, statistical_band_cap: bool = False
+) -> bool:
     """Mirror the validator's fail-closed tie grouping rule."""
     if _quality_primary_efficiency_active((candidate, anchor)):
         return continual_composite(candidate) == continual_composite(
@@ -1007,8 +1041,11 @@ def _weight_tied(candidate: KothEntry, anchor: KothEntry) -> bool:
     paired = _paired_statistic(candidate, anchor)
     if paired is None:
         return False
+    if not statistical_band_cap:
+        return abs(paired.mean_difference) <= KOTH_DETHRONE_Z * paired.standard_error
     return abs(paired.mean_difference) <= _indifference_band(
-        KOTH_MARGIN, KOTH_DETHRONE_Z * paired.standard_error
+        KOTH_MARGIN,
+        KOTH_DETHRONE_Z * paired.standard_error,
     )
 
 
@@ -1017,6 +1054,7 @@ def _dethrone_decision(
     champion: KothEntry,
     *,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> DethroneDecision:
     quality_primary = _quality_primary_efficiency_active((challenger, champion))
     score_ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
@@ -1024,7 +1062,8 @@ def _dethrone_decision(
     if paired is not None:
         margin_lead = KOTH_MARGIN
         paired_statistical_lead = _indifference_band(
-            margin_lead, KOTH_DETHRONE_Z * paired.standard_error
+            margin_lead,
+            KOTH_DETHRONE_Z * paired.standard_error,
         )
         required = paired_statistical_lead * _dethrone_band_scale(
             challenger, champion, paired.champion_reference
@@ -1072,9 +1111,9 @@ def _dethrone_decision(
             challenger_stderr**2 + champion_stderr**2
         )
         method = "unpaired"
-    required = _indifference_band(margin_lead, statistical_lead) * _dethrone_band_scale(
-        challenger, champion, champion_composite
-    )
+    required = _indifference_band(
+        margin_lead, statistical_lead, capped=statistical_band_cap
+    ) * _dethrone_band_scale(challenger, champion, champion_composite)
     required = _ceiling_capped_band(
         required,
         challenger,

@@ -2034,6 +2034,18 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = None
+    statistical_band_mode: Annotated[
+        Literal["capped"] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-29 consensus marker. When capped, paired tie and "
+                "unpaired dethrone statistics are limited to twice the KOTH "
+                "margin before decay. Absent preserves the legacy fold."
+            ),
+        ),
+    ] = None
     count: Annotated[int, Field(ge=0, description="Number of entries returned.")]
     generated_at: Annotated[
         datetime | None,

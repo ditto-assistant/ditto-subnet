@@ -2975,9 +2975,8 @@ class TestPublicLeaderboard:
         # Both reigns sit under ``KOTH_BAND_DECAY_START_COMPOSITE`` (0.60) so the
         # v6-and-later indifference-band decay leaves the required lead at its
         # unscaled value. What is on trial here is the dethrone decision itself
-        # -- that a real 0.01 lead is still short of the capped statistical
-        # bar -- and the decay has its own test; on the live era a 0.80 champion
-        # shrinks the band enough to flip this challenger.
+        # -- that a real 0.05 lead is still short of the legacy statistical
+        # bar without the protocol-29 marker -- and the decay has its own test.
         incumbent_id = await _seed_k3(
             session_maker,
             miner=_MINER_A,
@@ -2988,7 +2987,7 @@ class TestPublicLeaderboard:
         raw_leader_id = await _seed_k3(
             session_maker,
             miner=_MINER_B,
-            composites=[0.51, 0.51, 0.51],
+            composites=[0.55, 0.55, 0.55],
             details=details,
             created_at=datetime(2026, 7, 16, tzinfo=UTC),
         )
@@ -3022,8 +3021,10 @@ class TestPublicLeaderboard:
         assert body["emissions"]["allocation_mode"] == "ranked"
         assert body["emissions"]["score_ceiling_pool_size"] == 0
         decision = body["emissions"]["raw_leader_decision"]
-        assert decision["challenger_lead"] == pytest.approx(0.01)
-        assert decision["required_lead"] == pytest.approx(0.014)
+        assert decision["challenger_lead"] == pytest.approx(0.05)
+        assert decision["required_lead"] == pytest.approx(
+            1.64 * (0.03**2 + 0.03**2) ** 0.5
+        )
         assert decision["method"] == "unpaired"
         assert decision["dethrones"] is False
         assert decision["paired_standard_error"] is None

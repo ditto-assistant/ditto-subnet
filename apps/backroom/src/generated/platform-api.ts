@@ -18555,6 +18555,8 @@ export interface components {
              * @enum {string}
              */
             tie_weighting_mode: "disabled" | "fleet_ready";
+            /** Statistical Band Mode */
+            statistical_band_mode: "disabled" | "fleet_ready";
             /**
              * Wave Membership
              * @default participants
@@ -19379,6 +19381,12 @@ export interface components {
              * @default false
              */
             tie_weighting_fleet_ready: boolean;
+            /** Statistical Band Active */
+            statistical_band_active: boolean;
+            /** Statistical Band Fleet Ready */
+            statistical_band_fleet_ready: boolean;
+            /** Statistical Band Required Protocol */
+            statistical_band_required_protocol: number;
         };
         /**
          * EffectiveEfficiencyBonusSettings
@@ -21908,6 +21916,8 @@ export interface components {
              * @description Consensus activation marker for the ceiling-aware dethrone band. When set to headroom_capped, the KOTH indifference band is capped at a fixed share of the score the challenger can still gain, so a near-perfect incumbent can never require more than the benchmark can deliver. Absent keeps the uncapped decayed band.
              */
             dethrone_band_mode?: "headroom_capped" | null;
+            /** Statistical Band Mode */
+            statistical_band_mode?: "capped" | null;
             /**
              * Entries
              * @description Best eligible score per payment-time coldkey, highest composite first; the selected generation's hotkey is the weight destination.

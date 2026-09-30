@@ -112,8 +112,17 @@ class TestCappedStatisticalBand:
         challenger = _e("chall", 0.92, stderr=0.02, minutes=1)
 
         assert 1.64 * math.sqrt(2 * 0.02**2) > 0.02
-        assert _unpaired_band(challenger, champion, 0.007, 1.64) == pytest.approx(0.014)
-        assert _beats(challenger, champion, margin=0.007, dethrone_z=1.64)
+        assert _unpaired_band(
+            challenger, champion, 0.007, 1.64, statistical_band_cap=True
+        ) == pytest.approx(0.014)
+        assert _beats(
+            challenger,
+            champion,
+            margin=0.007,
+            dethrone_z=1.64,
+            statistical_band_cap=True,
+        )
+        assert not _beats(challenger, champion, margin=0.007, dethrone_z=1.64)
 
     def test_variance_inflation_does_not_pool_champion_share(self) -> None:
         seeds = list(range(15))
@@ -128,9 +137,16 @@ class TestCappedStatisticalBand:
         paired = _paired_dethrone(erratic, champion, 1.64)
 
         assert paired is not None
-        assert abs(paired[0]) > _indifference_band(0.007, 1.64 * paired[2])
+        assert abs(paired[0]) > _indifference_band(0.007, 1.64 * paired[2], capped=True)
         assert abs(paired[0]) < 1.64 * paired[2]
-        assert not _weight_tied(erratic, champion, margin=0.007, dethrone_z=1.64)
+        assert not _weight_tied(
+            erratic,
+            champion,
+            margin=0.007,
+            dethrone_z=1.64,
+            statistical_band_cap=True,
+        )
+        assert _weight_tied(erratic, champion, margin=0.007, dethrone_z=1.64)
         weights = compute_weights(
             [champion, erratic],
             margin=0.007,
@@ -138,6 +154,7 @@ class TestCappedStatisticalBand:
             rank_shares=self._SHARES,
             dethrone_z=1.64,
             tie_pooling=True,
+            statistical_band_cap=True,
         )
         assert weights == {"champ": 0.65, "erratic": 0.14}
 
@@ -159,6 +176,7 @@ class TestCappedStatisticalBand:
             rank_shares=self._SHARES,
             dethrone_z=1.64,
             tie_pooling=True,
+            statistical_band_cap=True,
         )
         assert weights == {"champ": 0.65, "erratic": 0.14}
 
@@ -1086,7 +1104,7 @@ class TestBeatsPaired:
         # Both carry stderr 0.03 AND aligned seeds, with a steady +0.03 per-seed
         # lead. PAIRED: se_diff ~ 0, so the fixed 0.02-point test margin wins and
         # the 0.03 lead clears it. UNPAIRED (seeds stripped): the independent-sum
-        # term is capped at 2*margin = 0.04 and holds the 0.03 lead. Same
+        # term is 0.070 and holds the 0.03 lead. Same
         # data, opposite verdict -- that is exactly the CRN pairing win.
         champ = _e(
             "champ",
@@ -1159,7 +1177,7 @@ class TestContestedConfirmationSet:
 
     def test_z_band_widens_the_contested_zone(self) -> None:
         # Deficit 0.03 clears the fixed 0.02-point margin but sits inside the
-        # capped statistical band of 0.04, so the pair is contested.
+        # legacy statistical band of about 0.070, so the pair is contested.
         champ = _e("5A" + "a" * 44, 0.80, stderr=0.03)
         chall = _e("5B" + "b" * 44, 0.77, stderr=0.03, minutes=1)
         got = contested_confirmation_set(
@@ -1231,7 +1249,7 @@ class TestContestedConfirmationSet:
             v9_full_composite=0.5,
             minutes=1,
         )
-        expected_band = 0.04  # 2 * margin, below the raw statistical term
+        expected_band = 1.64 * math.sqrt(2 * (0.04) ** 2)
 
         assert _unpaired_band(chall, champ, margin=0.02, dethrone_z=1.64) == (
             pytest.approx(expected_band)
@@ -1252,7 +1270,7 @@ class TestContestedConfirmationSet:
             efficiency_bonus=0.1,
             minutes=1,
         )
-        expected_band = 0.04  # 2 * margin, below the raw statistical term
+        expected_band = 1.64 * math.sqrt(2 * (0.04 * 1.1) ** 2)
 
         assert _unpaired_band(chall, champ, margin=0.02, dethrone_z=1.64) == (
             pytest.approx(expected_band)

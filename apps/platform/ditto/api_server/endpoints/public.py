@@ -226,6 +226,7 @@ from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
     crown_incumbent_is_active,
+    statistical_band_cap_is_active,
     tie_weighting_is_active,
 )
 from ditto.api_server.datapipeline import DataPipelineError
@@ -579,6 +580,7 @@ _TIE_WEIGHTING_PROTOCOL = 20
 # Protocol 24 caps the KOTH dethrone band at a share of the score a challenger
 # can still gain, so a saturated benchmark cannot freeze the crown.
 _DETHRONE_BAND_CLAMP_PROTOCOL = 24
+_STATISTICAL_BAND_CAP_PROTOCOL = 29
 # Grace after a lease is issued before the validator is expected to report (in a
 # heartbeat) that it has picked the agent up. Within this window an assigned-but-
 # not-yet-reported validator reads as "assigning" rather than a mismatch, so the
@@ -2851,6 +2853,7 @@ def _public_koth_emissions(
     efficiency_curve_versions: dict[UUID, int] | None = None,
     tie_weighting_active: bool = False,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
     ledger_pin: PublicLedgerPin | None = None,
     crown_incumbent_active: bool = False,
     reward_eligibility: dict | None = None,
@@ -2958,6 +2961,7 @@ def _public_koth_emissions(
         fold_entries,
         distinct_hotkeys=tie_weighting_active,
         ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_id,
     )
     if projection is None:
@@ -2967,6 +2971,7 @@ def _public_koth_emissions(
         projection,
         tie_pooling=tie_weighting_active,
         ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     )
     share_total = sum(allocation.shares)
     normalized_shares = tuple(share / share_total for share in allocation.shares)
@@ -3002,7 +3007,10 @@ def _public_koth_emissions(
     ) and (champion_record is None or champion_record.reward_eligible)
     decision = projection.raw_leader_decision
     defense = champion_defense(
-        fold_entries, projection, ceiling_band_clamp=ceiling_band_clamp
+        fold_entries,
+        projection,
+        ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     )
     return PublicKothEmissions(
         margin=KOTH_MARGIN,
@@ -3448,6 +3456,18 @@ async def build_public_leaderboard(
             bench_version=active_version,
             now=now,
             freshness=_VALIDATOR_STALE_WINDOW,
+        )
+    )
+    statistical_band_cap_active = (
+        bench_version is None
+        and statistical_band_cap_is_active(
+            continual_settings,
+            fleet_protocol_ready=await live_weight_setter_fleet_supports_protocol(
+                session,
+                minimum_protocol=_STATISTICAL_BAND_CAP_PROTOCOL,
+                now=now,
+                freshness=_VALIDATOR_STALE_WINDOW,
+            ),
         )
     )
     crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
@@ -4202,6 +4222,7 @@ async def build_public_leaderboard(
                 efficiency_curve_versions=board_curve_versions,
                 tie_weighting_active=tie_weighting_active,
                 ceiling_band_clamp=ceiling_band_clamp_active,
+                statistical_band_cap=statistical_band_cap_active,
                 ledger_pin=ledger_pin,
                 crown_incumbent_active=crown_incumbent_active,
                 reward_eligibility=projected_reward_eligibility,
@@ -4335,6 +4356,7 @@ async def ledger_epochs(
             fold_entries,
             distinct_hotkeys=served.get("tie_weighting_mode") == "pool",
             ceiling_band_clamp=served.get("dethrone_band_mode") == "headroom_capped",
+            statistical_band_cap=served.get("statistical_band_mode") == "capped",
             incumbent_agent_id=(
                 row.incumbent_agent_id
                 if served.get("crown_mode") == "incumbent"
@@ -4348,6 +4370,7 @@ async def ledger_epochs(
                 tie_pooling=served.get("tie_weighting_mode") == "pool",
                 ceiling_band_clamp=served.get("dethrone_band_mode")
                 == "headroom_capped",
+                statistical_band_cap=served.get("statistical_band_mode") == "capped",
             )
             if projection is not None
             else None

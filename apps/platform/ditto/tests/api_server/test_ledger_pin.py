@@ -105,6 +105,27 @@ class TestDigest:
 
 
 class TestBuildPinDraft:
+    def test_statistical_cap_is_frozen_only_when_activated(self) -> None:
+        entry = _entry(_HOTKEY_A, 0.8, first_seen=_NOW)
+        legacy = build_pin_draft(
+            _schedule(),
+            snapshot=_snapshot([entry]),
+            previous_pin=None,
+            previous_champion_owner_root=None,
+            now=_NOW,
+        )
+        capped = build_pin_draft(
+            _schedule(),
+            snapshot=_snapshot([entry], statistical_band_mode="capped"),
+            previous_pin=None,
+            previous_champion_owner_root=None,
+            now=_NOW,
+        )
+
+        assert "statistical_band_mode" not in legacy.context["served"]
+        assert capped.context["served"]["statistical_band_mode"] == "capped"
+        assert capped.ledger_digest != legacy.ledger_digest
+
     def test_records_the_classic_champion_and_owner_root(self) -> None:
         senior = _entry(_HOTKEY_A, 0.80, first_seen=_NOW - timedelta(days=2))
         # Inside the decayed 0.007 band at 0.80, so first-seen keeps the crown.

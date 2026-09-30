@@ -516,6 +516,7 @@ describe('Backroom MCP tools', () => {
       expect.arrayContaining([
         'aggregate_mode',
         'tie_weighting_mode',
+        'statistical_band_mode',
         'idle_retests_enabled',
         'wave_membership',
         'retest_cohort_size',

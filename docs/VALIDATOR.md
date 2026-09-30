@@ -701,6 +701,23 @@ after every recently live weight-setting validator advertises protocol 20;
 there is no force override because a mixed fold would split consensus. A merge
 or validator rollout alone therefore does not activate tie pooling.
 
+### Statistical band cap (protocol 29)
+
+The paired dethrone branch already caps its statistical term at twice the KOTH
+margin. Protocol 29 extends that cap to paired tie/cohort membership and the
+unpaired dethrone and contested-confirmation branches. This prevents noisy
+scores from widening payout groups or making an incumbent unreachable. The
+cap is applied before the existing version decay and optional ceiling clamp.
+
+The shipped `statistical_band_mode: disabled` policy preserves the pre-29 fold
+exactly. An operator may select `fleet_ready`; Platform serves the additive
+`statistical_band_mode: capped` ledger marker only after every recently-live
+weight-setting validator reports protocol 29. The epoch pin freezes the marker
+for every reader until the next pin. A protocol-28 validator that rejoins while
+a capped pin remains active receives HTTP 428 instead of folding that pin with
+the older rule. There is no force override and no production setting change
+from merging the code.
+
 ### Epoch-pinned ledger
 
 `GET /scoring/scores` used to be a time-based read. Validators poll it once per

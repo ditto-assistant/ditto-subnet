@@ -196,6 +196,11 @@ def _ledger_ceiling_band_clamp(ledger: LedgerResponse) -> bool:
     return getattr(ledger, "dethrone_band_mode", None) == "headroom_capped"
 
 
+def _ledger_statistical_band_cap(ledger: LedgerResponse) -> bool:
+    """Use the protocol-29 cap only when the served pin activates it."""
+    return getattr(ledger, "statistical_band_mode", None) == "capped"
+
+
 def _ledger_crown_incumbent(ledger: LedgerResponse) -> UUID | None:
     """The served incumbent the fold defends, or ``None`` for the classic walk.
 
@@ -2087,6 +2092,7 @@ class ValidatorWorker:
                 dethrone_z=self._config.koth_dethrone_z,
                 tie_pooling=ledger.tie_weighting_mode == "pool",
                 ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+                statistical_band_cap=_ledger_statistical_band_cap(ledger),
                 incumbent_agent_id=_ledger_crown_incumbent(ledger),
                 unpaid_agent_id=(
                     provisional.agent_id if provisional is not None else None
@@ -2159,6 +2165,7 @@ class ValidatorWorker:
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            statistical_band_cap=_ledger_statistical_band_cap(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         king_fingerprint = self._king_fingerprint(champion)
@@ -2280,6 +2287,7 @@ class ValidatorWorker:
                 margin=self._config.koth_margin,
                 dethrone_z=self._config.koth_dethrone_z,
                 ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+                statistical_band_cap=_ledger_statistical_band_cap(ledger),
                 incumbent_agent_id=_ledger_crown_incumbent(ledger),
             )
         except PlatformError as e:
@@ -3086,6 +3094,7 @@ class ValidatorWorker:
             tail_size=self._config.koth_tail_size,
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            statistical_band_cap=_ledger_statistical_band_cap(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         if not stale:
@@ -3205,6 +3214,7 @@ class ValidatorWorker:
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            statistical_band_cap=_ledger_statistical_band_cap(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         if not contested:

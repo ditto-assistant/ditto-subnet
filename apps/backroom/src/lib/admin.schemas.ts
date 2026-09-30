@@ -1778,6 +1778,7 @@ const checkCohortCeiling = (
 const continualRetestSettingsBaseSchema = z.object({
   aggregate_mode: z.enum(['disabled', 'fleet_ready', 'enabled']),
   tie_weighting_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
+  statistical_band_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
   // Serving change only: one frozen ledger per chain epoch so every validator
   // folds identical bytes. Like wave_membership, the read default mirrors the
   // platform's shipped default (`epoch`); a build old enough to omit the field
@@ -1840,6 +1841,7 @@ export const continualRetestSettingsSchema =
 export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSchema
   .extend({
     tie_weighting_mode: z.enum(['disabled', 'fleet_ready']),
+    statistical_band_mode: z.enum(['disabled', 'fleet_ready']),
     ledger_pin_mode: z.enum(['live', 'epoch']),
     crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']),
     wave_membership: z.enum(['strict', 'participants', 'per_agent']),
@@ -1921,6 +1923,9 @@ export const effectiveContinualRetestSettingsSchema = z.object({
   aggregate_active: z.boolean(),
   tie_weighting_fleet_ready: z.boolean().default(false),
   tie_weighting_active: z.boolean().default(false),
+  statistical_band_fleet_ready: z.boolean().default(false),
+  statistical_band_active: z.boolean().default(false),
+  statistical_band_required_protocol: z.number().int().default(29),
   crown_incumbent_fleet_ready: z.boolean().default(false),
   crown_incumbent_active: z.boolean().default(false),
   crown_incumbent_required_protocol: z.number().int().positive().default(27),
@@ -1981,6 +1986,12 @@ type ContinualRetestExtendedFieldSpec = {
 }
 
 export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExtendedFieldSpec> = [
+  {
+    field: 'statistical_band_mode',
+    label: 'a capped KOTH statistical band',
+    legacyValue: () => 'disabled',
+    legacyBehaviour: () => 'the historical statistical bands remain in effect',
+  },
   {
     field: 'tie_weighting_mode',
     label: 'a tie-aware weight policy',

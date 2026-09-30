@@ -150,6 +150,7 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "retest_eligibility_z",
                 "rollout_standdown",
                 "tie_weighting_mode",
+                "statistical_band_mode",
                 "wave_membership",
             )
         ),

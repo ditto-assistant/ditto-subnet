@@ -704,11 +704,21 @@ def test_erratic_paired_member_cannot_join_tie_or_ceiling_cohort() -> None:
         confirmations=(1.0,) * 11 + (0.0,) * 4,
         seeds=seeds,
     )
-    projection = project_koth([champion, erratic], distinct_hotkeys=True)
+    projection = project_koth(
+        [champion, erratic], distinct_hotkeys=True, statistical_band_cap=True
+    )
 
     assert projection is not None
-    assert emission_shares(projection, tie_pooling=True) == (0.65, 0.14)
-    allocation = emission_allocation([champion, erratic], projection, tie_pooling=True)
+    assert emission_shares(projection, tie_pooling=True, statistical_band_cap=True) == (
+        0.65,
+        0.14,
+    )
+    allocation = emission_allocation(
+        [champion, erratic],
+        projection,
+        tie_pooling=True,
+        statistical_band_cap=True,
+    )
     assert allocation.mode == "ranked"
     assert allocation.shares == (0.65, 0.14)
 
@@ -735,7 +745,7 @@ def test_statistical_band_matches_validator_unpaired_rule() -> None:
     incumbent = _entry(2, 0.80, minutes=0, stderr=0.03)
     raw_leader = _entry(1, 0.81, minutes=1, stderr=0.03)
 
-    projection = project_koth([raw_leader, incumbent])
+    projection = project_koth([raw_leader, incumbent], statistical_band_cap=True)
 
     assert projection is not None
     decision = projection.raw_leader_decision

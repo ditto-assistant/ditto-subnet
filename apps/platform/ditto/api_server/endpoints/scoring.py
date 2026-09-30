@@ -56,6 +56,7 @@ from ditto.api_server.confirmation_seed_anchor import list_reign_seed_anchors
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
     crown_incumbent_is_active,
+    statistical_band_cap_is_active,
     tie_weighting_is_active,
 )
 from ditto.api_server.efficiency import ensure_current_efficiency_state
@@ -150,6 +151,7 @@ _CROWN_INCUMBENT_PROTOCOL = CROWN_INCUMBENT_PROTOCOL
 # weight-setting fleet reports it; until then ``enforce`` rehearses as shadow,
 # or an older validator would crown and pay the held incumbent's runner-up.
 _PROVISIONAL_INCUMBENT_PROTOCOL = PROVISIONAL_INCUMBENT_PROTOCOL
+_STATISTICAL_BAND_CAP_PROTOCOL = 29
 
 
 def _fleet_safe_efficiency_adjustments(
@@ -192,6 +194,7 @@ class _LedgerSnapshot:
     byte-identical to the pre-gate ledger."""
     tie_weighting_mode: Literal["pool"] | None = None
     dethrone_band_mode: Literal["headroom_capped"] | None = None
+    statistical_band_mode: Literal["capped"] | None = None
     continual_retest_cohort_size: int = 5
     requesting_validator_hotkey: str | None = None
     context: _LedgerContext | None = None
@@ -241,6 +244,7 @@ class _LedgerContext:
     factor_fleet_ready: bool
     unbounded_factor_fleet_ready: bool = False
     dethrone_band_clamp_fleet_ready: bool = False
+    statistical_band_cap_fleet_ready: bool = False
     crown_incumbent_fleet_ready: bool = False
     reward_eligibility_fleet_ready: bool = False
 
@@ -434,6 +438,9 @@ async def resolve_ledger_context(
         bench_version=bench_version,
         now=now,
     )
+    statistical_band_cap_fleet_ready = await live_weight_setter_fleet_supports_protocol(
+        session, minimum_protocol=_STATISTICAL_BAND_CAP_PROTOCOL, now=now
+    )
     crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
         session,
         minimum_protocol=_CROWN_INCUMBENT_PROTOCOL,
@@ -454,6 +461,7 @@ async def resolve_ledger_context(
         factor_fleet_ready=factor_fleet_ready,
         unbounded_factor_fleet_ready=unbounded_factor_fleet_ready,
         dethrone_band_clamp_fleet_ready=dethrone_band_clamp_fleet_ready,
+        statistical_band_cap_fleet_ready=statistical_band_cap_fleet_ready,
         crown_incumbent_fleet_ready=crown_incumbent_fleet_ready,
         reward_eligibility_fleet_ready=reward_eligibility_fleet_ready,
     )
@@ -534,6 +542,7 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         reward_eligibility_mode=snapshot.reward_eligibility_mode,
         tie_weighting_mode=snapshot.tie_weighting_mode,
         dethrone_band_mode=snapshot.dethrone_band_mode,
+        statistical_band_mode=snapshot.statistical_band_mode,
         count=len(snapshot.entries),
         generated_at=snapshot.generated_at,
         stale=False,
@@ -990,6 +999,14 @@ async def materialize_ledger_snapshot(
         reward_eligibility_mode=reward_eligibility_mode,
         tie_weighting_mode="pool" if tie_weighting_active else None,
         dethrone_band_mode=("headroom_capped" if dethrone_band_clamp_active else None),
+        statistical_band_mode=(
+            "capped"
+            if statistical_band_cap_is_active(
+                continual_settings,
+                fleet_protocol_ready=ledger_context.statistical_band_cap_fleet_ready,
+            )
+            else None
+        ),
         continual_retest_cohort_size=continual_settings.retest_cohort_size,
         requesting_validator_hotkey=requesting_validator_hotkey,
         context=ledger_context,
@@ -1013,6 +1030,7 @@ async def materialize_ledger_snapshot(
             "bounded_factor": ledger_context.factor_fleet_ready,
             "unbounded_factor": ledger_context.unbounded_factor_fleet_ready,
             "dethrone_band_clamp": ledger_context.dethrone_band_clamp_fleet_ready,
+            "statistical_band_cap": ledger_context.statistical_band_cap_fleet_ready,
             "crown_incumbent": ledger_context.crown_incumbent_fleet_ready,
             "reward_eligibility": ledger_context.reward_eligibility_fleet_ready,
         },
@@ -1065,6 +1083,33 @@ async def _serve_epoch_pin(
         previous.epoch_index,
     )
     return response_from_pin(previous, stale=True, now=now)
+
+
+async def _require_statistical_cap_requester(
+    session: AsyncSession,
+    validator_hotkey: str,
+    ledger: LedgerResponse,
+    *,
+    now: datetime,
+) -> LedgerResponse:
+    """Refuse a v28 rejoiner while a pinned v29 fold remains active."""
+    if ledger.statistical_band_mode != "capped":
+        return ledger
+    heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
+    seen_at = heartbeat.seen_at if heartbeat is not None else None
+    if seen_at is not None and seen_at.tzinfo is None:
+        seen_at = seen_at.replace(tzinfo=UTC)
+    if (
+        heartbeat is None
+        or seen_at is None
+        or seen_at < now - VALIDATOR_STALE_WINDOW
+        or heartbeat.protocol_version < _STATISTICAL_BAND_CAP_PROTOCOL
+    ):
+        raise HTTPException(
+            status_code=428,
+            detail="validator protocol 29 is required for the pinned statistical band",
+        )
+    return ledger
 
 
 @router.get(
@@ -1155,7 +1200,9 @@ async def scores(
         request, session, x_validator_hotkey, context=ledger_context, now=auth_now
     )
     if pinned is not None:
-        return pinned
+        return await _require_statistical_cap_requester(
+            session, x_validator_hotkey, pinned, now=auth_now
+        )
     joined_snapshot, materialization = await _join_ledger_materialization(
         request, x_validator_hotkey, context=ledger_context
     )
@@ -1165,7 +1212,12 @@ async def scores(
             x_validator_hotkey,
             len(joined_snapshot.entries),
         )
-        return _fresh_response_from_snapshot(joined_snapshot)
+        return await _require_statistical_cap_requester(
+            session,
+            x_validator_hotkey,
+            _fresh_response_from_snapshot(joined_snapshot),
+            now=auth_now,
+        )
     assert materialization is not None
     try:
         snapshot = await materialize_ledger_snapshot(
@@ -1189,7 +1241,9 @@ async def scores(
     )
     ledger_response = _fresh_response_from_snapshot(snapshot)
     _finish_ledger_materialization(request, materialization)
-    return ledger_response
+    return await _require_statistical_cap_requester(
+        session, x_validator_hotkey, ledger_response, now=auth_now
+    )
 
 
 async def _authorize_ledger_request(
@@ -1353,6 +1407,14 @@ def _serve_last_known(
 ) -> LedgerResponse:
     """Serve the cached ledger on a DB failure, or 503 if there is none / too old."""
     snapshot = _cached_snapshot(request)
+    if (
+        snapshot is not None
+        and getattr(snapshot, "statistical_band_mode", None) == "capped"
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="scoring ledger unavailable; cannot verify protocol-29 requester",
+        ) from error
     if snapshot is None:
         logger.warning(
             "validator=%s ledger read failed and no cached snapshot to serve: %s",
@@ -1419,6 +1481,7 @@ def _serve_last_known(
         reward_eligibility_mode=snapshot.reward_eligibility_mode,
         tie_weighting_mode=snapshot.tie_weighting_mode,
         dethrone_band_mode=snapshot.dethrone_band_mode,
+        statistical_band_mode=snapshot.statistical_band_mode,
         count=len(entries),
         generated_at=snapshot.generated_at,
         stale=True,
