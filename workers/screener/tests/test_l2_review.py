@@ -62,6 +62,7 @@ from ditto_screener.l2_review import (
     _review_adaptation_hold,
     _safety_clearance_gaps,
     _served_generator_hold,
+    _enforce_causal_authority,
     _validate_lead_dispositions,
     _write_all,
     l2_cause_prompt_revision,
@@ -2094,6 +2095,54 @@ def test_served_generator_constellation_cannot_auto_clear(
     assert held.clearance_path == "deterministic_served_generator_hold"
     assert held.critic_disposition == "not_required_static_hold"
     assert held.resolution_basis == "insufficient_static_evidence"
+    retained = _enforce_causal_authority(
+        held.observation, clearance_path=held.clearance_path
+    )
+    assert retained is held.observation
+    assert retained.finding_digest == held.observation.finding_digest
+    assert retained.clearance_certified is False
+    assert retained.risk_level == "medium"
+    assert (
+        _enforce_causal_authority(held.observation).error_code
+        == "l2-causal-role-incomplete"
+    )
+    finding = SourceReviewFinding.model_validate(held.observation.finding)
+    changed = finding.model_copy(
+        update={"summary": "Static evidence proves a violation"}
+    )
+    assert (
+        _enforce_causal_authority(
+            replace(held.observation, finding=changed.model_dump(mode="json")),
+            clearance_path=held.clearance_path,
+        ).error_code
+        == "l2-causal-role-incomplete"
+    )
+    assert finding.invariant_assessment is not None
+    breach = finding.model_copy(
+        update={
+            "invariant_assessment": finding.invariant_assessment.model_copy(
+                update={
+                    "decisions": [
+                        decision.model_copy(
+                            update={
+                                "disposition": SourceReviewInvariantDisposition.BREACH
+                            }
+                        )
+                        if decision.invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+                        else decision
+                        for decision in finding.invariant_assessment.decisions
+                    ]
+                }
+            )
+        }
+    )
+    assert (
+        _enforce_causal_authority(
+            replace(held.observation, finding=breach.model_dump(mode="json")),
+            clearance_path=held.clearance_path,
+        ).error_code
+        == "l2-causal-role-incomplete"
+    )
     finding = SourceReviewFinding.model_validate(held.observation.finding)
     assert finding.invariant_assessment is not None
     i5 = next(

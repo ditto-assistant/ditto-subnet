@@ -6106,7 +6106,12 @@ class LayeredSourceReviewAgent:
             )
             return await settle(self._settle_gradient(carried))
         return await settle(
-            _carry_l1_notes(_enforce_causal_authority(result.observation), l1)
+            _carry_l1_notes(
+                _enforce_causal_authority(
+                    result.observation, clearance_path=result.clearance_path
+                ),
+                l1,
+            )
         )
 
 
@@ -6158,14 +6163,33 @@ def _carry_l1_notes(
 
 def _enforce_causal_authority(
     observation: SourceReviewObservation,
+    *,
+    clearance_path: str | None = None,
 ) -> SourceReviewObservation:
-    """Fail closed only at the authoritative v2 rollout boundary."""
+    """Require causal proof for breaches while retaining a static unresolved hold."""
     if not observation.ok or observation.risk_level == "low":
         return observation
     try:
         finding = SourceReviewFinding.model_validate(observation.finding)
     except (TypeError, ValueError):
         return _failure("l2-causal-finding-unavailable", "inconclusive")
+    if (
+        clearance_path == "deterministic_served_generator_hold"
+        and finding.prompt_revision == L2_STATIC_HOLD_REVISION
+        and finding.summary
+        == (
+            "served generator-shaped request, retrieval, and answer-path "
+            "signals require review; static evidence does not prove I5"
+        )
+        and finding.invariant_assessment is not None
+        and all(
+            decision.disposition != SourceReviewInvariantDisposition.BREACH
+            for decision in finding.invariant_assessment.decisions
+        )
+    ):
+        # This finding explicitly claims no violation. The deterministic
+        # constellation is still an unresolved hold, never a source clear.
+        return observation
     verification = verify_causal_finding(finding)
     if verification.role_complete:
         return observation
