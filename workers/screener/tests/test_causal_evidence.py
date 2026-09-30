@@ -407,6 +407,13 @@ def test_v13_i5_requires_signed_assumption_and_product_exclusion(
     )
     assert verify_causal_finding(historical).role_complete is True
     assert b'"i5_proof"' not in historical.canonical_bytes()
+    for revision in (48, 49, 100):
+        current = historical.model_copy(
+            update={"prompt_revision": f"l2-terra-source-review-v{revision}-policy-v13"}
+        )
+        verified = verify_causal_finding(current)
+        assert verified.role_complete is False
+        assert verified.reason_code == "i5-proof-incomplete"
 
 
 def test_v13_i5_assumption_index_must_bind_source_evidence(tmp_path: Path) -> None:

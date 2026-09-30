@@ -115,7 +115,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v48-policy-v13"
+        return "l2-terra-source-review-v49-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -1339,6 +1339,11 @@ def _l2_review_system_prompt(policy_version: int) -> str:
             .replace(
                 "exactly one decision for I1 through I7.",
                 "exactly one decision for I1 through I8.",
+            )
+            .replace(
+                "it must be a v2\nobject that binds",
+                "use schema_version 3 with i5_proof for an I5 breach; otherwise\n"
+                "use schema_version 2 with i5_proof null. In either case it binds",
             )
         )
     return prompt

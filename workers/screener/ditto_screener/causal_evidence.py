@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from ditto_screening_protocol import (
@@ -180,7 +181,10 @@ def verify_causal_finding(finding: SourceReviewFinding) -> CausalEvidenceVerific
     authority_transition = transition.value if transition is not None else None
     scorer_visible_effect = effect.value if effect is not None else None
     required_categories = set(finding.categories) & _CAUSAL_CATEGORIES
-    if finding.prompt_revision == "l2-terra-source-review-v48-policy-v13":
+    analyst_revision = re.fullmatch(
+        r"l2-terra-source-review-v([0-9]+)-policy-v13", finding.prompt_revision
+    )
+    if analyst_revision is not None and int(analyst_revision[1]) >= 48:
         assessment = finding.invariant_assessment
         i5_breach = assessment is not None and any(
             decision.invariant == SourceReviewInvariant.PRODUCTION_ENGINE
