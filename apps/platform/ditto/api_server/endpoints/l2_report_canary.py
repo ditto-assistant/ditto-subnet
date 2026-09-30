@@ -13,7 +13,7 @@ from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
-from sqlalchemy import exists, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.l2_report_canary import (
@@ -30,6 +30,7 @@ from ditto.api_models.l2_report_canary import (
 )
 from ditto.api_models.screener_node_settings import ScreenerNodeChannelSettings
 from ditto.api_models.system_health import fleet_release_from_heartbeat_envelope
+from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.canonical_starter_control import (
     ARCHIVE_BYTES,
     ARCHIVE_SHA256,
@@ -66,7 +67,10 @@ from ditto.db.queries.benchmark_rollout import arrival_bench_version
 from ditto.db.queries.screener_node_settings import (
     resolve_screener_node_channel_settings,
 )
-from ditto.db.queries.screening import has_claimable_screening_work
+from ditto.db.queries.screening import (
+    claim_canary_scopes,
+    has_claimable_screening_work,
+)
 
 admin_router = APIRouter(prefix="/admin/screener-l2-report-canaries", tags=["admin"])
 screener_router = APIRouter(prefix="/screener/l2-report-canaries", tags=["screener"])
@@ -322,35 +326,32 @@ async def _canary_yields_to_production(
     limits: ScreenerNodeChannelSettings,
     instance_id: str,
     active: int,
+    review_settings_scopes: frozenset[str] | None,
     now: datetime,
 ) -> bool:
-    """Hold canaries while this node's production admission is open.
+    """Hold a leasable canary while this node's production admission is open.
 
     The production claim budget counts only screening attempts, so a canary
     that takes the worker production needs delays a fresh upload by up to one
     canary lease. With admission open, a canary therefore waits while fresh
-    production work is claimable, and it may never occupy one of the
-    ``screening_concurrency`` fresh workers kept for production. The caller
-    holds the node row lock, so ``active`` cannot race another canary claim.
+    production work is claimable by this worker, and it may never occupy one
+    of the ``screening_concurrency`` fresh workers kept for production. The
+    caller holds the node row lock, so ``active`` cannot race another canary
+    claim, and has already selected the row it would lease, so a hold is
+    decided and logged only for a canary this worker could otherwise take.
     """
-    queued = await session.scalar(
-        select(
-            exists().where(
-                ScreenerL2ReportCanary.target_node_id == node.node_id,
-                ScreenerL2ReportCanary.status == "queued",
-            )
-        )
-    )
-    if not queued:
-        # Nothing to lease: skip the production read and the hold log.
-        return True
     healthy_workers = await _fresh_worker_ids(session, node=node, now=now)
     reserve_cap = min(
         limits.canary_concurrency,
         _MAX_PARALLEL_SOURCE_ONLY,
         max(0, len(healthy_workers) - limits.screening_concurrency),
     )
-    if await has_claimable_screening_work(session, now=now):
+    if await has_claimable_screening_work(
+        session,
+        now=now,
+        review_settings_scopes=review_settings_scopes,
+        netuid=expected_netuid(),
+    ):
         reason = "production-claimable"
     elif instance_id not in healthy_workers or active >= reserve_cap:
         # A worker without a fresh heartbeat is not counted in the
@@ -958,19 +959,8 @@ async def claim_l2_report_canary(
         _, limits = await resolve_screener_node_channel_settings(
             session, node_id=node_id
         )
-        if limits.screening_concurrency > 0:
-            # Production admission is open: canaries wait for claimable work
-            # and leave screening_concurrency fresh workers to production.
-            if await _canary_yields_to_production(
-                session,
-                node=node,
-                limits=limits,
-                instance_id=payload.instance_id,
-                active=len(active),
-                now=now,
-            ):
-                return None
-        elif active:
+        admission_open = limits.screening_concurrency > 0
+        if not admission_open and active:
             # Admission is closed, so canaries may use workers production
             # cannot. Preserve the legacy first lease without requiring a
             # heartbeat; additional source-only leases require fresh worker
@@ -1009,6 +999,35 @@ async def claim_l2_report_canary(
             )
         )
         if row is None:
+            return None
+        # Production admission is open: decide the hold on the exact row this
+        # worker would lease, after every queue filter above, so a canary it
+        # cannot take never holds or logs, and before any drift guard spends a
+        # storage read on a row that will wait. Keep new queue filters on
+        # ``queued`` and new per-row lease checks below this point.
+        if admission_open and await _canary_yields_to_production(
+            session,
+            node=node,
+            limits=limits,
+            instance_id=payload.instance_id,
+            active=len(active),
+            # The pinned retries a production claim from this worker could
+            # bind, as ``resolve_claim_binding`` derives them.
+            review_settings_scopes=claim_canary_scopes(
+                (
+                    (
+                        effective.revision,
+                        payload.instance_id,
+                        effective.scope,
+                        effective.checksum,
+                    )
+                    if effective.revision >= 1
+                    else None
+                ),
+                enrolled_node_id=node_id,
+            ),
+            now=now,
+        ):
             return None
         agent = None
         if row.source_kind == "canonical_starter_fixture":

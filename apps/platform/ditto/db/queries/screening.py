@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
@@ -231,30 +232,236 @@ def screening_running_or_backoff(now: datetime) -> ColumnElement[bool]:
     )
 
 
-async def has_claimable_screening_work(session: AsyncSession, *, now: datetime) -> bool:
-    """Report whether a fresh submission is waiting for a production claim.
+def screening_deferred_behind_earlier_owner(
+    candidate_payment: type[EvaluationPayment], *, netuid: int
+) -> ColumnElement[bool]:
+    """Match an agent whose bytes an earlier, different owner still holds.
+
+    While the earlier submission is uploaded, screening, or failed awaiting a
+    retry, the claim defers this one so the duplicate race resolves before
+    either is judged. ``candidate_payment`` must be outer-joined to the
+    agent's own payment row by the caller.
+    """
+    earlier = aliased(Agent)
+    earlier_payment = aliased(EvaluationPayment)
+    direct_owner_link = exists(
+        select(OwnerAttestation.attestation_id).where(
+            OwnerAttestation.netuid == netuid,
+            OwnerAttestation.revoked_at.is_(None),
+            or_(
+                and_(
+                    OwnerAttestation.hotkey_lo == Agent.miner_hotkey,
+                    OwnerAttestation.hotkey_hi == earlier.miner_hotkey,
+                ),
+                and_(
+                    OwnerAttestation.hotkey_lo == earlier.miner_hotkey,
+                    OwnerAttestation.hotkey_hi == Agent.miner_hotkey,
+                ),
+            ),
+        )
+    )
+    earlier_is_different_owner = and_(
+        earlier.miner_hotkey != Agent.miner_hotkey,
+        ~direct_owner_link,
+        or_(
+            candidate_payment.miner_coldkey.is_(None),
+            earlier_payment.miner_coldkey.is_(None),
+            earlier_payment.miner_coldkey != candidate_payment.miner_coldkey,
+        ),
+    )
+    return exists(
+        select(earlier.agent_id)
+        .select_from(earlier)
+        .outerjoin(
+            earlier_payment,
+            earlier_payment.agent_id == earlier.agent_id,
+        )
+        .where(
+            earlier.sha256 == Agent.sha256,
+            earlier_is_different_owner,
+            (earlier.created_at < Agent.created_at)
+            | (
+                (earlier.created_at == Agent.created_at)
+                & (earlier.agent_id < Agent.agent_id)
+            ),
+            earlier.status.in_(
+                (
+                    AgentStatus.UPLOADED,
+                    AgentStatus.SCREENING,
+                    AgentStatus.SCREENING_FAILED,
+                )
+            ),
+        )
+    )
+
+
+def scored_policy_release_filter(
+    canary_policy_version: int | None,
+) -> tuple[int | None, list[ColumnElement[bool]], bool]:
+    """Resolve the explicit scored-policy release a claim may take.
+
+    Returns the release's target policy version, the criteria that select a
+    pending release for it, and whether this claim may take such a release.
+    The process-global policy snapshot is read once, so every predicate built
+    from the result agrees.
+    """
+    scored_rescreen_policy_version = effective_scored_rescreen_policy_version()
+    scored_rescreen_activation_revision = (
+        effective_scored_rescreen_activation_revision()
+    )
+    scored_release_criteria: list[ColumnElement[bool]] = [
+        ScoredPolicyRescreenRelease.target_policy_version
+        == scored_rescreen_policy_version,
+        ScoredPolicyRescreenRelease.state == "pending",
+    ]
+    if scored_rescreen_activation_revision is not None:
+        scored_release_criteria.append(
+            ScoredPolicyRescreenRelease.activation_revision
+            == scored_rescreen_activation_revision
+        )
+    can_claim_scored_rescreen = scored_rescreen_policy_version is not None and (
+        scored_rescreen_policy_version == effective_screening_policy_version()
+        or (
+            canary_policy_version is not None
+            and canary_policy_version >= scored_rescreen_policy_version
+        )
+    )
+    return (
+        scored_rescreen_policy_version,
+        scored_release_criteria,
+        can_claim_scored_rescreen,
+    )
+
+
+def screening_canary_revision_usable(
+    *,
+    allowed_scopes: Collection[str] | None,
+    release_criteria: Sequence[ColumnElement[bool]] | None,
+) -> ColumnElement[bool]:
+    """Match an agent whose pinned review posture this claimant can bind.
+
+    An exact latest-attempt retry override wins, otherwise a pending scored
+    release (``release_criteria``, ``None`` when the claim may take none)
+    supplies the pinned revision. A pin is usable only in one of the
+    claimant's ``allowed_scopes`` as an enforcing adjudicator posture; with
+    ``None`` (no bound revision) only unpinned work is usable. The claim
+    filters on this before LIMIT so a retry unusable by one claimant cannot
+    hide the next upload from it.
+    """
+    latest_attempt_id = latest_screening_attempt_id()
+    retry_canary_revision = (
+        select(ScreeningRetryOverride.review_settings_revision)
+        .where(ScreeningRetryOverride.attempt_id == latest_attempt_id)
+        .correlate(Agent)
+        .scalar_subquery()
+    )
+    release_canary_revision = (
+        select(ScoredPolicyRescreenRelease.review_settings_revision)
+        .where(
+            ScoredPolicyRescreenRelease.agent_id == Agent.agent_id,
+            *release_criteria,
+        )
+        .correlate(Agent)
+        .scalar_subquery()
+        if release_criteria is not None
+        else None
+    )
+    canary_revision = func.coalesce(retry_canary_revision, release_canary_revision)
+    usable: ColumnElement[bool] = canary_revision.is_(None)
+    if allowed_scopes is not None:
+        usable = or_(
+            usable,
+            exists(
+                select(ScreenerReviewSettingsRevision.revision).where(
+                    ScreenerReviewSettingsRevision.revision == canary_revision,
+                    ScreenerReviewSettingsRevision.scope.in_(allowed_scopes),
+                    ScreenerReviewSettingsRevision.settings["mode"].as_string()
+                    == "enforce",
+                    func.coalesce(
+                        ScreenerReviewSettingsRevision.settings[
+                            "l3_enabled"
+                        ].as_boolean(),
+                        ScreenerReviewSettings().l3_enabled,
+                    ).is_(True),
+                    ScreenerReviewSettingsRevision.settings[
+                        "adjudicator_mode"
+                    ].as_string()
+                    == "enforce",
+                )
+            ),
+        )
+    return usable
+
+
+def claim_canary_scopes(
+    binding: tuple[int, str, str, str] | None, *, enrolled_node_id: str | None
+) -> frozenset[str] | None:
+    """Review-settings scopes whose pinned revisions a claimant can use.
+
+    ``binding`` is the claim's ``(revision, instance_id, scope, checksum)``.
+    ``None``, a claimant on built-in defaults, can take only unpinned work.
+    """
+    if binding is None:
+        return None
+    scopes = {"*", binding[1], binding[2]}
+    # The endpoint authenticates enrollment before passing the node scope.
+    if enrolled_node_id is not None:
+        scopes.add(enrolled_node_id)
+    return frozenset(scopes)
+
+
+async def has_claimable_screening_work(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    review_settings_scopes: Collection[str] | None,
+    netuid: int,
+) -> bool:
+    """Report whether a fresh submission is waiting for this claimant.
 
     Covers the two fresh-work arms of ``claim_screening_attempts``: a new
     upload, and a failed screen whose exact latest attempt carries a Backroom
-    retry authorization. Like the claim, it skips an agent that still holds a
-    running lease or a backoff hold, so a retry production cannot take yet
-    does not hold other lanes back.
+    retry authorization. It applies the claim's own exclusions from the same
+    predicate builders, so work production would never select cannot hold
+    another lane back indefinitely:
+
+    - a running lease or backoff hold (``screening_running_or_backoff``);
+    - a duplicate deferred behind an earlier owner's in-flight submission
+      (``screening_deferred_behind_earlier_owner``), which can stay parked
+      until an operator acts on the earlier one;
+    - a retry pinned to a review posture outside ``review_settings_scopes``
+      (``screening_canary_revision_usable``); pass the scopes a production
+      claim from the same worker would bind (``claim_canary_scopes``).
 
     This is an advisory read for lanes that must yield to production, such as
     report-only canaries. It is one unlocked ``SELECT``: it takes no advisory
     lock, locks no rows, runs no expiry or orphan sweep, and writes nothing, so
     it never queues behind or delays a production claim.
     """
+    candidate_payment = aliased(EvaluationPayment)
+    _, release_criteria, can_claim_scored_rescreen = scored_policy_release_filter(None)
+    claimable = and_(
+        ~screening_running_or_backoff(now),
+        ~screening_deferred_behind_earlier_owner(candidate_payment, netuid=netuid),
+        screening_canary_revision_usable(
+            allowed_scopes=review_settings_scopes,
+            release_criteria=release_criteria if can_claim_scored_rescreen else None,
+        ),
+    )
+
+    def fresh_work(*arm: ColumnElement[bool]) -> ColumnElement[bool]:
+        return exists(
+            select(Agent.agent_id)
+            .outerjoin(candidate_payment, candidate_payment.agent_id == Agent.agent_id)
+            .where(*arm, claimable)
+        )
+
     # Two EXISTS arms rather than one OR so the upload arm stays on the
     # partial ``agents_status_uploaded_idx`` index.
-    uploaded = exists().where(
-        Agent.status == AgentStatus.UPLOADED,
-        ~screening_running_or_backoff(now),
-    )
-    authorized_retry = exists().where(
+    uploaded = fresh_work(Agent.status == AgentStatus.UPLOADED)
+    authorized_retry = fresh_work(
         Agent.status == AgentStatus.SCREENING_FAILED,
         failed_screening_retry_authorized(),
-        ~screening_running_or_backoff(now),
     )
     return bool(await session.scalar(select(or_(uploaded, authorized_retry))))
 
@@ -1047,27 +1254,11 @@ async def claim_screening_attempts(
             ),
         )
     )
-    scored_rescreen_policy_version = effective_scored_rescreen_policy_version()
-    scored_rescreen_activation_revision = (
-        effective_scored_rescreen_activation_revision()
-    )
-    scored_release_criteria: list[ColumnElement[bool]] = [
-        ScoredPolicyRescreenRelease.target_policy_version
-        == scored_rescreen_policy_version,
-        ScoredPolicyRescreenRelease.state == "pending",
-    ]
-    if scored_rescreen_activation_revision is not None:
-        scored_release_criteria.append(
-            ScoredPolicyRescreenRelease.activation_revision
-            == scored_rescreen_activation_revision
-        )
-    can_claim_scored_rescreen = scored_rescreen_policy_version is not None and (
-        scored_rescreen_policy_version == effective_screening_policy_version()
-        or (
-            canary_policy_version is not None
-            and canary_policy_version >= scored_rescreen_policy_version
-        )
-    )
+    (
+        scored_rescreen_policy_version,
+        scored_release_criteria,
+        can_claim_scored_rescreen,
+    ) = scored_policy_release_filter(canary_policy_version)
     released_scored_policy_rescreen = (
         exists(
             select(ScoredPolicyRescreenRelease.release_id).where(
@@ -1095,60 +1286,17 @@ async def claim_screening_attempts(
         .correlate(Agent)
         .scalar_subquery()
     )
-    allowed_canary_scopes: set[str] = set()
-    if review_settings_binding is not None:
-        allowed_canary_scopes = {
-            "*",
-            review_settings_binding[1],
-            review_settings_binding[2],
-        }
-        # The endpoint authenticates enrollment before passing the node scope.
-        if review_settings_enrolled_node_id is not None:
-            allowed_canary_scopes.add(review_settings_enrolled_node_id)
-    retry_canary_revision = (
-        select(ScreeningRetryOverride.review_settings_revision)
-        .where(ScreeningRetryOverride.attempt_id == latest_attempt_id)
-        .correlate(Agent)
-        .scalar_subquery()
+    canary_scopes = claim_canary_scopes(
+        review_settings_binding, enrolled_node_id=review_settings_enrolled_node_id
     )
-    release_canary_revision = (
-        select(ScoredPolicyRescreenRelease.review_settings_revision)
-        .where(
-            ScoredPolicyRescreenRelease.agent_id == Agent.agent_id,
-            *scored_release_criteria,
-        )
-        .correlate(Agent)
-        .scalar_subquery()
-        if can_claim_scored_rescreen
-        else None
-    )
+    allowed_canary_scopes = canary_scopes or frozenset()
     # Match the binding chosen below: an exact latest-attempt override wins,
     # otherwise the pending release supplies the canary revision. Filter before
     # LIMIT so a retry unusable by this claimant cannot hide the next upload.
-    canary_revision = func.coalesce(retry_canary_revision, release_canary_revision)
-    canary_revision_usable: ColumnElement[bool] = canary_revision.is_(None)
-    if review_settings_binding is not None:
-        canary_revision_usable = or_(
-            canary_revision_usable,
-            exists(
-                select(ScreenerReviewSettingsRevision.revision).where(
-                    ScreenerReviewSettingsRevision.revision == canary_revision,
-                    ScreenerReviewSettingsRevision.scope.in_(allowed_canary_scopes),
-                    ScreenerReviewSettingsRevision.settings["mode"].as_string()
-                    == "enforce",
-                    func.coalesce(
-                        ScreenerReviewSettingsRevision.settings[
-                            "l3_enabled"
-                        ].as_boolean(),
-                        ScreenerReviewSettings().l3_enabled,
-                    ).is_(True),
-                    ScreenerReviewSettingsRevision.settings[
-                        "adjudicator_mode"
-                    ].as_string()
-                    == "enforce",
-                )
-            ),
-        )
+    canary_revision_usable = screening_canary_revision_usable(
+        allowed_scopes=canary_scopes,
+        release_criteria=scored_release_criteria if can_claim_scored_rescreen else None,
+    )
     # Resolved before selection: a double-check hold without a usable posture
     # (or claimed by a worker that cannot bind one) must not be selected at
     # all, or it would sit at the head of every claim and starve the queue.
@@ -1266,56 +1414,8 @@ async def claim_screening_attempts(
         deferred_ath_eligible,
     )
     candidate_payment = aliased(EvaluationPayment)
-    earlier = aliased(Agent)
-    earlier_payment = aliased(EvaluationPayment)
-    direct_owner_link = exists(
-        select(OwnerAttestation.attestation_id).where(
-            OwnerAttestation.netuid == netuid,
-            OwnerAttestation.revoked_at.is_(None),
-            or_(
-                and_(
-                    OwnerAttestation.hotkey_lo == Agent.miner_hotkey,
-                    OwnerAttestation.hotkey_hi == earlier.miner_hotkey,
-                ),
-                and_(
-                    OwnerAttestation.hotkey_lo == earlier.miner_hotkey,
-                    OwnerAttestation.hotkey_hi == Agent.miner_hotkey,
-                ),
-            ),
-        )
-    )
-    earlier_is_different_owner = and_(
-        earlier.miner_hotkey != Agent.miner_hotkey,
-        ~direct_owner_link,
-        or_(
-            candidate_payment.miner_coldkey.is_(None),
-            earlier_payment.miner_coldkey.is_(None),
-            earlier_payment.miner_coldkey != candidate_payment.miner_coldkey,
-        ),
-    )
-    earlier_pending = exists(
-        select(earlier.agent_id)
-        .select_from(earlier)
-        .outerjoin(
-            earlier_payment,
-            earlier_payment.agent_id == earlier.agent_id,
-        )
-        .where(
-            earlier.sha256 == Agent.sha256,
-            earlier_is_different_owner,
-            (earlier.created_at < Agent.created_at)
-            | (
-                (earlier.created_at == Agent.created_at)
-                & (earlier.agent_id < Agent.agent_id)
-            ),
-            earlier.status.in_(
-                (
-                    AgentStatus.UPLOADED,
-                    AgentStatus.SCREENING,
-                    AgentStatus.SCREENING_FAILED,
-                )
-            ),
-        )
+    earlier_pending = screening_deferred_behind_earlier_owner(
+        candidate_payment, netuid=netuid
     )
     agents = list(
         await session.scalars(

@@ -25,6 +25,10 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryCompleteRequest,
     L2CanaryScheduleRequest,
 )
+from ditto.api_models.screener_review_settings import (
+    ScreenerReviewSettings,
+    review_settings_checksum,
+)
 from ditto.api_server.endpoints import l2_report_canary as endpoints
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.storage.models import VerifiedObject
@@ -36,6 +40,7 @@ from ditto.db.models import (
     ScreenerL2ReportCanary,
     ScreenerNode,
     ScreenerNodeChannelSettingsRevision,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     ScreeningRetryOverride,
     ScreeningReviewEvent,
@@ -1156,8 +1161,9 @@ async def _seed_reservation_node(
     canary_concurrency: int | None = None,
     fresh_workers: Iterable[int] = range(1, 5),
     canaries: int = 4,
+    run_mode: str = "source_only",
 ) -> str:
-    """Seed an enrolled node, fresh workers and queued source-only canaries."""
+    """Seed an enrolled node, fresh workers and queued canaries."""
     agent_id = await _seed_agent(
         session_maker,
         status=AgentStatus.REJECTED,
@@ -1225,7 +1231,7 @@ async def _seed_reservation_node(
                     expected_agent_status="rejected",
                     expected_score_count=0,
                     review_label="known_reject",
-                    run_mode="source_only",
+                    run_mode=run_mode,
                     status="queued",
                 )
             )
@@ -1266,6 +1272,7 @@ def _reservation_claimer(
         AsyncMock(
             return_value=SimpleNamespace(
                 revision=137,
+                scope=node_id,
                 checksum="d" * 64,
                 settings=SimpleNamespace(
                     source_review_timeout_seconds=3600, timeout_seconds=1800
@@ -1318,6 +1325,13 @@ async def _leased(
                 )
             )
         )
+
+
+async def _production_claimable(session: AsyncSession, *, now: datetime) -> bool:
+    """The advisory read for a claimant on built-in review settings."""
+    return await has_claimable_screening_work(
+        session, now=now, review_settings_scopes=None, netuid=118
+    )
 
 
 def _holds(caplog: pytest.LogCaptureFixture, reason: str | None = None) -> list[str]:
@@ -1548,9 +1562,7 @@ async def test_has_claimable_screening_work_covers_fresh_work_only(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_maker() as session:
-        assert (
-            await has_claimable_screening_work(session, now=datetime.now(UTC)) is False
-        )
+        assert await _production_claimable(session, now=datetime.now(UTC)) is False
     for index, status in enumerate(
         (
             AgentStatus.SCREENING,
@@ -1592,9 +1604,7 @@ async def test_has_claimable_screening_work_covers_fresh_work_only(
                 )
             )
     async with session_maker() as session:
-        assert (
-            await has_claimable_screening_work(session, now=datetime.now(UTC)) is False
-        )
+        assert await _production_claimable(session, now=datetime.now(UTC)) is False
 
     async def authorize(attempt_id) -> bool:
         async with session_maker() as session, session.begin():
@@ -1610,7 +1620,7 @@ async def test_has_claimable_screening_work_covers_fresh_work_only(
                 )
             )
         async with session_maker() as session:
-            return await has_claimable_screening_work(session, now=datetime.now(UTC))
+            return await _production_claimable(session, now=datetime.now(UTC))
 
     # Only an authorization for the exact latest attempt re-queues it.
     assert await authorize(older) is False
@@ -1629,9 +1639,7 @@ async def test_has_claimable_screening_work_covers_fresh_work_only(
         name="fresh-upload",
     )
     async with session_maker() as session:
-        assert (
-            await has_claimable_screening_work(session, now=datetime.now(UTC)) is True
-        )
+        assert await _production_claimable(session, now=datetime.now(UTC)) is True
 
 
 @pytest.mark.asyncio
@@ -1688,11 +1696,10 @@ async def test_has_claimable_screening_work_skips_retries_still_backing_off(
             )
         )
     async with session_maker() as session:
-        assert await has_claimable_screening_work(session, now=now) is False
+        assert await _production_claimable(session, now=now) is False
         # The expired attempt's hold ends ten minutes after it finished.
         assert (
-            await has_claimable_screening_work(session, now=now + timedelta(minutes=9))
-            is True
+            await _production_claimable(session, now=now + timedelta(minutes=9)) is True
         )
 
 
@@ -1717,7 +1724,7 @@ async def test_has_claimable_screening_work_takes_no_locks_and_writes_nothing(
         async with session_maker() as reader, reader.begin():
             await reader.execute(text("SET LOCAL lock_timeout = '2s'"))
             assert await asyncio.wait_for(
-                has_claimable_screening_work(reader, now=datetime.now(UTC)), timeout=10
+                _production_claimable(reader, now=datetime.now(UTC)), timeout=10
             )
             locks = (
                 await reader.execute(
@@ -1733,3 +1740,182 @@ async def test_has_claimable_screening_work_takes_no_locks_and_writes_nothing(
                 await reader.scalar(text("SELECT txid_current_if_assigned()")) is None
             )
             assert not (reader.new or reader.dirty or reader.deleted)
+
+
+@pytest.mark.asyncio
+async def test_canary_claim_not_held_by_work_production_would_skip(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger=endpoints.__name__)
+    node_id = await _seed_reservation_node(
+        session_maker, screening_concurrency=2, canary_concurrency=4
+    )
+    now = datetime.now(UTC)
+    # A later copy of bytes whose earlier, different owner is parked on a
+    # failed screen: the production claim defers the copy until an operator
+    # acts on the owner, which can take days.
+    await _seed_agent(
+        session_maker,
+        status=AgentStatus.SCREENING_FAILED,
+        sha256=_FRESH_UPLOAD_SHA,
+        name="parked-owner",
+        miner_hotkey="5HK-parked-owner",
+        created_at=now - timedelta(days=2),
+    )
+    await _seed_agent(
+        session_maker,
+        status=AgentStatus.UPLOADED,
+        sha256=_FRESH_UPLOAD_SHA,
+        name="deferred-copy",
+        miner_hotkey="5HK-deferred-copy",
+        created_at=now - timedelta(days=1),
+    )
+    # A retry an operator pinned to another node's adjudicator posture: no
+    # production claim from this node can bind it.
+    pinned = await _seed_agent(
+        session_maker,
+        status=AgentStatus.SCREENING_FAILED,
+        sha256="8" * 64,
+        name="pinned-elsewhere",
+    )
+    posture = ScreenerReviewSettings(
+        mode="enforce", l3_enabled=True, adjudicator_mode="enforce"
+    )
+    pinned_attempt = uuid4()
+    async with session_maker() as session, session.begin():
+        revision = ScreenerReviewSettingsRevision(
+            parent_revision=0,
+            scope="subnet-screener-elsewhere",
+            settings=posture.model_dump(mode="json"),
+            checksum=review_settings_checksum(posture),
+            reason="Pin one adjudicator retry to another node",
+            actor="test",
+        )
+        session.add(revision)
+        session.add(
+            ScreeningAttempt(
+                attempt_id=pinned_attempt,
+                agent_id=pinned,
+                artifact_sha256="8" * 64,
+                screener_hotkey="hotkey-production",
+                policy_version=13,
+                status="failed",
+                started_at=now - timedelta(minutes=30),
+                deadline=now - timedelta(minutes=20),
+                finished_at=now - timedelta(minutes=20),
+            )
+        )
+        await session.flush()
+        session.add(
+            ScreeningRetryOverride(
+                override_id=uuid4(),
+                agent_id=pinned,
+                attempt_id=pinned_attempt,
+                artifact_sha256="8" * 64,
+                expected_score_count=0,
+                force_full_review=True,
+                review_settings_revision=revision.revision,
+                reason="Retry under the other node's adjudicator posture",
+                actor="operator@example.com",
+            )
+        )
+    claim = _reservation_claimer(node_id, session_maker, monkeypatch)
+
+    # Neither is work this node's production claim would take, so neither
+    # may hold the canary lane.
+    assert await claim(1) is not None
+    assert _holds(caplog) == []
+
+    # Work production can take still holds canaries.
+    await _seed_agent(
+        session_maker,
+        status=AgentStatus.UPLOADED,
+        sha256="7" * 64,
+        name="fresh-upload",
+    )
+    assert await claim(2) is None
+    assert len(_holds(caplog, "production-claimable")) == 1
+    assert len(await _leased(session_maker, node_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_canary_hold_is_decided_on_the_row_the_worker_would_lease(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger=endpoints.__name__)
+    # Only a full-runtime canary is queued, and these workers have not
+    # adopted a full-runtime release, so none of them can lease it.
+    node_id = await _seed_reservation_node(
+        session_maker,
+        screening_concurrency=2,
+        canary_concurrency=4,
+        canaries=1,
+        run_mode="full_runtime",
+    )
+    await _seed_agent(
+        session_maker,
+        status=AgentStatus.UPLOADED,
+        sha256=_FRESH_UPLOAD_SHA,
+        name="fresh-upload",
+    )
+    claim = _reservation_claimer(node_id, session_maker, monkeypatch)
+    production_read = AsyncMock(return_value=True)
+    monkeypatch.setattr(endpoints, "has_claimable_screening_work", production_read)
+
+    # A row the queue filters hide from this worker is not a canary it could
+    # take, so it neither reads production nor logs a hold.
+    assert await claim(1) is None
+    production_read.assert_not_awaited()
+    assert _holds(caplog) == []
+    async with session_maker() as session:
+        statuses = list(
+            await session.scalars(
+                select(ScreenerL2ReportCanary.status).where(
+                    ScreenerL2ReportCanary.target_node_id == node_id
+                )
+            )
+        )
+    assert statuses == ["queued"]
+
+
+@pytest.mark.asyncio
+async def test_production_hold_log_is_throttled_per_node_and_reason(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger=endpoints.__name__)
+    # Four fresh workers all reserved for production: every claim is held.
+    node_id = await _seed_reservation_node(
+        session_maker, screening_concurrency=4, canary_concurrency=4
+    )
+    claim = _reservation_claimer(node_id, session_maker, monkeypatch)
+
+    for worker in range(1, 5):
+        assert await claim(worker) is None
+    assert len(_holds(caplog, "production-reserved")) == 1
+    # Age the last log line instead of patching time.monotonic, which the
+    # event loop also reads.
+    logged_at = endpoints._production_hold_logged_at
+    key = (node_id, "production-reserved")
+    logged_at[key] -= endpoints._PRODUCTION_HOLD_LOG_INTERVAL_SECONDS - 1
+    assert await claim(1) is None
+    assert len(_holds(caplog, "production-reserved")) == 1
+    logged_at[key] -= 1
+    assert await claim(1) is None
+    assert len(_holds(caplog, "production-reserved")) == 2
+
+    # A different reason on the same node has its own interval.
+    await _seed_agent(
+        session_maker,
+        status=AgentStatus.UPLOADED,
+        sha256=_FRESH_UPLOAD_SHA,
+        name="fresh-upload",
+    )
+    assert await claim(2) is None
+    assert len(_holds(caplog, "production-claimable")) == 1
+    assert len(await _leased(session_maker, node_id)) == 0

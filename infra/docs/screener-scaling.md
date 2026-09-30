@@ -102,16 +102,21 @@ to zero capacity.
 
 `canary_concurrency` (0 through 8, default 1) applies only while the node's
 production admission is open. A report-only L2 canary then waits while a fresh
-upload or an authorized retry is claimable, and it never takes one of the
-`screening_concurrency` freshly heartbeating workers kept for production. The
-effective cap is `min(canary_concurrency, 4, fresh workers -
-screening_concurrency)`, so `screening_concurrency` at or above the worker
-count holds canaries entirely. With admission closed, canaries keep their
-legacy cap of `min(4, fresh workers)`. Revisions written before the field
-existed read as 1. `get_screener_capacity` reports unexpired canary leases as
-`usage.canary_active`, and Platform logs `report-only L2 canary held for
-production` with `reason=production-claimable` or `reason=production-reserved`
-at most once a minute per node and reason while queued canaries wait.
+upload or an authorized retry is claimable by that worker's production claim,
+and it never takes one of the `screening_concurrency` freshly heartbeating
+workers kept for production. Work the production claim would skip, such as a
+copy deferred behind its earlier owner or a retry pinned to another scope's
+review posture, does not hold canaries. The effective cap is
+`min(canary_concurrency, 4, fresh workers - screening_concurrency)`, so
+`screening_concurrency` at or above the worker count holds canaries entirely.
+With admission closed, canaries keep their legacy cap of `min(4, fresh
+workers)`. Revisions written before the field existed read as 1.
+`get_screener_capacity` reports unexpired canary leases as
+`usage.canary_active`. Platform logs `report-only L2 canary held for
+production` with
+`reason=production-claimable` or `reason=production-reserved` at most once a
+minute per node and reason, and only when a worker could otherwise lease a
+queued canary.
 
 ## Capacity event retention
 

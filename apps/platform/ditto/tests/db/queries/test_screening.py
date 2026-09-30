@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
@@ -43,9 +43,11 @@ from ditto.db.queries.screening import (
     MAX_SCREENING_EXPIRIES,
     POLICY_ONLY_RESCREEN_REASON,
     _inconclusive_attempt_count,
+    claim_canary_scopes,
     claim_screening_attempts,
     expire_screening_attempts,
     fail_orphaned_screening_attempts,
+    has_claimable_screening_work,
     sweep_screening_leases,
     try_acquire_screening_claim_lock,
 )
@@ -3256,3 +3258,92 @@ async def test_mechanical_deferred_hold_takes_posture_only_when_enforced(
     else:
         assert deep.review_settings_scope == "*"
         assert deep.review_settings_revision == _NORMAL_BINDING[0]
+
+
+# has_claimable_screening_work is the advisory read report-only canaries yield
+# to. It must never report work a production claim from the same worker would
+# not select, or an open node holds its canaries indefinitely. Each case asks
+# the read, then dry-runs the real claim and rolls it back.
+async def _claimable_and_claimed(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    review_settings_binding: tuple[int, str, str, str] | None = None,
+    review_settings_enrolled_node_id: str | None = None,
+) -> tuple[bool, list[UUID]]:
+    now = datetime.now(UTC)
+    async with session_maker() as reader:
+        claimable = await has_claimable_screening_work(
+            reader,
+            now=now,
+            review_settings_scopes=claim_canary_scopes(
+                review_settings_binding,
+                enrolled_node_id=review_settings_enrolled_node_id,
+            ),
+            netuid=118,
+        )
+    async with session_maker() as claimer:
+        transaction = await claimer.begin()
+        try:
+            claimed = await claim_screening_attempts(
+                claimer,
+                screener_hotkey=_SCREENER,
+                now=now,
+                ttl=timedelta(minutes=45),
+                limit=10,
+                review_settings_binding=review_settings_binding,
+                review_settings_enrolled_node_id=review_settings_enrolled_node_id,
+            )
+            claimed_ids = [agent.agent_id for agent, _, _ in claimed]
+        finally:
+            await transaction.rollback()
+    return claimable, claimed_ids
+
+
+async def test_claimable_work_skips_a_copy_deferred_behind_its_earlier_owner(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    # The earlier owner is parked on a failed screen until an operator acts,
+    # which can take days; the later copy of the same bytes waits behind it.
+    owner, copy = await _seed_owner_and_duplicate(
+        session, owner_status=AgentStatus.SCREENING_FAILED
+    )
+    owner_id = owner.agent_id
+    await _add_expired_attempts(session, owner, 1)
+    assert copy.status == AgentStatus.UPLOADED
+
+    assert await _claimable_and_claimed(session_maker) == (False, [])
+
+    # Authorizing the owner's retry makes the owner itself claimable.
+    await _authorize_latest_retry(session, owner)
+    assert await _claimable_and_claimed(session_maker) == (True, [owner_id])
+
+
+async def test_claimable_work_skips_a_retry_pinned_outside_the_claimant_scopes(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    posture = await _seed_canary_posture(session, scope="subnet-screener-2")
+    held = await _seed_failed_agent_with_age(
+        session, name="pinned-elsewhere", age=timedelta(days=1)
+    )
+    held_id = held.agent_id
+    await _add_expired_attempts(session, held, 1)
+    await _authorize_latest_retry(
+        session, held, force_full_review=True, review_settings_revision=posture.revision
+    )
+
+    # A claimant on built-in defaults binds no pin, and neither does one
+    # bound on another node.
+    assert await _claimable_and_claimed(session_maker) == (False, [])
+    assert await _claimable_and_claimed(
+        session_maker,
+        review_settings_binding=_NORMAL_BINDING,
+        review_settings_enrolled_node_id="subnet-screener-1",
+    ) == (False, [])
+    # A worker on the node the pin names takes it.
+    assert await _claimable_and_claimed(
+        session_maker,
+        review_settings_binding=_NORMAL_BINDING,
+        review_settings_enrolled_node_id="subnet-screener-2",
+    ) == (True, [held_id])
