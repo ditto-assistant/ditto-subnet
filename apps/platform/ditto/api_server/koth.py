@@ -1007,7 +1007,9 @@ def _weight_tied(candidate: KothEntry, anchor: KothEntry) -> bool:
     paired = _paired_statistic(candidate, anchor)
     if paired is None:
         return False
-    return abs(paired.mean_difference) <= KOTH_DETHRONE_Z * paired.standard_error
+    return abs(paired.mean_difference) <= _indifference_band(
+        KOTH_MARGIN, KOTH_DETHRONE_Z * paired.standard_error
+    )
 
 
 def _dethrone_decision(
@@ -1070,10 +1072,9 @@ def _dethrone_decision(
             challenger_stderr**2 + champion_stderr**2
         )
         method = "unpaired"
-    required = max(
-        margin_lead,
-        statistical_lead if statistical_lead is not None else margin_lead,
-    ) * _dethrone_band_scale(challenger, champion, champion_composite)
+    required = _indifference_band(margin_lead, statistical_lead) * _dethrone_band_scale(
+        challenger, champion, champion_composite
+    )
     required = _ceiling_capped_band(
         required,
         challenger,

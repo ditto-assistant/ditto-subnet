@@ -647,7 +647,7 @@ def compute_weights(
         recipient_shares = list(rank_shares[: len(recipients)])
     if tie_pooling and not ceiling_cohort:
         recipient_shares = _pool_tied_rank_shares(
-            recipients, recipient_shares, dethrone_z=dethrone_z
+            recipients, recipient_shares, margin=margin, dethrone_z=dethrone_z
         )
     weights = {
         (
@@ -665,6 +665,7 @@ def _pool_tied_rank_shares(
     recipients: Sequence[LedgerEntry],
     shares: Sequence[float],
     *,
+    margin: float,
     dethrone_z: float,
 ) -> list[float]:
     """Average the occupied rank shares inside deterministic tie groups.
@@ -683,7 +684,7 @@ def _pool_tied_rank_shares(
         anchor = recipients[start]
         end = start + 1
         while end < len(recipients) and _weight_tied(
-            recipients[end], anchor, dethrone_z=dethrone_z
+            recipients[end], anchor, margin=margin, dethrone_z=dethrone_z
         ):
             end += 1
         if end - start > 1:
@@ -694,7 +695,7 @@ def _pool_tied_rank_shares(
 
 
 def _weight_tied(
-    candidate: LedgerEntry, anchor: LedgerEntry, *, dethrone_z: float
+    candidate: LedgerEntry, anchor: LedgerEntry, *, margin: float, dethrone_z: float
 ) -> bool:
     """Whether two occupied slots may share weight without inventing evidence."""
     if _quality_primary_efficiency_active((candidate, anchor)):
@@ -707,7 +708,7 @@ def _weight_tied(
     if paired is None:
         return False
     mean_diff, _anchor_ref, se_diff = paired
-    return abs(mean_diff) <= dethrone_z * se_diff
+    return abs(mean_diff) <= _indifference_band(margin, dethrone_z * se_diff)
 
 
 def _score_ceiling_cohort(
@@ -744,7 +745,7 @@ def _score_ceiling_cohort(
     anchor = ranked[0]
     cohort = [anchor]
     for entry in ranked[1:]:
-        if not _weight_tied(entry, anchor, dethrone_z=dethrone_z):
+        if not _weight_tied(entry, anchor, margin=margin, dethrone_z=dethrone_z):
             break
         cohort.append(entry)
     return cohort if len(cohort) > 1 else []
@@ -1035,6 +1036,22 @@ def _indifference_band(margin: float, statistical: float | None) -> float:
     if statistical is None:
         return margin
     return max(margin, min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin))
+
+
+def _unpaired_statistical_band(
+    challenger: LedgerEntry, champion: LedgerEntry, dethrone_z: float
+) -> float | None:
+    """Statistical term on the comparison score scale, when both SEs exist."""
+    if dethrone_z <= 0.0:
+        return None
+    se_c = _entry_stderr(challenger)
+    se_champ = _entry_stderr(champion)
+    if se_c is None or se_champ is None:
+        return None
+    if not _quality_primary_efficiency_active((challenger, champion)):
+        se_c *= _efficiency_stderr_scale(challenger)
+        se_champ *= _efficiency_stderr_scale(champion)
+    return dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
 
 
 def _dethrone_composite(entry: LedgerEntry, *, quality_primary: bool) -> float:
@@ -1425,18 +1442,20 @@ def _beats(
     When both entries carry aligned per-seed confirmation composites over at
     least two SHARED CRN seeds (P5) and ``dethrone_z > 0``, the statistical term
     is a **paired** z-test (:func:`_paired_dethrone`): the lead is the mean
-    per-seed difference and the band is ``dethrone_z * se_diff``, where se_diff is
-    the SEM of the paired differences. Pairing cancels shared dataset difficulty,
-    so the band is tighter than the unpaired form at the same confidence.
+    per-seed difference and the statistical term is ``dethrone_z * se_diff``,
+    where se_diff is the SEM of the paired differences. Pairing cancels shared
+    dataset difficulty, so the band is tighter at the same confidence.
 
-    Otherwise the **unpaired** rule applies (byte-identical to before):
+    Otherwise the **unpaired** rule applies:
 
-        band = max( margin,
-                    dethrone_z * sqrt(se_challenger² + se_champion²) )
+        band = max(margin, min(dethrone_z * sqrt(se_challenger² + se_champion²),
+                               KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin))
 
     a two-sample z-test that engages only when BOTH entries carry a
     ``composite_stderr`` and ``dethrone_z > 0``; with no stderr (or z=0) the band
-    is exactly the fixed composite-point margin. Both sides use
+    is exactly the fixed composite-point margin. Both statistical terms use
+    :func:`_indifference_band` before version decay and the optional ceiling
+    clamp. Both sides use
     :func:`_effective_composite` (the MEDIAN over confirmation seeds when present,
     else the raw composite). Pure and deterministic (consensus-safe).
 
@@ -1479,17 +1498,9 @@ def _dethrone_scores(
 
     chall = _dethrone_composite(challenger, quality_primary=quality_primary)
     champ = _dethrone_composite(champion, quality_primary=quality_primary)
-    band = margin
-    if dethrone_z > 0.0:
-        se_c = _entry_stderr(challenger)
-        se_champ = _entry_stderr(champion)
-        if se_c is not None and se_champ is not None:
-            if not quality_primary:
-                se_c *= _efficiency_stderr_scale(challenger)
-                se_champ *= _efficiency_stderr_scale(champion)
-            stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
-            if stat_band > band:
-                band = stat_band
+    band = _indifference_band(
+        margin, _unpaired_statistical_band(challenger, champion, dethrone_z)
+    )
     band *= _dethrone_band_scale(challenger, champion, champ)
     band = _ceiling_capped_band(
         band, challenger, champion, champ, active=ceiling_band_clamp
@@ -1649,25 +1660,11 @@ def _unpaired_band(
     ceiling_band_clamp: bool = False,
 ) -> float:
     """The unpaired indifference band :func:`_beats` applies to this pair:
-    ``max(margin, dethrone_z * sqrt(se_c² + se_champ²))``, the
-    statistical term engaging only when both entries carry a stderr."""
-    band = margin
-    if dethrone_z > 0.0:
-        se_c = _entry_stderr(challenger)
-        se_champ = _entry_stderr(champion)
-        if se_c is not None and se_champ is not None:
-            # Standard error is expressed on the same pre-efficiency score
-            # scale as the entry's quality.  The contested-set predicate must
-            # compare the same transformed distributions as ``_beats``;
-            # otherwise a curve-v3 penalty/bonus can make scheduling disagree
-            # with the actual dethrone decision. Quality-primary dethrones on
-            # quality, so leave stderr unscaled there.
-            if not _quality_primary_efficiency_active((challenger, champion)):
-                se_c *= _efficiency_stderr_scale(challenger)
-                se_champ *= _efficiency_stderr_scale(champion)
-            stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
-            if stat_band > band:
-                band = stat_band
+    ``max(margin, statistical)``, capped at the consensus multiple of margin.
+    The statistical term engages only when both entries carry a stderr."""
+    band = _indifference_band(
+        margin, _unpaired_statistical_band(challenger, champion, dethrone_z)
+    )
     champ = _dethrone_composite(
         champion,
         quality_primary=_quality_primary_efficiency_active((challenger, champion)),
