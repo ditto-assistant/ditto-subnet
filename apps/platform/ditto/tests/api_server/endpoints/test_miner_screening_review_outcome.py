@@ -386,6 +386,12 @@ async def test_unverified_or_ignored_court_decision_has_no_outcome(
     ]
     for case in cases:
         # One active quarantine per agent, so each case gets its own agent.
+        attempt_artifact_sha256 = case.get("attempt_artifact_sha256", _SHA256)
+        event_policy_version = case.get("event_policy_version", 13)
+        assert attempt_artifact_sha256 is None or isinstance(
+            attempt_artifact_sha256, str
+        )
+        assert isinstance(event_policy_version, int)
         agent_id = await _seed_agent(
             session_maker,
             status=AgentStatus.QUARANTINED,
@@ -402,9 +408,9 @@ async def test_unverified_or_ignored_court_decision_has_no_outcome(
                 if "adjudication_digest" in case
                 else None
             ),
-            attempt_artifact_sha256=case.get("attempt_artifact_sha256", _SHA256),
+            attempt_artifact_sha256=attempt_artifact_sha256,
             event_artifact_sha256=str(case.get("event_artifact_sha256", _SHA256)),
-            event_policy_version=int(case.get("event_policy_version", 13)),
+            event_policy_version=event_policy_version,
         )
 
         response = await _feedback(client, agent_id=agent_id, token=token)
