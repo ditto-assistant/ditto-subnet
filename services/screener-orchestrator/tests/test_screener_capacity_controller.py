@@ -20,6 +20,7 @@ from screener_capacity.controller import (
     ProviderCounts,
     ProviderRouting,
     Settings,
+    _write_state,
     build_parser,
     desired_slots,
     gce_capacity_target,
@@ -1385,6 +1386,178 @@ class CapacityDecisionTests(unittest.TestCase):
                     [],
                 ],
             )
+
+    def _passes_losing_one_state_write(
+        self, *, after_renews: int, passes: int
+    ) -> tuple[list[list[str]], dict[str, Any], dict[str, Any]]:
+        """Run a 2 -> 0 deferral whose first state write after renew
+        ``after_renews`` fails, as a full disk or a kill before it would.
+
+        Returns the event details of every renew, the state file right after
+        the failed pass, and the state file after the last pass.
+        """
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            settings.state_file.write_text(json.dumps({"provider_ready": True}))
+            gce = _GCE(target=2)
+            gce.instances = {"vm-a", "vm-b"}
+            idle = self._inventory(
+                self._gcp_row("vm-a", seen=1), self._gcp_row("vm-b", seen=2)
+            )
+            renewed: list[dict[str, Any]] = []
+            lost: list[dict[str, Any]] = []
+
+            def write_state(path: Path, state: dict[str, Any]) -> None:
+                if len(renewed) == after_renews and not lost:
+                    lost.append(state)
+                    raise OSError("No space left on device")
+                _write_state(path, state)
+
+            platform = SimpleNamespace(
+                demand=lambda **_kwargs: Demand(runnable=2, active=0, desired=4),
+                provider_routing=_overflow_routing,
+                node_states=lambda: idle.states,
+                node_inventory=lambda: idle,
+                renew=lambda snapshot: renewed.append(snapshot) or snapshot,
+                fence=lambda **_kwargs: None,
+            )
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+                patch("screener_capacity.controller._write_state", write_state),
+            ):
+                # Not a ControllerError: the service exits and systemd
+                # restarts it, so no later write of that pass happens either.
+                with self.assertRaisesRegex(OSError, "No space left"):
+                    reconcile(settings)
+                after_loss = json.loads(settings.state_file.read_text())
+                for _ in range(passes - 1):
+                    reconcile(settings)
+            final = json.loads(settings.state_file.read_text())
+        self.assertEqual(len(lost), 1)
+        return (
+            [[event["detail"] for event in payload["events"]] for payload in renewed],
+            after_loss,
+            final,
+        )
+
+    def test_deferral_is_sent_again_once_when_its_state_write_is_lost(
+        self,
+    ) -> None:
+        # Platform has no capacity-event idempotency key, so the controller
+        # cannot tell a completed renew that committed from one that did not.
+        # It records the deferral only after that renew succeeds; losing the
+        # write that follows sends the deferral once more on the next pass.
+        # Delivery is at least once: never the delivered target change again,
+        # and never once per pass.
+        events, after_loss, final = self._passes_losing_one_state_write(
+            after_renews=2, passes=3
+        )
+
+        self.assertEqual(
+            after_loss["gce_scale_in_deferral"], {"from": 2, "to": 0, "reason": None}
+        )
+        self.assertEqual(
+            events,
+            [
+                ["GCE target 2 -> 0"],
+                ["GCE target 2 -> 0 deferred: durable_claim_fence_unavailable"],
+                [],
+                ["GCE target 2 -> 0 deferred: durable_claim_fence_unavailable"],
+                [],
+                [],
+            ],
+        )
+        self.assertEqual(
+            final["gce_scale_in_deferral"],
+            {"from": 2, "to": 0, "reason": "durable_claim_fence_unavailable"},
+        )
+
+    def test_target_change_is_sent_again_once_when_its_state_write_is_lost(
+        self,
+    ) -> None:
+        # The fenced first renew follows the same rule: losing the write after
+        # it sends the target change once more, with the deferral that the
+        # interrupted pass never reached.
+        events, after_loss, final = self._passes_losing_one_state_write(
+            after_renews=1, passes=3
+        )
+
+        self.assertNotIn("gce_scale_in_deferral", after_loss)
+        self.assertEqual(
+            events,
+            [
+                ["GCE target 2 -> 0"],
+                ["GCE target 2 -> 0"],
+                ["GCE target 2 -> 0 deferred: durable_claim_fence_unavailable"],
+                [],
+                [],
+            ],
+        )
+        self.assertEqual(
+            final["gce_scale_in_deferral"],
+            {"from": 2, "to": 0, "reason": "durable_claim_fence_unavailable"},
+        )
+
+    def test_completed_renew_is_recorded_in_one_state_write(self) -> None:
+        # The deferral and the pass's readiness both describe what the
+        # completed renew delivered. One write records them, so a crash or a
+        # failed write after that renew loses both together, and the pass adds
+        # no whole-file rewrite beyond one per renew.
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            settings.state_file.write_text(
+                json.dumps(
+                    {
+                        "provider_ready": False,
+                        "last_provider_error_code": "GCE_SCALE_DOWN_FAILED",
+                        "last_provider_error_at": "2026-09-29T00:00:00+00:00",
+                    }
+                )
+            )
+            gce = _GCE(target=2)
+            gce.instances = {"vm-a", "vm-b"}
+            idle = self._inventory(
+                self._gcp_row("vm-a", seen=1), self._gcp_row("vm-b", seen=2)
+            )
+            renewed: list[dict[str, Any]] = []
+            writes: list[tuple[int, dict[str, Any]]] = []
+
+            def write_state(path: Path, state: dict[str, Any]) -> None:
+                writes.append((len(renewed), json.loads(json.dumps(state))))
+                _write_state(path, state)
+
+            platform = SimpleNamespace(
+                demand=lambda **_kwargs: Demand(runnable=2, active=0, desired=4),
+                provider_routing=_overflow_routing,
+                node_states=lambda: idle.states,
+                node_inventory=lambda: idle,
+                renew=lambda snapshot: renewed.append(snapshot) or snapshot,
+                fence=lambda **_kwargs: None,
+            )
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+                patch("screener_capacity.controller._write_state", write_state),
+            ):
+                reconcile(settings)
+
+        # One write before the fenced renew, then one after each renew.
+        self.assertEqual([after for after, _state in writes], [0, 1, 2])
+        completed = writes[-1][1]
+        # An unready prior pass cannot vouch for the legacy claim fence.
+        self.assertEqual(
+            completed["gce_scale_in_deferral"],
+            {"from": 2, "to": 0, "reason": "legacy_claims_not_fenced"},
+        )
+        self.assertIs(completed["provider_ready"], True)
+        self.assertIsNone(completed["last_provider_error_code"])
 
     def test_scale_in_after_a_deferral_still_records_the_target_change(
         self,

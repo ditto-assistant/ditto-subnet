@@ -651,9 +651,13 @@ class GCPBootstrapTokenMinter:
 
 @dataclass(frozen=True)
 class ScaleInDeferral:
-    """A delivered GCE scale-in whose physical deletion is still deferred.
+    """A reported GCE scale-in whose physical deletion is still deferred.
 
-    ``reason`` is None until a completed renew delivers the deferral event.
+    The pair is recorded once the fenced renew carrying the target change
+    succeeds; ``reason`` stays None until the completed renew carrying the
+    deferral event succeeds. Platform has no event idempotency key, so a lost
+    renew response or state write sends that event once more: delivery is at
+    least once.
     """
 
     source: int
@@ -713,13 +717,16 @@ def _persist_provider_state(
     ready: bool,
     error_code: str | None,
     error_at: str | None,
+    delivered: dict[str, Any] | None = None,
 ) -> None:
+    """Record readiness, plus any other state the same renew delivered."""
     state = _load_state(path)
     state.update(
         {
             "provider_ready": ready,
             "last_provider_error_code": error_code,
             "last_provider_error_at": error_at,
+            **(delivered or {}),
         }
     )
     _write_state(path, state)
@@ -1010,8 +1017,8 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         target = current_target
         reason = "PLATFORM_INVENTORY_UNAVAILABLE"
     # A deferred scale-in republishes the same lower target on every pass until
-    # the group is drained. Its change and deferral were already delivered, so
-    # record them once per transition rather than once per pass.
+    # the group is drained. Its change and deferral were sent when it began, so
+    # send them once per transition rather than on every pass.
     delivered_deferral = ScaleInDeferral.from_state(state.get("gce_scale_in_deferral"))
     continuing_deferral = (
         delivered_deferral
@@ -1186,7 +1193,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         )
         completed["fallback_reason"] = "GCE_SCALE_IN_DEFERRED"
         if deferral != continuing_deferral:
-            # A new target or deferral reason; an unchanged one was delivered.
+            # A new target or deferral reason; an unchanged one was already sent.
             completed["events"] = [
                 {
                     "event_type": "gce_scale_in_deferred",
@@ -1204,14 +1211,16 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     # Readiness describes a fully completed reconciliation pass. Persist it so
     # a failed pass cannot publish an optimistic heartbeat on the next retry.
     platform.renew(completed)
-    state = _load_state(settings.state_file)
-    state["gce_scale_in_deferral"] = deferral.to_state() if deferral else None
-    _write_state(settings.state_file, state)
+    # One write records what the completed renew delivered: its readiness and
+    # its deferral. Platform cannot deduplicate events, and the controller
+    # cannot tell a renew that committed from one that did not, so losing this
+    # write (a full disk or a kill) sends a new deferral once more next pass.
     _persist_provider_state(
         settings.state_file,
         ready=provider_ready,
         error_code=completed["last_provider_error_code"],
         error_at=completed["last_provider_error_at"],
+        delivered={"gce_scale_in_deferral": deferral.to_state() if deferral else None},
     )
     return completed
 
