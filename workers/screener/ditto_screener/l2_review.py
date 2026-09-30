@@ -2150,6 +2150,7 @@ class L2RunResult:
     resolution_basis: str | None = None
     clearance_path: str | None = None
     dossier_complete: bool = True
+    dossier_incomplete_components: tuple[str, ...] = ()
     direct_clear_graph_complete: bool = True
     analyst_cache_hit: bool = False
     critic_cache_hit: bool = False
@@ -3060,6 +3061,35 @@ class TerraSolSourceReviewAgent:
             ):
                 self._store_cache(cache_key, result)
             if (
+                result.observation.error_code == "l2-only-clearance-unproven"
+                and result.dossier_incomplete_components
+                and result.observation.review_audit is None
+            ):
+                # Fixed component labels identify which deterministic evidence
+                # was partial without signing source text or changing the hold.
+                audit = ScreenReviewAudit(
+                    stage="l2",
+                    reason_code="l2-only-clearance-unproven",
+                    prompt_revision=self._analyst_prompt_revision(policy_version),
+                    harness_revision=L2_HARNESS_REVISION,
+                    max_steps=self._max_steps,
+                    steps_used=min(len(result.response_models), self._max_steps),
+                    dossier_complete=False,
+                    dossier_incomplete_components=list(
+                        result.dossier_incomplete_components
+                    ),
+                    model_steps_observed=len(result.response_models),
+                    tool_calls_observed=len(result.tools),
+                    final_stage="analyst",
+                )
+                result = replace(
+                    result,
+                    observation=replace(
+                        result.observation,
+                        review_audit=audit.model_dump(mode="json"),
+                    ),
+                )
+            if (
                 result.observation.error_code == "l3-adjudicator-model-tool-contract"
                 and result.failure_subcode
                 in {
@@ -3311,6 +3341,7 @@ class TerraSolSourceReviewAgent:
             dossier_tools,
             dossier_complete,
             direct_clear_graph_complete,
+            dossier_incomplete_components,
         ) = await self._build_dossier(
             workspace,
             repository,
@@ -3390,15 +3421,18 @@ class TerraSolSourceReviewAgent:
                 # still receives independent SOL review, which may clear it.
                 integrity_attention = static_attention is not None
             if not self._l3_enabled:
-                return _finalize_without_l3(
-                    analyst,
-                    dossier_tools=dossier_tools,
-                    analyst_cache_hit=analyst_cache_hit,
-                    policy_version=policy_version,
-                    l1_observation=l1_observation,
-                    static_attention=static_attention,
-                    dossier=dossier,
-                    expected_model=self._model,
+                return replace(
+                    _finalize_without_l3(
+                        analyst,
+                        dossier_tools=dossier_tools,
+                        analyst_cache_hit=analyst_cache_hit,
+                        policy_version=policy_version,
+                        l1_observation=l1_observation,
+                        static_attention=static_attention,
+                        dossier=dossier,
+                        expected_model=self._model,
+                    ),
+                    dossier_incomplete_components=dossier_incomplete_components,
                 )
             # The L2 analyst has settled; every path below is L3. This is the
             # only public progress boundary inside the deep review, and it is
@@ -4239,10 +4273,10 @@ class TerraSolSourceReviewAgent:
         policy_version: int,
         deadline: float | None,
         runtime_evidence: Mapping[str, object] | None = None,
-    ) -> tuple[dict[str, object], tuple[str, ...], bool, bool]:
+    ) -> tuple[dict[str, object], tuple[str, ...], bool, bool, tuple[str, ...]]:
         deterministic: dict[str, object] = {}
         tools: list[str] = []
-        dossier_complete = True
+        incomplete_components: list[str] = []
         for command in _DOSSIER_ANALYZERS:
             output = await self._harness.run(workspace, command, {}, deadline=deadline)
             try:
@@ -4265,16 +4299,16 @@ class TerraSolSourceReviewAgent:
             # clearance: carry incompleteness through every trajectory instead
             # of abandoning a clearly reviewable hostile artifact up front.
             if _contains_truncation(analysis):
-                dossier_complete = False
+                incomplete_components.append(command)
             deterministic[command] = analysis
             tools.append(command)
         inventory = json.loads(repository.inventory())
         # Binary failures remain evidence gaps even when the other analyzers
         # completed. A bounded inventory may omit their individual entries.
-        if inventory.get("opaque_truncated") is True or _contains_truncation(
-            inventory.get("binary_analysis")
-        ):
-            dossier_complete = False
+        if inventory.get("opaque_truncated") is True:
+            incomplete_components.append("opaque_inventory")
+        if _contains_truncation(inventory.get("binary_analysis")):
+            incomplete_components.append("binary_analysis")
         starter_diff = deterministic.get("starter_diff")
         selected_starter_revision = (
             str(starter_diff.get("revision"))
@@ -4301,8 +4335,9 @@ class TerraSolSourceReviewAgent:
                 "bounded_source_inventory": inventory,
             },
             tuple(tools),
-            dossier_complete,
+            not incomplete_components,
             False,  # legacy report field; no language-specific graph is required
+            tuple(incomplete_components),
         )
 
     async def _run_trajectory(
@@ -5410,6 +5445,9 @@ class TerraSolSourceReviewAgent:
                 resolution_basis=value.get("resolution_basis"),
                 clearance_path=value.get("clearance_path"),
                 dossier_complete=bool(value.get("dossier_complete", True)),
+                dossier_incomplete_components=tuple(
+                    value.get("dossier_incomplete_components", ())
+                ),
                 direct_clear_graph_complete=bool(
                     value.get("direct_clear_graph_complete", False)
                 ),
@@ -5418,6 +5456,7 @@ class TerraSolSourceReviewAgent:
                 l1_lead_dispositions=tuple(value.get("l1_lead_dispositions", ())),
                 analyst_finding=value.get("analyst_finding"),
                 analyst_summary=value.get("analyst_summary"),
+                failure_subcode=value.get("failure_subcode"),
             )
         except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError):
             return None
@@ -5451,12 +5490,14 @@ class TerraSolSourceReviewAgent:
             "resolution_basis": result.resolution_basis,
             "clearance_path": result.clearance_path,
             "dossier_complete": result.dossier_complete,
+            "dossier_incomplete_components": list(result.dossier_incomplete_components),
             "direct_clear_graph_complete": result.direct_clear_graph_complete,
             "analyst_cache_hit": result.analyst_cache_hit,
             "critic_cache_hit": result.critic_cache_hit,
             "l1_lead_dispositions": list(result.l1_lead_dispositions),
             "analyst_finding": result.analyst_finding,
             "analyst_summary": result.analyst_summary,
+            "failure_subcode": result.failure_subcode,
         }
         tmp = path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)

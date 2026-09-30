@@ -78,6 +78,7 @@ def test_inconclusive_review_audit_preserves_old_digest_and_bounds_new_labels() 
         mode="json",
         exclude={
             "dossier_complete",
+            "dossier_incomplete_components",
             "model_categories",
             "model_inconclusive_invariants",
             "model_evidence_count",
@@ -112,9 +113,25 @@ def test_inconclusive_review_audit_preserves_old_digest_and_bounds_new_labels() 
         }
     )
     assert diagnostic.canonical_digest() != legacy_digest
+    component_audit = ScreenReviewAudit.model_validate(
+        {
+            **legacy,
+            "dossier_complete": False,
+            "dossier_incomplete_components": ["workspace_index", "binary_analysis"],
+        }
+    )
+    assert component_audit.dossier_incomplete_components == [
+        "workspace_index",
+        "binary_analysis",
+    ]
+    assert component_audit.canonical_digest() != legacy_digest
     with pytest.raises(ValidationError):
         ScreenReviewAudit.model_validate(
             {**legacy, "model_categories": ["src/secret.py"]}
+        )
+    with pytest.raises(ValidationError):
+        ScreenReviewAudit.model_validate(
+            {**legacy, "dossier_incomplete_components": ["src/secret.py"]}
         )
 
 

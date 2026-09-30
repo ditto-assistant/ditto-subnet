@@ -1502,7 +1502,7 @@ def test_v13_medium_l1_requires_resolved_leads() -> None:
     l1 = _l1("medium")
     lead = _l1_lead_packet(l1)[0]
     candidate = _clearance_candidate(response_models=("openai/gpt-6-sol",))
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "dossier_tools": (),
         "analyst_cache_hit": False,
         "policy_version": 13,
@@ -3503,7 +3503,7 @@ async def test_dossier_incomplete_when_binary_analysis_fails(
         archive.addfile(info, io.BytesIO(model))
     repository = TarSourceRepository(str(archive_path))
     agent = _sol_agent(tmp_path, _FakeHarness(), None)
-    dossier, tools, complete, _ = await agent._build_dossier(
+    dossier, tools, complete, _, incomplete_components = await agent._build_dossier(
         tmp_path,
         repository,
         artifact_sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
@@ -3512,6 +3512,7 @@ async def test_dossier_incomplete_when_binary_analysis_fails(
         deadline=None,
     )
     assert not complete
+    assert "binary_analysis" in incomplete_components
     assert tools == l2_review._DOSSIER_ANALYZERS
     inventory = dossier["bounded_source_inventory"]
     assert isinstance(inventory, dict)
@@ -3519,6 +3520,66 @@ async def test_dossier_incomplete_when_binary_analysis_fails(
     assert entry["analysis_failed"] is True
     assert entry["analysis_truncated"] is True
     assert entry["format_confidence"] == "low"
+
+
+async def test_incomplete_dossier_components_are_signed_without_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+
+    async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
+        return L2RunResult(
+            observation=l2_review._failure(
+                "l2-only-clearance-unproven", "inconclusive"
+            ),
+            analyzed_files=(),
+            causal_path=(),
+            tools=("workspace_index", "read_file"),
+            usage=L2Usage(),
+            cache_hit=False,
+            response_models=("openai/gpt-5.6-sol-20260709",),
+            dossier_complete=False,
+            dossier_incomplete_components=("workspace_index", "binary_analysis"),
+            failure_subcode="dossier-incomplete",
+        )
+
+    monkeypatch.setattr(agent, "_review_uncached", review_uncached)
+    kwargs = {
+        "archive_path": str(tmp_path / "unused.tar"),
+        "artifact_sha256": "ab" * 32,
+        "attempt_id": ATTEMPT,
+        "l1_observation": _l1(),
+        "deadline": None,
+    }
+    first = await agent.review(**kwargs)
+    second = await agent.review(**kwargs)
+    for result in (first, second):
+        audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+        assert audit.dossier_incomplete_components == [
+            "workspace_index",
+            "binary_analysis",
+        ]
+        assert audit.dossier_complete is False
+        assert result.failure_subcode == "dossier-incomplete"
+        assert not result.observation.clearance_certified
+    assert second.cache_hit
+
+
+async def test_dossier_component_labels_name_only_truncated_analyzers(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+    agent = _sol_agent(tmp_path, _PartialHarness(), None)
+    _, _, complete, _, components = await agent._build_dossier(
+        tmp_path,
+        TarSourceRepository(str(archive)),
+        artifact_sha256=artifact_sha,
+        l1_observation=_l1(),
+        policy_version=SCREENING_POLICY_VERSION,
+        deadline=None,
+    )
+    assert not complete
+    assert components == l2_review._DOSSIER_ANALYZERS
 
 
 @pytest.mark.parametrize("recovers", [False, True])

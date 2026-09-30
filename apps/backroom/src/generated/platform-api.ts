@@ -29487,6 +29487,8 @@ export interface components {
             cost_usd_used?: number | null;
             /** Dossier Complete */
             dossier_complete?: boolean | null;
+            /** Dossier Incomplete Components */
+            dossier_incomplete_components?: ("workspace_index" | "starter_diff" | "build_structure" | "integrity_surfaces" | "opaque_inventory" | "binary_analysis")[] | null;
             /** Elapsed Ms */
             elapsed_ms?: number | null;
             /** Final Stage */
