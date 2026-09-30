@@ -29,6 +29,7 @@ from ditto.validator.weights import (
     _entry_stderr,
     _indifference_band,
     _paired_dethrone,
+    _score_ceiling_deadlocked,
     _unpaired_band,
     _weight_tied,
     compute_weights,
@@ -106,6 +107,61 @@ def _champ() -> Any:
 
 class TestCappedStatisticalBand:
     _SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
+
+    @pytest.mark.parametrize("champion_score", [0.90, 0.9975])
+    def test_low_variance_difference_below_margin_does_not_join_tie_or_cohort(
+        self, champion_score: float
+    ) -> None:
+        seeds = list(range(15))
+        champion = _e(
+            "champ",
+            champion_score,
+            confirmations=[champion_score] * 15,
+            seeds=seeds,
+        )
+        candidate = _e(
+            "candidate",
+            champion_score - 0.004,
+            confirmations=[
+                champion_score - (0.003 if seed % 2 else 0.005) for seed in seeds
+            ],
+            seeds=seeds,
+            minutes=1,
+        )
+        paired = _paired_dethrone(candidate, champion, 1.64)
+        assert paired is not None
+        assert 0.0 < 1.64 * paired[2] < abs(paired[0]) < 0.007
+        assert not _weight_tied(
+            candidate,
+            champion,
+            margin=0.007,
+            dethrone_z=1.64,
+            statistical_band_cap=True,
+        )
+        assert not _beats(
+            candidate,
+            champion,
+            margin=0.007,
+            dethrone_z=1.64,
+            statistical_band_cap=True,
+        )
+        if champion_score > 0.99:
+            assert _score_ceiling_deadlocked(
+                candidate,
+                champion,
+                margin=0.007,
+                dethrone_z=1.64,
+                statistical_band_cap=True,
+            )
+        assert compute_weights(
+            [champion, candidate],
+            margin=0.007,
+            tail_size=4,
+            rank_shares=self._SHARES,
+            dethrone_z=1.64,
+            tie_pooling=True,
+            statistical_band_cap=True,
+        ) == {"champ": 0.65, "candidate": 0.14}
 
     def test_noisy_fresh_challenger_can_dethrone_inside_raw_band(self) -> None:
         champion = _e("champ", 0.90, stderr=0.02)

@@ -727,7 +727,7 @@ def _weight_tied(
     mean_diff, _anchor_ref, se_diff = paired
     if not statistical_band_cap:
         return abs(mean_diff) <= dethrone_z * se_diff
-    return abs(mean_diff) <= _indifference_band(margin, dethrone_z * se_diff)
+    return abs(mean_diff) <= _capped_statistical_band(margin, dethrone_z * se_diff)
 
 
 def _score_ceiling_cohort(
@@ -1055,6 +1055,11 @@ def _quality_primary_efficiency_active(entries: Sequence[LedgerEntry]) -> bool:
     return any(_bounded_efficiency_factor(entry) is not None for entry in entries)
 
 
+def _capped_statistical_band(margin: float, statistical: float) -> float:
+    """Cap uncertainty without adding the dethrone margin to tie membership."""
+    return min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin)
+
+
 def _indifference_band(
     margin: float, statistical: float | None, *, capped: bool = True
 ) -> float:
@@ -1067,7 +1072,7 @@ def _indifference_band(
     if statistical is None:
         return margin
     if capped:
-        statistical = min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin)
+        statistical = _capped_statistical_band(margin, statistical)
     return max(margin, statistical)
 
 

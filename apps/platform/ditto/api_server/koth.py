@@ -651,6 +651,11 @@ def _quality_primary_efficiency_active(entries: Iterable[KothEntry]) -> bool:
     return any(_bounded_efficiency_factor(entry) is not None for entry in entries)
 
 
+def _capped_statistical_band(margin: float, statistical: float) -> float:
+    """Cap uncertainty without adding the dethrone margin to tie membership."""
+    return min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin)
+
+
 def _indifference_band(
     margin: float, statistical: float | None, *, capped: bool = True
 ) -> float:
@@ -658,7 +663,7 @@ def _indifference_band(
     if statistical is None:
         return margin
     if capped:
-        statistical = min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin)
+        statistical = _capped_statistical_band(margin, statistical)
     return max(margin, statistical)
 
 
@@ -1043,7 +1048,7 @@ def _weight_tied(
         return False
     if not statistical_band_cap:
         return abs(paired.mean_difference) <= KOTH_DETHRONE_Z * paired.standard_error
-    return abs(paired.mean_difference) <= _indifference_band(
+    return abs(paired.mean_difference) <= _capped_statistical_band(
         KOTH_MARGIN,
         KOTH_DETHRONE_Z * paired.standard_error,
     )
