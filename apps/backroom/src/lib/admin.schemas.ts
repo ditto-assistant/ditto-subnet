@@ -869,6 +869,7 @@ export const screenerFleetReleaseSchema = z.object({
   revision: z.string().regex(/^[0-9a-f]{40}$/).nullish().transform((value) => value ?? null),
   version: z.string().min(1).nullish().transform((value) => value ?? null),
   activated_at: z.number().int().nonnegative().nullish().transform((value) => value ?? null),
+  source_fixture_v1: z.boolean().default(false),
 })
 
 const screenerDockerHealthSchema = z.object({

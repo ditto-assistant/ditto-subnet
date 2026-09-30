@@ -98,6 +98,7 @@ import {
   listLeaseRevocationsInputSchema,
   leaseRevocationsListSchema,
   screenerCapacityViewSchema,
+  screenerFleetReleaseSchema,
   screeningInfraRetryViewSchema,
   screenerNodeChannelSettingsConfirmation,
   screenerProviderSettingsConfirmation,
@@ -313,6 +314,17 @@ describe('admin API schemas', () => {
     const base = { snapshot: null, nodes: [], events: [] }
     expect(screenerCapacityViewSchema.parse({ ...base, legacy_bearer_accepted: false }).legacy_bearer_accepted).toBe(false)
     expect(screenerCapacityViewSchema.parse(base).legacy_bearer_accepted).toBeNull()
+  })
+
+  it('preserves the signed fixture capability and defaults older releases to false', () => {
+    const release = {
+      builtin_policy_version: 13,
+      revision: 'a'.repeat(40),
+      version: 'v0.330.16',
+      activated_at: 1_800_000_000,
+    }
+    expect(screenerFleetReleaseSchema.parse({ ...release, source_fixture_v1: true }).source_fixture_v1).toBe(true)
+    expect(screenerFleetReleaseSchema.parse(release).source_fixture_v1).toBe(false)
   })
 
   it('preserves the fenced multi-provider capacity contract', () => {
