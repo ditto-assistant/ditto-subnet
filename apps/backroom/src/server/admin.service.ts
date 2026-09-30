@@ -2219,6 +2219,22 @@ export function invalidateCopyReviewsCache() {
   copyReviewsCache.clear()
 }
 
+/**
+ * Run one copy-review mutation and drop the console cache however it ends.
+ *
+ * A timeout or a dropped connection is ambiguous: Platform may already have
+ * applied the write. Invalidating only on success would then keep serving the
+ * pre-write queue for up to COPY_REVIEWS_CACHE_TTL_MS, which is exactly when an
+ * operator re-reads it to learn whether the write landed.
+ */
+async function mutateCopyReviews<T>(request: () => Promise<T>): Promise<T> {
+  try {
+    return await request()
+  } finally {
+    invalidateCopyReviewsCache()
+  }
+}
+
 export function fetchCopyReviews(generation: CopyReviewGeneration = 'active') {
   const cached = copyReviewsCache.get(generation)
   if (cached && cached.expiresAt > Date.now()) {
@@ -2335,15 +2351,16 @@ export async function fetchWithdrawnAthHolds(limit: number, offset: number) {
 
 export async function resolveCopyReview(rawInput: unknown, actor: string) {
   const input = resolveCopyReviewInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/resolve`,
-    {
-      method: 'POST',
-      actor,
-      body: { resolution: input.resolution, reason: input.reason },
-    },
+  const payload = await mutateCopyReviews(() =>
+    platformAdminRequest(
+      `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/resolve`,
+      {
+        method: 'POST',
+        actor,
+        body: { resolution: input.resolution, reason: input.reason },
+      },
+    ),
   )
-  invalidateCopyReviewsCache()
   return resolveCopyReviewResponseSchema.parse(payload)
 }
 
@@ -2369,28 +2386,29 @@ export async function previewAthHoldWithdrawal(rawInput: unknown, actor: string)
 
 export async function executeAthHoldWithdrawal(rawInput: unknown, actor: string) {
   const input = executeAthHoldWithdrawalInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/withdraw`,
-    {
-      method: 'POST',
-      actor,
-      body: {
-        review_id: input.reviewId,
-        expected_sha256: input.expectedSha256,
-        expected_score_count: input.expectedScoreCount,
-        expected_agent_status: input.expectedAgentStatus,
-        reason: input.reason,
-        preview_token: input.previewToken,
-        confirmation: input.confirmation,
+  const payload = await mutateCopyReviews(() =>
+    platformAdminRequest(
+      `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/withdraw`,
+      {
+        method: 'POST',
+        actor,
+        body: {
+          review_id: input.reviewId,
+          expected_sha256: input.expectedSha256,
+          expected_score_count: input.expectedScoreCount,
+          expected_agent_status: input.expectedAgentStatus,
+          reason: input.reason,
+          preview_token: input.previewToken,
+          confirmation: input.confirmation,
+        },
+        // Execute re-reads the hold, the policy and the board under the review
+        // lock, which is more work than the preview it confirms. Match the
+        // rulings execute rather than the 20s default, so a slow but landed
+        // withdrawal is not reported as a failure the operator then retries.
+        timeoutMs: 120_000,
       },
-      // Execute re-reads the hold, the policy and the board under the review
-      // lock, which is more work than the preview it confirms. Match the
-      // rulings execute rather than the 20s default, so a slow but landed
-      // withdrawal is not reported as a failure the operator then retries.
-      timeoutMs: 120_000,
-    },
+    ),
   )
-  invalidateCopyReviewsCache()
   return executeAthHoldWithdrawalResponseSchema.parse(payload)
 }
 
@@ -2424,19 +2442,20 @@ export async function fetchAthPrecedents(
 
 export async function openAthReview(rawInput: unknown, actor: string) {
   const input = openAthReviewInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/open`,
-    {
-      method: 'POST',
-      actor,
-      body: {
-        expected_sha256: input.expectedSha256,
-        expected_score_count: input.expectedScoreCount,
-        reason: input.reason,
+  const payload = await mutateCopyReviews(() =>
+    platformAdminRequest(
+      `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/open`,
+      {
+        method: 'POST',
+        actor,
+        body: {
+          expected_sha256: input.expectedSha256,
+          expected_score_count: input.expectedScoreCount,
+          reason: input.reason,
+        },
       },
-    },
+    ),
   )
-  invalidateCopyReviewsCache()
   return openAthReviewResponseSchema.parse(payload)
 }
 
@@ -2467,17 +2486,18 @@ export async function previewAthRulingsBatch(rawInput: unknown, actor: string) {
 
 export async function executeAthRulingsBatch(rawInput: unknown, actor: string) {
   const input = executeAthRulingsBatchInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/ath-rulings/batch-execute', {
-    method: 'POST',
-    actor,
-    body: {
-      preview_token: input.previewToken,
-      confirmation: input.confirmation,
-      rulings: input.rulings ?? null,
-    },
-    timeoutMs: 120_000,
-  })
-  invalidateCopyReviewsCache()
+  const payload = await mutateCopyReviews(() =>
+    platformAdminRequest('/api/v1/admin/ath-rulings/batch-execute', {
+      method: 'POST',
+      actor,
+      body: {
+        preview_token: input.previewToken,
+        confirmation: input.confirmation,
+        rulings: input.rulings ?? null,
+      },
+      timeoutMs: 120_000,
+    }),
+  )
   return athRulingsExecuteResponseSchema.parse(payload)
 }
 

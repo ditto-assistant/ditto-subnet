@@ -9,6 +9,7 @@ import {
   fetchWithdrawnAthHolds,
   previewAthHoldWithdrawal,
   executeAthHoldWithdrawal,
+  executeAthRulingsBatch,
   fetchBenchmarkRolloutControl,
   fetchCopyReviews,
   fetchBenchmarkContractRefresh,
@@ -2808,6 +2809,61 @@ describe('copy review admin service', () => {
     await fetchCopyReviews()
     // Resolve (1 call) invalidated the cache, so the next view rebuilds (2 calls).
     expect(fetchMock).toHaveBeenCalledTimes(5)
+  })
+
+  // A timeout is ambiguous: Platform may have applied the write. The cached
+  // console list must not keep showing the pre-write queue for the TTL.
+  it.each([
+    ['resolve', () => resolveCopyReview(
+      { agentId: review.agent_id, resolution: 'clear', reason: 'cleared' },
+      'operator@example.com',
+    )],
+    ['open', () => openAthReview(
+      { agentId: review.agent_id, expectedSha256: 'ab'.repeat(32), expectedScoreCount: 3, reason: 'Held for review' },
+      'operator@example.com',
+    )],
+    ['withdraw', () => executeAthHoldWithdrawal(
+      {
+        agentId: review.agent_id,
+        reviewId: review.review_id,
+        expectedSha256: 'ab'.repeat(32),
+        expectedScoreCount: 3,
+        expectedAgentStatus: 'ath_pending_review',
+        reason: 'Precautionary hold withdrawn',
+        previewToken: 'signed-preview-token-value',
+        confirmation: 'WITHDRAW ATH HOLD',
+      },
+      'operator@example.com',
+    )],
+    ['rulings execute', () => executeAthRulingsBatch(
+      { previewToken: 'p'.repeat(40), confirmation: 'APPLY ATH RULINGS BATCH' },
+      'operator@example.com',
+    )],
+  ] as const)('invalidates the console cache when a %s request fails', async (_name, mutate) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    let listReads = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const target = String(input)
+      if (init?.method === 'POST') {
+        return Promise.reject(new DOMException('aborted due to timeout', 'TimeoutError'))
+      }
+      if (target.includes('current-comparison')) {
+        return Promise.resolve(Response.json(comparison))
+      }
+      listReads += 1
+      return Promise.resolve(
+        Response.json({ items: [review], count: 1, limit: 200, offset: 0, ...activeListMetadata }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchCopyReviews()
+    await fetchCopyReviews()
+    expect(listReads).toBe(1)
+
+    await expect(mutate()).rejects.toThrow()
+    await fetchCopyReviews()
+    expect(listReads).toBe(2)
   })
 
   it('carries the matched submission identity when the platform provides it', async () => {
