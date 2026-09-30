@@ -1872,8 +1872,16 @@ def find_decisive_malicious_source(
     return findings
 
 
-_MAX_FINGERPRINT_FINDINGS = 24
+# Per-archive cap on fingerprint findings. Measured 2026-09-16 with the per-rule
+# cap applied: the largest real trees (aceron_v20/v21, Thief v6) produce 26-29
+# findings at roughly 270 JSON bytes each, so 48 leaves headroom while keeping
+# the fingerprint block well inside the reviewer's inventory tool-output budget.
+_MAX_FINGERPRINT_FINDINGS = 48
+# Per fingerprint, per file. Every finding of one fingerprint shares that
+# fingerprint's severity, so this trim can never drop a higher-severity lead in
+# favor of a lower one; it keeps the earliest anchors in line order.
 _MAX_FINGERPRINT_PER_RULE_FILE = 4
+_FINGERPRINT_SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
 _FINGERPRINT_LANGUAGE_BY_SUFFIX = {
     "rs": "rust",
     "py": "python",
@@ -1914,6 +1922,7 @@ def find_benchmark_emulation_fingerprints(
     languages it applies to.
     """
     findings: list[dict[str, object]] = []
+    high_findings = 0
     for path, text in sorted(files, key=lambda item: _path_priority(item[0])):
         if not _is_executable_source_path(path):
             continue
@@ -1938,16 +1947,39 @@ def find_benchmark_emulation_fingerprints(
                     scan_lines = _blank_lines(scan_lines, test_item_lines)
                     fingerprint_raw_lines = _blank_lines(raw_lines, test_item_lines)
             if fingerprint.min_hits > 1:
-                findings.extend(_aggregate_fingerprint(fingerprint, path, scan_lines))
+                matched = _aggregate_fingerprint(fingerprint, path, scan_lines)
             else:
-                findings.extend(
-                    _cooccurrence_fingerprint(
-                        fingerprint, path, scan_lines, fingerprint_raw_lines
-                    )
+                matched = _cooccurrence_fingerprint(
+                    fingerprint, path, scan_lines, fingerprint_raw_lines
                 )
-            if len(findings) >= _MAX_FINGERPRINT_FINDINGS:
-                return findings[:_MAX_FINGERPRINT_FINDINGS]
-    return findings
+            findings.extend(matched)
+            if fingerprint.severity == "high":
+                high_findings += len(matched)
+            if high_findings >= _MAX_FINGERPRINT_FINDINGS:
+                # The cap is already full of top-severity leads that precede
+                # anything a later scan could add, so scanning further is moot.
+                return _trim_fingerprint_findings(findings)
+    return _trim_fingerprint_findings(findings)
+
+
+def _fingerprint_severity_rank(finding: dict[str, object]) -> int:
+    return _FINGERPRINT_SEVERITY_RANK.get(
+        str(finding["severity"]), len(_FINGERPRINT_SEVERITY_RANK)
+    )
+
+
+def _trim_fingerprint_findings(
+    findings: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Order leads by severity, then keep at most the per-archive cap.
+
+    Severity orders first (high, medium, low). ``sorted`` is stable, so within a
+    severity the scan order is preserved: path priority, then fingerprint
+    declaration order, then anchor line. A late high-severity lead therefore
+    displaces earlier medium ones instead of being cut by the cap.
+    """
+    ordered = sorted(findings, key=_fingerprint_severity_rank)
+    return ordered[:_MAX_FINGERPRINT_FINDINGS]
 
 
 def _rust_test_item_lines(code_lines: list[str]) -> frozenset[int]:
