@@ -170,6 +170,9 @@ async def _seed_review(
     effective: str = "hold",
     event: bool = True,
     adjudication_digest: str | None = None,
+    attempt_artifact_sha256: str | None = _SHA256,
+    event_artifact_sha256: str = _SHA256,
+    event_policy_version: int = 13,
 ) -> UUID:
     now = datetime.now(UTC)
     attempt_id = uuid4()
@@ -182,6 +185,7 @@ async def _seed_review(
             ScreeningAttempt(
                 attempt_id=attempt_id,
                 agent_id=agent_id,
+                artifact_sha256=attempt_artifact_sha256,
                 screener_hotkey=_SCREENER,
                 policy_version=13,
                 status="quarantined",
@@ -219,8 +223,8 @@ async def _seed_review(
                     attempt_id=attempt_id,
                     quarantine_id=quarantine_id,
                     event_kind="automated",
-                    artifact_sha256=_SHA256,
-                    policy_version=13,
+                    artifact_sha256=event_artifact_sha256,
+                    policy_version=event_policy_version,
                     actor=f"screener:{_SCREENER}",
                     reviewer_model=_MODEL,
                     outcome="quarantine",
@@ -304,9 +308,6 @@ async def _owner(
         ("clear", "hold", "held_for_operator_review", "await_operator_review"),
         ("reject", "hold", "held_for_operator_review", "await_operator_review"),
         ("escalate", "hold", "held_for_operator_review", "await_operator_review"),
-        # Effective state disagrees with the court: ask an operator.
-        ("clear", "reject", "rejected", "contact_operators"),
-        ("reject", "pass", "cleared", "contact_operators"),
     ],
 )
 async def test_owner_gets_only_a_bounded_outcome_and_next_step(
@@ -377,6 +378,11 @@ async def test_unverified_or_ignored_court_decision_has_no_outcome(
         {"decision": "clear", "effective": "no_change"},  # late result, ignored
         {"decision": "clear", "effective": "provisional_admission"},  # deferred review
         {"decision": "clear", "event": False},  # no automated event at all
+        {"decision": "clear", "effective": "reject"},  # contradictory event
+        {"decision": "reject", "effective": "pass"},  # contradictory event
+        {"decision": "clear", "event_policy_version": 14},  # wrong snapshot
+        {"decision": "clear", "event_artifact_sha256": "a" * 64},  # wrong artifact
+        {"decision": "clear", "attempt_artifact_sha256": None},  # legacy unpinned
     ]
     for case in cases:
         # One active quarantine per agent, so each case gets its own agent.
@@ -396,6 +402,9 @@ async def test_unverified_or_ignored_court_decision_has_no_outcome(
                 if "adjudication_digest" in case
                 else None
             ),
+            attempt_artifact_sha256=case.get("attempt_artifact_sha256", _SHA256),
+            event_artifact_sha256=str(case.get("event_artifact_sha256", _SHA256)),
+            event_policy_version=int(case.get("event_policy_version", 13)),
         )
 
         response = await _feedback(client, agent_id=agent_id, token=token)

@@ -26,7 +26,7 @@ _EFFECTIVE_OUTCOME: dict[str, MinerReviewOutcome] = {
 
 
 def _review_outcome(
-    event: ScreeningReviewEvent | None, *, policy_version: int
+    event: ScreeningReviewEvent | None, *, attempt: ScreeningAttempt
 ) -> MinerScreeningReviewOutcome | None:
     """Reduce a verified court decision to a bounded outcome and next step.
 
@@ -37,7 +37,15 @@ def _review_outcome(
     decision that verifies against its signed digest produces an outcome;
     anything else is omitted. No field of the decision itself is returned.
     """
-    if event is None or not isinstance(event.evidence, dict):
+    if (
+        event is None
+        or not isinstance(event.evidence, dict)
+        or attempt.artifact_sha256 is None
+        or event.agent_id != attempt.agent_id
+        or event.attempt_id != attempt.attempt_id
+        or event.artifact_sha256 != attempt.artifact_sha256
+        or event.policy_version != attempt.policy_version
+    ):
         return None
     outcome = _EFFECTIVE_OUTCOME.get(event.effective_decision)
     raw = event.evidence.get("adjudication")
@@ -49,20 +57,20 @@ def _review_outcome(
         return None
     if (
         adjudication.canonical_digest() != event.evidence.get("adjudication_digest")
-        or adjudication.policy_version != policy_version
+        or adjudication.policy_version != attempt.policy_version
+    ):
+        return None
+    if (outcome == "cleared" and adjudication.decision != "clear") or (
+        outcome == "rejected" and adjudication.decision != "reject"
     ):
         return None
     next_step: MinerReviewNextStep
     if outcome == "held_for_operator_review":
         next_step = "await_operator_review"
     elif outcome == "rejected":
-        next_step = (
-            "resubmit_after_fix"
-            if adjudication.decision == "reject"
-            else "contact_operators"
-        )
+        next_step = "resubmit_after_fix"
     else:
-        next_step = "none" if adjudication.decision == "clear" else "contact_operators"
+        next_step = "none"
     return MinerScreeningReviewOutcome(outcome=outcome, next_step=next_step)
 
 
@@ -124,7 +132,7 @@ async def load_owned_screening_feedback(
                 log_tail=item.private_failure_log_tail,
                 captured_at=item.failure_captured_at,
                 review_outcome=_review_outcome(
-                    events.get(item.attempt_id), policy_version=item.policy_version
+                    events.get(item.attempt_id), attempt=item
                 ),
             )
             for item in attempts
