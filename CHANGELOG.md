@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v0.330.10 (2026-09-30)
+
+### Bug Fixes
+
+- **screener**: Bind provider leads to scored runtime selector
+  ([#2573](https://github.com/ditto-assistant/ditto-subnet/pull/2573),
+  [`5db8953`](https://github.com/ditto-assistant/ditto-subnet/commit/5db89530d8a4f515fff555bb11bf8d70e28de491))
+
+
+## v0.330.9 (2026-09-30)
+
+### Bug Fixes
+
+- **screener**: Sign bounded dossier gap components
+  ([#2572](https://github.com/ditto-assistant/ditto-subnet/pull/2572),
+  [`fb691f8`](https://github.com/ditto-assistant/ditto-subnet/commit/fb691f8804847fa50a6a5b381c0de060702df1a4))
+
+
+## v0.330.8 (2026-09-29)
+
+### Bug Fixes
+
+- **screener**: Require source read before L2-only safe result
+  ([#2570](https://github.com/ditto-assistant/ditto-subnet/pull/2570),
+  [`cc468cf`](https://github.com/ditto-assistant/ditto-subnet/commit/cc468cff5c08a5f5a0411124796b402261e89ad3))
+
+
 ## v0.330.7 (2026-09-29)
 
 ### Bug Fixes
