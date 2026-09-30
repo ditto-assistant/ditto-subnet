@@ -1805,3 +1805,106 @@ async def test_stale_worker_skips_older_unpinned_row_for_a_pinned_one(
     assert current is not None
     assert current.canary_id == scheduled["plain"].canary_id
     assert current.review_settings_override is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("excluded_by", ["full-runtime-unready", "source-only-lease"])
+async def test_stale_worker_is_refused_when_no_pinned_row_is_leasable(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    excluded_by: str,
+) -> None:
+    # A stale node posture is let past the settings refusal only for a pinned
+    # row this claimant could lease. A pinned full-runtime row it is not ready
+    # for, or one held back by an active source-only lease, must not turn the
+    # refusal that makes the worker refresh its posture into a silent None.
+    node_id, agent_id, attempts, sha = await _seed_pin_source(session_maker, attempts=2)
+    pinned_attempt, plain_attempt = attempts
+    scope = f"l2-report-canary-{uuid4().hex[:8]}"
+    pin_revision, _ = await _seed_revision(
+        session_maker, scope=scope, settings=ScreenerReviewSettings(mode="enforce")
+    )
+    _node_posture(monkeypatch)
+    _pin_evidence(monkeypatch, sha)
+    ready_instances: set[str] = set()
+
+    async def full_runtime_ready(
+        _session: AsyncSession, *, instance_id: str | None = None, **_kwargs: Any
+    ) -> bool:
+        # Scheduling asks about the node; each claim asks about one worker.
+        return instance_id is None or instance_id in ready_instances
+
+    monkeypatch.setattr(endpoints, "_full_runtime_worker_ready", full_runtime_ready)
+    async with session_maker() as session:
+        pinned = await endpoints.schedule_l2_report_canary(
+            _pin_schedule_request(
+                node_id,
+                agent_id,
+                pinned_attempt,
+                sha,
+                review_settings_revision=pin_revision,
+            ).model_copy(update={"run_mode": "full_runtime"}),
+            None,
+            session,
+            _pin_storage(),
+            "operator@example.com",
+        )
+    if excluded_by == "source-only-lease":
+        ready_instances.add(f"{node_id}-worker-2")
+        async with session_maker() as session:
+            await endpoints.schedule_l2_report_canary(
+                _pin_schedule_request(
+                    node_id,
+                    agent_id,
+                    plain_attempt,
+                    sha,
+                    review_settings_revision=None,
+                ),
+                None,
+                session,
+                _pin_storage(),
+                "operator@example.com",
+            )
+        # Make the unpinned row the oldest so a current worker leases it and
+        # leaves the node taking source-only rows only.
+        async with session_maker() as session, session.begin():
+            await session.execute(
+                update(ScreenerL2ReportCanary)
+                .where(ScreenerL2ReportCanary.canary_id == pinned.canary_id)
+                .values(created_at=datetime.now(UTC))
+            )
+        lease = await _pin_claim(
+            session_maker,
+            node_id,
+            settings_revision=_NODE_REVISION,
+            accepts_override=False,
+        )
+        assert lease is not None and lease.run_mode == "source_only"
+
+    with pytest.raises(HTTPException) as refused:
+        await _pin_claim(
+            session_maker,
+            node_id,
+            settings_revision=_NODE_REVISION + 1,
+            accepts_override=True,
+            worker=2,
+        )
+    assert refused.value.status_code == 409
+    assert refused.value.detail == "canary review settings changed"
+    async with session_maker() as session:
+        row = await session.get(ScreenerL2ReportCanary, pinned.canary_id)
+    assert row is not None and row.status == "queued"
+
+    if excluded_by == "full-runtime-unready":
+        # The same stale worker, once full-runtime ready, takes the pinned row.
+        ready_instances.add(f"{node_id}-worker-2")
+        claim = await _pin_claim(
+            session_maker,
+            node_id,
+            settings_revision=_NODE_REVISION + 1,
+            accepts_override=True,
+            worker=2,
+        )
+        assert claim is not None
+        assert claim.canary_id == pinned.canary_id
+        assert claim.review_settings_override is not None

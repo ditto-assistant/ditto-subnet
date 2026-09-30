@@ -11,7 +11,7 @@ from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.l2_report_canary import (
@@ -229,21 +229,6 @@ async def _claimable_queue_filters(
             ScreenerL2ReportCanary.source_kind != "canonical_starter_fixture"
         )
     return filters
-
-
-async def _pinned_canary_queued(session: AsyncSession, *, node_id: str) -> bool:
-    return (
-        await session.scalar(
-            select(ScreenerL2ReportCanary.canary_id)
-            .where(
-                ScreenerL2ReportCanary.target_node_id == node_id,
-                ScreenerL2ReportCanary.status == "queued",
-                ScreenerL2ReportCanary.review_settings_revision.is_not(None),
-            )
-            .limit(1)
-        )
-        is not None
-    )
 
 
 def _view(row: ScreenerL2ReportCanary) -> L2CanaryView:
@@ -988,10 +973,7 @@ async def claim_l2_report_canary(
             effective.revision == payload.settings_revision
             and effective.checksum == payload.settings_checksum
         )
-        if not node_settings_current and not (
-            payload.accepts_review_settings_override
-            and await _pinned_canary_queued(session, node_id=node_id)
-        ):
+        if not node_settings_current and not payload.accepts_review_settings_override:
             raise HTTPException(
                 status_code=409, detail="canary review settings changed"
             )
@@ -1020,6 +1002,24 @@ async def claim_l2_report_canary(
                 .with_for_update()
             )
         )
+        claimable = await _claimable_queue_filters(
+            session,
+            node=node,
+            payload=payload,
+            node_settings_current=node_settings_current,
+            source_only=bool(active),
+            now=now,
+        )
+        # A stale pin-capable worker passes only for a pinned row it could
+        # lease; otherwise it gets the refusal that makes it refresh its posture.
+        # Raising also rolls back the lazy expiry above; the next claim on this
+        # node from a current worker redoes it.
+        if not node_settings_current and not await session.scalar(
+            select(exists().where(*claimable))
+        ):
+            raise HTTPException(
+                status_code=409, detail="canary review settings changed"
+            )
         if any(row.claimed_instance_id == payload.instance_id for row in active):
             return None
         # Keep private-challenge runs isolated. Preserve the legacy first lease
@@ -1042,14 +1042,6 @@ async def claim_l2_report_canary(
                 _MAX_PARALLEL_SOURCE_ONLY, len(healthy_workers)
             ):
                 return None
-        claimable = await _claimable_queue_filters(
-            session,
-            node=node,
-            payload=payload,
-            node_settings_current=node_settings_current,
-            source_only=bool(active),
-            now=now,
-        )
         row = await session.scalar(
             select(ScreenerL2ReportCanary)
             .where(*claimable)
