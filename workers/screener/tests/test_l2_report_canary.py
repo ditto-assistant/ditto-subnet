@@ -507,13 +507,14 @@ def _pinned_posture(
     *,
     revision: int = 41,
     scope: str = "l2-report-canary-ctl137",
+    timeout_seconds: int = 777,
 ) -> EffectiveReviewSettings:
     """A posture that differs from ``node`` in every field the canary reads."""
     settings = node.settings.model_copy(
         update={
             "mode": "enforce",
             "l3_enabled": not node.settings.l3_enabled,
-            "timeout_seconds": 777,
+            "timeout_seconds": timeout_seconds,
             "source_review_timeout_seconds": 3333,
             "policy_manifest_profile": "l1_l2",
             "policy_manifest_rotation_id": "canary-ctl-137",
@@ -690,6 +691,7 @@ async def test_consume_applies_pinned_revision_to_canary_gate_only(
     [
         ("other-scope", "review-settings-override-mismatch"),
         ("other-revision", "review-settings-override-mismatch"),
+        ("other-checksum", "review-settings-override-mismatch"),
         ("unavailable", "review-settings-override-unavailable"),
     ],
 )
@@ -703,8 +705,14 @@ async def test_consume_override_mismatch_completes_incomplete(
     response: Any = {
         "other-scope": _pinned_posture(node, scope="l2-report-canary-other"),
         "other-revision": _pinned_posture(node, revision=pin.revision + 1),
+        # Same revision and scope, different settings: the stamped checksum is
+        # the only field that tells the two postures apart.
+        "other-checksum": _pinned_posture(node, timeout_seconds=778),
         "unavailable": RuntimeError("platform unavailable"),
     }[served]
+    if served == "other-checksum":
+        assert (response.revision, response.scope) == (pin.revision, pin.scope)
+        assert response.checksum != pin.checksum
     platform = _PinnedPlatform(claim, response)
 
     def no_gate(*_args: Any, **_kwargs: Any) -> None:
