@@ -7080,7 +7080,7 @@ async def test_stock_kit_dossier_is_complete_in_every_section(tmp_path: Path) ->
     workspace.mkdir()
     _extract_readonly_workspace(archive_path, workspace)
     agent = _sol_agent(tmp_path, InProcessAnalyzerHarness(), None)  # type: ignore[arg-type]
-    dossier, tools, complete, _ = await agent._build_dossier(
+    dossier, tools, complete, _, components = await agent._build_dossier(
         workspace,
         TarSourceRepository(str(archive_path)),
         artifact_sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
@@ -7089,6 +7089,7 @@ async def test_stock_kit_dossier_is_complete_in_every_section(tmp_path: Path) ->
         deadline=None,
     )
     assert complete
+    assert components == ()
     assert tools == l2_review._DOSSIER_ANALYZERS
     # Every section the compact packet serves through dossier_section must be
     # accepted as-is. A truncation marker there marks dossier_section pending,
