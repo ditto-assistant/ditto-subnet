@@ -5584,39 +5584,47 @@ async def test_admissible_citations_keep_the_finding(tmp_path: Path) -> None:
     assert [item.line for item in parsed.evidence] == [3, 4]
 
 
-async def test_cfg_test_helper_is_not_citable(tmp_path: Path) -> None:
-    """`async fn serve(...)` inside `#[cfg(test)] mod preflight_tests` is stock.
-
-    It ships in the official starter kit and never runs in the served image,
-    yet it was cited as HTTP-setup evidence.
-    """
+async def test_cfg_test_body_stays_citable_for_served_test_cfg_build(
+    tmp_path: Path,
+) -> None:
+    """A served Rust binary can activate `#[cfg(test)]` without a harness."""
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
     source = (
-        "fn main() { call_model(); }\n"
-        "\n"
-        "#[cfg(all(test))]\n"
-        "mod preflight_tests {\n"
-        "    async fn serve(app: Router) -> String { bind_listener() }\n"
-        "    fn capture_call() -> String { record() }\n"
+        "#[cfg(test)]\n"
+        "fn answer() -> String {\n"
+        '    "fixed".to_string()\n'
         "}\n"
+        'fn main() { println!("{}", answer()); }\n'
     )
     final = {
         "risk_level": "high",
         "confidence": 0.99,
         "categories": ["benchmark_emulation"],
         "evidence": [
+            {"path": "src/main.rs", "line": 3, "category": "benchmark_emulation"},
             {"path": "src/main.rs", "line": 5, "category": "benchmark_emulation"},
-            {"path": "src/main.rs", "line": 6, "category": "benchmark_emulation"},
         ],
-        "summary": "Test-only harness cited as served behaviour.",
+        "summary": "Deterministic answer is compiled into the served binary.",
     }
     observation = await _agent(key, _transport(final, [])).review(
-        str(_archive(tmp_path, source)), artifact_sha256=_SHA
+        str(
+            _archive_files(
+                tmp_path,
+                {
+                    "Dockerfile": (
+                        b"FROM rust:1\nWORKDIR /app\nCOPY src/main.rs .\n"
+                        b'RUN rustc --cfg test main.rs -o agent\nCMD ["./agent"]\n'
+                    ),
+                    "src/main.rs": source.encode(),
+                },
+            )
+        ),
+        artifact_sha256=_SHA,
     )
 
-    assert observation.ok and observation.risk_level == "low"
+    assert observation.ok and observation.risk_level == "high"
 
 
 async def test_reachability_gate_attribute_stays_citable(tmp_path: Path) -> None:

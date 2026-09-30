@@ -33,7 +33,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from ditto_screener.rust_test_items import is_rust_test_only_attribute
 from ditto_screener.source_signals import mask_comments
 
 # ``use``/``extern crate`` bring a name into scope; ``mod`` declares one. None of
@@ -76,31 +75,6 @@ def _inert_reason(code_line: str, raw_line: str) -> str:
     return ""
 
 
-def _test_only_lines(code_lines: list[str]) -> set[int]:
-    """1-based line numbers inside a ``#[cfg(test)]`` item.
-
-    Brace matching runs over the comment-masked text so a brace inside a
-    comment cannot open or close a region. Only an attribute that affirmatively
-    requires ``test`` counts; production branches such as ``#[cfg(not(test))]``
-    remain citable.
-    """
-    marked: set[int] = set()
-    for index, line in enumerate(code_lines):
-        if not is_rust_test_only_attribute(line):
-            continue
-        depth = 0
-        opened = False
-        for cursor in range(index, len(code_lines)):
-            depth += code_lines[cursor].count("{")
-            depth -= code_lines[cursor].count("}")
-            marked.add(cursor + 1)
-            if code_lines[cursor].count("{"):
-                opened = True
-            if opened and depth <= 0:
-                break
-    return marked
-
-
 def citation_admissibility(
     path: str,
     text: str | None,
@@ -112,6 +86,10 @@ def citation_admissibility(
     member is opaque. An opaque member keeps its citation: the path is proven
     and the line is unverifiable by design, so refusing it would invent a
     false negative.
+
+    A Rust ``#[cfg(test)]`` body remains citable because the served binary can
+    enable that cfg with ``rustc --cfg test`` without using a test harness.
+    The reviewer must still establish that the build serves the cited path.
     """
     if _TEST_PATH.search(path.removeprefix("./")):
         return Admissibility(False, "test-only-path")
@@ -125,8 +103,6 @@ def citation_admissibility(
     reason = _inert_reason(code_lines[line - 1], raw_lines[line - 1])
     if reason:
         return Admissibility(False, reason)
-    if line in _test_only_lines(code_lines):
-        return Admissibility(False, "cfg-test-only")
     return ADMISSIBLE
 
 
