@@ -89,7 +89,7 @@
       "read": [".agents/skills/mine/SKILL.md", "miners/dittobench-starter-kit/SETUP.md", "docs/MINER.md", ".agents/skills/backroom-review/references/review-bar.md", ".agents/skills/backroom-review/references/review-rules.md", ".agents/skills/backroom-review/references/techniques.md"],
       "search": ["rg -n 'LIVE_SCORING_BENCH_VERSION|run-size|tool_endpoint' miners/dittobench-starter-kit/scripts ditto/miner_cli/commands/practice.py", "rg -n 'evaluate|practice' miners/dittobench-starter-kit/README.md docs/MINER.md", "python3 .agents/skills/backroom-review/scripts/search-precedents.py --list"],
       "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/mine", "python3 miners/dittobench-starter-kit/scripts/test_local_rehearsal.py", "uv run pytest ditto/tests/miner_cli/commands/test_practice.py -q", "python3 .agents/skills/backroom-review/scripts/search-precedents.py family-compiler"],
-      "invariants": ["Do not treat cargo evaluate or hosted rehearsal as on-chain certification.", "Local ditto practice --run-size full matches the on-chain dataset envelope and observed-tool scorer, not the locked model or screened image.", "Do not package or upload a harness that fails the operator two-limb or production-engine bar."],
+      "invariants": ["Do not treat cargo evaluate or hosted rehearsal as on-chain certification.", "Local ditto practice --run-size full matches the on-chain dataset envelope and observed-tool scorer, not the locked model or screened image.", "Do not package or upload a harness that fails the operator two-limb or production-engine bar.", "Every miners/dittobench-starter-kit change ships the next starter provenance manifest in workers/screener/staged-starter-provenance; the screener drift guard prints the generate_starter_provenance.py command."],
       "related": ["validator-miner", "dittobench-scoring", "backroom-review", "miner-comms"]
     },
     {
@@ -238,14 +238,14 @@
     {
       "id": "screener-worker",
       "title": "Screening worker policy, gates, and source review",
-      "keywords": ["workers/screener", "screener worker", "policy gate", "source review", "false positive", "l2 review", "category guards", "luna"],
+      "keywords": ["workers/screener", "screener worker", "policy gate", "source review", "false positive", "l2 review", "category guards", "luna", "starter provenance"],
       "summary": "The screening worker leases submissions, builds the image, and applies policy gates. Hetzner and GCE capacity are coordinated separately.",
       "skills": ["ditto-subnet-benchmark", "backroom-review"],
       "owns": ["workers/screener"],
       "read": ["workers/screener/README.md", "workers/screener/docs/source-review-policy.md", "workers/screener/docs/policy-v7-false-positive-regression.md", "apps/platform/docs/screener-protocol.md"],
       "search": ["rg -n 'policy|gate|false.positive|quarantine' workers/screener/ditto_screener workers/screener/docs", "rg -n 'def gate|category_guards|source_review' workers/screener/ditto_screener"],
       "validate": ["uv run --project workers/screener pytest workers/screener/tests -q"],
-      "invariants": ["Medium- and high-risk results are quarantined for operator review, never automatically rejected.", "Untrusted builds never receive cloud, GitHub, Platform, or provider credentials."],
+      "invariants": ["Medium- and high-risk results are quarantined for operator review, never automatically rejected.", "Untrusted builds never receive cloud, GitHub, Platform, or provider credentials.", "Starter provenance trusts exact path + sha256 only, from ditto_screener/data manifests; new manifests are staged outside that runtime set and activated only by a separate reviewed change. Manifests are append-only and the newest, staged or active, must equal the monorepo kit."],
       "related": ["screener-capacity", "backroom-review", "contracts"]
     },
     {

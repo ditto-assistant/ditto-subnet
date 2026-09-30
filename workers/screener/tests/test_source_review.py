@@ -36,8 +36,24 @@ from ditto_screening_protocol import (
     SourceReviewInvariantDisposition,
 )
 from ditto_screening_protocol.review_ledger import substantiated_concern_count
+from scripts.generate_starter_provenance import (
+    RUNTIME_MANIFESTS,
+    STAGED_MANIFESTS,
+    manifests_in,
+    newest_manifest,
+    starter_files,
+)
 
 _SHA = "ab" * 32
+_STARTER_KIT = Path(__file__).resolve().parents[3] / "miners" / "dittobench-starter-kit"
+_STARTER_MANIFESTS = tuple(
+    str(path)
+    for path in sorted(
+        (Path(source_review_module.__file__).parent / "data").glob(
+            "starter-kit-provenance-*.json"
+        )
+    )
+)
 
 _PASS_CLAUSES = {
     "i1_model_invocation": "genuine_model_result",
@@ -4161,6 +4177,142 @@ def test_provenance_hashes_the_archive_once_across_manifests(
     assert opened == 1
     with pytest.raises(ValueError, match="unknown archive member"):
         repository.member_sha256("missing.rs")
+
+
+def _current_starter_kit_files() -> dict[str, bytes]:
+    if not _STARTER_KIT.is_dir():
+        pytest.skip("the monorepo starter kit is not part of this checkout")
+    return {
+        relative: (_STARTER_KIT / relative).read_bytes()
+        for relative in starter_files(_STARTER_KIT)
+    }
+
+
+def _current_starter_kit_sources() -> dict[str, bytes]:
+    """The kit without its large model blobs, which trust selection ignores.
+
+    A gzip archive re-decompresses on every backward seek, so leaving the
+    multi-megabyte models out keeps whole-kit provenance tests fast.
+    """
+    return {
+        path: raw
+        for path, raw in _current_starter_kit_files().items()
+        if len(raw) <= 1024 * 1024
+    }
+
+
+def _staged_starter_manifests() -> tuple[str, ...]:
+    staged = tuple(str(path) for path in manifests_in(STAGED_MANIFESTS))
+    if not staged:
+        pytest.skip("no starter provenance manifest is staged")
+    return staged
+
+
+def _exact_starter_matches(
+    files: dict[str, bytes], manifests: tuple[str, ...]
+) -> set[str]:
+    """Paths whose exact bytes some manifest pins, computed independently."""
+    pinned: dict[str, set[str]] = {}
+    for manifest in manifests:
+        for path, digest in json.loads(Path(manifest).read_text())["files"].items():
+            pinned.setdefault(path, set()).add(digest)
+    return {
+        path
+        for path, raw in files.items()
+        if hashlib.sha256(raw).hexdigest() in pinned.get(path, set())
+    }
+
+
+def test_runtime_provenance_ignores_staged_starter_manifests(
+    tmp_path: Path,
+) -> None:
+    files = _current_starter_kit_sources()
+    staged = _staged_starter_manifests()
+    repository = TarSourceRepository(str(_archive_files(tmp_path, files)))
+    staged_only = _exact_starter_matches(files, staged) - _exact_starter_matches(
+        files, _STARTER_MANIFESTS
+    )
+    assert staged_only
+
+    runtime = json.loads(repository.closest_trusted_provenance(_STARTER_MANIFESTS))
+
+    # L1's exact-file provenance reads the runtime set only, so a file that
+    # only a staged manifest pins stays attributed to the miner until the
+    # staged manifest is activated.
+    assert runtime["revision"] not in {
+        json.loads(Path(path).read_text())["revision"] for path in staged
+    }
+    assert not staged_only & set(runtime["matched_exact_files"])
+
+    # The newest manifest, named explicitly, matches every kit file exactly:
+    # the evidence an activation review starts from.
+    newest = newest_manifest(RUNTIME_MANIFESTS, STAGED_MANIFESTS)
+    exact = json.loads(repository.closest_trusted_provenance((str(newest),)))
+    assert exact["revision"] == json.loads(newest.read_text())["revision"]
+    assert exact["selection"] == "unique-closest-supported-revision"
+    assert exact["matched_exact_files"] == sorted(files)
+    assert exact["tracked_but_modified_files"] == []
+
+
+@pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
+def test_malicious_preflight_ignores_staged_starter_manifests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    files = _current_starter_kit_sources()
+    staged = _staged_starter_manifests()
+    scanned: list[list[str]] = []
+
+    def recording_detector(
+        readable: list[tuple[str, str]], **kwargs: object
+    ) -> list[dict[str, object]]:
+        scanned.append([path for path, _text in readable])
+        return find_decisive_malicious_source(readable, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        source_review_module, "find_decisive_malicious_source", recording_detector
+    )
+    kit = TarSourceRepository(
+        str(_archive_files(tmp_path, files)), static_preflight_v2_mode=mode
+    )
+    runtime_paths = kit._explicit_runtime_paths()
+    runtime_trusted = _exact_starter_matches(files, _STARTER_MANIFESTS)
+
+    assert kit.malicious_preflight(artifact_sha256="a" * 64, mode=mode) is None
+
+    # The default trust set is the runtime manifests only: every runtime file
+    # that only a staged manifest pins is still scanned as miner-authored.
+    assert set(scanned[-1]) == runtime_paths - runtime_trusted
+    assert runtime_paths & (_exact_starter_matches(files, staged) - runtime_trusted)
+
+    # Naming the staged manifests shows the exact trust that activation would
+    # grant: no kit file is scanned, and one changed byte is.
+    with_staged = (*_STARTER_MANIFESTS, *staged)
+    assert (
+        kit.malicious_preflight(
+            artifact_sha256="a" * 64, mode=mode, provenance_manifest_paths=with_staged
+        )
+        is None
+    )
+    assert scanned[-1] == []
+    edited_path = next(
+        (path for path in sorted(runtime_paths) if path.endswith(".rs")), None
+    )
+    if edited_path is None:
+        pytest.skip("the starter kit has no Rust runtime source to modify")
+    modified_dir = tmp_path / "modified"
+    modified_dir.mkdir()
+    modified = TarSourceRepository(
+        str(
+            _archive_files(
+                modified_dir, {**files, edited_path: files[edited_path] + b"\n"}
+            )
+        ),
+        static_preflight_v2_mode=mode,
+    )
+    modified.malicious_preflight(
+        artifact_sha256="b" * 64, mode=mode, provenance_manifest_paths=with_staged
+    )
+    assert scanned[-1] == [edited_path]
 
 
 async def test_sanitized_shortcut_fixture_produces_bounded_risk_digest(
