@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ATH_HOLD_WITHDRAWAL_CONFIRMATION, type CopyReviewConsoleItem } from '../lib/admin.schemas'
 import { CopyReviewPanel } from './CopyReviewPanel'
@@ -606,6 +606,56 @@ describe('CopyReviewPanel', () => {
       },
     }))
     expect(decideCopyReview).not.toHaveBeenCalled()
+  })
+
+  it('drops a withdrawal preview that returns after the operator switched rows', async () => {
+    const other = item({
+      review_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      agent_id: '44444444-4444-4444-8444-444444444444',
+      agent_name: 'other-agent',
+    })
+    vi.mocked(getAthReview).mockResolvedValue(audit() as never)
+    let resolvePreview: (value: unknown) => void = () => {}
+    vi.mocked(previewAthHoldWithdrawalFn).mockReturnValue(
+      new Promise((resolve) => {
+        resolvePreview = resolve
+      }) as never,
+    )
+    render(<CopyReviewPanel {...panelProps} initialItems={[eligible, other]} initialBulkEligibleCount={1} readOnly={false} />)
+    fireEvent.click(screen.getByText(/held-agent/))
+    fireEvent.click(await screen.findByText('Withdraw hold'))
+    fireEvent.change(screen.getByPlaceholderText(/Miner-visible reason/), {
+      target: { value: 'Precautionary hold withdrawn. No misconduct finding.' },
+    })
+    fireEvent.click(screen.getByText('Preview withdrawal'))
+    await waitFor(() => expect(previewAthHoldWithdrawalFn).toHaveBeenCalledTimes(1))
+
+    // The operator moves to another row while A's preview is still in flight.
+    fireEvent.click(screen.getByText(/other-agent/))
+    await waitFor(() => expect(getAthReview).toHaveBeenCalledWith({ data: { agentId: other.agent_id } }))
+    await act(async () => {
+      resolvePreview({
+      agent_id: eligible.agent_id,
+      review_id: eligible.review_id,
+      artifact_sha256: 'ab'.repeat(32),
+      score_count: 3,
+      agent_status: 'ath_pending_review',
+      restored_status: 'scored',
+      board_before: board,
+      board_after: board,
+      would_change_crown: false,
+      emission_reward_eligible: true,
+      emission_gate: 'off',
+      would_change_emission_crown: false,
+      emission_reason: 'Emissions resume.',
+      preview_token: 'stale-preview-token',
+      expires_at: '2026-09-23T00:10:00Z',
+      })
+    })
+
+    expect(screen.queryByLabelText('Withdrawal confirmation')).toBeNull()
+    expect(screen.queryByText(/Withdraw hold for/)).toBeNull()
+    expect(executeAthHoldWithdrawalFn).not.toHaveBeenCalled()
   })
 
   it('does not offer a withdrawal Platform would refuse', async () => {

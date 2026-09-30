@@ -140,6 +140,9 @@ type HoldDecision = CopyReviewResolution | 'withdraw'
 
 type WithdrawalPreview = {
   agentId: string
+  // The confirmation names this row, never the current selection: the two can
+  // differ if the operator switched rows while the preview was in flight.
+  agentName: string
   reviewId: string
   expectedSha256: string
   expectedScoreCount: number
@@ -259,13 +262,19 @@ export function CopyReviewPanel({
 
   async function beginWithdrawalPreview() {
     if (!selected || resolution !== 'withdraw') return
+    const target = selected
+    // Rows stay clickable while the requests are in flight. Drop any answer for
+    // a row the operator has left, so a late preview for A can never open a
+    // confirmation shown under B.
+    const stillSelected = () => auditRequest.current === target.agent_id
     setBusy(true)
     setError(null)
     setNotice(null)
     try {
       // Re-read the audit: the guards must be what Platform compares NOW, not
       // the values recorded when the review was opened.
-      const audit = await auditFn({ data: { agentId: selected.agent_id } })
+      const audit = await auditFn({ data: { agentId: target.agent_id } })
+      if (!stillSelected()) return
       setSelectedAudit(audit)
       if (!audit.withdrawable) {
         throw new Error(audit.withdrawal_refusal ?? 'This hold cannot be withdrawn.')
@@ -275,7 +284,7 @@ export function CopyReviewPanel({
       }
       const preview = await previewWithdrawalFn({
         data: {
-          agentId: selected.agent_id,
+          agentId: target.agent_id,
           reviewId: audit.review.review_id,
           expectedSha256: audit.current_artifact_sha256,
           expectedScoreCount: audit.current_score_count,
@@ -283,8 +292,10 @@ export function CopyReviewPanel({
           reason,
         },
       })
+      if (!stillSelected()) return
       setWithdrawalPreview({
-        agentId: selected.agent_id,
+        agentId: target.agent_id,
+        agentName: target.agent_name,
         reviewId: preview.review_id,
         expectedSha256: preview.artifact_sha256,
         expectedScoreCount: preview.score_count,
@@ -302,7 +313,7 @@ export function CopyReviewPanel({
       setTypedConfirmation('')
       setConfirmation('withdraw')
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      if (stillSelected()) setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(false)
     }
@@ -310,6 +321,12 @@ export function CopyReviewPanel({
 
   async function submitWithdrawal() {
     if (!withdrawalPreview || typedConfirmation !== ATH_HOLD_WITHDRAWAL_CONFIRMATION) return
+    if (withdrawalPreview.agentId !== selectedId) {
+      setWithdrawalPreview(null)
+      setConfirmation(null)
+      setError('The selected hold changed after the preview; preview the withdrawal again.')
+      return
+    }
     setBusy(true)
     setError(null)
     setNotice(null)
@@ -906,7 +923,7 @@ export function CopyReviewPanel({
                   : confirmation === 'bulk'
                     ? `Clear ${bulkEligible.length} calibrated eligible holds`
                     : confirmation === 'withdraw'
-                      ? `Withdraw hold for ${selected?.agent_name ?? 'selected submission'} without a clearance`
+                      ? `Withdraw hold for ${withdrawalPreview?.agentName ?? 'selected submission'} without a clearance`
                       : `${resolution === 'clear' ? 'Clear hold for' : 'Reject'} ${selected?.agent_name ?? 'selected submission'}`}
               </dd>
             </div>
