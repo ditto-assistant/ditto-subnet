@@ -8,7 +8,8 @@ The #2449 rebuild must also recover from what an interrupted concurrent build
 leaves: a ``lock_timeout`` during the build's waits cancels it and leaves an
 INVALID index that ``CREATE INDEX CONCURRENTLY IF NOT EXISTS`` would keep. It
 must recover within the run that hit the timeout, and on a re-run from any
-invalid or stale index under either name.
+invalid or stale index under either name. Only its CONCURRENTLY statements run
+under the wider ``lock_timeout``; the session keeps env.py's short bound.
 """
 
 from __future__ import annotations
@@ -253,6 +254,54 @@ async def test_key_code_rebuild_recovers_in_run_from_a_cancelled_build(
 
         # The first build really was cancelled, so the recovery path ran.
         assert any("55P03" in record.getMessage() for record in caplog.records)
+        _assert_only_target(await _indexes(engine), INFRA_AUTO_RETRY_REASON_CODES)
+    finally:
+        _alembic("upgrade", "head")
+
+
+async def test_key_code_rebuild_widens_the_lock_timeout_only_for_its_build(
+    engine: AsyncEngine,
+    worker_database: WorkerDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The build outwaits a writer the session bound would cancel, then resets it.
+
+    env.py's short ``lock_timeout`` is a startup parameter that every later
+    migration in the batch relies on. Only the CONCURRENTLY statements may run
+    under the wider bound, so a writer that outlives the session default must
+    not cancel the build, and afterwards the session must be back on its
+    startup bound rather than keep the wide one.
+    """
+    migration = _script(_KEY_REVISION).module
+    monkeypatch.setattr(migration, "_CONCURRENT_LOCK_TIMEOUT", "10s")
+    try:
+        _alembic("downgrade", _parent(_KEY_REVISION))
+        blocker = await asyncpg.connect(worker_database.dsn.asyncpg)
+        runner = create_async_engine(
+            worker_database.dsn.sqlalchemy,
+            poolclass=NullPool,
+            connect_args={"server_settings": {"lock_timeout": "100ms"}},
+        )
+        try:
+            await blocker.execute(
+                "BEGIN; LOCK TABLE screening_attempts IN ROW EXCLUSIVE MODE"
+            )
+            # Held six times the session bound, well inside the widened one.
+            released = asyncio.create_task(
+                blocker.execute("SELECT pg_sleep(0.6); ROLLBACK")
+            )
+            with caplog.at_level(logging.WARNING, logger="alembic.lock"):
+                async with runner.connect() as connection:
+                    await connection.run_sync(_upgrade_in_process, migration)
+                    after = await connection.scalar(text("SHOW lock_timeout"))
+            await released
+        finally:
+            await runner.dispose()
+            await blocker.close()
+
+        assert not any("55P03" in record.getMessage() for record in caplog.records)
+        assert after == "100ms"
         _assert_only_target(await _indexes(engine), INFRA_AUTO_RETRY_REASON_CODES)
     finally:
         _alembic("upgrade", "head")
