@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -15,7 +15,12 @@ from ditto_screening_protocol import (
 )
 
 
-class L2CanaryScheduleRequest(BaseModel):
+class L2CanaryScheduleBase(BaseModel):
+    """Fields shared by the plain and pinned schedule routes.
+
+    No route takes this model directly, so it never appears in the API schema.
+    """
+
     model_config = ConfigDict(extra="ignore", strict=True)
 
     # FastAPI parses JSON into Python strings before model validation. Keep the
@@ -32,16 +37,10 @@ class L2CanaryScheduleRequest(BaseModel):
     run_mode: Literal["source_only", "full_runtime"] = "source_only"
     historical_ruling_kind: Literal["ath_clear", "screening_reject"] | None = None
     historical_ruling_id: Annotated[UUID | None, Field(strict=False)] = None
-    # Run under this immutable ``l2-report-canary*`` revision instead of the
-    # claiming worker's node-effective posture. ``POST /pinned`` requires it
-    # (``L2CanaryPinnedScheduleRequest``). The plain route keeps the field only
-    # to refuse it, since ``extra="ignore"`` would otherwise drop a pin sent
-    # there, so an older Platform that would ignore the field never gets one.
-    review_settings_revision: Annotated[int | None, Field(ge=1)] = None
     confirm_report_only: Literal[True]
 
     @model_validator(mode="after")
-    def historical_ruling_is_explicit_and_source_only(self) -> L2CanaryScheduleRequest:
+    def historical_ruling_is_explicit_and_source_only(self) -> Self:
         if (self.historical_ruling_kind is None) != (self.historical_ruling_id is None):
             raise ValueError("historical ruling kind and id must be supplied together")
         if self.historical_ruling_kind is not None and (
@@ -53,9 +52,30 @@ class L2CanaryScheduleRequest(BaseModel):
         return self
 
 
-class L2CanaryPinnedScheduleRequest(L2CanaryScheduleRequest):
+class L2CanaryScheduleRequest(L2CanaryScheduleBase):
+    """The plain route: the canary runs under the claiming node's posture."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def pin_uses_the_pinned_route(cls, data: Any) -> Any:
+        # Every other unknown key is ignored, but a pin must not be: dropping
+        # it would queue the canary under the node's posture. Refuse the key
+        # even when null, so a client learns the route before it matters.
+        if isinstance(data, dict) and "review_settings_revision" in data:
+            raise ValueError(
+                "review_settings_revision is scheduled with POST "
+                "/admin/screener-l2-report-canaries/pinned, not this route"
+            )
+        return data
+
+
+class L2CanaryPinnedScheduleRequest(L2CanaryScheduleBase):
     """``POST /pinned``: the schedule request with a required posture pin."""
 
+    # Run under this immutable ``l2-report-canary*`` revision instead of the
+    # claiming worker's node-effective posture. Only this route accepts it, so
+    # a Platform build that predates pins refuses the route instead of
+    # ignoring the field.
     review_settings_revision: Annotated[int, Field(ge=1)]
 
 

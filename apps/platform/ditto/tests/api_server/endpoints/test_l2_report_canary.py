@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request, Response
+from pydantic import ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -34,6 +35,7 @@ from ditto.api_models.screener_review_settings import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints import l2_report_canary as endpoints
+from ditto.api_server.middleware.error_envelope import ERROR_CODE_VALIDATION
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.storage.models import VerifiedObject
 from ditto.db.models import (
@@ -52,6 +54,50 @@ from ditto_screening_protocol import (
     ScoredRuntimeEvidenceLease,
     ScreenerReviewSettingsOverride,
 )
+
+
+def _schedule_fields() -> dict[str, Any]:
+    return {
+        "request_id": str(uuid4()),
+        "agent_id": str(uuid4()),
+        "source_attempt_id": str(uuid4()),
+        "artifact_sha256": "a" * 64,
+        "policy_version": 13,
+        "expected_agent_status": "rejected",
+        "expected_score_count": 0,
+        "target_node_id": "subnet-screener-1",
+        "review_label": "known_reject",
+        "confirm_report_only": True,
+    }
+
+
+@pytest.mark.parametrize("pin", [141, None])
+def test_plain_schedule_request_refuses_a_pin_key(pin: int | None) -> None:
+    # The plain route ignores unknown keys, except a pin: ignoring that one
+    # would queue the canary under the node's posture. It is refused even as
+    # null, and only the pinned model accepts it.
+    with pytest.raises(ValidationError, match="/pinned"):
+        L2CanaryScheduleRequest.model_validate(
+            {**_schedule_fields(), "review_settings_revision": pin}
+        )
+    plain = L2CanaryScheduleRequest.model_validate(
+        {**_schedule_fields(), "some_future_field": pin}
+    )
+    assert not hasattr(plain, "review_settings_revision")
+
+
+def test_pinned_schedule_request_requires_a_revision() -> None:
+    for body in (
+        _schedule_fields(),
+        {**_schedule_fields(), "review_settings_revision": None},
+        {**_schedule_fields(), "review_settings_revision": 0},
+    ):
+        with pytest.raises(ValidationError):
+            L2CanaryPinnedScheduleRequest.model_validate(body)
+    pinned = L2CanaryPinnedScheduleRequest.model_validate(
+        {**_schedule_fields(), "review_settings_revision": 141, "some_future_field": 1}
+    )
+    assert pinned.review_settings_revision == 141
 
 
 def test_l2_canary_schedule_accepts_uuid_strings_from_http_json() -> None:
@@ -1273,40 +1319,40 @@ def _pin_schedule_request(
     *,
     review_settings_revision: int | None,
     request_id: UUID | None = None,
-) -> L2CanaryScheduleRequest:
-    return L2CanaryScheduleRequest(
-        request_id=request_id or uuid4(),
-        agent_id=agent_id,
-        source_attempt_id=attempt_id,
-        artifact_sha256=sha,
-        policy_version=13,
-        expected_agent_status="rejected",
-        expected_score_count=0,
-        target_node_id=node_id,
-        review_label="known_reject",
-        review_settings_revision=review_settings_revision,
-        confirm_report_only=True,
+) -> L2CanaryScheduleRequest | L2CanaryPinnedScheduleRequest:
+    fields: dict[str, Any] = {
+        "request_id": request_id or uuid4(),
+        "agent_id": agent_id,
+        "source_attempt_id": attempt_id,
+        "artifact_sha256": sha,
+        "policy_version": 13,
+        "expected_agent_status": "rejected",
+        "expected_score_count": 0,
+        "target_node_id": node_id,
+        "review_label": "known_reject",
+        "confirm_report_only": True,
+    }
+    if review_settings_revision is None:
+        return L2CanaryScheduleRequest.model_validate(fields)
+    return L2CanaryPinnedScheduleRequest.model_validate(
+        {**fields, "review_settings_revision": review_settings_revision}
     )
 
 
 async def _schedule_pin(
-    payload: L2CanaryScheduleRequest,
+    payload: L2CanaryScheduleRequest | L2CanaryPinnedScheduleRequest,
     admin: None,
     session: AsyncSession,
     storage: S3StorageClient,
     actor: str | None,
 ) -> L2CanaryView:
     """Schedule through the route Backroom uses for this payload."""
-    if payload.review_settings_revision is None:
-        return await endpoints.schedule_l2_report_canary(
+    if isinstance(payload, L2CanaryPinnedScheduleRequest):
+        return await endpoints.schedule_pinned_l2_report_canary(
             payload, admin, session, storage, actor
         )
-    return await endpoints.schedule_pinned_l2_report_canary(
-        L2CanaryPinnedScheduleRequest.model_validate(payload.model_dump()),
-        admin,
-        session,
-        storage,
-        actor,
+    return await endpoints.schedule_l2_report_canary(
+        payload, admin, session, storage, actor
     )
 
 
@@ -1409,7 +1455,14 @@ async def test_pinned_canary_claims_under_pinned_revision_not_node_effective(
     async with session_maker() as session:
         with pytest.raises(HTTPException) as unpinned_replay:
             await _schedule_pin(
-                payload.model_copy(update={"review_settings_revision": None}),
+                _pin_schedule_request(
+                    node_id,
+                    agent_id,
+                    attempt_id,
+                    sha,
+                    review_settings_revision=None,
+                    request_id=request_id,
+                ),
                 None,
                 session,
                 storage,
@@ -1944,6 +1997,7 @@ async def test_only_the_pinned_route_schedules_a_pin(
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     # Platform ignores unknown request fields, so a pin on the plain route
     # would be silently dropped by a build that predates pins. The pin
@@ -1958,7 +2012,9 @@ async def test_only_the_pinned_route_schedules_a_pin(
             yield session
 
     app.dependency_overrides[get_session] = _session
-    node_id, agent_id, (attempt_id,), sha = await _seed_pin_source(session_maker)
+    node_id, agent_id, (attempt_id, plain_attempt), sha = await _seed_pin_source(
+        session_maker, attempts=2
+    )
     scope = f"l2-report-canary-{uuid4().hex[:8]}"
     pin_revision, pin_checksum = await _seed_revision(
         session_maker, scope=scope, settings=ScreenerReviewSettings(mode="enforce")
@@ -1973,8 +2029,18 @@ async def test_only_the_pinned_route_schedules_a_pin(
     }
     base = "/api/v1/admin/screener-l2-report-canaries"
 
-    plain_with_pin = await client.post(base, json=body, headers=headers)
-    assert plain_with_pin.status_code == 422, plain_with_pin.text
+    # The plain route refuses the key itself, with a value or null. The
+    # envelope keeps validation bodies generic, so the reason, which names
+    # /pinned, is in the server log rather than the response.
+    for plain_with_pin in (body, {**body, "review_settings_revision": None}):
+        caplog.clear()
+        refused = await client.post(base, json=plain_with_pin, headers=headers)
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["error_code"] == ERROR_CODE_VALIDATION
+        assert any(
+            "/admin/screener-l2-report-canaries/pinned" in record.getMessage()
+            for record in caplog.records
+        )
     unpinned_body = {k: v for k, v in body.items() if k != "review_settings_revision"}
     for pinned_without_pin in (
         unpinned_body,
@@ -2010,6 +2076,20 @@ async def test_only_the_pinned_route_schedules_a_pin(
         pinned.json()["review_settings_checksum"],
     ) == (pin_revision, scope, pin_checksum)
 
+    # Every other unknown key is still ignored on the plain route.
+    plain = await client.post(
+        base,
+        json={
+            **unpinned_body,
+            "request_id": str(uuid4()),
+            "source_attempt_id": str(plain_attempt),
+            "some_future_field": True,
+        },
+        headers=headers,
+    )
+    assert plain.status_code == 200, plain.text
+    assert plain.json()["review_settings_revision"] is None
+
 
 def test_pinned_route_contract_requires_the_revision(app: FastAPI) -> None:
     # Generated clients must not type-check a pinned body without a revision,
@@ -2030,4 +2110,7 @@ def test_pinned_route_contract_requires_the_revision(app: FastAPI) -> None:
     assert pinned["properties"]["review_settings_revision"]["type"] == "integer"
     plain = body_schema(base)
     assert plain["title"] == "L2CanaryScheduleRequest"
-    assert "review_settings_revision" not in plain.get("required", [])
+    assert "review_settings_revision" not in plain["properties"]
+    assert set(plain["properties"]) | {"review_settings_revision"} == set(
+        pinned["properties"]
+    )

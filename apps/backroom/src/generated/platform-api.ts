@@ -1930,9 +1930,10 @@ export interface paths {
          * Schedule L2 Report Canary
          * @description Queue one exact source once under the claiming node's posture.
          *
-         *     This never reopens a screening attempt. A review-settings pin is refused
-         *     here: pinned canaries use ``POST /pinned``, so a Platform build without
-         *     pin support rejects the route instead of ignoring the field.
+         *     This never reopens a screening attempt. The request model refuses a
+         *     ``review_settings_revision`` key with 422: pinned canaries use
+         *     ``POST /pinned``, so a Platform build without pin support rejects the
+         *     route instead of ignoring the field.
          */
         post: operations["schedule_l2_report_canary_api_v1_admin_screener_l2_report_canaries_post"];
         delete?: never;
@@ -21537,7 +21538,10 @@ export interface components {
              */
             source_attempt_id: string;
         };
-        /** L2CanaryScheduleRequest */
+        /**
+         * L2CanaryScheduleRequest
+         * @description The plain route: the canary runs under the claiming node's posture.
+         */
         L2CanaryScheduleRequest: {
             /**
              * Agent Id
@@ -21574,8 +21578,6 @@ export interface components {
              * @enum {string}
              */
             review_label: "candidate_clear" | "known_reject";
-            /** Review Settings Revision */
-            review_settings_revision?: number | null;
             /**
              * Run Mode
              * @default source_only

@@ -24,6 +24,7 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryCompleteResponse,
     L2CanaryPinnedScheduleRequest,
     L2CanaryPreflightView,
+    L2CanaryScheduleBase,
     L2CanaryScheduleRequest,
     L2CanaryView,
 )
@@ -618,15 +619,14 @@ async def schedule_l2_report_canary(
 ) -> L2CanaryView:
     """Queue one exact source once under the claiming node's posture.
 
-    This never reopens a screening attempt. A review-settings pin is refused
-    here: pinned canaries use ``POST /pinned``, so a Platform build without
-    pin support rejects the route instead of ignoring the field.
+    This never reopens a screening attempt. The request model refuses a
+    ``review_settings_revision`` key with 422: pinned canaries use
+    ``POST /pinned``, so a Platform build without pin support rejects the
+    route instead of ignoring the field.
     """
-    if payload.review_settings_revision is not None:
-        raise HTTPException(
-            422, "schedule a pinned canary with POST /pinned, not this route"
-        )
-    return await _schedule_l2_report_canary(payload, session, storage, x_admin_actor)
+    return await _schedule_l2_report_canary(
+        payload, None, session, storage, x_admin_actor
+    )
 
 
 @admin_router.post("/pinned", response_model=L2CanaryView)
@@ -645,11 +645,14 @@ async def schedule_pinned_l2_report_canary(
     under the node's posture. This route therefore never answers 404 itself:
     a missing revision is a 422.
     """
-    return await _schedule_l2_report_canary(payload, session, storage, x_admin_actor)
+    return await _schedule_l2_report_canary(
+        payload, payload.review_settings_revision, session, storage, x_admin_actor
+    )
 
 
 async def _schedule_l2_report_canary(
-    payload: L2CanaryScheduleRequest,
+    payload: L2CanaryScheduleBase,
+    review_settings_revision: int | None,
     session: AsyncSession,
     storage: S3StorageClient,
     x_admin_actor: str | None,
@@ -671,7 +674,7 @@ async def _schedule_l2_report_canary(
                 or existing.policy_version != payload.policy_version
                 or existing.expected_agent_status != payload.expected_agent_status
                 or existing.expected_score_count != payload.expected_score_count
-                or existing.review_settings_revision != payload.review_settings_revision
+                or existing.review_settings_revision != review_settings_revision
                 or (existing.source_attestation or {}).get("kind")
                 != payload.historical_ruling_kind
                 or (existing.source_attestation or {}).get("ruling_id")
@@ -695,10 +698,8 @@ async def _schedule_l2_report_canary(
         ):
             raise HTTPException(409, "full-runtime canary worker not adopted")
         pin = (
-            await _schedulable_review_settings_pin(
-                session, payload.review_settings_revision
-            )
-            if payload.review_settings_revision is not None
+            await _schedulable_review_settings_pin(session, review_settings_revision)
+            if review_settings_revision is not None
             else None
         )
         # Serialize two distinct request ids for the same source attempt before
