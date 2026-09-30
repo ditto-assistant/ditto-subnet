@@ -1201,20 +1201,29 @@ class CapacityDecisionTests(unittest.TestCase):
     def _deferred_scale_in_passes(
         self,
         gce: _GCE,
-        inventories: list[NodeInventory],
+        inventories: list[NodeInventory | None],
         *,
         settings: Settings,
         runnable: int = 2,
     ) -> list[list[dict[str, Any]]]:
-        """Run one pass per inventory against one persistent state file."""
+        """Run one pass per inventory against one persistent state file.
+
+        A None inventory makes that pass's Platform node read fail.
+        """
         per_pass: list[list[dict[str, Any]]] = []
+
+        def read_nodes(inventory: NodeInventory | None) -> NodeInventory:
+            if inventory is None:
+                raise ControllerError("Platform GET failed with HTTP 502")
+            return inventory
+
         for inventory in inventories:
             renewed: list[dict[str, Any]] = []
             platform = SimpleNamespace(
                 demand=lambda **_kwargs: Demand(runnable=runnable, active=0, desired=4),
                 provider_routing=_overflow_routing,
-                node_states=lambda inventory=inventory: inventory.states,
-                node_inventory=lambda inventory=inventory: inventory,
+                node_states=lambda inventory=inventory: read_nodes(inventory).states,
+                node_inventory=lambda inventory=inventory: read_nodes(inventory),
                 renew=lambda snapshot, renewed=renewed: (
                     renewed.append(snapshot) or snapshot
                 ),
@@ -1367,6 +1376,13 @@ class CapacityDecisionTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ControllerError, "completed renew"):
                     reconcile(settings)
+                # Only the delivered target change is recorded.
+                self.assertEqual(
+                    json.loads(settings.state_file.read_text())[
+                        "gce_scale_in_deferral"
+                    ],
+                    {"from": 2, "to": 0, "reason": None},
+                )
                 reconcile(settings)
                 reconcile(settings)
 
@@ -1558,6 +1574,52 @@ class CapacityDecisionTests(unittest.TestCase):
         )
         self.assertIs(completed["provider_ready"], True)
         self.assertIsNone(completed["last_provider_error_code"])
+
+    def test_inventory_hold_ends_a_deferral_and_its_resumption_records_again(
+        self,
+    ) -> None:
+        # The hold republishes the current MIG size, so the lower target that
+        # returns after it is a new transition, recorded with the hold events.
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            settings.state_file.write_text(json.dumps({"provider_ready": True}))
+            gce = _GCE(target=2)
+            gce.instances = {"vm-a", "vm-b"}
+            idle = self._inventory(
+                self._gcp_row("vm-a", seen=1), self._gcp_row("vm-b", seen=2)
+            )
+            passes = self._deferred_scale_in_passes(
+                gce, [idle, idle, None, idle, idle], settings=settings
+            )
+
+        self.assertEqual(gce.resized, [])
+        self.assertEqual(gce.deleted_instances, [])
+        self.assertEqual(
+            [[payload["gce_target"] for payload in renewed] for renewed in passes],
+            [[0, 0], [0, 0], [2, 2], [0, 0], [0, 0]],
+        )
+        self.assertEqual(
+            [self._event_details(renewed) for renewed in passes],
+            [
+                [
+                    "GCE target 2 -> 0",
+                    "GCE target 2 -> 0 deferred: durable_claim_fence_unavailable",
+                ],
+                [],
+                [
+                    "nodes read failed; holding GCE target 2",
+                    "HETZNER_PRIMARY_HANDLING_BASE_LOAD -> "
+                    "PLATFORM_INVENTORY_UNAVAILABLE",
+                ],
+                [
+                    "GCE target 2 -> 0",
+                    "PLATFORM_INVENTORY_UNAVAILABLE -> "
+                    "HETZNER_PRIMARY_HANDLING_BASE_LOAD",
+                    "GCE target 2 -> 0 deferred: durable_claim_fence_unavailable",
+                ],
+                [],
+            ],
+        )
 
     def test_scale_in_after_a_deferral_still_records_the_target_change(
         self,
