@@ -1621,52 +1621,60 @@ class CapacityDecisionTests(unittest.TestCase):
             ],
         )
 
-    def test_scale_in_after_a_deferral_still_records_the_target_change(
+    def test_scale_in_after_a_deferral_does_not_resend_the_target_change(
         self,
     ) -> None:
-        # Once a claim fence lets a deferred scale-in proceed, the pass that
-        # deletes capacity must still record the change it suppressed.
+        # Like a scale-up, a scale-in sends its target change once, as a
+        # decision on the fenced renew that begins it, not again when the MIG
+        # finally changes. Once a claim fence lets a deferred scale-in proceed,
+        # the deferral ends in the published fallback reason instead.
         with TemporaryDirectory() as directory:
             settings = _settings(Path(directory))
-            settings.state_file.write_text(
-                json.dumps(
-                    {
-                        "provider_ready": True,
-                        "gce_scale_in_deferral": {
-                            "from": 3,
-                            "to": 1,
-                            "reason": "per_instance_claim_fence_unavailable",
-                        },
-                    }
-                )
-            )
+            settings.state_file.write_text(json.dumps({"provider_ready": True}))
             gce = _GCE(target=3)
+            gce.instances = {"vm-a", "vm-b", "vm-c"}
             inventory = self._inventory(
                 self._gcp_row("vm-a", seen=1),
                 self._gcp_row("vm-b", seen=2),
                 self._gcp_row("vm-c", seen=3),
             )
+            # threshold = max(12, 4 * 3); (14 - 12) / 2 jobs per slot -> 1.
+            deferred = self._deferred_scale_in_passes(
+                gce, [inventory], settings=settings, runnable=14
+            )
             with patch(
                 "screener_capacity.controller._plan_gce_scale_in",
                 return_value=(["vm-a", "vm-b"], None),
             ):
-                # threshold = max(12, 4 * 3); (14 - 12) / 2 jobs per slot -> 1.
-                passes = self._deferred_scale_in_passes(
+                deleted = self._deferred_scale_in_passes(
                     gce, [inventory], settings=settings, runnable=14
                 )
+            settled = self._deferred_scale_in_passes(
+                gce, [inventory], settings=settings, runnable=14
+            )
 
             self.assertEqual(gce.deleted_instances, [["vm-a", "vm-b"]])
-            renewed = passes[0]
-            self.assertEqual(renewed[0]["events"], [])
             self.assertEqual(
-                renewed[-1]["events"],
                 [
-                    {
-                        "event_type": "gce_target_changed",
-                        "provider": "gcp",
-                        "detail": "GCE target 3 -> 1",
-                    }
+                    self._event_details(renewed)
+                    for renewed in (*deferred, *deleted, *settled)
                 ],
+                [
+                    [
+                        "GCE target 3 -> 1",
+                        "GCE target 3 -> 1 deferred: "
+                        "per_instance_claim_fence_unavailable",
+                    ],
+                    [],
+                    [],
+                ],
+            )
+            self.assertEqual(
+                deferred[0][-1]["fallback_reason"], "GCE_SCALE_IN_DEFERRED"
+            )
+            self.assertEqual(deleted[0][-1]["gce_target"], 1)
+            self.assertEqual(
+                deleted[0][-1]["fallback_reason"], "HETZNER_BACKLOG_OVERFLOW"
             )
             self.assertIsNone(
                 json.loads(settings.state_file.read_text())["gce_scale_in_deferral"]

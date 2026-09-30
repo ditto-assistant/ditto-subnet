@@ -1028,14 +1028,17 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         == (current_target, target)
         else None
     )
-    target_changed_event = {
-        "event_type": "gce_target_changed",
-        "provider": "gcp",
-        "detail": f"GCE target {current_target} -> {target}",
-    }
     events: list[dict[str, Any]] = []
     if target != current_target and continuing_deferral is None:
-        events.append(target_changed_event)
+        # A decision, sent before any mutation: a deferred scale-in that later
+        # goes ahead does not send it again.
+        events.append(
+            {
+                "event_type": "gce_target_changed",
+                "provider": "gcp",
+                "detail": f"GCE target {current_target} -> {target}",
+            }
+        )
     failed_detail = f"{' and '.join(failed_reads)} read"
     if inventory_failures == 1:
         events.append(
@@ -1204,10 +1207,6 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                     ),
                 }
             ]
-    elif continuing_deferral is not None:
-        # The first renew omitted the change already delivered with an earlier
-        # deferral. This pass did not defer it, so record the change again.
-        completed["events"] = [target_changed_event]
     # Readiness describes a fully completed reconciliation pass. Persist it so
     # a failed pass cannot publish an optimistic heartbeat on the next retry.
     platform.renew(completed)
