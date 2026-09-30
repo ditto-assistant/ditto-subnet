@@ -420,7 +420,7 @@ def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     assert "blocks the call before endpoint dispatch" in v13
     assert "external tool's actual name and argument schema" in v13
     assert "hypothetically use the same field name" in v13
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v49-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v50-policy-v13"
     assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v22-policy-v13"
     assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v26-policy-v13"
     assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
@@ -507,7 +507,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "validator mints `inference_base_url`" in v13
     assert "A URL derived from user text" in v13
     assert "validator mints `inference_base_url`" not in _l2_review_system_prompt(12)
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v49-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v50-policy-v13"
     assert "v13" not in _benchmark_contract_capsule(12)
     assert _benchmark_contract_capsule(12)["supported_versions"] == [3, 4, 5, 6]
     assert (
@@ -3095,6 +3095,10 @@ class _FakeHarness:
     ) -> str:
         del deadline
         self.calls.append(command)
+        if command == "read_file":
+            return json.dumps(
+                {"path": _arguments.get("path"), "content": "1:fn main() {}"}
+            )
         return "{}"
 
 
@@ -6517,10 +6521,12 @@ async def test_report_only_audit_records_fixed_incomplete_reason_without_body(
 
 
 @pytest.mark.parametrize("compact_review_packet", [False, True])
+@pytest.mark.parametrize("empty_navigation", [None, "workspace_index", "read_file"])
 async def test_l3_off_safe_correction_requires_exact_source_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     compact_review_packet: bool,
+    empty_navigation: str | None,
 ) -> None:
     audit_path = tmp_path / "correction-audit.jsonl"
     agent = SolL2SourceReviewAgent(
@@ -6557,12 +6563,23 @@ async def test_l3_off_safe_correction_requires_exact_source_read(
         lambda *_args, **_kwargs: (_safe(), [], [], "safe_clearance"),
     )
     requests: list[list[dict[str, object]]] = []
+    if empty_navigation is not None:
+
+        async def run_without_source(*_args: object, **_kwargs: object) -> str:
+            return json.dumps({"path": "src/main.rs", "content": ""})
+
+        monkeypatch.setattr(agent._harness, "run", run_without_source)
 
     async def post(
         _client: object, _key: object, items: list[dict[str, object]], **_kwargs: object
     ) -> httpx.Response:
         requests.append(list(items))
-        if len(requests) == 1:
+        if len(requests) == 1 and empty_navigation is not None:
+            return _response(
+                [_tool_call("nav", empty_navigation, {"path": "src/main.rs"})],
+                model="openai/gpt-6-sol",
+            )
+        if len(requests) == (1 if empty_navigation is None else 2):
             return _response(
                 [_tool_call("1", "submit_l2_review", {"disposition": "safe"})],
                 model="openai/gpt-6-sol",
@@ -6588,7 +6605,7 @@ async def test_l3_off_safe_correction_requires_exact_source_read(
                 deadline=None,
                 dossier_complete=True,
             )
-    correction = json.loads(requests[1][-1]["output"])
+    correction = json.loads(requests[-1][-1]["output"])
     assert correction["reason"] == "safe_coverage"
     if compact_review_packet:
         assert "bounded_source_inventory" in correction["message"]
@@ -6607,6 +6624,28 @@ async def test_l3_off_safe_correction_requires_exact_source_read(
     )
     assert event["needs_source_read"] is True
     assert "private-source-marker" not in audit_path.read_text()
+
+
+@pytest.mark.parametrize(
+    "command, output, expected",
+    [
+        (
+            "workspace_index",
+            {"path": "src/main.rs", "content": "1:fn main() {}"},
+            False,
+        ),
+        ("read_file", {}, False),
+        ("read_file", {"content": ""}, False),
+        ("read_file", {"content": "  \n"}, False),
+        ("read_file", {"content": "1:fn main() {}", "error": "read-failed"}, False),
+        ("read_file", {"content": "1:fn main() {}", "truncated": True}, False),
+        ("read_file", {"content": "1:fn main() {}", "truncated": False}, True),
+    ],
+)
+def test_source_read_coverage_requires_complete_nonempty_read_file(
+    command: str, output: dict[str, object], expected: bool
+) -> None:
+    assert l2_review._successful_source_read(command, json.dumps(output)) is expected
 
 
 async def test_report_only_citation_correction_is_fixed_and_keeps_gate(

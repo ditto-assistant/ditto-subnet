@@ -115,7 +115,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v49-policy-v13"
+        return "l2-terra-source-review-v50-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -275,6 +275,18 @@ def _compact_safe_has_coverage(
     fetched_sections: set[str], read_files: set[str]
 ) -> bool:
     return set(_COMPACT_DOSSIER_SECTIONS) <= fetched_sections and bool(read_files)
+
+
+def _successful_source_read(command: str, output: str) -> bool:
+    """Metadata, rejected requests and empty pages do not establish a source read."""
+    if command != "read_file" or _analysis_requires_correction(output):
+        return False
+    value = json.loads(output)
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("content"), str)
+        and bool(value["content"].strip())
+    )
 
 
 _SUBMISSION_VALIDATION_HINTS = {
@@ -5054,12 +5066,12 @@ class TerraSolSourceReviewAgent:
                     ) from error
                 read_bytes_used += len(tool_output.encode("utf-8"))
                 path = arguments.get("path")
-                if isinstance(path, str):
-                    read_files.add(path)
                 try:
                     _require_complete_analysis(tool_output, allow_tool_error=True)
                 except L2InconclusiveError as error:
                     raise failure("analyzer-contract") from error
+                if isinstance(path, str) and _successful_source_read(name, tool_output):
+                    read_files.add(path)
                 if _analysis_requires_correction(tool_output):
                     pending_tool_corrections.add(name)
                 else:
