@@ -784,6 +784,7 @@ async def list_validator_assignments(
             purpose=str(ticket.purpose),  # type: ignore[arg-type]
             agent_status=agent.status.value,
             first_reported_at=ticket.first_reported_at,
+            seed=str(ticket.seed) if ticket.seed is not None else None,
         )
         for ticket, agent, score_count, provisional_composite in rows
     ]

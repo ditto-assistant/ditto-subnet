@@ -2049,9 +2049,9 @@ async def test_ledger_accepts_mixed_verified_v8_and_v9_rows() -> None:
     assert [entry.bench_version for entry in ledger.entries] == [8, 9]
 
 
-@pytest.mark.parametrize("bench_version", [7, 9])
+@pytest.mark.parametrize("bench_version", [None, 1, 6, 7, 9])
 async def test_ledger_rejects_entry_without_verifiable_quorum_receipts(
-    bench_version: int,
+    bench_version: int | None,
 ) -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")

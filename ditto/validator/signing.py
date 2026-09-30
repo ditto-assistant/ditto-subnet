@@ -103,6 +103,9 @@ if TYPE_CHECKING:
     )
     from ditto.validator.config import ValidatorConfig
 
+MIN_RECEIPT_BENCH_VERSION = 7
+"""First benchmark contract whose ledger rows must carry signed quorum receipts."""
+
 
 def load_validator_keypair(config: ValidatorConfig) -> Any:
     """Load the signing keypair and assert it matches ``config.validator_hotkey``.
@@ -878,11 +881,11 @@ def verify_ledger_entry(entry: LedgerEntry, *, quorum: int = 3) -> bool:
     answers only that cryptographic question; whether a verified score contract
     is ready for the active weight fold is a separate rollout decision.
     """
-    # Historical v2-v6 ledger rows predate quorum receipts. Keep them readable
-    # and weightable during the v7 fleet cutover; v7 is the first contract that
-    # makes signed quorum evidence mandatory.
-    if entry.bench_version is None or entry.bench_version < 7:
-        return True
+    # v7 made signed quorum receipts mandatory, and Platform serves only the
+    # active and rollout-target versions, so a row without a receipt-bearing
+    # version cannot be verified and must never be weighted.
+    if entry.bench_version is None or entry.bench_version < MIN_RECEIPT_BENCH_VERSION:
+        return False
 
     proofs = entry.score_proofs
     if len(proofs) < quorum:

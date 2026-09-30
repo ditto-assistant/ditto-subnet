@@ -199,6 +199,24 @@ def test_pull_request_ci_keeps_fast_safety_gates() -> None:
     assert "screener-core-e2e" not in workflow
 
 
+def test_pull_request_ci_runs_on_starter_kit_changes() -> None:
+    # The starter provenance drift guard is a screener test, so a kit-only
+    # change must still run this workflow.
+    lines = workflow_text("screener-ci.yml").splitlines()
+    start = lines.index("  pull_request:")
+    assert lines[start + 1] == "    paths:"
+    paths = []
+    for line in lines[start + 2 :]:
+        if line.lstrip().startswith("#"):
+            continue
+        if not line.startswith("      - "):
+            break
+        paths.append(line.removeprefix("      - "))
+
+    assert "miners/dittobench-starter-kit/**" in paths
+    assert "workers/screener/**" in paths
+
+
 def test_container_entrypoints_do_not_require_a_writable_uv_cache() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text()
 

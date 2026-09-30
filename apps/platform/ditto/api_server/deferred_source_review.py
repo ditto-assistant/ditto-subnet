@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from statistics import median
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, overload
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -40,7 +40,16 @@ TOP_FIVE_SIZE = 5
 # lifecycle (``review_kind`` stays ``deferred_source_review``) so the screener
 # re-claim, auto-clear on a clean pass, and operator adjudication are one path.
 INTEGRITY_DOUBLE_CHECK_AUDIT_KIND = "integrity_double_check"
+# Public text: every top-five entrant gets it, so it must not read as a finding
+# (#562). It keeps "double-check" so operator reason searches still match.
 INTEGRITY_DOUBLE_CHECK_REASON = (
+    "Top-five rank qualified this submission for a routine double-check of its source"
+)
+# The reason written before #562's follow-up. Stored rows keep it verbatim: the
+# lifecycle guards compare ``agents.review_reason`` with
+# ``ath_reviews.original_reason``, and operators read the stored text. Public
+# projections rewrite it through ``public_review_reason`` instead.
+LEGACY_INTEGRITY_DOUBLE_CHECK_REASON = (
     "Top-five rank qualified this submission for an integrity double-check"
 )
 INTEGRITY_DOUBLE_CHECK_ALGORITHM = "integrity-double-check-v1"
@@ -197,6 +206,28 @@ def evaluate_integrity_double_check(
 # closed enums derived from reason codes; nothing else from the evidence leaves.
 
 _ANOMALY_TRIGGERS = frozenset({"composite_anomaly", "tool_anomaly", "memory_anomaly"})
+
+# Stored platform-written reasons whose public wording has since changed. Exact
+# matches only: operator-written prose is never rewritten.
+_PUBLIC_REASON_REWRITES = {
+    LEGACY_INTEGRITY_DOUBLE_CHECK_REASON: INTEGRITY_DOUBLE_CHECK_REASON,
+}
+
+
+@overload
+def public_review_reason(reason: str) -> str: ...
+@overload
+def public_review_reason(reason: None) -> None: ...
+def public_review_reason(reason: str | None) -> str | None:
+    """The public wording of one stored ATH review reason.
+
+    Historical top-five double-check holds stored a reason that reads as an
+    integrity accusation. Public and miner surfaces show the current neutral
+    text for them; operator surfaces keep the stored value.
+    """
+    if reason is None:
+        return None
+    return _PUBLIC_REASON_REWRITES.get(reason, reason)
 
 
 def public_deferred_review_triggers(

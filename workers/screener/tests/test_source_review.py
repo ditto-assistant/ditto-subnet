@@ -6,13 +6,14 @@ import asyncio
 import hashlib
 import io
 import json
+import logging
 import os
 import sqlite3
 import struct
 import tarfile
 import zipfile
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 import httpx
 import pytest
@@ -36,8 +37,24 @@ from ditto_screening_protocol import (
     SourceReviewInvariantDisposition,
 )
 from ditto_screening_protocol.review_ledger import substantiated_concern_count
+from scripts.generate_starter_provenance import (
+    RUNTIME_MANIFESTS,
+    STAGED_MANIFESTS,
+    manifests_in,
+    newest_manifest,
+    starter_files,
+)
 
 _SHA = "ab" * 32
+_STARTER_KIT = Path(__file__).resolve().parents[3] / "miners" / "dittobench-starter-kit"
+_STARTER_MANIFESTS = tuple(
+    str(path)
+    for path in sorted(
+        (Path(source_review_module.__file__).parent / "data").glob(
+            "starter-kit-provenance-*.json"
+        )
+    )
+)
 
 _PASS_CLAUSES = {
     "i1_model_invocation": "genuine_model_result",
@@ -888,6 +905,109 @@ def test_oversized_file_is_surfaced_as_opaque(tmp_path: Path) -> None:
     )
 
 
+_STARTER_MODEL = "fixtures/models/cross-encoder.onnx"
+
+
+def _stock_starter_model() -> bytes:
+    kit = Path(__file__).resolve().parents[3] / "miners" / "dittobench-starter-kit"
+    return (kit / _STARTER_MODEL).read_bytes()
+
+
+def test_review_leads_account_for_exact_starter_model(tmp_path: Path) -> None:
+    model = _stock_starter_model()
+    repo = TarSourceRepository(str(_archive_with(tmp_path, {_STARTER_MODEL: model})))
+    leads = repo.review_leads()
+    assert leads["truncated"] is False
+    assert leads["nontext"] == [
+        {
+            "path": _STARTER_MODEL,
+            "bytes": len(model),
+            "sha256": hashlib.sha256(model).hexdigest(),
+            "provenance": "starter_manifest_digest",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("models/cross-encoder.onnx", "stock"),
+        (_STARTER_MODEL, "flipped"),
+        (_STARTER_MODEL, "nul-prefixed"),
+        ("assets/model.bin", "nul-prefixed"),
+        ("src/table.rs", "text"),
+    ],
+)
+def test_review_leads_keep_unproven_oversized_member_truncated(
+    tmp_path: Path, path: str, payload: str
+) -> None:
+    flipped = bytearray(_stock_starter_model())
+    flipped[-1] ^= 0x01
+    raw = {
+        "stock": _stock_starter_model(),
+        "flipped": bytes(flipped),
+        "nul-prefixed": b"\x00" + b"x" * (2 * 1024 * 1024),
+        "text": b"answer\n" + b"x" * (2 * 1024 * 1024),
+    }[payload]
+    leads = TarSourceRepository(
+        str(_archive_with(tmp_path, {path: raw}))
+    ).review_leads()
+    assert leads["truncated"] is True
+    assert leads["nontext"] == []
+
+
+def test_review_leads_need_installed_manifest_for_starter_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty = tmp_path / "no-manifests"
+    empty.mkdir()
+    monkeypatch.setattr(source_review_module, "_STARTER_MANIFEST_DIR", empty)
+    leads = TarSourceRepository(
+        str(_archive_with(tmp_path, {_STARTER_MODEL: _stock_starter_model()}))
+    ).review_leads()
+    assert leads["truncated"] is True
+    assert leads["nontext"] == []
+
+
+@pytest.mark.parametrize("shadow", ["special", "hardlink", "symlink"])
+def test_review_leads_hash_only_the_admitted_starter_model_member(
+    tmp_path: Path, shadow: str
+) -> None:
+    # tarfile resolves a name to its last entry. A later link or special entry
+    # that the repository skips must not lend the stock digest to the
+    # different, same-size regular file it admitted at the starter path.
+    stock = _stock_starter_model()
+    hidden = "fixtures/models/stock.bin"
+    entries: list[tuple[tarfile.TarInfo, bytes]] = []
+
+    def entry(name: str, kind: bytes, raw: bytes = b"", link: str = "") -> None:
+        info = tarfile.TarInfo(name)
+        info.type = kind
+        info.size = len(raw)
+        info.linkname = link
+        entries.append((info, raw))
+
+    entry("Dockerfile", tarfile.REGTYPE, b"FROM scratch\n")
+    if shadow != "special":
+        # An unknown entry type is skipped as non-regular, so the hidden stock
+        # copy cannot itself mark the lead scan truncated.
+        entry(hidden, b"Z", stock)
+    entry(_STARTER_MODEL, tarfile.REGTYPE, b"\x00" + b"h" * (len(stock) - 1))
+    if shadow == "special":
+        entry(_STARTER_MODEL, b"Z", stock)
+    elif shadow == "hardlink":
+        entry(_STARTER_MODEL, tarfile.LNKTYPE, link=hidden)
+    else:
+        entry(_STARTER_MODEL, tarfile.SYMTYPE, link="stock.bin")
+    path = tmp_path / "agent.tar.gz"
+    with tarfile.open(path, "w:gz") as archive:
+        for info, raw in entries:
+            archive.addfile(info, io.BytesIO(raw) if raw else None)
+    leads = TarSourceRepository(str(path)).review_leads()
+    assert leads["truncated"] is True
+    assert leads["nontext"] == []
+
+
 def test_utf8_only_crate_reports_no_opaque_blobs(tmp_path: Path) -> None:
     repo = TarSourceRepository(str(_archive_with(tmp_path, {})))
     inventory = json.loads(repo.inventory())
@@ -1011,6 +1131,35 @@ pub async fn run(question: &str) -> RunResponse {
 
     analysis = repo.review_leads()["generator_mirroring"]
 
+    assert analysis["served_runtime_candidate"] is False
+    assert analysis["served_runtime_locations"] == []
+
+
+def test_generator_words_in_model_authored_runtime_are_not_served_hold(
+    tmp_path: Path,
+) -> None:
+    source = b"""\
+const ATTRS: &[&str] = &["city", "employer", "car", "university", "instrument",
+    "project", "trip", "pet", "cuisine", "diet", "color", "hobby"];
+const QUESTIONS: &[&str] = &["What city?", "Where do I work?",
+    "Which project?", "How many trips?", "List pets", "What did I use before?"];
+const FACTS: &[&str] = &["I moved city", "I work company", "I drive car",
+    "I studied university", "I play instrument", "My project changed"];
+const EVENTS: &[&str] = &["moved", "started", "switched", "changed"];
+fn bridge(question: Query, query: Query, fact: Fact, memory: Memory,
+    attribute: Attr, value: Value) { extract(question); retrieve(query, memory);
+    match_fact(fact); keyword(attribute); use_value(value); }
+fn run() -> Answer {
+    let answer = model_inference_provider(retrieve(query, memory));
+    if valid(answer) { return answer; }
+    otherwise_call_model_inference_provider()
+}
+"""
+    repo = TarSourceRepository(str(_archive_files(tmp_path, {"src/agent.rs": source})))
+
+    analysis = repo.review_leads()["generator_mirroring"]
+
+    assert analysis["aggregate_candidate"] is True
     assert analysis["served_runtime_candidate"] is False
     assert analysis["served_runtime_locations"] == []
 
@@ -3505,7 +3654,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v29-policy-v13"
+    assert _prompt_revision(13) == "source-review-v30-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -3531,6 +3680,19 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     prompt = _prompt(SCREENING_POLICY_VERSION)
     assert all(fragment in prompt for fragment in required)
+
+
+def test_v13_i5_minor_unit_guidance_requires_benchmark_causality() -> None:
+    from ditto_screener.source_review import _source_review_system_prompt
+
+    v13 = _source_review_system_prompt(13)
+    v12 = _source_review_system_prompt(12)
+    assert "model-selected monetary amount in equivalent units" in v13
+    assert "evaluation-\nderived interpretation, operand or output recipe" in v13
+    assert "ANSWER-slot extraction that copies" in v13
+    assert "post-finalization currency rescaling under I4" in v13
+    assert "proven benchmark-family\nprompt compilation under I5" in v13
+    assert "model-selected monetary amount in equivalent units" not in v12
 
 
 def test_policy_v13_provider_lead_uses_scored_runtime_selector() -> None:
@@ -4065,6 +4227,196 @@ def test_closest_official_provenance_reports_ambiguous_exact_tie(
     assert provenance["candidate_revisions"] == ["newer", "older"]
     assert provenance["selection"] == "ambiguous-closest-supported-revisions"
     assert provenance["matched_exact_files"] == ["README.md"]
+
+
+def test_provenance_hashes_the_archive_once_across_manifests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = {
+        "./Dockerfile": b"FROM scratch\n",
+        "src/main.rs": b"fn main() {}\n",
+        "fixtures/model.bin": bytes(range(256)) * 8192,
+    }
+    archive = _archive_files(tmp_path, files)
+    digests = {
+        name.removeprefix("./"): hashlib.sha256(raw).hexdigest()
+        for name, raw in files.items()
+    }
+    manifests: list[str] = []
+    for revision in ("v1", "v2", "v3"):
+        manifest = tmp_path / f"{revision}.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "origin": "public/starter",
+                    "revision": revision,
+                    "files": {
+                        **digests,
+                        "src/main.rs": digests["src/main.rs"]
+                        if revision == "v2"
+                        else hashlib.sha256(revision.encode()).hexdigest(),
+                    },
+                }
+            )
+        )
+        manifests.append(str(manifest))
+    repository = TarSourceRepository(str(archive))
+    opened = 0
+    real_open = source_review_module.tarfile.open
+
+    def counting_open(*args: Any, **kwargs: Any) -> tarfile.TarFile:
+        nonlocal opened
+        opened += 1
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(source_review_module.tarfile, "open", counting_open)
+
+    provenance = json.loads(repository.closest_trusted_provenance(tuple(manifests)))
+
+    assert opened == 1
+    assert provenance["revision"] == "v2"
+    assert provenance["matched_exact_files"] == sorted(digests)
+    assert all(repository.member_sha256(name) == digests[name] for name in digests)
+    assert opened == 1
+    with pytest.raises(ValueError, match="unknown archive member"):
+        repository.member_sha256("missing.rs")
+
+
+def _current_starter_kit_files() -> dict[str, bytes]:
+    if not _STARTER_KIT.is_dir():
+        pytest.skip("the monorepo starter kit is not part of this checkout")
+    return {
+        relative: (_STARTER_KIT / relative).read_bytes()
+        for relative in starter_files(_STARTER_KIT)
+    }
+
+
+def _current_starter_kit_sources() -> dict[str, bytes]:
+    """The kit without its large model blobs, which trust selection ignores.
+
+    A gzip archive re-decompresses on every backward seek, so leaving the
+    multi-megabyte models out keeps whole-kit provenance tests fast.
+    """
+    return {
+        path: raw
+        for path, raw in _current_starter_kit_files().items()
+        if len(raw) <= 1024 * 1024
+    }
+
+
+def _staged_starter_manifests() -> tuple[str, ...]:
+    staged = tuple(str(path) for path in manifests_in(STAGED_MANIFESTS))
+    if not staged:
+        pytest.skip("no starter provenance manifest is staged")
+    return staged
+
+
+def _exact_starter_matches(
+    files: dict[str, bytes], manifests: tuple[str, ...]
+) -> set[str]:
+    """Paths whose exact bytes some manifest pins, computed independently."""
+    pinned: dict[str, set[str]] = {}
+    for manifest in manifests:
+        for path, digest in json.loads(Path(manifest).read_text())["files"].items():
+            pinned.setdefault(path, set()).add(digest)
+    return {
+        path
+        for path, raw in files.items()
+        if hashlib.sha256(raw).hexdigest() in pinned.get(path, set())
+    }
+
+
+def test_runtime_provenance_ignores_staged_starter_manifests(
+    tmp_path: Path,
+) -> None:
+    files = _current_starter_kit_sources()
+    staged = _staged_starter_manifests()
+    repository = TarSourceRepository(str(_archive_files(tmp_path, files)))
+    staged_only = _exact_starter_matches(files, staged) - _exact_starter_matches(
+        files, _STARTER_MANIFESTS
+    )
+    assert staged_only
+
+    runtime = json.loads(repository.closest_trusted_provenance(_STARTER_MANIFESTS))
+
+    # L1's exact-file provenance reads the runtime set only, so a file that
+    # only a staged manifest pins stays attributed to the miner until the
+    # staged manifest is activated.
+    assert runtime["revision"] not in {
+        json.loads(Path(path).read_text())["revision"] for path in staged
+    }
+    assert not staged_only & set(runtime["matched_exact_files"])
+
+    # The newest manifest, named explicitly, matches every kit file exactly:
+    # the evidence an activation review starts from.
+    newest = newest_manifest(RUNTIME_MANIFESTS, STAGED_MANIFESTS)
+    exact = json.loads(repository.closest_trusted_provenance((str(newest),)))
+    assert exact["revision"] == json.loads(newest.read_text())["revision"]
+    assert exact["selection"] == "unique-closest-supported-revision"
+    assert exact["matched_exact_files"] == sorted(files)
+    assert exact["tracked_but_modified_files"] == []
+
+
+@pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
+def test_malicious_preflight_ignores_staged_starter_manifests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    files = _current_starter_kit_sources()
+    staged = _staged_starter_manifests()
+    scanned: list[list[str]] = []
+
+    def recording_detector(
+        readable: list[tuple[str, str]], **kwargs: object
+    ) -> list[dict[str, object]]:
+        scanned.append([path for path, _text in readable])
+        return find_decisive_malicious_source(readable, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        source_review_module, "find_decisive_malicious_source", recording_detector
+    )
+    kit = TarSourceRepository(
+        str(_archive_files(tmp_path, files)), static_preflight_v2_mode=mode
+    )
+    runtime_paths = kit._explicit_runtime_paths()
+    runtime_trusted = _exact_starter_matches(files, _STARTER_MANIFESTS)
+
+    assert kit.malicious_preflight(artifact_sha256="a" * 64, mode=mode) is None
+
+    # The default trust set is the runtime manifests only: every runtime file
+    # that only a staged manifest pins is still scanned as miner-authored.
+    assert set(scanned[-1]) == runtime_paths - runtime_trusted
+    assert runtime_paths & (_exact_starter_matches(files, staged) - runtime_trusted)
+
+    # Naming the staged manifests shows the exact trust that activation would
+    # grant: no kit file is scanned, and one changed byte is.
+    with_staged = (*_STARTER_MANIFESTS, *staged)
+    assert (
+        kit.malicious_preflight(
+            artifact_sha256="a" * 64, mode=mode, provenance_manifest_paths=with_staged
+        )
+        is None
+    )
+    assert scanned[-1] == []
+    edited_path = next(
+        (path for path in sorted(runtime_paths) if path.endswith(".rs")), None
+    )
+    if edited_path is None:
+        pytest.skip("the starter kit has no Rust runtime source to modify")
+    modified_dir = tmp_path / "modified"
+    modified_dir.mkdir()
+    modified = TarSourceRepository(
+        str(
+            _archive_files(
+                modified_dir, {**files, edited_path: files[edited_path] + b"\n"}
+            )
+        ),
+        static_preflight_v2_mode=mode,
+    )
+    modified.malicious_preflight(
+        artifact_sha256="b" * 64, mode=mode, provenance_manifest_paths=with_staged
+    )
+    assert scanned[-1] == [edited_path]
 
 
 async def test_sanitized_shortcut_fixture_produces_bounded_risk_digest(
@@ -5232,39 +5584,47 @@ async def test_admissible_citations_keep_the_finding(tmp_path: Path) -> None:
     assert [item.line for item in parsed.evidence] == [3, 4]
 
 
-async def test_cfg_test_helper_is_not_citable(tmp_path: Path) -> None:
-    """`async fn serve(...)` inside `#[cfg(test)] mod preflight_tests` is stock.
-
-    It ships in the official starter kit and never runs in the served image,
-    yet it was cited as HTTP-setup evidence.
-    """
+async def test_cfg_test_body_stays_citable_for_served_test_cfg_build(
+    tmp_path: Path,
+) -> None:
+    """A served Rust binary can activate `#[cfg(test)]` without a harness."""
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
     source = (
-        "fn main() { call_model(); }\n"
-        "\n"
-        "#[cfg(all(test))]\n"
-        "mod preflight_tests {\n"
-        "    async fn serve(app: Router) -> String { bind_listener() }\n"
-        "    fn capture_call() -> String { record() }\n"
+        "#[cfg(test)]\n"
+        "fn answer() -> String {\n"
+        '    "fixed".to_string()\n'
         "}\n"
+        'fn main() { println!("{}", answer()); }\n'
     )
     final = {
         "risk_level": "high",
         "confidence": 0.99,
         "categories": ["benchmark_emulation"],
         "evidence": [
+            {"path": "src/main.rs", "line": 3, "category": "benchmark_emulation"},
             {"path": "src/main.rs", "line": 5, "category": "benchmark_emulation"},
-            {"path": "src/main.rs", "line": 6, "category": "benchmark_emulation"},
         ],
-        "summary": "Test-only harness cited as served behaviour.",
+        "summary": "Deterministic answer is compiled into the served binary.",
     }
     observation = await _agent(key, _transport(final, [])).review(
-        str(_archive(tmp_path, source)), artifact_sha256=_SHA
+        str(
+            _archive_files(
+                tmp_path,
+                {
+                    "Dockerfile": (
+                        b"FROM rust:1\nWORKDIR /app\nCOPY src/main.rs .\n"
+                        b'RUN rustc --cfg test main.rs -o agent\nCMD ["./agent"]\n'
+                    ),
+                    "src/main.rs": source.encode(),
+                },
+            )
+        ),
+        artifact_sha256=_SHA,
     )
 
-    assert observation.ok and observation.risk_level == "low"
+    assert observation.ok and observation.risk_level == "high"
 
 
 async def test_reachability_gate_attribute_stays_citable(tmp_path: Path) -> None:
@@ -5591,11 +5951,88 @@ async def test_persistent_unclassified_body_fails_after_one_post(
 
 def test_body_signature_never_reproduces_content() -> None:
     signature = source_review_module._body_signature(
-        {"choices": [], "secret_content": "miner source text here"}
+        {
+            "choices": [],
+            "secret_content": "miner source text here",
+            "error": {"code": "sk-test-private-review"},
+        }
     )
     assert "miner source text" not in signature
+    assert "secret_content" not in signature
+    assert "sk-test-private-review" not in signature
     assert "choices" in signature
+    assert "other_keys=1" in signature
     assert source_review_module._body_signature(None) == "non-json"
+
+
+def test_body_signature_classifies_rate_limit_without_logging_provider_text() -> None:
+    """The provider text is untrusted, including an error-only envelope."""
+    signature = source_review_module._body_signature(
+        {
+            "error": {
+                "code": 429,
+                "message": "Rate limit exceeded:\nlimit_rpm/openai/gpt-6-luna\x1b[31m"
+                + " per key secret=sk-test-private-review miner source here",
+            }
+        }
+    )
+
+    assert "error_class='429'" in signature
+    assert "provider_limit=key_rpm" in signature
+    for private in (
+        "sk-test-private-review",
+        "miner source",
+        "gpt-6-luna",
+        "\\n",
+        "\\x1b",
+    ):
+        assert private not in signature
+
+
+def test_provider_error_category_does_not_echo_unrecognized_message() -> None:
+    signature = source_review_module._body_signature(
+        {
+            "error": {
+                "code": 429,
+                "message": "secret=sk-test-private-review miner source here",
+            }
+        }
+    )
+    assert "provider_limit" not in signature
+    assert "sk-test-private-review" not in signature
+    assert "miner source" not in signature
+
+
+@pytest.mark.parametrize(
+    ("message", "category"),
+    [
+        ("Rate limit exceeded: limit_rpm/provider/model per key", "key_rpm"),
+        ("Upstream model capacity is overloaded", "upstream_capacity"),
+        ("Insufficient credits for this request", "credits"),
+    ],
+)
+def test_provider_error_categories_are_fixed_labels(
+    message: str, category: str
+) -> None:
+    signature = source_review_module._body_signature(
+        {"error": {"code": 429, "message": message + " sk-test-private-review"}}
+    )
+    assert f"provider_limit={category}" in signature
+    assert "sk-test-private-review" not in signature
+    assert message not in signature
+
+
+def test_body_signature_never_reads_a_message_beside_model_output() -> None:
+    """A body with ``choices`` or ``output`` can quote miner source; skip it."""
+    for body_key in ("choices", "output"):
+        signature = source_review_module._body_signature(
+            {
+                body_key: [],
+                "error": {"code": 429, "message": "miner source text here"},
+            }
+        )
+        assert "miner source text" not in signature
+        assert "provider_limit" not in signature
 
 
 async def test_non_json_body_parks_after_one_post(tmp_path: Path) -> None:
@@ -5623,6 +6060,46 @@ async def test_non_json_body_parks_after_one_post(tmp_path: Path) -> None:
     assert observation.error_code == "source-review-jsondecodeerror"
     assert observation.failure_disposition == "retryable_infra"
     assert calls == 1
+
+
+async def test_http_429_logs_the_provider_limit_without_publishing_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A real HTTP 429 names its limit in the logs, never in the public code."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    limit = "Rate limit exceeded: limit_rpm/openai/gpt-6-luna per key"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            request=request,
+            json={"error": {"code": 429, "message": limit}},
+        )
+
+    with caplog.at_level(logging.WARNING, logger=source_review_module.__name__):
+        observation = await _agent(key, httpx.MockTransport(handler)).review(
+            str(_archive(tmp_path, "fn main() { call_model(); }")),
+            artifact_sha256=_SHA,
+        )
+
+    assert observation.error_code == "source-review-http-429"
+    assert limit not in repr(observation)
+    retry_lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "retrying same turn" in record.getMessage()
+    ]
+    park_lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "parking attempt" in record.getMessage()
+    ]
+    assert retry_lines and park_lines
+    for line in retry_lines + park_lines:
+        assert "http-status=429 provider_limit=key_rpm" in line
+        assert limit not in line
 
 
 async def test_http_429_parks_after_three_bounded_posts(tmp_path: Path) -> None:
@@ -6087,7 +6564,8 @@ def test_repeated_concern_feedback_reports_storage_and_new_evidence_guidance() -
 
     assert feedback["recorded"] is False
     assert feedback["notes"] == source_review_module._MAX_REVIEW_NOTES
-    assert "different served-path location" in str(feedback["guidance"])
+    assert feedback["same_site_concerns"] == source_review_module._MAX_REVIEW_NOTES
+    assert "submit_review using the existing ledger" in str(feedback["guidance"])
     assert (
         source_review_module._record_note_feedback(
             notes, {**concern, "category": "mandatory_contract_failure", "line": 355}
@@ -6095,6 +6573,26 @@ def test_repeated_concern_feedback_reports_storage_and_new_evidence_guidance() -
         is True
     )
     assert notes[-1]["line"] == 355
+
+
+def test_repeated_site_feedback_keeps_distinct_mechanisms_in_the_ledger() -> None:
+    site = {
+        "kind": "concern",
+        "category": "benchmark_emulation",
+        "path": "app/service.py",
+        "line": 65,
+    }
+    notes = [{**site, "summary": f"mechanism {index}"} for index in range(3)]
+
+    feedback = source_review_module._record_note_feedback(
+        notes, {**site, "summary": "a separate effect at the same source line"}
+    )
+
+    assert feedback["recorded"] is True
+    assert feedback["same_site_concerns"] == 4
+    assert "distinct causal mechanism" in str(feedback["guidance"])
+    assert len(notes) == 4
+    assert notes[-1]["summary"] == "a separate effect at the same source line"
 
 
 async def test_dropped_repeated_note_keeps_the_inspection_reminder(

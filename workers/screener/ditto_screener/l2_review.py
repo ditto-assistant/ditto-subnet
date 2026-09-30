@@ -39,6 +39,7 @@ from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     _body_signature,
+    _http_error_signature,
     _retryable_model_error_type,
     ledger_disposition,
     policy_v10_static_assessment,
@@ -56,6 +57,7 @@ from ditto_screening_protocol import (
     SourceReviewEvidenceItem,
     SourceReviewEvidenceRole,
     SourceReviewFinding,
+    SourceReviewI5Proof,
     SourceReviewInvariant,
     SourceReviewInvariantAssessment,
     SourceReviewInvariantDecision,
@@ -113,7 +115,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v46-policy-v13"
+        return "l2-terra-source-review-v48-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -170,7 +172,7 @@ def l2_prompt_cache_key(policy_version: int) -> str:
 
 
 L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v4"
-L2_DOSSIER_REVISION = "language-neutral-source-v15"
+L2_DOSSIER_REVISION = "language-neutral-source-v16"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
 L2_HARNESS_REVISION = "l2-isolated-coding-harness-v22"
@@ -345,6 +347,8 @@ def _submission_validation_subcode(error: ValueError) -> str:
         for phrase in (
             "L2 causal evidence is invalid",
             "L2 causal evidence schema version is invalid",
+            "L2 I5 proof is incompatible with causal schema version",
+            "L2 I5 proof is invalid",
             "L2 causal role bindings are invalid",
             "L2 causal role binding is invalid",
             "L2 causal role binding is not evidence-bound",
@@ -1229,8 +1233,22 @@ For I5, conditionality is neither necessary nor sufficient: an always-on
 benchmark recipe is activated on every request. Establish the specific
 generator-, fixture-, grader-, or evaluation-dependent assumption and effect;
 common formulas, finite domain vocabulary, and prescriptive wording alone do
-not establish it. For I6, trace the condition guarding each alleged fabricated
-tool result. A fallback that returns a local stub only when the request omits
+not establish it. A current-request instruction to restate the model-selected
+money amount in equivalent units is not, by itself, a benchmark-specific
+assumption. If alleging a minor-unit prompt compiler, identify the evaluation-
+derived interpretation, operand or output recipe, its served activation and
+substantive effect, and why ordinary unit guidance does not explain it. Copying
+the model-authored ANSWER value is not a host-selected answer; a host rewrite
+after that value is final remains I4. Preserve an I5 finding when the prompt
+actually imposes a benchmark-derived recipe. For a V13 I5 breach, submit
+causal_evidence schema_version 3 with i5_proof naming the concrete evaluation-
+dependent assumption, an evidence index for that assumption, and a distinct
+ordinary-product exclusion. Do not fill either field with a generic claim that
+prescriptive prose is benchmark-shaped. If the source does not support these
+proof obligations, mark I5 inconclusive; the finding remains held. For I6,
+trace the condition
+guarding each alleged fabricated tool result. A fallback that returns a
+local stub only when the request omits
 `tool_endpoint` does not prove fabrication on a scored tool request when that
 request supplies the endpoint and the same selected call is actually POSTed to
 it. The response's `tool_calls` list is a self-report, not validator-observed
@@ -2066,6 +2084,40 @@ def _l2_tools_for_policy(
     assert isinstance(causal_schema, dict)
     causal_properties = causal_schema["properties"]
     assert isinstance(causal_properties, dict)
+    if policy_version >= 13:
+        causal_properties["schema_version"] = {"type": "integer", "enum": [2, 3]}
+        causal_properties["i5_proof"] = {
+            "anyOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "properties": {
+                        "evaluation_assumption": {
+                            "type": "string",
+                            "minLength": 12,
+                            "maxLength": 240,
+                        },
+                        "ordinary_product_exclusion": {
+                            "type": "string",
+                            "minLength": 12,
+                            "maxLength": 240,
+                        },
+                        "assumption_evidence_index": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 15,
+                        },
+                    },
+                    "required": [
+                        "evaluation_assumption",
+                        "ordinary_product_exclusion",
+                        "assumption_evidence_index",
+                    ],
+                    "additionalProperties": False,
+                },
+            ]
+        }
+        causal_schema["required"].append("i5_proof")
     authority_transition = causal_properties["authority_transition"]
     assert isinstance(authority_transition, dict)
     authority_transition["enum"] = sorted(
@@ -4654,6 +4706,12 @@ class TerraSolSourceReviewAgent:
                     )
                 raise
             except httpx.HTTPStatusError as error:
+                # The public code keeps only the status; the provider's bounded
+                # message names which limit refused the turn, so log it here.
+                logger.warning(
+                    "L2/L3 model request failed; parking attempt: signature=%s",
+                    _http_error_signature(error.response),
+                )
                 # Keep usage from earlier successful reviewer turns. Letting the
                 # raw HTTP error reach run() replaces that usage with an empty
                 # L2Usage, making a late provider failure look like a first-call
@@ -6055,7 +6113,12 @@ class LayeredSourceReviewAgent:
             )
             return await settle(self._settle_gradient(carried))
         return await settle(
-            _carry_l1_notes(_enforce_causal_authority(result.observation), l1)
+            _carry_l1_notes(
+                _enforce_causal_authority(
+                    result.observation, clearance_path=result.clearance_path
+                ),
+                l1,
+            )
         )
 
 
@@ -6107,14 +6170,33 @@ def _carry_l1_notes(
 
 def _enforce_causal_authority(
     observation: SourceReviewObservation,
+    *,
+    clearance_path: str | None = None,
 ) -> SourceReviewObservation:
-    """Fail closed only at the authoritative v2 rollout boundary."""
+    """Require causal proof for breaches while retaining a static unresolved hold."""
     if not observation.ok or observation.risk_level == "low":
         return observation
     try:
         finding = SourceReviewFinding.model_validate(observation.finding)
     except (TypeError, ValueError):
         return _failure("l2-causal-finding-unavailable", "inconclusive")
+    if (
+        clearance_path == "deterministic_served_generator_hold"
+        and finding.prompt_revision == L2_STATIC_HOLD_REVISION
+        and finding.summary
+        == (
+            "served generator-shaped request, retrieval, and answer-path "
+            "signals require review; static evidence does not prove I5"
+        )
+        and finding.invariant_assessment is not None
+        and all(
+            decision.disposition != SourceReviewInvariantDisposition.BREACH
+            for decision in finding.invariant_assessment.decisions
+        )
+    ):
+        # This finding explicitly claims no violation. The deterministic
+        # constellation is still an unresolved hold, never a source clear.
+        return observation
     verification = verify_causal_finding(finding)
     if verification.role_complete:
         return observation
@@ -6895,15 +6977,34 @@ def _parse_causal_evidence(
 ) -> SourceReviewCausalEvidence | None:
     if value is None:
         return None
-    if not isinstance(value, dict) or set(value) != {
+    required_keys = {
         "schema_version",
         "authority_transition",
         "scorer_visible_effect",
         "role_bindings",
-    }:
+    }
+    if (
+        not isinstance(value, dict)
+        or not required_keys <= set(value)
+        or not set(value) <= required_keys | {"i5_proof"}
+    ):
         raise ValueError("L2 causal evidence is invalid")
-    if value["schema_version"] != 2:
+    schema_version = value["schema_version"]
+    if schema_version not in ({2, 3} if policy_version >= 13 else {2}):
         raise ValueError("L2 causal evidence schema version is invalid")
+    proof_value = value.get("i5_proof")
+    if (schema_version == 3) != (proof_value is not None):
+        raise ValueError("L2 I5 proof is incompatible with causal schema version")
+    if proof_value is not None and (
+        not isinstance(proof_value, dict)
+        or set(proof_value)
+        != {
+            "evaluation_assumption",
+            "ordinary_product_exclusion",
+            "assumption_evidence_index",
+        }
+    ):
+        raise ValueError("L2 I5 proof is invalid")
     transition = value["authority_transition"]
     scorer_visible_effect = value["scorer_visible_effect"]
     bindings = value["role_bindings"]
@@ -6954,11 +7055,17 @@ def _parse_causal_evidence(
             )
         )
     return SourceReviewCausalEvidence(
+        schema_version=schema_version,
         authority_transition=SourceReviewAuthorityTransition(str(transition)),
         scorer_visible_effect=SourceReviewScorerVisibleEffect(
             str(scorer_visible_effect)
         ),
         role_bindings=normalized,
+        i5_proof=(
+            SourceReviewI5Proof.model_validate(proof_value)
+            if proof_value is not None
+            else None
+        ),
     )
 
 
@@ -7586,6 +7693,8 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 causal evidence has no elevated causal category": "inconsistent-verdict",
     "L2 causal evidence is invalid": "inconsistent-verdict",
     "L2 causal evidence schema version is invalid": "inconsistent-verdict",
+    "L2 I5 proof is incompatible with causal schema version": "inconsistent-verdict",
+    "L2 I5 proof is invalid": "inconsistent-verdict",
     "L2 causal mechanism lacks its required invariant breach": "inconsistent-verdict",
     "L2 scorer field rewrite requires I4 breach": "inconsistent-verdict",
     "L2 causal path is invalid": "inconsistent-verdict",
@@ -7809,12 +7918,11 @@ def _l1_lead_packet(
         diagnostics = lead["diagnostics_untrusted"]
         assert isinstance(diagnostics, list)
         summary = note.get("summary")
-        diagnostics.append(
-            {
-                "note_index": index,
-                "summary": summary[:300] if isinstance(summary, str) else "",
-            }
+        bounded_summary = (
+            " ".join(summary.split())[:300] if isinstance(summary, str) else ""
         )
+        if not any(item["summary"] == bounded_summary for item in diagnostics):
+            diagnostics.append({"note_index": index, "summary": bounded_summary})
         confidence = note.get("confidence")
         if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
             current_confidence = lead["max_confidence"]

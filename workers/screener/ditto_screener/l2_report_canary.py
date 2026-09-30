@@ -21,7 +21,10 @@ from ditto_screener.heartbeat import ScreenerProgressStage
 from ditto_screener.platform import PlatformClient
 from ditto_screener.policy import ReviewJournal, load_policy_engine
 from ditto_screener.review_settings import EffectiveReviewSettings
-from ditto_screening_protocol import ScoredRuntimeEvidenceLease
+from ditto_screening_protocol import (
+    ScoredRuntimeEvidenceLease,
+    ScreenerReviewSettingsOverride,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +46,13 @@ class L2CanaryClaim(BaseModel):
     lease_expires_at: datetime
     download_url: str
     scored_runtime_evidence: ScoredRuntimeEvidenceLease
+    # The operator-pinned posture this canary must run under, if any.
+    review_settings_override: ScreenerReviewSettingsOverride | None = None
 
 
 def _identity_report(
-    claim: L2CanaryClaim, settings: EffectiveReviewSettings
+    claim: L2CanaryClaim,
+    settings: EffectiveReviewSettings | ScreenerReviewSettingsOverride,
 ) -> dict[str, Any]:
     report = {
         "kind": "l2_report_canary_v1",
@@ -169,6 +175,47 @@ def _report(
     return report
 
 
+async def _pinned_posture(
+    platform: PlatformClient,
+    claim: L2CanaryClaim,
+    pin: ScreenerReviewSettingsOverride,
+) -> tuple[EffectiveReviewSettings | None, str | None]:
+    """Fetch the exact pinned revision, or name why the canary cannot run.
+
+    Like an attempt-bound override, this never falls back to the node posture:
+    a pinned canary runs the revision Platform stamped or completes incomplete.
+    """
+    try:
+        pinned = await platform.get_review_settings_revision(pin.revision)
+    except Exception:
+        logger.warning(
+            "report-only L2 canary posture unavailable canary_id=%s revision=%d",
+            claim.canary_id,
+            pin.revision,
+            exc_info=True,
+        )
+        return None, "review-settings-override-unavailable"
+    if (
+        pinned.revision != pin.revision
+        or pinned.scope != pin.scope
+        or pinned.checksum != pin.checksum
+    ):
+        logger.error(
+            "report-only L2 canary posture does not match its claim "
+            "canary_id=%s revision=%d",
+            claim.canary_id,
+            pin.revision,
+        )
+        return None, "review-settings-override-mismatch"
+    logger.info(
+        "report-only L2 canary uses pinned posture canary_id=%s revision=%d scope=%s",
+        claim.canary_id,
+        pinned.revision,
+        pinned.scope,
+    )
+    return pinned, None
+
+
 async def consume(
     *,
     config: ScreenerConfig,
@@ -179,7 +226,13 @@ async def consume(
     on_claim: Callable[[L2CanaryClaim], None] | None = None,
     progress: Callable[[ScreenerProgressStage], None] | None = None,
 ) -> bool:
-    """Claim one independent job only after the primary queue is empty."""
+    """Claim one independent job only after the primary queue is empty.
+
+    ``settings`` is the node-effective posture the caller also uses for the
+    primary queue. A claim pinned to an operator canary posture runs under that
+    revision instead, on this canary's own gate; ``primary_gate`` and every
+    later primary claim keep ``settings``.
+    """
     try:
         payload = await platform.claim_l2_report_canary(
             instance_id=instance_id,
@@ -205,6 +258,21 @@ async def consume(
     )
     if on_claim is not None:
         on_claim(claim)
+    pin = claim.review_settings_override
+    if pin is not None:
+        pinned, error_code = await _pinned_posture(platform, claim, pin)
+        if pinned is None:
+            # Platform binds the report to the pin it stamped at claim time.
+            await platform.complete_l2_report_canary(
+                claim.canary_id,
+                lease_token=claim.lease_token,
+                lease_expires_at=claim.lease_expires_at,
+                status="incomplete",
+                report=_identity_report(claim, pin),
+                error_code=error_code,
+            )
+            return True
+        settings = pinned
     if claim.policy_version != 13 or claim.bench_version != 13:
         logger.error("report-only L2 claim is not v13: %s", claim.canary_id)
         await platform.complete_l2_report_canary(

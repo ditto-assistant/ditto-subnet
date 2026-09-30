@@ -611,8 +611,7 @@ insufficient on their own:
 - benchmark words in prose, comments, tests, or filenames;
 - a citation to a line that cannot execute. Evidence names the trigger and the
   effect of a causal path, so a blank line, a comment, an import or module
-  declaration, a non-`cfg` attribute, a lone closing delimiter, or a line
-  inside a `#[cfg(test)]` item is not admissible evidence and is dropped
+  declaration, a non-`cfg` attribute, or a lone closing delimiter is not admissible evidence and is dropped
   before the finding is digest-bound. `#[cfg(...)]`/`#[cfg_attr(...)]` lines
   remain admissible because a reachability gate can genuinely be the trigger,
   and a line that carries both a signature and a body, or a statement with a
@@ -620,6 +619,10 @@ insufficient on their own:
   judgement that the surrounding code is safe: every file is still read in
   full and every rule still runs over it. When no category retains admissible
   evidence, the review records low risk rather than selecting a quarantine;
+- a `#[cfg(test)]` line without a demonstrated served build path. The citation
+  remains admissible because `rustc --cfg test` can compile its body into an
+  ordinary served binary; the reviewer must still prove activation and effect
+  before treating it as a violation;
 - unchanged official fixtures recognized by exact provenance;
 - local evaluation helpers that are unreachable from the submitted service.
 - local Docker launchers are not part of the screened image merely because they

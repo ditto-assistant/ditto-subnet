@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ditto_screening_protocol import ScoredRuntimeEvidenceLease
+from ditto_screening_protocol import (
+    ScoredRuntimeEvidenceLease,
+    ScreenerReviewSettingsOverride,
+)
 
 
-class L2CanaryScheduleRequest(BaseModel):
+class L2CanaryScheduleBase(BaseModel):
+    """Fields shared by the plain and pinned schedule routes.
+
+    No route takes this model directly, so it never appears in the API schema.
+    """
+
     model_config = ConfigDict(extra="ignore", strict=True)
 
     # FastAPI parses JSON into Python strings before model validation. Keep the
@@ -32,7 +40,7 @@ class L2CanaryScheduleRequest(BaseModel):
     confirm_report_only: Literal[True]
 
     @model_validator(mode="after")
-    def historical_ruling_is_explicit_and_source_only(self) -> L2CanaryScheduleRequest:
+    def historical_ruling_is_explicit_and_source_only(self) -> Self:
         if (self.historical_ruling_kind is None) != (self.historical_ruling_id is None):
             raise ValueError("historical ruling kind and id must be supplied together")
         if self.historical_ruling_kind is not None and (
@@ -42,6 +50,33 @@ class L2CanaryScheduleRequest(BaseModel):
         ):
             raise ValueError("historical ruling must match source-only review label")
         return self
+
+
+class L2CanaryScheduleRequest(L2CanaryScheduleBase):
+    """The plain route: the canary runs under the claiming node's posture."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def pin_uses_the_pinned_route(cls, data: Any) -> Any:
+        # Every other unknown key is ignored, but a pin must not be: dropping
+        # it would queue the canary under the node's posture. Refuse the key
+        # even when null, so a client learns the route before it matters.
+        if isinstance(data, dict) and "review_settings_revision" in data:
+            raise ValueError(
+                "review_settings_revision is scheduled with POST "
+                "/admin/screener-l2-report-canaries/pinned, not this route"
+            )
+        return data
+
+
+class L2CanaryPinnedScheduleRequest(L2CanaryScheduleBase):
+    """``POST /pinned``: the schedule request with a required posture pin."""
+
+    # Run under this immutable ``l2-report-canary*`` revision instead of the
+    # claiming worker's node-effective posture. Only this route accepts it, so
+    # a Platform build that predates pins refuses the route instead of
+    # ignoring the field.
+    review_settings_revision: Annotated[int, Field(ge=1)]
 
 
 class CanonicalFixtureRegisterRequest(BaseModel):
@@ -91,6 +126,12 @@ class L2CanaryView(BaseModel):
     review_label: str
     run_mode: Literal["source_only", "full_runtime"]
     source_attestation: dict | None = None
+    # Scheduled posture pin (all three or none) and the posture the claim bound.
+    review_settings_revision: int | None = None
+    review_settings_scope: str | None = None
+    review_settings_checksum: str | None = None
+    settings_revision: int | None = None
+    settings_checksum: str | None = None
     status: str
     claimed_instance_id: str | None
     lease_expires_at: datetime | None
@@ -121,6 +162,9 @@ class L2CanaryClaimRequest(BaseModel):
     instance_id: Annotated[str, Field(min_length=1, max_length=63)]
     settings_revision: Annotated[int, Field(ge=0)]
     settings_checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    # A rolling older worker omits this and would ignore a pinned posture, so
+    # Platform leases pinned canaries only to workers that declare support.
+    accepts_review_settings_override: bool = False
 
 
 class L2CanaryClaimResponse(BaseModel):
@@ -140,6 +184,9 @@ class L2CanaryClaimResponse(BaseModel):
     lease_expires_at: datetime
     download_url: str
     scored_runtime_evidence: ScoredRuntimeEvidenceLease
+    # The scheduled posture pin. The worker applies it to this canary's own
+    # gate only; its primary gate and next production claim are unaffected.
+    review_settings_override: ScreenerReviewSettingsOverride | None = None
 
 
 class L2CanaryCompleteRequest(BaseModel):

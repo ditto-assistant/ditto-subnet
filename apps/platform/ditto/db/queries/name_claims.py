@@ -112,9 +112,12 @@ async def list_entrenched_owner_roots(
 ) -> set[str]:
     """Payment-owner families that may endorse a handle claim.
 
-    Entrenched means: at least one ``scored`` agent with a full-benchmark
-    score, and that family's earliest upload is at least
-    :data:`ENTRENCHMENT_AGE` old. Brand-new miners cannot endorse.
+    Entrenched means: the family's earliest upload among its ``scored``
+    agents with a positive full-benchmark score is at least
+    :data:`ENTRENCHMENT_AGE` old. Older uploads that never earned a
+    full-benchmark score do not start the clock. Attested sibling hotkeys
+    share one owner root, so any of them can make the family entrenched.
+    Brand-new miners cannot endorse.
     """
     cutoff = now - ENTRENCHMENT_AGE
     stmt = (

@@ -48,6 +48,8 @@ async def _seed_family(
     coldkey: str,
     name: str,
     age: timedelta = timedelta(days=10),
+    status: AgentStatus = AgentStatus.SCORED,
+    score_n: int | None = MIN_ELIGIBLE_CASES,
 ) -> UUID:
     created = datetime.now(UTC) - age
     agent_id = uuid4()
@@ -59,7 +61,7 @@ async def _seed_family(
                 name=name,
                 sha256=uuid4().hex + uuid4().hex,
                 size_bytes=524288,
-                status=AgentStatus.SCORED,
+                status=status,
                 created_at=created,
             )
         )
@@ -76,20 +78,21 @@ async def _seed_family(
                 timestamp=created,
             )
         )
-        await upsert_score(
-            session,
-            agent_id=agent_id,
-            validator_hotkey=_VALIDATOR,
-            run_id="run_1",
-            seed=42,
-            composite=0.5,
-            tool_mean=0.5,
-            memory_mean=0.5,
-            median_ms=500,
-            n=MIN_ELIGIBLE_CASES,
-            generated_at=created,
-            bench_version=MIN_SCOREABLE_BENCH_VERSION,
-        )
+        if score_n is not None:
+            await upsert_score(
+                session,
+                agent_id=agent_id,
+                validator_hotkey=_VALIDATOR,
+                run_id="run_1",
+                seed=42,
+                composite=0.5,
+                tool_mean=0.5,
+                memory_mean=0.5,
+                median_ms=500,
+                n=score_n,
+                generated_at=created,
+                bench_version=MIN_SCOREABLE_BENCH_VERSION,
+            )
     return agent_id
 
 
@@ -269,6 +272,109 @@ async def test_endorser_must_be_entrenched(
     )
     assert response.status_code == 400, response.text
     assert "entrenched" in response.text
+
+
+async def test_entrenchment_age_counts_from_earliest_full_scored_upload(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Old uploads without a full-benchmark score do not start the clock.
+
+    Pins the documented rule (issue #2394): a family that first uploaded a
+    month ago but earned its first full-benchmark score two days ago is not
+    entrenched yet.
+    """
+    _install(app, session_maker)
+    alice = _kp("//Alice")
+    late = _kp("//Bob")
+    late_coldkey = _kp("//Bob//stash").ss58_address
+    await _seed_family(
+        session_maker,
+        hotkey=alice.ss58_address,
+        coldkey=_kp("//Alice//stash").ss58_address,
+        name="Jupiter",
+    )
+    # A month-old upload that failed screening, a month-old upload that only
+    # earned a partial score, and a full-benchmark score from two days ago.
+    await _seed_family(
+        session_maker,
+        hotkey=late.ss58_address,
+        coldkey=late_coldkey,
+        name="late-rejected",
+        age=timedelta(days=30),
+        status=AgentStatus.SCREENING_FAILED,
+        score_n=None,
+    )
+    await _seed_family(
+        session_maker,
+        hotkey=late.ss58_address,
+        coldkey=late_coldkey,
+        name="late-partial",
+        age=timedelta(days=30),
+        score_n=MIN_ELIGIBLE_CASES - 1,
+    )
+    await _seed_family(
+        session_maker,
+        hotkey=late.ss58_address,
+        coldkey=late_coldkey,
+        name="late-scored",
+        age=timedelta(days=2),
+    )
+
+    from ditto.db.queries.name_claims import (
+        list_entrenched_owner_roots,
+        owner_root_for_hotkey,
+    )
+
+    async with session_maker() as session, session.begin():
+        late_root = await owner_root_for_hotkey(session, hotkey=late.ss58_address)
+        entrenched = await list_entrenched_owner_roots(session, now=datetime.now(UTC))
+    assert late_root not in entrenched
+
+    created = await client.post(_URL, json=_claim_body(alice, name="Jupiter"))
+    assert created.status_code == 201, created.text
+    claim_id = UUID(created.json()["claim_id"])
+    response = await client.post(
+        f"{_URL}/{claim_id}/endorsements",
+        json=_endorse_body(late, claim_id=claim_id, name_stem="jupiter"),
+    )
+    assert response.status_code == 400, response.text
+    assert "entrenched" in response.text
+    assert "uploaded at least 7 days ago" in response.text
+
+
+async def test_entrenchment_pools_scored_history_across_family_hotkeys(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A fresh hotkey inherits its owner family's old full-benchmark score."""
+    coldkey = _kp("//Eve//stash").ss58_address
+    veteran = _kp("//Eve")
+    fresh = _kp("//Eve//fresh")
+    await _seed_family(
+        session_maker,
+        hotkey=veteran.ss58_address,
+        coldkey=coldkey,
+        name="veteran",
+        age=timedelta(days=8),
+    )
+    await _seed_family(
+        session_maker,
+        hotkey=fresh.ss58_address,
+        coldkey=coldkey,
+        name="fresh",
+        age=timedelta(days=1),
+    )
+
+    from ditto.db.queries.name_claims import (
+        list_entrenched_owner_roots,
+        owner_root_for_hotkey,
+    )
+
+    async with session_maker() as session, session.begin():
+        fresh_root = await owner_root_for_hotkey(session, hotkey=fresh.ss58_address)
+        entrenched = await list_entrenched_owner_roots(session, now=datetime.now(UTC))
+    assert fresh_root in entrenched
 
 
 async def test_cannot_endorse_own_claim(

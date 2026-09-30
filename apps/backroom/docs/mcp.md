@@ -32,6 +32,18 @@ global concurrency limit. `checks_per_minute` and
 the latest heartbeat, and they are null, never zero, until a check completes. The
 tool is read-only and schedules nothing.
 
+`list_validator_assignments` reads live leases from
+`GET /api/v1/admin/validator-assignments`. Each lease carries `seed`, the exact
+decimal dataset seed the validator runs, as a string. A JSON number would round
+a 64-bit seed above 2^53, so two different seeds could compare equal. Two
+`continual_retest` leases on one agent with equal `seed` values are the same
+paired shared-seed run. That lets an operator confirm two simultaneous runs
+match before either is accepted, without copying the seed into a manual run.
+`seed` is null for a ticket with no seed yet, and for a Platform that predates
+the field. It is a seed id only. Dataset contents never leave Platform, and the
+confirmation plan's pending seeds stay server-side
+(`get_continual_retest_diagnostic` reports only `pending_seed_count`).
+
 `get_outlier_escalation` reads the anomalous-score escalation that can open ATH
 holds (`review_kind` `anomalous_score`) through
 `GET /api/v1/admin/outlier-escalation`. The escalation is configured only by
@@ -74,6 +86,32 @@ exact would-trigger count, and up to 20 rows (100 at most) with each agent's
 composite, modified z-score and evidence. Held agents are not replayed. Each
 row is judged against today's ledger, not the ledger at its own finalization.
 The tool opens no hold and changes no setting.
+
+`get_continual_retest_diagnostic` explains, for one exact agent UUID, what
+`get_leaderboard` and `get_agent_scores` cannot: why a scored generation is or
+is not its owner's emission representative, and why it is or is not earning
+shared-seed retests. It reads
+`GET /api/v1/admin/agents/{agent_id}/continual-retest-diagnostic` with
+`backroom:read`. The response carries the canonical and official continual
+composites with their sample counts and completed-wave depth, the same-owner
+family with the representative, its margin and the `owner_family_key` term that
+selected it (`representative_selection`), membership in the raw wave, folded
+emission set and resolved retest cohort, and the cohort and emission cutoffs as
+`{composite, gap, tie_band, within_tie_band}`. `admission_reason` is the
+exclusion reason. A negative `cohort_cutoff.gap` on an agent still outside the
+cohort is owner suppression, not a score it failed to reach;
+`same_owner_challenger` is the bounded catch-up admission, not a second
+emission slot. `claim` runs the issuance lane's own gates for an empty validator
+hotkey, so no lease, event or slot is attributed. It gives the scheduled round,
+catch-up set, spare-capacity window, idle-retest gate, route priority and
+`decision`, the first gate a polling validator would hit now. A
+`chain_unavailable` decision means the block read failed, not that the lane is
+idle. The tool also returns ticket counts and the latest ticket and accepted
+result. Outstanding work is only a count, `pending_seed_count`. Pending seed
+values, confirmation datasets, prompts and answer keys never leave Platform, and
+unknown upstream fields are stripped. The raw and folded seed IDs it returns
+are already-scored confirmation seeds, as exact decimal strings. The snapshot
+grants no work and changes nothing.
 
 `https://backroom.dittobench.ai/mcp` is an OAuth-protected Streamable HTTP MCP
 server exposing the same operations as the console: screening quarantines and

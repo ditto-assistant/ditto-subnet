@@ -21,6 +21,7 @@ import {
   fetchScreeningSubmissions,
   fetchScreeningFailureSummary,
   fetchL2ReportCanaryPreflight,
+  scheduleL2ReportCanary,
   fetchOwnerAttestations,
   fetchScreeningDisputes,
   fetchValidatorAssignments,
@@ -715,6 +716,113 @@ describe('screening submission admin service', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/preflight/${agentId}/${sourceAttemptId}`,
       expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('forwards an optional canary review posture pin and keeps it in the view', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const input = {
+      requestId: '44444444-4444-4444-8444-444444444444',
+      agentId: '11111111-1111-4111-8111-111111111111',
+      sourceAttemptId: '22222222-2222-4222-8222-222222222222',
+      artifactSha256: 'a'.repeat(64),
+      expectedAgentStatus: 'rejected',
+      expectedScoreCount: 0,
+      targetNodeId: 'subnet-screener-1',
+      reviewLabel: 'known_reject',
+      confirmation: 'QUEUE REPORT ONLY L2 CANARY',
+    }
+    const view = {
+      canary_id: '33333333-3333-4333-8333-333333333333',
+      request_id: input.requestId,
+      agent_id: input.agentId,
+      source_attempt_id: input.sourceAttemptId,
+      artifact_sha256: input.artifactSha256,
+      target_node_id: input.targetNodeId,
+      expected_agent_status: 'rejected',
+      expected_score_count: 0,
+      review_label: 'known_reject',
+      run_mode: 'source_only',
+      review_settings_revision: 141,
+      review_settings_scope: 'l2-report-canary-ctl137',
+      review_settings_checksum: 'c'.repeat(64),
+      settings_revision: 141,
+      settings_checksum: 'c'.repeat(64),
+      status: 'leased',
+      claimed_instance_id: 'subnet-screener-1-worker-1',
+      lease_expires_at: '2026-09-29T02:00:00Z',
+      report: null,
+      error_code: null,
+      created_at: '2026-09-29T00:00:00Z',
+      completed_at: null,
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(view))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      scheduleL2ReportCanary({ ...input, reviewSettingsRevision: 141 }, 'operator@omniaura.ai'),
+    ).resolves.toMatchObject({
+      review_settings_revision: 141,
+      review_settings_scope: 'l2-report-canary-ctl137',
+      settings_revision: 141,
+    })
+    const [pinnedUrl, pinned] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(pinnedUrl).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/pinned',
+    )
+    expect(JSON.parse(String(pinned.body))).toMatchObject({ review_settings_revision: 141 })
+
+    // Omitting the pin keeps today's route and request shape: node posture.
+    await scheduleL2ReportCanary(input, 'operator@omniaura.ai')
+    const [unpinnedUrl, unpinned] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(unpinnedUrl).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries',
+    )
+    expect(JSON.parse(String(unpinned.body))).not.toHaveProperty('review_settings_revision')
+
+    await expect(
+      scheduleL2ReportCanary({ ...input, reviewSettingsRevision: 0 }, 'operator@omniaura.ai'),
+    ).rejects.toThrow()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    [405, 'Method Not Allowed'],
+    [404, 'Not Found'],
+  ])('refuses a pin that an older Platform cannot bind (%i), without queueing', async (status, message) => {
+    // A Platform build that predates pins has no /pinned route. It answers
+    // 405 or 404 before any handler runs, so nothing is queued; Backroom must
+    // say so and must not fall back to the plain route, which would drop the
+    // pin. The current route never answers 404 itself.
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const input = {
+      requestId: '44444444-4444-4444-8444-444444444444',
+      agentId: '11111111-1111-4111-8111-111111111111',
+      sourceAttemptId: '22222222-2222-4222-8222-222222222222',
+      artifactSha256: 'a'.repeat(64),
+      expectedAgentStatus: 'rejected',
+      expectedScoreCount: 0,
+      targetNodeId: 'subnet-screener-1',
+      reviewLabel: 'known_reject',
+      confirmation: 'QUEUE REPORT ONLY L2 CANARY',
+    }
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      Response.json({ error_code: 3002, message, request_id: 'r' }, { status }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      scheduleL2ReportCanary({ ...input, reviewSettingsRevision: 141 }, 'operator@omniaura.ai'),
+    ).rejects.toThrow(/does not support canary review settings pins yet, so nothing was queued/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/pinned',
+    )
+
+    // The same status on the plain route is not a missing pin capability.
+    await expect(scheduleL2ReportCanary(input, 'operator@omniaura.ai')).rejects.toThrow(
+      message,
     )
   })
 

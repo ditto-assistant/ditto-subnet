@@ -1276,6 +1276,19 @@ class AdminValidatorAssignment(BaseModel):
     ] = "legacy_unclassified"
     agent_status: str | None = None
     first_reported_at: datetime | None = None
+    seed: Annotated[
+        str | None,
+        Field(
+            pattern=r"^(0|[1-9][0-9]*)$",
+            description=(
+                "Exact decimal dataset seed this lease runs, as a string so a "
+                "64-bit value survives JSON. For continual_retest it is the "
+                "shared champion-anchored seed, so two leases for one agent "
+                "with the same value are the same paired run. Null when the "
+                "ticket has no seed yet."
+            ),
+        ),
+    ] = None
 
 
 class AdminValidatorAssignmentList(BaseModel):

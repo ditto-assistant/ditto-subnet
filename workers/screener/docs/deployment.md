@@ -134,6 +134,26 @@ observation; inspect its codes and the source finding before concluding that
 either labeled control passed. Keep adjudicator authority off until the paired
 full-runtime controls and their exact identities are reviewed.
 
+A canary runs under the claiming node's effective review settings unless it is
+scheduled with `reviewSettingsRevision`. To test a different posture, write it
+with `apply_screener_review_settings` to scope `l2-report-canary` or
+`l2-report-canary-<name>` and pass that revision when scheduling. Platform
+never resolves those scopes as a worker's posture, even for a node or worker
+named inside the namespace, so the posture never reaches production screening.
+Platform refuses a pin whose scope is `*`, `bootstrap`, a node, a worker, any
+other name, or a live screener identity, and refuses `mode: inherit`. Backroom
+sends a pinned schedule on its own route, so a Platform build that predates
+pins refuses it and queues nothing rather than queueing it unpinned. It leases
+a pinned canary only to a worker that declares pin support, sizes the lease
+from the pinned timeouts, and stamps the pinned revision as the canary's
+`settings_revision`. The worker fetches that exact revision and applies it to
+the canary's own gate only; its primary gate and next production claim keep the
+node posture. A revision that no longer matches its stamp ends the canary as
+`incomplete` with `review-settings-pin-drift` at claim, or
+`review-settings-override-mismatch` / `review-settings-override-unavailable`
+on the worker. Never write a node or worker scope for a canary experiment:
+production attempts on that node resolve it as soon as admission reopens.
+
 ## Policy v7 rollout
 
 1. Merge and deploy the platform protocol pin first. Existing v6 workers stop

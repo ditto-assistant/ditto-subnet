@@ -29,11 +29,12 @@ What is bound into each signature
 
 Endorsers must be entrenched
 ----------------------------
-An endorsement is only accepted from a payment-owner family that already has
-a full-benchmark scored submission whose earliest upload is older than
-:data:`ENTRENCHMENT_AGE`. One endorsement per owner family. The claimant's
-own family cannot endorse itself. Brand-new miners cannot manufacture a
-quorum.
+An endorsement is only accepted from a payment-owner family whose earliest
+full-benchmark scored submission was uploaded at least
+:data:`ENTRENCHMENT_AGE` ago. Uploads that never earned a full-benchmark
+score do not count toward that age. One endorsement per owner family. The
+claimant's own family cannot endorse itself. Brand-new miners cannot
+manufacture a quorum.
 
 The claim does not move emissions or rewrite ``agents.name``. It only
 governs the public name: an upheld reservation hides colliding names
@@ -68,7 +69,7 @@ ENDORSEMENT_THRESHOLD: Final = 3
 """Distinct entrenched owner families required to uphold a claim."""
 
 ENTRENCHMENT_AGE: Final = timedelta(days=7)
-"""How long a scored family must have existed before it can endorse."""
+"""Minimum age of a family's earliest full-benchmark scored upload to endorse."""
 
 MIN_STEM_LENGTH: Final = 3
 MAX_STEM_LENGTH: Final = 64

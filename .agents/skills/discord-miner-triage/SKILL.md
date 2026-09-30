@@ -62,7 +62,9 @@ for this run, using the fresh guards and verification in `backroom-review`.
   allegations based on other miners' claims.
 - Distinguish merged code, released code, deployed code, and observed live
   behavior. Distinguish 3/3 canonical scoring from continual shared-seed
-  retests and from emission eligibility.
+  retests and from emission eligibility. For "my newer version scores higher"
+  or "no retests", read Backroom `get_continual_retest_diagnostic` on the exact
+  UUID before replying; `get_leaderboard` cannot show a suppressed generation.
 - Report to Peyton only meaningful new issues, completed actions, failures, or
   decisions needing input, with links and exact status. A no-change scheduled
   run stays quiet.

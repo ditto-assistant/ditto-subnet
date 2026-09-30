@@ -53,7 +53,11 @@ eval -> top five -> integrity double-check -> clear or reject
   with the double-check reason and `trigger: integrity_double_check`, and
   appends the enforced marker. Reason, actor
   (`platform:integrity-double-check`), and algorithm version
-  (`integrity-double-check-v1`) differ; the lifecycle does not.
+  (`integrity-double-check-v1`) differ; the lifecycle does not. Every top-five
+  entrant gets this hold, so its reason is neutral. Rows stored with the older
+  "integrity double-check" wording keep it in the operator queue, and the
+  public and miner projections show the current wording instead
+  (`public_review_reason`, #562).
 - **Stronger posture.** `claim_screening_attempts` binds the deep pass to the
   latest screener review revision in scope `integrity-double-check`. No worker
   heartbeats under that scope, so writing it never changes the fleet posture.

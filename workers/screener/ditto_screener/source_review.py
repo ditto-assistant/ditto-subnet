@@ -84,7 +84,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v29-policy-v13"
+        return "source-review-v30-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -188,23 +188,33 @@ def _record_note_feedback(
     if note is None:
         return {"recorded": False, "notes": len(notes)}
     site_fields = ("category", "path", "line")
-    repeated_site = (
-        note.get("kind") == "concern"
-        and isinstance(note.get("path"), str)
-        and isinstance(note.get("line"), int)
-        and any(
+    same_site_count = (
+        sum(
             existing.get("kind") == "concern"
             and all(existing.get(field) == note.get(field) for field in site_fields)
             for existing in notes
         )
+        if note.get("kind") == "concern"
+        and isinstance(note.get("path"), str)
+        and isinstance(note.get("line"), int)
+        else 0
     )
     recorded = _append_note(notes, note)
     feedback: dict[str, object] = {"recorded": recorded, "notes": len(notes)}
-    if repeated_site:
-        feedback["guidance"] = (
-            "This location already has a concern note. If this adds no distinct "
-            "causal evidence, inspect a different served-path location."
-        )
+    if same_site_count:
+        feedback["same_site_concerns"] = same_site_count + int(recorded)
+        if same_site_count >= 3:
+            feedback["guidance"] = (
+                "This site already has multiple concern notes. Do not restate "
+                "the same mechanism. If a distinct causal mechanism remains, "
+                "record it explicitly; otherwise inspect a different served-path "
+                "location or submit_review using the existing ledger."
+            )
+        else:
+            feedback["guidance"] = (
+                "This location already has a concern note. If this adds no distinct "
+                "causal evidence, inspect a different served-path location."
+            )
     return feedback
 
 
@@ -266,6 +276,14 @@ _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
 _OPAQUE_SIZE_LIMIT = 2 * 1024 * 1024
+# The starter kit compiles one committed model larger than the lead-scan limit
+# into its reference service. Only that exact path whose SHA-256 matches an
+# installed provenance manifest is accounted for instead of marking the lead
+# scan truncated, the same rule tools/l2_analyzer.py applies. Every other
+# oversized member, including an unrecognized binary, still truncates.
+_STARTER_MODEL_PATH = "fixtures/models/cross-encoder.onnx"
+_MAX_STARTER_MODEL_BYTES = 20 * 1024 * 1024
+_STARTER_MANIFEST_DIR = Path(__file__).parent / "data"
 _MAX_TOOL_OUTPUT_CHARS = 48_000
 _MAX_TOTAL_TOOL_CHARS = 8_000_000
 _MAX_READ_LINES = 400
@@ -451,20 +469,84 @@ def _body_signature(payload: object) -> str:
         return "non-json"
     if not isinstance(payload, dict):
         return f"type={type(payload).__name__}"
-    keys = ",".join(sorted(str(key) for key in payload)[:10])
+    known_keys = {
+        "error",
+        "choices",
+        "output",
+        "id",
+        "object",
+        "model",
+        "usage",
+        "created",
+    }
+    keys = ",".join(
+        sorted(key for key in payload if isinstance(key, str) and key in known_keys)
+    )
+    unknown_count = sum(key not in known_keys for key in payload)
     error = payload.get("error")
     error_class = ""
     if isinstance(error, Mapping):
-        error_class = str(
-            error.get("code") or error.get("type") or error.get("error_type") or ""
-        )[:60]
+        code = error.get("code")
+        if isinstance(code, int) and 100 <= code <= 599:
+            error_class = str(code)
+        elif (
+            isinstance(code, str)
+            and len(code) == 3
+            and code.isascii()
+            and code.isdigit()
+        ):
+            error_class = code
     elif error:
-        error_class = str(error)[:60]
+        error_class = "non-object"
     choices = payload.get("choices")
-    return (
-        f"keys=[{keys}] error_class={error_class!r} "
+    signature = (
+        f"keys=[{keys}] other_keys={unknown_count} error_class={error_class!r} "
         f"choices={type(choices).__name__ if choices is not None else 'absent'}"
     )
+    provider_limit = _provider_limit_category(payload)
+    if provider_limit:
+        signature += f" provider_limit={provider_limit}"
+    return signature
+
+
+def _provider_limit_category(payload: object) -> str | None:
+    """Classify a provider refusal without copying upstream text into logs.
+
+    Provider error messages are untrusted: even an error-only envelope can echo
+    a request, source excerpt, account identifier, or credential. The log gets
+    only one of these fixed labels, never the provider's message or model name.
+    """
+    if not isinstance(payload, Mapping) or "choices" in payload or "output" in payload:
+        return None
+    error = payload.get("error")
+    if not isinstance(error, Mapping):
+        return None
+    message = error.get("message")
+    if not isinstance(message, str):
+        return None
+    lowered = message[:1000].casefold()
+    if "limit_rpm/" in lowered or "requests per minute" in lowered:
+        return "key_rpm"
+    if "insufficient credits" in lowered or "credit balance" in lowered:
+        return "credits"
+    if "upstream" in lowered and (
+        "capacity" in lowered or "rate limit" in lowered or "overloaded" in lowered
+    ):
+        return "upstream_capacity"
+    return None
+
+
+def _http_error_signature(response: httpx.Response) -> str:
+    """Describe a rejected HTTP status with the provider's bounded message."""
+    signature = f"http-status={response.status_code}"
+    try:
+        payload: object = response.json()
+    except ValueError:
+        return signature
+    provider_limit = _provider_limit_category(payload)
+    if provider_limit:
+        signature += f" provider_limit={provider_limit}"
+    return signature
 
 
 class SourceReviewBudgetExhausted(ValueError):
@@ -1908,6 +1990,14 @@ applies, and the semantic or trajectory effect. Common formulas, finite domain
 vocabularies, typo handling, prescriptive wording, and fixture references alone
 are insufficient. Distributed compilation across routing, retrieval, prompts,
 calculators and finalizers remains one end-to-end mechanism.
+An instruction to restate a model-selected monetary amount in equivalent units
+because the current user requested minor units is not, by itself, proof of a
+benchmark-specific compiler. Check whether the prompt encodes an evaluation-
+derived interpretation, operand or output recipe beyond ordinary unit guidance;
+cite its activation and substantive effect. ANSWER-slot extraction that copies
+the model-authored value does not turn formatting advice into host authority.
+Keep post-finalization currency rescaling under I4 and proven benchmark-family
+prompt compilation under I5; do not infer either solely from the word cents.
 
 I7 also prohibits incorrect host removal of an applicable, authorized and
 available capability. Check quoted titles, entity names, compound requests,
@@ -2430,6 +2520,7 @@ class TarSourceRepository:
         self._archive_path = archive_path
         self._static_preflight_v2_mode = static_preflight_v2_mode
         self._binary_analysis_cache: dict[str, dict[str, object]] = {}
+        self._member_digests: dict[str, str] | None = None
         members: list[_Member] = []
         seen: set[str] = set()
         with tarfile.open(archive_path, mode="r:gz") as archive:
@@ -2643,6 +2734,7 @@ class TarSourceRepository:
         files_scanned = 0
         members_considered = 0
         truncated = False
+        nontext: list[dict[str, object]] = []
         with tarfile.open(self._archive_path, mode="r:gz") as archive:
             # Runtime sources get the bounded scan budget before docs, tests,
             # and other decoys, while the latter remain available to the broad
@@ -2654,7 +2746,11 @@ class TarSourceRepository:
             for name in ordered_names:
                 member_info = self._members[name]
                 if member_info.size > _OPAQUE_SIZE_LIMIT:
-                    truncated = True
+                    model = self._published_starter_model(archive, name)
+                    if model is None:
+                        truncated = True
+                    else:
+                        nontext.append(model)
                     continue
                 if members_considered >= _MAX_LEAD_SCAN_FILES:
                     truncated = True
@@ -2706,7 +2802,43 @@ class TarSourceRepository:
             "files_scanned": files_scanned,
             "members_considered": members_considered,
             "bytes_scanned": bytes_scanned,
+            "nontext": nontext,
             "truncated": truncated,
+        }
+
+    def _published_starter_model(
+        self, archive: tarfile.TarFile, name: str
+    ) -> dict[str, object] | None:
+        """Account for an oversized member only as the exact starter model."""
+        member_info = self._members[name]
+        if name != _STARTER_MODEL_PATH or member_info.size > _MAX_STARTER_MODEL_BYTES:
+            return None
+        digests = _starter_model_digests()
+        if not digests:
+            return None
+        member = archive.getmember(member_info.archive_name)
+        # getmember resolves a name to its last entry, and extractfile follows
+        # links. The constructor admits one regular file per path, so anything
+        # else here is a later link or special entry it skipped. Never let that
+        # entry's bytes vouch for the admitted file; the analyzer's workspace
+        # walk likewise never follows links.
+        if not member.isfile():
+            return None
+        extracted = archive.extractfile(member)
+        if extracted is None:
+            return None
+        digest = hashlib.sha256()
+        hashed = 0
+        while chunk := extracted.read(1024 * 1024):
+            hashed += len(chunk)
+            digest.update(chunk)
+        if hashed != member_info.size or digest.hexdigest() not in digests:
+            return None
+        return {
+            "path": name,
+            "bytes": member_info.size,
+            "sha256": digest.hexdigest(),
+            "provenance": "starter_manifest_digest",
         }
 
     @staticmethod
@@ -3157,6 +3289,13 @@ class TarSourceRepository:
                 for dimension, minimum in local_minimums.items()
             ):
                 continue
+            # A large ordinary agent file can contain question examples,
+            # retrieval vocabulary, model calls, and answer returns without
+            # implementing a deterministic answer path. Those file-wide words
+            # remain aggregate review leads, but cannot select the automatic
+            # served-generator hold by themselves.
+            if "direct_answer" not in local["deterministic_answer_path"]:
+                continue
             for dimension in sorted(required):
                 marker_lines = local[dimension]
                 if marker_lines:
@@ -3410,16 +3549,37 @@ class TarSourceRepository:
             return None
 
     def _member_sha256(self, path: str) -> str:
-        member_info = self._members[path]
-        digest = hashlib.sha256()
+        if self._member_digests is None:
+            self._member_digests = self._hash_members()
+        return self._member_digests[path]
+
+    def _hash_members(self) -> dict[str, str]:
+        """Hash every validated member in one sequential pass over the archive.
+
+        Provenance compares each supported manifest file by digest; reopening
+        the gzip stream per file re-decompressed the archive prefix every time.
+        """
+        digests: dict[str, str] = {}
         with tarfile.open(self._archive_path, mode="r:gz") as archive:
-            member = archive.getmember(member_info.archive_name)
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                raise ValueError("provenance file could not be read")
-            while chunk := extracted.read(1024 * 1024):
-                digest.update(chunk)
-        return digest.hexdigest()
+            for member in archive:
+                name = member.name.removeprefix("./")
+                member_info = self._members.get(name)
+                if (
+                    member_info is None
+                    or member_info.archive_name != member.name
+                    or not member.isfile()
+                ):
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise ValueError("provenance file could not be read")
+                digest = hashlib.sha256()
+                while chunk := extracted.read(1024 * 1024):
+                    digest.update(chunk)
+                digests[name] = digest.hexdigest()
+        if digests.keys() != self._members.keys():
+            raise ValueError("provenance file could not be read")
+        return digests
 
     def member_sha256(self, path: str) -> str:
         """Return the digest of one validated regular archive member."""
@@ -3910,7 +4070,7 @@ class OpenRouterSourceReviewAgent:
             except httpx.HTTPStatusError as error:
                 status = error.response.status_code
                 fault = str(status) if status == 429 or status >= 500 else None
-                signature = f"http-status={status}"
+                signature = _http_error_signature(error.response)
                 caught: BaseException = error
             except (TimeoutError, httpx.TimeoutException) as error:
                 # ``asyncio.timeout`` raises the built-in TimeoutError, which
@@ -4490,6 +4650,22 @@ def _bounded_json(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _starter_model_digests() -> set[str]:
+    """Starter-model SHA-256 values published by every installed manifest."""
+    digests: set[str] = set()
+    try:
+        for path in sorted(_STARTER_MANIFEST_DIR.glob("starter-kit-provenance-*.json")):
+            files = _load_provenance_manifest(path)["files"]
+            if isinstance(files, dict) and isinstance(
+                files.get(_STARTER_MODEL_PATH), str
+            ):
+                digests.add(files[_STARTER_MODEL_PATH])
+    except (OSError, ValueError):
+        # An unreadable manifest set proves nothing; keep the member truncated.
+        return set()
+    return digests
 
 
 def _load_provenance_manifest(path: Path) -> dict[str, object]:

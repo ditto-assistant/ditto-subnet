@@ -33,6 +33,7 @@ from ditto.api_models.miner_session import (
     PublicMinerReview,
     PublicMinerSubmission,
 )
+from ditto.api_server.deferred_source_review import public_review_reason
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.miner_auth import (
     require_scope,
@@ -460,7 +461,7 @@ async def my_reviews(request: Request, session: SessionDep) -> MinerMeReviewsRes
                     name=agent.name,
                     status=item.status,
                     opened_at=item.opened_at,
-                    detail=item.original_reason,
+                    detail=public_review_reason(item.original_reason),
                 )
             )
         else:

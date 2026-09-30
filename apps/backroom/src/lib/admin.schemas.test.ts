@@ -98,6 +98,7 @@ import {
   listLeaseRevocationsInputSchema,
   leaseRevocationsListSchema,
   screenerCapacityViewSchema,
+  screenerFleetReleaseSchema,
   screeningInfraRetryViewSchema,
   screenerNodeChannelSettingsConfirmation,
   screenerProviderSettingsConfirmation,
@@ -313,6 +314,17 @@ describe('admin API schemas', () => {
     const base = { snapshot: null, nodes: [], events: [] }
     expect(screenerCapacityViewSchema.parse({ ...base, legacy_bearer_accepted: false }).legacy_bearer_accepted).toBe(false)
     expect(screenerCapacityViewSchema.parse(base).legacy_bearer_accepted).toBeNull()
+  })
+
+  it('preserves the signed fixture capability and defaults older releases to false', () => {
+    const release = {
+      builtin_policy_version: 13,
+      revision: 'a'.repeat(40),
+      version: 'v0.330.16',
+      activated_at: 1_800_000_000,
+    }
+    expect(screenerFleetReleaseSchema.parse({ ...release, source_fixture_v1: true }).source_fixture_v1).toBe(true)
+    expect(screenerFleetReleaseSchema.parse(release).source_fixture_v1).toBe(false)
   })
 
   it('preserves the fenced multi-provider capacity contract', () => {
@@ -859,6 +871,8 @@ describe('admin API schemas', () => {
     })
     expect(assignments.items[0].score_count).toBe(2)
     expect(assignments.items[0].provisional_composite).toBe(1.25)
+    // A platform that predates the field reads as "no seed", not a guess.
+    expect(assignments.items[0].seed).toBeNull()
     expect(() =>
       releaseValidatorAssignmentInputSchema.parse({
         agentId: assignments.items[0].agent_id,
@@ -867,6 +881,40 @@ describe('admin API schemas', () => {
         reason: 'short',
       }),
     ).toThrow()
+  })
+
+  it('keeps a continual retest lease seed exact and rejects a lossy number', () => {
+    const lease = {
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      agent_name: 'memory-agent',
+      miner_hotkey: '5Miner',
+      validator_hotkey: '5Validator',
+      issued_at: '2026-09-22T17:35:16Z',
+      deadline: '2026-09-22T20:35:16Z',
+      bench_version: 13,
+      attempt_count: 1,
+      score_count: 3,
+      provisional_composite: 0.9,
+      purpose: 'continual_retest',
+      seed: '9007199254740993',
+    }
+    const parsed = validatorAssignmentListSchema.parse({
+      count: 1,
+      generation: 'active',
+      active_bench_version: 13,
+      items: [lease],
+    })
+    expect(parsed.items[0].seed).toBe('9007199254740993')
+    for (const seed of [Number.MAX_SAFE_INTEGER + 2, '-1', '01', '1e3']) {
+      expect(() =>
+        validatorAssignmentListSchema.parse({
+          count: 1,
+          generation: 'active',
+          active_bench_version: 13,
+          items: [{ ...lease, seed }],
+        }),
+      ).toThrow()
+    }
   })
 })
 
@@ -1939,6 +1987,23 @@ describe('source review causal evidence schema', () => {
   it('parses the generated v2 finding shape without stripping causal proof', () => {
     const parsed = sourceReviewFindingSchema.parse(generatedFinding)
     expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
+  })
+
+  it('retains signed v3 I5 proof and rejects an unbound assumption', () => {
+    const proof = {
+      evaluation_assumption: 'A fixed evaluation answer replaces the request answer.',
+      ordinary_product_exclusion: 'The served code skips the deciding model entirely.',
+      assumption_evidence_index: 0,
+    }
+    const finding = {
+      ...generatedFinding,
+      causal_evidence: { ...generatedFinding.causal_evidence, schema_version: 3, i5_proof: proof },
+    } as const
+    expect(sourceReviewFindingSchema.parse(finding).causal_evidence?.i5_proof).toEqual(proof)
+    expect(() => sourceReviewFindingSchema.parse({
+      ...finding,
+      causal_evidence: { ...finding.causal_evidence, i5_proof: { ...proof, assumption_evidence_index: 9 } },
+    })).toThrow(/not bound to source evidence/)
   })
 
   it('parses and retains the complete policy-v10 invariant sweep', () => {

@@ -510,6 +510,7 @@ export const scheduleL2ReportCanaryInputSchema = z.object({
   runMode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   historicalRulingKind: z.enum(['ath_clear', 'screening_reject']).optional(),
   historicalRulingId: z.string().uuid().optional(),
+  reviewSettingsRevision: z.number().int().positive().optional(),
   confirmation: z.literal('QUEUE REPORT ONLY L2 CANARY'),
 }).superRefine((input, ctx) => {
   if ((input.historicalRulingKind === undefined) !== (input.historicalRulingId === undefined)) {
@@ -537,6 +538,12 @@ export const l2ReportCanaryViewSchema = z.object({
   review_label: z.string(),
   run_mode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   source_attestation: z.record(z.string(), z.unknown()).nullable().optional(),
+  // Scheduled l2-report-canary* posture pin, and the posture the claim bound.
+  review_settings_revision: z.number().int().positive().nullable().optional(),
+  review_settings_scope: z.string().nullable().optional(),
+  review_settings_checksum: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
+  settings_revision: z.number().int().nonnegative().nullable().optional(),
+  settings_checksum: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
   status: z.string(),
   claimed_instance_id: z.string().nullable(),
   lease_expires_at: z.string().nullable().optional(),
@@ -869,6 +876,7 @@ export const screenerFleetReleaseSchema = z.object({
   revision: z.string().regex(/^[0-9a-f]{40}$/).nullish().transform((value) => value ?? null),
   version: z.string().min(1).nullish().transform((value) => value ?? null),
   activated_at: z.number().int().nonnegative().nullish().transform((value) => value ?? null),
+  source_fixture_v1: z.boolean().default(false),
 })
 
 const screenerDockerHealthSchema = z.object({
@@ -4478,12 +4486,20 @@ const sourceReviewCausalRoleBindingSchema = z.strictObject({
 
 export const sourceReviewCausalEvidenceSchema = z
   .strictObject({
-    schema_version: z.literal(2),
+    schema_version: z.union([z.literal(2), z.literal(3)]),
     authority_transition: sourceReviewAuthorityTransitionSchema,
     scorer_visible_effect: sourceReviewScorerVisibleEffectSchema,
     role_bindings: z.array(sourceReviewCausalRoleBindingSchema).min(1).max(32),
+    i5_proof: z.strictObject({
+      evaluation_assumption: z.string().min(12).max(240),
+      ordinary_product_exclusion: z.string().min(12).max(240),
+      assumption_evidence_index: z.number().int().min(0).max(15),
+    }).nullish(),
   } satisfies PlatformResponseShape<GeneratedSourceReviewCausalEvidence>)
   .superRefine((causal, context) => {
+    if ((causal.schema_version === 3) !== (causal.i5_proof != null)) {
+      context.addIssue({ code: 'custom', message: 'causal evidence v3 requires an I5 proof' })
+    }
     const bindings = causal.role_bindings.map((binding) =>
       [binding.path, binding.line, binding.category, binding.role].join('\u0000'))
     if (new Set(bindings).size !== bindings.length) {
@@ -4638,6 +4654,11 @@ export const sourceReviewFindingSchema = z
             code: 'custom', message: 'causal role binding does not reference finding evidence',
           })
         }
+      }
+      const proof = finding.causal_evidence.i5_proof
+      if (proof && !['benchmark_emulation', 'embedded_evaluator_logic'].includes(
+        finding.evidence[proof.assumption_evidence_index]?.category ?? '')) {
+        context.addIssue({ code: 'custom', message: 'I5 assumption is not bound to source evidence' })
       }
     }
     if (finding.invariant_assessment) {
@@ -5679,6 +5700,15 @@ export const validatorAssignmentSchema = z.object({
     .default(null),
   agent_status: z.string().nullish().default(null),
   first_reported_at: z.string().nullish().default(null),
+  // Exact decimal dataset seed the lease runs. A string, never a number: a
+  // 64-bit seed above 2**53 would round in JSON and two different continual
+  // retest seeds could read as the same paired run. Null against a platform
+  // that predates the field or a ticket with no seed yet.
+  seed: z
+    .string()
+    .regex(/^(0|[1-9][0-9]*)$/)
+    .nullish()
+    .default(null),
 })
 
 export const validatorAssignmentListSchema = z.object({
@@ -8643,10 +8673,10 @@ export const scoreLeaderboardPageSchema = z.object({
  * throws on `JSON.stringify` without a custom replacer.
  *
  * This also matches the platform's own precedent: the pipeline endpoint already
- * declares `PublicProvisionalScore.seed` / `PublicConfirmationScore.seed` as
- * `str` with pattern `^\d+$` and the comment "Encoded as a string to avoid
- * JavaScript integer rounding". The score endpoints Backroom reads simply never
- * got the same treatment.
+ * declares `PublicProvisionalScore.seed` as `str` with pattern `^\d+$` and
+ * the comment "Encoded as a string to avoid JavaScript integer rounding".
+ * Reusable confirmation seeds are intentionally absent from public responses.
+ * The score endpoints Backroom reads simply never got the same treatment.
  *
  * Platform seeds are non-negative (`derive_seed` masks to 63 bits), but the
  * column is a signed `BigInteger`, so a leading `-` is accepted rather than

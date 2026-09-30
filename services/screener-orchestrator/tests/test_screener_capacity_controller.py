@@ -20,6 +20,7 @@ from screener_capacity.controller import (
     ProviderCounts,
     ProviderRouting,
     Settings,
+    _write_state,
     build_parser,
     desired_slots,
     gce_capacity_target,
@@ -1195,6 +1196,518 @@ class CapacityDecisionTests(unittest.TestCase):
                 self.assertEqual(
                     [event["detail"] for event in snapshot["events"]],
                     [f"GCE target 3 -> 1 deferred: {label}"],
+                )
+
+    def _deferred_scale_in_passes(
+        self,
+        gce: _GCE,
+        inventories: list[NodeInventory | None],
+        *,
+        settings: Settings,
+        runnable: int = 2,
+    ) -> list[list[dict[str, Any]]]:
+        """Run one pass per inventory against one persistent state file.
+
+        A None inventory makes that pass's Platform node read fail.
+        """
+        per_pass: list[list[dict[str, Any]]] = []
+
+        def read_nodes(inventory: NodeInventory | None) -> NodeInventory:
+            if inventory is None:
+                raise ControllerError("Platform GET failed with HTTP 502")
+            return inventory
+
+        for inventory in inventories:
+            renewed: list[dict[str, Any]] = []
+            platform = SimpleNamespace(
+                demand=lambda **_kwargs: Demand(runnable=runnable, active=0, desired=4),
+                provider_routing=_overflow_routing,
+                node_states=lambda inventory=inventory: read_nodes(inventory).states,
+                node_inventory=lambda inventory=inventory: read_nodes(inventory),
+                renew=lambda snapshot, renewed=renewed: (
+                    renewed.append(snapshot) or snapshot
+                ),
+                fence=lambda **_kwargs: None,
+            )
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+            ):
+                reconcile(settings)
+            per_pass.append(renewed)
+        return per_pass
+
+    @staticmethod
+    def _event_details(renewed: list[dict[str, Any]]) -> list[str]:
+        return [event["detail"] for payload in renewed for event in payload["events"]]
+
+    def test_deferred_scale_in_records_each_transition_once(self) -> None:
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            settings.state_file.write_text(json.dumps({"provider_ready": True}))
+            gce = _GCE(target=2)
+            gce.instances = {"vm-a", "vm-b"}
+            idle = self._inventory(
+                self._gcp_row("vm-a", seen=1), self._gcp_row("vm-b", seen=2)
+            )
+            busy = self._inventory(
+                self._gcp_row("vm-a", seen=1), self._gcp_row("vm-b", seen=2), running=1
+            )
+            passes = self._deferred_scale_in_passes(
+                gce, [idle, idle, idle, busy, busy], settings=settings
+            )
+
+            self.assertEqual(gce.resized, [])
+            self.assertEqual(gce.deleted_instances, [])
+            for renewed in passes:
+                # Every pass keeps publishing the lower target and the deferral.
+                self.assertEqual(renewed[0]["gce_target"], 0)
+                self.assertEqual(renewed[-1]["gce_target"], 0)
+                self.assertEqual(
+                    renewed[-1]["fallback_reason"], "GCE_SCALE_IN_DEFERRED"
+                )
+            self.assertEqual(
+                [self._event_details(renewed) for renewed in passes],
+                [
+                    [
+                        "GCE target 2 -> 0",
+                        "GCE target 2 -> 0 deferred: durable_claim_fence_unavailable",
+                    ],
+                    [],
+                    [],
+                    # A new deferral reason is a new event, not a new target.
+                    ["GCE target 2 -> 0 deferred: gce_active_lease"],
+                    [],
+                ],
+            )
+
+    def test_deferred_scale_in_records_a_new_target_or_a_resumed_deferral(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            settings.state_file.write_text(json.dumps({"provider_ready": True}))
+            gce = _GCE(target=3)
+            idle = self._inventory(
+                self._gcp_row("vm-a", seen=1),
+                self._gcp_row("vm-b", seen=2),
+                self._gcp_row("vm-c", seen=3),
+            )
+            gce.instances = {"vm-a", "vm-b", "vm-c"}
+            first = self._deferred_scale_in_passes(gce, [idle, idle], settings=settings)
+            self.assertEqual(
+                [self._event_details(renewed) for renewed in first],
+                [
+                    [
+                        "GCE target 3 -> 0",
+                        "GCE target 3 -> 0 deferred: durable_claim_fence_unavailable",
+                    ],
+                    [],
+                ],
+            )
+
+            # An operator drain changes the physical target: a new transition.
+            gce._target = 2
+            gce.instances = {"vm-a", "vm-b"}
+            drained = self._deferred_scale_in_passes(gce, [idle], settings=settings)
+            self.assertEqual(
+                self._event_details(drained[0]),
+                [
+                    "GCE target 2 -> 0",
+                    "GCE target 2 -> 0 deferred: durable_claim_fence_unavailable",
+                ],
+            )
+
+            # A pass that no longer scales in ends the deferral, so a later
+            # scale-in is recorded again instead of being mistaken for it.
+            leased = self._inventory(
+                self._gcp_row("vm-a", seen=1, busy=True, lease=True),
+                self._gcp_row("vm-b", seen=2),
+                running=1,
+            )
+            held = self._deferred_scale_in_passes(gce, [leased], settings=settings)
+            self.assertEqual(self._event_details(held[0]), [])
+            self.assertEqual(held[0][-1]["gce_target"], 2)
+            resumed = self._deferred_scale_in_passes(gce, [idle], settings=settings)
+            self.assertEqual(
+                self._event_details(resumed[0]),
+                [
+                    "GCE target 2 -> 0",
+                    "GCE target 2 -> 0 deferred: durable_claim_fence_unavailable",
+                ],
+            )
+
+    def test_deferred_scale_in_event_retries_after_completed_renew_fails(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            settings.state_file.write_text(json.dumps({"provider_ready": True}))
+            gce = _GCE(target=2)
+            gce.instances = {"vm-a", "vm-b"}
+            idle = self._inventory(
+                self._gcp_row("vm-a", seen=1), self._gcp_row("vm-b", seen=2)
+            )
+            renewed: list[dict[str, Any]] = []
+
+            def renew(snapshot: dict[str, Any]) -> dict[str, Any]:
+                renewed.append(snapshot)
+                if len(renewed) == 2:
+                    raise ControllerError("completed renew failed")
+                return snapshot
+
+            platform = SimpleNamespace(
+                demand=lambda **_kwargs: Demand(runnable=2, active=0, desired=4),
+                provider_routing=_overflow_routing,
+                node_states=lambda: idle.states,
+                node_inventory=lambda: idle,
+                renew=renew,
+                fence=lambda **_kwargs: None,
+            )
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+            ):
+                with self.assertRaisesRegex(ControllerError, "completed renew"):
+                    reconcile(settings)
+                # Only the delivered target change is recorded.
+                self.assertEqual(
+                    json.loads(settings.state_file.read_text())[
+                        "gce_scale_in_deferral"
+                    ],
+                    {"from": 2, "to": 0, "reason": None},
+                )
+                reconcile(settings)
+                reconcile(settings)
+
+            # The fenced renew delivered the target change, so only the
+            # undelivered deferral is sent on the next pass, then neither again.
+            self.assertEqual(
+                [
+                    [event["detail"] for event in payload["events"]]
+                    for payload in renewed
+                ],
+                [
+                    ["GCE target 2 -> 0"],
+                    ["GCE target 2 -> 0 deferred: durable_claim_fence_unavailable"],
+                    [],
+                    ["GCE target 2 -> 0 deferred: durable_claim_fence_unavailable"],
+                    [],
+                    [],
+                ],
+            )
+
+    def _passes_losing_one_state_write(
+        self, *, after_renews: int, passes: int
+    ) -> tuple[list[list[str]], dict[str, Any], dict[str, Any]]:
+        """Run a 2 -> 0 deferral whose first state write after renew
+        ``after_renews`` fails, as a full disk or a kill before it would.
+
+        Returns the event details of every renew, the state file right after
+        the failed pass, and the state file after the last pass.
+        """
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            settings.state_file.write_text(json.dumps({"provider_ready": True}))
+            gce = _GCE(target=2)
+            gce.instances = {"vm-a", "vm-b"}
+            idle = self._inventory(
+                self._gcp_row("vm-a", seen=1), self._gcp_row("vm-b", seen=2)
+            )
+            renewed: list[dict[str, Any]] = []
+            lost: list[dict[str, Any]] = []
+
+            def write_state(path: Path, state: dict[str, Any]) -> None:
+                if len(renewed) == after_renews and not lost:
+                    lost.append(state)
+                    raise OSError("No space left on device")
+                _write_state(path, state)
+
+            platform = SimpleNamespace(
+                demand=lambda **_kwargs: Demand(runnable=2, active=0, desired=4),
+                provider_routing=_overflow_routing,
+                node_states=lambda: idle.states,
+                node_inventory=lambda: idle,
+                renew=lambda snapshot: renewed.append(snapshot) or snapshot,
+                fence=lambda **_kwargs: None,
+            )
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+                patch("screener_capacity.controller._write_state", write_state),
+            ):
+                # Not a ControllerError: the service exits and systemd
+                # restarts it, so no later write of that pass happens either.
+                with self.assertRaisesRegex(OSError, "No space left"):
+                    reconcile(settings)
+                after_loss = json.loads(settings.state_file.read_text())
+                for _ in range(passes - 1):
+                    reconcile(settings)
+            final = json.loads(settings.state_file.read_text())
+        self.assertEqual(len(lost), 1)
+        return (
+            [[event["detail"] for event in payload["events"]] for payload in renewed],
+            after_loss,
+            final,
+        )
+
+    def test_deferral_is_sent_again_once_when_its_state_write_is_lost(
+        self,
+    ) -> None:
+        # Platform has no capacity-event idempotency key, so the controller
+        # cannot tell a completed renew that committed from one that did not.
+        # It records the deferral only after that renew succeeds; losing the
+        # write that follows sends the deferral once more on the next pass.
+        # Delivery is at least once: never the delivered target change again,
+        # and never once per pass.
+        events, after_loss, final = self._passes_losing_one_state_write(
+            after_renews=2, passes=3
+        )
+
+        self.assertEqual(
+            after_loss["gce_scale_in_deferral"], {"from": 2, "to": 0, "reason": None}
+        )
+        self.assertEqual(
+            events,
+            [
+                ["GCE target 2 -> 0"],
+                ["GCE target 2 -> 0 deferred: durable_claim_fence_unavailable"],
+                [],
+                ["GCE target 2 -> 0 deferred: durable_claim_fence_unavailable"],
+                [],
+                [],
+            ],
+        )
+        self.assertEqual(
+            final["gce_scale_in_deferral"],
+            {"from": 2, "to": 0, "reason": "durable_claim_fence_unavailable"},
+        )
+
+    def test_target_change_is_sent_again_once_when_its_state_write_is_lost(
+        self,
+    ) -> None:
+        # The fenced first renew follows the same rule: losing the write after
+        # it sends the target change once more, with the deferral that the
+        # interrupted pass never reached.
+        events, after_loss, final = self._passes_losing_one_state_write(
+            after_renews=1, passes=3
+        )
+
+        self.assertNotIn("gce_scale_in_deferral", after_loss)
+        self.assertEqual(
+            events,
+            [
+                ["GCE target 2 -> 0"],
+                ["GCE target 2 -> 0"],
+                ["GCE target 2 -> 0 deferred: durable_claim_fence_unavailable"],
+                [],
+                [],
+            ],
+        )
+        self.assertEqual(
+            final["gce_scale_in_deferral"],
+            {"from": 2, "to": 0, "reason": "durable_claim_fence_unavailable"},
+        )
+
+    def test_completed_renew_is_recorded_in_one_state_write(self) -> None:
+        # The deferral and the pass's readiness both describe what the
+        # completed renew delivered. One write records them, so a crash or a
+        # failed write after that renew loses both together, and the pass adds
+        # no whole-file rewrite beyond one per renew.
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            settings.state_file.write_text(
+                json.dumps(
+                    {
+                        "provider_ready": False,
+                        "last_provider_error_code": "GCE_SCALE_DOWN_FAILED",
+                        "last_provider_error_at": "2026-09-29T00:00:00+00:00",
+                    }
+                )
+            )
+            gce = _GCE(target=2)
+            gce.instances = {"vm-a", "vm-b"}
+            idle = self._inventory(
+                self._gcp_row("vm-a", seen=1), self._gcp_row("vm-b", seen=2)
+            )
+            renewed: list[dict[str, Any]] = []
+            writes: list[tuple[int, dict[str, Any]]] = []
+
+            def write_state(path: Path, state: dict[str, Any]) -> None:
+                writes.append((len(renewed), json.loads(json.dumps(state))))
+                _write_state(path, state)
+
+            platform = SimpleNamespace(
+                demand=lambda **_kwargs: Demand(runnable=2, active=0, desired=4),
+                provider_routing=_overflow_routing,
+                node_states=lambda: idle.states,
+                node_inventory=lambda: idle,
+                renew=lambda snapshot: renewed.append(snapshot) or snapshot,
+                fence=lambda **_kwargs: None,
+            )
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+                patch("screener_capacity.controller._write_state", write_state),
+            ):
+                reconcile(settings)
+
+        # One write before the fenced renew, then one after each renew.
+        self.assertEqual([after for after, _state in writes], [0, 1, 2])
+        completed = writes[-1][1]
+        # An unready prior pass cannot vouch for the legacy claim fence.
+        self.assertEqual(
+            completed["gce_scale_in_deferral"],
+            {"from": 2, "to": 0, "reason": "legacy_claims_not_fenced"},
+        )
+        self.assertIs(completed["provider_ready"], True)
+        self.assertIsNone(completed["last_provider_error_code"])
+
+    def test_inventory_hold_ends_a_deferral_and_its_resumption_records_again(
+        self,
+    ) -> None:
+        # The hold republishes the current MIG size, so the lower target that
+        # returns after it is a new transition, recorded with the hold events.
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            settings.state_file.write_text(json.dumps({"provider_ready": True}))
+            gce = _GCE(target=2)
+            gce.instances = {"vm-a", "vm-b"}
+            idle = self._inventory(
+                self._gcp_row("vm-a", seen=1), self._gcp_row("vm-b", seen=2)
+            )
+            passes = self._deferred_scale_in_passes(
+                gce, [idle, idle, None, idle, idle], settings=settings
+            )
+
+        self.assertEqual(gce.resized, [])
+        self.assertEqual(gce.deleted_instances, [])
+        self.assertEqual(
+            [[payload["gce_target"] for payload in renewed] for renewed in passes],
+            [[0, 0], [0, 0], [2, 2], [0, 0], [0, 0]],
+        )
+        self.assertEqual(
+            [self._event_details(renewed) for renewed in passes],
+            [
+                [
+                    "GCE target 2 -> 0",
+                    "GCE target 2 -> 0 deferred: durable_claim_fence_unavailable",
+                ],
+                [],
+                [
+                    "nodes read failed; holding GCE target 2",
+                    "HETZNER_PRIMARY_HANDLING_BASE_LOAD -> "
+                    "PLATFORM_INVENTORY_UNAVAILABLE",
+                ],
+                [
+                    "GCE target 2 -> 0",
+                    "PLATFORM_INVENTORY_UNAVAILABLE -> "
+                    "HETZNER_PRIMARY_HANDLING_BASE_LOAD",
+                    "GCE target 2 -> 0 deferred: durable_claim_fence_unavailable",
+                ],
+                [],
+            ],
+        )
+
+    def test_scale_in_after_a_deferral_does_not_resend_the_target_change(
+        self,
+    ) -> None:
+        # Like a scale-up, a scale-in sends its target change once, as a
+        # decision on the fenced renew that begins it, not again when the MIG
+        # finally changes. Once a claim fence lets a deferred scale-in proceed,
+        # the deferral ends in the published fallback reason instead.
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            settings.state_file.write_text(json.dumps({"provider_ready": True}))
+            gce = _GCE(target=3)
+            gce.instances = {"vm-a", "vm-b", "vm-c"}
+            inventory = self._inventory(
+                self._gcp_row("vm-a", seen=1),
+                self._gcp_row("vm-b", seen=2),
+                self._gcp_row("vm-c", seen=3),
+            )
+            # threshold = max(12, 4 * 3); (14 - 12) / 2 jobs per slot -> 1.
+            deferred = self._deferred_scale_in_passes(
+                gce, [inventory], settings=settings, runnable=14
+            )
+            with patch(
+                "screener_capacity.controller._plan_gce_scale_in",
+                return_value=(["vm-a", "vm-b"], None),
+            ):
+                deleted = self._deferred_scale_in_passes(
+                    gce, [inventory], settings=settings, runnable=14
+                )
+            settled = self._deferred_scale_in_passes(
+                gce, [inventory], settings=settings, runnable=14
+            )
+
+            self.assertEqual(gce.deleted_instances, [["vm-a", "vm-b"]])
+            self.assertEqual(
+                [
+                    self._event_details(renewed)
+                    for renewed in (*deferred, *deleted, *settled)
+                ],
+                [
+                    [
+                        "GCE target 3 -> 1",
+                        "GCE target 3 -> 1 deferred: "
+                        "per_instance_claim_fence_unavailable",
+                    ],
+                    [],
+                    [],
+                ],
+            )
+            self.assertEqual(
+                deferred[0][-1]["fallback_reason"], "GCE_SCALE_IN_DEFERRED"
+            )
+            self.assertEqual(deleted[0][-1]["gce_target"], 1)
+            self.assertEqual(
+                deleted[0][-1]["fallback_reason"], "HETZNER_BACKLOG_OVERFLOW"
+            )
+            self.assertIsNone(
+                json.loads(settings.state_file.read_text())["gce_scale_in_deferral"]
+            )
+
+    def test_corrupt_scale_in_deferral_state_is_ignored(self) -> None:
+        for cached in (
+            "2->0",
+            {"from": 2},
+            {"from": True, "to": 0, "reason": "durable_claim_fence_unavailable"},
+            {"from": 2, "to": "0", "reason": "durable_claim_fence_unavailable"},
+            {"from": 2, "to": 0, "reason": 7},
+        ):
+            with self.subTest(cached=cached), TemporaryDirectory() as directory:
+                settings = _settings(Path(directory))
+                settings.state_file.write_text(
+                    json.dumps(
+                        {"provider_ready": True, "gce_scale_in_deferral": cached}
+                    )
+                )
+                gce = _GCE(target=2)
+                gce.instances = {"vm-a", "vm-b"}
+                idle = self._inventory(
+                    self._gcp_row("vm-a", seen=1), self._gcp_row("vm-b", seen=2)
+                )
+                passes = self._deferred_scale_in_passes(gce, [idle], settings=settings)
+
+                self.assertEqual(
+                    self._event_details(passes[0]),
+                    [
+                        "GCE target 2 -> 0",
+                        "GCE target 2 -> 0 deferred: durable_claim_fence_unavailable",
+                    ],
                 )
 
     def test_gcp_first_policy_scales_gce_workers(self) -> None:

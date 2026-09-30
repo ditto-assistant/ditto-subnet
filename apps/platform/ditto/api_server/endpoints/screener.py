@@ -126,6 +126,7 @@ from ditto.api_models.screener_review_settings import (
     INTEGRITY_DOUBLE_CHECK_SCOPE,
     EffectiveScreenerReviewSettings,
     ScreenerReviewSettings,
+    is_l2_report_canary_scope,
     policy_manifest_digest,
     review_settings_checksum,
 )
@@ -2294,7 +2295,9 @@ async def _resolve_effective_review_settings(
     A persistent node can have multiple local heartbeat identities while
     keeping its credential and operator canary scope on the node. A worker's
     own override remains most specific, followed by its enrolled node scope,
-    then the global posture.
+    then the global posture. ``l2-report-canary*`` scopes are never a worker's
+    posture, even for a node or legacy instance named inside that namespace:
+    they exist only to be pinned to one report-only canary.
     """
     scopes = [instance_id]
     if (
@@ -2305,6 +2308,7 @@ async def _resolve_effective_review_settings(
         )
     ):
         scopes.append(enrolled_node_id)
+    scopes = [scope for scope in scopes if not is_l2_report_canary_scope(scope)]
     scopes.append("*")
     rows = list(
         await session.scalars(

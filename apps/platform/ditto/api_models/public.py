@@ -3887,16 +3887,9 @@ class PublicInferenceRun(BaseModel):
 
 
 class PublicConfirmationScore(BaseModel):
-    """One append-only shared-seed score from a continual top-five retest."""
+    """One append-only continual retest score, without its reusable seed."""
 
     composite: Annotated[float, Field(ge=0.0, le=1.0)]
-    seed: Annotated[
-        str,
-        Field(
-            pattern=r"^\d+$",
-            description="Exact decimal shared seed, encoded without JS rounding.",
-        ),
-    ]
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     bench_version: Annotated[int, Field(ge=1)]
     accepted_at: datetime
@@ -4332,6 +4325,17 @@ class PublicSubmissionPipeline(BaseModel):
     ] = None
     provisional_scores: list[PublicProvisionalScore] = Field(default_factory=list)
     confirmation_scores: list[PublicConfirmationScore] = Field(default_factory=list)
+    confirmation_sample_composites: list[Annotated[float, Field(ge=0.0, le=1.0)]] = (
+        Field(
+            default_factory=list,
+            description=(
+                "Per-seed retest medians for this agent and active benchmark, "
+                "sorted by composite without exposing reusable seed identifiers. "
+                "These are display-only; cohort fold eligibility is authoritative "
+                "only in the leaderboard."
+            ),
+        )
+    )
     final_composite: Annotated[
         float | None,
         Field(

@@ -35,8 +35,12 @@ legacy hotkey has no per-instance claim fence. A deferral leaves the managed
 group unchanged while publishing the lower desired target, which blocks new
 claims for a fresh, ready controller. After controller authority expires,
 current-policy emergency fallback can admit claims again; no deletion is in
-progress. It records a `gce_scale_in_deferred` event with
-`GCE_SCALE_IN_DEFERRED` and is not a provider failure. Physical excess capacity
+progress. It publishes `GCE_SCALE_IN_DEFERRED` and is not a provider failure.
+Its `gce_target_changed` and `gce_scale_in_deferred` events are sent when the
+deferral begins, not on every pass. A new desired target or MIG size sends
+both again, as does a lower target that returns after a pass stopped scaling
+in (such as an inventory hold, a routing outage, or a live GCE lease); a new
+deferral reason sends only the deferral event. Physical excess capacity
 requires a durable claim fence or an operator-controlled drain.
 
 `SCREENING=0` (`screening_concurrency=0`) on the primary is an operator closure,
@@ -75,6 +79,14 @@ fenced failing pass records a
 `platform_inventory_unavailable` event and the expiry records
 `platform_inventory_hold_expired`. A failed pre-event read or first fenced
 renew leaves the transition pending for the next pass.
+
+Capacity transition events are delivered at least once, not exactly once. The
+controller records an event as sent, in its state file, only after the renew
+that carries it succeeds, and Platform has no event idempotency key. A renew
+whose response is lost, or a crash or failed state write right after a
+successful renew, can send that event once more on the next pass. A state file
+that cannot be written at all stops each pass at its first write, before any
+renew. The best-effort `provider_mutation_failed` event is not retried.
 
 Production uses `['hetzner', 'gcp']` for build, runtime smoke, and source review.
 The second entry means that separate GCE workers may claim still-unclaimed

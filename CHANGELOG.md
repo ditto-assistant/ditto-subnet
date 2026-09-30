@@ -2,6 +2,134 @@
 
 <!-- version list -->
 
+## v0.331.3 (2026-09-30)
+
+### Bug Fixes
+
+- **backroom**: Expose signed fixture worker capability
+  ([#2591](https://github.com/ditto-assistant/ditto-subnet/pull/2591),
+  [`2c0ca27`](https://github.com/ditto-assistant/ditto-subnet/commit/2c0ca2786421e74c6a460ebd4130090a2ff7b7a1))
+
+- **screener**: Account for manifest-matched starter model in review leads
+  ([#2590](https://github.com/ditto-assistant/ditto-subnet/pull/2590),
+  [`1e1bc38`](https://github.com/ditto-assistant/ditto-subnet/commit/1e1bc387809f6a784654000d111885781fb780fc))
+
+- **screener-orchestrator**: Record each deferred GCE scale-in once
+  ([#2564](https://github.com/ditto-assistant/ditto-subnet/pull/2564),
+  [`3856518`](https://github.com/ditto-assistant/ditto-subnet/commit/3856518c044cbc5952c9778337949331e1cdb742))
+
+
+## v0.331.2 (2026-09-30)
+
+### Bug Fixes
+
+- **screener**: Classify provider limits without logging upstream text
+  ([#2589](https://github.com/ditto-assistant/ditto-subnet/pull/2589),
+  [`95b0998`](https://github.com/ditto-assistant/ditto-subnet/commit/95b0998ec75136d90569a557e1b228565086b4ac))
+
+
+## v0.331.1 (2026-09-30)
+
+### Bug Fixes
+
+- **screener**: Stage starter provenance and check drift
+  ([#2588](https://github.com/ditto-assistant/ditto-subnet/pull/2588),
+  [`8b6d202`](https://github.com/ditto-assistant/ditto-subnet/commit/8b6d20240e339aa6a61182319963d80396eb92dc))
+
+
+## v0.331.0 (2026-09-30)
+
+### Bug Fixes
+
+- **platform**: Define name-claim entrenchment by earliest full-benchmark scored upload
+  ([#2541](https://github.com/ditto-assistant/ditto-subnet/pull/2541),
+  [`9ac62a9`](https://github.com/ditto-assistant/ditto-subnet/commit/9ac62a95736c89bf45dd15f541aabbad970b6c90))
+
+- **platform**: Show a neutral reason for the top-five double-check hold
+  ([#2547](https://github.com/ditto-assistant/ditto-subnet/pull/2547),
+  [`d490498`](https://github.com/ditto-assistant/ditto-subnet/commit/d490498accc81caaf45a857101c326c7ead6f7d5))
+
+- **validator**: Keep the weight loop alive when a ledger read fails
+  ([#2579](https://github.com/ditto-assistant/ditto-subnet/pull/2579),
+  [`3e977e3`](https://github.com/ditto-assistant/ditto-subnet/commit/3e977e3225b031d71df2f3e70942d8ffc4e07482))
+
+### Features
+
+- **backroom**: Route score reads to the continual retest diagnostic
+  ([#2542](https://github.com/ditto-assistant/ditto-subnet/pull/2542),
+  [`a7d2b7a`](https://github.com/ditto-assistant/ditto-subnet/commit/a7d2b7a064a3867aeca2b63a3a1a78f7c6b87f70))
+
+- **platform**: Expose the exact lease seed on validator assignments
+  ([#2556](https://github.com/ditto-assistant/ditto-subnet/pull/2556),
+  [`9dfdc24`](https://github.com/ditto-assistant/ditto-subnet/commit/9dfdc24b9d9b25cc6a85d2f9118791d079832a00))
+
+### Performance Improvements
+
+- **screener**: Hash provenance archive members in one pass
+  ([#2546](https://github.com/ditto-assistant/ditto-subnet/pull/2546),
+  [`b3dbd89`](https://github.com/ditto-assistant/ditto-subnet/commit/b3dbd891f81cdf290bd7cd1b4e8148d4e09c91e2))
+
+### Testing
+
+- **screener**: Package the starter kit like submit in the daily E2E
+  ([#2544](https://github.com/ditto-assistant/ditto-subnet/pull/2544),
+  [`5db4a8f`](https://github.com/ditto-assistant/ditto-subnet/commit/5db4a8f449dc5c0b6b844943370d365797885056))
+
+
+## v0.330.16 (2026-09-30)
+
+### Bug Fixes
+
+- **screener**: Require explicit generator answer path
+  ([#2587](https://github.com/ditto-assistant/ditto-subnet/pull/2587),
+  [`7ae6be9`](https://github.com/ditto-assistant/ditto-subnet/commit/7ae6be9f8a5e7e355f894e1fb373ca0c70d0025a))
+
+
+## v0.330.15 (2026-09-30)
+
+### Bug Fixes
+
+- **screener**: Retain unresolved generator source holds
+  ([#2586](https://github.com/ditto-assistant/ditto-subnet/pull/2586),
+  [`138bad8`](https://github.com/ditto-assistant/ditto-subnet/commit/138bad8449c1f704a7ba374cbf45d8a4e0ff7a06))
+
+
+## v0.330.14 (2026-09-30)
+
+### Bug Fixes
+
+- **screener**: Steer repeated L1 concern notes to new evidence
+  ([#2585](https://github.com/ditto-assistant/ditto-subnet/pull/2585),
+  [`e3417ee`](https://github.com/ditto-assistant/ditto-subnet/commit/e3417eec9c8d2f46454a8697b69f03839d63142b))
+
+
+## v0.330.13 (2026-09-30)
+
+### Bug Fixes
+
+- **screener**: Require signed I5 causal proof for V13
+  ([#2583](https://github.com/ditto-assistant/ditto-subnet/pull/2583),
+  [`98c0ae2`](https://github.com/ditto-assistant/ditto-subnet/commit/98c0ae282f9bbbec0577da6c6bd5896543037109))
+
+
+## v0.330.12 (2026-09-30)
+
+### Bug Fixes
+
+- **screener**: Require I5 causality for money prompts
+  ([#2581](https://github.com/ditto-assistant/ditto-subnet/pull/2581),
+  [`8d1d180`](https://github.com/ditto-assistant/ditto-subnet/commit/8d1d180cbab3dde6764da85625bb02d3eb62c135))
+
+
+## v0.330.11 (2026-09-30)
+
+### Bug Fixes
+
+- **screener**: Collapse duplicate L1 lead summaries for L2
+  ([#2577](https://github.com/ditto-assistant/ditto-subnet/pull/2577),
+  [`512a701`](https://github.com/ditto-assistant/ditto-subnet/commit/512a701667d6cd5b275e8cb2a51ea24ac4e5baa2))
+
+
 ## v0.330.10 (2026-09-30)
 
 ### Bug Fixes

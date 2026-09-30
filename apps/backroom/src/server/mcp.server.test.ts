@@ -426,11 +426,12 @@ describe('Backroom MCP tools', () => {
     // Main also adds the no-input validator-capacity read (#2036), and the
     // guarded verified V13 court-clear release adds a bounded writer entry.
     // Four canonical starter fixture controls bring the measured catalog to
-    // 179,468 bytes. Manual hold preview/withdraw tools bring it to 182,192.
-    // The paginated list_withdrawn_ath_holds read and the current-guard notes
-    // on get_ath_review and preview_ath_hold_withdrawal measure 183,100;
-    // retain about 0.5 KB headroom.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(183_600)
+    // 179,468 bytes. The optional canary review-posture pin
+    // (reviewSettingsRevision) measures 179,642. Manual hold preview/withdraw
+    // tools, the paginated list_withdrawn_ath_holds read and the current-guard
+    // notes on get_ath_review and preview_ath_hold_withdrawal measure 183,274
+    // together; retain about 0.5 KB headroom.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(183_800)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -466,9 +467,10 @@ describe('Backroom MCP tools', () => {
       // main adds the validator-capacity summary (#2036) and the guarded
       // verified V13 court-clear release summary.
       // Four fixture tool summaries bring the measured total to 31,772.
-      // Manual hold preview/withdraw summaries bring it to 32,072. The
-      // withdrawn-holds read and the current-guard wording measure 32,505.
-      32_700,
+      // The canary review-posture pin clause measures 31,854. Manual hold
+      // preview/withdraw summaries, the withdrawn-holds read and the
+      // current-guard wording measure 32,587 together.
+      32_800,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -2437,6 +2439,86 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  it('schedules a report canary pinned to an isolated review posture', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const canaryId = '33333333-3333-4333-8333-333333333333'
+    const requestId = '44444444-4444-4444-8444-444444444444'
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const sourceAttemptId = '22222222-2222-4222-8222-222222222222'
+    const view = {
+      canary_id: canaryId,
+      request_id: requestId,
+      agent_id: agentId,
+      source_attempt_id: sourceAttemptId,
+      artifact_sha256: 'a'.repeat(64),
+      target_node_id: 'subnet-screener-1',
+      expected_agent_status: 'rejected',
+      expected_score_count: 0,
+      review_label: 'known_reject',
+      run_mode: 'source_only',
+      review_settings_revision: 141,
+      review_settings_scope: 'l2-report-canary-ctl137',
+      review_settings_checksum: 'c'.repeat(64),
+      settings_revision: null,
+      settings_checksum: null,
+      status: 'queued',
+      claimed_instance_id: null,
+      lease_expires_at: null,
+      report: null,
+      error_code: null,
+      created_at: '2026-09-29T00:00:00Z',
+      completed_at: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(view))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'schedule_l2_report_canary',
+        arguments: {
+          requestId,
+          agentId,
+          sourceAttemptId,
+          artifactSha256: 'a'.repeat(64),
+          expectedAgentStatus: 'rejected',
+          expectedScoreCount: 0,
+          targetNodeId: 'subnet-screener-1',
+          reviewLabel: 'known_reject',
+          reviewSettingsRevision: 141,
+          confirmation: 'QUEUE REPORT ONLY L2 CANARY',
+        },
+      })
+      expect(response.isError).not.toBe(true)
+      // The pin survives Backroom's response parsing for later diagnosis.
+      expect(readJsonResult(response)).toMatchObject({
+        review_settings_revision: 141,
+        review_settings_scope: 'l2-report-canary-ctl137',
+        review_settings_checksum: 'c'.repeat(64),
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/pinned')
+      expect(init.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        request_id: requestId,
+        review_settings_revision: 141,
+        confirm_report_only: true,
+      })
+
+      const help = readJsonResult(
+        await client.callTool({
+          name: 'get_backroom_tool_help',
+          arguments: { tool: 'schedule_l2_report_canary' },
+        }),
+      ) as { summary: string; guidance: string }
+      expect(help.summary).toContain('reviewSettingsRevision')
+      expect(help.guidance).toContain('l2-report-canary-<name>')
+      expect(help.guidance).toContain('Never write a node or worker scope for an experiment')
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('applies the conversation switch with the authenticated operator identity', async () => {
@@ -5106,6 +5188,57 @@ describe('Backroom MCP tools', () => {
       'https://platform-api.heyditto.ai/api/v1/admin/validator-assignments?generation=active',
       expect.objectContaining({ method: 'GET' }),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('proves two continual retest leases share one exact seed', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '69c73375-e6ef-41fa-b6d8-8df15feea985'
+    const lease = (validator: string, seed: string | null) => ({
+      agent_id: agentId,
+      agent_name: 'clear',
+      miner_hotkey: '5' + 'C'.repeat(47),
+      validator_hotkey: validator,
+      issued_at: '2026-09-22T17:35:16Z',
+      deadline: '2026-09-22T20:35:16Z',
+      bench_version: 13,
+      attempt_count: 1,
+      score_count: 3,
+      provisional_composite: 0.9,
+      slot_id: 'slot-1',
+      purpose: seed === null ? 'canonical_quorum' : 'continual_retest',
+      seed,
+    })
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        count: 3,
+        generation: 'active',
+        active_bench_version: 13,
+        items: [
+          lease('5' + 'A'.repeat(47), '9007199254740993'),
+          lease('5' + 'B'.repeat(47), '9007199254740993'),
+          lease('5' + 'D'.repeat(47), null),
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'list_validator_assignments',
+      arguments: { agentId },
+    })
+    expect(response.isError).not.toBe(true)
+    const result = readJsonResult(response) as {
+      items: Array<{ validator_hotkey: string; seed: string | null }>
+    }
+    expect(result.items.map((item) => item.seed)).toEqual([
+      '9007199254740993',
+      '9007199254740993',
+      null,
+    ])
 
     await client.close()
     await server.close()
@@ -9790,6 +9923,172 @@ describe('Backroom MCP tools', () => {
     await client.close()
     await server.close()
   })
+  it('explains an owner-suppressed generation over read scope with the admin token server-side', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    // The #2105 shape: a newer generation whose canonical median beats its
+    // owner's 15-seed representative sits outside every cohort it outscores.
+    const newerId = '01f5373c-c626-4271-ac68-348bd52510d3'
+    const representativeId = '7a2ca671-788d-4b18-b6bf-799cc450680f'
+    const diagnostic = {
+      generated_at: '2026-09-22T23:51:00Z',
+      agent_id: newerId,
+      agent_status: 'scored',
+      active_bench_version: 13,
+      canonical_composite: 0.54072,
+      official_composite: 0.54072,
+      owner_representative_id: representativeId,
+      family: [
+        {
+          agent_id: newerId,
+          canonical_composite: 0.54072,
+          official_composite: 0.54072,
+          representative: false,
+          effective_composite: 0.54072,
+          canonical_sample_count: 3,
+          completed_wave_depth: 0,
+          first_seen: '2026-09-22T22:51:00Z',
+        },
+        {
+          agent_id: representativeId,
+          canonical_composite: 0.479032,
+          official_composite: 0.5965,
+          representative: true,
+          effective_composite: 0.5965,
+          canonical_sample_count: 3,
+          completed_wave_depth: 15,
+          first_seen: '2026-09-12T23:51:00Z',
+        },
+      ],
+      raw_confirmation_seeds: ['9223372036854775001'],
+      folded_confirmation_seeds: [],
+      in_raw_wave: false,
+      in_emission_set: false,
+      in_retest_cohort: false,
+      is_same_owner_challenger: false,
+      cohort_position: null,
+      cohort_size: 9,
+      configured_cohort_size: 5,
+      eligibility_mode: 'statistical',
+      eligibility_z: 1.64,
+      configured_max_size: 25,
+      ticket_status_counts: {},
+      active_ticket_count: 0,
+      seed_anchor_champion_id: representativeId,
+      seed_anchor_block: 123456,
+      seed_anchor_pinned: true,
+      admission_reason: 'owner_suppressed',
+      ledger_eligible: true,
+      canonical_sample_count: 3,
+      completed_wave_depth: 0,
+      official_sample_count: 3,
+      raw_confirmation_depth: 1,
+      composite_stderr: 0.01,
+      aggregate_mode: 'fleet_ready',
+      wave_membership: 'participants',
+      owner_key: 'owner:gryffindor',
+      representative_canonical_composite: 0.479032,
+      representative_official_composite: 0.5965,
+      representative_margin: 0.05578,
+      representative_selection: 'official_composite',
+      cohort_cutoff: {
+        agent_id: representativeId,
+        composite: 0.30444,
+        gap: -0.23628,
+        tie_band: 0.02,
+        within_tie_band: true,
+      },
+      emission_cutoff: {
+        agent_id: representativeId,
+        composite: 0.30444,
+        gap: -0.23628,
+        tie_band: 0.02,
+        within_tie_band: true,
+      },
+      claim: {
+        lane_enabled: true,
+        latest_block: 1000,
+        champion_agent_id: representativeId,
+        champion_crown_block: 900,
+        scheduled_round: false,
+        spare_capacity_window: false,
+        idle_retests_enabled: false,
+        in_catchup_set: false,
+        route_priority: 'not_routed',
+        route_position: null,
+        pending_seed_count: 2,
+        claimable_seed_available: false,
+        live_lease_count: 0,
+        newer_canonical_work_pending: false,
+        least_covered_admitted: null,
+        decision: 'not_in_cohort',
+        // A drifted platform must not leak challenge material through MCP.
+        pending_seeds: ['9223372036854775002'],
+      },
+      latest_ticket_status: null,
+      latest_ticket_validator_hotkey: null,
+      latest_ticket_updated_at: null,
+      latest_ticket_failure_reason: null,
+      terminal_ticket_count: 0,
+      latest_confirmation_composite: null,
+      latest_confirmation_recorded_at: null,
+      confirmation_dataset: { prompt: 'must-not-escape' },
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(diagnostic))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_continual_retest_diagnostic',
+        arguments: { agentId: newerId },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        agent_id: newerId,
+        owner_representative_id: representativeId,
+        admission_reason: 'owner_suppressed',
+        in_raw_wave: false,
+        in_emission_set: false,
+        in_retest_cohort: false,
+        representative_selection: 'official_composite',
+        cohort_cutoff: { gap: -0.23628, within_tie_band: true },
+        claim: { decision: 'not_in_cohort', route_priority: 'not_routed', pending_seed_count: 2 },
+        raw_confirmation_seeds: ['9223372036854775001'],
+      })
+      const text = readTextResult(response)
+      expect(text).not.toContain('9223372036854775002')
+      expect(text).not.toContain('must-not-escape')
+      expect(text).not.toContain('platform-admin-token')
+
+      // The Platform admin bearer stays on the Worker's upstream call.
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe(
+        `https://platform-api.heyditto.ai/api/v1/admin/agents/${newerId}/continual-retest-diagnostic`,
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer platform-admin-token' })
+
+      // A name or hotkey is not an exact agent UUID; nothing reaches Platform.
+      const invalid = await client.callTool({
+        name: 'get_continual_retest_diagnostic',
+        arguments: { agentId: 'Gryffindor_v3' },
+      })
+      expect(invalid.isError).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      // The score reads that omit owner-generation and cohort facts say where
+      // to find them, in on-demand help rather than the catalog.
+      for (const tool of ['get_agent_scores', 'get_leaderboard']) {
+        const help = await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool } })
+        expect((readJsonResult(help) as { guidance: string }).guidance).toContain(
+          'get_continual_retest_diagnostic',
+        )
+      }
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('resolves an owner footprint on read scope alone, with standings joined', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const agentId = '55555555-5555-4555-8555-555555555555'

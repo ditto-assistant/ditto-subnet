@@ -17,6 +17,7 @@
 | Shadow coding revocation adapter | `services/dittobench-api/internal/codinggrantrevoke/`, `services/dittobench-api/docs/coding-private-runtime-adapters-shadow.md` |
 | Hippius sealed Coding evidence | `apps/platform/ditto/api_server/coding_hippius_evidence.py`, `apps/platform/ditto/db/queries/coding_evidence.py`, `apps/platform/docs/coding-hippius-sealed-evidence-mediator.md` |
 | Hippius Coding custody/recovery | `apps/platform/ditto/api_server/coding_hippius_custody.py`, `apps/platform/docs/coding-hippius-custody-recovery.md` |
+| Owner representative and continual retest admission diagnosis | `apps/platform/ditto/api_server/endpoints/admin_leaderboard.py` (`continual-retest-diagnostic`), `endpoints/validator.py` (`_current_retest_cohort`), Backroom MCP `get_continual_retest_diagnostic`, `apps/backroom/docs/mcp.md` |
 | Affected-component graph | `release/components.toml` |
 | Production DB and Targon logs (read-only) | `.agents/skills/gcloud-ditto-readonly/` |
 
