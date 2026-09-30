@@ -2121,6 +2121,8 @@ def test_pinned_route_contract_requires_the_revision(app: FastAPI) -> None:
     assert set(plain["properties"]) | {"review_settings_revision"} == set(
         pinned["properties"]
     )
+
+
 # Production reservation: with node admission open, report-only canaries must
 # not take the workers a fresh upload needs.
 _RESERVATION_SHA = "c" * 64

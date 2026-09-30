@@ -30,13 +30,13 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryScheduleRequest,
     L2CanaryView,
 )
+from ditto.api_models.screener_node_settings import ScreenerNodeChannelSettings
 from ditto.api_models.screener_review_settings import (
     L2_REPORT_CANARY_SCOPE_PREFIX,
     EffectiveScreenerReviewSettings,
     ScreenerReviewSettings,
     is_l2_report_canary_scope,
 )
-from ditto.api_models.screener_node_settings import ScreenerNodeChannelSettings
 from ditto.api_models.system_health import fleet_release_from_heartbeat_envelope
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.canonical_starter_control import (
