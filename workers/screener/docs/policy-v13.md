@@ -927,11 +927,8 @@ may produce `CLEAR`, and none of them may submit a passing verdict:
   finalized, verified finding (Platform stores it as the reason code
   `adjudicated-source-review-escalate`);
 - `behavioral-oracle-inconclusive` and `challenge-inconclusive` — an explicitly
-  required targeted behavioral audit produced no usable observation;
-- `source-review-unavailable` — review infrastructure was unreachable; and
-- `source-review-adjudicator-key-unavailable` — the node's court key file was
-  unusable. Platform retries this one automatically, since no submission can
-  cause it.
+  required targeted behavioral audit produced no usable observation; and
+- `source-review-unavailable` — review infrastructure was unreachable.
 
 Each resolves through the retry and deadline procedure and then terminates as:
 
