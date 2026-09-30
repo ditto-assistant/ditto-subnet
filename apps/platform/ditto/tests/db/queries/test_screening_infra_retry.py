@@ -71,9 +71,9 @@ _LANE = "buildkit"
 # of the gate's decision (Platform request failed); the L2 cache lock is keyed on
 # the artifact and held by another review of it, which may overrun its deadline;
 # reviewer and model failures (source-review retryable infra). The generic
-# ``source-review-unavailable`` also stays: a court that could not open the
-# archive and a build-only claim with no reviewer both produce it; only the node
-# key failure has its own automatic code.
+# ``source-review-unavailable`` also stays: a court that could not open or read
+# the archive and a screen whose source reviewer never started both produce it;
+# only the node key failure has its own automatic code.
 _MANUAL_RETRY_CODES = (
     "l2-late-result",
     "lease-budget-exhausted",

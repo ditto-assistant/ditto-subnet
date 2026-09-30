@@ -106,9 +106,10 @@ if TYPE_CHECKING:
 # emits it only when the source-review court's API key file on the node is unset,
 # unreadable, too short, or readable by group/other. The key is read before the
 # archive is opened, so the artifact decides only whether the court is consulted,
-# never whether it fails; a court that cannot open the archive, and a build-only
-# claim with no reviewer, report ``source-review-unavailable`` instead, which
-# stays on the operator retry (#2449).
+# never whether it fails. A court that cannot open or read the archive (which the
+# archive itself can cause) and a screen whose source reviewer never started
+# report ``source-review-unavailable`` instead, which stays on the operator
+# retry (#2449).
 INFRA_AUTO_RETRY_REASON_CODES: tuple[str, ...] = (
     "docker-build-infrastructure",
     "worker-claim-not-started",

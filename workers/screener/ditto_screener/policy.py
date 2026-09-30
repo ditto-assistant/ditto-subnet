@@ -616,8 +616,9 @@ class SourceFingerprintTriageModule(_BaseModule):
 _COURT_KEY_UNAVAILABLE = "adjudicator-key-unavailable"
 # The reason code for that case. Fleet-owned, so Platform retries it
 # automatically (``INFRA_AUTO_RETRY_REASON_CODES``, #2449); keep it distinct from
-# ``source-review-unavailable``, which an unreadable archive or a build-only
-# claim also produces and which therefore stays on the operator retry.
+# ``source-review-unavailable``, which an archive the court cannot open or read,
+# or a screen whose source reviewer never started, also produces and which
+# therefore stays on the operator retry.
 SOURCE_REVIEW_KEY_UNAVAILABLE_CODE = "source-review-adjudicator-key-unavailable"
 
 

@@ -342,7 +342,7 @@ def test_unknown_container_contract_detail_stays_public_safe() -> None:
             "screener error: private policy infrastructure unavailable "
             "SECRET_FROM_WORKER",
             "source-review-adjudicator-key-unavailable",
-            "Source review could not start on the screening node before "
+            "Source review was unavailable on the screening node before "
             "screening completed. This is operator-owned and is retried "
             "automatically with backoff for a limited time, then held for an "
             "operator retry.",
@@ -13529,8 +13529,9 @@ class TestQuarantineReviewContext:
         "reason_code",
         [
             "source-review-model-response-invalid",
-            # An archive the court could not open, or a build-only claim with no
-            # reviewer: only the node key failure has its own automatic code.
+            # An archive the court could not open or read, or a screen whose
+            # source reviewer never started: only the node key failure has its
+            # own automatic code.
             "source-review-unavailable",
         ],
     )
