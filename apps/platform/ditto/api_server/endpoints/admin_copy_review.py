@@ -223,6 +223,11 @@ def _evidence_int(evidence: dict, key: str) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def _evidence_count(evidence: dict, key: str) -> int | None:
+    value = _evidence_int(evidence, key)
+    return value if value is not None and value >= 0 else None
+
+
 def _evidence_bool(evidence: dict, key: str) -> bool | None:
     value = evidence.get(key)
     return value if isinstance(value, bool) else None
@@ -232,18 +237,20 @@ def _audit_action(action: AthReviewAction) -> AdminCopyReviewAction:
     """Project one ledger row, including a withdrawal's recorded reward posture.
 
     The evidence is JSONB written by several paths over time, so every field is
-    read defensively: a value of the wrong shape is omitted, never a 500.
+    read defensively: a value of the wrong shape is omitted, never a 500. That
+    includes evidence that is not a JSON object at all.
     """
-    evidence = action.evidence
+    evidence = action.evidence if isinstance(action.evidence, dict) else {}
     gate = evidence.get("emission_gate")
     return AdminCopyReviewAction(
         action=cast(Literal["reopen", "clear", "reject", "withdraw"], action.action),
         reason=action.reason,
         actor=action.actor,
         created_at=action.created_at,
-        previous_status=evidence.get("previous_status"),
-        artifact_sha256=evidence.get("sha256"),
-        score_count=evidence.get("score_count"),
+        previous_status=_evidence_str(evidence, "previous_status"),
+        artifact_sha256=_evidence_str(evidence, "sha256"),
+        # Non-negative, as every consumer's schema requires of a count.
+        score_count=_evidence_count(evidence, "score_count"),
         emission_gate=(
             cast(Literal["off", "shadow", "enforce"], gate)
             if gate in ("off", "shadow", "enforce")

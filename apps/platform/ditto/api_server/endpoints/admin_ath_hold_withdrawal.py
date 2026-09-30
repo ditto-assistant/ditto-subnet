@@ -100,11 +100,12 @@ def _previous_status(review: AthReview, actions: list[AthReviewAction]) -> str |
     latest_reopen = next(
         (action for action in reversed(actions) if action.action == "reopen"), None
     )
-    previous = (
-        latest_reopen.evidence.get("previous_status")
+    evidence = (
+        latest_reopen.evidence
         if latest_reopen is not None
-        else review.original_evidence.get("previous_status")
+        else review.original_evidence
     )
+    previous = evidence.get("previous_status") if isinstance(evidence, dict) else None
     return previous if isinstance(previous, str) else None
 
 

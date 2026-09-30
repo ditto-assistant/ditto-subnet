@@ -1189,3 +1189,73 @@ async def test_reopen_after_a_withdrawal_reports_the_superseded_withdrawal(
     assert original["superseded_resolution_reason"] == _REASON
     audit = await _audit(client, agent_id)
     assert audit["review"]["original"]["superseded_resolution"] == "withdraw"
+
+
+async def test_audit_omits_wrong_shaped_action_evidence(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """JSONB evidence of the wrong shape is omitted field by field, never a 500."""
+    agent_id, sha256 = await _seed_scored(maker)
+    _install(app, maker)
+    await _open_manual_hold(client, agent_id, sha256)
+    malformed: list[object] = [
+        {
+            "previous_status": 7,
+            "sha256": ["not", "a", "digest"],
+            "score_count": "three",
+            "emission_gate": "sometimes",
+            "eligibility_revision": "2",
+            "eligibility_checksum": 42,
+            "eligibility_state": {"state": "eligible"},
+            "emission_reward_eligible": "yes",
+        },
+        {"previous_status": {"status": "scored"}, "score_count": -1},
+        {"score_count": True, "eligibility_revision": False},
+        ["evidence", "that", "is", "not", "an", "object"],
+        "a bare string",
+    ]
+    async with maker() as session, session.begin():
+        review = await session.scalar(
+            select(AthReview).where(AthReview.agent_id == agent_id)
+        )
+        assert review is not None
+        for index, evidence in enumerate(malformed):
+            session.add(
+                AthReviewAction(
+                    action_id=uuid4(),
+                    review_id=review.review_id,
+                    action="reopen",
+                    reason=f"Legacy reopen row {index}",
+                    actor="legacy-writer",
+                    evidence=evidence,  # type: ignore[arg-type]
+                    created_at=_T0 + timedelta(minutes=index),
+                )
+            )
+
+    audit = await client.get(
+        f"/api/v1/admin/copy-reviews/{agent_id}/audit", headers=_HEADERS
+    )
+    assert audit.status_code == 200, audit.text
+    history = audit.json()["action_history"]
+    assert len(history) == len(malformed)
+    for row in history:
+        assert row["action"] == "reopen"
+        for field in (
+            "previous_status",
+            "artifact_sha256",
+            "score_count",
+            "emission_gate",
+            "eligibility_revision",
+            "eligibility_checksum",
+            "eligibility_state",
+            "emission_reward_eligible",
+        ):
+            assert row[field] is None, (field, row)
+    # The item and the withdraw preview read the same ledger and stay up too.
+    item = await client.get(f"/api/v1/admin/copy-reviews/{agent_id}", headers=_HEADERS)
+    assert item.status_code == 200, item.text
+    preview = await _preview(
+        client, agent_id, _audit_guards(audit.json(), reason=_REASON)
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["restored_status"] == AgentStatus.SCORED
