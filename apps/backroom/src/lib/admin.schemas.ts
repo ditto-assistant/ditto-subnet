@@ -4478,12 +4478,20 @@ const sourceReviewCausalRoleBindingSchema = z.strictObject({
 
 export const sourceReviewCausalEvidenceSchema = z
   .strictObject({
-    schema_version: z.literal(2),
+    schema_version: z.union([z.literal(2), z.literal(3)]),
     authority_transition: sourceReviewAuthorityTransitionSchema,
     scorer_visible_effect: sourceReviewScorerVisibleEffectSchema,
     role_bindings: z.array(sourceReviewCausalRoleBindingSchema).min(1).max(32),
+    i5_proof: z.strictObject({
+      evaluation_assumption: z.string().min(12).max(240),
+      ordinary_product_exclusion: z.string().min(12).max(240),
+      assumption_evidence_index: z.number().int().min(0).max(15),
+    }).nullish(),
   } satisfies PlatformResponseShape<GeneratedSourceReviewCausalEvidence>)
   .superRefine((causal, context) => {
+    if ((causal.schema_version === 3) !== (causal.i5_proof != null)) {
+      context.addIssue({ code: 'custom', message: 'causal evidence v3 requires an I5 proof' })
+    }
     const bindings = causal.role_bindings.map((binding) =>
       [binding.path, binding.line, binding.category, binding.role].join('\u0000'))
     if (new Set(bindings).size !== bindings.length) {
@@ -4638,6 +4646,11 @@ export const sourceReviewFindingSchema = z
             code: 'custom', message: 'causal role binding does not reference finding evidence',
           })
         }
+      }
+      const proof = finding.causal_evidence.i5_proof
+      if (proof && !['benchmark_emulation', 'embedded_evaluator_logic'].includes(
+        finding.evidence[proof.assumption_evidence_index]?.category ?? '')) {
+        context.addIssue({ code: 'custom', message: 'I5 assumption is not bound to source evidence' })
       }
     }
     if (finding.invariant_assessment) {

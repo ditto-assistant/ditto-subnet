@@ -56,6 +56,7 @@ from ditto_screening_protocol import (
     SourceReviewEvidenceItem,
     SourceReviewEvidenceRole,
     SourceReviewFinding,
+    SourceReviewI5Proof,
     SourceReviewInvariant,
     SourceReviewInvariantAssessment,
     SourceReviewInvariantDecision,
@@ -113,7 +114,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v47-policy-v13"
+        return "l2-terra-source-review-v48-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -345,6 +346,8 @@ def _submission_validation_subcode(error: ValueError) -> str:
         for phrase in (
             "L2 causal evidence is invalid",
             "L2 causal evidence schema version is invalid",
+            "L2 I5 proof is incompatible with causal schema version",
+            "L2 I5 proof is invalid",
             "L2 causal role bindings are invalid",
             "L2 causal role binding is invalid",
             "L2 causal role binding is not evidence-bound",
@@ -1236,7 +1239,13 @@ derived interpretation, operand or output recipe, its served activation and
 substantive effect, and why ordinary unit guidance does not explain it. Copying
 the model-authored ANSWER value is not a host-selected answer; a host rewrite
 after that value is final remains I4. Preserve an I5 finding when the prompt
-actually imposes a benchmark-derived recipe. For I6, trace the condition
+actually imposes a benchmark-derived recipe. For a V13 I5 breach, submit
+causal_evidence schema_version 3 with i5_proof naming the concrete evaluation-
+dependent assumption, an evidence index for that assumption, and a distinct
+ordinary-product exclusion. Do not fill either field with a generic claim that
+prescriptive prose is benchmark-shaped. If the source does not support these
+proof obligations, mark I5 inconclusive; the finding remains held. For I6,
+trace the condition
 guarding each alleged fabricated tool result. A fallback that returns a
 local stub only when the request omits
 `tool_endpoint` does not prove fabrication on a scored tool request when that
@@ -2074,6 +2083,40 @@ def _l2_tools_for_policy(
     assert isinstance(causal_schema, dict)
     causal_properties = causal_schema["properties"]
     assert isinstance(causal_properties, dict)
+    if policy_version >= 13:
+        causal_properties["schema_version"] = {"type": "integer", "enum": [2, 3]}
+        causal_properties["i5_proof"] = {
+            "anyOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "properties": {
+                        "evaluation_assumption": {
+                            "type": "string",
+                            "minLength": 12,
+                            "maxLength": 240,
+                        },
+                        "ordinary_product_exclusion": {
+                            "type": "string",
+                            "minLength": 12,
+                            "maxLength": 240,
+                        },
+                        "assumption_evidence_index": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 15,
+                        },
+                    },
+                    "required": [
+                        "evaluation_assumption",
+                        "ordinary_product_exclusion",
+                        "assumption_evidence_index",
+                    ],
+                    "additionalProperties": False,
+                },
+            ]
+        }
+        causal_schema["required"].append("i5_proof")
     authority_transition = causal_properties["authority_transition"]
     assert isinstance(authority_transition, dict)
     authority_transition["enum"] = sorted(
@@ -6903,15 +6946,34 @@ def _parse_causal_evidence(
 ) -> SourceReviewCausalEvidence | None:
     if value is None:
         return None
-    if not isinstance(value, dict) or set(value) != {
+    required_keys = {
         "schema_version",
         "authority_transition",
         "scorer_visible_effect",
         "role_bindings",
-    }:
+    }
+    if (
+        not isinstance(value, dict)
+        or not required_keys <= set(value)
+        or not set(value) <= required_keys | {"i5_proof"}
+    ):
         raise ValueError("L2 causal evidence is invalid")
-    if value["schema_version"] != 2:
+    schema_version = value["schema_version"]
+    if schema_version not in ({2, 3} if policy_version >= 13 else {2}):
         raise ValueError("L2 causal evidence schema version is invalid")
+    proof_value = value.get("i5_proof")
+    if (schema_version == 3) != (proof_value is not None):
+        raise ValueError("L2 I5 proof is incompatible with causal schema version")
+    if proof_value is not None and (
+        not isinstance(proof_value, dict)
+        or set(proof_value)
+        != {
+            "evaluation_assumption",
+            "ordinary_product_exclusion",
+            "assumption_evidence_index",
+        }
+    ):
+        raise ValueError("L2 I5 proof is invalid")
     transition = value["authority_transition"]
     scorer_visible_effect = value["scorer_visible_effect"]
     bindings = value["role_bindings"]
@@ -6962,11 +7024,17 @@ def _parse_causal_evidence(
             )
         )
     return SourceReviewCausalEvidence(
+        schema_version=schema_version,
         authority_transition=SourceReviewAuthorityTransition(str(transition)),
         scorer_visible_effect=SourceReviewScorerVisibleEffect(
             str(scorer_visible_effect)
         ),
         role_bindings=normalized,
+        i5_proof=(
+            SourceReviewI5Proof.model_validate(proof_value)
+            if proof_value is not None
+            else None
+        ),
     )
 
 
@@ -7594,6 +7662,8 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 causal evidence has no elevated causal category": "inconsistent-verdict",
     "L2 causal evidence is invalid": "inconsistent-verdict",
     "L2 causal evidence schema version is invalid": "inconsistent-verdict",
+    "L2 I5 proof is incompatible with causal schema version": "inconsistent-verdict",
+    "L2 I5 proof is invalid": "inconsistent-verdict",
     "L2 causal mechanism lacks its required invariant breach": "inconsistent-verdict",
     "L2 scorer field rewrite requires I4 breach": "inconsistent-verdict",
     "L2 causal path is invalid": "inconsistent-verdict",

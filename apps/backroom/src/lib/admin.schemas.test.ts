@@ -1941,6 +1941,23 @@ describe('source review causal evidence schema', () => {
     expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
   })
 
+  it('retains signed v3 I5 proof and rejects an unbound assumption', () => {
+    const proof = {
+      evaluation_assumption: 'A fixed evaluation answer replaces the request answer.',
+      ordinary_product_exclusion: 'The served code skips the deciding model entirely.',
+      assumption_evidence_index: 0,
+    }
+    const finding = {
+      ...generatedFinding,
+      causal_evidence: { ...generatedFinding.causal_evidence, schema_version: 3, i5_proof: proof },
+    } as const
+    expect(sourceReviewFindingSchema.parse(finding).causal_evidence?.i5_proof).toEqual(proof)
+    expect(() => sourceReviewFindingSchema.parse({
+      ...finding,
+      causal_evidence: { ...finding.causal_evidence, i5_proof: { ...proof, assumption_evidence_index: 9 } },
+    })).toThrow(/not bound to source evidence/)
+  })
+
   it('parses and retains the complete policy-v10 invariant sweep', () => {
     const parsed = sourceReviewFindingSchema.parse({
       ...generatedFinding,

@@ -31418,14 +31418,15 @@ export interface components {
          */
         SourceReviewCausalEvidence: {
             authority_transition: components["schemas"]["SourceReviewAuthorityTransition"];
+            i5_proof?: components["schemas"]["SourceReviewI5Proof"] | null;
             /** Role Bindings */
             role_bindings: components["schemas"]["SourceReviewCausalRoleBinding"][];
             /**
              * Schema Version
              * @default 2
-             * @constant
+             * @enum {integer}
              */
-            schema_version: 2;
+            schema_version: 2 | 3;
             scorer_visible_effect: components["schemas"]["SourceReviewScorerVisibleEffect"];
         };
         /**
@@ -31499,6 +31500,18 @@ export interface components {
             risk_level: "low" | "medium" | "high";
             /** Summary */
             summary: string;
+        };
+        /**
+         * SourceReviewI5Proof
+         * @description Bounded, signed explanation of an alleged benchmark-specific recipe.
+         */
+        SourceReviewI5Proof: {
+            /** Assumption Evidence Index */
+            assumption_evidence_index: number;
+            /** Evaluation Assumption */
+            evaluation_assumption: string;
+            /** Ordinary Product Exclusion */
+            ordinary_product_exclusion: string;
         };
         /**
          * SourceReviewInvariant

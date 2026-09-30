@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from ditto_screening_protocol import (
     SourceReviewAuthorityTransition,
     SourceReviewFinding,
+    SourceReviewInvariant,
+    SourceReviewInvariantDisposition,
     SourceReviewScorerVisibleEffect,
 )
 
@@ -178,6 +180,25 @@ def verify_causal_finding(finding: SourceReviewFinding) -> CausalEvidenceVerific
     authority_transition = transition.value if transition is not None else None
     scorer_visible_effect = effect.value if effect is not None else None
     required_categories = set(finding.categories) & _CAUSAL_CATEGORIES
+    if finding.prompt_revision == "l2-terra-source-review-v48-policy-v13":
+        assessment = finding.invariant_assessment
+        i5_breach = assessment is not None and any(
+            decision.invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+            and decision.disposition == SourceReviewInvariantDisposition.BREACH
+            for decision in assessment.decisions
+        )
+        if i5_breach and (
+            finding.causal_evidence is None
+            or finding.causal_evidence.schema_version != 3
+            or finding.causal_evidence.i5_proof is None
+        ):
+            return CausalEvidenceVerification(
+                evidence_schema_version=evidence_schema_version,
+                authority_transition=authority_transition,
+                scorer_visible_effect=scorer_visible_effect,
+                role_complete=False,
+                reason_code="i5-proof-incomplete",
+            )
     if not required_categories:
         return CausalEvidenceVerification(
             evidence_schema_version=evidence_schema_version,
