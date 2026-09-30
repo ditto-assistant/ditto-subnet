@@ -3175,6 +3175,13 @@ class TarSourceRepository:
                 for dimension, minimum in local_minimums.items()
             ):
                 continue
+            # A large ordinary agent file can contain question examples,
+            # retrieval vocabulary, model calls, and answer returns without
+            # implementing a deterministic answer path. Those file-wide words
+            # remain aggregate review leads, but cannot select the automatic
+            # served-generator hold by themselves.
+            if "direct_answer" not in local["deterministic_answer_path"]:
+                continue
             for dimension in sorted(required):
                 marker_lines = local[dimension]
                 if marker_lines:

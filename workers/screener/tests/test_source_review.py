@@ -1015,6 +1015,35 @@ pub async fn run(question: &str) -> RunResponse {
     assert analysis["served_runtime_locations"] == []
 
 
+def test_generator_words_in_model_authored_runtime_are_not_served_hold(
+    tmp_path: Path,
+) -> None:
+    source = b"""\
+const ATTRS: &[&str] = &["city", "employer", "car", "university", "instrument",
+    "project", "trip", "pet", "cuisine", "diet", "color", "hobby"];
+const QUESTIONS: &[&str] = &["What city?", "Where do I work?",
+    "Which project?", "How many trips?", "List pets", "What did I use before?"];
+const FACTS: &[&str] = &["I moved city", "I work company", "I drive car",
+    "I studied university", "I play instrument", "My project changed"];
+const EVENTS: &[&str] = &["moved", "started", "switched", "changed"];
+fn bridge(question: Query, query: Query, fact: Fact, memory: Memory,
+    attribute: Attr, value: Value) { extract(question); retrieve(query, memory);
+    match_fact(fact); keyword(attribute); use_value(value); }
+fn run() -> Answer {
+    let answer = model_inference_provider(retrieve(query, memory));
+    if valid(answer) { return answer; }
+    otherwise_call_model_inference_provider()
+}
+"""
+    repo = TarSourceRepository(str(_archive_files(tmp_path, {"src/agent.rs": source})))
+
+    analysis = repo.review_leads()["generator_mirroring"]
+
+    assert analysis["aggregate_candidate"] is True
+    assert analysis["served_runtime_candidate"] is False
+    assert analysis["served_runtime_locations"] == []
+
+
 def test_generator_scan_prioritizes_runtime_source_over_decoy_files(
     tmp_path: Path,
 ) -> None:
