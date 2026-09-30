@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import ActiveBenchmarkSlot
@@ -5017,6 +5018,52 @@ class TestIndependentWeightLoop:
 
         assert available
         assert fingerprint == worker._king_fingerprint(confirmed_v9)
+
+    async def test_king_observer_survives_a_ledger_that_fails_validation(
+        self,
+    ) -> None:
+        try:
+            LedgerResponse.model_validate({"entries": "not-a-list", "count": 0})
+        except ValidationError as exc:
+            validation_error = exc
+        worker = self._worker_observing([])
+        worker._platform.get_ledger = AsyncMock(side_effect=validation_error)  # type: ignore[method-assign]
+
+        assert await worker._observe_platform_king() == (False, None)
+
+    async def test_king_observer_survives_an_undecodable_ledger(self) -> None:
+        worker = self._worker_observing([])
+        worker._platform.get_ledger = AsyncMock(  # type: ignore[method-assign]
+            side_effect=json.JSONDecodeError("Expecting value", "", 0)
+        )
+
+        assert await worker._observe_platform_king() == (False, None)
+
+    async def test_weight_loop_restarts_after_an_unexpected_crash(self) -> None:
+        config = _config()
+        config.sweep_seconds = 0.001
+        worker = ValidatorWorker(
+            config=config,
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        stop = asyncio.Event()
+        calls = 0
+
+        async def crash_then_stop(*_args: object, **_kwargs: object) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("unexpected weight-loop bug")
+            stop.set()
+
+        worker._run_weight_epochs = crash_then_stop  # type: ignore[method-assign]
+
+        await asyncio.wait_for(worker._run_weights_forever(stop), timeout=5)
+
+        assert calls == 2
 
     async def test_king_event_never_bypasses_local_commit_reveal_floor(self) -> None:
         config = _config()

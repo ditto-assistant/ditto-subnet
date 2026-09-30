@@ -2274,16 +2274,19 @@ class ValidatorWorker:
         """Return ``(available, fingerprint)`` from the weight-authoritative ledger."""
         try:
             ledger = await self._platform.get_ledger()
+            champion = select_champion(
+                _ledger_weight_entries(ledger),
+                margin=self._config.koth_margin,
+                dethrone_z=self._config.koth_dethrone_z,
+                ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+                incumbent_agent_id=_ledger_crown_incumbent(ledger),
+            )
         except PlatformError as e:
             logger.warning("event-driven king check failed: %s", e)
             return False, None
-        champion = select_champion(
-            _ledger_weight_entries(ledger),
-            margin=self._config.koth_margin,
-            dethrone_z=self._config.koth_dethrone_z,
-            ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
-            incumbent_agent_id=_ledger_crown_incumbent(ledger),
-        )
+        except Exception:  # noqa: BLE001 - an unreadable ledger must not kill weights
+            logger.exception("event-driven king check could not read the ledger")
+            return False, None
         return True, self._king_fingerprint(champion)
 
     async def _registered_ledger_entries(
@@ -4343,6 +4346,32 @@ class ValidatorWorker:
             )
 
     async def _run_weights_forever(
+        self,
+        stop: asyncio.Event,
+        *,
+        drain_requested: asyncio.Event | None = None,
+    ) -> None:
+        """Keep the weight loop alive for the life of the worker.
+
+        Scoring and heartbeats run in a separate task, so a weight loop that
+        dies leaves a validator that looks healthy but never commits again
+        and drops out of consensus once ActivityCutoff passes.
+        """
+        while not stop.is_set():
+            try:
+                await self._run_weight_epochs(stop, drain_requested=drain_requested)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - weights must outlive any one bug
+                logger.exception(
+                    "weight loop crashed; restarting in %.0fs",
+                    self._config.sweep_seconds,
+                )
+                await self._sleep_or_stop_or_drain(
+                    stop, self._config.sweep_seconds, drain_requested
+                )
+
+    async def _run_weight_epochs(
         self,
         stop: asyncio.Event,
         *,
