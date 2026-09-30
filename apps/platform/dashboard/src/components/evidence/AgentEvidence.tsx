@@ -578,12 +578,6 @@ function ConfirmationScores(props: {
       ? (boardEntry()?.completed_wave_composites || []).filter(Number.isFinite)
       : [];
   });
-  const pendingScores = createMemo(() =>
-    (props.pipeline.confirmation_scores || [])
-      .filter((score) => Number(score.bench_version) === activeVersion())
-      .map((score) => Number(score.composite))
-      .filter(Number.isFinite),
-  );
   const counts = createMemo(() =>
     retestAttemptCounts(
       (props.pipeline.validation_attempts || []).filter(
@@ -613,7 +607,8 @@ function ConfirmationScores(props: {
     if (counts().expired) bits.push(counts().expired + " expired");
     return bits;
   };
-  const visibleSamples = () => (completedWaves().length ? completedWaves() : pendingScores());
+  const visibleSamples = () =>
+    completedWaves().length ? completedWaves() : confirmationSeedMedians();
   const sampleMean = () => {
     const samples = visibleSamples();
     return samples.length
