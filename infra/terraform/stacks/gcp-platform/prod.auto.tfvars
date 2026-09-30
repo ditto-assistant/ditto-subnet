@@ -7,9 +7,11 @@ enable_datapipeline   = true
 enable_embedder       = true
 enable_validator      = true
 enable_validator_prod = true
-# Treasury hosts remain physically absent until separately reviewed applies.
-enable_treasury_host         = false
-enable_treasury_planner_host = false
+# Proposed persistent treasury host intent. This draft changes no cloud state;
+# inspect an exact protected plan from main before any separately approved apply.
+enable_treasury_host         = true
+enable_treasury_planner_host = true
+treasury_operator_email      = "peyton@omniaura.ai"
 # Shadow coding remains physically absent until a separately reviewed protected
 # apply creates the complete three-host executor cohort. No worker, daemon, or
 # provider route is activated by this default.
