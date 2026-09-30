@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import subprocess
@@ -5694,6 +5695,40 @@ async def test_http_failure_is_single_shot_before_deadline(
             )
 
     assert requests == 1
+
+
+async def test_http_429_logs_the_provider_limit_without_publishing_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The L2 public code keeps only the status; the log names the limit."""
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+    limit = "Rate limit exceeded: limit_rpm/moonshotai/kimi-k3 per key"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            request=request,
+            json={"error": {"code": 429, "message": limit}},
+        )
+
+    with caplog.at_level(logging.WARNING, logger=l2_review.__name__):
+        result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+            str(archive),
+            artifact_sha256=artifact_sha,
+            attempt_id=ATTEMPT,
+            l1_observation=_l1(),
+            deadline=None,
+        )
+
+    assert not result.observation.ok
+    assert "429" in (result.observation.error_code or "")
+    assert limit not in (result.observation.error_code or "")
+    assert limit not in repr(result.observation)
+    assert any(
+        "http-status=429 provider_limit=key_rpm" in record.getMessage()
+        for record in caplog.records
+    )
+    assert all(limit not in record.getMessage() for record in caplog.records)
 
 
 async def test_report_only_terminal_schema_is_local_to_single_layer(

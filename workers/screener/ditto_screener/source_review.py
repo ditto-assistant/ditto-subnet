@@ -461,20 +461,84 @@ def _body_signature(payload: object) -> str:
         return "non-json"
     if not isinstance(payload, dict):
         return f"type={type(payload).__name__}"
-    keys = ",".join(sorted(str(key) for key in payload)[:10])
+    known_keys = {
+        "error",
+        "choices",
+        "output",
+        "id",
+        "object",
+        "model",
+        "usage",
+        "created",
+    }
+    keys = ",".join(
+        sorted(key for key in payload if isinstance(key, str) and key in known_keys)
+    )
+    unknown_count = sum(key not in known_keys for key in payload)
     error = payload.get("error")
     error_class = ""
     if isinstance(error, Mapping):
-        error_class = str(
-            error.get("code") or error.get("type") or error.get("error_type") or ""
-        )[:60]
+        code = error.get("code")
+        if isinstance(code, int) and 100 <= code <= 599:
+            error_class = str(code)
+        elif (
+            isinstance(code, str)
+            and len(code) == 3
+            and code.isascii()
+            and code.isdigit()
+        ):
+            error_class = code
     elif error:
-        error_class = str(error)[:60]
+        error_class = "non-object"
     choices = payload.get("choices")
-    return (
-        f"keys=[{keys}] error_class={error_class!r} "
+    signature = (
+        f"keys=[{keys}] other_keys={unknown_count} error_class={error_class!r} "
         f"choices={type(choices).__name__ if choices is not None else 'absent'}"
     )
+    provider_limit = _provider_limit_category(payload)
+    if provider_limit:
+        signature += f" provider_limit={provider_limit}"
+    return signature
+
+
+def _provider_limit_category(payload: object) -> str | None:
+    """Classify a provider refusal without copying upstream text into logs.
+
+    Provider error messages are untrusted: even an error-only envelope can echo
+    a request, source excerpt, account identifier, or credential. The log gets
+    only one of these fixed labels, never the provider's message or model name.
+    """
+    if not isinstance(payload, Mapping) or "choices" in payload or "output" in payload:
+        return None
+    error = payload.get("error")
+    if not isinstance(error, Mapping):
+        return None
+    message = error.get("message")
+    if not isinstance(message, str):
+        return None
+    lowered = message[:1000].casefold()
+    if "limit_rpm/" in lowered or "requests per minute" in lowered:
+        return "key_rpm"
+    if "insufficient credits" in lowered or "credit balance" in lowered:
+        return "credits"
+    if "upstream" in lowered and (
+        "capacity" in lowered or "rate limit" in lowered or "overloaded" in lowered
+    ):
+        return "upstream_capacity"
+    return None
+
+
+def _http_error_signature(response: httpx.Response) -> str:
+    """Describe a rejected HTTP status with the provider's bounded message."""
+    signature = f"http-status={response.status_code}"
+    try:
+        payload: object = response.json()
+    except ValueError:
+        return signature
+    provider_limit = _provider_limit_category(payload)
+    if provider_limit:
+        signature += f" provider_limit={provider_limit}"
+    return signature
 
 
 class SourceReviewBudgetExhausted(ValueError):
@@ -3957,7 +4021,7 @@ class OpenRouterSourceReviewAgent:
             except httpx.HTTPStatusError as error:
                 status = error.response.status_code
                 fault = str(status) if status == 429 or status >= 500 else None
-                signature = f"http-status={status}"
+                signature = _http_error_signature(error.response)
                 caught: BaseException = error
             except (TimeoutError, httpx.TimeoutException) as error:
                 # ``asyncio.timeout`` raises the built-in TimeoutError, which

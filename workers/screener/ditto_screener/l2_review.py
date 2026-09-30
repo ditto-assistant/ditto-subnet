@@ -39,6 +39,7 @@ from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     _body_signature,
+    _http_error_signature,
     _retryable_model_error_type,
     ledger_disposition,
     policy_v10_static_assessment,
@@ -4705,6 +4706,12 @@ class TerraSolSourceReviewAgent:
                     )
                 raise
             except httpx.HTTPStatusError as error:
+                # The public code keeps only the status; the provider's bounded
+                # message names which limit refused the turn, so log it here.
+                logger.warning(
+                    "L2/L3 model request failed; parking attempt: signature=%s",
+                    _http_error_signature(error.response),
+                )
                 # Keep usage from earlier successful reviewer turns. Letting the
                 # raw HTTP error reach run() replaces that usage with an empty
                 # L2Usage, making a late provider failure look like a first-call
