@@ -22,6 +22,7 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryClaimResponse,
     L2CanaryCompleteRequest,
     L2CanaryCompleteResponse,
+    L2CanaryPinnedScheduleRequest,
     L2CanaryPreflightView,
     L2CanaryScheduleRequest,
     L2CanaryView,
@@ -139,7 +140,9 @@ async def _schedulable_review_settings_pin(
     """Accept only an isolated canary posture, never one production resolves."""
     row = await session.get(ScreenerReviewSettingsRevision, revision)
     if row is None:
-        raise HTTPException(404, "review settings revision not found")
+        # 422, not 404: Backroom reads a 404 from ``POST /pinned`` as a
+        # Platform build without that route.
+        raise HTTPException(422, f"review settings revision {revision} not found")
     if not is_l2_report_canary_scope(row.scope):
         raise HTTPException(
             422,
@@ -628,7 +631,7 @@ async def schedule_l2_report_canary(
 
 @admin_router.post("/pinned", response_model=L2CanaryView)
 async def schedule_pinned_l2_report_canary(
-    payload: L2CanaryScheduleRequest,
+    payload: L2CanaryPinnedScheduleRequest,
     _admin: AdminDep,
     session: SessionDep,
     storage: Annotated[S3StorageClient, Depends(get_storage_client)],
@@ -636,13 +639,12 @@ async def schedule_pinned_l2_report_canary(
 ) -> L2CanaryView:
     """Queue one exact source once under a pinned ``l2-report-canary*`` posture.
 
-    ``review_settings_revision`` is required. The separate route is the
-    capability check: a Platform build that predates pins answers it with 405
-    and queues nothing, where the plain route would ignore the unknown field
-    and queue the canary under the node's posture.
+    The separate route is the capability check. A Platform build that predates
+    pins has no such route and answers 405 or 404 without queueing anything,
+    where the plain route would ignore the unknown field and queue the canary
+    under the node's posture. This route therefore never answers 404 itself:
+    a missing revision is a 422.
     """
-    if payload.review_settings_revision is None:
-        raise HTTPException(422, "a pinned canary requires review_settings_revision")
     return await _schedule_l2_report_canary(payload, session, storage, x_admin_actor)
 
 

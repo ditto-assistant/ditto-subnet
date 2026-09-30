@@ -33,9 +33,10 @@ class L2CanaryScheduleRequest(BaseModel):
     historical_ruling_kind: Literal["ath_clear", "screening_reject"] | None = None
     historical_ruling_id: Annotated[UUID | None, Field(strict=False)] = None
     # Run under this immutable ``l2-report-canary*`` revision instead of the
-    # claiming worker's node-effective posture. Required by ``POST /pinned``
-    # and refused by the plain route, so an older Platform that would ignore
-    # the field never receives it.
+    # claiming worker's node-effective posture. ``POST /pinned`` requires it
+    # (``L2CanaryPinnedScheduleRequest``). The plain route keeps the field only
+    # to refuse it, since ``extra="ignore"`` would otherwise drop a pin sent
+    # there, so an older Platform that would ignore the field never gets one.
     review_settings_revision: Annotated[int | None, Field(ge=1)] = None
     confirm_report_only: Literal[True]
 
@@ -50,6 +51,12 @@ class L2CanaryScheduleRequest(BaseModel):
         ):
             raise ValueError("historical ruling must match source-only review label")
         return self
+
+
+class L2CanaryPinnedScheduleRequest(L2CanaryScheduleRequest):
+    """``POST /pinned``: the schedule request with a required posture pin."""
+
+    review_settings_revision: Annotated[int, Field(ge=1)]
 
 
 class CanonicalFixtureRegisterRequest(BaseModel):

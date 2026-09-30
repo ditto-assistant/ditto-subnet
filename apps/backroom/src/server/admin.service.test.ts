@@ -783,10 +783,14 @@ describe('screening submission admin service', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
-  it('refuses a pin that an older Platform cannot bind, without queueing', async () => {
+  it.each([
+    [405, 'Method Not Allowed'],
+    [404, 'Not Found'],
+  ])('refuses a pin that an older Platform cannot bind (%i), without queueing', async (status, message) => {
     // A Platform build that predates pins has no /pinned route. It answers
-    // 405 before any handler runs, so nothing is queued; Backroom must say so
-    // and must not fall back to the plain route, which would drop the pin.
+    // 405 or 404 before any handler runs, so nothing is queued; Backroom must
+    // say so and must not fall back to the plain route, which would drop the
+    // pin. The current route never answers 404 itself.
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const input = {
       requestId: '44444444-4444-4444-8444-444444444444',
@@ -800,10 +804,7 @@ describe('screening submission admin service', () => {
       confirmation: 'QUEUE REPORT ONLY L2 CANARY',
     }
     const fetchMock = vi.fn().mockImplementation(async () =>
-      Response.json(
-        { error_code: 3002, message: 'Method Not Allowed', request_id: 'r' },
-        { status: 405 },
-      ),
+      Response.json({ error_code: 3002, message, request_id: 'r' }, { status }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
@@ -816,9 +817,9 @@ describe('screening submission admin service', () => {
       'https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/pinned',
     )
 
-    // A 405 on the plain route is not a missing pin capability.
+    // The same status on the plain route is not a missing pin capability.
     await expect(scheduleL2ReportCanary(input, 'operator@omniaura.ai')).rejects.toThrow(
-      /Method Not Allowed/,
+      message,
     )
   })
 

@@ -24,6 +24,7 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryClaimRequest,
     L2CanaryClaimResponse,
     L2CanaryCompleteRequest,
+    L2CanaryPinnedScheduleRequest,
     L2CanaryScheduleRequest,
     L2CanaryView,
 )
@@ -1296,12 +1297,17 @@ async def _schedule_pin(
     actor: str | None,
 ) -> L2CanaryView:
     """Schedule through the route Backroom uses for this payload."""
-    route = (
-        endpoints.schedule_pinned_l2_report_canary
-        if payload.review_settings_revision is not None
-        else endpoints.schedule_l2_report_canary
+    if payload.review_settings_revision is None:
+        return await endpoints.schedule_l2_report_canary(
+            payload, admin, session, storage, actor
+        )
+    return await endpoints.schedule_pinned_l2_report_canary(
+        L2CanaryPinnedScheduleRequest.model_validate(payload.model_dump()),
+        admin,
+        session,
+        storage,
+        actor,
     )
-    return await route(payload, admin, session, storage, actor)
 
 
 def _pin_storage() -> S3StorageClient:
@@ -1494,7 +1500,8 @@ async def test_pinned_canary_claims_under_pinned_revision_not_node_effective(
         ("inherit", 422),
         ("live-identity", 409),
         ("enrolled-node", 409),
-        ("missing", 404),
+        # 422, never 404: a 404 from the pinned route means the route is absent.
+        ("missing", 422),
     ],
 )
 async def test_schedule_rejects_production_or_inherit_pin_scope(
@@ -1968,12 +1975,23 @@ async def test_only_the_pinned_route_schedules_a_pin(
 
     plain_with_pin = await client.post(base, json=body, headers=headers)
     assert plain_with_pin.status_code == 422, plain_with_pin.text
-    pinned_without_pin = await client.post(
+    unpinned_body = {k: v for k, v in body.items() if k != "review_settings_revision"}
+    for pinned_without_pin in (
+        unpinned_body,
+        {**body, "review_settings_revision": None},
+    ):
+        refused = await client.post(
+            f"{base}/pinned", json=pinned_without_pin, headers=headers
+        )
+        assert refused.status_code == 422, refused.text
+    # Backroom reads a 404 from /pinned as a build without the route, so the
+    # route itself must never answer 404, even for a revision that is missing.
+    missing = await client.post(
         f"{base}/pinned",
-        json={**body, "review_settings_revision": None},
+        json={**body, "review_settings_revision": 2_000_000_000},
         headers=headers,
     )
-    assert pinned_without_pin.status_code == 422, pinned_without_pin.text
+    assert missing.status_code == 422, missing.text
     async with session_maker() as session:
         assert (
             await session.scalar(
@@ -1991,3 +2009,25 @@ async def test_only_the_pinned_route_schedules_a_pin(
         pinned.json()["review_settings_scope"],
         pinned.json()["review_settings_checksum"],
     ) == (pin_revision, scope, pin_checksum)
+
+
+def test_pinned_route_contract_requires_the_revision(app: FastAPI) -> None:
+    # Generated clients must not type-check a pinned body without a revision,
+    # and the plain route keeps its unchanged request model.
+    schema = app.openapi()
+    paths = schema["paths"]
+    base = "/api/v1/admin/screener-l2-report-canaries"
+
+    def body_schema(path: str) -> dict[str, Any]:
+        ref = paths[path]["post"]["requestBody"]["content"]["application/json"][
+            "schema"
+        ]["$ref"]
+        return cast(dict[str, Any], schema["components"]["schemas"][ref.split("/")[-1]])
+
+    pinned = body_schema(f"{base}/pinned")
+    assert pinned["title"] == "L2CanaryPinnedScheduleRequest"
+    assert "review_settings_revision" in pinned["required"]
+    assert pinned["properties"]["review_settings_revision"]["type"] == "integer"
+    plain = body_schema(base)
+    assert plain["title"] == "L2CanaryScheduleRequest"
+    assert "review_settings_revision" not in plain.get("required", [])

@@ -688,8 +688,9 @@ export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
   const pinned = input.reviewSettingsRevision !== undefined
   // Platform ignores unknown request fields, so a pin sent on the plain route
   // to a build that predates pins would queue the canary under the node's
-  // posture. A pin therefore travels only on its own route, which such a
-  // build answers with 405 before queueing anything.
+  // posture. A pin therefore travels only on its own route. A build without
+  // that route answers 405 (the path matches GET /{canary_id}) or 404 during
+  // routing and queues nothing; the route itself never answers 404.
   const path = `/api/v1/admin/screener-l2-report-canaries${pinned ? '/pinned' : ''}`
   let payload: unknown
   try {
@@ -714,7 +715,11 @@ export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
       },
     })
   } catch (error) {
-    if (pinned && error instanceof PlatformAdminError && error.status === 405) {
+    if (
+      pinned &&
+      error instanceof PlatformAdminError &&
+      (error.status === 404 || error.status === 405)
+    ) {
       throw new Error(
         'This Platform build does not support canary review settings pins yet, so nothing was queued. ' +
           'Retry reviewSettingsRevision after Platform is deployed with POST /admin/screener-l2-report-canaries/pinned.',

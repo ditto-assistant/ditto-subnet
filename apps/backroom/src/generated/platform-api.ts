@@ -2034,10 +2034,11 @@ export interface paths {
          * Schedule Pinned L2 Report Canary
          * @description Queue one exact source once under a pinned ``l2-report-canary*`` posture.
          *
-         *     ``review_settings_revision`` is required. The separate route is the
-         *     capability check: a Platform build that predates pins answers it with 405
-         *     and queues nothing, where the plain route would ignore the unknown field
-         *     and queue the canary under the node's posture.
+         *     The separate route is the capability check. A Platform build that predates
+         *     pins has no such route and answers 405 or 404 without queueing anything,
+         *     where the plain route would ignore the unknown field and queue the canary
+         *     under the node's posture. This route therefore never answers 404 itself:
+         *     a missing revision is a 422.
          */
         post: operations["schedule_pinned_l2_report_canary_api_v1_admin_screener_l2_report_canaries_pinned_post"];
         delete?: never;
@@ -21453,6 +21454,62 @@ export interface components {
             accepted: boolean;
         };
         /**
+         * L2CanaryPinnedScheduleRequest
+         * @description ``POST /pinned``: the schedule request with a required posture pin.
+         */
+        L2CanaryPinnedScheduleRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Confirm Report Only
+             * @constant
+             */
+            confirm_report_only: true;
+            /** Expected Agent Status */
+            expected_agent_status: string;
+            /** Expected Score Count */
+            expected_score_count: number;
+            /** Historical Ruling Id */
+            historical_ruling_id?: string | null;
+            /** Historical Ruling Kind */
+            historical_ruling_kind?: ("ath_clear" | "screening_reject") | null;
+            /**
+             * Policy Version
+             * @constant
+             */
+            policy_version: 13;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Review Label
+             * @enum {string}
+             */
+            review_label: "candidate_clear" | "known_reject";
+            /** Review Settings Revision */
+            review_settings_revision: number;
+            /**
+             * Run Mode
+             * @default source_only
+             * @enum {string}
+             */
+            run_mode: "source_only" | "full_runtime";
+            /**
+             * Source Attempt Id
+             * Format: uuid
+             */
+            source_attempt_id: string;
+            /** Target Node Id */
+            target_node_id: string;
+        };
+        /**
          * L2CanaryPreflightView
          * @description Current values of the scheduler's exact-source guards, before its recheck.
          */
@@ -39167,7 +39224,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["L2CanaryScheduleRequest"];
+                "application/json": components["schemas"]["L2CanaryPinnedScheduleRequest"];
             };
         };
         responses: {
