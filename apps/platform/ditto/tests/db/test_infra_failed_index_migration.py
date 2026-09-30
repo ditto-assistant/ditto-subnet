@@ -15,10 +15,12 @@ under the wider ``lock_timeout``; the session keeps env.py's short bound.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
 import subprocess
+from collections.abc import AsyncIterator
 from types import ModuleType
 
 import asyncpg
@@ -211,6 +213,40 @@ def _upgrade_in_process(connection: Connection, migration: ModuleType) -> None:
         migration.upgrade()
 
 
+@contextlib.asynccontextmanager
+async def _writer_holding_the_table(
+    database: WorkerDatabase, *, seconds: float
+) -> AsyncIterator[None]:
+    """Hold ``ROW EXCLUSIVE`` on ``screening_attempts`` for ``seconds``.
+
+    The server ends the writer itself (``pg_sleep``, then ``ROLLBACK``),
+    whatever the migration's backoff does to this event loop meanwhile. The
+    release is settled before the connection closes: awaited when the body
+    completes, cancelled and awaited when it raises, so a failing migration
+    reports its own error instead of an orphaned query task.
+    """
+    blocker = await asyncpg.connect(database.dsn.asyncpg)
+    try:
+        await blocker.execute(
+            "BEGIN; LOCK TABLE screening_attempts IN ROW EXCLUSIVE MODE"
+        )
+        released = asyncio.create_task(
+            blocker.execute(f"SELECT pg_sleep({seconds}); ROLLBACK")
+        )
+        try:
+            yield
+        except BaseException:
+            released.cancel()
+            await asyncio.wait({released})
+            if not released.cancelled():
+                # Retrieved and dropped: the body's error is the one to report.
+                released.exception()
+            raise
+        await released
+    finally:
+        await blocker.close()
+
+
 async def test_key_code_rebuild_recovers_in_run_from_a_cancelled_build(
     engine: AsyncEngine,
     worker_database: WorkerDatabase,
@@ -228,7 +264,6 @@ async def test_key_code_rebuild_recovers_in_run_from_a_cancelled_build(
     monkeypatch.setattr(migration, "_CONCURRENT_LOCK_TIMEOUT", "150ms")
     try:
         _alembic("downgrade", _parent(_KEY_REVISION))
-        blocker = await asyncpg.connect(worker_database.dsn.asyncpg)
         # env.py sets lock_timeout as a startup parameter; mirror it, shorter.
         runner = create_async_engine(
             worker_database.dsn.sqlalchemy,
@@ -236,21 +271,14 @@ async def test_key_code_rebuild_recovers_in_run_from_a_cancelled_build(
             connect_args={"server_settings": {"lock_timeout": "100ms"}},
         )
         try:
-            await blocker.execute(
-                "BEGIN; LOCK TABLE screening_attempts IN ROW EXCLUSIVE MODE"
-            )
-            # Released by the server itself after 0.6s, whatever the
-            # migration's backoff does to this event loop meanwhile.
-            released = asyncio.create_task(
-                blocker.execute("SELECT pg_sleep(0.6); ROLLBACK")
-            )
             with caplog.at_level(logging.WARNING, logger="alembic.lock"):
-                async with runner.connect() as connection:
+                async with (
+                    _writer_holding_the_table(worker_database, seconds=0.6),
+                    runner.connect() as connection,
+                ):
                     await connection.run_sync(_upgrade_in_process, migration)
-            await released
         finally:
             await runner.dispose()
-            await blocker.close()
 
         # The first build really was cancelled, so the recovery path ran.
         assert any("55P03" in record.getMessage() for record in caplog.records)
@@ -277,28 +305,22 @@ async def test_key_code_rebuild_widens_the_lock_timeout_only_for_its_build(
     monkeypatch.setattr(migration, "_CONCURRENT_LOCK_TIMEOUT", "10s")
     try:
         _alembic("downgrade", _parent(_KEY_REVISION))
-        blocker = await asyncpg.connect(worker_database.dsn.asyncpg)
         runner = create_async_engine(
             worker_database.dsn.sqlalchemy,
             poolclass=NullPool,
             connect_args={"server_settings": {"lock_timeout": "100ms"}},
         )
         try:
-            await blocker.execute(
-                "BEGIN; LOCK TABLE screening_attempts IN ROW EXCLUSIVE MODE"
-            )
-            # Held six times the session bound, well inside the widened one.
-            released = asyncio.create_task(
-                blocker.execute("SELECT pg_sleep(0.6); ROLLBACK")
-            )
             with caplog.at_level(logging.WARNING, logger="alembic.lock"):
-                async with runner.connect() as connection:
+                # Held six times the session bound, well inside the widened one.
+                async with (
+                    _writer_holding_the_table(worker_database, seconds=0.6),
+                    runner.connect() as connection,
+                ):
                     await connection.run_sync(_upgrade_in_process, migration)
                     after = await connection.scalar(text("SHOW lock_timeout"))
-            await released
         finally:
             await runner.dispose()
-            await blocker.close()
 
         assert not any("55P03" in record.getMessage() for record in caplog.records)
         assert after == "100ms"
