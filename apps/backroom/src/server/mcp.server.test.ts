@@ -2655,11 +2655,12 @@ describe('Backroom MCP tools', () => {
       build_concurrency: 1,
       runtime_concurrency: 1,
       source_review_concurrency: 1,
+      canary_concurrency: 0,
     }
     const reason = 'Start the approved one-slot Hetzner production canary'
     const confirmation =
       'APPLY SCREENER NODE subnet-screener-1 ' +
-      'SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1'
+      'SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1 CANARY=0'
     const control = {
       current: {
         environment: 'prod',
@@ -2678,6 +2679,7 @@ describe('Backroom MCP tools', () => {
         build_active: 0,
         runtime_active: 0,
         source_review_active: 0,
+        canary_active: 0,
       },
     }
     const fetchMock = vi
@@ -10103,4 +10105,119 @@ describe('Backroom MCP tools', () => {
     await client.close()
     await server.close()
   })
+  it('reads a pre-canary Platform node control with Platform defaults', async () => {
+    // Platform and Backroom deploy in parallel. A Platform build without the
+    // canary cap omits it; Backroom's read schema supplies Platform's own
+    // defaults instead of failing the capacity read.
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const revision = {
+      environment: 'prod',
+      node_id: 'subnet-screener-1',
+      revision: 3,
+      parent_revision: 2,
+      settings: {
+        screening_concurrency: 2,
+        sandbox_slots: 2,
+        build_concurrency: 2,
+        runtime_concurrency: 2,
+        source_review_concurrency: 2,
+      },
+      reason: 'Open two production lanes on the primary',
+      actor: 'operator@example.com',
+      created_at: '2026-09-28T00:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        snapshot: null,
+        nodes: [],
+        events: [],
+        node_controls: [
+          {
+            current: revision,
+            history: [revision],
+            usage: {
+              screening_active: 1,
+              sandbox_active: 0,
+              build_active: 0,
+              runtime_active: 0,
+              source_review_active: 0,
+            },
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_screener_capacity', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        node_controls: [
+          {
+            current: { revision: 3, settings: { canary_concurrency: 1 } },
+            history: [{ settings: { canary_concurrency: 1 } }],
+            usage: { screening_active: 1, canary_active: 0, canary_queued: 0 },
+          },
+        ],
+      })
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('requires the report-only canary cap on node concurrency writes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const tool = (await client.listTools()).tools.find(
+        (candidate) => candidate.name === 'set_screener_node_channel_settings',
+      )
+      expect(tool?.description).toContain('report-only L2 canary cap')
+      const settingsSchema = (
+        tool?.inputSchema.properties as Record<string, { required?: string[] }>
+      ).settings
+      expect(settingsSchema.required).toContain('canary_concurrency')
+      const help = async (name: string) =>
+        (
+          readJsonResult(
+            await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool: name } }),
+          ) as { guidance: string }
+        ).guidance
+      const writeHelp = await help('set_screener_node_channel_settings')
+      expect(writeHelp).toContain('Supply all six limits')
+      expect(writeHelp).toContain('only while admission is open')
+      expect(writeHelp).toContain(
+        'min(canary_concurrency, 4, fresh workers minus screening_concurrency)',
+      )
+      expect(await help('get_screener_capacity')).toContain('usage.canary_active')
+
+      const response = await client.callTool({
+        name: 'set_screener_node_channel_settings',
+        arguments: {
+          nodeId: 'subnet-screener-1',
+          expectedRevision: 0,
+          settings: {
+            screening_concurrency: 1,
+            sandbox_slots: 1,
+            build_concurrency: 1,
+            runtime_concurrency: 1,
+            source_review_concurrency: 1,
+          },
+          reason: 'Start the approved one-slot Hetzner production canary',
+          confirmation:
+            'APPLY SCREENER NODE subnet-screener-1 ' +
+            'SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1 CANARY=1',
+        },
+      })
+      expect(response.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
 })
