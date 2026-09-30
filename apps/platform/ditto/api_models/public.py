@@ -4327,7 +4327,7 @@ class PublicSubmissionPipeline(BaseModel):
         Field(
             default_factory=list,
             description=(
-                "Per-seed median retest composites for this agent and active benchmark, "
+                "Per-seed retest medians for this agent and active benchmark, "
                 "sorted by composite without exposing reusable seed identifiers. "
                 "These are display-only; cohort fold eligibility is authoritative "
                 "only in the leaderboard."

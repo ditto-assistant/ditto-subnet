@@ -27188,7 +27188,7 @@ export interface components {
              */
             agent_id: string;
             artifact_release: components["schemas"]["PublicArtifactRelease"];
-            /** @description Per-seed median retest composites for this agent and active benchmark, sorted by composite without exposing reusable seed identifiers. These are display-only; cohort fold eligibility is authoritative only in the leaderboard. */
+            /** @description Per-seed retest medians for this agent and active benchmark, sorted by composite without exposing reusable seed identifiers. These are display-only; cohort fold eligibility is authoritative only in the leaderboard. */
             confirmation_sample_composites?: number[];
             /** Confirmation Scores */
             confirmation_scores?: components["schemas"]["PublicConfirmationScore"][];
