@@ -260,7 +260,7 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
     assert l2_prompt_revision(11) == "l2-terra-source-review-v37-policy-v11"
     assert l2_prompt_revision(10) == "l2-terra-source-review-v37-policy-v10"
-    assert L2_DOSSIER_REVISION == "language-neutral-source-v15"
+    assert L2_DOSSIER_REVISION == "language-neutral-source-v16"
     assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v27-policy-v11"
     assert l2_cause_tiebreaker_prompt_revision(11) == (
         "l3-sol-cause-disagreement-v7-policy-v11"
@@ -7241,6 +7241,40 @@ async def test_stock_kit_dossier_analyzers_are_complete() -> None:
     for command in l2_review._DOSSIER_ANALYZERS:
         output = await harness.run(starter, command, {})
         assert not l2_review._contains_truncation(json.loads(output)), command
+
+
+async def test_stock_kit_dossier_is_complete_in_every_section(tmp_path: Path) -> None:
+    starter = ROOT.parent.parent / "miners/dittobench-starter-kit"
+    archive_path = tmp_path / "starter.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        # A miner archive carries regular files only; the L2 extractor rejects
+        # links such as the kit's shared skill links.
+        for directory, _dirs, names in os.walk(starter):
+            for name in sorted(names):
+                path = Path(directory) / name
+                if not path.is_symlink():
+                    archive.add(path, arcname=path.relative_to(starter).as_posix())
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _extract_readonly_workspace(archive_path, workspace)
+    agent = _sol_agent(tmp_path, InProcessAnalyzerHarness(), None)  # type: ignore[arg-type]
+    dossier, tools, complete, _, components = await agent._build_dossier(
+        workspace,
+        TarSourceRepository(str(archive_path)),
+        artifact_sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+        l1_observation=_l1(),
+        policy_version=SCREENING_POLICY_VERSION,
+        deadline=None,
+    )
+    assert complete
+    assert components == ()
+    assert tools == l2_review._DOSSIER_ANALYZERS
+    # Every section the compact packet serves through dossier_section must be
+    # accepted as-is. A truncation marker there marks dossier_section pending,
+    # and the host rejects the final review until the model re-runs the tool.
+    for section in l2_review._COMPACT_DOSSIER_SECTIONS:
+        output = l2_review._dossier_section_output(dossier, section)
+        assert not l2_review._analysis_requires_correction(output), section
 
 
 async def test_search_accepts_exact_starter_model_on_stock_kit() -> None:

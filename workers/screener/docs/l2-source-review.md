@@ -163,7 +163,13 @@ small no-exec scratch tmpfs.
 The absolute screening lease deadline bounds every dossier and model-requested
 analyzer process as well as every gateway call. Directory/header traversal,
 analyzer calls, outputs, and file sizes are independently capped; any omitted
-oversized content or traversal truncation makes clearance inconclusive.
+oversized content or traversal truncation makes clearance inconclusive. The
+one accounted exception is the starter kit's
+`fixtures/models/cross-encoder.onnx`: at that exact path, and only when its
+SHA-256 matches an installed starter provenance manifest, `integrity_surfaces`,
+`search`, and the bounded review leads list it under `nontext` with
+`provenance: starter_manifest_digest` instead of omitting it. Any other
+oversized file, including an unrecognized binary, still counts as truncation.
 
 Every file, output, AST, function, call, route, and graph bound carries an
 explicit truncation marker. A sampled deterministic attention map may still
