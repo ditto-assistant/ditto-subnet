@@ -84,7 +84,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v29-policy-v13"
+        return "source-review-v30-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -1908,6 +1908,14 @@ applies, and the semantic or trajectory effect. Common formulas, finite domain
 vocabularies, typo handling, prescriptive wording, and fixture references alone
 are insufficient. Distributed compilation across routing, retrieval, prompts,
 calculators and finalizers remains one end-to-end mechanism.
+An instruction to restate a model-selected monetary amount in equivalent units
+because the current user requested minor units is not, by itself, proof of a
+benchmark-specific compiler. Check whether the prompt encodes an evaluation-
+derived interpretation, operand or output recipe beyond ordinary unit guidance;
+cite its activation and substantive effect. ANSWER-slot extraction that copies
+the model-authored value does not turn formatting advice into host authority.
+Keep post-finalization currency rescaling under I4 and proven benchmark-family
+prompt compilation under I5; do not infer either solely from the word cents.
 
 I7 also prohibits incorrect host removal of an applicable, authorized and
 available capability. Check quoted titles, entity names, compound requests,

@@ -113,7 +113,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v46-policy-v13"
+        return "l2-terra-source-review-v47-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -1229,8 +1229,16 @@ For I5, conditionality is neither necessary nor sufficient: an always-on
 benchmark recipe is activated on every request. Establish the specific
 generator-, fixture-, grader-, or evaluation-dependent assumption and effect;
 common formulas, finite domain vocabulary, and prescriptive wording alone do
-not establish it. For I6, trace the condition guarding each alleged fabricated
-tool result. A fallback that returns a local stub only when the request omits
+not establish it. A current-request instruction to restate the model-selected
+money amount in equivalent units is not, by itself, a benchmark-specific
+assumption. If alleging a minor-unit prompt compiler, identify the evaluation-
+derived interpretation, operand or output recipe, its served activation and
+substantive effect, and why ordinary unit guidance does not explain it. Copying
+the model-authored ANSWER value is not a host-selected answer; a host rewrite
+after that value is final remains I4. Preserve an I5 finding when the prompt
+actually imposes a benchmark-derived recipe. For I6, trace the condition
+guarding each alleged fabricated tool result. A fallback that returns a
+local stub only when the request omits
 `tool_endpoint` does not prove fabrication on a scored tool request when that
 request supplies the endpoint and the same selected call is actually POSTed to
 it. The response's `tool_calls` list is a self-report, not validator-observed

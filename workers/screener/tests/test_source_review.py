@@ -3505,7 +3505,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v29-policy-v13"
+    assert _prompt_revision(13) == "source-review-v30-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -3531,6 +3531,19 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     prompt = _prompt(SCREENING_POLICY_VERSION)
     assert all(fragment in prompt for fragment in required)
+
+
+def test_v13_i5_minor_unit_guidance_requires_benchmark_causality() -> None:
+    from ditto_screener.source_review import _source_review_system_prompt
+
+    v13 = _source_review_system_prompt(13)
+    v12 = _source_review_system_prompt(12)
+    assert "model-selected monetary amount in equivalent units" in v13
+    assert "evaluation-\nderived interpretation, operand or output recipe" in v13
+    assert "ANSWER-slot extraction that copies" in v13
+    assert "post-finalization currency rescaling under I4" in v13
+    assert "proven benchmark-family\nprompt compilation under I5" in v13
+    assert "model-selected monetary amount in equivalent units" not in v12
 
 
 def test_policy_v13_provider_lead_uses_scored_runtime_selector() -> None:
