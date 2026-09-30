@@ -26,6 +26,7 @@ import pytest
 from ditto.api_models.emission_eligibility import (
     DEFAULT_SETTINGS,
     STATE_REASONS,
+    WITHDRAWN_ELIGIBLE_REASON,
     WITHDRAWN_REVIEW_REASON,
     EmissionEligibilitySettings,
     eligibility_checksum,
@@ -356,9 +357,15 @@ class TestLedgerEvaluation:
         }
 
 
-@pytest.mark.parametrize("state", [*sorted(STATE_REASONS), "withdrawn"])
+_WITHDRAWN_REASONS = {
+    "withdrawn": WITHDRAWN_REVIEW_REASON,
+    "withdrawn_eligible": WITHDRAWN_ELIGIBLE_REASON,
+}
+
+
+@pytest.mark.parametrize("state", [*sorted(STATE_REASONS), *sorted(_WITHDRAWN_REASONS)])
 def test_every_state_has_source_free_miner_facing_text(state: str) -> None:
-    reason = WITHDRAWN_REVIEW_REASON if state == "withdrawn" else STATE_REASONS[state]
+    reason = _WITHDRAWN_REASONS.get(state) or STATE_REASONS[state]
     assert reason.endswith(".")
     assert len(reason) > 40
     # These strings render on the public board. Nothing that could leak a
@@ -416,3 +423,39 @@ def test_a_withdrawn_hold_is_never_described_as_still_open(
     if resolution == "withdraw":
         assert "still open" not in record.reason
         assert "withdrawn" in record.reason
+
+
+@pytest.mark.parametrize(
+    ("enforcement", "overrides"),
+    [
+        ("off", {}),
+        ("shadow", {"require_terminal_review": False}),
+        ("enforce", {"require_terminal_review": False}),
+    ],
+)
+def test_an_eligible_withdrawn_hold_never_claims_a_terminal_review(
+    enforcement: str, overrides: dict[str, object]
+) -> None:
+    """A withdrawal can earn, but it is never a completed review."""
+    withdrawn = _classify(
+        AgentReviewPosture(
+            agent_id=uuid4(),
+            review_status="resolved",
+            review_resolution="withdraw",
+            review_resolved_at=_NOW,
+            passed_attempt_count=1,
+        ),
+        policy=_policy(enforcement, **overrides),
+    )
+    assert withdrawn.state == "eligible"
+    assert withdrawn.reward_eligible is True
+    assert withdrawn.reason == WITHDRAWN_ELIGIBLE_REASON
+    assert "terminal" not in withdrawn.reason.lower()
+    assert "withheld" not in withdrawn.reason.lower()
+    assert "wait" not in withdrawn.reason.lower()
+    # An artifact that was never held keeps the canonical sentence.
+    never_held = _classify(
+        AgentReviewPosture(agent_id=uuid4(), passed_attempt_count=1),
+        policy=_policy(enforcement, **overrides),
+    )
+    assert never_held.reason == STATE_REASONS["eligible"]

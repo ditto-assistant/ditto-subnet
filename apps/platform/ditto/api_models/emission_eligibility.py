@@ -152,6 +152,18 @@ The state is the same one an open review takes, but "still open" would
 contradict the public ``review_event`` of ``withdrawn``. Same table rules as
 :data:`STATE_REASONS`: fixed text, no source or reviewer output."""
 
+WITHDRAWN_ELIGIBLE_REASON = (
+    "The precautionary review hold on this exact artifact was withdrawn without "
+    "a finding. A withdrawal is not a certification; the current reward "
+    "eligibility policy does not withhold this artifact, so the score is earning "
+    "emissions."
+)
+"""Miner-facing text for ``eligible`` reached through a withdrawal.
+
+With ``require_terminal_review`` off, or the gate off, a withdrawn hold earns.
+The canonical ``eligible`` sentence says review is terminal, which a withdrawal
+never is. Same table rules as :data:`STATE_REASONS`."""
+
 
 class EmissionEligibilitySettings(BaseModel):
     """Complete subnet-global reward-eligibility posture, stored per revision."""
@@ -280,9 +292,9 @@ class AgentEmissionEligibility(BaseModel):
     enforcement: EligibilityEnforcement
     state: EligibilityState
     reason: str
-    """Miner-facing text from :data:`STATE_REASONS` (or
-    :data:`WITHDRAWN_REVIEW_REASON` for a withdrawn hold); never reviewer
-    output."""
+    """Miner-facing text from :data:`STATE_REASONS`, or for a withdrawn hold
+    :data:`WITHDRAWN_REVIEW_REASON` (withheld) / :data:`WITHDRAWN_ELIGIBLE_REASON`
+    (earning); never reviewer output."""
     reward_eligible: bool
     """Whether this artifact earns emissions under the *current* posture.
 

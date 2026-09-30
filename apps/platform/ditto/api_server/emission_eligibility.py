@@ -57,6 +57,7 @@ from pydantic import ValidationError
 from ditto.api_models.emission_eligibility import (
     DEFAULT_SETTINGS,
     STATE_REASONS,
+    WITHDRAWN_ELIGIBLE_REASON,
     WITHDRAWN_REVIEW_REASON,
     AgentEmissionEligibility,
     EligibilityState,
@@ -246,6 +247,24 @@ def _state_for(
     return "eligible"
 
 
+def _reason_for(state: EligibilityState, posture: AgentReviewPosture) -> str:
+    """The published sentence for ``state``, worded for a withdrawn hold.
+
+    A withdrawal retracts the hold without completing review, so neither the
+    canonical ``unresolved_review`` ("still open") nor ``eligible`` ("review is
+    terminal") sentence is true for it. The state and reward outcome stay the
+    evaluator's; only the wording changes.
+    """
+    withdrawn = (
+        posture.review_status == "resolved" and posture.review_resolution == "withdraw"
+    )
+    if withdrawn and state == "unresolved_review":
+        return WITHDRAWN_REVIEW_REASON
+    if withdrawn and state == "eligible":
+        return WITHDRAWN_ELIGIBLE_REASON
+    return STATE_REASONS[state]
+
+
 def classify(
     *,
     agent_id: UUID,
@@ -264,9 +283,6 @@ def classify(
         else _state_for(posture, settings, window=window)
     )
     posture_satisfied = state == "eligible"
-    withdrawn = (
-        posture.review_status == "resolved" and posture.review_resolution == "withdraw"
-    )
     return AgentEmissionEligibility(
         agent_id=agent_id,
         artifact_sha256=artifact_sha256,
@@ -275,12 +291,7 @@ def classify(
         policy_checksum=policy.checksum or eligibility_checksum(settings),
         enforcement=settings.enforcement,
         state=state,
-        # Same state as an open review, but the review is not "still open".
-        reason=(
-            WITHDRAWN_REVIEW_REASON
-            if withdrawn and state == "unresolved_review"
-            else STATE_REASONS[state]
-        ),
+        reason=_reason_for(state, posture),
         # Only ``enforce`` withholds. Under ``off``/``shadow`` the row is paid
         # exactly as before, which is what makes shipping this a no-op.
         reward_eligible=posture_satisfied or not policy.enforcing,

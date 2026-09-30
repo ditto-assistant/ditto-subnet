@@ -59,10 +59,13 @@ exact artifact's review the same way it reads an open one:
   would not have withheld it either. A `clear` is a new certification, and new
   certifications take effect at the next window.
 
-The published reason for a withdrawn hold is its own sentence
-(`WITHDRAWN_REVIEW_REASON`), because "still open" would contradict the public
-`review_event` of `withdrawn`. The state and the reward outcome are the same as
-for an open review.
+A withdrawn hold publishes its own sentences, because neither canonical one is
+true for it: "still open" would contradict the public `review_event` of
+`withdrawn`, and "review is terminal" would claim a certification that never
+happened. Withheld as `unresolved_review` it reads `WITHDRAWN_REVIEW_REASON`;
+earning as `eligible` (the gate off, or `require_terminal_review` off) it reads
+`WITHDRAWN_ELIGIBLE_REASON`. Only the wording differs: the state and reward
+outcome are the evaluator's.
 
 ## The next-window rule
 
@@ -99,8 +102,8 @@ Scores stay published throughout. Three separate facts:
   revision, the window, and `activates_at`.
 
 The sentences come from one table (`STATE_REASONS`, plus
-`WITHDRAWN_REVIEW_REASON` for a withdrawn hold's `unresolved_review`), so the
-board, the submission page and Backroom cannot disagree. They carry no source, no reviewer
+`WITHDRAWN_REVIEW_REASON` and `WITHDRAWN_ELIGIBLE_REASON` for a withdrawn
+hold), so the board, the submission page and Backroom cannot disagree. They carry no source, no reviewer
 output, no thresholds and no cohort statistics.
 
 ## Holding the crown unpaid
