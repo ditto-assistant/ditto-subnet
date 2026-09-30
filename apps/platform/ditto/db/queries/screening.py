@@ -433,12 +433,24 @@ async def has_claimable_screening_work(
       (``screening_canary_revision_usable``); pass the scopes a production
       claim from the same worker would bind (``claim_canary_scopes``).
 
+    The other claim arms are not modeled: the released scored-policy rescreen
+    (SCORED/LIVE), infrastructure auto-retries, stale EVALUATING rows and
+    deferred ATH passes. They do not hold a yielding lane, whose own
+    reservation of admitted workers covers them.
+
     This is an advisory read for lanes that must yield to production, such as
     report-only canaries. It is one unlocked ``SELECT``: it takes no advisory
     lock, locks no rows, runs no expiry or orphan sweep, and writes nothing, so
     it never queues behind or delays a production claim.
     """
     candidate_payment = aliased(EvaluationPayment)
+    # No canary policy version, deliberately. In these two arms a pending
+    # scored release only narrows which pinned posture is usable; it never
+    # makes an agent claimable. Ignoring it (``None``) therefore reports a
+    # superset of what any worker's claim selects. That can over-hold a
+    # yielding lane but never hide work from production, and it holds for
+    # workers of any build. The released scored rescreen is the SCORED/LIVE
+    # arm, which this read does not model.
     _, release_criteria, can_claim_scored_rescreen = scored_policy_release_filter(None)
     claimable = and_(
         ~screening_running_or_backoff(now),
