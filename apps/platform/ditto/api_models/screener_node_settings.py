@@ -82,6 +82,9 @@ class ScreenerNodeChannelUsage(BaseModel):
     source_review_active: Annotated[int, Field(ge=0)] = 0
     # Unexpired report-only L2 canary leases targeting the node.
     canary_active: Annotated[int, Field(ge=0)] = 0
+    # Report-only L2 canaries queued for the node. With admission open they
+    # wait while production can claim work or needs the free workers.
+    canary_queued: Annotated[int, Field(ge=0)] = 0
 
 
 class ScreenerNodeChannelSettingsWriteRequest(BaseModel):

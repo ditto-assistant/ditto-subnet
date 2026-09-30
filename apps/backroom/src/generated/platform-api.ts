@@ -30205,6 +30205,11 @@ export interface components {
              */
             canary_active: number;
             /**
+             * Canary Queued
+             * @default 0
+             */
+            canary_queued: number;
+            /**
              * Runtime Active
              * @default 0
              */

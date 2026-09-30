@@ -754,6 +754,7 @@ export const screenerNodeChannelSettingsControlSchema = z.object({
     runtime_active: z.number().int().nonnegative(),
     source_review_active: z.number().int().nonnegative(),
     canary_active: z.number().int().nonnegative().default(0),
+    canary_queued: z.number().int().nonnegative().default(0),
   }).nullable(),
 })
 

@@ -526,6 +526,7 @@ describe('admin API schemas', () => {
     })
     expect(control.current.settings.canary_concurrency).toBe(1)
     expect(control.usage?.canary_active).toBe(0)
+    expect(control.usage?.canary_queued).toBe(0)
 
     const write = {
       nodeId: 'subnet-screener-1',

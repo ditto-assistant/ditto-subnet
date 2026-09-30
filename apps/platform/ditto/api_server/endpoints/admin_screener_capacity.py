@@ -341,6 +341,17 @@ async def _node_channel_control(
         )
         or 0
     )
+    canary_queued = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(ScreenerL2ReportCanary)
+            .where(
+                ScreenerL2ReportCanary.target_node_id == node_id,
+                ScreenerL2ReportCanary.status == "queued",
+            )
+        )
+        or 0
+    )
     node = await session.get(ScreenerNode, node_id)
     screening_active = 0
     if node is not None:
@@ -372,6 +383,7 @@ async def _node_channel_control(
             runtime_active=runtime_active,
             source_review_active=source_review_active,
             canary_active=canary_active,
+            canary_queued=canary_queued,
         ),
     )
 

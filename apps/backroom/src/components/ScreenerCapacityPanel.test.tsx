@@ -399,7 +399,16 @@ describe('ScreenerCapacityPanel', () => {
       actor: 'operator@example.com',
       created_at: '2026-09-28T00:00:00Z',
     }
-    const control = { current: revision, history: [revision], usage: null }
+    const usage = {
+      screening_active: 1,
+      sandbox_active: 1,
+      build_active: 1,
+      runtime_active: 0,
+      source_review_active: 0,
+      canary_active: 1,
+      canary_queued: 3,
+    }
+    const control = { current: revision, history: [revision], usage }
     updateScreenerNodeChannelSettings.mockResolvedValue({
       ...control,
       current: { ...revision, revision: 5, settings: { ...settings, canary_concurrency: 0 } },
@@ -415,6 +424,8 @@ describe('ScreenerCapacityPanel', () => {
     const node = within(
       screen.getByRole('heading', { name: 'subnet-screener-1' }).closest('section') as HTMLElement,
     )
+    // Leased and waiting report canaries sit beside production usage.
+    expect(node.getByText(/1\/1 report canaries, 3 queued/)).toBeTruthy()
     fireEvent.change(node.getByLabelText('Report canaries'), { target: { value: '0' } })
     const expected =
       'APPLY SCREENER NODE subnet-screener-1 SCREENING=2 SANDBOX=2 BUILD=2 RUNTIME=2 SOURCE_REVIEW=2 CANARY=0'

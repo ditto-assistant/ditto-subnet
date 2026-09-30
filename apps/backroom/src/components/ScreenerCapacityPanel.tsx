@@ -437,7 +437,7 @@ function NodeChannelControl({
         </div>
         {control.usage ? (
           <span className="text-xs tabular-nums text-[var(--muted-strong)]">
-            {control.usage.screening_active}/{settings.screening_concurrency} screens · {control.usage.sandbox_active}/{settings.sandbox_slots} sandboxes
+            {control.usage.screening_active}/{settings.screening_concurrency} screens · {control.usage.sandbox_active}/{settings.sandbox_slots} sandboxes · {control.usage.canary_active}/{settings.canary_concurrency} report canaries, {control.usage.canary_queued} queued
           </span>
         ) : null}
       </div>

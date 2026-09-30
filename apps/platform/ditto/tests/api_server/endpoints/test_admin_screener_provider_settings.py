@@ -327,6 +327,7 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
         "canary_concurrency": 1,
     }
     assert initial.json()["usage"]["canary_active"] == 0
+    assert initial.json()["usage"]["canary_queued"] == 0
 
     settings = {
         "screening_concurrency": 8,
@@ -559,6 +560,7 @@ async def test_legacy_node_revision_reads_one_canary_and_counts_canary_leases(
     assert control.status_code == 200, control.text
     assert control.json()["current"]["settings"]["canary_concurrency"] == 1
     assert control.json()["usage"]["canary_active"] == 1
+    assert control.json()["usage"]["canary_queued"] == 1
 
     # The confirmation must name the canary cap the revision will store,
     # including the default an operator did not type.

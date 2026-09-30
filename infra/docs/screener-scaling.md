@@ -112,8 +112,8 @@ review posture, does not hold canaries. The effective cap is
 With admission closed, canaries keep their legacy cap of `min(4, fresh
 workers)`. Revisions written before the field existed read as 1.
 `get_screener_capacity` reports unexpired canary leases as
-`usage.canary_active`. Platform logs `report-only L2 canary held for
-production` with
+`usage.canary_active` and waiting canaries as `usage.canary_queued`. Platform
+logs `report-only L2 canary held for production` with
 `reason=production-claimable` or `reason=production-reserved` at most once a
 minute per node and reason, and only when a worker could otherwise lease a
 queued canary.
