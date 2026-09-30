@@ -3626,9 +3626,11 @@ PublicAdmissionLane = Literal["build", "runtime_smoke", "source_review"]
 class PublicAdmissionRetry(BaseModel):
     """Live admission state for a submission still in build & admission.
 
-    Failed cost-bearing attempts never retry automatically, except a Docker build
-    infrastructure failure or a claim the worker released before starting it.
-    ``parked`` names a source-review/provider failure (including OpenRouter
+    Failed cost-bearing attempts never retry automatically, except a Ditto-owned
+    failure that never judged the artifact: a Docker build infrastructure
+    failure, a claim the worker released before starting it, missing scorer
+    runtime evidence, or a screening node whose source-review court could not
+    start. ``parked`` names a source-review/provider failure (including OpenRouter
     throttling), while ``stuck`` names another Ditto-owned infrastructure
     failure. Both require a guarded Backroom retry.
     ``retry_queued`` means a retry is waiting for a screener slot: either that

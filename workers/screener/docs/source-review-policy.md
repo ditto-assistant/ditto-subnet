@@ -131,8 +131,12 @@ addendum.
   Since 2026-09-07 the worker no longer settles a refusal as a clear: an
   `adjudicator-failed`, `adjudicator-no-evidence`, or
   `verdict-contract-failed` court result is carried as a quarantine (an ATH
-  hold on a deferred rescreen), and `adjudicator-unavailable` (no key file or
-  unreadable archive on the node) is a retryable infrastructure outcome.
+  hold on a deferred rescreen), and `adjudicator-unavailable` (unreadable
+  archive) or `adjudicator-key-unavailable` (no usable court key file on the
+  node) is a retryable infrastructure outcome. Only the key case reports
+  `source-review-adjudicator-key-unavailable`, which Platform retries
+  automatically within its backoff, breaker, and age/streak caps (#2449);
+  `source-review-unavailable` still waits for an operator retry.
 - **Fairness.** The same rules as v11 apply: agents are held to the policy
   that screened them; the scheduled activation with `rescreen_scored` is the
   mechanism that re-adjudicates every scored row — including the champion —

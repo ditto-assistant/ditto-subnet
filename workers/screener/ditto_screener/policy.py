@@ -610,9 +610,41 @@ class SourceFingerprintTriageModule(_BaseModule):
         )
 
 
+# ``adjudicator.ADJUDICATOR_KEY_UNAVAILABLE_CODE``, spelled out here as the
+# sibling ``adjudicator-unavailable`` is: the court's API key file on this node
+# was unusable. The key is read before the archive, so no submission reaches it.
+_COURT_KEY_UNAVAILABLE = "adjudicator-key-unavailable"
+# The reason code for that case. Fleet-owned, so Platform retries it
+# automatically (``INFRA_AUTO_RETRY_REASON_CODES``, #2449); keep it distinct from
+# ``source-review-unavailable``, which an archive the court cannot open or read,
+# or a screen whose source reviewer never started, also produces and which
+# therefore stays on the operator retry.
+SOURCE_REVIEW_KEY_UNAVAILABLE_CODE = "source-review-adjudicator-key-unavailable"
+
+
 def _court_unavailable(adjudication: Mapping[str, object]) -> bool:
-    """True when the court never started: no key file or unreadable archive."""
-    return adjudication.get("escalation_code") == "adjudicator-unavailable"
+    """True when the court never started: no usable key or unreadable archive."""
+    return adjudication.get("escalation_code") in {
+        "adjudicator-unavailable",
+        _COURT_KEY_UNAVAILABLE,
+    }
+
+
+def _court_unavailable_evidence(
+    module_id: str, adjudication: Mapping[str, object]
+) -> PolicyEvidence:
+    """Name a node key failure apart from an archive the court could not open."""
+    if adjudication.get("escalation_code") == _COURT_KEY_UNAVAILABLE:
+        return PolicyEvidence(
+            module_id,
+            SOURCE_REVIEW_KEY_UNAVAILABLE_CODE,
+            "private source-review adjudication key was unavailable on this node",
+        )
+    return PolicyEvidence(
+        module_id,
+        "source-review-unavailable",
+        "private source-review adjudication was unavailable",
+    )
 
 
 _ADJUDICATED_CODE = "source-review-adjudicated"
@@ -722,19 +754,13 @@ class AgenticSourceReviewModule(_BaseModule):
                     review_notes=review_notes,
                 )
             if _court_unavailable(adjudication):
-                # The court could not even start on this node (no key file,
-                # unreadable archive). That is node infrastructure, not a
-                # verdict: let the platform retry within the attempt budget
-                # instead of parking the miner behind a broken worker.
+                # The court could not even start (no usable key on this node,
+                # or an unreadable archive). That is not a verdict. Only the
+                # key case is provably the node's, so only it carries the code
+                # Platform retries automatically.
                 return ModuleResult(
                     ModuleDisposition.RETRYABLE_INFRA,
-                    (
-                        PolicyEvidence(
-                            self.module_id,
-                            "source-review-unavailable",
-                            "private source-review adjudication was unavailable",
-                        ),
-                    ),
+                    (_court_unavailable_evidence(self.module_id, adjudication),),
                     finding=observation.finding,
                     review_notes=review_notes,
                 )
@@ -1501,20 +1527,17 @@ class PolicyEngine:
             if court_decision not in {"clear", "reject"} and _court_unavailable(
                 adjudication
             ):
+                unavailable = _court_unavailable_evidence(
+                    "agentic-preexecution-review", adjudication
+                )
                 return self._decision(
                     ScreeningOutcome.RETRYABLE_INFRA,
-                    (
-                        PolicyEvidence(
-                            "agentic-preexecution-review",
-                            "source-review-unavailable",
-                            "private source-review adjudication was unavailable",
-                        ),
-                    ),
+                    (unavailable,),
                     observation.finding,
                     review_audit=observation.review_audit,
                     review_notes=observation.notes,
                     policy_version=policy_version,
-                    reason_code="source-review-unavailable",
+                    reason_code=unavailable.code,
                 )
             evidence: tuple[PolicyEvidence, ...] = (
                 PolicyEvidence(

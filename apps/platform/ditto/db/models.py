@@ -639,12 +639,14 @@ class ScreeningAttempt(Base):
             postgresql_where=text(
                 "status = 'failed' AND reason_code IN "
                 "('docker-build-infrastructure', 'worker-claim-not-started', "
-                "'l2-runtime-evidence-unavailable')"
+                "'l2-runtime-evidence-unavailable', "
+                "'source-review-adjudicator-key-unavailable')"
             ),
             sqlite_where=text(
                 "status = 'failed' AND reason_code IN "
                 "('docker-build-infrastructure', 'worker-claim-not-started', "
-                "'l2-runtime-evidence-unavailable')"
+                "'l2-runtime-evidence-unavailable', "
+                "'source-review-adjudicator-key-unavailable')"
             ),
         ),
         Index(
