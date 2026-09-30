@@ -25,6 +25,8 @@ def service_first_weights(
 
     Unknown collector identity stops the fold, preserving the previous vector
     at the caller. Empty/withheld miner share burns, never enlarges the pool.
+    A configured collector remains a treasury role when service funding is
+    paused, so it never competes for the ordinary miner remainder.
     """
     if type(service_bps) is not int or not 0 <= service_bps <= 1000:
         raise ValueError("service allocation must be between 0 and 1000 bps")
@@ -44,7 +46,7 @@ def service_first_weights(
     ):
         raise ValueError("invalid miner vector")
     excluded = {burn_hotkey}
-    if service_bps:
+    if collector_hotkey:
         excluded.add(collector_hotkey)
     miners = {h: w for h, w in weights.items() if h not in excluded and w > 0}
     service = service_bps / 10_000

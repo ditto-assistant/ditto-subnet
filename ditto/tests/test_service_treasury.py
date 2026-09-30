@@ -58,6 +58,52 @@ def test_finite_large_weights_cannot_lose_the_miner_share_to_sum_overflow():
     assert sum(vector.values()) == pytest.approx(1)
 
 
+@pytest.mark.parametrize("burn", [0, 0.5, 1])
+@pytest.mark.parametrize("paid", [0, 0.5, 1])
+@pytest.mark.parametrize("verified", [False, True])
+def test_paused_collector_never_competes_for_miner_remainder(burn, paid, verified):
+    vector = service_first_weights(
+        {"miner": 1, "collector": 100},
+        service_bps=0,
+        burn_share=burn,
+        paid_miner_fraction=paid,
+        collector_hotkey="collector",
+        collector_verified=verified,
+        burn_hotkey="burn",
+    )
+    miner = (1 - burn) * paid
+    expected = {}
+    if miner:
+        expected["miner"] = miner
+    if miner < 1:
+        expected["burn"] = 1 - miner
+    assert vector == pytest.approx(expected)
+    assert "collector" not in vector
+    assert sum(vector.values()) == pytest.approx(1)
+
+
+def test_paused_collector_only_vector_burns_the_remainder():
+    assert service_first_weights(
+        {"collector": 1},
+        service_bps=0,
+        burn_share=0,
+        collector_hotkey="collector",
+        collector_verified=True,
+        burn_hotkey="burn",
+    ) == {"burn": 1}
+
+
+def test_no_configured_collector_preserves_ordinary_zero_service_payout():
+    assert service_first_weights(
+        {"miner": 1},
+        service_bps=0,
+        burn_share=0,
+        collector_hotkey="",
+        collector_verified=False,
+        burn_hotkey="burn",
+    ) == {"miner": 1}
+
+
 def test_unverified_or_burn_collector_cannot_receive_funds():
     with pytest.raises(ValueError, match="independently verified"):
         service_first_weights(
