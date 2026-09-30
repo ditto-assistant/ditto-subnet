@@ -12,6 +12,7 @@ import {
 
 type AggregateMode = 'disabled' | 'fleet_ready' | 'enabled'
 type TieWeightingMode = 'disabled' | 'fleet_ready'
+type StatisticalBandMode = 'disabled' | 'fleet_ready'
 type LedgerPinMode = 'live' | 'epoch'
 type CrownIncumbentMode = 'disabled' | 'fleet_ready'
 type RolloutStanddown = 'off' | 'capable_validators' | 'all'
@@ -51,6 +52,24 @@ const tieWeightingModes: Array<{
     value: 'disabled',
     label: 'Fixed rank shares (rollback)',
     detail: 'Keep 65/14/10/7/4 even when secondary ordering is the only separator.',
+  },
+]
+
+const statisticalBandModes: Array<{
+  value: StatisticalBandMode
+  label: string
+  detail: string
+}> = [
+  {
+    value: 'fleet_ready',
+    label: 'Cap statistical bands (fleet ready)',
+    detail:
+      'After protocol 29 fleet readiness, cap paired tie and unpaired dethrone uncertainty at twice the KOTH margin on the next epoch pin.',
+  },
+  {
+    value: 'disabled',
+    label: 'Legacy statistical bands (rollback)',
+    detail: 'Keep the pre-protocol-29 statistical band rule.',
   },
 ]
 
@@ -178,7 +197,7 @@ export function ContinualRetestControlPanel({
   const [tieWeightingMode, setTieWeightingMode] = useState<TieWeightingMode>(
     initialState.effective.settings.tie_weighting_mode,
   )
-  const [statisticalBandMode, setStatisticalBandMode] = useState<TieWeightingMode>(
+  const [statisticalBandMode, setStatisticalBandMode] = useState<StatisticalBandMode>(
     initialState.effective.settings.statistical_band_mode,
   )
   const [ledgerPinMode, setLedgerPinMode] = useState<LedgerPinMode>(
@@ -472,7 +491,7 @@ export function ContinualRetestControlPanel({
             {effective.statistical_band_required_protocol}; the next epoch pin activates the fold.
           </p>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {tieWeightingModes.map((item) => (
+            {statisticalBandModes.map((item) => (
               <button
                 key={item.value}
                 type="button"
@@ -484,7 +503,10 @@ export function ContinualRetestControlPanel({
                     : 'border-[var(--line)] bg-[var(--panel)] hover:border-[var(--line-strong)]'
                 }`}
               >
-                <span className="block text-sm font-semibold">Statistical cap: {item.label}</span>
+                <span className="block text-sm font-semibold">{item.label}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-[var(--muted)]">
+                  {item.detail}
+                </span>
               </button>
             ))}
           </div>
