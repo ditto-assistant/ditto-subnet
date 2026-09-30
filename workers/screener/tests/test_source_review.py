@@ -952,6 +952,45 @@ def test_review_leads_need_installed_manifest_for_starter_model(
     assert leads["nontext"] == []
 
 
+@pytest.mark.parametrize("shadow", ["special", "hardlink", "symlink"])
+def test_review_leads_hash_only_the_admitted_starter_model_member(
+    tmp_path: Path, shadow: str
+) -> None:
+    # tarfile resolves a name to its last entry. A later link or special entry
+    # that the repository skips must not lend the stock digest to the
+    # different, same-size regular file it admitted at the starter path.
+    stock = _stock_starter_model()
+    hidden = "fixtures/models/stock.bin"
+    entries: list[tuple[tarfile.TarInfo, bytes]] = []
+
+    def entry(name: str, kind: bytes, raw: bytes = b"", link: str = "") -> None:
+        info = tarfile.TarInfo(name)
+        info.type = kind
+        info.size = len(raw)
+        info.linkname = link
+        entries.append((info, raw))
+
+    entry("Dockerfile", tarfile.REGTYPE, b"FROM scratch\n")
+    if shadow != "special":
+        # An unknown entry type is skipped as non-regular, so the hidden stock
+        # copy cannot itself mark the lead scan truncated.
+        entry(hidden, b"Z", stock)
+    entry(_STARTER_MODEL, tarfile.REGTYPE, b"\x00" + b"h" * (len(stock) - 1))
+    if shadow == "special":
+        entry(_STARTER_MODEL, b"Z", stock)
+    elif shadow == "hardlink":
+        entry(_STARTER_MODEL, tarfile.LNKTYPE, link=hidden)
+    else:
+        entry(_STARTER_MODEL, tarfile.SYMTYPE, link="stock.bin")
+    path = tmp_path / "agent.tar.gz"
+    with tarfile.open(path, "w:gz") as archive:
+        for info, raw in entries:
+            archive.addfile(info, io.BytesIO(raw) if raw else None)
+    leads = TarSourceRepository(str(path)).review_leads()
+    assert leads["truncated"] is True
+    assert leads["nontext"] == []
+
+
 def test_utf8_only_crate_reports_no_opaque_blobs(tmp_path: Path) -> None:
     repo = TarSourceRepository(str(_archive_with(tmp_path, {})))
     inventory = json.loads(repo.inventory())

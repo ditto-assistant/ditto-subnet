@@ -2733,7 +2733,15 @@ class TarSourceRepository:
         digests = _starter_model_digests()
         if not digests:
             return None
-        extracted = archive.extractfile(archive.getmember(member_info.archive_name))
+        member = archive.getmember(member_info.archive_name)
+        # getmember resolves a name to its last entry, and extractfile follows
+        # links. The constructor admits one regular file per path, so anything
+        # else here is a later link or special entry it skipped. Never let that
+        # entry's bytes vouch for the admitted file; the analyzer's workspace
+        # walk likewise never follows links.
+        if not member.isfile():
+            return None
+        extracted = archive.extractfile(member)
         if extracted is None:
             return None
         digest = hashlib.sha256()
