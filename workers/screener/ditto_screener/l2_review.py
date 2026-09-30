@@ -7809,12 +7809,11 @@ def _l1_lead_packet(
         diagnostics = lead["diagnostics_untrusted"]
         assert isinstance(diagnostics, list)
         summary = note.get("summary")
-        diagnostics.append(
-            {
-                "note_index": index,
-                "summary": summary[:300] if isinstance(summary, str) else "",
-            }
+        bounded_summary = (
+            " ".join(summary.split())[:300] if isinstance(summary, str) else ""
         )
+        if not any(item["summary"] == bounded_summary for item in diagnostics):
+            diagnostics.append({"note_index": index, "summary": bounded_summary})
         confidence = note.get("confidence")
         if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
             current_confidence = lead["max_confidence"]

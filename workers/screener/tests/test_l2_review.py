@@ -1408,6 +1408,34 @@ def test_l1_lead_packet_deduplicates_without_losing_note_provenance() -> None:
     ]
 
 
+def test_l1_lead_packet_collapses_repeated_diagnostics_but_keeps_all_indices() -> None:
+    repeated = {
+        "kind": "concern",
+        "path": "src/main.rs",
+        "line": 7,
+        "area": "answer_construction",
+        "category": "provider_bypass",
+        "summary": "Broker  selector  bypassed",
+    }
+    l1 = replace(
+        _l1("medium"),
+        notes=(
+            repeated,
+            {**repeated, "summary": " Broker selector bypassed "},
+            {**repeated, "summary": "Distinct direct call at this line"},
+        ),
+    )
+
+    lead = _l1_lead_packet(l1)[0]
+    assert lead["note_indices"] == [0, 1, 2]
+    assert lead["occurrences"] == 3
+    assert lead["diagnostics_untrusted"] == [
+        {"note_index": 0, "summary": "Broker selector bypassed"},
+        {"note_index": 2, "summary": "Distinct direct call at this line"},
+    ]
+    assert len(l1.notes) == 3
+
+
 def test_l1_unlocated_concern_remains_in_packet_and_blocks_medium_clear() -> None:
     l1 = replace(
         _l1("medium"),
