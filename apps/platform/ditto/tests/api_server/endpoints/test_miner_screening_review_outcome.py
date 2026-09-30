@@ -300,7 +300,6 @@ async def _owner(
     [
         ("reject", "reject", "rejected", "resubmit_after_fix"),
         ("clear", "pass", "cleared", "none"),
-        ("clear", "provisional_admission", "cleared", "none"),
         # Shadow posture or a held v13 clear: what took effect is the hold.
         ("clear", "hold", "held_for_operator_review", "await_operator_review"),
         ("reject", "hold", "held_for_operator_review", "await_operator_review"),
@@ -376,6 +375,7 @@ async def test_unverified_or_ignored_court_decision_has_no_outcome(
     cases: list[dict[str, object]] = [
         {"decision": "reject", "adjudication_digest": "1" * 64},  # tampered
         {"decision": "clear", "effective": "no_change"},  # late result, ignored
+        {"decision": "clear", "effective": "provisional_admission"},  # deferred review
         {"decision": "clear", "event": False},  # no automated event at all
     ]
     for case in cases:

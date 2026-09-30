@@ -21,7 +21,6 @@ from ditto_screening_protocol.models import SourceReviewAdjudication
 _EFFECTIVE_OUTCOME: dict[str, MinerReviewOutcome] = {
     "reject": "rejected",
     "pass": "cleared",
-    "provisional_admission": "cleared",
     "hold": "held_for_operator_review",
 }
 
@@ -33,9 +32,10 @@ def _review_outcome(
 
     The outcome is what took effect for the attempt (the automated event's
     effective decision), so a shadow-posture or receipt-held decision reads as
-    held rather than as the court's unapplied verdict. Only a court decision
-    that verifies against its signed digest produces an outcome; anything else
-    is omitted. No field of the decision itself is returned.
+    held rather than as the court's unapplied verdict. Provisional admission
+    is not source clearance, so it has no bounded review outcome. Only a court
+    decision that verifies against its signed digest produces an outcome;
+    anything else is omitted. No field of the decision itself is returned.
     """
     if event is None or not isinstance(event.evidence, dict):
         return None
