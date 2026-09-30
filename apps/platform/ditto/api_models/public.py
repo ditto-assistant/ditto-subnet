@@ -4323,16 +4323,16 @@ class PublicSubmissionPipeline(BaseModel):
     ] = None
     provisional_scores: list[PublicProvisionalScore] = Field(default_factory=list)
     confirmation_scores: list[PublicConfirmationScore] = Field(default_factory=list)
-    confirmation_sample_composites: list[
-        Annotated[float, Field(ge=0.0, le=1.0)]
-    ] = Field(
-        default_factory=list,
-        description=(
-            "Per-seed median retest composites for this agent and active benchmark, "
-            "sorted by composite without exposing reusable seed identifiers. "
-            "These are display-only; cohort fold eligibility is authoritative "
-            "only in the leaderboard."
-        ),
+    confirmation_sample_composites: list[Annotated[float, Field(ge=0.0, le=1.0)]] = (
+        Field(
+            default_factory=list,
+            description=(
+                "Per-seed median retest composites for this agent and active benchmark, "
+                "sorted by composite without exposing reusable seed identifiers. "
+                "These are display-only; cohort fold eligibility is authoritative "
+                "only in the leaderboard."
+            ),
+        )
     )
     final_composite: Annotated[
         float | None,
