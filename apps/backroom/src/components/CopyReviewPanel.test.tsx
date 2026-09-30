@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ATH_HOLD_WITHDRAWAL_CONFIRMATION, type CopyReviewConsoleItem } from '../lib/admin.schemas'
 import { CopyReviewPanel } from './CopyReviewPanel'
@@ -656,6 +656,56 @@ describe('CopyReviewPanel', () => {
     expect(screen.queryByLabelText('Withdrawal confirmation')).toBeNull()
     expect(screen.queryByText(/Withdraw hold for/)).toBeNull()
     expect(executeAthHoldWithdrawalFn).not.toHaveBeenCalled()
+  })
+
+  it('confirms the previewed reason and retires the preview when the reason is edited', async () => {
+    const previewed = 'Precautionary hold withdrawn. No misconduct finding.'
+    const edited = 'A different public reason typed after the preview.'
+    vi.mocked(getAthReview).mockResolvedValue(audit() as never)
+    vi.mocked(previewAthHoldWithdrawalFn).mockResolvedValue({
+      agent_id: eligible.agent_id,
+      review_id: eligible.review_id,
+      artifact_sha256: 'ab'.repeat(32),
+      score_count: 3,
+      agent_status: 'ath_pending_review',
+      restored_status: 'scored',
+      board_before: board,
+      board_after: board,
+      would_change_crown: false,
+      emission_reward_eligible: true,
+      emission_gate: 'off',
+      would_change_emission_crown: false,
+      emission_reason: 'Reward eligibility is off.',
+      preview_token: 'signed-preview-token-value',
+      expires_at: '2026-09-23T00:10:00Z',
+    })
+    render(<CopyReviewPanel {...panelProps} initialItems={[eligible]} initialBulkEligibleCount={1} readOnly={false} />)
+    fireEvent.click(screen.getByText(/held-agent/))
+    fireEvent.click(await screen.findByText('Withdraw hold'))
+    const reasonField = screen.getByPlaceholderText(/Miner-visible reason/) as HTMLTextAreaElement
+    fireEvent.change(reasonField, { target: { value: previewed } })
+    fireEvent.click(screen.getByText('Preview withdrawal'))
+
+    const dialog = await screen.findByRole('dialog')
+    // The confirmation shows the reason execute will send, and the field it
+    // came from is locked while the confirmation is open.
+    expect(within(dialog).getByText(previewed)).toBeDefined()
+    expect(reasonField.disabled).toBe(true)
+
+    // Any edit that does reach the field retires the preview instead of
+    // letting the dialog show one reason while execute sends another.
+    fireEvent.change(reasonField, { target: { value: edited } })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(executeAthHoldWithdrawalFn).not.toHaveBeenCalled()
+    expect(reasonField.disabled).toBe(false)
+
+    fireEvent.click(screen.getByText('Preview withdrawal'))
+    await waitFor(() => expect(previewAthHoldWithdrawalFn).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({ reason: edited }),
+    }))
+    const reopened = await screen.findByRole('dialog')
+    expect(within(reopened).getByText(edited)).toBeDefined()
+    expect(within(reopened).queryByText(previewed)).toBeNull()
   })
 
   it('does not offer a withdrawal Platform would refuse', async () => {

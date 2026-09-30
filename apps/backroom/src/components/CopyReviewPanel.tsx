@@ -248,6 +248,18 @@ export function CopyReviewPanel({
     }
   }
 
+  // A withdrawal preview's token binds the reason it was built with, and execute
+  // sends that reason. Editing the text afterwards retires the preview, so the
+  // confirmation can never show one reason while execute sends another.
+  function editReason(value: string) {
+    setReason(value)
+    if (withdrawalPreview && value !== withdrawalPreview.reason) {
+      setWithdrawalPreview(null)
+      setTypedConfirmation('')
+      if (confirmation === 'withdraw') setConfirmation(null)
+    }
+  }
+
   async function refresh(nextGeneration: CopyReviewGeneration = generation) {
     const data = await listFn({ data: { generation: nextGeneration } })
     setItems(data.items)
@@ -887,7 +899,7 @@ export function CopyReviewPanel({
               {resolution === 'withdraw' && withdrawalOffered ? (
                 <p className="text-xs text-[var(--muted)]">Withdraws an unsupported manual precautionary hold. This is not a clearance. Rewards follow the current emission policy; review the preview before confirming.</p>
               ) : null}
-              <textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Miner-visible reason recorded with your operator identity (min 3 characters)" rows={2} className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm" />
+              <textarea value={reason} onChange={(event) => editReason(event.target.value)} disabled={confirmation === 'withdraw'} placeholder="Miner-visible reason recorded with your operator identity (min 3 characters)" rows={2} className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm" />
               <button type="button" onClick={() => { if (resolution === 'withdraw') void beginWithdrawalPreview(); else setConfirmation('decision') }} disabled={reason.trim().length < 3} className={`rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 ${resolution === 'reject' ? 'bg-[var(--red-dim)] text-[var(--red)]' : 'bg-[var(--acid-dim)] text-[var(--acid)]'}`}>
                 Preview {resolution === 'withdraw' ? 'withdrawal' : resolution}
               </button>
@@ -902,7 +914,7 @@ export function CopyReviewPanel({
           <p className="text-xs text-[var(--muted-strong)]">
             Issues one separately audited decision per submission. Only rows explicitly marked bulk eligible by the deployed calibrated comparison are included; failures remain pending and are reported individually.
           </p>
-          <textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Shared miner-visible reason recorded on every decision (min 3 characters)" rows={2} disabled={busy} className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm" />
+          <textarea value={reason} onChange={(event) => editReason(event.target.value)} placeholder="Shared miner-visible reason recorded on every decision (min 3 characters)" rows={2} disabled={busy || confirmation === 'withdraw'} className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm" />
           <button type="button" onClick={() => setConfirmation('bulk')} disabled={busy || reason.trim().length < 3} className="rounded-lg bg-[var(--acid-dim)] px-4 py-2 text-sm font-medium text-[var(--acid)] disabled:opacity-50">
             {bulk ? `Clearing ${bulk.done}/${bulk.total}…` : `Preview clearing ${bulkEligible.length} eligible submission${bulkEligible.length === 1 ? '' : 's'}`}
           </button>
@@ -930,7 +942,11 @@ export function CopyReviewPanel({
             <div>
               <dt className="text-[var(--muted)]">Miner-visible reason</dt>
               <dd className="mt-1 whitespace-pre-wrap text-[var(--muted-strong)]">
-                {confirmation === 'hold' ? holdReason : reason}
+                {confirmation === 'hold'
+                  ? holdReason
+                  : confirmation === 'withdraw'
+                    ? (withdrawalPreview?.reason ?? '')
+                    : reason}
               </dd>
             </div>
             {confirmation === 'hold' ? (
