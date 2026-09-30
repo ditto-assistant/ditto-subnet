@@ -148,8 +148,9 @@ async def _schedulable_review_settings_pin(
         )
     if row.settings.get("mode") == "inherit":
         raise HTTPException(422, "canary review settings cannot inherit")
-    # Workers resolve their own instance scope and their enrolled node scope,
-    # so a canary scope that also names a live identity is production posture.
+    # Worker posture resolution already skips canary scopes, so this is not
+    # what isolates the experiment. It refuses the confusing configuration of
+    # a canary scope that is also a node or worker name.
     if (
         await session.get(ScreenerNode, row.scope) is not None
         or await session.scalar(

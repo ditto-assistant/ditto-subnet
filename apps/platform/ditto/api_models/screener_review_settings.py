@@ -46,9 +46,9 @@ PolicyManifestProfile = Literal["core", "l1", "l1_l2"]
 # one claimed attempt at a time.
 INTEGRITY_DOUBLE_CHECK_SCOPE = "integrity-double-check"
 # The prefix for report-only L2 canary postures (``l2-report-canary`` or
-# ``l2-report-canary-<name>``). No worker heartbeats under these scopes, so an
-# experiment written here never changes a node's or the fleet's production
-# posture; Platform binds one revision to one scheduled canary at a time.
+# ``l2-report-canary-<name>``). Worker posture resolution skips these scopes,
+# so an experiment written here never changes a node's or the fleet's
+# production posture; Platform binds one revision to one scheduled canary.
 L2_REPORT_CANARY_SCOPE_PREFIX = "l2-report-canary"
 
 

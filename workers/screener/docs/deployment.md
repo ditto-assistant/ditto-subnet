@@ -137,8 +137,9 @@ full-runtime controls and their exact identities are reviewed.
 A canary runs under the claiming node's effective review settings unless it is
 scheduled with `reviewSettingsRevision`. To test a different posture, write it
 with `apply_screener_review_settings` to scope `l2-report-canary` or
-`l2-report-canary-<name>` and pass that revision when scheduling. No worker
-resolves those scopes, so the posture never reaches production screening.
+`l2-report-canary-<name>` and pass that revision when scheduling. Platform
+never resolves those scopes as a worker's posture, even for a node or worker
+named inside the namespace, so the posture never reaches production screening.
 Platform refuses a pin whose scope is `*`, `bootstrap`, a node, a worker, any
 other name, or a live screener identity, and refuses `mode: inherit`. It leases
 a pinned canary only to a worker that declares pin support, sizes the lease
