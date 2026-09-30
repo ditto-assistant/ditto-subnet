@@ -73,8 +73,10 @@ UPGRADED_CODES = (*PREVIOUS_CODES, NEW_CODE)
 # Bounds each wait of a CONCURRENTLY statement: long enough to outlast ordinary
 # request transactions (Backroom's slowest reads have a 30s budget), short
 # enough that a session left idle in a transaction fails the attempt instead of
-# hanging the deploy.
+# hanging the deploy. Fewer attempts than the 3s statements get, so a stuck
+# session fails the run in about the time it did under the short timeout.
 _CONCURRENT_LOCK_TIMEOUT = "30s"
+_CONCURRENT_ATTEMPTS = 4
 
 _INDEX_STATE_SQL = """
 SELECT i.indisvalid,
@@ -167,14 +169,16 @@ def _concurrent_lock_timeout(bind: Connection) -> Iterator[None]:
         bind.exec_driver_sql("RESET lock_timeout")
 
 
-def _with_retry(what: str, step: Callable[[], object]) -> None:
+def _with_retry(
+    what: str, step: Callable[[], object], *, attempts: int = MAX_ATTEMPTS
+) -> None:
     """Run ``step``, retrying lock contention with the shared backoff."""
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    for attempt in range(1, attempts + 1):
         try:
             step()
             return
         except exc.DBAPIError as error:
-            if not is_retryable(error) or attempt == MAX_ATTEMPTS:
+            if not is_retryable(error) or attempt == attempts:
                 raise
             delay = backoff_delay(attempt)
             log.warning(
@@ -182,7 +186,7 @@ def _with_retry(what: str, step: Callable[[], object]) -> None:
                 what,
                 sqlstate(error),
                 attempt,
-                MAX_ATTEMPTS,
+                attempts,
                 delay,
             )
             time.sleep(delay)
@@ -198,7 +202,7 @@ def _drop(bind: Connection, name: str) -> None:
         with _concurrent_lock_timeout(bind):
             bind.exec_driver_sql(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
 
-    _with_retry(f"drop {name}", attempt)
+    _with_retry(f"drop {name}", attempt, attempts=_CONCURRENT_ATTEMPTS)
 
 
 def _build(bind: Connection, name: str, codes: Sequence[str]) -> None:
@@ -218,7 +222,7 @@ def _build(bind: Connection, name: str, codes: Sequence[str]) -> None:
                 f"ON {TABLE} ({COLUMN}) WHERE {_predicate(codes)}"
             )
 
-    _with_retry(f"build {name}", attempt)
+    _with_retry(f"build {name}", attempt, attempts=_CONCURRENT_ATTEMPTS)
     state = _index_state(bind, name)
     if state is None or not state.matches(codes):
         raise RuntimeError(f"{name} did not come up valid as built: {state}")

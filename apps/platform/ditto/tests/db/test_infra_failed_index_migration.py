@@ -238,10 +238,10 @@ async def test_key_code_rebuild_recovers_in_run_from_a_cancelled_build(
             await blocker.execute(
                 "BEGIN; LOCK TABLE screening_attempts IN ROW EXCLUSIVE MODE"
             )
-            # Released by the server itself after one second, whatever the
+            # Released by the server itself after 0.6s, whatever the
             # migration's backoff does to this event loop meanwhile.
             released = asyncio.create_task(
-                blocker.execute("SELECT pg_sleep(1); ROLLBACK")
+                blocker.execute("SELECT pg_sleep(0.6); ROLLBACK")
             )
             with caplog.at_level(logging.WARNING, logger="alembic.lock"):
                 async with runner.connect() as connection:
