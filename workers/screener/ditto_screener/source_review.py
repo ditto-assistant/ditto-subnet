@@ -188,23 +188,33 @@ def _record_note_feedback(
     if note is None:
         return {"recorded": False, "notes": len(notes)}
     site_fields = ("category", "path", "line")
-    repeated_site = (
-        note.get("kind") == "concern"
-        and isinstance(note.get("path"), str)
-        and isinstance(note.get("line"), int)
-        and any(
+    same_site_count = (
+        sum(
             existing.get("kind") == "concern"
             and all(existing.get(field) == note.get(field) for field in site_fields)
             for existing in notes
         )
+        if note.get("kind") == "concern"
+        and isinstance(note.get("path"), str)
+        and isinstance(note.get("line"), int)
+        else 0
     )
     recorded = _append_note(notes, note)
     feedback: dict[str, object] = {"recorded": recorded, "notes": len(notes)}
-    if repeated_site:
-        feedback["guidance"] = (
-            "This location already has a concern note. If this adds no distinct "
-            "causal evidence, inspect a different served-path location."
-        )
+    if same_site_count:
+        feedback["same_site_concerns"] = same_site_count + int(recorded)
+        if same_site_count >= 3:
+            feedback["guidance"] = (
+                "This site already has multiple concern notes. Do not restate "
+                "the same mechanism. If a distinct causal mechanism remains, "
+                "record it explicitly; otherwise inspect a different served-path "
+                "location or submit_review using the existing ledger."
+            )
+        else:
+            feedback["guidance"] = (
+                "This location already has a concern note. If this adds no distinct "
+                "causal evidence, inspect a different served-path location."
+            )
     return feedback
 
 

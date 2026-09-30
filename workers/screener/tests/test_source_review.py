@@ -6100,7 +6100,8 @@ def test_repeated_concern_feedback_reports_storage_and_new_evidence_guidance() -
 
     assert feedback["recorded"] is False
     assert feedback["notes"] == source_review_module._MAX_REVIEW_NOTES
-    assert "different served-path location" in str(feedback["guidance"])
+    assert feedback["same_site_concerns"] == source_review_module._MAX_REVIEW_NOTES
+    assert "submit_review using the existing ledger" in str(feedback["guidance"])
     assert (
         source_review_module._record_note_feedback(
             notes, {**concern, "category": "mandatory_contract_failure", "line": 355}
@@ -6108,6 +6109,26 @@ def test_repeated_concern_feedback_reports_storage_and_new_evidence_guidance() -
         is True
     )
     assert notes[-1]["line"] == 355
+
+
+def test_repeated_site_feedback_keeps_distinct_mechanisms_in_the_ledger() -> None:
+    site = {
+        "kind": "concern",
+        "category": "benchmark_emulation",
+        "path": "app/service.py",
+        "line": 65,
+    }
+    notes = [{**site, "summary": f"mechanism {index}"} for index in range(3)]
+
+    feedback = source_review_module._record_note_feedback(
+        notes, {**site, "summary": "a separate effect at the same source line"}
+    )
+
+    assert feedback["recorded"] is True
+    assert feedback["same_site_concerns"] == 4
+    assert "distinct causal mechanism" in str(feedback["guidance"])
+    assert len(notes) == 4
+    assert notes[-1]["summary"] == "a separate effect at the same source line"
 
 
 async def test_dropped_repeated_note_keeps_the_inspection_reminder(
