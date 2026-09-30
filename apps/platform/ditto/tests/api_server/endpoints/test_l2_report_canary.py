@@ -5,14 +5,17 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
-from fastapi import HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -22,11 +25,13 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryClaimResponse,
     L2CanaryCompleteRequest,
     L2CanaryScheduleRequest,
+    L2CanaryView,
 )
 from ditto.api_models.screener_review_settings import (
     ScreenerReviewSettings,
     review_settings_checksum,
 )
+from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints import l2_report_canary as endpoints
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.storage.models import VerifiedObject
@@ -1283,6 +1288,22 @@ def _pin_schedule_request(
     )
 
 
+async def _schedule_pin(
+    payload: L2CanaryScheduleRequest,
+    admin: None,
+    session: AsyncSession,
+    storage: S3StorageClient,
+    actor: str | None,
+) -> L2CanaryView:
+    """Schedule through the route Backroom uses for this payload."""
+    route = (
+        endpoints.schedule_pinned_l2_report_canary
+        if payload.review_settings_revision is not None
+        else endpoints.schedule_l2_report_canary
+    )
+    return await route(payload, admin, session, storage, actor)
+
+
 def _pin_storage() -> S3StorageClient:
     return cast(
         S3StorageClient,
@@ -1364,7 +1385,7 @@ async def test_pinned_canary_claims_under_pinned_revision_not_node_effective(
         request_id=request_id,
     )
     async with session_maker() as session:
-        scheduled = await endpoints.schedule_l2_report_canary(
+        scheduled = await _schedule_pin(
             payload, None, session, storage, "operator@example.com"
         )
     assert (
@@ -1375,13 +1396,13 @@ async def test_pinned_canary_claims_under_pinned_revision_not_node_effective(
     assert scheduled.settings_revision is None
     # The pin is part of the idempotent request identity.
     async with session_maker() as session:
-        replay = await endpoints.schedule_l2_report_canary(
+        replay = await _schedule_pin(
             payload, None, session, storage, "operator@example.com"
         )
     assert replay.canary_id == scheduled.canary_id
     async with session_maker() as session:
         with pytest.raises(HTTPException) as unpinned_replay:
-            await endpoints.schedule_l2_report_canary(
+            await _schedule_pin(
                 payload.model_copy(update={"review_settings_revision": None}),
                 None,
                 session,
@@ -1529,7 +1550,7 @@ async def test_schedule_rejects_production_or_inherit_pin_scope(
     _pin_evidence(monkeypatch, sha)
     async with session_maker() as session:
         with pytest.raises(HTTPException) as rejected:
-            await endpoints.schedule_l2_report_canary(
+            await _schedule_pin(
                 _pin_schedule_request(
                     node_id,
                     agent_id,
@@ -1569,7 +1590,7 @@ async def test_pinned_claim_rejects_checksum_drift(
     for attempt_id, revision in ((pinned_attempt, pin_revision), (plain_attempt, None)):
         async with session_maker() as session:
             scheduled.append(
-                await endpoints.schedule_l2_report_canary(
+                await _schedule_pin(
                     _pin_schedule_request(
                         node_id,
                         agent_id,
@@ -1628,7 +1649,7 @@ async def test_unpinned_canary_still_requires_node_settings(
     _node_posture(monkeypatch)
     _pin_evidence(monkeypatch, sha)
     async with session_maker() as session:
-        scheduled = await endpoints.schedule_l2_report_canary(
+        scheduled = await _schedule_pin(
             _pin_schedule_request(
                 node_id, agent_id, attempt_id, sha, review_settings_revision=None
             ),
@@ -1690,7 +1711,7 @@ async def test_pinned_canary_waits_for_a_pin_capable_worker(
         ("plain", plain_attempt, None),
     ):
         async with session_maker() as session:
-            scheduled[name] = await endpoints.schedule_l2_report_canary(
+            scheduled[name] = await _schedule_pin(
                 _pin_schedule_request(
                     node_id,
                     agent_id,
@@ -1758,7 +1779,7 @@ async def test_stale_worker_skips_older_unpinned_row_for_a_pinned_one(
         ("pinned", pinned_attempt, pin_revision),
     ):
         async with session_maker() as session:
-            scheduled[name] = await endpoints.schedule_l2_report_canary(
+            scheduled[name] = await _schedule_pin(
                 _pin_schedule_request(
                     node_id,
                     agent_id,
@@ -1836,7 +1857,7 @@ async def test_stale_worker_is_refused_when_no_pinned_row_is_leasable(
 
     monkeypatch.setattr(endpoints, "_full_runtime_worker_ready", full_runtime_ready)
     async with session_maker() as session:
-        pinned = await endpoints.schedule_l2_report_canary(
+        pinned = await _schedule_pin(
             _pin_schedule_request(
                 node_id,
                 agent_id,
@@ -1852,7 +1873,7 @@ async def test_stale_worker_is_refused_when_no_pinned_row_is_leasable(
     if excluded_by == "source-only-lease":
         ready_instances.add(f"{node_id}-worker-2")
         async with session_maker() as session:
-            await endpoints.schedule_l2_report_canary(
+            await _schedule_pin(
                 _pin_schedule_request(
                     node_id,
                     agent_id,
@@ -1908,3 +1929,65 @@ async def test_stale_worker_is_refused_when_no_pinned_row_is_leasable(
         assert claim is not None
         assert claim.canary_id == pinned.canary_id
         assert claim.review_settings_override is not None
+
+
+@pytest.mark.asyncio
+async def test_only_the_pinned_route_schedules_a_pin(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Platform ignores unknown request fields, so a pin on the plain route
+    # would be silently dropped by a build that predates pins. The pin
+    # therefore has its own route, which such a build answers with 405 before
+    # queueing anything. This build refuses a pin on the plain route and
+    # requires one on the pinned route, both before queueing.
+    token = "test-admin-token-at-least-32-characters"
+    app.state.config = replace(app.state.config, admin_api_token=token)
+
+    async def _session() -> AsyncIterator[AsyncSession]:
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _session
+    node_id, agent_id, (attempt_id,), sha = await _seed_pin_source(session_maker)
+    scope = f"l2-report-canary-{uuid4().hex[:8]}"
+    pin_revision, pin_checksum = await _seed_revision(
+        session_maker, scope=scope, settings=ScreenerReviewSettings(mode="enforce")
+    )
+    _pin_evidence(monkeypatch, sha)
+    body = _pin_schedule_request(
+        node_id, agent_id, attempt_id, sha, review_settings_revision=pin_revision
+    ).model_dump(mode="json")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Admin-Actor": "operator@example.com",
+    }
+    base = "/api/v1/admin/screener-l2-report-canaries"
+
+    plain_with_pin = await client.post(base, json=body, headers=headers)
+    assert plain_with_pin.status_code == 422, plain_with_pin.text
+    pinned_without_pin = await client.post(
+        f"{base}/pinned",
+        json={**body, "review_settings_revision": None},
+        headers=headers,
+    )
+    assert pinned_without_pin.status_code == 422, pinned_without_pin.text
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(ScreenerL2ReportCanary)
+                .where(ScreenerL2ReportCanary.target_node_id == node_id)
+            )
+            == 0
+        )
+
+    pinned = await client.post(f"{base}/pinned", json=body, headers=headers)
+    assert pinned.status_code == 200, pinned.text
+    assert (
+        pinned.json()["review_settings_revision"],
+        pinned.json()["review_settings_scope"],
+        pinned.json()["review_settings_checksum"],
+    ) == (pin_revision, scope, pin_checksum)

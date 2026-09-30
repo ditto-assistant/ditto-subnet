@@ -763,12 +763,18 @@ describe('screening submission admin service', () => {
       review_settings_scope: 'l2-report-canary-ctl137',
       settings_revision: 141,
     })
-    const [, pinned] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const [pinnedUrl, pinned] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(pinnedUrl).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/pinned',
+    )
     expect(JSON.parse(String(pinned.body))).toMatchObject({ review_settings_revision: 141 })
 
-    // Omitting the pin keeps today's request shape: no field, node posture.
+    // Omitting the pin keeps today's route and request shape: node posture.
     await scheduleL2ReportCanary(input, 'operator@omniaura.ai')
-    const [, unpinned] = fetchMock.mock.calls[1] as [string, RequestInit]
+    const [unpinnedUrl, unpinned] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(unpinnedUrl).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries',
+    )
     expect(JSON.parse(String(unpinned.body))).not.toHaveProperty('review_settings_revision')
 
     await expect(
@@ -777,10 +783,10 @@ describe('screening submission admin service', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
-  it('surfaces a canary Platform queued without the requested review posture pin', async () => {
-    // Platform ignores unknown request fields, so during a parallel deploy a
-    // Platform that predates pins queues the canary unpinned. It then runs
-    // under the node posture; do not report that as the requested experiment.
+  it('refuses a pin that an older Platform cannot bind, without queueing', async () => {
+    // A Platform build that predates pins has no /pinned route. It answers
+    // 405 before any handler runs, so nothing is queued; Backroom must say so
+    // and must not fall back to the plain route, which would drop the pin.
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const input = {
       requestId: '44444444-4444-4444-8444-444444444444',
@@ -793,38 +799,27 @@ describe('screening submission admin service', () => {
       reviewLabel: 'known_reject',
       confirmation: 'QUEUE REPORT ONLY L2 CANARY',
     }
-    const legacyView = {
-      canary_id: '33333333-3333-4333-8333-333333333333',
-      request_id: input.requestId,
-      agent_id: input.agentId,
-      source_attempt_id: input.sourceAttemptId,
-      artifact_sha256: input.artifactSha256,
-      target_node_id: input.targetNodeId,
-      expected_agent_status: 'rejected',
-      expected_score_count: 0,
-      review_label: 'known_reject',
-      run_mode: 'source_only',
-      status: 'queued',
-      claimed_instance_id: null,
-      lease_expires_at: null,
-      report: null,
-      error_code: null,
-      created_at: '2026-09-29T00:00:00Z',
-      completed_at: null,
-    }
-    const fetchMock = vi.fn().mockImplementation(async () => Response.json(legacyView))
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      Response.json(
+        { error_code: 3002, message: 'Method Not Allowed', request_id: 'r' },
+        { status: 405 },
+      ),
+    )
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(
       scheduleL2ReportCanary({ ...input, reviewSettingsRevision: 141 }, 'operator@omniaura.ai'),
-    ).rejects.toThrow(
-      /queued canary 33333333-3333-4333-8333-333333333333 without review settings revision 141/,
+    ).rejects.toThrow(/does not support canary review settings pins yet, so nothing was queued/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/pinned',
     )
-    // An unpinned request against the same Platform is unaffected.
-    await expect(scheduleL2ReportCanary(input, 'operator@omniaura.ai')).resolves.toMatchObject({
-      canary_id: legacyView.canary_id,
-    })
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    // A 405 on the plain route is not a missing pin capability.
+    await expect(scheduleL2ReportCanary(input, 'operator@omniaura.ai')).rejects.toThrow(
+      /Method Not Allowed/,
+    )
   })
 
   it('forwards explicit pagination for screening history and disputes', async () => {

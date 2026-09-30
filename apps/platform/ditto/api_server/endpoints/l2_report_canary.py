@@ -613,7 +613,45 @@ async def schedule_l2_report_canary(
     storage: Annotated[S3StorageClient, Depends(get_storage_client)],
     x_admin_actor: Annotated[str | None, Header()] = None,
 ) -> L2CanaryView:
-    """Queue one exact source once; this never reopens a screening attempt."""
+    """Queue one exact source once under the claiming node's posture.
+
+    This never reopens a screening attempt. A review-settings pin is refused
+    here: pinned canaries use ``POST /pinned``, so a Platform build without
+    pin support rejects the route instead of ignoring the field.
+    """
+    if payload.review_settings_revision is not None:
+        raise HTTPException(
+            422, "schedule a pinned canary with POST /pinned, not this route"
+        )
+    return await _schedule_l2_report_canary(payload, session, storage, x_admin_actor)
+
+
+@admin_router.post("/pinned", response_model=L2CanaryView)
+async def schedule_pinned_l2_report_canary(
+    payload: L2CanaryScheduleRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: Annotated[S3StorageClient, Depends(get_storage_client)],
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> L2CanaryView:
+    """Queue one exact source once under a pinned ``l2-report-canary*`` posture.
+
+    ``review_settings_revision`` is required. The separate route is the
+    capability check: a Platform build that predates pins answers it with 405
+    and queues nothing, where the plain route would ignore the unknown field
+    and queue the canary under the node's posture.
+    """
+    if payload.review_settings_revision is None:
+        raise HTTPException(422, "a pinned canary requires review_settings_revision")
+    return await _schedule_l2_report_canary(payload, session, storage, x_admin_actor)
+
+
+async def _schedule_l2_report_canary(
+    payload: L2CanaryScheduleRequest,
+    session: AsyncSession,
+    storage: S3StorageClient,
+    x_admin_actor: str | None,
+) -> L2CanaryView:
     async with session.begin():
         existing = await session.scalar(
             select(ScreenerL2ReportCanary).where(

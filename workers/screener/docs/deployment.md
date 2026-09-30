@@ -141,7 +141,9 @@ with `apply_screener_review_settings` to scope `l2-report-canary` or
 never resolves those scopes as a worker's posture, even for a node or worker
 named inside the namespace, so the posture never reaches production screening.
 Platform refuses a pin whose scope is `*`, `bootstrap`, a node, a worker, any
-other name, or a live screener identity, and refuses `mode: inherit`. It leases
+other name, or a live screener identity, and refuses `mode: inherit`. Backroom
+sends a pinned schedule on its own route, so a Platform build that predates
+pins refuses it and queues nothing rather than queueing it unpinned. It leases
 a pinned canary only to a worker that declares pin support, sizes the lease
 from the pinned timeouts, and stamps the pinned revision as the canary's
 `settings_revision`. The worker fetches that exact revision and applies it to

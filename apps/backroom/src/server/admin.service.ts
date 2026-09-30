@@ -685,40 +685,44 @@ export async function fetchL2ReportCanaryPreflight(rawInput: unknown) {
 
 export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
   const input = scheduleL2ReportCanaryInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/screener-l2-report-canaries', {
-    method: 'POST',
-    actor,
-    body: {
-      request_id: input.requestId,
-      agent_id: input.agentId,
-      source_attempt_id: input.sourceAttemptId,
-      artifact_sha256: input.artifactSha256,
-      policy_version: 13,
-      expected_agent_status: input.expectedAgentStatus,
-      expected_score_count: input.expectedScoreCount,
-      target_node_id: input.targetNodeId,
-      review_label: input.reviewLabel,
-      run_mode: input.runMode,
-      historical_ruling_kind: input.historicalRulingKind,
-      historical_ruling_id: input.historicalRulingId,
-      review_settings_revision: input.reviewSettingsRevision,
-      confirm_report_only: true,
-    },
-  })
-  const view = l2ReportCanaryViewSchema.parse(payload)
-  // Platform ignores unknown request fields, so a Platform that predates
-  // canary posture pins queues the canary unpinned, under the node posture.
-  if (
-    input.reviewSettingsRevision !== undefined &&
-    view.review_settings_revision !== input.reviewSettingsRevision
-  ) {
-    throw new Error(
-      `Platform queued canary ${view.canary_id} without review settings revision ${input.reviewSettingsRevision} ` +
-        `(pinned revision: ${view.review_settings_revision ?? 'none'}); it will run under the claiming node's ` +
-        'effective posture, not the requested one. Retry once Platform supports canary posture pins.',
-    )
+  const pinned = input.reviewSettingsRevision !== undefined
+  // Platform ignores unknown request fields, so a pin sent on the plain route
+  // to a build that predates pins would queue the canary under the node's
+  // posture. A pin therefore travels only on its own route, which such a
+  // build answers with 405 before queueing anything.
+  const path = `/api/v1/admin/screener-l2-report-canaries${pinned ? '/pinned' : ''}`
+  let payload: unknown
+  try {
+    payload = await platformAdminRequest(path, {
+      method: 'POST',
+      actor,
+      body: {
+        request_id: input.requestId,
+        agent_id: input.agentId,
+        source_attempt_id: input.sourceAttemptId,
+        artifact_sha256: input.artifactSha256,
+        policy_version: 13,
+        expected_agent_status: input.expectedAgentStatus,
+        expected_score_count: input.expectedScoreCount,
+        target_node_id: input.targetNodeId,
+        review_label: input.reviewLabel,
+        run_mode: input.runMode,
+        historical_ruling_kind: input.historicalRulingKind,
+        historical_ruling_id: input.historicalRulingId,
+        ...(pinned ? { review_settings_revision: input.reviewSettingsRevision } : {}),
+        confirm_report_only: true,
+      },
+    })
+  } catch (error) {
+    if (pinned && error instanceof PlatformAdminError && error.status === 405) {
+      throw new Error(
+        'This Platform build does not support canary review settings pins yet, so nothing was queued. ' +
+          'Retry reviewSettingsRevision after Platform is deployed with POST /admin/screener-l2-report-canaries/pinned.',
+      )
+    }
+    throw error
   }
-  return view
+  return l2ReportCanaryViewSchema.parse(payload)
 }
 
 export async function fetchCanonicalStarterPreflight() {

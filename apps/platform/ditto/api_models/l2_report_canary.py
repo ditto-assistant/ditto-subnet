@@ -33,7 +33,9 @@ class L2CanaryScheduleRequest(BaseModel):
     historical_ruling_kind: Literal["ath_clear", "screening_reject"] | None = None
     historical_ruling_id: Annotated[UUID | None, Field(strict=False)] = None
     # Run under this immutable ``l2-report-canary*`` revision instead of the
-    # claiming worker's node-effective posture. Omitted keeps today's behaviour.
+    # claiming worker's node-effective posture. Required by ``POST /pinned``
+    # and refused by the plain route, so an older Platform that would ignore
+    # the field never receives it.
     review_settings_revision: Annotated[int | None, Field(ge=1)] = None
     confirm_report_only: Literal[True]
 

@@ -2489,7 +2489,7 @@ describe('Backroom MCP tools', () => {
         review_settings_checksum: 'c'.repeat(64),
       })
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries')
+      expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/pinned')
       expect(init.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
       expect(JSON.parse(String(init.body))).toMatchObject({
         request_id: requestId,
