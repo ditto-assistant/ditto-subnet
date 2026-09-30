@@ -310,6 +310,10 @@ async def test_manual_open_holds_exact_scored_artifact_and_removes_it_from_ledge
         "agent_status": AgentStatus.ATH_PENDING_REVIEW,
         "held_artifact_sha256": sha256,
         "held_score_count": 3,
+        "current_artifact_sha256": sha256,
+        "current_score_count": 3,
+        "withdrawable": True,
+        "withdrawal_refusal": None,
         "previous_status": AgentStatus.SCORED,
         "opened_by": "operator",
         "action_history": [],
@@ -517,7 +521,16 @@ async def test_resolved_review_reopens_without_rewriting_original_evidence(
         "previous_status": "live",
         "artifact_sha256": sha256,
         "score_count": 3,
+        "emission_gate": None,
+        "eligibility_revision": None,
+        "eligibility_checksum": None,
+        "eligibility_state": None,
+        "emission_reward_eligible": None,
     }
+    # A reopened clear is a ruling: it is settled by clear or reject, never
+    # withdrawn, and the audit says so before an operator tries.
+    assert audit.json()["withdrawable"] is False
+    assert "prior clear/reject ruling" in audit.json()["withdrawal_refusal"]
 
     recleared = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",

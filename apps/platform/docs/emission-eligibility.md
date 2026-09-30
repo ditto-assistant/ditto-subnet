@@ -29,7 +29,7 @@ already owns it — nothing is duplicated into a new status column.
 | `review_escalated` | latest `ath_copy_court_recommendations.verdict = 'escalate'`, or `algorithm_provenance.review_kind = 'anomalous_score'` | The platform declined to decide mechanically; an operator must rule. |
 | `review_inconclusive` | `reason_code` in `source-review-inconclusive`, `repeatedly-inconclusive` | Mandatory verification did not finish. **Not a finding** (#2077); the published reason says so. |
 | `review_infrastructure_failed` | `reason_code` in `INFRA_AUTO_RETRY_REASON_CODES` + `PROVIDER_BACKOFF_REASON_CODES`, with a failed/expired latest attempt | Ditto's build, provider, or claim handling failed. **Never a miner violation** (#2051); retried automatically by `screening_infra_retry`. |
-| `unresolved_review` | `ath_reviews.status = 'pending'`, any kind | The generic open hold, including a stranded one. |
+| `unresolved_review` | `ath_reviews.status = 'pending'`, any kind, **or** `ath_reviews.resolution = 'withdraw'` | The generic open hold, including a stranded one, and a withdrawn manual hold: withdrawal retracts the hold without completing review. |
 | `review_missing` | no `passed` screening attempt | Only when the operator sets `require_completed_review` (off by default). |
 | `awaiting_next_window` | `resolved_at >= window_start` on a `clear` | Cleared, and starting at the next window. |
 
@@ -39,6 +39,33 @@ is the overwhelming majority, and is why the default posture changes nothing.
 Each withheld class has its own switch (`require_terminal_review`,
 `exclude_inconclusive`, `exclude_infrastructure_failed`, `exclude_escalated`,
 `require_completed_review`), so a class can be enabled or disabled on its own.
+
+### Withdrawn holds
+
+A `withdraw` (see [`ath-review-queue.md`](ath-review-queue.md#withdrawing-a-precautionary-hold))
+is part of the `unresolved_review` contract, not a terminal review. The review
+row is `resolved`, so the hold leaves the pending queue, but the gate reads the
+exact artifact's review the same way it reads an open one:
+
+* `require_terminal_review = true` (the default): under `enforce` the artifact
+  stays withheld as `unresolved_review` until an operator reopens the review
+  and records a terminal `clear` (next window) or `reject`. List these rows
+  with `GET /api/v1/admin/copy-reviews?status=resolved&resolution=withdraw`
+  (Backroom `list_withdrawn_ath_holds`).
+* `require_terminal_review = false`: a withdrawal is `eligible` in the
+  **current** window, while a `clear` still waits for the next one. This is
+  intentional. A withdrawal restores the pre-hold posture of an artifact whose
+  hold should not have been opened, and with this switch off an open review
+  would not have withheld it either. A `clear` is a new certification, and new
+  certifications take effect at the next window.
+
+A withdrawn hold publishes its own sentences, because neither canonical one is
+true for it: "still open" would contradict the public `review_event` of
+`withdrawn`, and "review is terminal" would claim a certification that never
+happened. Withheld as `unresolved_review` it reads `WITHDRAWN_REVIEW_REASON`;
+earning as `eligible` (the gate off, or `require_terminal_review` off) it reads
+`WITHDRAWN_ELIGIBLE_REASON`. Only the wording differs: the state and reward
+outcome are the evaluator's.
 
 ## The next-window rule
 
@@ -74,8 +101,9 @@ Scores stay published throughout. Three separate facts:
   miner-facing sentence, `reward_eligible`, `posture_satisfied`, the posture
   revision, the window, and `activates_at`.
 
-The sentences come from one table (`STATE_REASONS`), so the board, the
-submission page and Backroom cannot disagree. They carry no source, no reviewer
+The sentences come from one table (`STATE_REASONS`, plus
+`WITHDRAWN_REVIEW_REASON` and `WITHDRAWN_ELIGIBLE_REASON` for a withdrawn
+hold), so the board, the submission page and Backroom cannot disagree. They carry no source, no reviewer
 output, no thresholds and no cohort statistics.
 
 ## Holding the crown unpaid

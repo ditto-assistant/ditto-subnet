@@ -26,6 +26,8 @@ import pytest
 from ditto.api_models.emission_eligibility import (
     DEFAULT_SETTINGS,
     STATE_REASONS,
+    WITHDRAWN_ELIGIBLE_REASON,
+    WITHDRAWN_REVIEW_REASON,
     EmissionEligibilitySettings,
     eligibility_checksum,
     next_window_start,
@@ -355,9 +357,15 @@ class TestLedgerEvaluation:
         }
 
 
-@pytest.mark.parametrize("state", sorted(STATE_REASONS))
+_WITHDRAWN_REASONS = {
+    "withdrawn": WITHDRAWN_REVIEW_REASON,
+    "withdrawn_eligible": WITHDRAWN_ELIGIBLE_REASON,
+}
+
+
+@pytest.mark.parametrize("state", [*sorted(STATE_REASONS), *sorted(_WITHDRAWN_REASONS)])
 def test_every_state_has_source_free_miner_facing_text(state: str) -> None:
-    reason = STATE_REASONS[state]
+    reason = _WITHDRAWN_REASONS.get(state) or STATE_REASONS[state]
     assert reason.endswith(".")
     assert len(reason) > 40
     # These strings render on the public board. Nothing that could leak a
@@ -365,3 +373,89 @@ def test_every_state_has_source_free_miner_facing_text(state: str) -> None:
     lowered = reason.lower()
     for forbidden in ("sha256", "prompt", "threshold", "z-score", "cohort"):
         assert forbidden not in lowered
+
+
+@pytest.mark.parametrize("resolution", ["withdraw", "clear"])
+def test_withdrawal_never_receives_the_exact_artifact_clear_window(
+    resolution: str,
+) -> None:
+    agent_id = uuid4()
+    posture = AgentReviewPosture(
+        agent_id=agent_id,
+        review_status="resolved",
+        review_resolution=resolution,
+        review_resolved_at=_NOW,
+        passed_attempt_count=1,
+    )
+    during = _classify(posture)
+    assert during.reward_eligible is False
+    assert during.state == (
+        "unresolved_review" if resolution == "withdraw" else "awaiting_next_window"
+    )
+    later = _classify(posture, now=_NOW + timedelta(hours=1))
+    assert later.reward_eligible is (resolution == "clear")
+
+
+@pytest.mark.parametrize(
+    ("status", "resolution", "expected"),
+    [
+        ("resolved", "withdraw", WITHDRAWN_REVIEW_REASON),
+        ("pending", None, STATE_REASONS["unresolved_review"]),
+    ],
+)
+@pytest.mark.parametrize("enforcement", ["shadow", "enforce"])
+def test_a_withdrawn_hold_is_never_described_as_still_open(
+    status: str, resolution: str | None, expected: str, enforcement: str
+) -> None:
+    """Same withheld state, but the public ``review_event`` reads ``withdrawn``."""
+    record = _classify(
+        AgentReviewPosture(
+            agent_id=uuid4(),
+            review_status=status,
+            review_resolution=resolution,
+            review_resolved_at=_NOW if status == "resolved" else None,
+            passed_attempt_count=1,
+        ),
+        policy=_policy(enforcement),
+    )
+    assert record.state == "unresolved_review"
+    assert record.reason == expected
+    if resolution == "withdraw":
+        assert "still open" not in record.reason
+        assert "withdrawn" in record.reason
+
+
+@pytest.mark.parametrize(
+    ("enforcement", "overrides"),
+    [
+        ("off", {}),
+        ("shadow", {"require_terminal_review": False}),
+        ("enforce", {"require_terminal_review": False}),
+    ],
+)
+def test_an_eligible_withdrawn_hold_never_claims_a_terminal_review(
+    enforcement: str, overrides: dict[str, object]
+) -> None:
+    """A withdrawal can earn, but it is never a completed review."""
+    withdrawn = _classify(
+        AgentReviewPosture(
+            agent_id=uuid4(),
+            review_status="resolved",
+            review_resolution="withdraw",
+            review_resolved_at=_NOW,
+            passed_attempt_count=1,
+        ),
+        policy=_policy(enforcement, **overrides),
+    )
+    assert withdrawn.state == "eligible"
+    assert withdrawn.reward_eligible is True
+    assert withdrawn.reason == WITHDRAWN_ELIGIBLE_REASON
+    assert "terminal" not in withdrawn.reason.lower()
+    assert "withheld" not in withdrawn.reason.lower()
+    assert "wait" not in withdrawn.reason.lower()
+    # An artifact that was never held keeps the canonical sentence.
+    never_held = _classify(
+        AgentReviewPosture(agent_id=uuid4(), passed_attempt_count=1),
+        policy=_policy(enforcement, **overrides),
+    )
+    assert never_held.reason == STATE_REASONS["eligible"]

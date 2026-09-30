@@ -60,8 +60,12 @@ class AdminCopyReviewEvidence(BaseModel):
     action ledger stays available from the audit endpoint.
     """
 
-    superseded_resolution: Literal["clear", "reject"] | None = None
-    """The decision the reopen withdrew — historical, not an active finding."""
+    superseded_resolution: Literal["clear", "reject", "withdraw"] | None = None
+    """The decision the reopen superseded — historical, not an active finding.
+
+    ``withdraw`` means the reopen re-held an artifact whose earlier
+    precautionary hold had been withdrawn without a ruling.
+    """
 
     superseded_resolution_reason: str | None = None
     """That withdrawn decision's own reason, recovered from the action ledger.
@@ -170,7 +174,7 @@ class AdminCopyReviewItem(BaseModel):
     opened_at: datetime
     resolved_at: datetime | None = None
     resolved_by: str | None = None
-    resolution: Literal["clear", "reject"] | None = None
+    resolution: Literal["clear", "reject", "withdraw"] | None = None
     resolution_reason: str | None = None
     original: AdminCopyReviewEvidence
     # Populated only when the list is requested with
@@ -197,16 +201,34 @@ class AdminCopyReviewList(BaseModel):
     generation: Literal["active", "rollout", "history", "all"]
     active_bench_version: int = Field(ge=1)
     rollout_bench_version: int | None = Field(default=None, ge=1)
+    resolution: Literal["clear", "reject", "withdraw"] | None = None
+    """Echo of the applied ``resolution`` filter; ``None`` means any.
+
+    ``status=resolved&resolution=withdraw`` lists withdrawn manual holds. They
+    leave the pending queue but are not certified, so under ``enforce`` with
+    ``require_terminal_review`` they stay withheld as ``unresolved_review``.
+    """
 
 
 class AdminCopyReviewAction(BaseModel):
-    action: Literal["reopen", "clear", "reject"]
+    action: Literal["reopen", "clear", "reject", "withdraw"]
     reason: str
     actor: str
     created_at: datetime
     previous_status: str | None = None
     artifact_sha256: str | None = None
     score_count: int | None = None
+    emission_gate: Literal["off", "shadow", "enforce"] | None = None
+    """``withdraw`` only: the fleet-effective reward-eligibility enforcement the
+    withdrawal was previewed and executed under."""
+    eligibility_revision: int | None = None
+    """``withdraw`` only: the reward-eligibility policy revision it was bound to."""
+    eligibility_checksum: str | None = None
+    """``withdraw`` only: that policy revision's checksum."""
+    eligibility_state: str | None = None
+    """``withdraw`` only: the canonical eligibility state it produced."""
+    emission_reward_eligible: bool | None = None
+    """``withdraw`` only: whether the artifact was earning after it."""
 
 
 class AdminCopyReviewAudit(BaseModel):
@@ -215,7 +237,21 @@ class AdminCopyReviewAudit(BaseModel):
     review: AdminCopyReviewItem
     agent_status: str
     held_artifact_sha256: str | None = None
+    """SHA-256 recorded when the review was first opened (original evidence)."""
     held_score_count: int | None = None
+    """Score count recorded when the review was first opened. Scores can still
+    arrive during a hold and a reopen records its own count, so this is history,
+    not the withdrawal guard: send ``current_score_count`` instead."""
+    current_artifact_sha256: str | None = None
+    """``agents.sha256`` now: the ``expected_sha256`` withdrawal guard."""
+    current_score_count: int | None = None
+    """Score rows for the agent now: the ``expected_score_count`` withdrawal
+    guard. Nullable only for wire compatibility."""
+    withdrawable: bool = False
+    """Whether the withdraw preview would accept this review right now: a pending
+    manual precautionary hold whose ledger carries no clear or reject."""
+    withdrawal_refusal: str | None = None
+    """When not ``withdrawable``, the 409 detail the withdraw preview returns."""
     previous_status: str | None = None
     opened_by: str | None = None
     action_history: list[AdminCopyReviewAction] = Field(default_factory=list)

@@ -7453,6 +7453,10 @@ export const selectActiveBenchmarkInputSchema = z
 // since-fixed gate read as releasable without guesswork.
 
 export const copyReviewResolutionSchema = z.enum(['clear', 'reject'])
+// Every terminal outcome a review row can carry. `withdraw` retracts a manual
+// precautionary hold without ruling, so it is never a resolve input or a
+// precedent, but a review can read `withdraw` and a reopen can supersede one.
+export const copyReviewDecisionSchema = z.enum(['clear', 'reject', 'withdraw'])
 
 export const copyReviewSimilaritySchema = z.object({
   candidate_version: z.union([z.number().int(), z.string()]).nullable(),
@@ -7591,7 +7595,8 @@ export const copyReviewOriginalSchema = z.object({
   // projection simply reports the original hold, which is what it meant.
   reason_source: z.enum(['original_hold', 'reconsideration']).nullish().default('original_hold'),
   superseded_reason: z.string().nullish().default(null),
-  superseded_resolution: copyReviewResolutionSchema.nullish().default(null),
+  // `withdraw` when the reopen re-held a previously withdrawn manual hold.
+  superseded_resolution: copyReviewDecisionSchema.nullish().default(null),
   superseded_resolution_reason: z.string().nullish().default(null),
   superseded_at: z.string().nullish().default(null),
   policy_version: z.number().int(),
@@ -7638,7 +7643,7 @@ export const copyReviewItemSchema = z.object({
   opened_at: z.string(),
   resolved_at: z.string().nullable(),
   resolved_by: z.string().nullable(),
-  resolution: copyReviewResolutionSchema.nullable(),
+  resolution: copyReviewDecisionSchema.nullable(),
   resolution_reason: z.string().nullable(),
   original: copyReviewOriginalSchema,
   // Embedded by platforms with #163 when the list is requested with
@@ -7655,6 +7660,8 @@ export const copyReviewListSchema = z.object({
   generation: z.enum(['active', 'rollout', 'history', 'all']),
   active_bench_version: z.number().int().positive(),
   rollout_bench_version: z.number().int().positive().nullable().default(null),
+  // Echo of the platform's resolution filter; null means any.
+  resolution: copyReviewDecisionSchema.nullish().default(null),
 })
 
 /**
@@ -7758,18 +7765,34 @@ export const athPrecedentListSchema = z.object({
 export const athReviewAuditSchema = z.object({
   review: copyReviewItemSchema,
   agent_status: z.string(),
+  // Evidence recorded when the review was first opened: history, not a guard.
   held_artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
   held_score_count: z.number().int().nonnegative().nullable(),
+  // What the withdraw preview compares NOW. Scores can arrive during a hold and
+  // a reopen records its own count, so the held values above go stale.
+  current_artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullish().default(null),
+  current_score_count: z.number().int().nonnegative().nullish().default(null),
+  // Platform's own withdraw refusal rule: a pending manual precautionary hold
+  // with no clear/reject in its ledger. False from a platform that predates it.
+  withdrawable: z.boolean().default(false),
+  withdrawal_refusal: z.string().nullish().default(null),
   previous_status: z.string().nullable(),
   opened_by: z.string().nullable(),
   action_history: z.array(z.object({
-    action: z.enum(['reopen', 'clear', 'reject']),
+    action: z.enum(['reopen', 'clear', 'reject', 'withdraw']),
     reason: z.string(),
     actor: z.string(),
     created_at: z.string(),
     previous_status: z.string().nullable(),
     artifact_sha256: z.string().nullable(),
     score_count: z.number().int().nonnegative().nullable(),
+    // Recorded on a withdraw: the reward posture it was previewed and executed
+    // under. Null on every other action.
+    emission_gate: z.enum(['off', 'shadow', 'enforce']).nullish().default(null),
+    eligibility_revision: z.number().int().nullish().default(null),
+    eligibility_checksum: z.string().nullish().default(null),
+    eligibility_state: z.string().nullish().default(null),
+    emission_reward_eligible: z.boolean().nullish().default(null),
   })).default([]),
 })
 
@@ -7786,6 +7809,61 @@ export const openAthReviewResponseSchema = z.object({
   idempotent: z.boolean(),
   // Defaults false while the platform API rollout catches up.
   reopened: z.boolean().default(false),
+})
+
+export const ATH_HOLD_WITHDRAWAL_CONFIRMATION = 'WITHDRAW ATH HOLD'
+
+export const previewAthHoldWithdrawalInputSchema = z.object({
+  agentId: z.string().uuid(),
+  reviewId: z.string().uuid(),
+  expectedSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expectedScoreCount: z.number().int().nonnegative(),
+  expectedAgentStatus: z.string().trim().min(1).max(64),
+  reason: auditReasonSchema(3),
+})
+
+export const athHoldWithdrawalBoardSchema = z.object({
+  bench_version: z.number().int().positive(),
+  read_at: z.string(),
+  ranked_count: z.number().int().nonnegative(),
+  champion_agent_id: z.string().uuid().nullable(),
+  champion_hotkey: z.string().nullable(),
+  champion_score: z.number().nullable(),
+  raw_leader_agent_id: z.string().uuid().nullable(),
+  raw_leader_score: z.number().nullable(),
+  fingerprint: z.string(),
+})
+
+export const previewAthHoldWithdrawalResponseSchema = z.object({
+  agent_id: z.string().uuid(),
+  review_id: z.string().uuid(),
+  artifact_sha256: z.string(),
+  score_count: z.number().int().nonnegative(),
+  agent_status: z.string(),
+  restored_status: z.enum(['scored', 'live']),
+  board_before: athHoldWithdrawalBoardSchema,
+  board_after: athHoldWithdrawalBoardSchema,
+  would_change_crown: z.boolean(),
+  emission_reward_eligible: z.boolean(),
+  emission_gate: z.enum(['off', 'shadow', 'enforce']),
+  would_change_emission_crown: z.boolean(),
+  emission_reason: z.string(),
+  preview_token: z.string().min(20),
+  expires_at: z.string(),
+})
+
+export const executeAthHoldWithdrawalInputSchema = previewAthHoldWithdrawalInputSchema.extend({
+  previewToken: z.string().trim().min(20),
+  confirmation: z.literal(ATH_HOLD_WITHDRAWAL_CONFIRMATION),
+})
+
+export const executeAthHoldWithdrawalResponseSchema = z.object({
+  review: copyReviewItemSchema,
+  agent_status: z.string(),
+  restored_status: z.enum(['scored', 'live']),
+  emission_reward_eligible: z.boolean(),
+  emission_gate: z.enum(['off', 'shadow', 'enforce']),
+  emission_reason: z.string(),
 })
 
 // Batched ATH rulings: presigned upload -> dry-run preview -> guarded execute.
@@ -8231,6 +8309,7 @@ export type CopyReviewGeneration = z.infer<typeof copyReviewGenerationSchema>
 export type CopyReviewConsoleItem = z.infer<typeof copyReviewConsoleItemSchema>
 export type CopyReviewCurrentComparison = z.infer<typeof copyReviewCurrentComparisonSchema>
 export type CopyReviewResolution = z.infer<typeof copyReviewResolutionSchema>
+export type CopyReviewDecision = z.infer<typeof copyReviewDecisionSchema>
 export type AthReviewAudit = z.infer<typeof athReviewAuditSchema>
 export type OpenAthReviewInput = z.infer<typeof openAthReviewInputSchema>
 export type AthPrecedentList = z.infer<typeof athPrecedentListSchema>

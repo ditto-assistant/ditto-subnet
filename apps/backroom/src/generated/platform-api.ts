@@ -1024,7 +1024,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Copy Reviews */
+        /**
+         * List Copy Reviews
+         * @description Page ATH reviews by status, scoring generation, kind and resolution.
+         *
+         *     ``status=resolved&resolution=withdraw`` is how an operator finds withdrawn
+         *     manual holds: they are ``resolved`` so they leave the pending queue, yet
+         *     uncertified, so ``enforce`` with ``require_terminal_review`` still
+         *     withholds them.
+         */
         get: operations["list_copy_reviews_api_v1_admin_copy_reviews_get"];
         put?: never;
         post?: never;
@@ -1087,6 +1095,10 @@ export interface paths {
         /**
          * Get Copy Review Audit
          * @description Return the durable reason and attribution needed to explain an ATH hold.
+         *
+         *     ``held_*`` are the opening evidence; ``current_*`` are the values the
+         *     withdraw guards compare now, and ``withdrawable`` applies the withdraw
+         *     preview's own refusal rule.
          */
         get: operations["get_copy_review_audit_api_v1_admin_copy_reviews__agent_id__audit_get"];
         put?: never;
@@ -1197,6 +1209,40 @@ export interface paths {
         get: operations["get_copy_review_source_diff_file_api_v1_admin_copy_reviews__agent_id__source_diff_file_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/copy-reviews/{agent_id}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Execute Ath Hold Withdrawal */
+        post: operations["execute_ath_hold_withdrawal_api_v1_admin_copy_reviews__agent_id__withdraw_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/copy-reviews/{agent_id}/withdraw/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Ath Hold Withdrawal */
+        post: operations["preview_ath_hold_withdrawal_api_v1_admin_copy_reviews__agent_id__withdraw_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8081,6 +8127,111 @@ export interface components {
             history: components["schemas"]["ArtifactReleaseSettingsRevision"][];
             release_gate: components["schemas"]["SourceReleaseGateStatus"];
         };
+        /** AdminAthHoldWithdrawalExecuteRequest */
+        AdminAthHoldWithdrawalExecuteRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Agent Status */
+            expected_agent_status: string;
+            /** Expected Score Count */
+            expected_score_count: number;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Preview Token */
+            preview_token: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Review Id
+             * Format: uuid
+             */
+            review_id: string;
+        };
+        /** AdminAthHoldWithdrawalExecuteResponse */
+        AdminAthHoldWithdrawalExecuteResponse: {
+            /** Agent Status */
+            agent_status: string;
+            /**
+             * Emission Gate
+             * @enum {string}
+             */
+            emission_gate: "off" | "shadow" | "enforce";
+            /** Emission Reason */
+            emission_reason: string;
+            /** Emission Reward Eligible */
+            emission_reward_eligible: boolean;
+            /**
+             * Restored Status
+             * @enum {string}
+             */
+            restored_status: "scored" | "live";
+            review: components["schemas"]["AdminCopyReviewItem"];
+        };
+        /** AdminAthHoldWithdrawalPreviewRequest */
+        AdminAthHoldWithdrawalPreviewRequest: {
+            /** Expected Agent Status */
+            expected_agent_status: string;
+            /** Expected Score Count */
+            expected_score_count: number;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Review Id
+             * Format: uuid
+             */
+            review_id: string;
+        };
+        /**
+         * AdminAthHoldWithdrawalPreviewResponse
+         * @description Dry-run of restoring rank without granting a policy clearance.
+         */
+        AdminAthHoldWithdrawalPreviewResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            board_after: components["schemas"]["AdminAthRulingsBoardProjection"];
+            board_before: components["schemas"]["AdminAthRulingsBoardProjection"];
+            /**
+             * Emission Gate
+             * @enum {string}
+             */
+            emission_gate: "off" | "shadow" | "enforce";
+            /** Emission Reason */
+            emission_reason: string;
+            /** Emission Reward Eligible */
+            emission_reward_eligible: boolean;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Preview Token */
+            preview_token: string;
+            /**
+             * Restored Status
+             * @enum {string}
+             */
+            restored_status: "scored" | "live";
+            /**
+             * Review Id
+             * Format: uuid
+             */
+            review_id: string;
+            /** Score Count */
+            score_count: number;
+            /** Would Change Crown */
+            would_change_crown: boolean;
+            /** Would Change Emission Crown */
+            would_change_emission_crown: boolean;
+        };
         /**
          * AdminAthRuling
          * @description One guarded ruling: the same guards ``open_ath_review`` takes.
@@ -9374,7 +9525,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "reopen" | "clear" | "reject";
+            action: "reopen" | "clear" | "reject" | "withdraw";
             /** Actor */
             actor: string;
             /** Artifact Sha256 */
@@ -9384,6 +9535,16 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Eligibility Checksum */
+            eligibility_checksum?: string | null;
+            /** Eligibility Revision */
+            eligibility_revision?: number | null;
+            /** Eligibility State */
+            eligibility_state?: string | null;
+            /** Emission Gate */
+            emission_gate?: ("off" | "shadow" | "enforce") | null;
+            /** Emission Reward Eligible */
+            emission_reward_eligible?: boolean | null;
             /** Previous Status */
             previous_status?: string | null;
             /** Reason */
@@ -9400,6 +9561,10 @@ export interface components {
             action_history?: components["schemas"]["AdminCopyReviewAction"][];
             /** Agent Status */
             agent_status: string;
+            /** Current Artifact Sha256 */
+            current_artifact_sha256?: string | null;
+            /** Current Score Count */
+            current_score_count?: number | null;
             /** Held Artifact Sha256 */
             held_artifact_sha256?: string | null;
             /** Held Score Count */
@@ -9409,6 +9574,13 @@ export interface components {
             /** Previous Status */
             previous_status?: string | null;
             review: components["schemas"]["AdminCopyReviewItem"];
+            /**
+             * Withdrawable
+             * @default false
+             */
+            withdrawable: boolean;
+            /** Withdrawal Refusal */
+            withdrawal_refusal?: string | null;
         };
         /**
          * AdminCopyReviewComparisonUnavailable
@@ -9522,7 +9694,7 @@ export interface components {
             /** Superseded Reason */
             superseded_reason?: string | null;
             /** Superseded Resolution */
-            superseded_resolution?: ("clear" | "reject") | null;
+            superseded_resolution?: ("clear" | "reject" | "withdraw") | null;
             /** Superseded Resolution Reason */
             superseded_resolution_reason?: string | null;
         };
@@ -9552,7 +9724,7 @@ export interface components {
             opened_at: string;
             original: components["schemas"]["AdminCopyReviewEvidence"];
             /** Resolution */
-            resolution?: ("clear" | "reject") | null;
+            resolution?: ("clear" | "reject" | "withdraw") | null;
             /** Resolution Reason */
             resolution_reason?: string | null;
             /** Resolved At */
@@ -9592,6 +9764,8 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+            /** Resolution */
+            resolution?: ("clear" | "reject" | "withdraw") | null;
             /** Review Kind */
             review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
             /** Rollout Bench Version */
@@ -23566,7 +23740,7 @@ export interface components {
              * Review Event
              * @description Latest public ATH lifecycle event. Null when the submission has no durable ATH review record.
              */
-            review_event?: ("opened" | "reopened" | "cleared" | "rejected") | null;
+            review_event?: ("opened" | "reopened" | "cleared" | "rejected" | "withdrawn") | null;
             /**
              * Review Event At
              * @description When the latest public ATH lifecycle event occurred (UTC).
@@ -23851,7 +24025,7 @@ export interface components {
              */
             review_conclusion?: ("pending" | "not_completed" | "no_finding" | "budget_exhausted" | "adverse_signal") | null;
             /** Review Event */
-            review_event?: ("opened" | "reopened" | "cleared" | "rejected") | null;
+            review_event?: ("opened" | "reopened" | "cleared" | "rejected" | "withdrawn") | null;
             /** Review Event At */
             review_event_at?: string | null;
             /** Review Opened At */
@@ -37576,6 +37750,7 @@ export interface operations {
                 include?: "current_comparison" | null;
                 generation?: "active" | "rollout" | "history" | "all";
                 review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
+                resolution?: ("clear" | "reject" | "withdraw") | null;
             };
             header?: {
                 authorization?: string | null;
@@ -37875,6 +38050,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminSourceDiffFileDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_ath_hold_withdrawal_api_v1_admin_copy_reviews__agent_id__withdraw_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAthHoldWithdrawalExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAthHoldWithdrawalExecuteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_ath_hold_withdrawal_api_v1_admin_copy_reviews__agent_id__withdraw_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAthHoldWithdrawalPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAthHoldWithdrawalPreviewResponse"];
                 };
             };
             /** @description Validation Error */

@@ -225,6 +225,7 @@ describe('Backroom MCP tools', () => {
         'get_screening_quarantine_context',
         'get_screening_quarantine_contexts',
         'get_screening_review_queue',
+        'list_withdrawn_ath_holds',
         'get_screening_review_deadline',
         'get_screening_failure_diagnostic',
         'list_screening_adjudication_attempts',
@@ -303,7 +304,9 @@ describe('Backroom MCP tools', () => {
         'resolve_screening_quarantine',
         'release_verified_v13_court_clear',
         'resolve_screening_dispute',
+        'preview_ath_hold_withdrawal',
         'resolve_ath_review',
+        'withdraw_ath_hold',
         'create_ath_rulings_upload',
         'preview_ath_rulings_batch',
         'execute_ath_rulings_batch',
@@ -423,10 +426,13 @@ describe('Backroom MCP tools', () => {
     // Main also adds the no-input validator-capacity read (#2036), and the
     // guarded verified V13 court-clear release adds a bounded writer entry.
     // Four canonical starter fixture controls bring the measured catalog to
-    // 179,468 bytes; retain about 0.5 KB headroom. The optional canary
-    // review-posture pin (reviewSettingsRevision) measured 179,642;
-    // node canary cap (#2447) adds one required setting and catalog note.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(180_000)
+    // 179,468 bytes. The optional canary review-posture pin
+    // (reviewSettingsRevision) measured 179,642; the node canary cap (#2447)
+    // adds one required setting and catalog note. Manual hold preview/withdraw
+    // tools, the paginated list_withdrawn_ath_holds read and the current-guard
+    // notes on get_ath_review and preview_ath_hold_withdrawal bring the
+    // measured catalog to 183,401; retain about 0.5 KB headroom.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(183_900)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -463,8 +469,10 @@ describe('Backroom MCP tools', () => {
       // verified V13 court-clear release summary.
       // Four fixture tool summaries bring the measured total to 31,772.
       // The canary review-posture pin clause measured 31,854; the node
-      // canary cap (#2447) also adds a short catalog note.
-      32_000,
+      // canary cap (#2447) also adds a short catalog note. Manual hold
+      // preview/withdraw summaries, the withdrawn-holds read and the
+      // current-guard wording bring the measured total to 32,629.
+      32_850,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -1259,6 +1267,7 @@ describe('Backroom MCP tools', () => {
       { maxLimit: number; maxDefault: number }
     > = {
       get_screening_review_queue: { maxLimit: 200, maxDefault: 50 },
+      list_withdrawn_ath_holds: { maxLimit: 200, maxDefault: 50 },
       list_screening_quarantines: { maxLimit: 200, maxDefault: 50 },
       list_screening_review_events: { maxLimit: 20, maxDefault: 10 },
       list_screening_disputes: { maxLimit: 200, maxDefault: 50 },
@@ -5834,8 +5843,28 @@ describe('Backroom MCP tools', () => {
         agent_status: 'ath_pending_review',
         held_artifact_sha256: expectedSha256,
         held_score_count: 3,
+        current_artifact_sha256: expectedSha256,
+        current_score_count: 4,
+        withdrawable: false,
+        withdrawal_refusal: 'review has a prior clear/reject ruling; resolve it with clear or reject',
         previous_status: 'live',
         opened_by: 'operator@omniaura.ai',
+        action_history: [
+          {
+            action: 'withdraw',
+            reason: 'Precautionary hold withdrawn',
+            actor: 'operator@omniaura.ai',
+            created_at: '2026-07-16T14:00:00Z',
+            previous_status: 'live',
+            artifact_sha256: expectedSha256,
+            score_count: 3,
+            emission_gate: 'shadow',
+            eligibility_revision: 2,
+            eligibility_checksum: 'cd'.repeat(32),
+            eligibility_state: 'unresolved_review',
+            emission_reward_eligible: true,
+          },
+        ],
       }),
     )
     vi.stubGlobal('fetch', fetchMock)
@@ -5857,8 +5886,23 @@ describe('Backroom MCP tools', () => {
       },
       held_artifact_sha256: expectedSha256,
       held_score_count: 3,
+      // The withdrawal guards and refusal survive the schema, not just held_*.
+      current_artifact_sha256: expectedSha256,
+      current_score_count: 4,
+      withdrawable: false,
+      withdrawal_refusal: expect.stringContaining('prior clear/reject ruling'),
       previous_status: 'live',
       opened_by: 'operator@omniaura.ai',
+      action_history: [
+        {
+          action: 'withdraw',
+          emission_gate: 'shadow',
+          eligibility_revision: 2,
+          eligibility_checksum: 'cd'.repeat(32),
+          eligibility_state: 'unresolved_review',
+          emission_reward_eligible: true,
+        },
+      ],
     })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/copy-reviews/${agentId}/audit`,
@@ -6112,6 +6156,77 @@ describe('Backroom MCP tools', () => {
           Authorization: 'Bearer platform-admin-token',
         }),
       }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('lists withdrawn manual holds that left the pending queue', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            review_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            agent_id: '11111111-1111-4111-8111-111111111111',
+            miner_hotkey: '5HeldMiner',
+            miner_coldkey: null,
+            agent_name: 'withdrawn-agent',
+            agent_version: 3,
+            submitted_at: '2026-08-01T00:00:00Z',
+            status: 'resolved',
+            agent_status: 'scored',
+            opened_at: '2026-08-02T00:00:00Z',
+            resolved_at: '2026-08-03T00:00:00Z',
+            resolved_by: 'operator@omniaura.ai',
+            resolution: 'withdraw',
+            resolution_reason: 'Precautionary hold withdrawn',
+            original: {
+              review_kind: 'benchmark_overfit',
+              duplicate_of: null,
+              reason: 'Manual precautionary hold',
+              policy_version: 13,
+              fingerprint_versions: {},
+              reference_provenance: 'unknown',
+              backfilled: false,
+            },
+            current_comparison: null,
+          },
+        ],
+        count: 1,
+        limit: 25,
+        offset: 0,
+        generation: 'all',
+        active_bench_version: 9,
+        resolution: 'withdraw',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'list_withdrawn_ath_holds',
+      arguments: { limit: 25, offset: 0 },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      count: 1,
+      resolution: 'withdraw',
+      items: [
+        {
+          agent_id: '11111111-1111-4111-8111-111111111111',
+          agent_status: 'scored',
+          resolution: 'withdraw',
+          resolution_reason: 'Precautionary hold withdrawn',
+          hold: { review_kind: 'benchmark_overfit', reason: 'Manual precautionary hold' },
+        },
+      ],
+    })
+    // Pinned, not caller-controlled: this read is withdrawn holds only.
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/copy-reviews?status=resolved&resolution=withdraw&generation=all&limit=25&offset=0',
+      expect.any(Object),
     )
 
     await client.close()

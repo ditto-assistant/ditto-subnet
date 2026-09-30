@@ -179,3 +179,45 @@ def test_legacy_rows_without_stored_text_still_project_a_reason() -> None:
     )
     assert resolved.event == "cleared"
     assert resolved.reason == DEFAULT_RESOLVED_REASON
+
+
+def test_reopen_after_a_withdrawal_supersedes_the_withdrawal() -> None:
+    """clear -> ... -> withdraw -> reopen supersedes the withdraw, not the clear."""
+    review_id = uuid4()
+    clear = _action(review_id, "clear", "old clear", _T0 + timedelta(hours=1))
+    first_reopen = _action(review_id, "reopen", "re-held", _T0 + timedelta(hours=2))
+    withdraw = _action(
+        review_id, "withdraw", "unsupported hold withdrawn", _T0 + timedelta(hours=3)
+    )
+    second_reopen = _action(review_id, "reopen", _REOPEN, _T0 + timedelta(hours=4))
+    lifecycle = derive_ath_review_lifecycle(
+        _review(review_id, status="pending", reopened_at=second_reopen.created_at),
+        latest_action=second_reopen,
+        actions=[clear, first_reopen, withdraw, second_reopen],
+    )
+    assert lifecycle.event == "reopened"
+    assert lifecycle.reason == _REOPEN
+    assert lifecycle.superseded_resolution == "withdraw"
+    assert lifecycle.superseded_resolution_reason == "unsupported hold withdrawn"
+    assert lifecycle.superseded_at == second_reopen.created_at
+
+
+def test_resolved_withdrawal_reads_as_withdrawn() -> None:
+    review_id = uuid4()
+    withdrawn_at = _T0 + timedelta(hours=1)
+    withdraw = _action(review_id, "withdraw", "hold withdrawn", withdrawn_at)
+    lifecycle = derive_ath_review_lifecycle(
+        _review(
+            review_id,
+            status="resolved",
+            resolved_at=withdrawn_at,
+            resolved_by="operator",
+            resolution="withdraw",
+            resolution_reason="hold withdrawn",
+        ),
+        latest_action=withdraw,
+        actions=[withdraw],
+    )
+    assert lifecycle.event == "withdrawn"
+    assert lifecycle.reason == "hold withdrawn"
+    assert lifecycle.superseded_resolution is None

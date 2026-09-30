@@ -37,6 +37,7 @@ from ditto.api_models.admin_copy_review import (
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.anti_copy_comparison import compare_anti_copy_pair
 from ditto.api_server.artifact_audit import client_ip, request_detail
+from ditto.api_server.ath_hold_withdrawal import withdrawal_refusal
 from ditto.api_server.ath_review_state import (
     derive_ath_review_lifecycle,
     load_reopened_review_actions,
@@ -169,7 +170,9 @@ def _item(
         opened_at=review.reopened_at or review.opened_at,
         resolved_at=review.resolved_at,
         resolved_by=review.resolved_by,
-        resolution=cast(Literal["clear", "reject"] | None, review.resolution),
+        resolution=cast(
+            Literal["clear", "reject", "withdraw"] | None, review.resolution
+        ),
         resolution_reason=review.resolution_reason,
         original=AdminCopyReviewEvidence(
             review_kind=cast(
@@ -210,6 +213,56 @@ def _item(
     )
 
 
+def _evidence_str(evidence: dict, key: str) -> str | None:
+    value = evidence.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _evidence_int(evidence: dict, key: str) -> int | None:
+    value = evidence.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _evidence_count(evidence: dict, key: str) -> int | None:
+    value = _evidence_int(evidence, key)
+    return value if value is not None and value >= 0 else None
+
+
+def _evidence_bool(evidence: dict, key: str) -> bool | None:
+    value = evidence.get(key)
+    return value if isinstance(value, bool) else None
+
+
+def _audit_action(action: AthReviewAction) -> AdminCopyReviewAction:
+    """Project one ledger row, including a withdrawal's recorded reward posture.
+
+    The evidence is JSONB written by several paths over time, so every field is
+    read defensively: a value of the wrong shape is omitted, never a 500. That
+    includes evidence that is not a JSON object at all.
+    """
+    evidence = action.evidence if isinstance(action.evidence, dict) else {}
+    gate = evidence.get("emission_gate")
+    return AdminCopyReviewAction(
+        action=cast(Literal["reopen", "clear", "reject", "withdraw"], action.action),
+        reason=action.reason,
+        actor=action.actor,
+        created_at=action.created_at,
+        previous_status=_evidence_str(evidence, "previous_status"),
+        artifact_sha256=_evidence_str(evidence, "sha256"),
+        # Non-negative, as every consumer's schema requires of a count.
+        score_count=_evidence_count(evidence, "score_count"),
+        emission_gate=(
+            cast(Literal["off", "shadow", "enforce"], gate)
+            if gate in ("off", "shadow", "enforce")
+            else None
+        ),
+        eligibility_revision=_evidence_int(evidence, "eligibility_revision"),
+        eligibility_checksum=_evidence_str(evidence, "eligibility_checksum"),
+        eligibility_state=_evidence_str(evidence, "eligibility_state"),
+        emission_reward_eligible=_evidence_bool(evidence, "emission_reward_eligible"),
+    )
+
+
 def _audit(
     review: AthReview,
     agent: Agent,
@@ -218,6 +271,7 @@ def _audit(
     *,
     miner_coldkey: str | None = None,
     duplicate_of_coldkey: str | None = None,
+    current_score_count: int | None = None,
 ) -> AdminCopyReviewAudit:
     evidence = review.original_evidence
     provenance = review.algorithm_provenance
@@ -237,6 +291,10 @@ def _audit(
     opened_by = provenance.get("opened_by")
     if not isinstance(opened_by, str):
         opened_by = None
+    ledger = list(actions or [])
+    # The same rule the withdraw preview applies, so Backroom only offers a
+    # withdrawal that Platform would accept.
+    refusal = withdrawal_refusal(review, agent, ledger)
     return AdminCopyReviewAudit(
         review=_item(
             review,
@@ -244,25 +302,18 @@ def _audit(
             matched,
             miner_coldkey=miner_coldkey,
             duplicate_of_coldkey=duplicate_of_coldkey,
-            actions=list(actions or []),
+            actions=ledger,
         ),
         agent_status=agent.status.value,
         held_artifact_sha256=held_artifact_sha256,
         held_score_count=held_score_count,
+        current_artifact_sha256=agent.sha256,
+        current_score_count=current_score_count,
+        withdrawable=refusal is None,
+        withdrawal_refusal=refusal,
         previous_status=previous_status,
         opened_by=opened_by,
-        action_history=[
-            AdminCopyReviewAction(
-                action=cast(Literal["reopen", "clear", "reject"], action.action),
-                reason=action.reason,
-                actor=action.actor,
-                created_at=action.created_at,
-                previous_status=action.evidence.get("previous_status"),
-                artifact_sha256=action.evidence.get("sha256"),
-                score_count=action.evidence.get("score_count"),
-            )
-            for action in actions or []
-        ],
+        action_history=[_audit_action(action) for action in ledger],
     )
 
 
@@ -516,7 +567,15 @@ async def list_copy_reviews(
         "copy", "benchmark_overfit", "deferred_source_review", "anomalous_score"
     ]
     | None = None,
+    resolution: Literal["clear", "reject", "withdraw"] | None = None,
 ) -> AdminCopyReviewList:
+    """Page ATH reviews by status, scoring generation, kind and resolution.
+
+    ``status=resolved&resolution=withdraw`` is how an operator finds withdrawn
+    manual holds: they are ``resolved`` so they leave the pending queue, yet
+    uncertified, so ``enforce`` with ``require_terminal_review`` still
+    withholds them.
+    """
     active_version = await active_bench_version(session)
     rollout = await open_rollout(session)
     rollout_version = (
@@ -535,6 +594,8 @@ async def list_copy_reviews(
     )
     if review_kind is not None:
         where.append(_review_kind_filter(review_kind))
+    if resolution is not None:
+        where.append(AthReview.resolution == resolution)
     if generation == "active":
         where.append(has_active_score)
     elif generation == "rollout":
@@ -625,6 +686,7 @@ async def list_copy_reviews(
         generation=generation,
         active_bench_version=active_version,
         rollout_bench_version=rollout_version,
+        resolution=resolution,
     )
 
 
@@ -651,7 +713,15 @@ async def search_copy_review_precedents(
     where: list[ColumnElement[bool]] = []
     if status != "all":
         where.append(AthReview.status == status)
-    if resolution != "all":
+    if resolution == "all":
+        # A withdrawal is a correction, not a holding later reviews can cite.
+        where.append(
+            or_(
+                AthReview.resolution.is_(None),
+                AthReview.resolution.in_(("clear", "reject")),
+            )
+        )
+    else:
         where.append(AthReview.resolution == resolution)
     if review_kind is not None:
         where.append(_review_kind_filter(review_kind))
@@ -731,7 +801,12 @@ async def get_copy_review(
 async def get_copy_review_audit(
     agent_id: UUID, _admin: AdminDep, session: SessionDep
 ) -> AdminCopyReviewAudit:
-    """Return the durable reason and attribution needed to explain an ATH hold."""
+    """Return the durable reason and attribution needed to explain an ATH hold.
+
+    ``held_*`` are the opening evidence; ``current_*`` are the values the
+    withdraw guards compare now, and ``withdrawable`` applies the withdraw
+    preview's own refusal rule.
+    """
     row = await _get_review(session, agent_id)
     if row is None:
         raise HTTPException(status_code=404, detail="copy review not found")
@@ -745,6 +820,9 @@ async def get_copy_review_audit(
     candidate_coldkey, reference_coldkey = await _review_coldkeys(
         session, agent, matched
     )
+    current_score_count = await session.scalar(
+        select(func.count()).select_from(Score).where(Score.agent_id == agent_id)
+    )
     return _audit(
         review,
         agent,
@@ -752,6 +830,7 @@ async def get_copy_review_audit(
         actions,
         miner_coldkey=candidate_coldkey,
         duplicate_of_coldkey=reference_coldkey,
+        current_score_count=int(current_score_count or 0),
     )
 
 
