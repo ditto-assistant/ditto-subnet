@@ -1259,3 +1259,44 @@ async def test_audit_omits_wrong_shaped_action_evidence(
     )
     assert preview.status_code == 200, preview.text
     assert preview.json()["restored_status"] == AgentStatus.SCORED
+
+
+async def test_execute_lands_through_the_production_session_dependency(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """The HTTP execute path, on the real ``get_session``, opens one transaction.
+
+    Every other test here overrides ``get_session``. This one does not, so the
+    request runs exactly as deployed: the admin-activity row commits on its own
+    session, nothing reads through the request session before execute's
+    ``session.begin()``, and the response is built after that commit.
+    """
+    from ditto.db.models import AdminActivity
+
+    agent_id, sha256 = await _seed_scored(maker)
+    app.state.config = replace(app.state.config, admin_api_token=_TOKEN)
+    app.state.session_maker = maker
+    app.dependency_overrides.pop(get_session, None)
+    body = _preview_body(await _open_manual_hold(client, agent_id, sha256), sha256)
+    preview = await _preview(client, agent_id, body)
+    assert preview.status_code == 200, preview.text
+
+    executed = await _execute(client, agent_id, body, preview.json()["preview_token"])
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["review"]["resolution"] == "withdraw"
+    assert executed.json()["agent_status"] == AgentStatus.SCORED
+
+    review, agent, actions = await _review_state(maker, agent_id)
+    assert review.status == "resolved" and review.resolution == "withdraw"
+    assert agent.status == AgentStatus.SCORED
+    assert actions == ["withdraw"]
+    async with maker() as session:
+        activity = list(
+            await session.scalars(
+                select(AdminActivity.action).where(
+                    AdminActivity.action
+                    == "/api/v1/admin/copy-reviews/{agent_id}/withdraw"
+                )
+            )
+        )
+    assert activity == ["/api/v1/admin/copy-reviews/{agent_id}/withdraw"]
