@@ -354,6 +354,8 @@ export interface PipelinePayload {
   score_floor?: number | null;
   provisional_scores?: AcceptedScore[];
   confirmation_scores?: ConfirmationScore[];
+  /** Seed-free per-wave medians, including agents absent from the leaderboard. */
+  confirmation_sample_composites?: number[];
   validation_attempts?: ValidationAttempt[];
   inference_runs?: InferenceRun[];
   screening_attempts?: ScreeningAttempt[];

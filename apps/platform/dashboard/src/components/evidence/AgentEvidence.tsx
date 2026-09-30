@@ -73,6 +73,7 @@ import { screeningAttemptLabel, screeningPolicySummary, validationAttemptView } 
 import { modelUseRows } from "./model-use";
 import type { ModelUse } from "./model-use";
 import { reviewPacket } from "./review-packet";
+import { confirmationSampleComposites } from "./confirmation-samples";
 
 type RankedEntry = LeaderboardEntry & { rank?: number | null };
 
@@ -571,7 +572,10 @@ function ConfirmationScores(props: {
   // The leaderboard already publishes folded per-wave composites. Rebuilding
   // these from public score rows would require exposing reusable seed IDs.
   const confirmationSeedMedians = createMemo(() =>
-    (boardEntry()?.confirmation_seed_composites || []).filter(Number.isFinite),
+    confirmationSampleComposites(
+      boardEntry()?.confirmation_seed_composites,
+      props.pipeline.confirmation_sample_composites,
+    ),
   );
   const completedWaves = createMemo(() => {
     return boardEntry()?.aggregate_method === "continual_mean"

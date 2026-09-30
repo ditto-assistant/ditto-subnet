@@ -11161,6 +11161,10 @@ class TestPublicActivity:
             pytest.approx(0.94),
             pytest.approx(0.95),
         ]
+        assert body["confirmation_sample_composites"] == [
+            pytest.approx(0.94),
+            pytest.approx(0.95),
+        ]
         assert all("seed" not in score for score in body["confirmation_scores"])
         assert all("run_id" not in score for score in body["confirmation_scores"])
         # The public projection redacts the reusable CRN seed; the append-only

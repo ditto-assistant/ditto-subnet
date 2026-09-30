@@ -7948,6 +7948,17 @@ async def agent_pipeline(
             )
         )
     )
+    # An agent can be absent from the current top-five leaderboard while its
+    # public pipeline still has accepted retests. Keep the display's per-seed
+    # medians available without publishing the reusable seed identifiers or
+    # relying on the leaderboard projection.
+    confirmation_by_seed: dict[int, list[float]] = {}
+    for score in confirmation_scores:
+        if score.bench_version == canonical_version:
+            confirmation_by_seed.setdefault(score.seed, []).append(score.composite)
+    confirmation_sample_composites = sorted(
+        statistics.median(values) for values in confirmation_by_seed.values()
+    )
     # Dataset provenance is PER BENCH VERSION. The agent row carries only the
     # version it was first pinned at, so pairing every score with it published the
     # v2 digest alongside a v3 score -- next to a verification_command that
@@ -8164,6 +8175,7 @@ async def agent_pipeline(
             )
             for score in confirmation_scores
         ],
+        confirmation_sample_composites=confirmation_sample_composites,
         # Same era as ``score_count`` above, or the page contradicts itself: a
         # finalized v6 row would read "3 of 3" with no final score to show for
         # it. The median is over one era's scores either way, so this stays the
