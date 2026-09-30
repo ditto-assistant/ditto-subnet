@@ -394,13 +394,25 @@ function NodeChannelControl({
     && settings.runtime_concurrency <= settings.sandbox_slots
   const ready = sandboxValid && reason.trim().length >= 8 && confirmation === expected
 
-  const fields: { key: keyof ScreenerNodeChannelSettings; label: string; max: number }[] = [
+  const fields: {
+    key: keyof ScreenerNodeChannelSettings
+    label: string
+    max: number
+    hint?: string
+  }[] = [
     { key: 'screening_concurrency', label: 'Full screens', max: 32 },
     { key: 'sandbox_slots', label: 'KVM sandboxes', max: 16 },
     { key: 'build_concurrency', label: 'Builds', max: 16 },
     { key: 'runtime_concurrency', label: 'Runtime smoke', max: 16 },
     { key: 'source_review_concurrency', label: 'Source review', max: 32 },
-    { key: 'canary_concurrency', label: 'Report canaries', max: 8 },
+    // Not the effective cap in either state: closed admission keeps the legacy
+    // canary cap, and open admission also reserves full-screen workers.
+    {
+      key: 'canary_concurrency',
+      label: 'Report canaries',
+      max: 8,
+      hint: 'Applies only while full screens is above 0',
+    },
   ]
 
   async function submit() {
@@ -437,27 +449,35 @@ function NodeChannelControl({
         </div>
         {control.usage ? (
           <span className="text-xs tabular-nums text-[var(--muted-strong)]">
-            {control.usage.screening_active}/{settings.screening_concurrency} screens · {control.usage.sandbox_active}/{settings.sandbox_slots} sandboxes · {control.usage.canary_active}/{settings.canary_concurrency} report canaries, {control.usage.canary_queued} queued
+            {control.usage.screening_active}/{settings.screening_concurrency} screens · {control.usage.sandbox_active}/{settings.sandbox_slots} sandboxes · report canaries: {control.usage.canary_active} active, {control.usage.canary_queued} queued
           </span>
         ) : null}
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        {fields.map(({ key, label, max }) => (
-          <label key={key} className="text-xs text-[var(--muted)]">
-            {label}
-            <input
-              type="number"
-              min={0}
-              max={max}
-              value={settings[key]}
-              disabled={readOnly || loading}
-              onChange={(event) => setSettings((current) => ({
-                ...current,
-                [key]: Number(event.target.value),
-              }))}
-              className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-base tabular-nums text-white disabled:opacity-50 sm:text-sm"
-            />
-          </label>
+        {fields.map(({ key, label, max, hint }) => (
+          <div key={key}>
+            <label className="text-xs text-[var(--muted)]">
+              {label}
+              <input
+                type="number"
+                min={0}
+                max={max}
+                value={settings[key]}
+                disabled={readOnly || loading}
+                aria-describedby={hint ? `${nodeId}-${key}-hint` : undefined}
+                onChange={(event) => setSettings((current) => ({
+                  ...current,
+                  [key]: Number(event.target.value),
+                }))}
+                className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-base tabular-nums text-white disabled:opacity-50 sm:text-sm"
+              />
+            </label>
+            {hint ? (
+              <span id={`${nodeId}-${key}-hint`} className="mt-1 block text-[10px] text-[var(--muted)]">
+                {hint}
+              </span>
+            ) : null}
+          </div>
         ))}
       </div>
       {!sandboxValid ? (
