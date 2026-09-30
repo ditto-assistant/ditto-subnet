@@ -60,6 +60,7 @@ from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 
 _SCREENER = "5GScreenerHotkeyForInfraRetryTests00000000000000000"
 _CODE = INFRA_AUTO_RETRY_REASON_CODES[0]
+_KEY_CODE = "source-review-adjudicator-key-unavailable"
 _SECOND = timedelta(seconds=1)
 _PROVIDER = "gcp"
 _LANE = "buildkit"
@@ -424,7 +425,7 @@ async def test_node_court_key_failure_is_auto_retried_after_backoff(
         attempt_id=attempt_id,
         provider=None,
         lane=None,
-        reason_code="source-review-adjudicator-key-unavailable",
+        reason_code=_KEY_CODE,
     )
 
     assert await _claim(session_maker, now=failed_at + delay - _SECOND) == []
@@ -715,6 +716,7 @@ async def _tripped_fleet(
     t0: datetime,
     provider: str | None = _PROVIDER,
     lane: str | None = _LANE,
+    reason_code: str = _CODE,
 ) -> list[UUID]:
     """``BREAKER_DISTINCT_AGENTS`` agents failing one minute apart from ``t0``.
 
@@ -731,6 +733,7 @@ async def _tripped_fleet(
                 attempt_id=_id_with_jitter_unit(at_most=0.25),
                 provider=provider,
                 lane=lane,
+                reason_code=reason_code,
             )
         )
     return agents
@@ -800,6 +803,44 @@ async def test_successful_probe_closes_the_breaker(
     # Everyone still parked is now simply due; no probe pacing applies.
     remaining = sorted(set(agents) - {probe})
     assert sorted(await _claim(session_maker, now=after)) == remaining
+
+
+async def test_court_key_breaker_on_the_screening_lane_drains_without_recovery(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The court-key signature production records throttles, never stalls (#2449).
+
+    Platform stamps ``failure_lane='screening'`` on a non-build failure that
+    carried private detail, and the worker attaches detail to every retryable
+    verdict. Recovery needs proof that the local build worked on the
+    signature's lane, which a screening lane never has, so a probe that passes
+    does not close the breaker. It still admits one probe per interval until
+    the tripping failures leave ``BREAKER_HISTORY_LOOKBACK``.
+    """
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_KEY_CODE
+    )
+    probe_at = _opened_at(t0) + BREAKER_OPEN_DURATION + _SECOND
+    (probe,) = await _claim(session_maker, now=probe_at)
+    await _settle_probe(
+        session_maker, probe, status="passed", at=probe_at + timedelta(minutes=1)
+    )
+
+    after = probe_at + timedelta(minutes=2)
+    (breaker,) = (await _plan(session_maker, now=after)).breakers.values()
+    assert breaker.signature == (_KEY_CODE, _PROVIDER, "screening")
+    assert breaker.open
+    assert await _claim(session_maker, now=after) == []
+    (second,) = await _claim(
+        session_maker, now=probe_at + BREAKER_PROBE_INTERVAL + _SECOND
+    )
+    assert second in set(agents) - {probe}
+
+    aged = t0 + BREAKER_HISTORY_LOOKBACK + BREAKER_OPEN_DURATION
+    async with session_maker() as session:
+        plan = await plan_infra_retries(session, now=aged, fleet_breakers=True)
+    assert not any(breaker.open for breaker in plan.breakers.values())
 
 
 async def test_concurrent_claimers_select_exactly_one_probe(

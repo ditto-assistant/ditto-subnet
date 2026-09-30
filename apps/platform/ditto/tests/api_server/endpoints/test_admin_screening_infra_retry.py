@@ -147,6 +147,10 @@ async def test_empty_state_still_reports_policy(
     assert "worker on another provider can still claim" in body["basis"]
     assert "by backoff alone" in body["basis"]
     assert "no particular claimant" in body["basis"]
+    # A screening-lane signature (the node court-key code) never shows build
+    # recovery, so the view must say that it only ages out.
+    assert "screening lane" in body["basis"]
+    assert "breaker_history_lookback_seconds" in body["basis"]
 
 
 async def test_policy_block_equals_the_constants(

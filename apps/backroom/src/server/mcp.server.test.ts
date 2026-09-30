@@ -2403,6 +2403,8 @@ describe('Backroom MCP tools', () => {
       expect(help.guidance).toContain('a worker on another provider can still claim those agents by backoff alone')
       expect(help.guidance).toContain('holds every worker')
       expect(help.guidance).toContain('aged_out_agents')
+      expect(help.guidance).toContain('source-review-adjudicator-key-unavailable')
+      expect(help.guidance).toContain('screening-lane signature')
     } finally {
       await client.close()
       await server.close()
