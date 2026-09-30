@@ -1408,6 +1408,34 @@ def test_l1_lead_packet_deduplicates_without_losing_note_provenance() -> None:
     ]
 
 
+def test_l1_lead_packet_collapses_repeated_diagnostics_but_keeps_all_indices() -> None:
+    repeated = {
+        "kind": "concern",
+        "path": "src/main.rs",
+        "line": 7,
+        "area": "answer_construction",
+        "category": "provider_bypass",
+        "summary": "Broker  selector  bypassed",
+    }
+    l1 = replace(
+        _l1("medium"),
+        notes=(
+            repeated,
+            {**repeated, "summary": " Broker selector bypassed "},
+            {**repeated, "summary": "Distinct direct call at this line"},
+        ),
+    )
+
+    lead = _l1_lead_packet(l1)[0]
+    assert lead["note_indices"] == [0, 1, 2]
+    assert lead["occurrences"] == 3
+    assert lead["diagnostics_untrusted"] == [
+        {"note_index": 0, "summary": "Broker selector bypassed"},
+        {"note_index": 2, "summary": "Distinct direct call at this line"},
+    ]
+    assert len(l1.notes) == 3
+
+
 def test_l1_unlocated_concern_remains_in_packet_and_blocks_medium_clear() -> None:
     l1 = replace(
         _l1("medium"),
@@ -1502,7 +1530,7 @@ def test_v13_medium_l1_requires_resolved_leads() -> None:
     l1 = _l1("medium")
     lead = _l1_lead_packet(l1)[0]
     candidate = _clearance_candidate(response_models=("openai/gpt-6-sol",))
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "dossier_tools": (),
         "analyst_cache_hit": False,
         "policy_version": 13,
@@ -3300,7 +3328,20 @@ async def test_terminal_l2_model_inconclusive_carries_bounded_signed_audit(
 
     async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
         return L2RunResult(
-            observation=l2_review._failure("l2-model-inconclusive", "inconclusive"),
+            observation=replace(
+                l2_review._failure("l2-model-inconclusive", "inconclusive"),
+                inconclusive_model_audit={
+                    "categories": ["benchmark_emulation"],
+                    "evidence": [{"path": "src/main.rs"}],
+                    "causal_path": [{"role": "decision"}],
+                    "invariants": [
+                        {
+                            "invariant": "i5_production_engine",
+                            "disposition": "inconclusive",
+                        }
+                    ],
+                },
+            ),
             analyzed_files=(),
             causal_path=(),
             tools=("read_file", "search", "submit_review"),
@@ -3325,6 +3366,13 @@ async def test_terminal_l2_model_inconclusive_carries_bounded_signed_audit(
     assert audit.model_steps_observed == 2
     assert audit.tool_calls_observed == 3
     assert audit.budget_stop_reason == "none"
+    assert audit.dossier_complete is True
+    assert audit.model_categories == ["benchmark_emulation"]
+    assert audit.model_inconclusive_invariants == [
+        SourceReviewInvariant.PRODUCTION_ENGINE
+    ]
+    assert audit.model_evidence_count == 1
+    assert audit.model_causal_role_count == 1
     assert "read_file" not in json.dumps(audit.model_dump(mode="json"))
 
 
@@ -3483,7 +3531,7 @@ async def test_dossier_incomplete_when_binary_analysis_fails(
         archive.addfile(info, io.BytesIO(model))
     repository = TarSourceRepository(str(archive_path))
     agent = _sol_agent(tmp_path, _FakeHarness(), None)
-    dossier, tools, complete, _ = await agent._build_dossier(
+    dossier, tools, complete, _, incomplete_components = await agent._build_dossier(
         tmp_path,
         repository,
         artifact_sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
@@ -3492,6 +3540,7 @@ async def test_dossier_incomplete_when_binary_analysis_fails(
         deadline=None,
     )
     assert not complete
+    assert "binary_analysis" in incomplete_components
     assert tools == l2_review._DOSSIER_ANALYZERS
     inventory = dossier["bounded_source_inventory"]
     assert isinstance(inventory, dict)
@@ -3499,6 +3548,66 @@ async def test_dossier_incomplete_when_binary_analysis_fails(
     assert entry["analysis_failed"] is True
     assert entry["analysis_truncated"] is True
     assert entry["format_confidence"] == "low"
+
+
+async def test_incomplete_dossier_components_are_signed_without_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+
+    async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
+        return L2RunResult(
+            observation=l2_review._failure(
+                "l2-only-clearance-unproven", "inconclusive"
+            ),
+            analyzed_files=(),
+            causal_path=(),
+            tools=("workspace_index", "read_file"),
+            usage=L2Usage(),
+            cache_hit=False,
+            response_models=("openai/gpt-5.6-sol-20260709",),
+            dossier_complete=False,
+            dossier_incomplete_components=("workspace_index", "binary_analysis"),
+            failure_subcode="dossier-incomplete",
+        )
+
+    monkeypatch.setattr(agent, "_review_uncached", review_uncached)
+    kwargs = {
+        "archive_path": str(tmp_path / "unused.tar"),
+        "artifact_sha256": "ab" * 32,
+        "attempt_id": ATTEMPT,
+        "l1_observation": _l1(),
+        "deadline": None,
+    }
+    first = await agent.review(**kwargs)
+    second = await agent.review(**kwargs)
+    for result in (first, second):
+        audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+        assert audit.dossier_incomplete_components == [
+            "workspace_index",
+            "binary_analysis",
+        ]
+        assert audit.dossier_complete is False
+        assert result.failure_subcode == "dossier-incomplete"
+        assert not result.observation.clearance_certified
+    assert second.cache_hit
+
+
+async def test_dossier_component_labels_name_only_truncated_analyzers(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+    agent = _sol_agent(tmp_path, _PartialHarness(), None)
+    _, _, complete, _, components = await agent._build_dossier(
+        tmp_path,
+        TarSourceRepository(str(archive)),
+        artifact_sha256=artifact_sha,
+        l1_observation=_l1(),
+        policy_version=SCREENING_POLICY_VERSION,
+        deadline=None,
+    )
+    assert not complete
+    assert components == l2_review._DOSSIER_ANALYZERS
 
 
 @pytest.mark.parametrize("recovers", [False, True])
@@ -6229,8 +6338,11 @@ async def test_report_only_audit_records_fixed_incomplete_reason_without_body(
     assert "private-source-marker" not in audit_path.read_text()
 
 
-async def test_compact_safe_correction_names_missing_sections_without_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("compact_review_packet", [False, True])
+async def test_l3_off_safe_correction_requires_exact_source_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    compact_review_packet: bool,
 ) -> None:
     audit_path = tmp_path / "correction-audit.jsonl"
     agent = SolL2SourceReviewAgent(
@@ -6248,7 +6360,7 @@ async def test_compact_safe_correction_names_missing_sections_without_source(
         cache_ttl_seconds=86_400,
         l3_enabled=False,
         terminal_verdict_required=True,
-        compact_review_packet=True,
+        compact_review_packet=compact_review_packet,
     )
     deterministic = {
         name.removeprefix("deterministic."): {}
@@ -6300,7 +6412,10 @@ async def test_compact_safe_correction_names_missing_sections_without_source(
             )
     correction = json.loads(requests[1][-1]["output"])
     assert correction["reason"] == "safe_coverage"
-    assert "bounded_source_inventory" in correction["message"]
+    if compact_review_packet:
+        assert "bounded_source_inventory" in correction["message"]
+    else:
+        assert "bounded_source_inventory" not in correction["message"]
     assert "read at least one exact source file" in correction["message"]
     events = [json.loads(line) for line in audit_path.read_text().splitlines()]
     event = next(
@@ -6309,7 +6424,9 @@ async def test_compact_safe_correction_names_missing_sections_without_source(
         if event["event_type"] == "report_only_submit_correction"
     )
     assert event["proposed_disposition"] == "safe"
-    assert event["missing_sections"] == list(l2_review._COMPACT_DOSSIER_SECTIONS)
+    assert event["missing_sections"] == (
+        list(l2_review._COMPACT_DOSSIER_SECTIONS) if compact_review_packet else []
+    )
     assert event["needs_source_read"] is True
     assert "private-source-marker" not in audit_path.read_text()
 

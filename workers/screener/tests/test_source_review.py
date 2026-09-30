@@ -3569,7 +3569,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v28-policy-v13"
+    assert _prompt_revision(13) == "source-review-v29-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -3595,6 +3595,18 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     prompt = _prompt(SCREENING_POLICY_VERSION)
     assert all(fragment in prompt for fragment in required)
+
+
+def test_policy_v13_provider_lead_uses_scored_runtime_selector() -> None:
+    from ditto_screener.source_review import _source_review_system_prompt as _prompt
+
+    v13_prompt = _prompt(13)
+    assert "do not infer the scored environment from Dockerfile ENV" in v13_prompt
+    assert "DITTOBENCH_PROVIDER=platform" in v13_prompt
+    assert "after caller environment" in v13_prompt
+    assert "conditional lead, not" in v13_prompt
+    assert "remains reachable under the" in v13_prompt
+    assert "do not infer the scored environment from Dockerfile ENV" not in _prompt(12)
 
 
 def test_policy_v10_prompt_keeps_false_positive_valves() -> None:

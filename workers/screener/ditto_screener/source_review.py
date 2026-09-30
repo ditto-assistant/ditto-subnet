@@ -84,7 +84,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v28-policy-v13"
+        return "source-review-v29-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -1873,6 +1873,14 @@ or capability transition, and substantive served or execution consequence.
 For build and security findings, trace the reachable lifecycle operation to an
 unauthorized read, disclosure, write, execution, persistence, privilege, or
 material availability effect; no model or scorer effect is required.
+
+For provider_bypass, do not infer the scored environment from Dockerfile ENV
+alone. The V13 scorer locks DITTOBENCH_PROVIDER=platform and supplies
+DITTOBENCH_INFERENCE_BASE_URL after caller environment. An external-provider
+default guarded only by the selector being absent is a conditional lead, not
+a proved scored-path bypass. Trace the effective served path for an override,
+ignored selector, or direct provider call that remains reachable under the
+locked environment. Preserve a concern when that alternate route is proved.
 
 Decide I1 through I8 independently. I8 EVALUATION INDEPENDENCE prohibits live
 case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit

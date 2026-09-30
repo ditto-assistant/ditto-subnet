@@ -145,6 +145,7 @@ def _report(
         "clearance_path": l2_result.clearance_path,
         "critic_disposition": l2_result.critic_disposition,
         "dossier_complete": l2_result.dossier_complete,
+        "dossier_incomplete_components": list(l2_result.dossier_incomplete_components),
         "direct_clear_graph_complete": l2_result.direct_clear_graph_complete,
         "failure_subcode": l2_result.failure_subcode,
         "scorer_attention": l2_result.scorer_attention,
