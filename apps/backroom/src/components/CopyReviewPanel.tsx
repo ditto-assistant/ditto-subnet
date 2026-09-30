@@ -1,6 +1,6 @@
 import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, Gavel, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AthReviewAudit, AthReviewKind, CopyReviewConsoleItem, CopyReviewDecision, CopyReviewGeneration, CopyReviewResolution } from '../lib/admin.schemas'
 import { ATH_HOLD_WITHDRAWAL_CONFIRMATION } from '../lib/admin.schemas'
 import { decideCopyReview, executeAthHoldWithdrawalFn, getAthReview, listCopyReviews, openAthReview, previewAthHoldWithdrawalFn } from '../server/admin.functions'
@@ -248,6 +248,26 @@ export function CopyReviewPanel({
     }
   }
 
+  // A refresh can drop the previewed hold from the queue: another operator
+  // resolved or withdrew it, or it moved generation. Keep neither its preview
+  // nor an open confirmation for it, instead of letting the operator type the
+  // phrase for a hold execute will then refuse. Keyed on the preview's own
+  // agent, not the selection, so a refresh that lands after the operator has
+  // moved to another row never touches that row's state.
+  useEffect(() => {
+    if (!withdrawalPreview) return
+    if (items.some((item) => item.agent_id === withdrawalPreview.agentId)) return
+    const wasOpen = confirmation === 'withdraw'
+    setWithdrawalPreview(null)
+    setTypedConfirmation('')
+    if (wasOpen) {
+      setConfirmation(null)
+      setError(
+        `${withdrawalPreview.agentName} left the review queue after the preview; nothing was withdrawn.`,
+      )
+    }
+  }, [items, withdrawalPreview, confirmation])
+
   // A withdrawal preview's token binds the reason it was built with, and execute
   // sends that reason. Editing the text afterwards retires the preview, so the
   // confirmation can never show one reason while execute sends another.
@@ -269,6 +289,11 @@ export function CopyReviewPanel({
     setRolloutBenchVersion(data.rollout_bench_version)
     setSelectedId((current) =>
       current && data.items.some((item) => item.agent_id === current) ? current : null,
+    )
+    setSelectedAudit((current) =>
+      current && data.items.some((item) => item.agent_id === current.review.agent_id)
+        ? current
+        : null,
     )
   }
 
