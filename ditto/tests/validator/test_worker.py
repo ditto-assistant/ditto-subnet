@@ -5065,6 +5065,49 @@ class TestIndependentWeightLoop:
 
         assert calls == 2
 
+    def _restart_worker(self) -> ValidatorWorker:
+        config = _config()
+        config.sweep_seconds = 30.0
+        config.epoch_seconds = 3600.0
+        worker = ValidatorWorker(
+            config=config,
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._chain_min_epoch_seconds = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+        return worker
+
+    async def test_weight_restart_without_a_prior_attempt_waits_one_sweep(
+        self,
+    ) -> None:
+        worker = self._restart_worker()
+
+        assert await worker._weight_restart_delay() == 30.0
+
+    async def test_weight_restart_holds_the_local_guard_after_a_recent_attempt(
+        self,
+    ) -> None:
+        worker = self._restart_worker()
+        worker._local_resubmit_guard_seconds = AsyncMock(return_value=600.0)  # type: ignore[method-assign]
+        worker._last_weight_attempt_at = time.monotonic() - 100.0
+
+        delay = await worker._weight_restart_delay()
+
+        assert 499.0 <= delay <= 500.0
+
+    async def test_weight_restart_keeps_the_full_cadence_when_chain_reads_fail(
+        self,
+    ) -> None:
+        worker = self._restart_worker()
+        worker._chain_min_epoch_seconds = AsyncMock(side_effect=RuntimeError("rpc"))  # type: ignore[method-assign]
+        worker._last_weight_attempt_at = time.monotonic()
+
+        delay = await worker._weight_restart_delay()
+
+        assert 3599.0 <= delay <= 3600.0
+
     async def test_king_event_never_bypasses_local_commit_reveal_floor(self) -> None:
         config = _config()
         config.sweep_seconds = 0.005

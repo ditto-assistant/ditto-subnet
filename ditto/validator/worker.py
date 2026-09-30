@@ -754,6 +754,7 @@ class ValidatorWorker:
         # so their check/set transitions are atomic within this event loop.
         self._scoring_active = False
         self._weights_active = False
+        self._last_weight_attempt_at: float | None = None
         self._last_weights_fold: WeightsFold | None = None
         self._longmem_active = False
         # A failed ticket hand-back is an ambiguous lease transition: local
@@ -4363,13 +4364,28 @@ class ValidatorWorker:
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - weights must outlive any one bug
-                logger.exception(
-                    "weight loop crashed; restarting in %.0fs",
-                    self._config.sweep_seconds,
-                )
-                await self._sleep_or_stop_or_drain(
-                    stop, self._config.sweep_seconds, drain_requested
-                )
+                delay = await self._weight_restart_delay()
+                logger.exception("weight loop crashed; restarting in %.0fs", delay)
+                await self._sleep_or_stop_or_drain(stop, delay, drain_requested)
+
+    async def _weight_restart_delay(self) -> float:
+        """Seconds to wait before restarting a crashed weight loop.
+
+        A fresh loop trusts ``_seconds_until_weight_window``, which fails open
+        to 0 when ``LastUpdate`` is unreadable, so an attempt just before the
+        crash must still hold the local resubmit guard.
+        """
+        delay = float(self._config.sweep_seconds)
+        if self._last_weight_attempt_at is None:
+            return delay
+        epoch_seconds = float(self._config.epoch_seconds)
+        try:
+            epoch_seconds = max(epoch_seconds, await self._chain_min_epoch_seconds())
+            guard = await self._local_resubmit_guard_seconds(epoch_seconds)
+        except Exception:  # noqa: BLE001 - keep the full cadence if chain reads fail
+            guard = epoch_seconds
+        remaining = guard - (time.monotonic() - self._last_weight_attempt_at)
+        return max(delay, remaining)
 
     async def _run_weight_epochs(
         self,
@@ -4379,7 +4395,6 @@ class ValidatorWorker:
     ) -> None:
         """Submit weights in a chain-safe window, independently of scoring."""
         chain_floor = await self._chain_min_epoch_seconds()
-        last_submit_at: float | None = None
         while not stop.is_set():
             if drain_requested is not None and drain_requested.is_set():
                 # The scoring loop is the sole drain-acknowledgement owner: it
@@ -4387,6 +4402,7 @@ class ValidatorWorker:
                 # ``drained``. The weight loop only remains quiescent here.
                 while drain_requested.is_set() and not stop.is_set():
                     await self._sleep_or_stop(stop, 0.05)
+                last_submit_at = self._last_weight_attempt_at
                 if not stop.is_set() and last_submit_at is not None:
                     # A drain interrupts the cadence sleep. Resume on the
                     # REMAINDER of the interrupted epoch, not a fresh full one:
@@ -4441,7 +4457,7 @@ class ValidatorWorker:
                 logger.exception("weight epoch failed; retrying next epoch")
             finally:
                 self._weights_active = False
-                last_submit_at = time.monotonic()
+                self._last_weight_attempt_at = time.monotonic()
             last_update, observed_block = await self._observe_onchain_weight_state()
             self._telemetry.record_sweep(
                 SweepStats(
