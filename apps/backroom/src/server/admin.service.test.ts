@@ -777,6 +777,56 @@ describe('screening submission admin service', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  it('surfaces a canary Platform queued without the requested review posture pin', async () => {
+    // Platform ignores unknown request fields, so during a parallel deploy a
+    // Platform that predates pins queues the canary unpinned. It then runs
+    // under the node posture; do not report that as the requested experiment.
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const input = {
+      requestId: '44444444-4444-4444-8444-444444444444',
+      agentId: '11111111-1111-4111-8111-111111111111',
+      sourceAttemptId: '22222222-2222-4222-8222-222222222222',
+      artifactSha256: 'a'.repeat(64),
+      expectedAgentStatus: 'rejected',
+      expectedScoreCount: 0,
+      targetNodeId: 'subnet-screener-1',
+      reviewLabel: 'known_reject',
+      confirmation: 'QUEUE REPORT ONLY L2 CANARY',
+    }
+    const legacyView = {
+      canary_id: '33333333-3333-4333-8333-333333333333',
+      request_id: input.requestId,
+      agent_id: input.agentId,
+      source_attempt_id: input.sourceAttemptId,
+      artifact_sha256: input.artifactSha256,
+      target_node_id: input.targetNodeId,
+      expected_agent_status: 'rejected',
+      expected_score_count: 0,
+      review_label: 'known_reject',
+      run_mode: 'source_only',
+      status: 'queued',
+      claimed_instance_id: null,
+      lease_expires_at: null,
+      report: null,
+      error_code: null,
+      created_at: '2026-09-29T00:00:00Z',
+      completed_at: null,
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(legacyView))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      scheduleL2ReportCanary({ ...input, reviewSettingsRevision: 141 }, 'operator@omniaura.ai'),
+    ).rejects.toThrow(
+      /queued canary 33333333-3333-4333-8333-333333333333 without review settings revision 141/,
+    )
+    // An unpinned request against the same Platform is unaffected.
+    await expect(scheduleL2ReportCanary(input, 'operator@omniaura.ai')).resolves.toMatchObject({
+      canary_id: legacyView.canary_id,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   it('forwards explicit pagination for screening history and disputes', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi

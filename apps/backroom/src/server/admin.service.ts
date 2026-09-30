@@ -705,7 +705,20 @@ export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
       confirm_report_only: true,
     },
   })
-  return l2ReportCanaryViewSchema.parse(payload)
+  const view = l2ReportCanaryViewSchema.parse(payload)
+  // Platform ignores unknown request fields, so a Platform that predates
+  // canary posture pins queues the canary unpinned, under the node posture.
+  if (
+    input.reviewSettingsRevision !== undefined &&
+    view.review_settings_revision !== input.reviewSettingsRevision
+  ) {
+    throw new Error(
+      `Platform queued canary ${view.canary_id} without review settings revision ${input.reviewSettingsRevision} ` +
+        `(pinned revision: ${view.review_settings_revision ?? 'none'}); it will run under the claiming node's ` +
+        'effective posture, not the requested one. Retry once Platform supports canary posture pins.',
+    )
+  }
+  return view
 }
 
 export async function fetchCanonicalStarterPreflight() {
