@@ -606,9 +606,9 @@ describe('Backroom MCP tools', () => {
     // expected-value canary guard inputs. Keep operational tutorials in help
     // and retain the existing catalog budget as these inputs evolve.
     // Two bounded report-only paid archive reads add 1,346 bytes (one-line
-    // catalog summaries, one uuid pair); merged with main's condensed catalog
-    // and its treasury receipt tools (#2618) they measure 180,807 bytes.
-    // Retain about 0.5 KB headroom.
+    // catalog summaries, one uuid pair); merged with main's condensed catalog,
+    // its treasury receipt tools (#2618) and the receipt-only observer grant
+    // (#2620) they measure 180,939 bytes. Retain about 0.35 KB headroom.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(181_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
