@@ -57,13 +57,17 @@ describe("SubmissionFee", () => {
     const revisions = Array.from(document.querySelectorAll(".submission-fee-history li")).map(
       (row) => row.getAttribute("data-fee-revision"),
     );
-    // Platform's real shape: revision 1 kept the built-in 0.04 TAO, so it is
-    // not a change; the first operator change reports 0.04 as its previous fee.
-    expect(revisions).toEqual(["5", "3"]);
+    // Platform's real shape: revision 1 is the first published fee, with no
+    // previous fee (the built-in default is never shown as one); later
+    // changes report the revision they replaced.
+    expect(revisions).toEqual(["5", "3", "1"]);
     expect(rows[0]).toContain("0.2 → 0.1 TAO");
     expect(rows[0]).toContain("down 50%");
     expect(rows[1]).toContain("0.04 → 0.2 TAO");
     expect(rows[1]).toContain("up 400%");
+    expect(rows[2]).toContain("0.04 TAO");
+    expect(rows[2]).not.toContain("→");
+    expect(rows[2]).toContain("first published fee");
     expect(document.body.textContent).not.toContain("initial");
   });
 
@@ -121,7 +125,7 @@ describe("SubmissionFee edge payloads", () => {
     serve({ ...fixture, history_truncated: true });
     render(() => <SubmissionFee />);
     await screen.findByText("0.1 TAO");
-    expect(document.querySelectorAll(".submission-fee-history li")).toHaveLength(2);
+    expect(document.querySelectorAll(".submission-fee-history li")).toHaveLength(3);
     expect(screen.getByText("Some fee changes are not shown.")).toBeTruthy();
   });
 
@@ -198,12 +202,12 @@ describe("SubmissionFee revision states", () => {
 
   it("labels a change whose previous fee was not published", async () => {
     const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
-    const [newest, oldest] = fixture.history;
+    const [newest, second] = fixture.history;
     serve({
       ...fixture,
       history: [
         newest,
-        { ...oldest, previous_fee_amount_rao: null, previous_fee_amount_tao: null },
+        { ...second, previous_fee_amount_rao: null, previous_fee_amount_tao: null },
       ],
       history_truncated: true,
     });
@@ -253,7 +257,7 @@ describe("submission fee helpers", () => {
     expect(quoteLifetimeText(59)).toBe("59 seconds");
     expect(quoteLifetimeText(5_430)).toBe("5430 seconds");
     expect(quoteLifetimeText(60)).toBe("1 minute");
-    expect(changeLabel(null, 40_000_000, true)).toBe("initial");
+    expect(changeLabel(null, 40_000_000, true)).toBe("first published fee");
     expect(changeLabel(null, 40_000_000, false)).toBe("previous fee not shown");
     expect(changeLabel(40_000_000, 40_000_000, false)).toBe("same amount");
   });

@@ -17,10 +17,9 @@ export function isFixedTao(denomination: string | null | undefined): boolean {
   return denomination === "fixed_tao";
 }
 
-/** "0.1 → 0.04 TAO" for a change. Platform reports every change, including the
- * first operator revision, with its previous fee (the built-in default for
- * revision 1); a bare "0.04 TAO" only renders when that previous fee was not
- * published. */
+/** "0.1 → 0.04 TAO" for a change. A bare "0.04 TAO" renders when Platform
+ * publishes no previous fee: for the first published fee (revision 1, whose
+ * parent is only the build's built-in default) or an unpublishable one. */
 export function feeChangeText(previousRao: number | null, rao: number): string {
   return previousRao === null
     ? `${raoToTao(rao)} TAO`
@@ -78,10 +77,9 @@ export function feeRevisionText(revision: number | null, policyRevision: number)
 
 /** Direction of one change. */
 export function changeLabel(previousRao: number | null, rao: number, isGenesis: boolean): string {
-  // Defensive only: current Platform always reports a previous fee for a
-  // published change (the built-in default for revision 1) unless that
-  // previous fee is unpublishable, which is "previous fee not shown".
-  // "initial" survives for an older Platform that omitted revision 1's parent.
-  if (previousRao === null) return isGenesis ? "initial" : "previous fee not shown";
+  // Platform publishes no previous fee for revision 1 (its parent is only the
+  // built-in default, never a charged fee) or for an unpublishable parent.
+  // Only the oldest row of a complete history is the first published fee.
+  if (previousRao === null) return isGenesis ? "first published fee" : "previous fee not shown";
   return feeDirection(previousRao, rao) || "same amount";
 }
