@@ -189,5 +189,68 @@ def upgrade():
 
 
 def downgrade():
-    # Financial history is deliberately not destructively downgraded.
-    raise RuntimeError("treasury receipt migration requires a reviewed forward repair")
+    # A never-used schema can round-trip. Retained financial facts must never
+    # be silently deleted or lose additive provenance during rollback. Hold
+    # both locks through the guard and DDL so a concurrent writer cannot race.
+    op.execute(
+        "LOCK TABLE treasury_public_events, treasury_verified_receipts "
+        "IN ACCESS EXCLUSIVE MODE"
+    )
+    retained = op.get_bind().scalar(
+        sa.text(
+            "SELECT EXISTS (SELECT 1 FROM treasury_verified_receipts) OR "
+            "EXISTS (SELECT 1 FROM treasury_public_events WHERE "
+            "bucket_id IS NOT NULL OR policy_digest IS NOT NULL OR "
+            "epoch_index IS NOT NULL OR event_kind IN "
+            "('service_distribution', 'vendor_payment') OR denominator IN "
+            "('collector_liquid_emission', 'not_attributed') OR "
+            "route = 'tao_transfer' OR actor_provenance = 'treasury_observer')"
+        )
+    )
+    if retained:
+        raise RuntimeError(
+            "retained treasury financial history requires a reviewed forward repair"
+        )
+    op.drop_table("treasury_verified_receipts")
+    previous = {
+        "treasury_public_kind": (
+            "(event_kind = 'gm_token_deposit' AND state = 'chain_finalized' "
+            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NULL AND accepted_work_ref IS NULL) OR "
+            "(event_kind = 'gm_credit_purchase' AND state = 'reconciled' "
+            "AND finalized_event_id IS NOT NULL AND credited_usd_nano IS NOT NULL "
+            "AND credited_usd_nano > 0 AND bounty_award_id IS NULL "
+            "AND accepted_work_ref IS NULL) OR "
+            "(event_kind = 'maintenance_bounty' AND state = 'chain_finalized' "
+            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NOT NULL AND accepted_work_ref IS NOT NULL "
+            "AND length(bounty_award_id) BETWEEN 8 AND 120 "
+            "AND length(accepted_work_ref) BETWEEN 8 AND 240)"
+        ),
+        "treasury_public_denominator": (
+            "denominator IN ('miner_emission', 'released_miner_emission')"
+        ),
+        "treasury_public_allocation": (
+            "maintenance_bps BETWEEN 0 AND 10000 AND "
+            "gm_bps BETWEEN 0 AND 10000 AND allocation_bps BETWEEN 0 AND 10000 "
+            "AND allocated_alpha_rao >= 0 AND source_alpha_rao > 0 AND "
+            "burn_revision >= 0 AND burn_share_micros BETWEEN 0 AND 1000000"
+        ),
+        "treasury_public_purpose_allocation": (
+            "(event_kind = 'maintenance_bounty' AND allocation_bps = maintenance_bps) "
+            "OR (event_kind <> 'maintenance_bounty' AND allocation_bps = gm_bps)"
+        ),
+        "treasury_public_route": (
+            "route IN ('alpha_to_tao', 'alpha_to_gm_alpha', "
+            "'alpha_transfer', 'alpha_to_tao_bounty')"
+        ),
+        "treasury_public_actor_provenance": (
+            "actor_provenance IN "
+            "('treasury_signer', 'gm_reconciler', 'bounty_executor')"
+        ),
+    }
+    for name, expression in previous.items():
+        op.drop_constraint(name, "treasury_public_events", type_="check")
+        op.create_check_constraint(name, "treasury_public_events", expression)
+    for name in ("epoch_index", "policy_digest", "bucket_id"):
+        op.drop_column("treasury_public_events", name)
