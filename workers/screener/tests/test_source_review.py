@@ -11,6 +11,7 @@ import os
 import sqlite3
 import struct
 import tarfile
+import time
 import zipfile
 from pathlib import Path
 from typing import IO, Any
@@ -6705,6 +6706,120 @@ async def test_http_429_parks_after_three_bounded_posts(tmp_path: Path) -> None:
     assert observation.error_code == "source-review-http-429"
     assert observation.failure_disposition == "retryable_infra"
     assert calls == 3
+
+
+async def test_router_deploy_401_window_is_waited_out_in_the_same_review(
+    tmp_path: Path,
+) -> None:
+    """A brief 401 window (router blue/green cutover) keeps the review alive."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    calls = 0
+    final = _with_policy_v10_invariants(_BENIGN_REVIEW)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            return httpx.Response(401, request=request, json={"error": "invalid key"})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [_tool("submit", "submit_review", final)],
+                        }
+                    }
+                ]
+            },
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=1,
+        transport=httpx.MockTransport(handler),
+        auth_retry_delays=(0, 0, 0),
+    )
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() {}")), artifact_sha256=_SHA
+    )
+
+    assert observation.ok
+    assert calls == 3
+
+
+async def test_persistent_401_parks_after_the_bounded_auth_wait(
+    tmp_path: Path,
+) -> None:
+    """A key that stays rejected still parks as a retryable infra failure."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(401, request=request, json={"error": "invalid key"})
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=4,
+        transport=httpx.MockTransport(handler),
+        transport_retry_delays=(0, 0),
+        auth_retry_delays=(0, 0),
+    )
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert not observation.ok
+    assert observation.error_code == "source-review-http-401"
+    assert observation.failure_disposition == "retryable_infra"
+    assert calls == 3
+
+
+async def test_auth_wait_never_sleeps_past_the_turn_budget(tmp_path: Path) -> None:
+    """The 401 wait is bounded by the review deadline, not just its count."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(401, request=request, json={"error": "invalid key"})
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=4,
+        transport=httpx.MockTransport(handler),
+        transport_retry_delays=(),
+        auth_retry_delays=(60.0,),
+    )
+    started = time.monotonic()
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.error_code == "source-review-http-401"
+    assert calls == 1
+    assert time.monotonic() - started < 5
 
 
 def _note_call(

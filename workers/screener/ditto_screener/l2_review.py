@@ -16,7 +16,7 @@ import sys
 import tarfile
 import tempfile
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Protocol, cast
@@ -36,6 +36,7 @@ from ditto_screener.source_review import (
     _ADVISORY_CATEGORIES,
     _ALLOWED_CATEGORIES,
     _MULTI_LOCATION_CATEGORIES,
+    ROUTER_AUTH_RETRY_DELAYS_SECONDS,
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     _body_signature,
@@ -2836,6 +2837,7 @@ class TerraSolSourceReviewAgent:
         independent_analyst: bool = False,
         terminal_verdict_required: bool = False,
         retry_provider_body_fault_once: bool = False,
+        auth_retry_delays: Sequence[float] = ROUTER_AUTH_RETRY_DELAYS_SECONDS,
         analyst_provider: str | None = None,
         compact_review_packet: bool = False,
         analyst_reasoning_effort: str = "model_default",
@@ -2884,6 +2886,9 @@ class TerraSolSourceReviewAgent:
             raise ValueError("terminal-only comparator cannot enable L3")
         self._terminal_verdict_required = terminal_verdict_required
         self._retry_provider_body_fault_once = retry_provider_body_fault_once
+        self._auth_retry_delays = tuple(
+            max(0.0, float(delay)) for delay in auth_retry_delays
+        )
         self._analyst_provider = analyst_provider
         if compact_review_packet and not terminal_verdict_required:
             raise ValueError("compact review packet is report-only terminal mode")
@@ -5141,6 +5146,60 @@ class TerraSolSourceReviewAgent:
             )
 
     async def _post(
+        self,
+        client: httpx.AsyncClient,
+        api_key: str,
+        items: list[dict[str, object]],
+        *,
+        artifact_sha256: str,
+        reasoning_effort: str,
+        model: str,
+        fallback_models: tuple[str, ...],
+        provider: str | None,
+        deadline: float | None,
+        policy_version: int = SCREENING_POLICY_VERSION,
+    ) -> httpx.Response:
+        # A router blue/green deploy rejects valid keys with 401 for a few
+        # minutes. Wait it out within the lease instead of discarding every
+        # completed analyst/critic turn of this review.
+        auth_retries = 0
+        while True:
+            try:
+                return await self._post_turn(
+                    client,
+                    api_key,
+                    items,
+                    artifact_sha256=artifact_sha256,
+                    reasoning_effort=reasoning_effort,
+                    model=model,
+                    fallback_models=fallback_models,
+                    provider=provider,
+                    deadline=deadline,
+                    policy_version=policy_version,
+                )
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code != 401 or auth_retries >= len(
+                    self._auth_retry_delays
+                ):
+                    raise
+                delay = self._auth_retry_delays[auth_retries]
+                if (
+                    deadline is not None
+                    and deadline - asyncio.get_running_loop().time() <= delay
+                ):
+                    raise
+                auth_retries += 1
+                logger.warning(
+                    "L2/L3 model key rejected; waiting out a router deploy: "
+                    "signature=%s retry=%d/%d delay_s=%.1f",
+                    _http_error_signature(error.response),
+                    auth_retries,
+                    len(self._auth_retry_delays),
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+    async def _post_turn(
         self,
         client: httpx.AsyncClient,
         api_key: str,

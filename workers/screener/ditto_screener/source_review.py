@@ -272,6 +272,11 @@ _MIN_MAX_COMPLETION_TOKENS = 2_000
 # among compatible providers, so a third slow post only burns another slice of
 # the lease without adding a distinct recovery path.
 _MODEL_TRANSPORT_RETRY_DELAYS_SECONDS = (1.0,)
+# A Ditto Router blue/green deploy rejects valid endpoint keys with HTTP 401
+# for a few minutes (observed 3-7 minutes after each cutover). Waiting that
+# out keeps a half-finished review instead of discarding it; a key that is
+# really revoked still parks after about five minutes.
+ROUTER_AUTH_RETRY_DELAYS_SECONDS = (15.0, 30.0, 60.0, 90.0, 120.0)
 
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
@@ -3663,6 +3668,7 @@ class OpenRouterSourceReviewAgent:
         transport_retry_delays: Sequence[float] = (
             _MODEL_TRANSPORT_RETRY_DELAYS_SECONDS
         ),
+        auth_retry_delays: Sequence[float] = ROUTER_AUTH_RETRY_DELAYS_SECONDS,
         inference_provider: str = "openrouter",
         max_completion_request_seconds: float | None = None,
     ) -> None:
@@ -3699,6 +3705,9 @@ class OpenRouterSourceReviewAgent:
         self._max_completion_request_seconds = float(request_timeout)
         self._transport_retry_delays = tuple(
             max(0.0, float(delay)) for delay in transport_retry_delays
+        )
+        self._auth_retry_delays = tuple(
+            max(0.0, float(delay)) for delay in auth_retry_delays
         )
         self._static_preflight_v2_mode = static_preflight_v2_mode
         self._provenance_manifest_files = (
@@ -4113,7 +4122,9 @@ class OpenRouterSourceReviewAgent:
         """Issue one model turn, healing only bounded transport-class faults."""
         started = asyncio.get_running_loop().time()
         attempts = len(self._transport_retry_delays) + 1
-        for attempt in range(attempts):
+        attempt = 0
+        auth_retries = 0
+        while True:
             remaining_timeout = timeout
             if timeout is not None:
                 remaining_timeout = timeout - (
@@ -4141,6 +4152,21 @@ class OpenRouterSourceReviewAgent:
                 fault = str(status) if status == 429 or status >= 500 else None
                 signature = _http_error_signature(error.response)
                 caught: BaseException = error
+                if status == 401 and auth_retries < len(self._auth_retry_delays):
+                    delay = self._auth_retry_delays[auth_retries]
+                    elapsed = asyncio.get_running_loop().time() - started
+                    if timeout is None or timeout - elapsed > delay:
+                        auth_retries += 1
+                        logger.warning(
+                            "source review model key rejected; waiting out a "
+                            "router deploy: signature=%s retry=%d/%d delay_s=%.1f",
+                            signature,
+                            auth_retries,
+                            len(self._auth_retry_delays),
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
             except (TimeoutError, httpx.TimeoutException) as error:
                 # ``asyncio.timeout`` raises the built-in TimeoutError, which
                 # is not an httpx.RequestError. Treat both deadline sources as
@@ -4183,8 +4209,7 @@ class OpenRouterSourceReviewAgent:
                 delay,
             )
             await asyncio.sleep(delay)
-
-        raise AssertionError("model retry loop exhausted without a result")
+            attempt += 1
 
     def _completion_request_headers(
         self, api_key: str, _effective_timeout: float

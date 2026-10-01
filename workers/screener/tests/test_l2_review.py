@@ -8760,3 +8760,137 @@ async def test_l1_infra_failure_and_pre_v13_unsettled_l1_do_not_escalate() -> No
         )
         assert l2.calls == 0
         assert not result.ok
+
+
+def _auth_wait_agent(
+    tmp_path: Path, handler: object, auth_retry_delays: tuple[float, ...]
+) -> SolL2SourceReviewAgent:
+    return SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(None, retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        transport=httpx.MockTransport(handler),  # type: ignore[arg-type]
+        auth_retry_delays=auth_retry_delays,
+    )
+
+
+async def test_l2_turn_waits_out_a_router_deploy_401_window(tmp_path: Path) -> None:
+    """A brief 401 window keeps the analyst/critic turn instead of parking."""
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests <= 2:
+            return httpx.Response(401, request=request, json={"error": "bad key"})
+        return httpx.Response(200, json={"status": "completed", "output": []})
+
+    agent = _auth_wait_agent(tmp_path, handler, (0, 0, 0))
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        response = await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="low",
+            model="openai/gpt-5.6-sol",
+            fallback_models=(),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 10,
+        )
+
+    assert response.status_code == 200
+    assert requests == 3
+
+
+async def test_l2_persistent_401_raises_after_the_bounded_auth_wait(
+    tmp_path: Path,
+) -> None:
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(401, request=request, json={"error": "bad key"})
+
+    agent = _auth_wait_agent(tmp_path, handler, (0, 0))
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await agent._post(
+                client,
+                "test-key",
+                [],
+                artifact_sha256="d" * 64,
+                reasoning_effort="low",
+                model="openai/gpt-5.6-sol",
+                fallback_models=(),
+                provider=None,
+                deadline=asyncio.get_running_loop().time() + 10,
+            )
+
+    assert requests == 3
+
+
+async def test_l2_auth_wait_never_sleeps_past_the_lease_deadline(
+    tmp_path: Path,
+) -> None:
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(401, request=request, json={"error": "bad key"})
+
+    agent = _auth_wait_agent(tmp_path, handler, (60.0,))
+    started = time.monotonic()
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await agent._post(
+                client,
+                "test-key",
+                [],
+                artifact_sha256="d" * 64,
+                reasoning_effort="low",
+                model="openai/gpt-5.6-sol",
+                fallback_models=(),
+                provider=None,
+                deadline=asyncio.get_running_loop().time() + 5,
+            )
+
+    assert requests == 1
+    assert time.monotonic() - started < 5
+
+
+async def test_non_auth_http_errors_are_not_waited_out(tmp_path: Path) -> None:
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(403, request=request, json={"error": "forbidden"})
+
+    agent = _auth_wait_agent(tmp_path, handler, (0, 0))
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await agent._post(
+                client,
+                "test-key",
+                [],
+                artifact_sha256="d" * 64,
+                reasoning_effort="low",
+                model="openai/gpt-5.6-sol",
+                fallback_models=(),
+                provider=None,
+                deadline=asyncio.get_running_loop().time() + 10,
+            )
+
+    assert requests == 1
