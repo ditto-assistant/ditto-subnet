@@ -1,0 +1,45 @@
+---
+# Prepare only the dedicated verifier identity and protected bank mountpoint.
+# Do not fetch a bank, read secret versions, start Docker, or enable a scorer.
+# Run scripts/check-v13-private-inventory.py first, then apply with
+# inventory/v13-private-gcp_compute.yml to only the dedicated
+# project's role_v13_private_verifier group after
+# reviewing a Terraform plan and the host custodian list.
+- name: Stage the private V13 verifier host
+  hosts: role_v13_private_verifier
+  become: true
+  gather_facts: true
+  roles:
+    - base
+
+  tasks:
+    - name: Create a dedicated unprivileged verifier identity
+      ansible.builtin.user:
+        name: ditto-v13-verifier
+        home: /var/lib/ditto-v13-private-verifier
+        create_home: true
+        shell: /usr/sbin/nologin
+        password_lock: true
+        system: true
+
+    - name: Keep the verifier home private
+      ansible.builtin.file:
+        path: /var/lib/ditto-v13-private-verifier
+        state: directory
+        owner: ditto-v13-verifier
+        group: ditto-v13-verifier
+        mode: "0700"
+
+    - name: Create an empty protected bank mountpoint
+      ansible.builtin.file:
+        path: /var/lib/ditto-v13-private-verifier/bank
+        state: directory
+        owner: ditto-v13-verifier
+        group: ditto-v13-verifier
+        mode: "0700"
+
+    - name: Assert no scorer activation is configured by this play
+      ansible.builtin.assert:
+        that:
+          - not (v13_private_verifier_activate | default(false) | bool)
+        fail_msg: This staging play cannot activate private verifier execution.

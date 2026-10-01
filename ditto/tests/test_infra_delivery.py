@@ -27,6 +27,35 @@ def test_preview_root_is_validated_and_has_protected_plan_apply_routing() -> Non
     assert 'if [ "$TF_ROOT" = gcp-platform ]; then' in delivery_text
 
 
+def test_v13_bootstrap_uses_exact_scoped_protected_plan_and_apply() -> None:
+    text = (ROOT / ".github" / "workflows" / "infra-plan-apply.yml").read_text()
+    workflow = yaml.safe_load(text)
+    inputs = workflow[True]["workflow_dispatch"]["inputs"]
+    assert "gcp-v13-private-bootstrap" in inputs["root"]["options"]
+    assert (
+        text.count(
+            "gcp-v13-private-bootstrap) "
+            "root=infra/terraform/stacks/gcp-v13-private-bootstrap"
+        )
+        == 2
+    )
+    assert workflow["jobs"]["plan"]["environment"] == "infra-plan"
+    assert workflow["jobs"]["apply"]["environment"] == "infra-apply"
+    for contract in (
+        "secrets.GCP_V13_BOOTSTRAP_PLAN_SA",
+        "secrets.GCP_V13_BOOTSTRAP_APPLY_SA",
+        "secrets.V13_PRIVATE_STATE_CUSTODIANS_JSON",
+        "secrets.V13_PRIVATE_APPROVED_BOOTSTRAP_JSON",
+        'test -z "$TF_TARGETS"',
+        "enable_v13_private_bootstrap[[:space:]]*=[[:space:]]*true",
+        "check-plan.py",
+        '[[ "$PLAN_CHECKSUM" =~ ^[0-9a-f]{64}$ ]]',
+        'test "$(sha256sum tfplan | awk \'{print $1}\')" = "$PLAN_CHECKSUM"',
+        'test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"',
+    ):
+        assert contract in text
+
+
 def test_preview_state_bootstrap_is_exact_object_only() -> None:
     lock_grant = (GCP_ROOT / "terraform-state-locks.tf").read_text()
     assert 'role   = "roles/storage.objectAdmin"' in lock_grant

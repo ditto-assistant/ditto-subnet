@@ -1,0 +1,18 @@
+---
+# Dedicated project only. Existing gcp.yml remains scoped to ditto-app-dev.
+plugin: google.cloud.gcp_compute
+projects:
+  - ditto-v13-private-verifier
+zones:
+  - us-central1-a
+auth_kind: application
+keyed_groups:
+  - key: labels.role
+    prefix: role
+    separator: "_"
+filters:
+  - labels.managed = terraform
+hostnames:
+  - name
+compose:
+  ansible_host: networkInterfaces[0].networkIP
