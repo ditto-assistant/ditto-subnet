@@ -420,8 +420,11 @@ async def submission_settings_history(
     The parent is the revision the operator previewed and confirmed against
     (``parent_revision``), which is not necessarily ``revision - 1``: a failed
     insert still consumes a sequence value. The first revision's parent (0)
-    is the built-in default policy, returned as an unsaved revision 0 so the
-    genesis row is compared with what was actually in force before it.
+    is returned as the current build's built-in default policy (an unsaved
+    revision 0). That is a reference point, not a record of what was charged
+    before revision 1: production's revision 1 predates the fixed-TAO
+    setting, so its "previous" fee is this build's default, never actually
+    charged.
     """
     parent = aliased(SubmissionSettingsRevision)
     rows = (

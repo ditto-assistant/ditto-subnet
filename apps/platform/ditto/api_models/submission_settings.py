@@ -80,9 +80,10 @@ class AdminSubmissionSettingsResponse(BaseModel):
     history_incomplete: bool = Field(
         default=False,
         description=(
-            "True when a historical revision in a denomination this build "
-            "cannot price was omitted from history. The current revision never "
-            "is: it fails closed instead."
+            "True when history may be incomplete: it reached its page limit "
+            "(older revisions exist), or a historical revision in a "
+            "denomination this build cannot price was omitted. The current "
+            "revision is never omitted: it fails closed instead."
         ),
     )
     bounds: SubmissionFeeBounds = SubmissionFeeBounds()

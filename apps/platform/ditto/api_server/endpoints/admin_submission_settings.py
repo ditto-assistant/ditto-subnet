@@ -120,6 +120,8 @@ async def get_settings(
     _admin: AdminDep, session: SessionDep
 ) -> AdminSubmissionSettingsResponse:
     rows = await submission_settings_history(session, limit=_HISTORY_LIMIT)
+    # Reaching the cap means older revisions exist beyond this page.
+    capped = len(rows) >= _HISTORY_LIMIT
     if not rows:
         return AdminSubmissionSettingsResponse(
             current=_default_revision(),
@@ -141,7 +143,7 @@ async def get_settings(
     return AdminSubmissionSettingsResponse(
         current=current,
         history=history,
-        history_incomplete=omitted,
+        history_incomplete=omitted or capped,
         bounds=SubmissionFeeBounds(),
         quote_lifetime_seconds=_QUOTE_LIFETIME_SECONDS,
     )
@@ -275,7 +277,17 @@ async def create_settings_revision(
                 "nothing to apply"
             ),
         )
-    previous = (parent.fee_amount_rao, parent.cooldown_seconds)
+    # Snapshot the parent before commit: committing expires loaded attributes.
+    parent_snapshot = SubmissionSettingsRevision(
+        revision=parent.revision,
+        parent_revision=parent.parent_revision,
+        cooldown_seconds=parent.cooldown_seconds,
+        fee_amount_rao=parent.fee_amount_rao,
+        fee_denomination=parent.fee_denomination,
+        reason=parent.reason,
+        actor=parent.actor,
+        created_at=parent.created_at,
+    )
     row = SubmissionSettingsRevision(
         parent_revision=actual_revision,
         cooldown_seconds=payload.cooldown_seconds,
@@ -294,10 +306,6 @@ async def create_settings_revision(
             detail="submission settings changed concurrently; refresh before applying",
         ) from error
     await session.refresh(row)
-    revision = _revision(row)
-    return revision.model_copy(
-        update={
-            "previous_fee_amount_rao": previous[0],
-            "previous_cooldown_seconds": previous[1],
-        }
-    )
+    # Same rule as history: an unpublishable parent is never shown as the
+    # previous fee (its number is not a TAO amount).
+    return _revision(row, parent_snapshot)

@@ -1205,3 +1205,104 @@ async def test_unsupported_denomination_path_end_to_end_in_postgres(
             await session.rollback()
     # The rollback restored the CHECK and removed the row.
     assert len(await _revision_rows(session_maker)) == 1
+
+
+async def test_dashboard_fee_fixture_matches_platform_shape(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The dashboard fixture must be a payload Platform can actually produce:
+    the same keys, and the same fee/previous-fee sequence for the same
+    operator changes (0.2 TAO, then 0.1 TAO, then a cooldown-only revision)."""
+    from pathlib import Path
+
+    _install(app, session_maker)
+    raised = await _apply(client, expected=1, fee_amount_rao=200_000_000)
+    lowered = await _apply(
+        client, expected=raised["revision"], fee_amount_rao=100_000_000
+    )
+    await _apply(
+        client,
+        expected=lowered["revision"],
+        fee_amount_rao=100_000_000,
+        cooldown_seconds=1800,
+    )
+    produced = (await client.get(_PUBLIC)).json()
+    fixture = json.loads(
+        (
+            Path(__file__).resolve().parents[4]
+            / "dashboard/fixtures/submission-fee.json"
+        ).read_text()
+    )
+
+    assert set(fixture) == set(produced)
+    assert {key for row in fixture["history"] for key in row} == {
+        key for row in produced["history"] for key in row
+    }
+
+    def _fees(payload: dict[str, Any]) -> list[tuple[int, int | None]]:
+        return [
+            (row["fee_amount_rao"], row["previous_fee_amount_rao"])
+            for row in payload["history"]
+        ]
+
+    assert _fees(fixture) == _fees(produced)
+    assert fixture["fee_amount_rao"] == produced["fee_amount_rao"]
+    assert fixture["history_truncated"] == produced["history_truncated"]
+
+
+async def test_admin_history_reports_incomplete_at_its_page_limit(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    first = await _apply(client, expected=1, fee_amount_rao=50_000_000)
+    await _apply(client, expected=first["revision"], fee_amount_rao=60_000_000)
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.admin_submission_settings._HISTORY_LIMIT", 2
+    )
+    body = (await client.get(_SETTINGS, headers=_HEADERS)).json()
+    assert len(body["history"]) == 2
+    assert body["history_incomplete"] is True
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.admin_submission_settings._HISTORY_LIMIT", 100
+    )
+    body = (await client.get(_SETTINGS, headers=_HEADERS)).json()
+    assert len(body["history"]) == 3
+    assert body["history_incomplete"] is False
+
+
+async def test_create_response_never_shows_an_unpublishable_parent_fee(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    usd_parent = SubmissionSettingsRevision(
+        revision=1,
+        parent_revision=0,
+        cooldown_seconds=3600,
+        fee_amount_rao=5_000_000_000,
+        fee_denomination="usd_indexed",
+        reason="five dollar target from a newer writer",
+        actor="future-platform",
+        created_at=datetime.now(UTC),
+    )
+
+    async def _latest(_session: AsyncSession) -> SubmissionSettingsRevision:
+        return usd_parent
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.admin_submission_settings.latest_submission_settings",
+        _latest,
+    )
+    created = await _apply(client, expected=1, fee_amount_rao=50_000_000)
+
+    assert created["previous_fee_amount_rao"] is None
+    assert created["previous_cooldown_seconds"] is None
+    assert "5000000000" not in json.dumps(created)
