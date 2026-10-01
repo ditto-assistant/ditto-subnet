@@ -3,7 +3,7 @@
 // Backroom); the quote a miner actually pays is the one `ditto upload`
 // reserves: a payment made within the quote lifetime keeps that fee even if
 // this changes.
-import { For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { useEndpoint } from "../../data/useEndpoint";
@@ -24,6 +24,12 @@ export function SubmissionFee(): JSX.Element {
   const fee = useEndpoint<SubmissionFeePayload>("/public/submission-fee", {
     pollMs: FEE_POLL_MS,
   });
+  // "Loading" belongs to the first fetch only. Once any response or error has
+  // settled, a background poll keeps the rendered fee or status in place.
+  const [settled, setSettled] = createSignal(false);
+  createEffect(() => {
+    if (!fee.loading()) setSettled(true);
+  });
   const payload = (): SubmissionFeePayload | undefined => {
     const value = fee.error() ? undefined : fee.data();
     return value && isFixedTao(value.fee_denomination) ? value : undefined;
@@ -41,7 +47,7 @@ export function SubmissionFee(): JSX.Element {
         when={payload()}
         fallback={
           <p class="submission-fee-status" role="status">
-            {fee.loading() && !fee.error()
+            {!settled() && fee.loading() && !fee.error()
               ? "Loading submission fee…"
               : "Submission fee is unavailable."}
           </p>

@@ -1,5 +1,5 @@
 import { cleanup, render, screen, waitFor } from "@solidjs/testing-library";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installFixtureFetch, loadFixture } from "../../test-fixtures";
 import type { SubmissionFeePayload } from "../../types/submission-fee";
@@ -96,6 +96,76 @@ describe("SubmissionFee unavailable states", () => {
       expect(screen.getByRole("status").textContent).toBe("Submission fee is unavailable."),
     );
     expect(document.body.textContent).not.toContain("TAO");
+  });
+});
+
+describe("SubmissionFee background polling", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps an unavailable status while a later poll is in flight", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    const original = globalThis.fetch;
+    let calls = 0;
+    let releaseSecond: (() => void) | undefined;
+    globalThis.fetch = (() => {
+      calls += 1;
+      const body = JSON.stringify({ ...fixture, fee_denomination: "usd_indexed" });
+      const response = new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+      if (calls === 1) return Promise.resolve(response);
+      // The second poll stays in flight until released.
+      return new Promise<Response>((resolve) => {
+        releaseSecond = () => resolve(response);
+      });
+    }) as typeof fetch;
+    restoreFetch = () => {
+      globalThis.fetch = original;
+    };
+
+    render(() => <SubmissionFee />);
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe("Submission fee is unavailable."),
+    );
+
+    vi.advanceTimersByTime(60_000);
+    await waitFor(() => expect(calls).toBe(2));
+    expect(screen.getByRole("status").textContent).toBe("Submission fee is unavailable.");
+    releaseSecond?.();
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe("Submission fee is unavailable."),
+    );
+  });
+
+  it("keeps the rendered fee while a later poll is in flight", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (() => {
+      calls += 1;
+      if (calls > 1) return new Promise<Response>(() => undefined);
+      return Promise.resolve(
+        new Response(JSON.stringify(fixture), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }) as typeof fetch;
+    restoreFetch = () => {
+      globalThis.fetch = original;
+    };
+
+    render(() => <SubmissionFee />);
+    await screen.findByText("0.1 TAO");
+    vi.advanceTimersByTime(60_000);
+    await waitFor(() => expect(calls).toBe(2));
+    expect(screen.getByText("0.1 TAO")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("Loading submission fee");
   });
 });
 
