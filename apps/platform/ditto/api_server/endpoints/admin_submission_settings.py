@@ -214,7 +214,10 @@ async def get_settings(
     # revision is reported raw in unsupported_current instead.
     history: list[RevisionModel] = []
     omitted = False
-    for row, previous in rows:
+    for index, (row, previous) in enumerate(rows):
+        if index == 0 and unsupported_current is not None:
+            # Surfaced in unsupported_current, so not missing from the view.
+            continue
         try:
             history.append(_revision(row, previous))
         except UnsupportedFeeDenominationError:

@@ -1416,8 +1416,9 @@ async def test_fee_less_apply_refuses_an_unsupported_current_denomination(
         "actor": "future-platform",
         "created_at": view.json()["unsupported_current"]["created_at"],
     }
+    # The unsupported revision is reported, not omitted: history is complete.
     assert view.json()["history"] == []
-    assert view.json()["history_incomplete"] is True
+    assert view.json()["history_incomplete"] is False
 
     # An explicit fixed-TAO fee previews as a fee change (the denomination
     # changes even at the same number) with no TAO ratio.
@@ -1536,6 +1537,62 @@ async def test_fee_less_preview_refuses_an_out_of_bounds_current_fee_like_apply(
 
     assert preview.status_code == 422, preview.text
     assert "safe bounds" in preview.json()["message"]
+
+
+async def test_unsupported_current_does_not_mark_history_incomplete(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a revision actually missing from the view sets history_incomplete."""
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+
+    def _row(revision: int, denomination: str):  # type: ignore[no-untyped-def]
+        return SubmissionSettingsRevision(
+            revision=revision,
+            parent_revision=revision - 1,
+            cooldown_seconds=3600,
+            fee_amount_rao=50_000_000,
+            fee_denomination=denomination,
+            reason="history fixture",
+            actor="test",
+            created_at=now - timedelta(days=10 - revision),
+        )
+
+    genesis = _row(1, "fixed_tao")
+    older_usd = _row(2, "usd_indexed")
+    supported = _row(3, "fixed_tao")
+    current_usd = _row(4, "usd_indexed")
+    histories = {
+        "complete": [(current_usd, genesis), (genesis, None)],
+        "omits_older": [
+            (current_usd, supported),
+            (supported, older_usd),
+            (older_usd, genesis),
+            (genesis, None),
+        ],
+    }
+    for case, expected in (("complete", False), ("omits_older", True)):
+
+        async def _history(
+            _session: AsyncSession,
+            _rows=histories[case],  # type: ignore[no-untyped-def]
+            **_kwargs: object,
+        ) -> list[tuple[SubmissionSettingsRevision, SubmissionSettingsRevision | None]]:
+            return _rows
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.admin_submission_settings.submission_settings_history",
+            _history,
+        )
+        body = (await client.get(_SETTINGS, headers=_HEADERS)).json()
+
+        assert body["current"] is None, case
+        assert body["unsupported_current"]["revision"] == 4, case
+        assert body["history_incomplete"] is expected, case
+        assert 4 not in [row["revision"] for row in body["history"]], case
 
 
 @pytest.mark.parametrize(
