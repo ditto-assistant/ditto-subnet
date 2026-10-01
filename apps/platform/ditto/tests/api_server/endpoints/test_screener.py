@@ -8,6 +8,7 @@ sr25519 dev keypair so the verification path runs for real.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import io
 import json
@@ -56,6 +57,7 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
+from ditto.api_server.endpoints import screener as screener_endpoint
 from ditto.api_server.endpoints.public import screening_dispute_signing_message
 from ditto.api_server.endpoints.screener import (
     _fanout_response_model_matches,
@@ -4046,11 +4048,14 @@ class TestQueue:
 
 
 class TestClaim:
+    @pytest.mark.parametrize("setup_delay", [0, 0.65])
     async def test_busy_claim_gate_returns_before_node_row_lock(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        setup_delay: float,
     ) -> None:
         node_id = "claim-gate-node"
         hotkey = "5ClaimGateNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
@@ -4062,8 +4067,38 @@ class TestClaim:
             token=token,
             screening_concurrency=2,
         )
-        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
+        gate_entered = asyncio.Event()
+        release_contender = asyncio.Event()
+        real_try_lock = screener_endpoint.try_acquire_screening_claim_lock
+        gate_results: list[bool] = []
+
+        async def synchronized_try_lock(session: AsyncSession) -> bool:
+            gate_entered.set()
+            await release_contender.wait()
+            result = await real_try_lock(session)
+            gate_results.append(result)
+            return result
+
+        monkeypatch.setattr(
+            screener_endpoint, "try_acquire_screening_claim_lock", synchronized_try_lock
+        )
+        if setup_delay:
+            real_sweep = screener_endpoint._sweep_screening_leases
+
+            async def delayed_sweep(*args, **kwargs):
+                # Exercise loaded setup without replacing its real DB work.
+                await asyncio.sleep(setup_delay)
+                return await real_sweep(*args, **kwargs)
+
+            monkeypatch.setattr(
+                screener_endpoint, "_sweep_screening_leases", delayed_sweep
+            )
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Screener-Hotkey": hotkey,
+        }
 
         async with session_maker() as owner, owner.begin():
             # Reproduce both locks that the old endpoint took in the opposite
@@ -4077,20 +4112,44 @@ class TestClaim:
                 select(func.pg_advisory_xact_lock(_SCREENING_CLAIM_LOCK_KEY))
             )
 
-            response = await asyncio.wait_for(
-                client.post(
-                    _CLAIM_URL,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "X-Screener-Hotkey": hotkey,
-                    },
-                ),
-                timeout=0.5,
-            )
+            contender = asyncio.create_task(client.post(_CLAIM_URL, headers=headers))
+            try:
+                # Auth, lease sweep and policy reads precede this gate. Bound
+                # setup separately, then keep the original response deadline
+                # around the actual nonblocking SQL with both holder locks held.
+                await asyncio.wait_for(gate_entered.wait(), timeout=5)
+                async with asyncio.timeout(0.5):
+                    release_contender.set()
+                    response = await contender
+            finally:
+                if not contender.done():
+                    contender.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await contender
 
-        assert response.status_code == 200, response.text
-        assert response.json()["items"] == []
-        assert response.headers["X-Ditto-Claim-Empty-Reason"] == "claim_lock_busy"
+            assert response.status_code == 200, response.text
+            assert response.json()["items"] == []
+            assert response.headers["X-Ditto-Claim-Empty-Reason"] == "claim_lock_busy"
+            assert gate_results == [False]
+            async with session_maker() as probe:
+                assert (
+                    await probe.scalar(
+                        select(func.count()).select_from(ScreeningAttempt)
+                    )
+                    == 0
+                )
+                agent = await probe.get(Agent, agent_id)
+                assert agent is not None and agent.status == AgentStatus.UPLOADED
+                node = await probe.get(ScreenerNode, node_id)
+                assert node is not None
+                assert node.token_hash == hashlib.sha256(token.encode()).hexdigest()
+
+        # The unchanged bearer and same artifact can claim after lock release.
+        retry = await client.post(_CLAIM_URL, headers=headers)
+        assert retry.status_code == 200, retry.text
+        assert gate_results == [False, True]
+        assert len(retry.json()["items"]) == 1
+        assert retry.json()["items"][0]["agent_id"] == str(agent_id)
 
     async def test_concurrent_node_claims_obey_node_limit_not_heartbeat_count(
         self,
