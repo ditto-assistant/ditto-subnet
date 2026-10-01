@@ -138,6 +138,21 @@ def _reservation_expiry(row: UploadAdmissionReservation) -> datetime:
     return _utc(row.expires_at)
 
 
+def reservation_send_address(
+    row: UploadAdmissionReservation, *, effective_address: str
+) -> str:
+    """The destination a reservation promised, for both quoting and verifying.
+
+    Rows written since the column exists store it. A legacy row with NULL is
+    only possible while no deposit-address rotation has happened since it was
+    created: every rotation snapshots the then-effective address into NULL
+    rows under a table lock. So the address it was quoted under is the current
+    effective deposit address. Using one helper keeps the advertised and the
+    verified destination identical.
+    """
+    return row.payment_send_address or effective_address
+
+
 def _reservation_live(
     row: UploadAdmissionReservation, *, now: datetime, paid_at: datetime | None
 ) -> bool:
@@ -206,8 +221,8 @@ async def reserve_upload_admission(
                 cooldown_seconds=existing.cooldown_seconds,
                 fee_amount_rao=existing.fee_amount_rao,
                 legacy_payment_cutoff_at=existing.legacy_payment_cutoff_at,
-                payment_send_address=(
-                    existing.payment_send_address or settings.payment_address
+                payment_send_address=reservation_send_address(
+                    existing, effective_address=settings.payment_address
                 ),
             )
         if replace_existing and existing.miner_hotkey == miner_hotkey:
@@ -230,8 +245,8 @@ async def reserve_upload_admission(
                 cooldown_seconds=existing.cooldown_seconds,
                 fee_amount_rao=existing.fee_amount_rao,
                 legacy_payment_cutoff_at=existing.legacy_payment_cutoff_at,
-                payment_send_address=(
-                    existing.payment_send_address or settings.payment_address
+                payment_send_address=reservation_send_address(
+                    existing, effective_address=settings.payment_address
                 ),
             )
         block_until = _reservation_block_until(existing)
@@ -278,7 +293,9 @@ async def reserve_upload_admission(
         cooldown_seconds=row.cooldown_seconds,
         fee_amount_rao=row.fee_amount_rao,
         legacy_payment_cutoff_at=row.legacy_payment_cutoff_at,
-        payment_send_address=row.payment_send_address or settings.payment_address,
+        payment_send_address=reservation_send_address(
+            row, effective_address=settings.payment_address
+        ),
     )
 
 

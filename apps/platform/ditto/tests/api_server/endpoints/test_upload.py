@@ -2254,3 +2254,144 @@ class TestReservedQuoteUnderUnquotablePricing:
         assert response.status_code == expected_status, response.text
         if expected_status == 503:
             assert response.json()["error_code"] == 3100
+
+
+class TestKeptReservationUnderUnquotablePricing:
+    """Recovery with ``reserve_submission_slot`` keeps an expired reservation
+    that was live when its payment finalized, under an unquotable revision."""
+
+    @pytest.mark.parametrize("same_archive", [True, False])
+    async def test_recovery_reserve_keeps_reserved_fee_and_expiry(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        session_maker: async_sessionmaker[AsyncSession],
+        same_archive: bool,
+    ) -> None:
+        from ditto.api_server.dependencies import get_session
+        from ditto.db.models import UploadAdmissionReservation
+        from ditto.db.queries import submission_settings as queries
+
+        async def _session():  # type: ignore[no-untyped-def]
+            async with session_maker() as session:
+                yield session
+
+        app.dependency_overrides[get_session] = _session
+        override_get_chain_client(app)
+        address = app.state.config.upload_payment_address
+        hotkey = _make_keypair().ss58_address
+        quoted_at = datetime.now(UTC) - timedelta(hours=25)
+        async with session_maker() as session, session.begin():
+            issued = await queries.reserve_upload_admission(
+                session,
+                miner_coldkey="5Coldkey",
+                miner_hotkey=hotkey,
+                sha256=_GOOD_SHA256 if same_archive else "f" * 64,
+                settings=queries.EffectiveSubmissionSettings(
+                    revision=1,
+                    cooldown_seconds=3600,
+                    payment_address=address,
+                    fee_amount_rao=40_000_000,
+                ),
+                now=quoted_at,
+            )
+        _real_verifier_paid_at(
+            app,
+            paid_at=quoted_at + timedelta(hours=23),
+            paid_rao=40_000_000,
+            address=address,
+        )
+        _unquotable_policy(monkeypatch)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission_for_coldkey",
+            queries.get_upload_admission_for_coldkey,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(),
+                "reserve_submission_slot": True,
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["ok"] is True
+        assert body["payment_required"] is False
+        async with session_maker() as session:
+            kept = await session.get(UploadAdmissionReservation, "5Coldkey")
+        assert kept is not None
+        assert kept.fee_amount_rao == 40_000_000
+        assert kept.expires_at == issued.expires_at
+        assert kept.sha256 == _GOOD_SHA256
+        assert body["admission_token"] == str(kept.token)
+        assert (kept.token == issued.token) is same_archive
+
+
+class TestReservationSendAddressIsSingleSourced:
+    async def test_legacy_null_address_verifies_against_the_advertised_one(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A legacy reservation without a stored destination is verified against
+        the current effective deposit address, the same one reservations
+        advertise, not the static config default."""
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        verifier = _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        effective = "5RotatedEffectiveDepositAddress"
+        assert effective != app.state.config.upload_payment_address
+
+        async def _rotated(_session, **_kwargs):  # type: ignore[no-untyped-def]
+            return SimpleNamespace(
+                revision=1,
+                cooldown_seconds=3600,
+                fee_amount_rao=40_000_000,
+                payment_address=effective,
+                quotable=True,
+            )
+
+        class Reservation:
+            miner_hotkey = kp.ss58_address
+            sha256 = _GOOD_TAR_SHA
+            fee_amount_rao = 40_000_000
+            payment_send_address = None
+            legacy_payment_cutoff_at = None
+            expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.effective_submission_settings",
+            AsyncMock(side_effect=_rotated),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission",
+            AsyncMock(return_value=Reservation()),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        data, files = _upload_agent_form(keypair=kp)
+        data["admission_token"] = str(uuid4())
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        assert verifier.verify_payment.await_args is not None
+        assert (
+            verifier.verify_payment.await_args.kwargs["expected_send_address"]
+            == effective
+        )

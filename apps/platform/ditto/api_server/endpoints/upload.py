@@ -95,6 +95,7 @@ from ditto.db.queries.submission_settings import (
     get_upload_admission,
     get_upload_admission_for_coldkey,
     release_upload_admission_for_exact_retry,
+    reservation_send_address,
     reserve_upload_admission,
 )
 
@@ -186,7 +187,6 @@ async def _payment_terms(
     *,
     reservation: UploadAdmissionReservation | None,
     default_payment_address: str,
-    reserved_address_default: str,
 ) -> _PaymentTerms:
     settings = await effective_submission_settings(
         session,
@@ -208,8 +208,8 @@ async def _payment_terms(
         settings=settings,
         expected_amount_rao=reservation.fee_amount_rao,
         legacy_amount_cutoff_at=reservation.legacy_payment_cutoff_at,
-        expected_send_address=(
-            reservation.payment_send_address or reserved_address_default
+        expected_send_address=reservation_send_address(
+            reservation, effective_address=settings.payment_address
         ),
         reserved_terms_expire_at=_as_utc(reservation.expires_at),
         fallback_amount_rao=current_fee_rao,
@@ -351,7 +351,6 @@ async def check(
         session,
         reservation=reserved_admission,
         default_payment_address=request.app.state.config.upload_payment_address,
-        reserved_address_default=request.app.state.config.upload_payment_address,
     )
     settings = recovery_terms.settings
     recovery_payment_verified = False
@@ -683,7 +682,6 @@ async def upload_agent(
         session,
         reservation=admission,
         default_payment_address=request.app.state.config.upload_payment_address,
-        reserved_address_default=request.app.state.config.upload_payment_address,
     )
 
     # The replay lookup autobegan a read transaction. Release that pooled

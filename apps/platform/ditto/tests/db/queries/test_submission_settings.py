@@ -518,3 +518,92 @@ async def test_unquotable_settings_never_issue_a_new_reservation(
                 now=now,
             )
     assert await session.get(UploadAdmissionReservation, "other-coldkey") is None
+
+
+@pytest.mark.parametrize("same_archive", [True, False])
+async def test_unquotable_recovery_keeps_an_in_time_reservation(
+    session: AsyncSession, same_archive: bool
+) -> None:
+    """kept_for_payment + paid_at must not be blocked by an unquotable revision:
+    the reservation keeps its fee and original expiry (rotated or idempotent)."""
+    quoted_at = datetime(2026, 9, 24, 0, 0, tzinfo=UTC)
+    reserved = EffectiveSubmissionSettings(
+        revision=1,
+        cooldown_seconds=3600,
+        payment_address=_PAYMENT_ADDRESS,
+        fee_amount_rao=40_000_000,
+    )
+    unquotable = EffectiveSubmissionSettings(
+        revision=2,
+        cooldown_seconds=3600,
+        payment_address=_PAYMENT_ADDRESS,
+        fee_amount_rao=5,
+        quotable=False,
+    )
+    async with session.begin():
+        original = await reserve_upload_admission(
+            session,
+            miner_coldkey="coldkey",
+            miner_hotkey="hotkey",
+            sha256="a" * 64,
+            settings=reserved,
+            now=quoted_at,
+        )
+    async with session.begin():
+        recovered = await reserve_upload_admission(
+            session,
+            miner_coldkey="coldkey",
+            miner_hotkey="hotkey",
+            sha256="a" * 64 if same_archive else "b" * 64,
+            settings=unquotable,
+            replace_existing=True,
+            paid_at=quoted_at + timedelta(hours=23),
+            now=quoted_at + timedelta(hours=25),
+        )
+    assert recovered.fee_amount_rao == 40_000_000
+    assert recovered.expires_at == original.expires_at
+    assert (recovered.token == original.token) is same_archive
+
+
+async def test_advertised_and_verified_send_address_share_one_source(
+    session: AsyncSession,
+) -> None:
+    """A legacy reservation without a stored destination advertises the current
+    effective deposit address, exactly what verification will require."""
+    from ditto.db.queries.submission_settings import reservation_send_address
+
+    now = datetime(2026, 9, 24, 0, 0, tzinfo=UTC)
+    settings = EffectiveSubmissionSettings(
+        revision=1, cooldown_seconds=3600, payment_address=_PAYMENT_ADDRESS
+    )
+    async with session.begin():
+        await reserve_upload_admission(
+            session,
+            miner_coldkey="coldkey",
+            miner_hotkey="hotkey",
+            sha256="a" * 64,
+            settings=settings,
+            now=now,
+        )
+    async with session.begin():
+        row = await session.get(UploadAdmissionReservation, "coldkey")
+        assert row is not None
+        row.payment_send_address = None
+    rotated = EffectiveSubmissionSettings(
+        revision=1, cooldown_seconds=3600, payment_address="5EffectiveAfterBoot"
+    )
+    async with session.begin():
+        advertised = await reserve_upload_admission(
+            session,
+            miner_coldkey="coldkey",
+            miner_hotkey="hotkey",
+            sha256="a" * 64,
+            settings=rotated,
+            now=now + timedelta(minutes=1),
+        )
+        row = await session.get(UploadAdmissionReservation, "coldkey")
+        assert row is not None
+        verified = reservation_send_address(
+            row, effective_address="5EffectiveAfterBoot"
+        )
+    assert advertised.payment_send_address == verified == "5EffectiveAfterBoot"
