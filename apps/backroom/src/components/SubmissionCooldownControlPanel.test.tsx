@@ -310,6 +310,50 @@ describe('SubmissionCooldownControlPanel', () => {
     expect(screen.queryByLabelText('Change preview')).toBeNull()
   })
 
+  it('notes when Platform could not return the whole revision history', () => {
+    const control = submissionSettingsControlSchema.parse({
+      ...initial,
+      history: [{ ...initial.current }],
+      history_incomplete: true,
+    })
+    render(<SubmissionCooldownControlPanel initialState={control} readOnly />)
+    expect(screen.getByText('Some revisions are not shown.')).toBeTruthy()
+    cleanup()
+    render(
+      <SubmissionCooldownControlPanel
+        initialState={{ ...control, history_incomplete: false }}
+        readOnly
+      />,
+    )
+    expect(screen.queryByText('Some revisions are not shown.')).toBeNull()
+  })
+
+  it('re-seeds an untouched non-minute cooldown when refresh finds a new one', async () => {
+    const control = submissionSettingsControlSchema.parse({
+      ...initial,
+      current: { ...initial.current, cooldown_seconds: 90 },
+    })
+    // Another operator meanwhile set the cooldown to 150 s.
+    getSubmissionSettingsControl.mockResolvedValueOnce({
+      ...control,
+      current: { ...control.current, revision: 2, cooldown_seconds: 150 },
+    })
+    render(<SubmissionCooldownControlPanel initialState={control} readOnly={false} />)
+    // Only the fee is edited; the cooldown field stays untouched at "1.5".
+    fireEvent.change(screen.getByLabelText('Submission fee in TAO'), {
+      target: { value: '0.05' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Refresh policy/ }))
+    await waitFor(() => expect(getSubmissionSettingsControl).toHaveBeenCalledTimes(1))
+
+    const minutes = screen.getByLabelText(/Cooldown in minutes/) as HTMLInputElement
+    await waitFor(() => expect(minutes.value).toBe('2.5'))
+    expect(minutes.getAttribute('aria-invalid')).toBe('false')
+    expect((screen.getByLabelText('Submission fee in TAO') as HTMLInputElement).value).toBe(
+      '0.05',
+    )
+  })
+
   it('does not enable apply for a stale preview', async () => {
     previewSubmissionSettingsChange.mockImplementation(async (input) => ({
       ...previewFor(input),

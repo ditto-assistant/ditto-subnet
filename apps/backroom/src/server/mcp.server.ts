@@ -916,7 +916,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_submission_cooldown:
     'Fixed-TAO miner fee, safe bounds, quote lifetime, and owner-coldkey cooldown; optional newest-first history (old/new fee), historyLimit=0 default.',
   set_submission_cooldown:
-    'Apply a fixed-TAO fee/cooldown revision after preview_submission_settings, with expectedRevision, reason, and its exact confirmation; stale or concurrent writes return 409. Requires backroom:write.',
+    'Apply a fixed-TAO fee/cooldown revision after preview_submission_settings, with expectedRevision, reason, and its exact confirmation; stale, concurrent or no-op writes return 409. Requires backroom:write.',
   preview_submission_settings:
     'Dry-run a fee/cooldown revision: diff, fee ratio, stale flag, exact confirmation, and in-flight quotes that keep their issued fee. Never mutates.',
   list_hotkey_bans: 'Hotkey bans.',
@@ -2307,7 +2307,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get miner submission settings',
       description:
-        'Read the platform-owned TAO fee and cooldown enforced between accepted uploads from the same owner coldkey. Revision history is newest-first and opt-in with historyLimit (default 0). Compatible clients reserve these terms before payment. Requires backroom:read and changes nothing.',
+        'Read the platform-owned TAO fee and cooldown enforced between accepted uploads from the same owner coldkey. Revision history is newest-first and opt-in with historyLimit (default 0). history_incomplete is true when Platform could not return the whole history: it reached its 100-revision page limit, or it omitted a historical revision in a denomination this build cannot price. Compatible clients reserve these terms before payment. Requires backroom:read and changes nothing.',
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
     },

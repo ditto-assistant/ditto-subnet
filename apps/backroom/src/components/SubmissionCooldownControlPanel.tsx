@@ -166,6 +166,10 @@ export function SubmissionCooldownControlPanel({
     // dropped), so "refresh, then preview again" after a stale preview does not
     // make the operator re-enter the change.
     const keepDraft = dirty
+    // Fields the operator has not touched follow the refreshed policy, so a
+    // concurrent change cannot leave an untouched field stale or invalid.
+    const cooldownUntouched = minutes === String(state.current.cooldown_seconds / 60)
+    const feeUntouched = feeTao === formatRaoAsTao(state.current.fee_amount_rao)
     setBusy('refresh')
     setError('')
     setSuccess('')
@@ -175,6 +179,8 @@ export function SubmissionCooldownControlPanel({
       if (keepDraft) {
         setPreview(null)
         setConfirmation('')
+        if (cooldownUntouched) setMinutes(String(next.current.cooldown_seconds / 60))
+        if (feeUntouched) setFeeTao(formatRaoAsTao(next.current.fee_amount_rao))
       } else {
         clearForm(next.current.fee_amount_rao, next.current.cooldown_seconds)
       }
@@ -511,6 +517,11 @@ export function SubmissionCooldownControlPanel({
           <History className="h-4 w-4 text-[var(--muted)]" />
           <h2 className="text-sm font-semibold">Revision history</h2>
         </div>
+        {state.history_incomplete ? (
+          <p className="border-b border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] sm:px-5">
+            Some revisions are not shown.
+          </p>
+        ) : null}
         {state.history.length === 0 ? (
           <p className="p-4 text-xs text-[var(--muted)] sm:px-5">No revisions recorded.</p>
         ) : (

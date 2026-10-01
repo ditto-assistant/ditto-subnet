@@ -1354,9 +1354,6 @@ const submissionCooldownSecondsSchema = z
   .int()
   .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
   .max(SUBMISSION_COOLDOWN_MAX_SECONDS)
-// fixed_tao is the only reviewed denomination. A Platform that predates the
-// explicit field priced in fixed TAO, so absence means fixed_tao; any other
-// value fails the parse instead of being displayed as a TAO fee.
 // Responses must state the denomination: fixed_tao is the only reviewed one,
 // and a missing or different value fails the parse rather than being
 // assumed. Inputs (below) default to fixed_tao.
