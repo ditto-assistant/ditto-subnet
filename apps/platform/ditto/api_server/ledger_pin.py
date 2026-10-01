@@ -44,6 +44,7 @@ from ditto.db.queries.ledger_epochs import (
     latest_pin,
 )
 from ditto.metrics import LEDGER_PIN_LOOP_RUNS, LEDGER_PIN_MATERIALIZATIONS
+from ditto_screening_protocol.treasury import TreasuryLedgerPin
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -148,8 +149,10 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
     readiness and are identical for every reader.
     """
     served = pin.context.get("served", {})
+    treasury = treasury_pin_from_context(pin)
     age = max(0, int((now - pin.pinned_at).total_seconds()))
     return LedgerResponse(
+        treasury_pin=treasury,
         entries=list(pin.entries),
         active_bench_version=pin.bench_version,
         v9_confirmation_mode=served.get("v9_confirmation_mode"),
@@ -182,6 +185,28 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
             for item in served.get("confirmation_seed_anchors", [])
         ],
     )
+
+
+def treasury_pin_from_context(pin: LedgerPin) -> TreasuryLedgerPin | None:
+    """Replay stored known fields only; malformed treasury evidence is never dropped."""
+    served = pin.context.get("served", {})
+    if "treasury_pin" not in served:
+        return None
+    raw = served["treasury_pin"]
+    treasury = TreasuryLedgerPin.model_validate(raw)
+    treasury.require_epoch(
+        netuid=pin.netuid,
+        first_block=pin.last_epoch_block,
+        pinned_block=pin.pinned_block,
+    )
+    if (
+        treasury.identity.finalized_block == pin.pinned_block
+        and treasury.identity.finalized_block_hash != pin.pinned_block_hash
+    ):
+        raise ValueError("treasury identity block hash differs from ledger pin")
+    if ledger_digest(canonical_entries(pin.entries), served) != pin.ledger_digest:
+        raise ValueError("treasury ledger digest mismatch")
+    return treasury
 
 
 # Revealed weights are u16-quantized (value / sum), so two folds of the same
@@ -501,6 +526,20 @@ def build_pin_draft(
         "continual_retest_cohort_size": snapshot.continual_retest_cohort_size,
         "crown_mode": snapshot.crown_mode,
     }
+    raw_treasury = getattr(snapshot, "treasury_pin", None)
+    if raw_treasury is not None:
+        treasury = TreasuryLedgerPin.model_validate(raw_treasury)
+        treasury.require_epoch(
+            netuid=schedule.netuid,
+            first_block=schedule.last_epoch_block,
+            pinned_block=schedule.block,
+        )
+        if (
+            treasury.identity.finalized_block == schedule.block
+            and treasury.identity.finalized_block_hash != schedule.block_hash
+        ):
+            raise ValueError("treasury identity block hash differs from ledger pin")
+        served["treasury_pin"] = treasury.model_dump(mode="json")
     if getattr(snapshot, "statistical_band_mode", None) == "capped":
         served["statistical_band_mode"] = "capped"
     # Bench v13+: freeze the pinned confirmation seed anchors with the pin so a

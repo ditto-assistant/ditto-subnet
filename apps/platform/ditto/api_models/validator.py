@@ -112,6 +112,7 @@ from ditto_screening_protocol.confirmation import (
 from ditto_screening_protocol.confirmation import (
     V9ConfirmationEvidenceRoot,
 )
+from ditto_screening_protocol.treasury import TreasuryLedgerPin
 
 _CODE_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
@@ -1974,6 +1975,18 @@ class LedgerResponse(BaseModel):
     so the exposed pool and the computed weights agree by construction.
     """
 
+    treasury_pin: Annotated[
+        TreasuryLedgerPin | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Immutable epoch-bound treasury policy and collector observations. "
+                "V1 is shadow-only and cannot alter weights or authorize spending. "
+                "Absent preserves the legacy ledger wire."
+            ),
+        ),
+    ] = None
     entries: Annotated[
         list[LedgerEntry],
         Field(

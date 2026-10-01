@@ -22205,6 +22205,8 @@ export interface components {
             track_shares_bps?: {
                 [key: string]: number;
             };
+            /** @description Immutable epoch-bound treasury policy and collector observations. V1 is shadow-only and cannot alter weights or authorize spending. Absent preserves the legacy ledger wire. */
+            treasury_pin?: components["schemas"]["TreasuryLedgerPin"] | null;
             /**
              * V9 Confirmation Mode
              * @description Fail-closed marker: every Bench v9 entry must carry a valid full-confirmation receipt while present.
@@ -33013,6 +33015,95 @@ export interface components {
             reason: string;
             /** Revision */
             revision: number;
+        };
+        /**
+         * TreasuryCollectorIdentity
+         * @description Finalized read values, not a caller's unbound verified=True assertion.
+         */
+        TreasuryCollectorIdentity: {
+            /** Finalized Block */
+            finalized_block: number;
+            /** Finalized Block Hash */
+            finalized_block_hash: string;
+            /** Genesis Hash */
+            genesis_hash: string;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Netuid
+             * @default 118
+             * @constant
+             */
+            netuid: 118;
+            /** Owner Coldkey */
+            owner_coldkey: string;
+            /** Subnet Owner Coldkey */
+            subnet_owner_coldkey: string;
+            /** Uid */
+            uid: number;
+            /** Uid Hotkey */
+            uid_hotkey: string;
+        };
+        /** TreasuryEmissionBucket */
+        TreasuryEmissionBucket: {
+            /** Allocation Bps */
+            allocation_bps: number;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Holding Coldkey */
+            holding_coldkey: string;
+        };
+        /**
+         * TreasuryEmissionPolicy
+         * @description Public fold inputs only; no billing references, credentials or seed data.
+         */
+        TreasuryEmissionPolicy: {
+            /** Buckets */
+            buckets: components["schemas"]["TreasuryEmissionBucket"][];
+            /** Collector Coldkey */
+            collector_coldkey: string;
+            /** Collector Hotkey */
+            collector_hotkey: string;
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /** Genesis Hash */
+            genesis_hash: string;
+            /**
+             * Netuid
+             * @default 118
+             * @constant
+             */
+            netuid: 118;
+            /** Revision */
+            revision: number;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
+        /**
+         * TreasuryLedgerPin
+         * @description V1 can record shadow evidence only. No weight or spending activation.
+         */
+        TreasuryLedgerPin: {
+            identity: components["schemas"]["TreasuryCollectorIdentity"];
+            /**
+             * Mode
+             * @default shadow
+             * @constant
+             */
+            mode: "shadow";
+            policy: components["schemas"]["TreasuryEmissionPolicy"];
+            /** Policy Digest */
+            policy_digest: string;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
         };
         /**
          * TreasuryPayeeRule

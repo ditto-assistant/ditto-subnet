@@ -109,6 +109,7 @@ from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
 )
+from ditto_screening_protocol.treasury import TreasuryLedgerPin
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +214,8 @@ class _LedgerSnapshot:
     epoch pin for public and operator reads; absent while the gate is off."""
     reward_eligibility_enforcement: str | None = None
     fleet_readiness: dict[str, bool] | None = None
+    treasury_pin: TreasuryLedgerPin | None = None
+    """Default-off; populated only by a future reviewed finalized producer."""
     confirmation_seed_anchors: tuple[ConfirmationSeedAnchorPin, ...] = ()
     """Pinned finalized-block anchors of the active version's seed families.
 

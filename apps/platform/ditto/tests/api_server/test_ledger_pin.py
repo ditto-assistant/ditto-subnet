@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -673,3 +676,133 @@ class TestProvisionalIncumbent:
                 burn_hotkey=burn,
             )
             assert verdict == ("current" if legacy else "diverged")
+
+
+class TestShadowTreasuryPin:
+    def _treasury(self) -> dict:
+        fixture = (
+            Path(__file__).resolve().parents[5]
+            / "packages/ditto-screening-protocol/tests/fixtures"
+            / "treasury_ledger_pin_v1.json"
+        )
+        value = json.loads(fixture.read_text())
+        value["identity"]["finalized_block"] = _schedule().block
+        return value
+
+    def _draft(self, treasury=None):
+        return build_pin_draft(
+            _schedule(),
+            snapshot=_snapshot([], treasury_pin=treasury),
+            previous_pin=None,
+            previous_champion_owner_root=None,
+            now=_NOW,
+        )
+
+    def _pin(self, draft):
+        return LedgerPin(
+            netuid=draft.netuid,
+            epoch_index=draft.epoch_index,
+            last_epoch_block=draft.last_epoch_block,
+            pinned_block=draft.pinned_block,
+            pinned_block_hash=draft.pinned_block_hash,
+            pinned_at=draft.pinned_at,
+            bench_version=draft.bench_version,
+            entries=(),
+            context=draft.context,
+            ledger_digest=draft.ledger_digest,
+        )
+
+    def test_absence_preserves_legacy_digest_and_wire(self):
+        legacy = build_pin_draft(
+            _schedule(),
+            snapshot=_snapshot([]),
+            previous_pin=None,
+            previous_champion_owner_root=None,
+            now=_NOW,
+        )
+        explicit_none = self._draft()
+        assert legacy.context == explicit_none.context
+        assert legacy.ledger_digest == explicit_none.ledger_digest
+        expected_served = {
+            "v9_confirmation_mode": None,
+            "tie_weighting_mode": None,
+            "dethrone_band_mode": "headroom_capped",
+            "burn_share": 0.1,
+            "continual_retest_cohort_size": 5,
+            "crown_mode": None,
+        }
+        assert legacy.context["served"] == expected_served
+        # Fixed pre-treasury canonical JSON digest, independent of this builder.
+        assert legacy.ledger_digest == (
+            "d86e3fde7265152b526598c69b3e05caa39abedfaee3e49fa2d17c6dea9f55c0"
+        )
+        for draft in (legacy, explicit_none):
+            response = response_from_pin(self._pin(draft), stale=False, now=_NOW)
+            assert "treasury_pin" not in response.model_dump(mode="json")
+
+    def test_policy_and_identity_are_frozen_in_digest_and_replay(self):
+        raw = self._treasury()
+        draft = self._draft(raw)
+        stored = deepcopy(raw)
+        raw["identity"]["uid"] += 1
+        raw["policy"]["revision"] += 1
+        assert draft.context["served"]["treasury_pin"] == stored
+        assert draft.ledger_digest != self._draft().ledger_digest
+        replay = response_from_pin(self._pin(draft), stale=True, now=_NOW)
+        assert replay.treasury_pin.model_dump(mode="json") == stored
+        assert replay.treasury_pin.mode == "shadow"
+        changed = deepcopy(stored)
+        changed["identity"]["uid"] += 1
+        assert self._draft(changed).ledger_digest != draft.ledger_digest
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            "reused_uid",
+            "owner",
+            "chain",
+            "policy",
+            "future",
+            "stale",
+            "hash",
+            "enforce",
+        ],
+    )
+    def test_invalid_evidence_cannot_enter_a_new_pin(self, change):
+        raw = self._treasury()
+        if change == "reused_uid":
+            raw["identity"]["uid_hotkey"] = "5" + "E" * 47
+        elif change == "owner":
+            raw["identity"]["subnet_owner_coldkey"] = raw["policy"]["collector_coldkey"]
+        elif change == "chain":
+            raw["identity"]["genesis_hash"] = "0x" + "22" * 32
+        elif change == "policy":
+            raw["policy"]["revision"] += 1
+        elif change == "future":
+            raw["identity"]["finalized_block"] += 1
+        elif change == "stale":
+            raw["identity"]["finalized_block"] = _schedule().last_epoch_block - 1
+        elif change == "hash":
+            raw["identity"]["finalized_block_hash"] = "0x" + "22" * 32
+        else:
+            raw["mode"] = "enforce"
+        with pytest.raises(ValueError):
+            self._draft(raw)
+
+    def test_changed_stored_uid_cannot_replay_with_original_digest(self):
+        pin = self._pin(self._draft(self._treasury()))
+        pin.context["served"]["treasury_pin"]["identity"]["uid"] += 1
+        with pytest.raises(ValueError, match="ledger digest mismatch"):
+            response_from_pin(pin, stale=False, now=_NOW)
+
+    def test_corrupt_stored_policy_is_not_silently_omitted(self):
+        pin = self._pin(self._draft(self._treasury()))
+        pin.context["served"]["treasury_pin"]["policy"]["revision"] += 1
+        with pytest.raises(ValueError, match="policy digest mismatch"):
+            response_from_pin(pin, stale=False, now=_NOW)
+
+    def test_null_stored_evidence_is_not_treated_as_legacy_absence(self):
+        pin = self._pin(self._draft(self._treasury()))
+        pin.context["served"]["treasury_pin"] = None
+        with pytest.raises(ValueError):
+            response_from_pin(pin, stale=False, now=_NOW)
