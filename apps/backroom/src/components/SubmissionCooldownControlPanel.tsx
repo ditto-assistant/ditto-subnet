@@ -102,6 +102,15 @@ export function SubmissionCooldownControlPanel({
     !currentPreview.stale &&
     reason.trim().length >= 8 &&
     confirmation === expectedConfirmation
+  // The draft differs from the applied policy in any way, including text that
+  // does not parse yet; Cancel must stay available so an invalid draft can
+  // always be discarded.
+  const dirty =
+    minutes !== String(state.current.cooldown_seconds / 60) ||
+    feeTao !== formatRaoAsTao(state.current.fee_amount_rao) ||
+    preview !== null ||
+    reason !== '' ||
+    confirmation !== ''
   const invalidMinutes = minutes.trim() !== '' && selectedSeconds === null
   const invalidFee = feeTao.trim() !== '' && selectedFeeRao === null
 
@@ -256,10 +265,11 @@ export function SubmissionCooldownControlPanel({
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <p>
                 This changes admission for future uploads. Existing scores and submissions are not
-                rewritten. An already-issued reservation keeps the fee and cooldown revision it was
-                issued under until it is consumed or expires
-                {quoteLifetimeHours ? ` (${quoteLifetimeHours} hours)` : ''}. Roll back by applying
-                the older value as a new revision.
+                rewritten. A payment made before its reservation expires
+                {quoteLifetimeHours ? ` (${quoteLifetimeHours} hours after it is issued)` : ''} keeps
+                the fee it was quoted at, even if it is uploaded or recovered after that; a later
+                payment must match the new fee. Roll back by applying the older value as a new
+                revision.
               </p>
             </div>
           </div>
@@ -380,8 +390,16 @@ export function SubmissionCooldownControlPanel({
                     {currentPreview.in_flight_quotes_at_other_fees} of{' '}
                     {currentPreview.in_flight_quotes} keep an earlier fee
                     {currentPreview.in_flight_quotes_expire_by
-                      ? ` until ${formatWhen(currentPreview.in_flight_quotes_expire_by)}`
+                      ? ` for payments made by ${formatWhen(currentPreview.in_flight_quotes_expire_by)}`
                       : ''}
+                    {currentPreview.recoverable_expired_quotes > 0 ? (
+                      <span className="mt-1 block font-normal text-[var(--muted)]">
+                        Plus up to {currentPreview.recoverable_expired_quotes} recently expired (
+                        {currentPreview.recoverable_expired_quotes_at_other_fees} at another fee):
+                        each still binds only a payment made before it expired, recoverable until{' '}
+                        {formatWhen(currentPreview.recoverable_expired_quotes_until)}.
+                      </span>
+                    ) : null}
                   </dd>
                 </div>
               </dl>
@@ -435,7 +453,7 @@ export function SubmissionCooldownControlPanel({
             <button
               type="button"
               onClick={() => clearForm()}
-              disabled={loading || !changed}
+              disabled={loading || !dirty}
               className="min-h-11 rounded-lg border border-[var(--line)] px-4 text-xs font-medium text-[var(--muted-strong)] transition-colors hover:bg-white/5 disabled:opacity-40"
             >
               Cancel

@@ -1432,6 +1432,9 @@ export const submissionSettingsPreviewSchema = z.object({
   in_flight_quotes: z.number().int().nonnegative(),
   in_flight_quotes_at_other_fees: z.number().int().nonnegative(),
   in_flight_quotes_expire_by: z.string().nullable(),
+  recoverable_expired_quotes: z.number().int().nonnegative(),
+  recoverable_expired_quotes_at_other_fees: z.number().int().nonnegative(),
+  recoverable_expired_quotes_until: z.string().nullable(),
 } satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsPreview>)
 
 export function submissionSettingsConfirmation(seconds: number, feeAmountRao: number) {

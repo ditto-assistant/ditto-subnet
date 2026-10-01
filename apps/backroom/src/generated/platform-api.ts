@@ -12925,6 +12925,23 @@ export interface components {
             proposed: components["schemas"]["SubmissionSettingsProposal"];
             /** Quote Lifetime Seconds */
             quote_lifetime_seconds: number;
+            /**
+             * Recoverable Expired Quotes
+             * @description Reservations that expired less than quote_lifetime_seconds ago. Each still binds its issued fee only for a payment that finalized before it expired (that payment stays recoverable for quote_lifetime_seconds after its block time), so this is an upper bound on expired quotes that may still be honoured.
+             * @default 0
+             */
+            recoverable_expired_quotes: number;
+            /**
+             * Recoverable Expired Quotes At Other Fees
+             * @description Of recoverable_expired_quotes, how many differ from the proposed fee.
+             * @default 0
+             */
+            recoverable_expired_quotes_at_other_fees: number;
+            /**
+             * Recoverable Expired Quotes Until
+             * @description Latest time an in-time payment against one of those reservations can still be recovered.
+             */
+            recoverable_expired_quotes_until?: string | null;
             /** Required Confirmation */
             required_confirmation: string;
             /** Stale */

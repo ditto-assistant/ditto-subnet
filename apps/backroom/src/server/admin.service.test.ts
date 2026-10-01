@@ -1929,6 +1929,9 @@ describe('submission fee preview', () => {
     in_flight_quotes: 2,
     in_flight_quotes_at_other_fees: 2,
     in_flight_quotes_expire_by: '2026-09-25T12:00:00Z',
+    recoverable_expired_quotes: 0,
+    recoverable_expired_quotes_at_other_fees: 0,
+    recoverable_expired_quotes_until: null,
   }
 
   it('reads a dry run with a GET and never posts', async () => {

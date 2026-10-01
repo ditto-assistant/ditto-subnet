@@ -71,6 +71,9 @@ function previewFor(input: {
     in_flight_quotes: 3,
     in_flight_quotes_at_other_fees: 2,
     in_flight_quotes_expire_by: '2026-07-25T12:00:00Z',
+    recoverable_expired_quotes: 1,
+    recoverable_expired_quotes_at_other_fees: 1,
+    recoverable_expired_quotes_until: '2026-07-25T13:00:00Z',
   }
 }
 
@@ -101,6 +104,7 @@ describe('SubmissionCooldownControlPanel', () => {
     })
     await screen.findByLabelText('Change preview')
     expect(screen.getByText(/2 of 3 keep an earlier fee/)).toBeTruthy()
+    expect(screen.getByText(/Plus up to 1 recently expired/)).toBeTruthy()
 
     fireEvent.change(screen.getByLabelText('Operator reason'), {
       target: { value: 'reduce cadence for the current capacity window' },
@@ -201,6 +205,28 @@ describe('SubmissionCooldownControlPanel', () => {
     expect(fee.getAttribute('aria-invalid')).toBe('true')
     fireEvent.change(fee, { target: { value: '0.5' } })
     expect(fee.getAttribute('aria-invalid')).toBe('false')
+  })
+
+  it('lets an invalid draft be cancelled back to the applied values', () => {
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    const cancel = screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement
+    const fee = screen.getByLabelText('Submission fee in TAO') as HTMLInputElement
+    const minutes = screen.getByLabelText(/Cooldown in minutes/) as HTMLInputElement
+    expect(cancel.disabled).toBe(true)
+
+    fireEvent.change(fee, { target: { value: 'abc' } })
+    fireEvent.change(minutes, { target: { value: '0' } })
+    expect(fee.getAttribute('aria-invalid')).toBe('true')
+    expect(
+      (screen.getByRole('button', { name: 'Preview change' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+    expect(cancel.disabled).toBe(false)
+
+    fireEvent.click(cancel)
+    expect(fee.value).toBe('0.04')
+    expect(minutes.value).toBe('60')
+    expect(fee.getAttribute('aria-invalid')).toBe('false')
+    expect(cancel.disabled).toBe(true)
   })
 
   it('does not enable apply for a stale preview', async () => {
