@@ -848,6 +848,58 @@ async def test_public_fee_omits_an_unsupported_historical_revision(
     assert "5000000000" not in response.text
 
 
+@pytest.mark.parametrize("prior_change", [False, True])
+async def test_public_fee_start_is_unknown_after_an_omitted_newer_revision(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    prior_change: bool,
+) -> None:
+    """A forked chain (the latest's parent skips an unsupported revision) keeps
+    the same published number, but the unsupported revision may have been
+    effective in between, so neither "built-in" (0) nor the older change's
+    revision is a true start of the current fee."""
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+
+    def _row(revision: int, parent: int, rao: int, denomination: str):  # type: ignore[no-untyped-def]
+        return SubmissionSettingsRevision(
+            revision=revision,
+            parent_revision=parent,
+            cooldown_seconds=3600,
+            fee_amount_rao=rao,
+            fee_denomination=denomination,
+            reason="fork fixture",
+            actor="test",
+            created_at=now - timedelta(days=10 - revision),
+        )
+
+    base_fee = 37_271_710 if prior_change else _GENESIS_FEE
+    first = _row(1, 0, base_fee, "fixed_tao")
+    usd = _row(2, 1, 5_000_000_000, "usd_indexed")
+    latest = _row(3, 1, base_fee, "fixed_tao")
+    from ditto.db.queries.submission_settings import built_in_submission_settings
+
+    async def _history(
+        _session: AsyncSession, **_kwargs: object
+    ) -> list[tuple[SubmissionSettingsRevision, SubmissionSettingsRevision | None]]:
+        return [(latest, first), (usd, first), (first, built_in_submission_settings())]
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.public_submission_fee.submission_settings_history",
+        _history,
+    )
+
+    body = (await client.get(_PUBLIC)).json()
+
+    assert body["fee_amount_rao"] == base_fee
+    assert body["fee_revision"] is None
+    assert body["fee_effective_at"] is None
+    assert body["history_truncated"] is True
+    assert [row["revision"] for row in body["history"]] == ([1] if prior_change else [])
+
+
 async def test_preview_validates_the_same_denomination_as_apply(
     app: FastAPI,
     client: httpx.AsyncClient,

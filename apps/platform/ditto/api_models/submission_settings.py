@@ -199,8 +199,10 @@ class PublicSubmissionFee(BaseModel):
     fee_revision: int | None = Field(
         description=(
             "Revision in which the current fee took effect: 0 while it is still "
-            "the built-in default, null when the bounded history scan could not "
-            "reach the change that set it."
+            "the built-in default, null when it cannot be determined (the "
+            "bounded history scan could not reach the change that set it, or "
+            "an omitted revision in an unsupported denomination may have been "
+            "effective since)."
         )
     )
     fee_effective_at: datetime | None

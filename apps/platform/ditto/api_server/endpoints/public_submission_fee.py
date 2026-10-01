@@ -104,6 +104,7 @@ async def public_submission_fee(
     # published (it must not be shown as a TAO fee) and must not take down the
     # current quote; it is omitted and the history is reported incomplete.
     omitted_unsupported = False
+    newest_omitted_revision = 0
     for row, previous in rows:
         if _same_published_fee(row, previous):
             continue
@@ -111,6 +112,7 @@ async def public_submission_fee(
             changes.append(_fee_change(row, previous))
         except UnsupportedFeeDenominationError:
             omitted_unsupported = True
+            newest_omitted_revision = max(newest_omitted_revision, row.revision)
     quote_lifetime_seconds = int(UPLOAD_ADMISSION_TTL.total_seconds())
     response.headers["Cache-Control"] = "public, max-age=15"
     if not rows:
@@ -130,7 +132,16 @@ async def public_submission_fee(
     scan_capped = len(rows) >= _SCAN_LIMIT
     fee_revision: int | None
     fee_effective_at: datetime | None
-    if changes:
+    # An omitted (unpublishable) revision newer than the newest published
+    # change may have been effective in between, so the current fee's run may
+    # have started after it: unknown, like a run older than the scan.
+    omitted_after_change = omitted_unsupported and (
+        not changes or newest_omitted_revision > changes[0].revision
+    )
+    if omitted_after_change:
+        fee_revision = None
+        fee_effective_at = None
+    elif changes:
         # The newest change starts the run of revisions the latest belongs to.
         fee_revision = changes[0].revision
         fee_effective_at = changes[0].effective_at
