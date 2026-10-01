@@ -83,6 +83,40 @@ async def test_defaults_and_revision(
     assert len((await client.get(_URL, headers=_HEADERS)).json()["history"]) == 2
 
 
+async def test_ledger_readiness_is_read_only_and_never_funding_ready(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    response = await client.get(f"{_URL}/ledger-readiness", headers=_HEADERS)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["configured_proposal"] is None
+    assert result["observer_status"] == "disabled"
+    assert result["observer_scope"] == "this_platform_process"
+    assert result["latest_stored_epoch_index"] is None
+    assert result["stored_shadow_pin"] is None
+    assert result["offline_policy_verified"] is False
+    assert result["weight_effect"] == "none"
+    assert result["can_enforce_weights"] is False
+    assert "producer_disabled" in result["blocking_reasons"]
+    assert "no_epoch_pin" in result["blocking_reasons"]
+    # A second read cannot create an epoch observation as a side effect.
+    repeat = await client.get(f"{_URL}/ledger-readiness", headers=_HEADERS)
+    assert repeat.status_code == 200
+    assert repeat.json() == result
+
+
+async def test_ledger_readiness_requires_admin(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    assert (await client.get(f"{_URL}/ledger-readiness")).status_code in {401, 403}
+
+
 @pytest.mark.parametrize(
     "change",
     [

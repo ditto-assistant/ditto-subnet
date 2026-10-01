@@ -30,6 +30,8 @@ from ditto.chain.models import (
     ExtrinsicInfo,
     NeuronInfo,
 )
+from ditto_screening_protocol.treasury import TreasuryEmissionPolicy, TreasuryLedgerPin
+from ditto_screening_protocol.treasury_identity import read_finalized_collector_pin
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -336,6 +338,34 @@ class ChainClient:
                 f"no block hash found for block number {block_number}"
             )
         return str(block_hash).lower()
+
+    async def get_treasury_collector_pin(
+        self, policy: TreasuryEmissionPolicy, *, first_block: int, pinned_block: int
+    ) -> TreasuryLedgerPin:
+        """Read finalized shadow evidence only; never access a wallet or signer."""
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        try:
+            async with (
+                asyncio.timeout(8),
+                AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
+            ):
+                return await read_finalized_collector_pin(
+                    substrate,
+                    policy,
+                    first_block=first_block,
+                    pinned_block=pinned_block,
+                )
+        except ValueError:
+            raise
+        except TimeoutError as error:
+            raise ChainTimeoutError(
+                "finalized treasury identity read timed out"
+            ) from error
+        except Exception as error:
+            raise ChainConnectionError(
+                "finalized treasury identity unavailable"
+            ) from error
 
     async def get_finalized_block(self) -> BlockInfo:
         """Return the current finalized chain block from Substrate."""

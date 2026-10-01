@@ -57,6 +57,7 @@ from ditto.api_server.validator_names import (
 )
 from ditto.chain import ChainConfig, parse_chain_config_from_env
 from ditto.db import PostgresConfig, parse_postgres_config_from_env
+from ditto_screening_protocol.treasury import TreasuryEmissionPolicy
 
 # Substrate SS58 base58 alphabet, 47-48 chars. Same shape Pydantic
 # enforces on the wire; mirrored here so a bad payment address fails
@@ -323,6 +324,9 @@ class ApiServerConfig:
 
     validator_compatibility: ValidatorCompatibilityConfig
     """Validator release and heartbeat requirements for scoring tickets."""
+
+    treasury_shadow_policy: TreasuryEmissionPolicy | None = None
+    """Optional public proposal for finalized shadow observation, never funding."""
 
     private_preparation: PrivatePreparationConfig = field(
         default_factory=PrivatePreparationConfig
@@ -855,6 +859,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             os.environ.get("DITTO_SOURCE_EMISSION_CONFIRMATION_ENABLED", "true").lower()
             in _TRUTHY
         ),
+        treasury_shadow_policy=parse_treasury_shadow_policy(),
         host=host,
         port=port,
         log_level=log_level,
@@ -910,6 +915,20 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         source_review_queue_slo=parse_source_review_queue_slo_config_from_env(),
         public_rate_limit_per_minute=public_rate_limit_per_minute,
     )
+
+
+def parse_treasury_shadow_policy() -> TreasuryEmissionPolicy | None:
+    """Public known-field proposal only; absence performs no collector RPC reads."""
+    raw = os.environ.get("DITTO_TREASURY_SHADOW_POLICY_JSON", "").strip()
+    if not raw:
+        return None
+    if len(raw.encode()) > 8192:
+        raise ApiServerConfigError("treasury shadow policy exceeds 8192 bytes")
+    try:
+        return TreasuryEmissionPolicy.model_validate_json(raw)
+    except ValueError:
+        # Do not echo arbitrary operator input into boot logs.
+        raise ApiServerConfigError("invalid public treasury shadow policy") from None
 
 
 def parse_ditto_link_config_from_env() -> DittoLinkConfig:

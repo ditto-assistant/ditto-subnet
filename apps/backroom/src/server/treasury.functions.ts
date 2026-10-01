@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start'
 import { setResponseHeader } from '@tanstack/react-start/server'
 import { recordTreasurySettingsInputSchema } from '../lib/treasury.schemas'
-import { fetchTreasurySettings, recordTreasurySettings } from './admin.service'
+import { fetchTreasuryLedgerReadiness, fetchTreasurySettings, recordTreasurySettings } from './admin.service'
 import { authMiddleware, sameOriginMiddleware, writeAuthMiddleware } from './auth.functions'
 
 export const getTreasurySettings = createServerFn({ method: 'GET' })
@@ -10,6 +10,14 @@ export const getTreasurySettings = createServerFn({ method: 'GET' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return fetchTreasurySettings()
+  })
+
+export const getTreasuryLedgerReadiness = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(() => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchTreasuryLedgerReadiness()
   })
 
 export const saveTreasurySettings = createServerFn({ method: 'POST' })

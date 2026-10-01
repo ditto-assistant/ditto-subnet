@@ -6,11 +6,12 @@ import hashlib
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.treasury_readiness import TreasuryLedgerReadiness
 from ditto.api_models.treasury_settings import (
     AdminTreasurySettingsRequest,
     TreasurySettings,
@@ -19,7 +20,9 @@ from ditto.api_models.treasury_settings import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.treasury_shadow import shadow_readiness
 from ditto.db.models import TreasurySettingsRevision as RevisionRow
+from ditto.db.queries.ledger_epochs import latest_pin
 
 router = APIRouter(prefix="/admin/treasury-settings", tags=["admin"])
 AUTHENTICATED_PRINCIPAL = "platform_admin_token"
@@ -43,6 +46,15 @@ async def _latest(session: AsyncSession) -> RevisionRow | None:
     return await session.scalar(
         select(RevisionRow).order_by(RevisionRow.revision.desc()).limit(1)
     )
+
+
+@router.get("/ledger-readiness", response_model=TreasuryLedgerReadiness)
+async def get_treasury_ledger_readiness(
+    request: Request, _admin: AdminDep, session: SessionDep
+) -> TreasuryLedgerReadiness:
+    state = request.app.state
+    row = await latest_pin(session, netuid=state.config.chain.netuid)
+    return shadow_readiness(state, row)
 
 
 @router.get("", response_model=TreasurySettingsControl)

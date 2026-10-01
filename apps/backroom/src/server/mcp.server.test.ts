@@ -296,6 +296,7 @@ describe('Backroom MCP tools', () => {
         'get_owner_attestations',
         'get_submission_cooldown',
         'get_treasury_settings',
+        'get_treasury_ledger_readiness',
         'quote_treasury_topup',
         'preview_treasury_topup',
         'get_validation_retry',

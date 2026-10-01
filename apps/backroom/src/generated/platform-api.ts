@@ -3407,6 +3407,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/treasury-settings/ledger-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Treasury Ledger Readiness */
+        get: operations["get_treasury_ledger_readiness_api_v1_admin_treasury_settings_ledger_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/trusted-image-builds": {
         parameters: {
             query?: never;
@@ -33105,6 +33122,46 @@ export interface components {
              */
             version: 1;
         };
+        /** TreasuryLedgerReadiness */
+        TreasuryLedgerReadiness: {
+            /** Blocking Reasons */
+            blocking_reasons: ("producer_disabled" | "no_epoch_pin" | "stored_pin_invalid" | "proposal_pin_mismatch" | "shadow_only" | "offline_policy_unverified" | "weight_adapter_not_active" | "fleet_gate_unimplemented" | "current_epoch_not_checked")[];
+            /**
+             * Can Enforce Weights
+             * @default false
+             * @constant
+             */
+            can_enforce_weights: false;
+            configured_proposal: components["schemas"]["TreasuryEmissionPolicy"] | null;
+            /** Latest Stored Epoch Index */
+            latest_stored_epoch_index: number | null;
+            /** Latest Stored Ledger Digest */
+            latest_stored_ledger_digest: string | null;
+            /**
+             * Observer Scope
+             * @default this_platform_process
+             * @constant
+             */
+            observer_scope: "this_platform_process";
+            /**
+             * Observer Status
+             * @enum {string}
+             */
+            observer_status: "disabled" | "not_observed" | "observing" | "observed" | "unavailable";
+            /**
+             * Offline Policy Verified
+             * @default false
+             * @constant
+             */
+            offline_policy_verified: false;
+            stored_shadow_pin: components["schemas"]["TreasuryLedgerPin"] | null;
+            /**
+             * Weight Effect
+             * @default none
+             * @constant
+             */
+            weight_effect: "none";
+        };
         /**
          * TreasuryPayeeRule
          * @description An exact chain-payment classification, never provider credit proof.
@@ -42582,6 +42639,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TreasurySettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_treasury_ledger_readiness_api_v1_admin_treasury_settings_ledger_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasuryLedgerReadiness"];
                 };
             };
             /** @description Validation Error */

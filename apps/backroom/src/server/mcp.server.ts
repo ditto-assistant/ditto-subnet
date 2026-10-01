@@ -12,7 +12,7 @@ import { fetchConversationAssessments, setConversationSettings, authorizeConvers
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
-import { fetchTreasuryQuote, fetchTreasurySettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
+import { fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
   cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema } from '../lib/benchmark-canary.schemas'
@@ -886,6 +886,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_emission_eligibility_policy:
     'Read emission gate posture, fleet fold, stored/default revision, windows and shadow withheld count. Optional history.',
   get_treasury_settings: 'Read shadow treasury buckets and history. No weights or funds move.',
+  get_treasury_ledger_readiness: 'Read shadow proposal, stored epoch identity and funding blockers. No activation.',
   record_treasury_settings: 'Record a shadow treasury revision with CAS and confirmation. No weights or funds move.',
   quote_treasury_topup: 'Quote finalized GM funding routes and price impact. No execution.',
   preview_treasury_topup: 'Dry-run a GM route against shadow limits. Execution disabled.',
@@ -3411,6 +3412,16 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchTreasurySettings()),
+  )
+
+  registerTool(
+    'get_treasury_ledger_readiness',
+    {
+      title: 'Read treasury epoch observation and activation blockers',
+      description: 'Read the configured public shadow proposal separately from the latest stored epoch pin and this Platform process observation status. Includes finalized collector Owner/Uids/Keys evidence, policy and enclosing ledger digests, and bounded blockers for missing, invalid or mismatched evidence. A stored observation does not attest offline policy approval or current epoch freshness. Weight effect is none and enforcement is false; this tool performs no chain read, settings write, transfer or activation. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchTreasuryLedgerReadiness()),
   )
 
   registerTool(
