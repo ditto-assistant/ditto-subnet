@@ -51,7 +51,7 @@ dependency-light `ditto-screening-protocol` package, pinned to an exact commit.
 | --- | --- |
 | `GET /health` | Liveness + DB/chain readiness + running vs checked-out commit |
 | `GET /metrics` | Prometheus metrics |
-| `GET /api/v1/upload/eval-pricing` | Current operator-set submission fee in rao (fixed-TAO policy; informational — `/upload/check` reserves the binding quote) |
+| `GET /api/v1/upload/eval-pricing` | Current operator-set submission fee in rao (fixed-TAO policy). Compatible CLIs pay the fee `/upload/check` reserves; for tokenless uploads (older CLIs and the fallback path) this is the binding current fee, checked at verification |
 | `GET /api/v1/public/submission-fee` | Public fee, denomination, policy revision, effective time, quote lifetime, and fee-change history (no operator identity or reasons) |
 | `POST /api/v1/upload/check` | Pre-payment validation (signature, registration, size, accidental identical-upload detection) |
 | `POST /api/v1/upload/agent` | Verified submission: assign payment/credit → store unique tarball → write `agents` + `evaluation_payments` atomically; an accidental paid identical upload becomes a reusable credit |
