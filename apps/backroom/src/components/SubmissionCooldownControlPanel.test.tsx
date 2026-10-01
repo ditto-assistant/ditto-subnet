@@ -433,6 +433,60 @@ describe('SubmissionCooldownControlPanel', () => {
   })
 })
 
+describe('SubmissionCooldownControlPanel preset highlight', () => {
+  afterEach(cleanup)
+
+  const presets = [
+    ['15', /^15 minutes/],
+    ['30', /^30 minutes/],
+    ['60', /^1 hour/],
+    ['120', /^2 hours/],
+  ] as const
+  const pressedLabels = () =>
+    presets
+      .filter(
+        ([, name]) => screen.getByRole('button', { name }).getAttribute('aria-pressed') === 'true',
+      )
+      .map(([label]) => label)
+
+  it('follows only the validated cooldown, never malformed text', () => {
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    const minutes = screen.getByLabelText(/Cooldown in minutes/)
+    expect(pressedLabels()).toEqual(['60'])
+
+    for (const malformed of ['15.', ' 15', '15 ', '1.5e1', '0x0f']) {
+      fireEvent.change(minutes, { target: { value: malformed } })
+      expect(pressedLabels(), malformed).toEqual([])
+    }
+    fireEvent.change(minutes, { target: { value: '15' } })
+    expect(pressedLabels()).toEqual(['15'])
+  })
+
+  it('highlights an untouched applied value only when it is a preset', () => {
+    render(
+      <SubmissionCooldownControlPanel
+        initialState={submissionSettingsControlSchema.parse({
+          ...initial,
+          current: { ...applied, cooldown_seconds: 90 },
+        })}
+        readOnly
+      />,
+    )
+    expect(pressedLabels()).toEqual([])
+    cleanup()
+    render(
+      <SubmissionCooldownControlPanel
+        initialState={submissionSettingsControlSchema.parse({
+          ...initial,
+          current: { ...applied, cooldown_seconds: 900 },
+        })}
+        readOnly
+      />,
+    )
+    expect(pressedLabels()).toEqual(['15'])
+  })
+})
+
 describe('SubmissionCooldownControlPanel messages on reset', () => {
   afterEach(cleanup)
 

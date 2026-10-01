@@ -350,24 +350,31 @@ export function SubmissionCooldownControlPanel({
           </div>
 
           <div className="mt-5 grid gap-2 sm:grid-cols-4">
-            {presets.map((value) => (
-              <button
-                key={value}
-                type="button"
-                disabled={readOnly || loading}
-                onClick={() => selectMinutes(value)}
-                className={`min-h-16 rounded-lg border px-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
-                  Number(minutes) === value
-                    ? 'border-[var(--amber)]/40 bg-[var(--amber-dim)]'
-                    : 'border-[var(--line)] bg-[var(--panel-soft)] hover:border-[var(--line-strong)]'
-                }`}
-              >
-                <span className="block text-sm font-semibold">{formatDuration(value * 60)}</span>
-                <span className="mt-1 block text-[11px] text-[var(--muted)]">
-                  {policy.cooldownSeconds === value * 60 ? 'Current value' : 'Set cadence'}
-                </span>
-              </button>
-            ))}
+            {presets.map((value) => {
+              // From the validated cooldown only: malformed text such as "15."
+              // or " 15" selects no preset, while an untouched applied value
+              // (900 s) still selects its preset and 90 s selects none.
+              const selected = selectedSeconds === value * 60
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={selected}
+                  disabled={readOnly || loading}
+                  onClick={() => selectMinutes(value)}
+                  className={`min-h-16 rounded-lg border px-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                    selected
+                      ? 'border-[var(--amber)]/40 bg-[var(--amber-dim)]'
+                      : 'border-[var(--line)] bg-[var(--panel-soft)] hover:border-[var(--line-strong)]'
+                  }`}
+                >
+                  <span className="block text-sm font-semibold">{formatDuration(value * 60)}</span>
+                  <span className="mt-1 block text-[11px] text-[var(--muted)]">
+                    {policy.cooldownSeconds === value * 60 ? 'Current value' : 'Set cadence'}
+                  </span>
+                </button>
+              )
+            })}
           </div>
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
