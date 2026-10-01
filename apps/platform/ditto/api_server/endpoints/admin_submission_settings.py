@@ -29,6 +29,7 @@ from ditto.api_models.submission_settings import (
     SubmissionFeeBounds,
     SubmissionFeeDenomination,
     SubmissionSettingsProposal,
+    UnsupportedSubmissionSettingsRevision,
     format_rao_as_tao,
     submission_settings_confirmation,
 )
@@ -121,15 +122,83 @@ def _default_revision() -> RevisionModel:
         fee_amount_rao=DEFAULT_SUBMISSION_FEE_RAO,
         fee_amount_tao=format_rao_as_tao(DEFAULT_SUBMISSION_FEE_RAO),
         fee_denomination=SUBMISSION_FEE_DENOMINATION_FIXED_TAO,
-        reason="Built-in submission cooldown and 0.04 TAO fee",
+        reason=(
+            "Built-in submission cooldown and "
+            f"{format_rao_as_tao(DEFAULT_SUBMISSION_FEE_RAO)} TAO fee"
+        ),
         actor="platform",
         created_at=None,
     )
 
 
-async def _current(session: AsyncSession) -> RevisionModel:
-    rows = await submission_settings_history(session, limit=1)
-    return _revision(*rows[0]) if rows else _default_revision()
+def _resolve_fee_amount_rao(
+    latest: SubmissionSettingsRevision | None, requested: int | None
+) -> int:
+    """The fee a request proposes; one rule for preview and apply.
+
+    An explicit fee is used as sent (already bounds-checked by validation). A
+    fee-less (legacy, cooldown-only) request keeps the current fee, but only
+    when that fee is a fixed-TAO amount inside today's safe bounds: re-asserting
+    a fee in an unsupported denomination would relabel its number as TAO, and
+    re-asserting an out-of-bounds historical fee would bypass the bounds. Both
+    are 422 and the operator must send ``fee_amount_rao`` explicitly.
+    """
+    if requested is not None:
+        return requested
+    if latest is None:
+        return DEFAULT_SUBMISSION_FEE_RAO
+    if not _publishable(latest):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"current fee denomination {latest.fee_denomination!r} is "
+                "unsupported; send fee_amount_rao explicitly"
+            ),
+        )
+    if not MIN_SUBMISSION_FEE_RAO <= latest.fee_amount_rao <= MAX_SUBMISSION_FEE_RAO:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"current fee {latest.fee_amount_rao} rao is outside the safe "
+                "bounds; send fee_amount_rao explicitly"
+            ),
+        )
+    return latest.fee_amount_rao
+
+
+def _unsupported(
+    row: SubmissionSettingsRevision,
+) -> UnsupportedSubmissionSettingsRevision:
+    return UnsupportedSubmissionSettingsRevision(
+        revision=row.revision,
+        parent_revision=row.parent_revision,
+        cooldown_seconds=row.cooldown_seconds,
+        fee_denomination=row.fee_denomination,
+        fee_amount_raw=row.fee_amount_rao,
+        reason=row.reason,
+        actor=row.actor,
+        created_at=row.created_at,
+    )
+
+
+_Current = tuple[RevisionModel | None, UnsupportedSubmissionSettingsRevision | None]
+
+
+def _current_view(
+    rows: list[tuple[SubmissionSettingsRevision, SubmissionSettingsRevision | None]],
+) -> _Current:
+    """The effective revision for the operator view; never a 503.
+
+    The operator needs to see (and recover from) an effective revision this
+    build cannot price, so it is reported raw in ``unsupported_current``
+    rather than failing the page. Miner-facing reads still fail closed.
+    """
+    if not rows:
+        return _default_revision(), None
+    row, previous = rows[0]
+    if not _publishable(row):
+        return None, _unsupported(row)
+    return _revision(row, previous), None
 
 
 @router.get("", response_model=AdminSubmissionSettingsResponse)
@@ -139,26 +208,20 @@ async def get_settings(
     rows = await submission_settings_history(session, limit=_HISTORY_LIMIT)
     # Reaching the cap means older revisions exist beyond this page.
     capped = len(rows) >= _HISTORY_LIMIT
-    if not rows:
-        return AdminSubmissionSettingsResponse(
-            current=_default_revision(),
-            history=[],
-            bounds=SubmissionFeeBounds(),
-            quote_lifetime_seconds=_QUOTE_LIFETIME_SECONDS,
-        )
-    # Only the effective revision fails closed; a historical revision this
-    # build cannot price is omitted (and flagged) rather than taking down the
-    # operator's view of the current policy.
-    current = _revision(*rows[0])
-    history = [current]
+    current, unsupported_current = _current_view(rows)
+    # A revision this build cannot price is omitted from history (and
+    # flagged): its fee number is not a TAO amount. An unsupported effective
+    # revision is reported raw in unsupported_current instead.
+    history: list[RevisionModel] = []
     omitted = False
-    for row, previous in rows[1:]:
+    for row, previous in rows:
         try:
             history.append(_revision(row, previous))
         except UnsupportedFeeDenominationError:
             omitted = True
     return AdminSubmissionSettingsResponse(
         current=current,
+        unsupported_current=unsupported_current,
         history=history,
         history_incomplete=omitted or capped,
         bounds=SubmissionFeeBounds(),
@@ -176,8 +239,16 @@ async def preview_settings_revision(
         Query(ge=MIN_SUBMISSION_COOLDOWN_SECONDS, le=MAX_SUBMISSION_COOLDOWN_SECONDS),
     ],
     fee_amount_rao: Annotated[
-        int, Query(ge=MIN_SUBMISSION_FEE_RAO, le=MAX_SUBMISSION_FEE_RAO)
-    ],
+        int | None,
+        Query(
+            ge=MIN_SUBMISSION_FEE_RAO,
+            le=MAX_SUBMISSION_FEE_RAO,
+            description=(
+                "Omit for a cooldown-only change; the current fee is kept under "
+                "the same rule as the apply endpoint."
+            ),
+        ),
+    ] = None,
     fee_denomination: Annotated[
         SubmissionFeeDenomination,
         Query(
@@ -191,24 +262,45 @@ async def preview_settings_revision(
     """Dry-run one revision: the diff, the exact confirmation, and quotes in flight.
 
     Read-only (a GET, so it is not an audited mutation). Out-of-bounds values
-    are rejected with 422 exactly as the apply endpoint would reject them.
+    are rejected with 422 exactly as the apply endpoint would reject them, and
+    a fee-less (cooldown-only) request resolves the fee by the same rule as
+    apply, so the returned confirmation is one apply accepts.
     """
-    current = await _current(session)
-    quotes = await in_flight_quotes(session, proposed_fee_amount_rao=fee_amount_rao)
-    fee_changed = fee_amount_rao != current.fee_amount_rao
-    cooldown_changed = cooldown_seconds != current.cooldown_seconds
-    stale = expected_revision != current.revision
-    ratio = (
-        fee_change_ratio_text(fee_amount_rao, current.fee_amount_rao)
-        if fee_changed
-        else None
+    rows = await submission_settings_history(session, limit=1)
+    proposed_fee_rao = _resolve_fee_amount_rao(
+        rows[0][0] if rows else None, fee_amount_rao
     )
+    current, unsupported_current = _current_view(rows)
+    quotes = await in_flight_quotes(session, proposed_fee_amount_rao=proposed_fee_rao)
+    if current is not None:
+        current_revision = current.revision
+        current_cooldown = current.cooldown_seconds
+        # Same comparison as apply's no-op check: amount or denomination.
+        fee_changed = (
+            proposed_fee_rao != current.fee_amount_rao
+            or fee_denomination != current.fee_denomination
+        )
+        ratio = (
+            fee_change_ratio_text(proposed_fee_rao, current.fee_amount_rao)
+            if proposed_fee_rao != current.fee_amount_rao
+            else None
+        )
+    else:
+        assert unsupported_current is not None
+        current_revision = unsupported_current.revision
+        current_cooldown = unsupported_current.cooldown_seconds
+        # The denomination always changes, and no TAO ratio exists.
+        fee_changed = True
+        ratio = None
+    cooldown_changed = cooldown_seconds != current_cooldown
+    stale = expected_revision != current_revision
     return AdminSubmissionSettingsPreview(
         current=current,
+        unsupported_current=unsupported_current,
         proposed=SubmissionSettingsProposal(
             cooldown_seconds=cooldown_seconds,
-            fee_amount_rao=fee_amount_rao,
-            fee_amount_tao=format_rao_as_tao(fee_amount_rao),
+            fee_amount_rao=proposed_fee_rao,
+            fee_amount_tao=format_rao_as_tao(proposed_fee_rao),
             fee_denomination=fee_denomination,
         ),
         expected_revision=expected_revision,
@@ -218,7 +310,7 @@ async def preview_settings_revision(
         fee_change_ratio=ratio,
         applicable=not stale and (fee_changed or cooldown_changed),
         required_confirmation=submission_settings_confirmation(
-            cooldown_seconds, fee_amount_rao
+            cooldown_seconds, proposed_fee_rao
         ),
         bounds=SubmissionFeeBounds(),
         quote_lifetime_seconds=_QUOTE_LIFETIME_SECONDS,
@@ -238,10 +330,7 @@ async def create_settings_revision(
     session: SessionDep,
 ) -> RevisionModel:
     latest = await latest_submission_settings(session)
-    current_fee = (
-        latest.fee_amount_rao if latest is not None else DEFAULT_SUBMISSION_FEE_RAO
-    )
-    fee_amount_rao = payload.fee_amount_rao or current_fee
+    fee_amount_rao = _resolve_fee_amount_rao(latest, payload.fee_amount_rao)
     expected_confirmation = submission_settings_confirmation(
         payload.cooldown_seconds, fee_amount_rao
     )
@@ -263,18 +352,6 @@ async def create_settings_revision(
             detail=(
                 "submission settings changed; refresh before applying "
                 f"(expected {payload.expected_revision}, current {actual_revision})"
-            ),
-        )
-    if payload.fee_amount_rao is None and not (
-        MIN_SUBMISSION_FEE_RAO <= fee_amount_rao <= MAX_SUBMISSION_FEE_RAO
-    ):
-        # A fee-less (legacy, cooldown-only) apply must not re-assert a
-        # historical fee that the current safe bounds would reject.
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"current fee {fee_amount_rao} rao is outside the safe bounds; "
-                "send fee_amount_rao explicitly"
             ),
         )
     parent = latest if latest is not None else built_in_submission_settings()

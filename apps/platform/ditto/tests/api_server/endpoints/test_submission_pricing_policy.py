@@ -713,7 +713,9 @@ async def test_public_fee_reflects_a_change_without_a_deploy(
 # --- Fail closed on an unreviewed denomination ------------------------------
 
 
-@pytest.mark.parametrize("path", [_PUBLIC, _SETTINGS, "/api/v1/upload/eval-pricing"])
+# Miner-facing reads only: the operator view reports an unsupported effective
+# revision raw instead (test_fee_less_apply_refuses_an_unsupported_current...).
+@pytest.mark.parametrize("path", [_PUBLIC, "/api/v1/upload/eval-pricing"])
 async def test_unreviewed_denomination_is_refused_not_relabelled(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -1359,6 +1361,181 @@ async def test_create_response_never_shows_an_unpublishable_parent_fee(
     assert created["previous_fee_amount_rao"] is None
     assert created["previous_cooldown_seconds"] is None
     assert "5000000000" not in json.dumps(created)
+
+
+async def test_fee_less_apply_refuses_an_unsupported_current_denomination(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cooldown-only apply must not relabel a non-TAO fee number as TAO."""
+    _install(app, session_maker)
+    usd_current = SubmissionSettingsRevision(
+        revision=1,
+        parent_revision=0,
+        cooldown_seconds=3600,
+        # Inside the fixed-TAO bounds, so only the denomination guard can stop it.
+        fee_amount_rao=50_000_000,
+        fee_denomination="usd_indexed",
+        reason="usd target from a newer writer",
+        actor="future-platform",
+        created_at=datetime.now(UTC),
+    )
+
+    async def _latest(_session: AsyncSession) -> SubmissionSettingsRevision:
+        return usd_current
+
+    async def _history(
+        _session: AsyncSession, **_kwargs: object
+    ) -> list[tuple[SubmissionSettingsRevision, SubmissionSettingsRevision | None]]:
+        return [(usd_current, None)]
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.admin_submission_settings.latest_submission_settings",
+        _latest,
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.admin_submission_settings.submission_settings_history",
+        _history,
+    )
+    before = await _revision_rows(session_maker)
+
+    # The operator view loads instead of failing with 503, and names the
+    # unsupported revision without presenting its number as TAO.
+    view = await client.get(_SETTINGS, headers=_HEADERS)
+    assert view.status_code == 200, view.text
+    assert view.json()["current"] is None
+    assert view.json()["unsupported_current"] == {
+        "revision": 1,
+        "parent_revision": 0,
+        "cooldown_seconds": 3600,
+        "fee_denomination": "usd_indexed",
+        "fee_amount_raw": 50_000_000,
+        "reason": "usd target from a newer writer",
+        "actor": "future-platform",
+        "created_at": view.json()["unsupported_current"]["created_at"],
+    }
+    assert view.json()["history"] == []
+    assert view.json()["history_incomplete"] is True
+
+    # An explicit fixed-TAO fee previews as a fee change (the denomination
+    # changes even at the same number) with no TAO ratio.
+    explicit = await client.get(
+        _PREVIEW,
+        headers=_HEADERS,
+        params={
+            "expected_revision": 1,
+            "cooldown_seconds": 1800,
+            "fee_amount_rao": 50_000_000,
+        },
+    )
+    assert explicit.status_code == 200, explicit.text
+    assert explicit.json()["current"] is None
+    assert explicit.json()["unsupported_current"]["revision"] == 1
+    assert explicit.json()["fee_changed"] is True
+    assert explicit.json()["fee_change_ratio"] is None
+    assert explicit.json()["stale"] is False
+    assert explicit.json()["applicable"] is True
+
+    response = await client.post(
+        _SETTINGS,
+        headers=_HEADERS,
+        json={
+            "expected_revision": 1,
+            "cooldown_seconds": 1800,
+            "reason": "cooldown-only legacy apply",
+            "actor": "operator@example.com",
+            "confirmation": "SET SUBMISSION COOLDOWN 1800 SECONDS",
+        },
+    )
+    preview = await client.get(
+        _PREVIEW,
+        headers=_HEADERS,
+        params={"expected_revision": 1, "cooldown_seconds": 1800},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "denomination" in response.json()["message"]
+    assert "send fee_amount_rao explicitly" in response.json()["message"]
+    assert preview.status_code == 422, preview.text
+    assert preview.json()["message"] == response.json()["message"]
+    assert await _revision_rows(session_maker) == before
+
+    # An explicit fixed-TAO fee is the recovery path and is still accepted,
+    # with the confirmation the preview returned.
+    created = await _apply(
+        client, expected=1, fee_amount_rao=50_000_000, cooldown_seconds=1800
+    )
+    assert created["fee_denomination"] == "fixed_tao"
+    assert explicit.json()["required_confirmation"] == (
+        "SET SUBMISSION COOLDOWN 1800 SECONDS FEE 50000000 RAO"
+    )
+
+
+async def test_fee_less_preview_and_apply_follow_one_rule(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Preview accepts a cooldown-only request and its confirmation applies."""
+    _install(app, session_maker)
+
+    preview = await client.get(
+        _PREVIEW,
+        headers=_HEADERS,
+        params={"expected_revision": 1, "cooldown_seconds": 1800},
+    )
+
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["proposed"]["fee_amount_rao"] == _GENESIS_FEE
+    assert body["fee_changed"] is False
+    assert body["cooldown_changed"] is True
+    assert body["fee_change_ratio"] is None
+    assert body["applicable"] is True
+    response = await client.post(
+        _SETTINGS,
+        headers=_HEADERS,
+        json={
+            "expected_revision": 1,
+            "cooldown_seconds": 1800,
+            "reason": "cooldown-only change",
+            "actor": "operator@example.com",
+            "confirmation": body["required_confirmation"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["fee_amount_rao"] == _GENESIS_FEE
+    assert response.json()["cooldown_seconds"] == 1800
+
+
+async def test_fee_less_preview_refuses_an_out_of_bounds_current_fee_like_apply(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    async with session_maker() as session, session.begin():
+        session.add(
+            SubmissionSettingsRevision(
+                parent_revision=1,
+                cooldown_seconds=3600,
+                fee_amount_rao=500,
+                fee_denomination="fixed_tao",
+                reason="historical fee below today's bounds",
+                actor="migration",
+            )
+        )
+
+    preview = await client.get(
+        _PREVIEW,
+        headers=_HEADERS,
+        params={"expected_revision": 2, "cooldown_seconds": 1800},
+    )
+
+    assert preview.status_code == 422, preview.text
+    assert "safe bounds" in preview.json()["message"]
 
 
 @pytest.mark.parametrize(

@@ -58,9 +58,33 @@ class SubmissionSettingsRevision(BaseModel):
     fee_amount_tao: str | None = None
     """Exact nine-decimal rendering of ``fee_amount_rao``."""
     previous_fee_amount_rao: int | None = None
-    """Fee of ``parent_revision``; ``None`` for the first revision."""
+    """Fee of ``parent_revision``. ``None`` only for the built-in revision 0
+    or when the parent is in a denomination this build cannot price (its
+    number is not a TAO amount)."""
     previous_cooldown_seconds: int | None = None
-    """Cooldown of ``parent_revision``; ``None`` for the first revision."""
+    """Cooldown of ``parent_revision``. ``None`` exactly when
+    ``previous_fee_amount_rao`` is."""
+
+
+class UnsupportedSubmissionSettingsRevision(BaseModel):
+    """The effective revision when this build cannot price its denomination.
+
+    Operator-only. New quotes are refused while it is effective (issued quotes
+    are still honoured); applying a revision with an explicit fixed-TAO fee
+    recovers. ``fee_amount_raw`` is the stored number in ``fee_denomination``'s
+    own unit and is never a TAO amount.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    revision: int
+    parent_revision: int
+    cooldown_seconds: int
+    fee_denomination: str
+    fee_amount_raw: int
+    reason: str
+    actor: str
+    created_at: datetime | None
 
 
 class SubmissionFeeBounds(BaseModel):
@@ -75,15 +99,22 @@ class SubmissionFeeBounds(BaseModel):
 class AdminSubmissionSettingsResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    current: SubmissionSettingsRevision
+    current: SubmissionSettingsRevision | None = Field(
+        description=(
+            "The effective fixed-TAO revision; null only when the effective "
+            "revision is in a denomination this build cannot price, which is "
+            "then reported in unsupported_current."
+        )
+    )
+    unsupported_current: UnsupportedSubmissionSettingsRevision | None = None
     history: list[SubmissionSettingsRevision]
     history_incomplete: bool = Field(
         default=False,
         description=(
             "True when history may be incomplete: it reached its page limit "
-            "(older revisions exist), or a historical revision in a "
-            "denomination this build cannot price was omitted. The current "
-            "revision is never omitted: it fails closed instead."
+            "(older revisions exist), or a revision in a denomination this "
+            "build cannot price was omitted (an unsupported effective revision "
+            "is reported in unsupported_current instead)."
         ),
     )
     bounds: SubmissionFeeBounds = SubmissionFeeBounds()
@@ -124,17 +155,29 @@ class AdminSubmissionSettingsPreview(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    current: SubmissionSettingsRevision
+    current: SubmissionSettingsRevision | None = Field(
+        description=(
+            "The effective fixed-TAO revision; null when it is in a "
+            "denomination this build cannot price (see unsupported_current)."
+        )
+    )
+    unsupported_current: UnsupportedSubmissionSettingsRevision | None = None
     proposed: SubmissionSettingsProposal
     expected_revision: int
     stale: bool
     """``expected_revision`` is not the current revision; an apply returns 409."""
-    fee_changed: bool
+    fee_changed: bool = Field(
+        description=(
+            "The proposed fee amount or denomination differs from the current "
+            "one (the same comparison apply uses to reject a no-op)."
+        )
+    )
     cooldown_changed: bool
     fee_change_ratio: str | None = Field(
         description=(
             "Proposed ÷ current fee, rounded away from 1 to four decimals (four "
-            "significant digits when below 0.0001); null if unchanged."
+            "significant digits when below 0.0001); null if unchanged or the "
+            "current fee is not a TAO amount."
         )
     )
     applicable: bool
