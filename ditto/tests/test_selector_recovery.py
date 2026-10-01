@@ -511,7 +511,9 @@ def test_actual_reader_cleanup_preserves_terminal_publisher_failure_without_retr
         raise RuntimeError("unrelated teardown failure")
 
     reader = PublicEpochReader.__new__(PublicEpochReader)
-    reader.subtensor = SimpleNamespace(get_block_hash=fail, close=close)
+    reader.subtensor = SimpleNamespace(
+        substrate=SimpleNamespace(get_block_hash=fail), close=close
+    )
 
     class Publisher:
         def recover(self):
