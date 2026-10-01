@@ -1460,7 +1460,8 @@ def _serve_last_known(
 ) -> LedgerResponse:
     """Serve the cached ledger on a DB failure, or 503 if there is none / too old."""
     snapshot = _cached_snapshot(request)
-    if getattr(request.app.state.config, "treasury_weight_enforcement", False) or (
+    config = getattr(request.app.state, "config", None)
+    if getattr(config, "treasury_weight_enforcement", False) or (
         snapshot is not None and isinstance(snapshot.treasury_pin, EnforcingTreasuryPin)
     ):
         raise HTTPException(
