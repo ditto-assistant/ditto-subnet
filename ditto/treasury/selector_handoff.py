@@ -17,7 +17,7 @@ import sqlite3
 import stat
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import MISSING, asdict, dataclass, fields
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -137,6 +137,30 @@ class SelectorHandoff:
             not Path(p).is_absolute() for p in (self.outbox, self.acknowledgments)
         ):
             raise ValueError("distinct absolute selector directories required")
+
+    @classmethod
+    def from_mapping(cls, value):
+        if not isinstance(value, dict):
+            raise ValueError("selector_handoff must be an object")
+        known = {
+            field.name: value[field.name]
+            for field in fields(cls)
+            if field.name in value
+        }
+        missing = [
+            field.name
+            for field in fields(cls)
+            if field.default is MISSING
+            and field.default_factory is MISSING
+            and field.name not in known
+        ]
+        if missing:
+            raise ValueError(
+                "selector_handoff missing required fields: " + ", ".join(missing)
+            )
+        # Forward-compatible config: unknown fields are not authoritative and
+        # do not enter the canonical digest. Known bounds stay strictly checked.
+        return cls(**known)
 
     @property
     def digest(self):

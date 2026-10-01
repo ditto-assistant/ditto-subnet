@@ -123,7 +123,8 @@ def write_selector_snapshot(db: sqlite3.Connection, path: Path, policy: JournalP
             snapshot.commit()
             db.execute("COMMIT")
         except BaseException:
-            db.execute("ROLLBACK")
+            if db.in_transaction:
+                db.execute("ROLLBACK")
             raise
         snapshot.close()
         if any(

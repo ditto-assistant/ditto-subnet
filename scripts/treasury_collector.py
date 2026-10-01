@@ -72,7 +72,7 @@ def main() -> None:
         CollectorJournal(args.journal, policy, args.role, initialize=True).close()
         print(json.dumps({"status": "journal_initialized", "policy": policy.digest}))
         return
-    if not args.watch_only and not policy.enabled:
+    if not args.watch_only and not args.snapshot_only and not policy.enabled:
         print(json.dumps({"status": "disabled", "policy": policy.digest}))
         return
     if args.snapshot_only:

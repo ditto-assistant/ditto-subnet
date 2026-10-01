@@ -5,7 +5,6 @@ import argparse
 import hashlib
 import json
 import os
-from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -88,15 +87,14 @@ def main():
     ):
         parser.error("immutable observer config or bounded poll interval invalid")
     body = json.loads(raw)
+    if not isinstance(body, dict):
+        parser.error("configuration must be an object")
     handoff = body.get("selector_handoff")
-    if handoff is not None:
-        handoff = SelectorHandoff(
-            **{
-                field.name: handoff[field.name]
-                for field in fields(SelectorHandoff)
-                if field.name in handoff
-            }
-        )
+    if "selector_handoff" in body:
+        try:
+            handoff = SelectorHandoff.from_mapping(handoff)
+        except (TypeError, ValueError) as exc:
+            parser.error(str(exc))
     config = ActivityObserverConfig(
         approval=TreasuryPolicyApproval.model_validate(body["approval"]),
         settings_checksum=body["settings_checksum"],

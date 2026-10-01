@@ -5,7 +5,6 @@ import argparse
 import hashlib
 import json
 from contextlib import suppress
-from dataclasses import fields
 from pathlib import Path
 
 from ditto.treasury.collector_chain import PublicCollectorChain, load_policy
@@ -83,6 +82,8 @@ def main():
     if hashlib.sha256(raw).hexdigest() != args.config_sha256:
         parser.error("selector config differs from immutable deployment pin")
     body = json.loads(raw)
+    if not isinstance(body, dict):
+        parser.error("configuration must be an object")
     enabled = body.get("enabled", False)
     if type(enabled) is not bool:
         parser.error("selector enabled must be boolean")
@@ -95,13 +96,10 @@ def main():
         parser.error("explicit policy, snapshot, state and bounded polling required")
     if args.initialize_state and not args.once:
         parser.error("one-time initialization requires --once")
-    config = SelectorHandoff(
-        **{
-            field.name: body["selector_handoff"][field.name]
-            for field in fields(SelectorHandoff)
-            if field.name in body["selector_handoff"]
-        }
-    )
+    try:
+        config = SelectorHandoff.from_mapping(body.get("selector_handoff"))
+    except (TypeError, ValueError) as exc:
+        parser.error(str(exc))
     policy = load_policy(args.policy, args.policy_sha256)
     if policy.digest != config.collector_policy_digest:
         raise ValueError("selector exporter signed collector policy differs")

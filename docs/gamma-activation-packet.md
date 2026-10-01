@@ -160,7 +160,10 @@ Snapshot failure reports `selector_snapshot_failed` and the already durable
 `signer_status`, then halts that invocation. It does not retry the money tick.
 An explicitly approved `--snapshot-only --selector-snapshot ...` observation
 repair uses the existing private journal without chain/signing/money tick.
-This flag initializes neither journal nor publisher cursor. A previous valid
+This flag also works with a disabled signed policy matching the existing journal:
+it reads that local journal without chain/key loading or a money tick. Ordinary
+disabled signing still returns before journal/state/network/key work. This flag
+initializes neither journal nor publisher cursor. A previous valid
 snapshot remains on pre-replace failure; it may lag new money, never authorize it.
 Publisher validates snapshot version/count/last operation, monotonic retained
 history and every previously published selector's exact coordinates before new
@@ -186,6 +189,12 @@ identities or authorization:
   }
 }
 ```
+
+Unknown config fields are ignored for rolling compatibility and never enter the
+handoff digest; known fields and bounds remain strict. Omitted `max_pending_pages`
+uses the documented default of 10. Operators must check the effective known-field
+configuration/digest against their intended bound; spelling an unknown key does
+not apply a bound.
 
 Observer config adds this same `selector_handoff` object alongside its existing
 offline approval, exact historical settings checksum, starting block and disabled
@@ -241,6 +250,15 @@ For future installation, independently stage the proposed publisher unit and
 optional signer snapshot and observer `selector-handoff.conf` drop-ins, adding
 the observer's read-only group
 plus ACK writable path. The base observer alone needs neither spool nor group.
+Before either activation marker is installed, a separately authorized operator
+must stage the existing outbox and acknowledgment directories with the exact
+configured distinct owners, shared read-only GID and 0750 modes. The publisher
+unit asserts both directories exist; code also validates exact ownership/mode
+and refuses absent or mismatched paths. No unit creates the public spool, resets
+it, or repairs permissions. Initialize private publisher/observer state once only
+after staging and approved configuration, and validate cross-user access before
+starting recurring units.
+
 Both default-off
 activation markers remain absent. Configure exactly matching UIDs/GID and
 root-owned immutable config/proof/runtime. Verify default-off CLI and unit parsing,

@@ -3,6 +3,9 @@ Description=SN118 public selector publisher (operator staged, default off)
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/etc/sn118-treasury-selector/activation.env
+# Approved operator staging must precede activation; never create/reset spool.
+AssertPathIsDirectory=/var/lib/sn118-selector-handoff/outbox
+AssertPathIsDirectory=/var/lib/sn118-selector-handoff/acknowledgments
 
 [Service]
 Type=simple

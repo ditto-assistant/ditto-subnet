@@ -377,14 +377,36 @@ class ActivityQueue:
             raise
 
     def _initialize(self, config: ActivityObserverConfig, *, existing_handoff=False):
+        if existing_handoff:
+            # Never recreate tables after interrupted initialization or state
+            # loss: missing pending/page history cannot be safely inferred.
+            required = {
+                "pin": "digest",
+                "cursor": "id,block,hash",
+                "journal_cursor": "id,operation",
+                "block_progress": "id,block,hash,event_offset",
+                "pending": "id,body,receipt_id",
+                "selector_pages": "id,body",
+            }
+            tables = {
+                row[0]
+                for row in self.db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            error = "selector observer state lost or changed; recovery required"
+            if not required.keys() <= tables:
+                raise ValueError(error)
+            try:
+                for table, columns in required.items():
+                    self.db.execute(f"SELECT {columns} FROM {table} LIMIT 1")
+                pins = self.db.execute("SELECT digest FROM pin").fetchall()
+            except sqlite3.DatabaseError as exc:
+                raise ValueError(error) from exc
+            if pins != [(config.digest,)]:
+                raise ValueError(error)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
-        if existing_handoff and self.db.execute(
-            "SELECT digest FROM pin"
-        ).fetchall() != [(config.digest,)]:
-            raise ValueError(
-                "selector observer state lost or changed; recovery required"
-            )
         self.db.executescript(
             "CREATE TABLE IF NOT EXISTS pin(id INTEGER PRIMARY KEY "
             "CHECK(id=1),digest TEXT NOT NULL); CREATE TABLE IF NOT "
@@ -404,14 +426,10 @@ class ActivityQueue:
                 "observer historical policy changed; explicit recovery required"
             )
         self.db.execute("INSERT OR IGNORE INTO pin VALUES(1,?)", (config.digest,))
-        if config.selector_handoff is not None:
-            if existing_handoff:
-                self.db.execute("SELECT id,body FROM selector_pages LIMIT 1")
-            else:
-                self.db.execute(
-                    "CREATE TABLE selector_pages(id TEXT PRIMARY KEY,"
-                    "body TEXT NOT NULL)"
-                )
+        if config.selector_handoff is not None and not existing_handoff:
+            self.db.execute(
+                "CREATE TABLE selector_pages(id TEXT PRIMARY KEY,body TEXT NOT NULL)"
+            )
 
     def close(self):
         self.db.close()
