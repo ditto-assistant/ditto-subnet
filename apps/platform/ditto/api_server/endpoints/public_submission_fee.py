@@ -9,6 +9,7 @@ the one ``/upload/check`` reserves; this endpoint is informational.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -126,19 +127,31 @@ async def public_submission_fee(
     latest, _ = rows[0]
     # Never publish a price this build would refuse to quote.
     require_supported_fee_denomination(latest)
-    current_change = changes[0] if changes else _fee_change(latest, None)
+    scan_capped = len(rows) >= _SCAN_LIMIT
+    fee_revision: int | None
+    fee_effective_at: datetime | None
+    if changes:
+        # The newest change starts the run of revisions the latest belongs to.
+        fee_revision = changes[0].revision
+        fee_effective_at = changes[0].effective_at
+    elif scan_capped:
+        # The run started before the bounded scan: unknown, not "the latest".
+        fee_revision = None
+        fee_effective_at = None
+    else:
+        # Every revision kept the built-in fee.
+        fee_revision = 0
+        fee_effective_at = None
     return PublicSubmissionFee(
         policy_revision=latest.revision,
         fee_denomination=SUBMISSION_FEE_DENOMINATION_FIXED_TAO,
         fee_amount_rao=latest.fee_amount_rao,
         fee_amount_tao=format_rao_as_tao(latest.fee_amount_rao),
-        fee_revision=current_change.revision,
-        fee_effective_at=current_change.effective_at,
+        fee_revision=fee_revision,
+        fee_effective_at=fee_effective_at,
         quote_lifetime_seconds=quote_lifetime_seconds,
         history=changes[:limit],
         # Also true when the bounded scan may have stopped short of the oldest
         # revision, or when an unpublishable historical revision was omitted.
-        history_truncated=(
-            len(changes) > limit or len(rows) >= _SCAN_LIMIT or omitted_unsupported
-        ),
+        history_truncated=(len(changes) > limit or scan_capped or omitted_unsupported),
     )

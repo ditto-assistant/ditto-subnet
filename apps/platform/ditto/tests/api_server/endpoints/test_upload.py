@@ -421,6 +421,7 @@ class TestUploadCheck:
         cutoff = datetime.now(UTC)
 
         class Reservation:
+            miner_hotkey = _make_keypair().ss58_address
             expires_at = datetime.now(UTC) + timedelta(hours=1)
             fee_amount_rao = 40_000_000
             payment_send_address = _make_keypair().ss58_address
@@ -2172,6 +2173,7 @@ class TestReservedQuoteUnderUnquotablePricing:
         reads = _unquotable_policy(monkeypatch)
 
         class Reservation:
+            miner_hotkey = _make_keypair().ss58_address
             fee_amount_rao = 40_000_000
             payment_send_address = address
             legacy_payment_cutoff_at = None
@@ -2395,3 +2397,93 @@ class TestReservationSendAddressIsSingleSourced:
             verifier.verify_payment.await_args.kwargs["expected_send_address"]
             == effective
         )
+
+
+class TestCheckRecoveryUsesOnlyTheCallersReservation:
+    """A coldkey's reservation for one hotkey never prices another hotkey's
+    payment on /upload/check, matching /upload/agent."""
+
+    @pytest.mark.parametrize(
+        ("reservation_hotkey_is_caller", "paid_rao", "expected_status"),
+        [
+            # Same hotkey (archive may differ): the reserved 0.04 TAO binds.
+            (True, 40_000_000, 200),
+            # Another hotkey's reservation at 0.04 TAO: the current 0.09 TAO
+            # applies, so the old amount is refused here, not later at upload.
+            (False, 40_000_000, 402),
+            (False, 90_000_000, 200),
+        ],
+    )
+    async def test_two_hotkeys_on_one_coldkey(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        reservation_hotkey_is_caller: bool,
+        paid_rao: int,
+        expected_status: int,
+    ) -> None:
+        override_get_session(app)
+        override_get_chain_client(app)
+        address = app.state.config.upload_payment_address
+        _real_verifier_paid_at(
+            app,
+            paid_at=datetime.now(UTC) - timedelta(hours=1),
+            paid_rao=paid_rao,
+            address=address,
+        )
+
+        async def _changed_policy(  # type: ignore[no-untyped-def]
+            _session, *, default_payment_address: str, **_kwargs
+        ):
+            return SimpleNamespace(
+                revision=7,
+                cooldown_seconds=3600,
+                fee_amount_rao=90_000_000,
+                payment_address=default_payment_address,
+                quotable=True,
+            )
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.effective_submission_settings",
+            AsyncMock(side_effect=_changed_policy),
+        )
+
+        class Reservation:
+            miner_hotkey = (
+                _make_keypair().ss58_address
+                if reservation_hotkey_is_caller
+                else bittensor.Keypair.create_from_uri("//Bob").ss58_address
+            )
+            sha256 = "f" * 64
+            fee_amount_rao = 40_000_000
+            payment_send_address = address
+            legacy_payment_cutoff_at = None
+            expires_at = datetime.now(UTC) + timedelta(hours=2)
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission_for_coldkey",
+            AsyncMock(return_value=Reservation()),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(),
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == expected_status, response.text
+        if expected_status == 402:
+            assert response.json()["error_code"] == ERROR_CODE_PAYMENT_AMOUNT_MISMATCH

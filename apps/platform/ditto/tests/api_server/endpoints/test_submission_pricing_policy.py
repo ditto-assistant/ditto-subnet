@@ -28,6 +28,7 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
 from ditto.db.models import SubmissionSettingsRevision, UploadAdmissionReservation
 from ditto.db.queries.submission_settings import (
+    DEFAULT_SUBMISSION_FEE_RAO,
     UPLOAD_ADMISSION_TTL,
     effective_submission_settings,
     require_supported_fee_denomination,
@@ -368,7 +369,9 @@ async def test_history_audits_old_and_new_values_and_rollback_is_a_new_revision(
         _GENESIS_FEE,
         100_000_000,
     )
-    assert genesis["previous_fee_amount_rao"] is None
+    # The seeded revision 1 replaced the built-in default policy.
+    assert genesis["previous_fee_amount_rao"] == DEFAULT_SUBMISSION_FEE_RAO
+    assert genesis["previous_cooldown_seconds"] == 3600
     for row in history:
         assert row["fee_denomination"] == "fixed_tao"
         assert row["fee_amount_tao"] == format_rao_as_tao(row["fee_amount_rao"])
@@ -595,24 +598,27 @@ async def test_issued_quote_survives_a_policy_change_only_for_its_lifetime(
 # --- Public projection ---------------------------------------------------------
 
 
-async def test_public_fee_starts_at_the_seeded_revision(
+async def test_public_fee_seeded_revision_that_kept_the_built_in_fee(
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
     app: FastAPI,
 ) -> None:
+    """The seeded revision 1 kept the built-in 0.04 TAO, so it is not a fee
+    change: the fee is still the built-in default (revision 0, no date)."""
     _install(app, session_maker)
+    assert _GENESIS_FEE == DEFAULT_SUBMISSION_FEE_RAO
     response = await client.get(_PUBLIC)
     assert response.status_code == 200, response.text
     assert response.headers["cache-control"].startswith("public")
     body = response.json()
     assert body["policy_revision"] == 1
-    assert body["fee_revision"] == 1
+    assert body["fee_revision"] == 0
+    assert body["fee_effective_at"] is None
     assert body["fee_denomination"] == "fixed_tao"
     assert body["fee_amount_rao"] == _GENESIS_FEE
     assert body["fee_amount_tao"] == "0.040000000"
     assert body["quote_lifetime_seconds"] == int(UPLOAD_ADMISSION_TTL.total_seconds())
-    assert [row["revision"] for row in body["history"]] == [1]
-    assert body["history"][0]["previous_fee_amount_rao"] is None
+    assert body["history"] == []
     assert body["history_truncated"] is False
 
 
@@ -644,10 +650,10 @@ async def test_public_history_shows_every_fee_change_and_no_operator_identity(
     assert body["fee_amount_rao"] == _GENESIS_FEE
     assert body["fee_effective_at"] == body["history"][0]["effective_at"]
     # The cooldown-only revision is not a fee change.
+    # Revision 1 kept the built-in fee, so it is not a published change.
     assert [row["revision"] for row in body["history"]] == [
         rolled_back["revision"],
         raised["revision"],
-        1,
     ]
     assert body["history"][0]["previous_fee_amount_tao"] == "0.037271710"
     assert body["history"][1]["fee_amount_tao"] == "0.037271710"
@@ -972,3 +978,230 @@ async def test_public_current_fee_is_dated_from_a_denomination_change_at_equal_r
     assert body["history"][0]["previous_fee_amount_rao"] is None
     assert [row["revision"] for row in body["history"]] == [3, 1]
     assert body["history_truncated"] is True
+
+
+# --- Built-in default parity, genesis, and admin parity ------------------------
+
+
+async def test_built_in_default_fee_matches_the_go_upload_relay() -> None:
+    """Python and the Go relay must quote the same fee with no revision."""
+    import re
+    from pathlib import Path
+
+    handlers = (
+        Path(__file__).resolve().parents[6]
+        / "services/model-relay/internal/upload/handlers.go"
+    ).read_text()
+    match = re.search(r"defaultFeeAmountRao\s*=\s*int64\(([0-9_]+)\)", handlers)
+    assert match is not None
+    assert int(match.group(1).replace("_", "")) == DEFAULT_SUBMISSION_FEE_RAO
+    match = re.search(r"defaultCooldownSeconds\s*=\s*([0-9_]+)", handlers)
+    assert match is not None
+    from ditto.db.queries.submission_settings import (
+        DEFAULT_SUBMISSION_COOLDOWN_SECONDS,
+    )
+
+    assert int(match.group(1).replace("_", "")) == DEFAULT_SUBMISSION_COOLDOWN_SECONDS
+
+
+async def test_public_fee_with_a_capped_scan_and_no_change_is_unknown(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the bounded scan finds no fee change, the fee's revision and time are
+    unknown, not the latest (cooldown-only) revision's."""
+    _install(app, session_maker)
+    first = await _apply(client, expected=1, fee_amount_rao=50_000_000)
+    second = await _apply(
+        client,
+        expected=first["revision"],
+        fee_amount_rao=50_000_000,
+        cooldown_seconds=1800,
+    )
+    await _apply(
+        client,
+        expected=second["revision"],
+        fee_amount_rao=50_000_000,
+        cooldown_seconds=3600,
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.public_submission_fee._SCAN_LIMIT", 2
+    )
+
+    body = (await client.get(_PUBLIC)).json()
+
+    assert body["fee_amount_rao"] == 50_000_000
+    assert body["fee_revision"] is None
+    assert body["fee_effective_at"] is None
+    assert body["history"] == []
+    assert body["history_truncated"] is True
+
+
+async def test_admin_history_omits_unsupported_rows_and_hides_their_amount(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the effective revision fails closed in the admin view."""
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+
+    def _row(revision: int, rao: int, denomination: str):  # type: ignore[no-untyped-def]
+        return SubmissionSettingsRevision(
+            revision=revision,
+            parent_revision=revision - 1,
+            cooldown_seconds=3600,
+            fee_amount_rao=rao,
+            fee_denomination=denomination,
+            reason="history fixture",
+            actor="test",
+            created_at=now - timedelta(days=10 - revision),
+        )
+
+    genesis = _row(1, 40_000_000, "fixed_tao")
+    usd = _row(2, 5_000_000_000, "usd_indexed")
+    current = _row(3, 60_000_000, "fixed_tao")
+
+    async def _history(
+        _session: AsyncSession, **_kwargs: object
+    ) -> list[tuple[SubmissionSettingsRevision, SubmissionSettingsRevision | None]]:
+        return [(current, usd), (usd, genesis), (genesis, None)]
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.admin_submission_settings.submission_settings_history",
+        _history,
+    )
+
+    response = await client.get(_SETTINGS, headers=_HEADERS)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["current"]["revision"] == 3
+    assert body["current"]["previous_fee_amount_rao"] is None
+    assert [row["revision"] for row in body["history"]] == [3, 1]
+    assert body["history_incomplete"] is True
+    assert "usd_indexed" not in response.text
+    assert "5000000000" not in response.text
+
+
+async def test_fee_less_apply_cannot_reassert_an_out_of_bounds_fee(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    async with session_maker() as session, session.begin():
+        session.add(
+            SubmissionSettingsRevision(
+                parent_revision=1,
+                cooldown_seconds=3600,
+                fee_amount_rao=500,
+                fee_denomination="fixed_tao",
+                reason="historical fee below today's bounds",
+                actor="migration",
+            )
+        )
+    current = (await client.get(_SETTINGS, headers=_HEADERS)).json()["current"]
+    before = await _revision_rows(session_maker)
+
+    response = await client.post(
+        _SETTINGS,
+        headers=_HEADERS,
+        json={
+            "expected_revision": current["revision"],
+            "cooldown_seconds": 1800,
+            "reason": "cooldown-only legacy apply",
+            "actor": "operator@example.com",
+            "confirmation": "SET SUBMISSION COOLDOWN 1800 SECONDS",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert "safe bounds" in response.json()["message"]
+    assert await _revision_rows(session_maker) == before
+
+
+async def test_a_no_op_apply_is_rejected_and_writes_nothing(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    before = await _revision_rows(session_maker)
+    response = await client.post(
+        _SETTINGS,
+        headers=_HEADERS,
+        json=_payload(expected=1, fee_amount_rao=_GENESIS_FEE),
+    )
+    assert response.status_code == 409, response.text
+    assert "nothing to apply" in response.json()["message"]
+    assert await _revision_rows(session_maker) == before
+
+
+async def test_unsupported_denomination_path_end_to_end_in_postgres(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Drop the CHECK inside a transaction (rolled back) to exercise the real
+    fail-closed path: quoting refuses, a cooldown-only read marks the
+    revision unquotable, and a new reservation is refused."""
+    from sqlalchemy import text
+
+    from ditto.db.queries.submission_settings import reserve_upload_admission
+
+    async with session_maker() as session:
+        await session.begin()
+        try:
+            constraints = list(
+                await session.scalars(
+                    text(
+                        "SELECT conname FROM pg_constraint WHERE conrelid = "
+                        "'submission_settings_revisions'::regclass AND "
+                        "pg_get_constraintdef(oid) LIKE '%fee_denomination%'"
+                    )
+                )
+            )
+            assert constraints
+            for name in constraints:
+                await session.execute(
+                    text(
+                        "ALTER TABLE submission_settings_revisions "
+                        f'DROP CONSTRAINT "{name}"'
+                    )
+                )
+            session.add(
+                SubmissionSettingsRevision(
+                    parent_revision=1,
+                    cooldown_seconds=3600,
+                    fee_amount_rao=5_000_000_000,
+                    fee_denomination="usd_indexed",
+                    reason="five dollar target from a newer writer",
+                    actor="future-platform",
+                )
+            )
+            await session.flush()
+            with pytest.raises(UnsupportedFeeDenominationError):
+                await effective_submission_settings(
+                    session, default_payment_address=_PAYMENT_ADDRESS
+                )
+            relaxed = await effective_submission_settings(
+                session,
+                default_payment_address=_PAYMENT_ADDRESS,
+                require_quotable=False,
+            )
+            assert relaxed.quotable is False
+            assert relaxed.cooldown_seconds == 3600
+            with pytest.raises(UnsupportedFeeDenominationError):
+                await reserve_upload_admission(
+                    session,
+                    miner_coldkey="coldkey-e2e",
+                    miner_hotkey="hotkey-e2e",
+                    sha256="9" * 64,
+                    settings=relaxed,
+                )
+        finally:
+            await session.rollback()
+    # The rollback restored the CHECK and removed the row.
+    assert len(await _revision_rows(session_maker)) == 1

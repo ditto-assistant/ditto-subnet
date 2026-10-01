@@ -347,9 +347,18 @@ async def check(
     # expired, even when the reservation has expired by now (or the current
     # revision is unquotable); the verifier compares the payment's block time
     # with this expiry and otherwise requires the current fee.
+    # Only this hotkey's reservation can bind its payment, as in /upload/agent
+    # (the archive may differ: recovery rotates it). Another hotkey's
+    # reservation on the same coldkey never lends it a quoted fee.
+    own_reservation = (
+        reserved_admission
+        if reserved_admission is not None
+        and reserved_admission.miner_hotkey == body.hotkey
+        else None
+    )
     recovery_terms = await _payment_terms(
         session,
-        reservation=reserved_admission,
+        reservation=own_reservation,
         default_payment_address=request.app.state.config.upload_payment_address,
     )
     settings = recovery_terms.settings

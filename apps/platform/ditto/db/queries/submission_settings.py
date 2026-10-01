@@ -22,7 +22,10 @@ from ditto.db.queries.submission_deposit_address import (
 )
 
 DEFAULT_SUBMISSION_COOLDOWN_SECONDS = 3600
-DEFAULT_SUBMISSION_FEE_RAO = 200_000_000
+# Built-in policy in force before any operator revision. It matches the fee the
+# migration seeded as revision 1 and the Go upload relay's default
+# (``defaultFeeAmountRao``); a parity test pins the two together.
+DEFAULT_SUBMISSION_FEE_RAO = 40_000_000
 MIN_SUBMISSION_COOLDOWN_SECONDS = 60
 MAX_SUBMISSION_COOLDOWN_SECONDS = 86400
 # A finalized payment may recover its admission for 24 hours. An unpaid
@@ -416,7 +419,9 @@ async def submission_settings_history(
 
     The parent is the revision the operator previewed and confirmed against
     (``parent_revision``), which is not necessarily ``revision - 1``: a failed
-    insert still consumes a sequence value.
+    insert still consumes a sequence value. The first revision's parent (0)
+    is the built-in default policy, returned as an unsaved revision 0 so the
+    genesis row is compared with what was actually in force before it.
     """
     parent = aliased(SubmissionSettingsRevision)
     rows = (
@@ -430,7 +435,29 @@ async def submission_settings_history(
             .limit(limit)
         )
     ).all()
-    return [(row, previous) for row, previous in rows]
+    return [
+        (
+            row,
+            previous
+            if previous is not None or row.parent_revision != 0
+            else built_in_submission_settings(),
+        )
+        for row, previous in rows
+    ]
+
+
+def built_in_submission_settings() -> SubmissionSettingsRevision:
+    """The policy in force before any operator revision (unsaved, revision 0)."""
+    return SubmissionSettingsRevision(
+        revision=0,
+        parent_revision=0,
+        cooldown_seconds=DEFAULT_SUBMISSION_COOLDOWN_SECONDS,
+        fee_amount_rao=DEFAULT_SUBMISSION_FEE_RAO,
+        fee_denomination=SUBMISSION_FEE_DENOMINATION_FIXED_TAO,
+        reason="Built-in submission settings",
+        actor="platform",
+        created_at=None,
+    )
 
 
 @dataclass(frozen=True)

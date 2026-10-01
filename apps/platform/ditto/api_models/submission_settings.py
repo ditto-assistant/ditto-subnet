@@ -77,6 +77,14 @@ class AdminSubmissionSettingsResponse(BaseModel):
 
     current: SubmissionSettingsRevision
     history: list[SubmissionSettingsRevision]
+    history_incomplete: bool = Field(
+        default=False,
+        description=(
+            "True when a historical revision in a denomination this build "
+            "cannot price was omitted from history. The current revision never "
+            "is: it fails closed instead."
+        ),
+    )
     bounds: SubmissionFeeBounds = SubmissionFeeBounds()
     quote_lifetime_seconds: int | None = None
     """How long a reserved quote stays payable after it is issued."""
@@ -183,8 +191,13 @@ class PublicSubmissionFee(BaseModel):
     fee_denomination: SubmissionFeeDenomination
     fee_amount_rao: int
     fee_amount_tao: str
-    fee_revision: int
-    """Revision in which the current fee amount took effect."""
+    fee_revision: int | None = Field(
+        description=(
+            "Revision in which the current fee took effect: 0 while it is still "
+            "the built-in default, null when the bounded history scan could not "
+            "reach the change that set it."
+        )
+    )
     fee_effective_at: datetime | None
     quote_lifetime_seconds: int
     """A quote reserved before payment stays payable for this long."""

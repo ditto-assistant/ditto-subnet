@@ -37,11 +37,13 @@ from ditto.api_models.submission_settings import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
 from ditto.db.models import SubmissionSettingsRevision
 from ditto.db.queries.submission_settings import (
     DEFAULT_SUBMISSION_COOLDOWN_SECONDS,
     DEFAULT_SUBMISSION_FEE_RAO,
     UPLOAD_ADMISSION_TTL,
+    built_in_submission_settings,
     in_flight_quotes,
     latest_submission_settings,
     require_supported_fee_denomination,
@@ -56,10 +58,23 @@ _HISTORY_LIMIT = 100
 _QUOTE_LIFETIME_SECONDS = int(UPLOAD_ADMISSION_TTL.total_seconds())
 
 
+def _publishable(row: SubmissionSettingsRevision | None) -> bool:
+    if row is None:
+        return False
+    try:
+        require_supported_fee_denomination(row)
+    except UnsupportedFeeDenominationError:
+        return False
+    return True
+
+
 def _revision(
     row: SubmissionSettingsRevision,
     previous: SubmissionSettingsRevision | None = None,
 ) -> RevisionModel:
+    # A parent in a denomination this build cannot price is never shown as the
+    # previous fee: its number is not a TAO amount.
+    previous = previous if _publishable(previous) else None
     return RevisionModel(
         revision=row.revision,
         parent_revision=row.parent_revision,
@@ -89,7 +104,7 @@ def _default_revision() -> RevisionModel:
         fee_amount_rao=DEFAULT_SUBMISSION_FEE_RAO,
         fee_amount_tao=format_rao_as_tao(DEFAULT_SUBMISSION_FEE_RAO),
         fee_denomination=SUBMISSION_FEE_DENOMINATION_FIXED_TAO,
-        reason="Built-in submission cooldown and 0.2 TAO fee",
+        reason="Built-in submission cooldown and 0.04 TAO fee",
         actor="platform",
         created_at=None,
     )
@@ -105,10 +120,28 @@ async def get_settings(
     _admin: AdminDep, session: SessionDep
 ) -> AdminSubmissionSettingsResponse:
     rows = await submission_settings_history(session, limit=_HISTORY_LIMIT)
-    history = [_revision(row, previous) for row, previous in rows]
+    if not rows:
+        return AdminSubmissionSettingsResponse(
+            current=_default_revision(),
+            history=[],
+            bounds=SubmissionFeeBounds(),
+            quote_lifetime_seconds=_QUOTE_LIFETIME_SECONDS,
+        )
+    # Only the effective revision fails closed; a historical revision this
+    # build cannot price is omitted (and flagged) rather than taking down the
+    # operator's view of the current policy.
+    current = _revision(*rows[0])
+    history = [current]
+    omitted = False
+    for row, previous in rows[1:]:
+        try:
+            history.append(_revision(row, previous))
+        except UnsupportedFeeDenominationError:
+            omitted = True
     return AdminSubmissionSettingsResponse(
-        current=history[0] if history else _default_revision(),
+        current=current,
         history=history,
+        history_incomplete=omitted,
         bounds=SubmissionFeeBounds(),
         quote_lifetime_seconds=_QUOTE_LIFETIME_SECONDS,
     )
@@ -217,9 +250,32 @@ async def create_settings_revision(
                 f"(expected {payload.expected_revision}, current {actual_revision})"
             ),
         )
-    previous = (
-        (latest.fee_amount_rao, latest.cooldown_seconds) if latest is not None else None
-    )
+    if payload.fee_amount_rao is None and not (
+        MIN_SUBMISSION_FEE_RAO <= fee_amount_rao <= MAX_SUBMISSION_FEE_RAO
+    ):
+        # A fee-less (legacy, cooldown-only) apply must not re-assert a
+        # historical fee that the current safe bounds would reject.
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"current fee {fee_amount_rao} rao is outside the safe bounds; "
+                "send fee_amount_rao explicitly"
+            ),
+        )
+    parent = latest if latest is not None else built_in_submission_settings()
+    if (
+        payload.cooldown_seconds == parent.cooldown_seconds
+        and fee_amount_rao == parent.fee_amount_rao
+        and payload.fee_denomination == parent.fee_denomination
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "proposed submission settings equal the current revision; "
+                "nothing to apply"
+            ),
+        )
+    previous = (parent.fee_amount_rao, parent.cooldown_seconds)
     row = SubmissionSettingsRevision(
         parent_revision=actual_revision,
         cooldown_seconds=payload.cooldown_seconds,
@@ -239,8 +295,6 @@ async def create_settings_revision(
         ) from error
     await session.refresh(row)
     revision = _revision(row)
-    if previous is None:
-        return revision
     return revision.model_copy(
         update={
             "previous_fee_amount_rao": previous[0],
