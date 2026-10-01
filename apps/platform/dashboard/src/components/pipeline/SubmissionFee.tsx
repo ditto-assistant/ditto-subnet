@@ -7,8 +7,15 @@ import { For, Show } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { useEndpoint } from "../../data/useEndpoint";
-import type { SubmissionFeePayload } from "../../types/submission-fee";
-import { feeChangeText, feeDate, feeDirection, isFixedTao, raoToTao } from "./submission-fee";
+import type { SubmissionFeePayload, SubmissionFeeRevision } from "../../types/submission-fee";
+import {
+  feeChangeText,
+  feeDate,
+  feeDirection,
+  isFixedTao,
+  quoteLifetimeText,
+  raoToTao,
+} from "./submission-fee";
 
 const FEE_POLL_MS = 60_000;
 
@@ -20,7 +27,12 @@ export function SubmissionFee(): JSX.Element {
     const value = fee.error() ? undefined : fee.data();
     return value && isFixedTao(value.fee_denomination) ? value : undefined;
   };
-  const lifetimeHours = (): number => Math.round((payload()?.quote_lifetime_seconds ?? 0) / 3600);
+  // Never render a row in a denomination this build has not reviewed as TAO;
+  // dropping one makes the visible history incomplete.
+  const history = (): SubmissionFeeRevision[] =>
+    (payload()?.history ?? []).filter((row) => isFixedTao(row.fee_denomination));
+  const incomplete = (): boolean =>
+    Boolean(payload()?.history_truncated) || history().length !== (payload()?.history.length ?? 0);
 
   return (
     <section class="submission-fee" aria-label="Submission fee">
@@ -42,23 +54,26 @@ export function SubmissionFee(): JSX.Element {
                 {raoToTao(current().fee_amount_rao)} TAO
               </strong>
               <span class="submission-fee-meta">
-                Fixed TAO · revision {current().fee_revision} · since{" "}
-                {feeDate(current().fee_effective_at)}
+                Fixed TAO · revision {current().fee_revision}
+                <Show when={current().fee_effective_at}>
+                  {(at) => <> · since {feeDate(at())}</>}
+                </Show>
               </span>
               <span class="submission-fee-note">
-                A payment made within {lifetimeHours()} hours of reserving keeps the reserved fee.
+                A payment made within {quoteLifetimeText(current().quote_lifetime_seconds)} of
+                reserving keeps the reserved fee.
               </span>
             </div>
             <details class="submission-fee-history">
               <summary>
                 Fee history
                 <span class="submission-fee-count">
-                  {current().history.length}
-                  {current().history_truncated ? "+" : ""}
+                  {history().length}
+                  {incomplete() ? "+" : ""}
                 </span>
               </summary>
               <ol aria-label="Submission fee changes, newest first">
-                <For each={current().history}>
+                <For each={history()}>
                   {(change) => (
                     <li data-fee-revision={change.revision}>
                       <time datetime={change.effective_at ?? undefined}>

@@ -38,3 +38,14 @@ export function feeDate(value: string | null | undefined): string {
   if (Number.isNaN(date.getTime())) return "Not recorded";
   return date.toLocaleDateString(undefined, { dateStyle: "medium" });
 }
+
+/** "24 hours", "1 hour", "90 minutes"; whole units only, never a rounded "0 hours". */
+export function quoteLifetimeText(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "the quote lifetime";
+  if (seconds % 3600 === 0) {
+    const hours = seconds / 3600;
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  const minutes = Math.ceil(seconds / 60);
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}

@@ -4,7 +4,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installFixtureFetch, loadFixture } from "../../test-fixtures";
 import type { SubmissionFeePayload } from "../../types/submission-fee";
 import { SubmissionFee } from "./SubmissionFee";
-import { feeChangeText, feeDirection, isFixedTao, raoToTao } from "./submission-fee";
+import {
+  feeChangeText,
+  feeDirection,
+  isFixedTao,
+  quoteLifetimeText,
+  raoToTao,
+} from "./submission-fee";
 
 let restoreFetch: (() => void) | null = null;
 
@@ -87,6 +93,37 @@ describe("SubmissionFee unavailable states", () => {
   });
 });
 
+describe("SubmissionFee edge payloads", () => {
+  it("never renders an unreviewed-denomination history row as TAO and marks history incomplete", async () => {
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    const [first, second, third] = fixture.history;
+    serve({
+      ...fixture,
+      history: [first, { ...second, fee_denomination: "usd_indexed" }, third],
+      history_truncated: false,
+    });
+    render(() => <SubmissionFee />);
+    await screen.findByText("0.1 TAO");
+    const revisions = Array.from(document.querySelectorAll(".submission-fee-history li")).map(
+      (row) => row.getAttribute("data-fee-revision"),
+    );
+    expect(revisions).toEqual(["5", "1"]);
+    expect(document.querySelector(".submission-fee-count")?.textContent).toBe("2+");
+  });
+
+  it("omits the effective date when the API has none, and handles empty history", async () => {
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    serve({ ...fixture, fee_effective_at: null, history: [], history_truncated: false });
+    render(() => <SubmissionFee />);
+    await screen.findByText("0.1 TAO");
+    const meta = document.querySelector(".submission-fee-meta")?.textContent ?? "";
+    expect(meta).toContain("revision 5");
+    expect(meta).not.toContain("since");
+    expect(meta).not.toContain("Not recorded");
+    expect(document.querySelector(".submission-fee-count")?.textContent).toBe("0");
+  });
+});
+
 describe("submission fee helpers", () => {
   it("renders rao as exact TAO without floating point", () => {
     expect(raoToTao(37_271_710)).toBe("0.03727171");
@@ -107,5 +144,9 @@ describe("submission fee helpers", () => {
     expect(feeDirection(1_000_000_000, 1_000_000_001)).toBe("up <1%");
     expect(isFixedTao("fixed_tao")).toBe(true);
     expect(isFixedTao("usd_indexed")).toBe(false);
+    expect(quoteLifetimeText(86_400)).toBe("24 hours");
+    expect(quoteLifetimeText(3_600)).toBe("1 hour");
+    expect(quoteLifetimeText(5_400)).toBe("90 minutes");
+    expect(quoteLifetimeText(0)).toBe("the quote lifetime");
   });
 });
