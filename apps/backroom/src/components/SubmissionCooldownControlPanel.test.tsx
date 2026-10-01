@@ -433,6 +433,77 @@ describe('SubmissionCooldownControlPanel', () => {
   })
 })
 
+describe('SubmissionCooldownControlPanel messages on reset', () => {
+  afterEach(cleanup)
+
+  beforeEach(() => {
+    previewSubmissionSettingsChange.mockReset().mockImplementation(async (input) => previewFor(input))
+    setSubmissionSettings.mockReset()
+  })
+
+  async function previewThirtyMinutes() {
+    fireEvent.click(screen.getByRole('button', { name: /30 minutes/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Preview change' }))
+    await screen.findByLabelText('Change preview')
+  }
+
+  async function applyPreview() {
+    fireEvent.change(screen.getByLabelText('Operator reason'), {
+      target: { value: 'reduce cadence for the current capacity window' },
+    })
+    const expected = submissionSettingsConfirmation(1800, 40_000_000)
+    fireEvent.change(screen.getByLabelText(new RegExp(expected)), {
+      target: { value: expected },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply settings' }))
+  }
+
+  it('clears a failed preview error on Cancel', async () => {
+    previewSubmissionSettingsChange.mockReset().mockRejectedValue(new Error('preview exploded'))
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    fireEvent.click(screen.getByRole('button', { name: /30 minutes/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Preview change' }))
+    await screen.findByText('preview exploded')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByText('preview exploded')).toBeNull()
+    expect((screen.getByLabelText(/Cooldown in minutes/) as HTMLInputElement).value).toBe('60')
+  })
+
+  it('drops the preview after a failed apply and clears the error on Cancel', async () => {
+    setSubmissionSettings.mockRejectedValue(new Error('submission settings changed; refresh'))
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    await previewThirtyMinutes()
+    await applyPreview()
+
+    await screen.findByText('submission settings changed; refresh')
+    expect(screen.queryByLabelText('Change preview')).toBeNull()
+    expect(screen.queryByLabelText('Operator reason')).toBeNull()
+    expect((screen.getByLabelText(/Cooldown in minutes/) as HTMLInputElement).value).toBe('30')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByText('submission settings changed; refresh')).toBeNull()
+  })
+
+  it('keeps the success message after a successful apply, until Cancel or a new draft', async () => {
+    setSubmissionSettings.mockResolvedValue({
+      ...initial,
+      current: { ...applied, revision: 2, parent_revision: 1, cooldown_seconds: 1800 },
+    })
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    await previewThirtyMinutes()
+    await applyPreview()
+
+    const message = await screen.findByText(/Submission settings updated: 30 minutes cooldown/)
+    expect(message).toBeTruthy()
+    expect(screen.queryByLabelText('Change preview')).toBeNull()
+
+    fireEvent.change(screen.getByLabelText(/Cooldown in minutes/), { target: { value: '45' } })
+    expect(screen.queryByText(/Submission settings updated/)).toBeNull()
+  })
+})
+
 describe('SubmissionCooldownControlPanel history and unsupported policy', () => {
   afterEach(cleanup)
 

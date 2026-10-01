@@ -158,12 +158,16 @@ export function SubmissionCooldownControlPanel({
     setSuccess('')
   }
 
+  // Discarding the draft also discards any message about it, so Cancel never
+  // leaves a stale error (or an earlier success) on screen.
   const clearForm = (next = policy) => {
     setMinutes(String(next.cooldownSeconds / 60))
     setFeeTao(feeText(next.feeAmountRao))
     setPreview(null)
     setReason('')
     setConfirmation('')
+    setError('')
+    setSuccess('')
   }
 
   const selectMinutes = (value: number) => {
@@ -234,11 +238,16 @@ export function SubmissionCooldownControlPanel({
         },
       })
       setState(next)
+      clearForm(effectiveSubmissionPolicy(next))
       setSuccess(
         `Submission settings updated: ${formatDuration(proposal.cooldownSeconds)} cooldown, ${formatRaoAsTao(proposal.feeAmountRao)} TAO fee.`,
       )
-      clearForm(effectiveSubmissionPolicy(next))
     } catch (cause) {
+      // The policy may have changed under a failed apply (409): its preview and
+      // confirmation can no longer be trusted, so they must be redone. The
+      // draft values and reason are kept.
+      setPreview(null)
+      setConfirmation('')
       setError(cause instanceof Error ? cause.message : 'Unable to update submission settings')
     } finally {
       setBusy(null)
