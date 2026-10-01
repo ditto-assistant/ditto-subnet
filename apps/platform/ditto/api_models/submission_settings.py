@@ -166,4 +166,12 @@ class PublicSubmissionFee(BaseModel):
     """A quote reserved before payment stays payable for this long."""
     history: list[PublicSubmissionFeeRevision]
     """Fee changes, newest first. Cooldown-only revisions are omitted."""
-    history_truncated: bool = False
+    history_truncated: bool = Field(
+        default=False,
+        description=(
+            "True when history may be incomplete: more fee changes than limit, "
+            "the bounded revision scan reached its cap, or a historical revision "
+            "in a denomination this build cannot price was omitted rather than "
+            "published."
+        ),
+    )

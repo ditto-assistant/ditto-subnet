@@ -24,6 +24,7 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated
 
@@ -71,7 +72,7 @@ from ditto.api_server.source_inspect import (
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.upload_feedback import submission_cooldown_message
 from ditto.chain import ChainError
-from ditto.db.models import AgentStatus
+from ditto.db.models import AgentStatus, UploadAdmissionReservation
 from ditto.db.queries.agents import (
     SubmissionCooldownError,
     get_submission_retry_at,
@@ -88,6 +89,7 @@ from ditto.db.queries.payments import (
 )
 from ditto.db.queries.submission_settings import (
     UPLOAD_ADMISSION_TTL,
+    EffectiveSubmissionSettings,
     consume_or_enforce_upload_admission,
     effective_submission_settings,
     get_upload_admission,
@@ -155,6 +157,64 @@ def _tarball_size_cap_from_env() -> int:
         )
         return DEFAULT_MAX_TARBALL_SIZE_BYTES
     return value
+
+
+@dataclass(frozen=True)
+class _PaymentTerms:
+    """What a payment must match, snapshotted before any session rollback.
+
+    Shared by ``/upload/check`` recovery and ``/upload/agent`` so the two can
+    never disagree about a reserved quote. With a reservation, its fee,
+    destination and amnesty bind payments finalized before
+    ``reserved_terms_expire_at``; a later payment must match the current fee,
+    which is ``None`` (fail closed) when the current revision is unquotable.
+    Honouring an issued quote never requires the current revision to be
+    quotable; quoting without a reservation always does.
+    """
+
+    settings: EffectiveSubmissionSettings
+    expected_amount_rao: int
+    legacy_amount_cutoff_at: datetime | None
+    expected_send_address: str
+    reserved_terms_expire_at: datetime | None
+    fallback_amount_rao: int | None
+    fallback_send_address: str
+
+
+async def _payment_terms(
+    session: AsyncSession,
+    *,
+    reservation: UploadAdmissionReservation | None,
+    default_payment_address: str,
+    reserved_address_default: str,
+) -> _PaymentTerms:
+    settings = await effective_submission_settings(
+        session,
+        default_payment_address=default_payment_address,
+        require_quotable=reservation is None,
+    )
+    current_fee_rao = settings.fee_amount_rao if settings.quotable else None
+    if reservation is None:
+        return _PaymentTerms(
+            settings=settings,
+            expected_amount_rao=settings.fee_amount_rao,
+            legacy_amount_cutoff_at=None,
+            expected_send_address=settings.payment_address,
+            reserved_terms_expire_at=None,
+            fallback_amount_rao=current_fee_rao,
+            fallback_send_address=settings.payment_address,
+        )
+    return _PaymentTerms(
+        settings=settings,
+        expected_amount_rao=reservation.fee_amount_rao,
+        legacy_amount_cutoff_at=reservation.legacy_payment_cutoff_at,
+        expected_send_address=(
+            reservation.payment_send_address or reserved_address_default
+        ),
+        reserved_terms_expire_at=_as_utc(reservation.expires_at),
+        fallback_amount_rao=current_fee_rao,
+        fallback_send_address=settings.payment_address,
+    )
 
 
 # Hard cap shared with /upload/check. Tarballs above this size are
@@ -278,40 +338,22 @@ async def check(
                 "Please try again after updating."
             )
 
-    settings = await effective_submission_settings(
-        session,
-        default_payment_address=request.app.state.config.upload_payment_address,
-    )
     reserved_admission = (
         await get_upload_admission_for_coldkey(session, miner_coldkey=owner_coldkey)
         if owner_coldkey is not None
         else None
     )
     # Recovery honours the reservation for a payment finalized before it
-    # expired, even when the reservation has expired by now; the verifier
-    # compares the payment's block time with this expiry and otherwise requires
-    # the current fee.
-    recovery_reserved_terms_expire_at = (
-        _as_utc(reserved_admission.expires_at)
-        if reserved_admission is not None
-        else None
+    # expired, even when the reservation has expired by now (or the current
+    # revision is unquotable); the verifier compares the payment's block time
+    # with this expiry and otherwise requires the current fee.
+    recovery_terms = await _payment_terms(
+        session,
+        reservation=reserved_admission,
+        default_payment_address=request.app.state.config.upload_payment_address,
+        reserved_address_default=request.app.state.config.upload_payment_address,
     )
-    expected_recovery_amount_rao = (
-        reserved_admission.fee_amount_rao
-        if reserved_admission is not None
-        else settings.fee_amount_rao
-    )
-    recovery_legacy_amount_cutoff_at = (
-        reserved_admission.legacy_payment_cutoff_at
-        if reserved_admission is not None
-        else None
-    )
-    recovery_payment_send_address = (
-        reserved_admission.payment_send_address
-        if reserved_admission is not None
-        and reserved_admission.payment_send_address is not None
-        else settings.payment_address
-    )
+    settings = recovery_terms.settings
     recovery_payment_verified = False
     recovery_paid_at: datetime | None = None
     if (
@@ -362,12 +404,12 @@ async def check(
                         extrinsic_index=body.payment_extrinsic_index,
                     ),
                     expected_hotkey=body.hotkey,
-                    expected_amount_rao=expected_recovery_amount_rao,
-                    legacy_amount_cutoff_at=recovery_legacy_amount_cutoff_at,
-                    expected_send_address=recovery_payment_send_address,
-                    reserved_terms_expire_at=recovery_reserved_terms_expire_at,
-                    fallback_amount_rao=settings.fee_amount_rao,
-                    fallback_send_address=settings.payment_address,
+                    expected_amount_rao=recovery_terms.expected_amount_rao,
+                    legacy_amount_cutoff_at=recovery_terms.legacy_amount_cutoff_at,
+                    expected_send_address=recovery_terms.expected_send_address,
+                    reserved_terms_expire_at=recovery_terms.reserved_terms_expire_at,
+                    fallback_amount_rao=recovery_terms.fallback_amount_rao,
+                    fallback_send_address=recovery_terms.fallback_send_address,
                 )
             except ChainError as e:
                 logger.warning(f"chain unreachable during /upload/check recovery: {e}")
@@ -406,9 +448,13 @@ async def check(
                 await rollback_result
         try:
             async with session.begin():
+                # Not required quotable here: an existing reservation keeps its
+                # issued fee, and reserve_upload_admission itself refuses to
+                # issue a new quote from an unquotable revision.
                 settings = await effective_submission_settings(
                     session,
                     default_payment_address=request.app.state.config.upload_payment_address,
+                    require_quotable=False,
                 )
                 admission = await reserve_upload_admission(
                     session,
@@ -633,25 +679,12 @@ async def upload_agent(
     # ``reserved_terms_expire_at`` and otherwise requires the current fee.
     # Honouring an already-issued quote never depends on the current revision
     # being quotable; only the current-fee fallback does (fail closed).
-    settings = await effective_submission_settings(
+    terms = await _payment_terms(
         session,
+        reservation=admission,
         default_payment_address=request.app.state.config.upload_payment_address,
-        require_quotable=admission is None,
+        reserved_address_default=request.app.state.config.upload_payment_address,
     )
-    current_fee_rao = settings.fee_amount_rao if settings.quotable else None
-    reserved_terms_expire_at = None
-    if admission is not None:
-        expected_amount_rao = admission.fee_amount_rao
-        legacy_payment_cutoff_at = admission.legacy_payment_cutoff_at
-        expected_send_address = (
-            admission.payment_send_address
-            or request.app.state.config.upload_payment_address
-        )
-        reserved_terms_expire_at = _as_utc(admission.expires_at)
-    else:
-        expected_amount_rao = settings.fee_amount_rao
-        legacy_payment_cutoff_at = None
-        expected_send_address = settings.payment_address
 
     # The replay lookup autobegan a read transaction. Release that pooled
     # connection before the slow chain/storage/fingerprint work below.
@@ -689,12 +722,12 @@ async def upload_agent(
                     extrinsic_index=payment_extrinsic_index,
                 ),
                 expected_hotkey=hotkey,
-                expected_amount_rao=expected_amount_rao,
-                legacy_amount_cutoff_at=legacy_payment_cutoff_at,
-                expected_send_address=expected_send_address,
-                reserved_terms_expire_at=reserved_terms_expire_at,
-                fallback_amount_rao=current_fee_rao,
-                fallback_send_address=settings.payment_address,
+                expected_amount_rao=terms.expected_amount_rao,
+                legacy_amount_cutoff_at=terms.legacy_amount_cutoff_at,
+                expected_send_address=terms.expected_send_address,
+                reserved_terms_expire_at=terms.reserved_terms_expire_at,
+                fallback_amount_rao=terms.fallback_amount_rao,
+                fallback_send_address=terms.fallback_send_address,
             )
         except ChainError as e:
             logger.warning(f"chain unreachable during /upload/agent verify: {e}")

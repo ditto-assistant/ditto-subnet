@@ -251,6 +251,12 @@ async def reserve_upload_admission(
         if retry_at is not None:
             raise SubmissionCooldownError(retry_at)
 
+    if not settings.quotable:
+        # A new quote is never issued from a revision this build cannot price;
+        # only an already-issued reservation (handled above) is honoured.
+        raise UnsupportedFeeDenominationError(
+            f"submission settings revision {settings.revision} cannot be quoted"
+        )
     row = UploadAdmissionReservation(
         miner_coldkey=miner_coldkey,
         token=uuid.uuid4(),

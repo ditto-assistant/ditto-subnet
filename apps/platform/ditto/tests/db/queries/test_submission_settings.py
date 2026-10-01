@@ -465,3 +465,56 @@ async def test_recovery_of_late_payment_reprices_at_current_fee(
             now=quoted_at + timedelta(hours=25),
         )
     assert recovered.fee_amount_rao == 90_000_000
+
+
+async def test_unquotable_settings_never_issue_a_new_reservation(
+    session: AsyncSession,
+) -> None:
+    """An issued reservation is honoured; a new quote is refused (fail closed)."""
+    from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
+
+    now = datetime(2026, 9, 24, 0, 0, tzinfo=UTC)
+    quotable = EffectiveSubmissionSettings(
+        revision=1,
+        cooldown_seconds=3600,
+        payment_address=_PAYMENT_ADDRESS,
+        fee_amount_rao=40_000_000,
+    )
+    unquotable = EffectiveSubmissionSettings(
+        revision=2,
+        cooldown_seconds=3600,
+        payment_address=_PAYMENT_ADDRESS,
+        fee_amount_rao=5,
+        quotable=False,
+    )
+    async with session.begin():
+        issued = await reserve_upload_admission(
+            session,
+            miner_coldkey="coldkey",
+            miner_hotkey="hotkey",
+            sha256="a" * 64,
+            settings=quotable,
+            now=now,
+        )
+    async with session.begin():
+        again = await reserve_upload_admission(
+            session,
+            miner_coldkey="coldkey",
+            miner_hotkey="hotkey",
+            sha256="a" * 64,
+            settings=unquotable,
+            now=now + timedelta(minutes=5),
+        )
+    assert again.token == issued.token
+    assert again.fee_amount_rao == 40_000_000
+    with pytest.raises(UnsupportedFeeDenominationError):
+        async with session.begin():
+            await reserve_upload_admission(
+                session,
+                miner_coldkey="other-coldkey",
+                miner_hotkey="other-hotkey",
+                sha256="b" * 64,
+                settings=unquotable,
+                now=now,
+            )
+    assert await session.get(UploadAdmissionReservation, "other-coldkey") is None

@@ -26,6 +26,7 @@ from ditto.api_models.submission_settings import (
     AdminSubmissionSettingsRequest,
     AdminSubmissionSettingsResponse,
     SubmissionFeeBounds,
+    SubmissionFeeDenomination,
     SubmissionSettingsProposal,
     format_rao_as_tao,
     submission_settings_confirmation,
@@ -124,6 +125,15 @@ async def preview_settings_revision(
     fee_amount_rao: Annotated[
         int, Query(ge=MIN_SUBMISSION_FEE_RAO, le=MAX_SUBMISSION_FEE_RAO)
     ],
+    fee_denomination: Annotated[
+        SubmissionFeeDenomination,
+        Query(
+            description=(
+                "Same field as the apply request; only fixed_tao is accepted, "
+                "so preview and apply validate identical inputs."
+            )
+        ),
+    ] = SUBMISSION_FEE_DENOMINATION_FIXED_TAO,
 ) -> AdminSubmissionSettingsPreview:
     """Dry-run one revision: the diff, the exact confirmation, and quotes in flight.
 
@@ -150,7 +160,7 @@ async def preview_settings_revision(
             cooldown_seconds=cooldown_seconds,
             fee_amount_rao=fee_amount_rao,
             fee_amount_tao=format_rao_as_tao(fee_amount_rao),
-            fee_denomination=SUBMISSION_FEE_DENOMINATION_FIXED_TAO,
+            fee_denomination=fee_denomination,
         ),
         expected_revision=expected_revision,
         stale=stale,

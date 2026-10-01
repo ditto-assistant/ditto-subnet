@@ -749,3 +749,117 @@ async def test_unreviewed_denomination_is_refused_not_relabelled(
     assert response.status_code == 503, response.text
     assert response.json()["error_code"] == 3100
     assert "5000000" not in response.text
+
+
+async def test_public_history_reports_a_capped_scan_as_truncated(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    first = await _apply(client, expected=1, fee_amount_rao=50_000_000)
+    await _apply(
+        client,
+        expected=first["revision"],
+        fee_amount_rao=50_000_000,
+        cooldown_seconds=1800,
+    )
+    # The scan sees only the two newest rows: one fee change, below `limit`.
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.public_submission_fee._SCAN_LIMIT", 2
+    )
+
+    body = (await client.get(_PUBLIC, params={"limit": 50})).json()
+
+    assert [row["revision"] for row in body["history"]] == [first["revision"]]
+    assert body["history_truncated"] is True
+
+
+async def test_public_fee_omits_an_unsupported_historical_revision(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An older USD-denominated change never appears, and never fails the
+    endpoint; the supported current fee is still published."""
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    genesis = SubmissionSettingsRevision(
+        revision=1,
+        parent_revision=0,
+        cooldown_seconds=3600,
+        fee_amount_rao=_GENESIS_FEE,
+        fee_denomination="fixed_tao",
+        reason="genesis",
+        actor="migration",
+        created_at=now - timedelta(days=3),
+    )
+    usd = SubmissionSettingsRevision(
+        revision=2,
+        parent_revision=1,
+        cooldown_seconds=3600,
+        fee_amount_rao=5_000_000_000,
+        fee_denomination="usd_indexed",
+        reason="five dollar target from a newer writer",
+        actor="future-platform",
+        created_at=now - timedelta(days=2),
+    )
+    current = SubmissionSettingsRevision(
+        revision=3,
+        parent_revision=2,
+        cooldown_seconds=3600,
+        fee_amount_rao=37_271_710,
+        fee_denomination="fixed_tao",
+        reason="back to a fixed TAO fee",
+        actor="operator",
+        created_at=now - timedelta(days=1),
+    )
+
+    async def _history(
+        _session: AsyncSession, **_kwargs: object
+    ) -> list[tuple[SubmissionSettingsRevision, SubmissionSettingsRevision | None]]:
+        return [(current, usd), (usd, genesis), (genesis, None)]
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.public_submission_fee.submission_settings_history",
+        _history,
+    )
+
+    response = await client.get(_PUBLIC)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["fee_amount_rao"] == 37_271_710
+    assert body["fee_revision"] == 3
+    assert [row["revision"] for row in body["history"]] == [3, 1]
+    assert body["history_truncated"] is True
+    # The unpublishable parent is not shown as revision 3's previous fee.
+    assert body["history"][0]["previous_fee_amount_rao"] is None
+    assert "usd_indexed" not in response.text
+    assert "5000000000" not in response.text
+
+
+async def test_preview_validates_the_same_denomination_as_apply(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    params = {
+        "expected_revision": 1,
+        "cooldown_seconds": 3600,
+        "fee_amount_rao": 50_000_000,
+    }
+    explicit = await client.get(
+        _PREVIEW, headers=_HEADERS, params={**params, "fee_denomination": "fixed_tao"}
+    )
+    assert explicit.status_code == 200, explicit.text
+    assert explicit.json()["proposed"]["fee_denomination"] == "fixed_tao"
+    refused = await client.get(
+        _PREVIEW,
+        headers=_HEADERS,
+        params={**params, "fee_denomination": "usd_indexed"},
+    )
+    assert refused.status_code == 422
