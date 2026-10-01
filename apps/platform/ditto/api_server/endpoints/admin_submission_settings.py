@@ -10,7 +10,7 @@ that payment stays recoverable for the same window after its block time.
 
 from __future__ import annotations
 
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -56,6 +56,23 @@ AdminDep = Annotated[None, Depends(require_admin)]
 
 _HISTORY_LIMIT = 100
 _QUOTE_LIFETIME_SECONDS = int(UPLOAD_ADMISSION_TTL.total_seconds())
+
+
+def fee_change_ratio_text(proposed_rao: int, current_rao: int) -> str:
+    """Proposed / current fee to four decimals, rounded away from 1.
+
+    A changed fee never reads as "1.0000" (an increase rounds up, a decrease
+    down), and a tiny ratio keeps four significant digits instead of
+    collapsing to "0.0000".
+    """
+    ratio = Decimal(proposed_rao) / Decimal(current_rao)
+    rounding = ROUND_CEILING if ratio > 1 else ROUND_FLOOR
+    rounded = ratio.quantize(Decimal("0.0001"), rounding=rounding)
+    if rounded == 0:
+        rounded = ratio.quantize(
+            Decimal(1).scaleb(ratio.adjusted() - 3), rounding=ROUND_FLOOR
+        )
+    return format(rounded, "f")
 
 
 def _publishable(row: SubmissionSettingsRevision | None) -> bool:
@@ -182,11 +199,7 @@ async def preview_settings_revision(
     cooldown_changed = cooldown_seconds != current.cooldown_seconds
     stale = expected_revision != current.revision
     ratio = (
-        str(
-            (Decimal(fee_amount_rao) / Decimal(current.fee_amount_rao)).quantize(
-                Decimal("0.0001"), rounding=ROUND_HALF_EVEN
-            )
-        )
+        fee_change_ratio_text(fee_amount_rao, current.fee_amount_rao)
         if fee_changed
         else None
     )

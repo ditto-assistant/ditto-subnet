@@ -437,7 +437,8 @@ async def test_preview_reports_the_diff_confirmation_and_in_flight_quotes(
     assert preview["stale"] is False
     assert preview["fee_changed"] is True
     assert preview["cooldown_changed"] is False
-    assert preview["fee_change_ratio"] == "0.9318"
+    # 37,271,710 / 40,000,000 = 0.93179275, rounded away from 1.
+    assert preview["fee_change_ratio"] == "0.9317"
     assert preview["applicable"] is True
     assert preview["required_confirmation"] == (
         "SET SUBMISSION COOLDOWN 3600 SECONDS FEE 37271710 RAO"
@@ -1306,3 +1307,24 @@ async def test_create_response_never_shows_an_unpublishable_parent_fee(
     assert created["previous_fee_amount_rao"] is None
     assert created["previous_cooldown_seconds"] is None
     assert "5000000000" not in json.dumps(created)
+
+
+@pytest.mark.parametrize(
+    ("proposed", "current", "expected"),
+    [
+        (40_000_001, 40_000_000, "1.0001"),
+        (39_999_999, 40_000_000, "0.9999"),
+        (80_000_000, 40_000_000, "2.0000"),
+        (20_000_000, 40_000_000, "0.5000"),
+        (1_000_000, 1_000_000_000_000, "0.000001000"),
+        (10_000_000_000, 1, "10000000000.0000"),
+    ],
+)
+async def test_fee_change_ratio_never_misstates_a_boundary(
+    proposed: int, current: int, expected: str
+) -> None:
+    from ditto.api_server.endpoints.admin_submission_settings import (
+        fee_change_ratio_text,
+    )
+
+    assert fee_change_ratio_text(proposed, current) == expected
