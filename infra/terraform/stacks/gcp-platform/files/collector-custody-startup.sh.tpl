@@ -19,6 +19,7 @@ readonly ORIGIN=https://github.com/ditto-assistant/ditto-subnet.git
 [[ "$${REVISION}" =~ ^[0-9a-f]{40}$ ]]
 if [[ -f "$${STATE}/ready" ]]; then
   test "$(git -C "$${ROOT}" rev-parse HEAD)" = "$${REVISION}"
+  git -C "$${ROOT}" update-index --refresh
   git -C "$${ROOT}" diff-index --quiet HEAD --
   test -x "$${ROOT}/.venv/bin/python"
   exit 0
@@ -43,6 +44,7 @@ fi
 # never replace a different checkout or erase ceremony state during recovery.
 if head="$(runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" rev-parse --verify HEAD 2>/dev/null)"; then
   test "$${head}" = "$${REVISION}"
+  runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" update-index --refresh
   runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" diff-index --quiet HEAD --
 fi
 runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" fetch --filter=blob:none origin refs/heads/main:refs/remotes/origin/main
@@ -69,6 +71,7 @@ umask 077
 ulimit -c 0
 readonly ROOT=/opt/sn118-collector
 test "$(git -C "$${ROOT}" rev-parse HEAD)" = '${git_revision}'
+git -C "$${ROOT}" update-index --refresh
 git -C "$${ROOT}" diff-index --quiet HEAD --
 test -z "$(git -C "$${ROOT}" ls-files --others --exclude-standard -- ':!.venv' ':!*.egg-info')"
 [[ "$${1:-}" == generate || "$${1:-}" == verify ]]
