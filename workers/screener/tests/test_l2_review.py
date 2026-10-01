@@ -8762,6 +8762,59 @@ async def test_l1_infra_failure_and_pre_v13_unsettled_l1_do_not_escalate() -> No
         assert not result.ok
 
 
+def _l1_out_of_time() -> SourceReviewObservation:
+    return replace(
+        _unsettled_l1(),
+        error_code="source-review-lease-budget-exhausted",
+        review_audit={
+            "stage": "l1",
+            "reason_code": "source-review-lease-budget-exhausted",
+            "budget_stop_reason": "time",
+        },
+    )
+
+
+async def test_v13_l1_out_of_time_escalates_on_its_notes() -> None:
+    l1 = _FakeL1(_l1_out_of_time())
+    l2 = _FakeL2(_model_result(_safe()))
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        policy_version=13,
+        deadline=asyncio.get_running_loop().time() + 3600,
+    )
+
+    assert l1.calls == l2.calls == 1
+    assert result.ok
+
+
+async def test_l1_out_of_time_does_not_escalate_without_lease_left() -> None:
+    cases = (
+        (_l1_out_of_time(), 13, 30.0),
+        (_l1_out_of_time(), 12, 3600.0),
+        (
+            replace(_l1_out_of_time(), failure_disposition="pass_inconclusive"),
+            13,
+            3600.0,
+        ),
+    )
+    for observation, policy_version, seconds_left in cases:
+        l1 = _FakeL1(observation)
+        l2 = _FakeL2(_model_result(_safe()))
+        layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+        await layered.review(
+            "unused",
+            artifact_sha256="ab" * 32,
+            attempt_id=ATTEMPT,
+            policy_version=policy_version,
+            deadline=asyncio.get_running_loop().time() + seconds_left,
+        )
+        assert l2.calls == 0
+
+
 def _auth_wait_agent(
     tmp_path: Path, handler: object, auth_retry_delays: tuple[float, ...]
 ) -> SolL2SourceReviewAgent:

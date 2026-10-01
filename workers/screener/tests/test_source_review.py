@@ -5232,6 +5232,11 @@ async def test_expired_lease_deadline_stops_review_before_first_call(
         "source-review-lease-budget-exhausted"
     )
     assert observation.review_audit["steps_used"] == 0
+    # L1 ran out of its own time with nothing to settle on: the deep review
+    # still owes a decision, so the stop is marked for v13 escalation.
+    assert observation.failure_disposition == "inconclusive"
+    assert observation.review_audit["budget_stop_reason"] == "time"
+    assert l1_verdict_unsettled(observation)
 
 
 async def test_deadline_expiry_mid_turn_is_lease_budget(tmp_path: Path) -> None:
@@ -5293,6 +5298,9 @@ async def test_deadline_expiry_mid_turn_is_lease_budget(tmp_path: Path) -> None:
         "source-review-lease-budget-exhausted"
     )
     assert 1 <= observation.review_audit["steps_used"] <= 4
+    # A ledger that admits on its own coverage is settled, not escalated.
+    assert observation.review_audit["budget_stop_reason"] == "time"
+    assert not l1_verdict_unsettled(observation)
 
 
 async def test_provider_timeout_with_open_lease_stays_retryable(

@@ -6148,7 +6148,12 @@ class LayeredSourceReviewAgent:
         # An L1 that never produced a valid verdict carries its ledger but no
         # decision. Under the two-outcome policy the deep review still owes
         # one, so it escalates on the recorded notes rather than ending here.
-        unsettled_l1 = policy_version >= 13 and not l1.ok and l1_verdict_unsettled(l1)
+        unsettled_l1 = (
+            policy_version >= 13
+            and not l1.ok
+            and l1_verdict_unsettled(l1)
+            and _escalation_time_remains(review_deadline)
+        )
         should_escalate = (
             always_escalate
             or unsettled_l1
@@ -6564,6 +6569,18 @@ def _has_mixed_causal_families(
     return (
         bool(analyst_families & l1_families) and len(analyst_families | l1_families) > 1
     )
+
+
+# An unsettled L1 escalates only while the deep review can still run a turn;
+# with less than this left the escalation would fail as lease exhaustion.
+_MIN_UNSETTLED_ESCALATION_SECONDS = 120.0
+
+
+def _escalation_time_remains(deadline: float | None) -> bool:
+    if deadline is None:
+        return True
+    remaining = deadline - asyncio.get_running_loop().time()
+    return remaining >= _MIN_UNSETTLED_ESCALATION_SECONDS
 
 
 def _routes_inconclusive_to_l3(analyst: L2RunResult, policy_version: int) -> bool:

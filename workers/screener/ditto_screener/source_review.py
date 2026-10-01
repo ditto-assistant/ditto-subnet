@@ -570,10 +570,12 @@ class SourceReviewBudgetExhausted(ValueError):
         max_read_bytes: int = _MAX_TOTAL_TOOL_CHARS,
         policy_version: int = SCREENING_POLICY_VERSION,
         verdict_unsettled: bool = False,
+        stop_reason: str | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
         self.verdict_unsettled = verdict_unsettled
+        self.stop_reason = stop_reason
         self.max_steps = max_steps
         self.steps_used = steps_used
         self.read_bytes_used = read_bytes_used
@@ -590,24 +592,32 @@ class SourceReviewBudgetExhausted(ValueError):
             steps_used=self.steps_used,
             max_read_bytes=self.max_read_bytes,
             read_bytes_used=self.read_bytes_used,
-            budget_stop_reason="step" if self.verdict_unsettled else None,
+            budget_stop_reason="step" if self.verdict_unsettled else self.stop_reason,
         )
 
 
 def l1_verdict_unsettled(observation: object) -> bool:
-    """Whether L1 spent its steps without one host-valid verdict.
+    """Whether L1 stopped without one host-valid verdict it could settle on.
 
-    The specific inconsistency stays in ``error_code`` for diagnosis; the
-    audit's step stop marks that the reviewer, not infrastructure, ran out.
+    Two reviewer-owned stops qualify: spending every step without a valid
+    verdict (the inconsistency stays in ``error_code``), and running out of
+    L1's own time with a ledger that cannot admit or clear on its own. Either
+    way the reviewer, not infrastructure, ran out, and the deep review still
+    owes a decision on the recorded notes.
     """
     audit = getattr(observation, "review_audit", None)
     code = getattr(observation, "error_code", None)
+    if not isinstance(audit, Mapping) or audit.get("stage") != "l1":
+        return False
+    if not isinstance(code, str):
+        return False
+    stop = audit.get("budget_stop_reason")
+    if stop == "step":
+        return code.startswith("source-review-inconsistent-verdict")
     return (
-        isinstance(audit, Mapping)
-        and audit.get("stage") == "l1"
-        and audit.get("budget_stop_reason") == "step"
-        and isinstance(code, str)
-        and code.startswith("source-review-inconsistent-verdict")
+        stop == "time"
+        and code == "source-review-lease-budget-exhausted"
+        and getattr(observation, "failure_disposition", None) == "inconclusive"
     )
 
 
@@ -3874,6 +3884,7 @@ class OpenRouterSourceReviewAgent:
                 read_files_used=len(read_files),
                 max_read_bytes=self._max_read_bytes,
                 policy_version=policy_version,
+                stop_reason="time",
             )
 
         if progress is not None:
