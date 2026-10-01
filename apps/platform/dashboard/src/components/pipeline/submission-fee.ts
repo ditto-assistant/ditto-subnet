@@ -17,7 +17,10 @@ export function isFixedTao(denomination: string | null | undefined): boolean {
   return denomination === "fixed_tao";
 }
 
-/** "0.1 → 0.04 TAO" for a change, "0.04 TAO" for the first recorded fee. */
+/** "0.1 → 0.04 TAO" for a change. Platform reports every change, including the
+ * first operator revision, with its previous fee (the built-in default for
+ * revision 1); a bare "0.04 TAO" only renders when that previous fee was not
+ * published. */
 export function feeChangeText(previousRao: number | null, rao: number): string {
   return previousRao === null
     ? `${raoToTao(rao)} TAO`
@@ -50,15 +53,25 @@ export function quoteLifetimeText(seconds: number): string {
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
-/** Meta line for the current fee's revision. */
-export function feeRevisionText(revision: number | null): string {
-  if (revision === 0) return "Built-in default (no operator revision yet)";
+/** Meta line for the current fee's revision. ``fee_revision`` 0 means the fee
+ * was never changed by an operator; cooldown-only revisions can still exist
+ * (``policy_revision`` > 0). */
+export function feeRevisionText(revision: number | null, policyRevision: number): string {
+  if (revision === 0) {
+    return policyRevision === 0
+      ? "Built-in default (no operator revision yet)"
+      : "Built-in default fee (never changed by an operator)";
+  }
   if (revision === null) return "Fixed TAO · revision not in the scanned history";
   return `Fixed TAO · revision ${revision}`;
 }
 
-/** Direction of one change; "initial" only for the true first fee. */
+/** Direction of one change. */
 export function changeLabel(previousRao: number | null, rao: number, isGenesis: boolean): string {
+  // Defensive only: current Platform always reports a previous fee for a
+  // published change (the built-in default for revision 1) unless that
+  // previous fee is unpublishable, which is "previous fee not shown".
+  // "initial" survives for an older Platform that omitted revision 1's parent.
   if (previousRao === null) return isGenesis ? "initial" : "previous fee not shown";
   return feeDirection(previousRao, rao) || "same amount";
 }

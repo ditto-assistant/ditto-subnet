@@ -57,13 +57,14 @@ describe("SubmissionFee", () => {
     const revisions = Array.from(document.querySelectorAll(".submission-fee-history li")).map(
       (row) => row.getAttribute("data-fee-revision"),
     );
-    expect(revisions).toEqual(["5", "3", "1"]);
+    // Platform's real shape: revision 1 kept the built-in 0.04 TAO, so it is
+    // not a change; the first operator change reports 0.04 as its previous fee.
+    expect(revisions).toEqual(["5", "3"]);
     expect(rows[0]).toContain("0.2 → 0.1 TAO");
     expect(rows[0]).toContain("down 50%");
     expect(rows[1]).toContain("0.04 → 0.2 TAO");
     expect(rows[1]).toContain("up 400%");
-    expect(rows[2]).toContain("0.04 TAO");
-    expect(rows[2]).toContain("initial");
+    expect(document.body.textContent).not.toContain("initial");
   });
 
   it("never shows operator identity or reasons", async () => {
@@ -97,10 +98,10 @@ describe("SubmissionFee unavailable states", () => {
 describe("SubmissionFee edge payloads", () => {
   it("never renders an unreviewed-denomination history row as TAO and marks history incomplete", async () => {
     const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
-    const [first, second, third] = fixture.history;
+    const [first, second] = fixture.history;
     serve({
       ...fixture,
-      history: [first, { ...second, fee_denomination: "usd_indexed" }, third],
+      history: [{ ...first, fee_denomination: "usd_indexed" }, second],
       history_truncated: false,
     });
     render(() => <SubmissionFee />);
@@ -108,8 +109,8 @@ describe("SubmissionFee edge payloads", () => {
     const revisions = Array.from(document.querySelectorAll(".submission-fee-history li")).map(
       (row) => row.getAttribute("data-fee-revision"),
     );
-    expect(revisions).toEqual(["5", "1"]);
-    expect(document.querySelector(".submission-fee-count")?.textContent).toBe("2+");
+    expect(revisions).toEqual(["3"]);
+    expect(document.querySelector(".submission-fee-count")?.textContent).toBe("1+");
   });
 
   it("omits the effective date when the API has none, and handles empty history", async () => {
@@ -127,20 +128,42 @@ describe("SubmissionFee edge payloads", () => {
 });
 
 describe("SubmissionFee revision states", () => {
-  it("names the built-in default when no operator revision set the fee", async () => {
+  it("names the built-in default when no operator revision exists", async () => {
     const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
     serve({
       ...fixture,
+      policy_revision: 0,
       fee_revision: 0,
+      fee_amount_rao: 40_000_000,
+      fee_amount_tao: "0.040000000",
       fee_effective_at: null,
       history: [],
       history_truncated: false,
     });
     render(() => <SubmissionFee />);
-    await screen.findByText("0.1 TAO");
+    await screen.findByText("0.04 TAO");
     const meta = document.querySelector(".submission-fee-meta")?.textContent ?? "";
     expect(meta).toBe("Built-in default (no operator revision yet)");
     expect(document.querySelector("details.submission-fee-history")).toBeNull();
+  });
+
+  it("says the built-in fee was never changed when only cooldowns were revised", async () => {
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    serve({
+      ...fixture,
+      policy_revision: 4,
+      fee_revision: 0,
+      fee_amount_rao: 40_000_000,
+      fee_amount_tao: "0.040000000",
+      fee_effective_at: null,
+      history: [],
+      history_truncated: false,
+    });
+    render(() => <SubmissionFee />);
+    await screen.findByText("0.04 TAO");
+    expect(document.querySelector(".submission-fee-meta")?.textContent).toBe(
+      "Built-in default fee (never changed by an operator)",
+    );
   });
 
   it("says when the revision is outside the scanned history", async () => {
@@ -153,15 +176,14 @@ describe("SubmissionFee revision states", () => {
     );
   });
 
-  it("calls a row initial only when it is the first fee of a complete history", async () => {
+  it("labels a change whose previous fee was not published", async () => {
     const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
-    const [newest, middle, oldest] = fixture.history;
+    const [newest, oldest] = fixture.history;
     serve({
       ...fixture,
       history: [
         newest,
-        { ...middle, previous_fee_amount_rao: null, previous_fee_amount_tao: null },
-        oldest,
+        { ...oldest, previous_fee_amount_rao: null, previous_fee_amount_tao: null },
       ],
       history_truncated: true,
     });
@@ -170,7 +192,7 @@ describe("SubmissionFee revision states", () => {
     const labels = Array.from(document.querySelectorAll(".submission-fee-direction")).map(
       (node) => node.textContent,
     );
-    expect(labels).toEqual(["down 50%", "previous fee not shown", "previous fee not shown"]);
+    expect(labels).toEqual(["down 50%", "previous fee not shown"]);
   });
 });
 

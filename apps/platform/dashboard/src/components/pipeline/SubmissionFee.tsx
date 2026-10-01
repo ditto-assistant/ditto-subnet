@@ -55,7 +55,7 @@ export function SubmissionFee(): JSX.Element {
                 {raoToTao(current().fee_amount_rao)} TAO
               </strong>
               <span class="submission-fee-meta">
-                {feeRevisionText(current().fee_revision)}
+                {feeRevisionText(current().fee_revision, current().policy_revision)}
                 <Show when={current().fee_effective_at}>
                   {(at) => <> · since {feeDate(at())}</>}
                 </Show>
