@@ -110,7 +110,7 @@ class Cloud:
             if len(raw) > 65536:
                 raise Refusal("api-response-too-large")
             value = json.loads(raw)
-            if not isinstance(value, dict):
+            if not isinstance(value, dict) or "error" in value:
                 raise Refusal("api-response-invalid")
             return value
 
@@ -123,8 +123,12 @@ class Cloud:
         payload = mnemonic.encode("ascii")
         result = self.call(
             ":addVersion",
-            {"payload": {"data": base64.b64encode(payload).decode(),
-                         "dataCrc32c": str(crc32c(payload))}},
+            {
+                "payload": {
+                    "data": base64.b64encode(payload).decode(),
+                    "dataCrc32c": str(crc32c(payload)),
+                }
+            },
         )
         if (
             result.get("name") != self.parent + "/versions/1"
@@ -155,7 +159,11 @@ def keypair_type():
 def check_private(fd: int, *, directory: bool = False) -> None:
     item = os.fstat(fd)
     expected_type = stat.S_ISDIR if directory else stat.S_ISREG
-    if not expected_type(item.st_mode) or item.st_uid != os.geteuid() or item.st_mode & 0o077:
+    if (
+        not expected_type(item.st_mode)
+        or item.st_uid != os.geteuid()
+        or item.st_mode & 0o077
+    ):
         raise Refusal("ceremony-state-permissions")
 
 
@@ -166,7 +174,15 @@ def read_receipt(root: Path) -> dict:
         raw = handle.read(8193)
         if len(raw) > 8192:
             raise Refusal("receipt-too-large")
-        return json.loads(raw)
+        value = json.loads(raw)
+        if not isinstance(value, dict) or set(value) != {
+            "role",
+            "secret_version",
+            "status",
+            "address",
+        }:
+            raise Refusal("receipt-fields-invalid")
+        return value
 
 
 def write_receipt(root: Path, receipt: dict, *, first: bool = False) -> None:
@@ -192,7 +208,9 @@ def ceremony(cloud: Cloud, mode: str, root: Path, forbidden: list[str]) -> dict:
         check_private(directory_fd, directory=True)
     finally:
         os.close(directory_fd)
-    lock_fd = os.open(root / "ceremony.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    lock_fd = os.open(
+        root / "ceremony.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600
+    )
     with os.fdopen(lock_fd, "w") as lock:
         check_private(lock.fileno())
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -213,18 +231,26 @@ def ceremony(cloud: Cloud, mode: str, root: Path, forbidden: list[str]) -> dict:
                 raise Refusal("stored-address-mismatch")
             return {**receipt, "status": "independently-rederived"}
         # Existing, invalid, disabled, destroyed or uncertain attempts never retry.
-        if os.path.lexists(root / "receipt.json") or os.path.lexists(root / ".receipt.pending"):
+        if os.path.lexists(root / "receipt.json") or os.path.lexists(
+            root / ".receipt.pending"
+        ):
             raise Refusal("existing-intent-no-regeneration")
         cloud.assert_empty()
-        receipt = {"role": cloud.role, "secret_version": cloud.parent + "/versions/1",
-                   "status": "started", "address": None}
+        receipt = {
+            "role": cloud.role,
+            "secret_version": cloud.parent + "/versions/1",
+            "status": "started",
+            "address": None,
+        }
         write_receipt(root, receipt, first=True)
         Keypair = keypair_type()
         mnemonic = Keypair.generate_mnemonic(n_words=24)
         if len(mnemonic.split()) != 24:
             raise Refusal("mnemonic-format-invalid")
         address = Keypair.create_from_mnemonic(mnemonic).ss58_address
-        if address in forbidden or not re.fullmatch(r"5[1-9A-HJ-NP-Za-km-z]{47}", address):
+        if address in forbidden or not re.fullmatch(
+            r"5[1-9A-HJ-NP-Za-km-z]{47}", address
+        ):
             raise Refusal("generated-address-invalid")
         receipt.update(address=address, status="pending-upload")
         write_receipt(root, receipt)
@@ -258,7 +284,11 @@ def main() -> int:
     except Exception:
         # Includes dependency/transport/HTTP/SDK errors. Their text can contain
         # auth headers or payloads; never emit repr, body, traceback or cause.
-        print("Collector delegate ceremony refused. Preserve state; reconcile before retry.", file=sys.stderr)
+        print(
+            "Collector delegate ceremony refused. "
+            "Preserve state; reconcile before retry.",
+            file=sys.stderr,
+        )
         return 1
 
 

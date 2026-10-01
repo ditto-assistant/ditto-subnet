@@ -100,13 +100,17 @@ class CeremonyControls(unittest.TestCase):
             module.ceremony(cloud, "generate", self.root, FORBIDDEN)
         self.assertEqual(FakeKeys.calls, 1)
         self.assertEqual(cloud.uploads, 1)
-        self.assertEqual(module.ceremony(cloud, "verify", self.root, FORBIDDEN)["address"], ADDRESS)
+        self.assertEqual(
+            module.ceremony(cloud, "verify", self.root, FORBIDDEN)["address"], ADDRESS
+        )
 
     def test_crash_before_generation_is_latched_even_with_empty_secret(self):
         cloud = FakeCloud()
-        with patch.object(module, "keypair_type", side_effect=RuntimeError(SENTINEL)):
-            with self.assertRaises(RuntimeError):
-                module.ceremony(cloud, "generate", self.root, FORBIDDEN)
+        with (
+            patch.object(module, "keypair_type", side_effect=RuntimeError(SENTINEL)),
+            self.assertRaises(RuntimeError),
+        ):
+            module.ceremony(cloud, "generate", self.root, FORBIDDEN)
         self.assertEqual(module.read_receipt(self.root)["status"], "started")
         with self.assertRaisesRegex(module.Refusal, "existing-intent"):
             module.ceremony(cloud, "generate", self.root, FORBIDDEN)
@@ -146,6 +150,7 @@ class CeremonyControls(unittest.TestCase):
         self.root.chmod(0o700)
         lock = self.root / "ceremony.lock"
         lock.touch(mode=0o644)
+        lock.chmod(0o644)
         with self.assertRaisesRegex(module.Refusal, "permissions"):
             module.ceremony(FakeCloud(), "generate", self.root, FORBIDDEN)
 
@@ -165,9 +170,16 @@ class CeremonyControls(unittest.TestCase):
         for wrong in (FakeCloud("transfer"),):
             with self.assertRaisesRegex(module.Refusal, "receipt-binding"):
                 module.ceremony(wrong, "verify", self.root, FORBIDDEN)
-        with patch.object(cloud, "access", return_value="wrong key"):
-            with self.assertRaises(Exception):
-                module.ceremony(cloud, "verify", self.root, FORBIDDEN)
+        with (
+            patch.object(cloud, "access", return_value="wrong key"),
+            self.assertRaises(module.Refusal),
+        ):
+            module.ceremony(cloud, "verify", self.root, FORBIDDEN)
+        with (
+            patch.object(FakeKeys, "ss58_address", "5" + "Z" * 47),
+            self.assertRaisesRegex(module.Refusal, "stored-address-mismatch"),
+        ):
+            module.ceremony(cloud, "verify", self.root, FORBIDDEN)
         self.assertEqual(cloud.uploads, 1)
 
     def test_offline_address_collision_stops_before_upload(self):
@@ -175,13 +187,35 @@ class CeremonyControls(unittest.TestCase):
             module.ceremony(FakeCloud(), "generate", self.root, [ADDRESS])
         self.assertEqual(module.read_receipt(self.root)["status"], "started")
 
+    def test_unexpected_receipt_field_cannot_escape_in_public_output(self):
+        cloud = FakeCloud()
+        receipt = module.ceremony(cloud, "generate", self.root, FORBIDDEN)
+        receipt["unexpected_private_payload"] = SENTINEL
+        (self.root / "receipt.json").write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(module.Refusal, "receipt-fields-invalid"):
+            module.ceremony(cloud, "verify", self.root, FORBIDDEN)
+
     def test_main_redacts_transport_and_sdk_errors_and_has_no_secret_arguments(self):
-        argv = [str(SCRIPT), "--project", "test-project", "--role", "transfer",
-                "--mode", "generate", "--confirm", "GENERATE GCP COLLECTOR TRANSFER DELEGATE"]
+        argv = [
+            str(SCRIPT),
+            "--project",
+            "test-project",
+            "--role",
+            "transfer",
+            "--mode",
+            "generate",
+            "--confirm",
+            "GENERATE GCP COLLECTOR TRANSFER DELEGATE",
+        ]
         for address in FORBIDDEN:
             argv.extend(["--forbidden-address", address])
         out, err = io.StringIO(), io.StringIO()
-        with patch.object(module.sys, "argv", argv), patch.object(module, "Cloud", side_effect=RuntimeError(SENTINEL)), redirect_stdout(out), redirect_stderr(err):
+        with (
+            patch.object(module.sys, "argv", argv),
+            patch.object(module, "Cloud", side_effect=RuntimeError(SENTINEL)),
+            redirect_stdout(out),
+            redirect_stderr(err),
+        ):
             self.assertEqual(module.main(), 1)
         self.assertEqual(out.getvalue(), "")
         self.assertNotIn(SENTINEL, err.getvalue())
@@ -200,26 +234,42 @@ class WireControls(unittest.TestCase):
     def test_upload_checks_exact_first_version_and_server_checksum(self):
         client = self.client()
         calls = []
+
         def call(suffix, body):
             calls.append((suffix, body))
-            return {"name": client.parent + "/versions/1", "state": "ENABLED",
-                    "clientSpecifiedPayloadChecksum": True}
+            return {
+                "name": client.parent + "/versions/1",
+                "state": "ENABLED",
+                "clientSpecifiedPayloadChecksum": True,
+            }
+
         client.call = call
         client.add(SENTINEL)
         payload = calls[0][1]["payload"]
         self.assertEqual(base64.b64decode(payload["data"]), SENTINEL.encode())
         self.assertEqual(payload["dataCrc32c"], str(module.crc32c(SENTINEL.encode())))
-        for result in ({}, {"name": client.parent + "/versions/2"},
-                       {"name": client.parent + "/versions/1", "state": "ENABLED", "clientSpecifiedPayloadChecksum": False}):
+        for result in (
+            {},
+            {"name": client.parent + "/versions/2"},
+            {
+                "name": client.parent + "/versions/1",
+                "state": "ENABLED",
+                "clientSpecifiedPayloadChecksum": False,
+            },
+        ):
             client.call = lambda *_args, value=result: value
             with self.assertRaisesRegex(module.Refusal, "uncertain"):
                 client.add(SENTINEL)
 
     def test_read_checksum_and_exact_version_refused(self):
         client = self.client()
-        response = {"name": client.parent + "/versions/1", "payload": {
-            "data": base64.b64encode(SENTINEL.encode()).decode(),
-            "dataCrc32c": str(module.crc32c(SENTINEL.encode()))}}
+        response = {
+            "name": client.parent + "/versions/1",
+            "payload": {
+                "data": base64.b64encode(SENTINEL.encode()).decode(),
+                "dataCrc32c": str(module.crc32c(SENTINEL.encode())),
+            },
+        }
         client.call = lambda *_args: response
         self.assertEqual(client.access(), SENTINEL)
         response["payload"]["dataCrc32c"] = "0"
@@ -230,18 +280,40 @@ class WireControls(unittest.TestCase):
             client.access()
 
     def test_metadata_wrong_host_principal_project_or_phase_refused(self):
-        base = {"project/project-id": "test-project", "instance/name": "sn118-collector-registration-signer",
-                "instance/service-accounts/default/email": "sn118-collector-registration@test-project.iam.gserviceaccount.com",
-                "instance/tags": '["collector-registration-armed"]',
-                "project/numeric-project-id": "123456", "instance/service-accounts/default/token": '{"access_token":"TEST"}'}
+        base = {
+            "project/project-id": "test-project",
+            "instance/name": "sn118-collector-registration-signer",
+            "instance/service-accounts/default/email": (
+                "sn118-collector-registration@test-project.iam.gserviceaccount.com"
+            ),
+            "instance/tags": '["collector-registration-armed"]',
+            "project/numeric-project-id": "123456",
+            "instance/service-accounts/default/token": '{"access_token":"TEST"}',
+        }
         with patch.object(module.Cloud, "metadata", side_effect=lambda s: base[s]):
-            self.assertEqual(module.Cloud("test-project", "registration", "generate").parent, self.client().parent)
-        for key, wrong in (("project/project-id", "other-project"), ("instance/name", "other-host"),
-                           ("instance/service-accounts/default/email", "other-principal"),
-                           ("instance/tags", '["collector-registration-bootstrap"]'),
-                           ("instance/tags", '["collector-registration-armed","collector-transfer-bootstrap"]')):
+            self.assertEqual(
+                module.Cloud("test-project", "registration", "generate").parent,
+                self.client().parent,
+            )
+        for key, wrong in (
+            ("project/project-id", "other-project"),
+            ("instance/name", "other-host"),
+            ("instance/service-accounts/default/email", "other-principal"),
+            ("instance/tags", '["collector-registration-bootstrap"]'),
+            (
+                "instance/tags",
+                '["collector-registration-armed","collector-transfer-bootstrap"]',
+            ),
+        ):
             changed = {**base, key: wrong}
-            with patch.object(module.Cloud, "metadata", side_effect=lambda s: changed[s]), self.assertRaises(module.Refusal):
+            with (
+                patch.object(
+                    module.Cloud,
+                    "metadata",
+                    side_effect=lambda s, value=changed: value[s],
+                ),
+                self.assertRaises(module.Refusal),
+            ):
                 module.Cloud("test-project", "registration", "generate")
 
     def test_redirects_refused_and_arbitrary_api_paths_refused(self):

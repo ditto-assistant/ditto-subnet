@@ -59,7 +59,9 @@ main, match root-owned source and frozen `uv.lock`. Bootstrap asserts SDK10.5.0.
 1. **Bootstrap** both roles with no secret permission. Verify actual image,
    identities, source/lock/venv files, root ownership, no long-lived bootstrap
    process, ready marker and no activation/timer/journal. Record image/source
-   hashes and network/principal facts. SSH operator access is per instance only.
+   hashes and network/principal facts. OS Admin Login/IAP are per instance;
+   the operator also receives Service Account User on each exact attached
+   identity, required by OS Login. No token-creator or project-wide grant is added.
 2. **Armed**: apply removes that role's bootstrap internet tag/allow first, then
    gives its own add/list secret binding. Verify actual effective Google-only
    egress (`199.36.153.4/30:443`), no private/internet path and no inherited secret

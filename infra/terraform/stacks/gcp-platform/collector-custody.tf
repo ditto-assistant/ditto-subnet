@@ -293,6 +293,15 @@ resource "google_compute_instance_iam_member" "collector_operator" {
   member        = "user:${var.collector_custody_operator}"
 }
 
+# OS Login on a VM with an attached identity also requires actAs on that exact
+# service account. This does not grant token creation or project-level access.
+resource "google_service_account_iam_member" "collector_operator" {
+  for_each           = local.collector_roles
+  service_account_id = google_service_account.collector_delegate[each.key].name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "user:${var.collector_custody_operator}"
+}
+
 resource "google_iap_tunnel_instance_iam_member" "collector_operator" {
   for_each = local.collector_roles
   project  = var.project
