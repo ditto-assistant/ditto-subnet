@@ -382,6 +382,7 @@ async def check(
     )
     settings = recovery_terms.settings
     recovery_payment_verified = False
+    proof_already_used = False
     recovery_paid_at: datetime | None = None
     if (
         not codes
@@ -407,10 +408,21 @@ async def check(
                     and existing.sha256 == body.sha256
                 ):
                     raise PaymentReplayedError("payment proof already used")
-                recovery_payment_verified = True
+                # The proof is consumed: it funded this exact upload already,
+                # so it funds nothing new. No new payment is needed (the
+                # /upload/agent exact retry returns the existing agent), but
+                # the slot is reserved like any fresh request: the cooldown
+                # applies and no live reservation is rotated or taken over.
+                proof_already_used = True
             elif payment_record.miner_hotkey != body.hotkey:
                 raise PaymentReplayedError(
                     "payment credit belongs to a different hotkey"
+                )
+            elif payment_record.miner_coldkey != owner_coldkey:
+                # Same rule as /upload/agent's credit path: a credit is bound
+                # to the coldkey that paid it.
+                raise PaymentReplayedError(
+                    "payment credit belongs to a different coldkey"
                 )
             else:
                 _ensure_payment_recovery_fresh(payment_record.timestamp)
@@ -498,7 +510,9 @@ async def check(
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)
             messages.append(submission_cooldown_message(retry_at))
 
-    payment_required = not codes and not recovery_payment_verified
+    payment_required = (
+        not codes and not recovery_payment_verified and not proof_already_used
+    )
     return UploadCheckResponse(
         ok=not codes,
         error_codes=codes,
