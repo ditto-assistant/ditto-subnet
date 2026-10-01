@@ -59,6 +59,7 @@ def install_shims():
         '    forwarded=(); for item in "$@"; do\n'
         '      [[ "$item" == --filter=blob:none ]] || forwarded+=("$item")\n'
         "    done\n"
+        '    forwarded+=(--update-shallow)\n'
         "    exec /usr/bin/git -c "
         "url.file:///fixture/repo.git.insteadOf="
         'https://github.com/ditto-assistant/ditto-subnet.git "${forwarded[@]}"\n'
