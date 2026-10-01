@@ -185,6 +185,49 @@ def test_snapshot_cannot_overwrite_source_or_wrong_scope(spool, fault):
     as_user(PUBLISHER, refused)
 
 
+@pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])
+def test_real_sqlite_sidecar_alias_refuses_without_source_damage(spool, suffix):
+    root, handoff, _, _ = spool
+    add_rows(spool, 1)
+    refresh_snapshot(spool)
+    source = root / "publisher/journal.sqlite"
+    prior = (root / "publisher/selector-snapshot.db").read_bytes()
+
+    def exercise():
+        with sqlite3.connect(source) as writer:
+            writer.execute(
+                "PRAGMA journal_mode=" + ("DELETE" if suffix == "-journal" else "WAL")
+            )
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            writer.execute("UPDATE operations SET amount=31 WHERE id=1")
+            if suffix != "-journal":
+                writer.commit()
+            # Rollback journal remains live while a separate connection's
+            # snapshot attempt must refuse before beginning any source read.
+            reader = sqlite3.connect(source) if suffix == "-journal" else writer
+            try:
+                sidecar = Path(str(source) + suffix)
+                assert sidecar.is_file()
+                before, main_before = sidecar.read_bytes(), source.read_bytes()
+                with pytest.raises(ValueError, match="journal or sidecar"):
+                    write_selector_snapshot(
+                        reader,
+                        sidecar,
+                        SimpleNamespace(digest=handoff.collector_policy_digest),
+                    )
+                assert sidecar.read_bytes() == before
+                assert source.read_bytes() == main_before
+                assert writer.execute(
+                    "SELECT amount FROM operations WHERE id=1"
+                ).fetchone() == (31,)
+                assert (root / "publisher/selector-snapshot.db").read_bytes() == prior
+            finally:
+                if reader is not writer:
+                    reader.close()
+
+    as_user(PUBLISHER, exercise)
+
+
 def test_actual_collector_cli_optional_hook_success_and_failure_do_not_retry_money(
     spool,
 ):

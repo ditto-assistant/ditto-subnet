@@ -40,8 +40,13 @@ def write_selector_snapshot(db: sqlite3.Connection, path: Path, policy: JournalP
     sources = [
         Path(row[2]).resolve() for row in db.execute("PRAGMA database_list") if row[2]
     ]
-    if path.resolve() in sources:
-        raise ValueError("snapshot cannot replace authoritative journal")
+    protected = {
+        Path(str(source) + suffix).resolve()
+        for source in sources
+        for suffix in ("", "-wal", "-shm", "-journal")
+    }
+    if path.resolve() in protected:
+        raise ValueError("snapshot cannot replace authoritative journal or sidecar")
     if path.exists() or path.is_symlink():
         info = path.lstat()
         if (
