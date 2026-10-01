@@ -4363,6 +4363,163 @@
         ],
         "type": "object"
       },
+      "TreasuryCollectorIdentity": {
+        "properties": {
+          "finalized_block": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized_block_hash": {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "genesis_hash": {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "hotkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "netuid": {
+            "const": 118,
+            "default": 118,
+            "type": "integer"
+          },
+          "owner_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "subnet_owner_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "uid": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "uid_hotkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "genesis_hash",
+          "finalized_block",
+          "finalized_block_hash",
+          "uid",
+          "hotkey",
+          "owner_coldkey",
+          "uid_hotkey",
+          "subnet_owner_coldkey"
+        ],
+        "type": "object"
+      },
+      "TreasuryEmissionBucket": {
+        "properties": {
+          "allocation_bps": {
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bucket_id": {
+            "pattern": "^[a-z][a-z0-9_]{1,47}$",
+            "type": "string"
+          },
+          "holding_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bucket_id",
+          "allocation_bps",
+          "holding_coldkey"
+        ],
+        "type": "object"
+      },
+      "TreasuryEmissionPolicy": {
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/$defs/TreasuryEmissionBucket"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
+          "collector_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "collector_hotkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "collector_policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "genesis_hash": {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "netuid": {
+            "const": 118,
+            "default": 118,
+            "type": "integer"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "genesis_hash",
+          "collector_hotkey",
+          "collector_coldkey",
+          "collector_policy_digest",
+          "buckets"
+        ],
+        "type": "object"
+      },
+      "TreasuryLedgerPin": {
+        "properties": {
+          "identity": {
+            "$ref": "#/$defs/TreasuryCollectorIdentity"
+          },
+          "mode": {
+            "const": "shadow",
+            "default": "shadow",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/$defs/TreasuryEmissionPolicy"
+          },
+          "policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy",
+          "policy_digest",
+          "identity"
+        ],
+        "type": "object"
+      },
       "V12AnswerStuffingGate": {
         "properties": {
           "administered_cases": {
@@ -5596,6 +5753,17 @@
           "type": "integer"
         },
         "type": "object"
+      },
+      "treasury_pin": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TreasuryLedgerPin"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "v9_confirmation_mode": {
         "anyOf": [
