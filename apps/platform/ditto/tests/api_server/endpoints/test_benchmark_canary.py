@@ -27,6 +27,7 @@ from ditto.db.models import (
     BenchmarkRollout,
     PrivateBenchmarkPreparation,
     Score,
+    ScreeningAttempt,
     ValidatorHeartbeat,
     ValidatorTicket,
 )
@@ -683,14 +684,37 @@ async def test_cancel_and_expiry_do_not_spend_miner_budget(
         assert await counts(session) == (3, 0)
 
 
+# Every label the comparison can give a changed or retried artifact, including
+# the most lenient infrastructure retry, against both V13 hold kinds.
+_HOLD_COMPARISONS = {
+    "material_new_work": (
+        {"main.py": source("planning")},
+        {"main.py": source("memory")},
+        False,
+    ),
+    "packaging_only_repair": (
+        {"main.py": source("memory"), "Dockerfile": b"FROM b"},
+        {"main.py": source("memory"), "Dockerfile": b"FROM a"},
+        False,
+    ),
+    "infrastructure_retry": (
+        {"main.py": source("memory")},
+        {"main.py": source("memory")},
+        True,
+    ),
+}
+
+
+@pytest.mark.parametrize("label", sorted(_HOLD_COMPARISONS))
 @pytest.mark.parametrize(
     "held_status", [AgentStatus.QUARANTINED, AgentStatus.ATH_PENDING_REVIEW]
 )
-async def test_material_delta_does_not_clear_v13_source_or_integrity_hold(
-    client, ready, app, session_maker, held_status
+async def test_comparison_label_does_not_clear_v13_source_or_integrity_hold(
+    client, ready, app, session_maker, held_status, label
 ):
-    current = archive({"main.py": source("planning")})
-    prior = archive({"main.py": source("memory")})
+    current_files, prior_files, infrastructure = _HOLD_COMPARISONS[label]
+    current = archive(current_files)
+    prior = archive(prior_files)
     async with session_maker() as session, session.begin():
         agent = await session.get(Agent, UUID(ready["agent_id"]))
         agent.sha256 = hashlib.sha256(current).hexdigest()
@@ -705,6 +729,20 @@ async def test_material_delta_does_not_clear_v13_source_or_integrity_hold(
         )
         await session.flush()
         reference_id = reference.agent_id
+        if infrastructure:
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=uuid4(),
+                    agent_id=reference_id,
+                    screener_hotkey="worker",
+                    policy_version=13,
+                    status="failed",
+                    started_at=agent.created_at - timedelta(minutes=9),
+                    deadline=agent.created_at + timedelta(minutes=30),
+                    finished_at=agent.created_at - timedelta(minutes=5),
+                    reason_code="docker-build-infrastructure",
+                )
+            )
     objects = {
         f"{ready['agent_id']}/agent.tar.gz": current,
         f"{reference_id}/agent.tar.gz": prior,
@@ -723,9 +761,11 @@ async def test_material_delta_does_not_clear_v13_source_or_integrity_hold(
     )
     assert comparison.status_code == 200, comparison.text
     result = comparison.json()
-    assert result["classification"] == "material_new_work"
-    assert not result["policy"]["source_clearance"]
-    assert not result["policy"]["integrity_clearance"]
+    assert result["classification"] == label
+    assert result["policy"]["report_only"] is True
+    assert result["policy"]["admission_effect"] == "none"
+    assert result["policy"]["source_clearance"] is False
+    assert result["policy"]["integrity_clearance"] is False
     ready["expected_artifact_sha256"] = hashlib.sha256(current).hexdigest()
     refused = await client.post(
         "/api/v1/admin/benchmark-canaries", headers=_HEADERS, json=ready
