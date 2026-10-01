@@ -27748,9 +27748,15 @@ export interface components {
              * @constant
              */
             fee_denomination: "fixed_tao";
-            /** Previous Fee Amount Rao */
+            /**
+             * Previous Fee Amount Rao
+             * @description Fee this change replaced; null for the first published fee (revision 1, whose parent is only the built-in default) and when the replaced revision is in a denomination this build cannot price.
+             */
             previous_fee_amount_rao: number | null;
-            /** Previous Fee Amount Tao */
+            /**
+             * Previous Fee Amount Tao
+             * @description Exact TAO rendering of previous_fee_amount_rao; null with it.
+             */
             previous_fee_amount_tao: string | null;
             /** Revision */
             revision: number;
@@ -32663,7 +32669,10 @@ export interface components {
             parent_revision: number;
             /** Previous Cooldown Seconds */
             previous_cooldown_seconds?: number | null;
-            /** Previous Fee Amount Rao */
+            /**
+             * Previous Fee Amount Rao
+             * @description Fee of parent_revision. Null for revision 1 and the built-in revision 0 (the built-in default is a reference point, never published as a charged fee), and when the parent is in a denomination this build cannot price (its number is not TAO).
+             */
             previous_fee_amount_rao?: number | null;
             /** Reason */
             reason: string;
