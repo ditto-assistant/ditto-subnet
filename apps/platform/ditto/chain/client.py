@@ -38,6 +38,9 @@ if TYPE_CHECKING:
 
     from pylon_client.artanis import AsyncPylonClient
 
+    from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
+    from ditto.chain.treasury_receipts import TreasuryChainProof
+
 logger = logging.getLogger(__name__)
 
 _RECENT_NEURONS_CACHE_TTL_SECONDS = 12.0
@@ -396,6 +399,50 @@ class ChainClient:
             AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
         ):
             return await read_treasury_dispatch_observation(substrate, policy)
+
+    async def get_treasury_receipt_proof(
+        self,
+        selector: TreasuryReceiptSelector,
+        policy: TreasuryEmissionPolicy,
+        *,
+        sender: str,
+        recipient: str,
+        asset: str,
+        recipient_hotkey: str | None,
+        pinned_block: int,
+        pinned_block_hash: str,
+        pinned_uid: int,
+    ) -> TreasuryChainProof:
+        """Canonical finalized receipt, with existing archive fallback and no signer."""
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        from ditto.chain.treasury_receipts import read_treasury_chain_proof
+
+        for url in self._historical_substrate_urls():
+            try:
+                async with (
+                    asyncio.timeout(self._config.archive_rpc_timeout_seconds),
+                    AsyncSubstrateInterface(url=url) as substrate,
+                ):
+                    return await read_treasury_chain_proof(
+                        substrate,
+                        selector,
+                        policy,
+                        sender=sender,
+                        recipient=recipient,
+                        asset=asset,
+                        recipient_hotkey=recipient_hotkey,
+                        pinned_block=pinned_block,
+                        pinned_block_hash=pinned_block_hash,
+                        pinned_uid=pinned_uid,
+                    )
+            except ValueError:
+                # Complete data contradicting the claim is not provider failure.
+                raise
+            except Exception:
+                # Provider addresses/credentials and raw exceptions stay private.
+                continue
+        raise ChainConnectionError("finalized treasury receipt unavailable")
 
     async def get_finalized_block(self) -> BlockInfo:
         """Return the current finalized chain block from Substrate."""

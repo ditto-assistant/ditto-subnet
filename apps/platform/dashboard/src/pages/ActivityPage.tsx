@@ -20,14 +20,26 @@ interface ActivityPageData {
 interface TreasuryEvent {
   id: number;
   payment_id: string;
-  event_kind: "gm_token_deposit" | "gm_credit_purchase" | "maintenance_bounty";
+  event_kind:
+    | "gm_token_deposit"
+    | "gm_credit_purchase"
+    | "maintenance_bounty"
+    | "service_distribution"
+    | "vendor_payment";
+  bucket_id?: string | null;
+  policy_digest?: string | null;
+  epoch_index?: number | null;
   state: "chain_finalized" | "reconciled";
   finalized_event_id: number | null;
   event_at: string;
   policy_revision: number;
   burn_revision: number;
   burn_share_micros: number;
-  denominator: "miner_emission" | "released_miner_emission";
+  denominator:
+    | "miner_emission"
+    | "released_miner_emission"
+    | "collector_liquid_emission"
+    | "not_attributed";
   maintenance_bps: number;
   gm_bps: number;
   allocation_bps: number;
@@ -128,8 +140,9 @@ export function ActivityPage(): JSX.Element {
       <section aria-label="Treasury spending" class="treasury-activity">
         <h2>Treasury spending</h2>
         <p>
-          Finalized GM token deposits, confirmed GM credits, and maintenance bounties. Entries with
-          the same payment ID describe stages of one payment, not separate purchases.
+          Finalized service distributions and vendor payments, confirmed GM credits, and maintenance
+          bounties. A vendor payment does not prove provider credits. Entries with the same payment
+          ID describe stages of one payment, not separate purchases.
         </p>
         <Show when={treasury.error()}>
           <div role="alert" class="activity-state">
@@ -160,7 +173,11 @@ export function ActivityPage(): JSX.Element {
                           ? "GM token deposit finalized"
                           : item.event_kind === "gm_credit_purchase"
                             ? "GM credits confirmed"
-                            : "Maintenance bounty paid"}
+                            : item.event_kind === "service_distribution"
+                              ? "Service holding distribution finalized"
+                              : item.event_kind === "vendor_payment"
+                                ? "Vendor payment finalized · provider credits unproven"
+                                : "Maintenance bounty paid"}
                         <small>
                           Payment {item.payment_id} ·{" "}
                           {item.state === "reconciled" ? "Reconciled" : "Chain finalized"}
@@ -173,33 +190,56 @@ export function ActivityPage(): JSX.Element {
                           <dt>Policy revision</dt>
                           <dd>{item.policy_revision}</dd>
                         </div>
-                        <div>
-                          <dt>Burn revision</dt>
-                          <dd>
-                            {item.burn_revision} · {item.burn_share_micros} millionths burned
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>Purpose allocations</dt>
-                          <dd>
-                            Maintenance {item.maintenance_bps} bps · GM {item.gm_bps} bps
-                          </dd>
-                        </div>
+                        <Show when={item.bucket_id}>
+                          <div>
+                            <dt>Service bucket</dt>
+                            <dd>{item.bucket_id}</dd>
+                          </div>
+                          <div>
+                            <dt>Historical policy digest</dt>
+                            <dd>{item.policy_digest}</dd>
+                          </div>
+                          <div>
+                            <dt>Epoch</dt>
+                            <dd>{item.epoch_index}</dd>
+                          </div>
+                        </Show>
+                        <Show when={!item.bucket_id}>
+                          <div>
+                            <dt>Burn revision</dt>
+                            <dd>
+                              {item.burn_revision} · {item.burn_share_micros} millionths burned
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Purpose allocations</dt>
+                            <dd>
+                              Maintenance {item.maintenance_bps} bps · GM {item.gm_bps} bps
+                            </dd>
+                          </div>
+                        </Show>
                         <div>
                           <dt>Allocation</dt>
                           <dd>
-                            {item.allocation_bps} bps of {item.denominator.replaceAll("_", " ")} ·{" "}
-                            {item.allocated_alpha_rao} alpha rao
+                            {item.denominator === "not_attributed"
+                              ? "Alpha funding/conversion attribution unproven"
+                              : `${item.allocation_bps} bps of ${item.denominator.replaceAll("_", " ")} · ${item.allocated_alpha_rao} alpha rao`}
                           </dd>
                         </div>
                         <div>
                           <dt>Route</dt>
                           <dd>{item.route}</dd>
                         </div>
-                        <div>
-                          <dt>Source spent</dt>
-                          <dd>{item.source_alpha_rao} SN118 alpha rao</dd>
-                        </div>
+                        <Show when={item.denominator !== "not_attributed"}>
+                          <div>
+                            <dt>
+                              {item.event_kind === "service_distribution"
+                                ? "Source liquid earning"
+                                : "Source spent"}
+                            </dt>
+                            <dd>{item.source_alpha_rao} SN118 alpha rao</dd>
+                          </div>
+                        </Show>
                         <div>
                           <dt>Chain deposit</dt>
                           <dd>

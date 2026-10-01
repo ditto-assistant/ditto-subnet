@@ -3423,6 +3423,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/treasury-receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Treasury Receipts */
+        get: operations["list_treasury_receipts_api_v1_admin_treasury_receipts_get"];
+        put?: never;
+        /** Record Treasury Receipt */
+        post: operations["record_treasury_receipt_api_v1_admin_treasury_receipts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/treasury-settings": {
         parameters: {
             query?: never;
@@ -28166,6 +28184,8 @@ export interface components {
             block_hash: string;
             /** Bounty Award Id */
             bounty_award_id: string | null;
+            /** Bucket Id */
+            bucket_id?: string | null;
             /** Burn Revision */
             burn_revision: number;
             /** Burn Share Micros */
@@ -28176,7 +28196,7 @@ export interface components {
              * Denominator
              * @enum {string}
              */
-            denominator: "miner_emission" | "released_miner_emission";
+            denominator: "miner_emission" | "released_miner_emission" | "collector_liquid_emission" | "not_attributed";
             /** Deposit Amount Atomic */
             deposit_amount_atomic: string;
             /**
@@ -28184,6 +28204,8 @@ export interface components {
              * @enum {string}
              */
             deposit_asset: "TAO" | "SN28_ALPHA" | "SN118_ALPHA";
+            /** Epoch Index */
+            epoch_index?: number | null;
             /**
              * Event At
              * Format: date-time
@@ -28195,7 +28217,7 @@ export interface components {
              * Event Kind
              * @enum {string}
              */
-            event_kind: "gm_token_deposit" | "gm_credit_purchase" | "maintenance_bounty";
+            event_kind: "gm_token_deposit" | "gm_credit_purchase" | "maintenance_bounty" | "service_distribution" | "vendor_payment";
             /** Extrinsic Index */
             extrinsic_index: number;
             /** Finalized Event Id */
@@ -28208,6 +28230,8 @@ export interface components {
             maintenance_bps: number;
             /** Payment Id */
             payment_id: string;
+            /** Policy Digest */
+            policy_digest?: string | null;
             /** Policy Revision */
             policy_revision: number;
             /** Public Recipient */
@@ -33392,6 +33416,87 @@ export interface components {
             policy: components["schemas"]["TreasuryEmissionPolicy"];
             /** Signature */
             signature: string;
+        };
+        /** TreasuryReceiptPage */
+        TreasuryReceiptPage: {
+            /** Items */
+            items: components["schemas"]["TreasuryReceiptResult"][];
+        };
+        /** TreasuryReceiptResult */
+        TreasuryReceiptResult: {
+            /** Amount Atomic */
+            amount_atomic: string;
+            /** Block */
+            block: number;
+            /** Block Hash */
+            block_hash: string;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Epoch Index */
+            epoch_index: number;
+            /** Extrinsic Hash */
+            extrinsic_hash: string;
+            /** Extrinsic Index */
+            extrinsic_index: number;
+            /** Policy Digest */
+            policy_digest: string;
+            /**
+             * Provider Credit Status
+             * @default not_proven
+             * @constant
+             */
+            provider_credit_status: "not_proven";
+            /** Public Event Id */
+            public_event_id: number | null;
+            /** Published */
+            published: boolean;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Replayed */
+            replayed: boolean;
+            /** Source Block */
+            source_block: number | null;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "service_distribution" | "vendor_payment";
+            /**
+             * Status
+             * @default chain_finalized
+             * @constant
+             */
+            status: "chain_finalized";
+        };
+        /** TreasuryReceiptSelector */
+        TreasuryReceiptSelector: {
+            /** Amount Atomic */
+            amount_atomic: number;
+            /** Block */
+            block: number;
+            /** Block Hash */
+            block_hash: string;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Epoch Index */
+            epoch_index: number;
+            /** Extrinsic Hash */
+            extrinsic_hash: string;
+            /** Extrinsic Index */
+            extrinsic_index: number;
+            /** Parent Receipt Id */
+            parent_receipt_id?: string | null;
+            /** Payee Rule Id */
+            payee_rule_id?: string | null;
+            /** Reason */
+            reason: string;
+            /** Source Block */
+            source_block?: number | null;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "service_distribution" | "vendor_payment" | "provider_credit";
         };
         /** TreasuryServiceBucket */
         TreasuryServiceBucket: {
@@ -42863,6 +42968,74 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_treasury_receipts_api_v1_admin_treasury_receipts_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasuryReceiptPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_treasury_receipt_api_v1_admin_treasury_receipts_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TreasuryReceiptSelector"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasuryReceiptResult"];
                 };
             };
             /** @description Validation Error */

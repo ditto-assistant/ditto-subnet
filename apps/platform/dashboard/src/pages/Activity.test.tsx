@@ -55,6 +55,53 @@ beforeEach(() => {
   );
 });
 afterEach(cleanup);
+it("distinguishes service allocation from vendor payment and unproved provider credits", async () => {
+  request.mockImplementation(async (path) =>
+    path.startsWith("/public/treasury-activity")
+      ? {
+          items: [
+            {
+              ...treasuryDeposit,
+              event_kind: "service_distribution",
+              bucket_id: "gamma",
+              policy_digest: "a".repeat(64),
+              epoch_index: 9,
+              denominator: "collector_liquid_emission",
+              deposit_asset: "SN118_ALPHA",
+              deposit_amount_atomic: "40",
+              allocated_alpha_rao: "40",
+              source_alpha_rao: "40",
+            },
+            {
+              ...treasuryDeposit,
+              id: 3,
+              event_kind: "vendor_payment",
+              bucket_id: "beta",
+              policy_digest: "b".repeat(64),
+              epoch_index: 9,
+              denominator: "not_attributed",
+              source_alpha_rao: "0",
+              allocated_alpha_rao: "0",
+              allocation_bps: 0,
+            },
+          ],
+          next_before: null,
+        }
+      : { items: [], next_before: null },
+  );
+  render(() => <ActivityPage />);
+  await screen.findByText("Service holding distribution finalized");
+  expect(
+    screen.getByText("Vendor payment finalized · provider credits unproven"),
+  ).toBeInTheDocument();
+  expect(screen.getByText("Alpha funding/conversion attribution unproven")).toBeInTheDocument();
+  expect(screen.getByText("Source liquid earning")).toBeInTheDocument();
+  expect(screen.queryByText("Source spent")).not.toBeInTheDocument();
+  expect(screen.queryByText("GM credits confirmed")).not.toBeInTheDocument();
+  expect(screen.getByText("gamma")).toBeInTheDocument();
+  expect(screen.getByText("beta")).toBeInTheDocument();
+});
+
 it("searches server-side, filters outcomes, and paginates", async () => {
   render(() => <ActivityPage />);
   await screen.findByText("inference concurrency settings");

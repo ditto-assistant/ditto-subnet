@@ -10,7 +10,16 @@ class PublicTreasuryEvent(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: int
     payment_id: str
-    event_kind: Literal["gm_token_deposit", "gm_credit_purchase", "maintenance_bounty"]
+    bucket_id: str | None = None
+    policy_digest: str | None = None
+    epoch_index: int | None = None
+    event_kind: Literal[
+        "gm_token_deposit",
+        "gm_credit_purchase",
+        "maintenance_bounty",
+        "service_distribution",
+        "vendor_payment",
+    ]
     state: Literal["chain_finalized", "reconciled"]
     finalized_event_id: int | None
     event_at: datetime
@@ -18,7 +27,12 @@ class PublicTreasuryEvent(BaseModel):
     policy_revision: int
     burn_revision: int
     burn_share_micros: int
-    denominator: Literal["miner_emission", "released_miner_emission"]
+    denominator: Literal[
+        "miner_emission",
+        "released_miner_emission",
+        "collector_liquid_emission",
+        "not_attributed",
+    ]
     maintenance_bps: int
     gm_bps: int
     allocation_bps: int

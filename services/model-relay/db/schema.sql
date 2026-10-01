@@ -5240,15 +5240,18 @@ CREATE TABLE public.treasury_public_events (
     actor_provenance text NOT NULL,
     actor_public_id text NOT NULL,
     verification_source text NOT NULL,
+    bucket_id text,
+    policy_digest text,
+    epoch_index bigint,
     CONSTRAINT ck_treasury_public_events_treasury_public_actor_id CHECK (((length(actor_public_id) >= 3) AND (length(actor_public_id) <= 120))),
-    CONSTRAINT ck_treasury_public_events_treasury_public_actor_provenance CHECK ((actor_provenance = ANY (ARRAY['treasury_signer'::text, 'gm_reconciler'::text, 'bounty_executor'::text]))),
-    CONSTRAINT ck_treasury_public_events_treasury_public_allocation CHECK ((((maintenance_bps >= 0) AND (maintenance_bps <= 10000)) AND ((gm_bps >= 0) AND (gm_bps <= 10000)) AND ((allocation_bps >= 0) AND (allocation_bps <= 10000)) AND (allocated_alpha_rao >= 0) AND (source_alpha_rao > 0) AND (burn_revision >= 0) AND ((burn_share_micros >= 0) AND (burn_share_micros <= 1000000)))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_actor_provenance CHECK ((actor_provenance = ANY (ARRAY['treasury_signer'::text, 'gm_reconciler'::text, 'bounty_executor'::text, 'treasury_observer'::text]))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_allocation CHECK ((((maintenance_bps >= 0) AND (maintenance_bps <= 10000)) AND ((gm_bps >= 0) AND (gm_bps <= 10000)) AND ((allocation_bps >= 0) AND (allocation_bps <= 10000)) AND (allocated_alpha_rao >= 0) AND (((source_alpha_rao > 0) AND (denominator <> 'not_attributed'::text)) OR ((event_kind = 'vendor_payment'::text) AND (denominator = 'not_attributed'::text) AND (source_alpha_rao = 0) AND (allocated_alpha_rao = 0))) AND (burn_revision >= 0) AND ((burn_share_micros >= 0) AND (burn_share_micros <= 1000000)))),
     CONSTRAINT ck_treasury_public_events_treasury_public_amounts CHECK (((deposit_amount_atomic > 0) AND (deposit_asset = ANY (ARRAY['TAO'::text, 'SN28_ALPHA'::text, 'SN118_ALPHA'::text])))),
-    CONSTRAINT ck_treasury_public_events_treasury_public_denominator CHECK ((denominator = ANY (ARRAY['miner_emission'::text, 'released_miner_emission'::text]))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_denominator CHECK ((denominator = ANY (ARRAY['miner_emission'::text, 'released_miner_emission'::text, 'collector_liquid_emission'::text, 'not_attributed'::text]))),
     CONSTRAINT ck_treasury_public_events_treasury_public_indexes CHECK (((extrinsic_index >= 0) AND (event_index >= 0))),
-    CONSTRAINT ck_treasury_public_events_treasury_public_kind CHECK ((((event_kind = 'gm_token_deposit'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'gm_credit_purchase'::text) AND (state = 'reconciled'::text) AND (finalized_event_id IS NOT NULL) AND (credited_usd_nano IS NOT NULL) AND (credited_usd_nano > 0) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'maintenance_bounty'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NOT NULL) AND (accepted_work_ref IS NOT NULL) AND ((length(bounty_award_id) >= 8) AND (length(bounty_award_id) <= 120)) AND ((length(accepted_work_ref) >= 8) AND (length(accepted_work_ref) <= 240))))),
-    CONSTRAINT ck_treasury_public_events_treasury_public_purpose_allocation CHECK ((((event_kind = 'maintenance_bounty'::text) AND (allocation_bps = maintenance_bps)) OR ((event_kind <> 'maintenance_bounty'::text) AND (allocation_bps = gm_bps)))),
-    CONSTRAINT ck_treasury_public_events_treasury_public_route CHECK ((route = ANY (ARRAY['alpha_to_tao'::text, 'alpha_to_gm_alpha'::text, 'alpha_transfer'::text, 'alpha_to_tao_bounty'::text]))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_kind CHECK ((((event_kind = ANY (ARRAY['service_distribution'::text, 'vendor_payment'::text])) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'gm_token_deposit'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'gm_credit_purchase'::text) AND (state = 'reconciled'::text) AND (finalized_event_id IS NOT NULL) AND (credited_usd_nano IS NOT NULL) AND (credited_usd_nano > 0) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'maintenance_bounty'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NOT NULL) AND (accepted_work_ref IS NOT NULL) AND ((length(bounty_award_id) >= 8) AND (length(bounty_award_id) <= 120)) AND ((length(accepted_work_ref) >= 8) AND (length(accepted_work_ref) <= 240))))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_purpose_allocation CHECK (((event_kind = ANY (ARRAY['service_distribution'::text, 'vendor_payment'::text])) OR ((event_kind = 'maintenance_bounty'::text) AND (allocation_bps = maintenance_bps)) OR ((event_kind <> ALL (ARRAY['service_distribution'::text, 'vendor_payment'::text, 'maintenance_bounty'::text])) AND (allocation_bps = gm_bps)))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_route CHECK ((route = ANY (ARRAY['alpha_to_tao'::text, 'alpha_to_gm_alpha'::text, 'alpha_transfer'::text, 'alpha_to_tao_bounty'::text, 'tao_transfer'::text]))),
     CONSTRAINT ck_treasury_public_events_treasury_public_state CHECK ((state = ANY (ARRAY['chain_finalized'::text, 'reconciled'::text]))),
     CONSTRAINT ck_treasury_public_events_treasury_public_verification_source CHECK ((verification_source = ANY (ARRAY['finalized_chain_rpc'::text, 'chain_and_provider_reconciliation'::text])))
 );
@@ -5304,6 +5307,38 @@ CREATE SEQUENCE public.treasury_settings_revisions_revision_seq
 --
 
 ALTER SEQUENCE public.treasury_settings_revisions_revision_seq OWNED BY public.treasury_settings_revisions.revision;
+
+
+--
+-- Name: treasury_verified_receipts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_verified_receipts (
+    receipt_id text NOT NULL,
+    request_digest text NOT NULL,
+    stage text NOT NULL,
+    parent_receipt_id text,
+    policy_digest text NOT NULL,
+    collector_policy_digest text NOT NULL,
+    bucket_id text NOT NULL,
+    block_hash text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    epoch_index bigint NOT NULL,
+    source_block bigint,
+    amount_atomic bigint NOT NULL,
+    public_event_id bigint,
+    settings_revision integer NOT NULL,
+    extrinsic_index integer NOT NULL,
+    event_index integer NOT NULL,
+    proof jsonb NOT NULL,
+    published boolean NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_treasury_verified_receipts_treasury_verified_bounds CHECK (((amount_atomic > 0) AND (epoch_index >= 0) AND ((source_block IS NULL) OR (source_block > 0)) AND (extrinsic_index >= 0) AND (event_index >= 0))),
+    CONSTRAINT ck_treasury_verified_receipts_treasury_verified_parent CHECK ((((stage = 'service_distribution'::text) AND (parent_receipt_id IS NULL) AND (source_block IS NOT NULL)) OR ((stage = 'vendor_payment'::text) AND (((parent_receipt_id IS NULL) AND (source_block IS NULL)) OR ((parent_receipt_id IS NOT NULL) AND (source_block IS NOT NULL)))))),
+    CONSTRAINT ck_treasury_verified_receipts_treasury_verified_publication CHECK ((published = (public_event_id IS NOT NULL))),
+    CONSTRAINT ck_treasury_verified_receipts_treasury_verified_stage CHECK ((stage = ANY (ARRAY['service_distribution'::text, 'vendor_payment'::text])))
+);
 
 
 --
@@ -7901,6 +7936,14 @@ ALTER TABLE ONLY public.treasury_settings_revisions
 
 
 --
+-- Name: treasury_verified_receipts pk_treasury_verified_receipts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_verified_receipts
+    ADD CONSTRAINT pk_treasury_verified_receipts PRIMARY KEY (receipt_id);
+
+
+--
 -- Name: trusted_image_builds pk_trusted_image_builds; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8354,6 +8397,14 @@ ALTER TABLE ONLY public.treasury_public_events
 
 ALTER TABLE ONLY public.treasury_settings_revisions
     ADD CONSTRAINT treasury_settings_parent_key UNIQUE (parent_revision);
+
+
+--
+-- Name: treasury_verified_receipts treasury_verified_chain_effect; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_verified_receipts
+    ADD CONSTRAINT treasury_verified_chain_effect UNIQUE (block_hash, extrinsic_index, event_index);
 
 
 --
@@ -9662,6 +9713,13 @@ CREATE INDEX treasury_public_event_at_idx ON public.treasury_public_events USING
 
 
 --
+-- Name: treasury_verified_distribution_once; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX treasury_verified_distribution_once ON public.treasury_verified_receipts USING btree (epoch_index, source_block, bucket_id) WHERE (stage = 'service_distribution'::text);
+
+
+--
 -- Name: trusted_image_builds_queue_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -10128,6 +10186,13 @@ CREATE TRIGGER treasury_public_reconciliation_verified BEFORE INSERT ON public.t
 --
 
 CREATE TRIGGER treasury_settings_immutable BEFORE DELETE OR UPDATE ON public.treasury_settings_revisions FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_settings_mutation();
+
+
+--
+-- Name: treasury_verified_receipts treasury_verified_receipts_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_verified_receipts_immutable BEFORE DELETE OR UPDATE ON public.treasury_verified_receipts FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_public_event_mutation();
 
 
 --
@@ -11124,6 +11189,30 @@ ALTER TABLE ONLY public.screening_verification_replays
 
 ALTER TABLE ONLY public.treasury_public_events
     ADD CONSTRAINT fk_treasury_public_events_finalized_event_id_treasury_p_3f2e FOREIGN KEY (finalized_event_id) REFERENCES public.treasury_public_events(id);
+
+
+--
+-- Name: treasury_verified_receipts fk_treasury_verified_receipts_parent_receipt_id_treasur_92b6; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_verified_receipts
+    ADD CONSTRAINT fk_treasury_verified_receipts_parent_receipt_id_treasur_92b6 FOREIGN KEY (parent_receipt_id) REFERENCES public.treasury_verified_receipts(receipt_id);
+
+
+--
+-- Name: treasury_verified_receipts fk_treasury_verified_receipts_public_event_id_treasury__9775; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_verified_receipts
+    ADD CONSTRAINT fk_treasury_verified_receipts_public_event_id_treasury__9775 FOREIGN KEY (public_event_id) REFERENCES public.treasury_public_events(id);
+
+
+--
+-- Name: treasury_verified_receipts fk_treasury_verified_receipts_settings_revision_treasur_f7d8; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_verified_receipts
+    ADD CONSTRAINT fk_treasury_verified_receipts_settings_revision_treasur_f7d8 FOREIGN KEY (settings_revision) REFERENCES public.treasury_settings_revisions(revision);
 
 
 --

@@ -121,7 +121,11 @@ class TestCreateApiServer:
                     visit(value, f"{path}[{index}]")
 
         visit(schema, "openapi")
-        assert bounded == []
+        # Machine receipt selectors carry a bounded transport annotation, not
+        # an operator's potentially extensive source/policy review evidence.
+        assert bounded == [
+            "openapi.components.schemas.TreasuryReceiptSelector.reason=240"
+        ]
 
 
 class TestLifespanFailureCleanup:

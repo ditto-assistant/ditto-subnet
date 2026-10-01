@@ -11377,6 +11377,83 @@ class AdminActivityOutcome(Base):
     )
 
 
+class TreasuryVerifiedReceipt(Base):
+    """Private append-only canonical chain proofs; no signed extrinsics/credentials."""
+
+    __tablename__ = "treasury_verified_receipts"
+    receipt_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    stage: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_receipt_id: Mapped[str | None] = mapped_column(Text)
+    epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    collector_policy_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    bucket_id: Mapped[str] = mapped_column(Text, nullable=False)
+    source_block: Mapped[int | None] = mapped_column(BigInteger)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    proof: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    published: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    public_event_id: Mapped[int | None] = mapped_column(BigInteger)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["parent_receipt_id"], ["treasury_verified_receipts.receipt_id"]
+        ),
+        ForeignKeyConstraint(
+            ["settings_revision"], ["treasury_settings_revisions.revision"]
+        ),
+        ForeignKeyConstraint(["public_event_id"], ["treasury_public_events.id"]),
+        UniqueConstraint(
+            "block_hash",
+            "extrinsic_index",
+            "event_index",
+            name="treasury_verified_chain_effect",
+        ),
+        CheckConstraint(
+            "stage IN ('service_distribution', 'vendor_payment')",
+            name="treasury_verified_stage",
+        ),
+        CheckConstraint(
+            (
+                "amount_atomic > 0 AND epoch_index >= 0 AND (source_block IS "
+                "NULL OR source_block > 0) AND extrinsic_index >= 0 AND "
+                "event_index >= 0"
+            ),
+            name="treasury_verified_bounds",
+        ),
+        CheckConstraint(
+            "published = (public_event_id IS NOT NULL)",
+            name="treasury_verified_publication",
+        ),
+        CheckConstraint(
+            (
+                "(stage = 'service_distribution' AND parent_receipt_id IS "
+                "NULL AND source_block IS NOT NULL) OR (stage = "
+                "'vendor_payment' AND ((parent_receipt_id IS NULL AND "
+                "source_block IS NULL) OR (parent_receipt_id IS NOT NULL AND "
+                "source_block IS NOT NULL)))"
+            ),
+            name="treasury_verified_parent",
+        ),
+        Index(
+            "treasury_verified_distribution_once",
+            "epoch_index",
+            "source_block",
+            "bucket_id",
+            unique=True,
+            postgresql_where=text("stage = 'service_distribution'"),
+        ),
+    )
+
+
 class TreasuryPublicEvent(Base):
     """Public, append-only projection of independently verified treasury receipts.
 
@@ -11388,6 +11465,9 @@ class TreasuryPublicEvent(Base):
     __tablename__ = "treasury_public_events"
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     payment_id: Mapped[str] = mapped_column(Text, nullable=False)
+    bucket_id: Mapped[str | None] = mapped_column(Text)
+    policy_digest: Mapped[str | None] = mapped_column(Text)
+    epoch_index: Mapped[int | None] = mapped_column(BigInteger)
     event_kind: Mapped[str] = mapped_column(Text, nullable=False)
     state: Mapped[str] = mapped_column(Text, nullable=False)
     finalized_event_id: Mapped[int | None] = mapped_column(BigInteger)
@@ -11429,38 +11509,52 @@ class TreasuryPublicEvent(Base):
             name="treasury_public_chain_event_state",
         ),
         CheckConstraint(
-            "(event_kind = 'gm_token_deposit' AND state = 'chain_finalized' "
-            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
-            "AND bounty_award_id IS NULL AND accepted_work_ref IS NULL) OR "
-            "(event_kind = 'gm_credit_purchase' AND state = 'reconciled' "
-            "AND finalized_event_id IS NOT NULL AND credited_usd_nano IS NOT NULL "
-            "AND credited_usd_nano > 0 AND bounty_award_id IS NULL "
-            "AND accepted_work_ref IS NULL) OR "
-            "(event_kind = 'maintenance_bounty' AND state = 'chain_finalized' "
-            "AND finalized_event_id IS NULL AND credited_usd_nano IS NULL "
-            "AND bounty_award_id IS NOT NULL AND accepted_work_ref IS NOT NULL "
-            "AND length(bounty_award_id) BETWEEN 8 AND 120 "
-            "AND length(accepted_work_ref) BETWEEN 8 AND 240)",
+            "(event_kind IN ('service_distribution', 'vendor_payment') "
+            "AND state = 'chain_finalized' AND finalized_event_id IS "
+            "NULL AND credited_usd_nano IS NULL AND bounty_award_id IS "
+            "NULL AND accepted_work_ref IS NULL) OR (event_kind = "
+            "'gm_token_deposit' AND state = 'chain_finalized' AND "
+            "finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NULL AND accepted_work_ref IS NULL) "
+            "OR (event_kind = 'gm_credit_purchase' AND state = "
+            "'reconciled' AND finalized_event_id IS NOT NULL AND "
+            "credited_usd_nano IS NOT NULL AND credited_usd_nano > 0 AND "
+            "bounty_award_id IS NULL AND accepted_work_ref IS NULL) OR "
+            "(event_kind = 'maintenance_bounty' AND state = "
+            "'chain_finalized' AND finalized_event_id IS NULL AND "
+            "credited_usd_nano IS NULL AND bounty_award_id IS NOT NULL "
+            "AND accepted_work_ref IS NOT NULL AND "
+            "length(bounty_award_id) BETWEEN 8 AND 120 AND "
+            "length(accepted_work_ref) BETWEEN 8 AND 240)",
             name="treasury_public_kind",
         ),
         CheckConstraint(
             "state IN ('chain_finalized', 'reconciled')", name="treasury_public_state"
         ),
         CheckConstraint(
-            "denominator IN ('miner_emission', 'released_miner_emission')",
+            (
+                "denominator IN ('miner_emission', "
+                "'released_miner_emission', 'collector_liquid_emission', "
+                "'not_attributed')"
+            ),
             name="treasury_public_denominator",
         ),
         CheckConstraint(
-            "maintenance_bps BETWEEN 0 AND 10000 AND "
-            "gm_bps BETWEEN 0 AND 10000 AND "
-            "allocation_bps BETWEEN 0 AND 10000 AND "
-            "allocated_alpha_rao >= 0 AND source_alpha_rao > 0 AND "
-            "burn_revision >= 0 AND burn_share_micros BETWEEN 0 AND 1000000",
+            "maintenance_bps BETWEEN 0 AND 10000 AND gm_bps BETWEEN 0 "
+            "AND 10000 AND allocation_bps BETWEEN 0 AND 10000 AND "
+            "allocated_alpha_rao >= 0 AND ((source_alpha_rao > 0 AND "
+            "denominator <> 'not_attributed') OR (event_kind = "
+            "'vendor_payment' AND denominator = 'not_attributed' AND "
+            "source_alpha_rao = 0 AND allocated_alpha_rao = 0)) AND "
+            "burn_revision >= 0 AND burn_share_micros BETWEEN 0 AND "
+            "1000000",
             name="treasury_public_allocation",
         ),
         CheckConstraint(
+            "event_kind IN ('service_distribution', 'vendor_payment') OR "
             "(event_kind = 'maintenance_bounty' AND allocation_bps = maintenance_bps) "
-            "OR (event_kind <> 'maintenance_bounty' AND allocation_bps = gm_bps)",
+            "OR (event_kind NOT IN ('service_distribution', "
+            "'vendor_payment', 'maintenance_bounty') AND allocation_bps = gm_bps)",
             name="treasury_public_purpose_allocation",
         ),
         CheckConstraint(
@@ -11470,15 +11564,15 @@ class TreasuryPublicEvent(Base):
         ),
         CheckConstraint(
             "route IN ('alpha_to_tao', 'alpha_to_gm_alpha', "
-            "'alpha_transfer', 'alpha_to_tao_bounty')",
+            "'alpha_transfer', 'alpha_to_tao_bounty', 'tao_transfer')",
             name="treasury_public_route",
         ),
         CheckConstraint(
             "extrinsic_index >= 0 AND event_index >= 0", name="treasury_public_indexes"
         ),
         CheckConstraint(
-            "actor_provenance IN "
-            "('treasury_signer', 'gm_reconciler', 'bounty_executor')",
+            "actor_provenance IN ('treasury_signer', 'gm_reconciler', "
+            "'bounty_executor', 'treasury_observer')",
             name="treasury_public_actor_provenance",
         ),
         CheckConstraint(
