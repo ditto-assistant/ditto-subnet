@@ -2634,3 +2634,182 @@ class TestNoFeeBranchesUnderUnquotablePricing:
         assert response.status_code == 200, response.text
         assert response.json()["payment_required"] is False
         verifier.verify_payment.assert_not_awaited()
+
+
+def _real_db(app: FastAPI, session_maker: async_sessionmaker[AsyncSession]) -> None:
+    from ditto.api_server.dependencies import get_session
+
+    async def _session():  # type: ignore[no-untyped-def]
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _session
+
+
+async def _issue_reservation(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    sha256: str,
+    now: datetime,
+    address: str,
+    fee_amount_rao: int = 40_000_000,
+) -> Any:
+    from ditto.db.queries import submission_settings as queries
+
+    async with session_maker() as session, session.begin():
+        return await queries.reserve_upload_admission(
+            session,
+            miner_coldkey="5Coldkey",
+            miner_hotkey=_make_keypair().ss58_address,
+            sha256=sha256,
+            settings=queries.EffectiveSubmissionSettings(
+                revision=1,
+                cooldown_seconds=3600,
+                payment_address=address,
+                fee_amount_rao=fee_amount_rao,
+            ),
+            now=now,
+        )
+
+
+async def _reservation_row(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> Any:
+    from ditto.db.models import UploadAdmissionReservation
+
+    async with session_maker() as session:
+        return await session.get(UploadAdmissionReservation, "5Coldkey")
+
+
+def _raised_policy(monkeypatch: pytest.MonkeyPatch, *, fee_amount_rao: int) -> None:
+    from ditto.db.queries import submission_settings as queries
+
+    async def _settings(  # type: ignore[no-untyped-def]
+        _session, *, default_payment_address: str, **_kwargs
+    ):
+        return queries.EffectiveSubmissionSettings(
+            revision=2,
+            cooldown_seconds=3600,
+            payment_address=default_payment_address,
+            fee_amount_rao=fee_amount_rao,
+        )
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.effective_submission_settings",
+        AsyncMock(side_effect=_settings),
+    )
+
+
+def _recovery_check_body(**overrides: Any) -> dict[str, Any]:
+    return {
+        **_signed_request_body(**overrides),
+        "reserve_submission_slot": True,
+        "payment_block_hash": _GOOD_BLOCK_HASH,
+        "payment_block_number": 13579,
+        "payment_extrinsic_index": 7,
+    }
+
+
+class TestRotationNeverExtendsAReservation:
+    async def test_rotated_quote_cannot_be_chained_past_its_expiry(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Recovering a credit onto another archive rotates the token but keeps
+        the original expiry, so a fresh payment made after it pays the
+        current fee instead of the old reserved one."""
+        _real_db(app, session_maker)
+        override_get_chain_client(app)
+        override_get_storage_client(app)
+        address = app.state.config.upload_payment_address
+        t0 = datetime.now(UTC) - timedelta(hours=23, minutes=30)
+        issued = await _issue_reservation(
+            session_maker, sha256="f" * 64, now=t0, address=address
+        )
+        _raised_policy(monkeypatch, fee_amount_rao=90_000_000)
+        payment_lookup = AsyncMock(
+            return_value=SimpleNamespace(
+                agent_id=None,
+                miner_hotkey=_make_keypair().ss58_address,
+                miner_coldkey="5Coldkey",
+                timestamp=t0 + timedelta(hours=1),
+            )
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            payment_lookup,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        _override_payment_verifier(app)
+
+        # T0+23.5h: recover the credit onto archive B (live reservation).
+        check = await client.post(
+            "/api/v1/upload/check",
+            json=_recovery_check_body(sha256=_GOOD_TAR_SHA),
+        )
+
+        assert check.status_code == 200, check.text
+        assert check.json()["payment_required"] is False
+        rotated = await _reservation_row(session_maker)
+        assert rotated is not None
+        assert rotated.token != issued.token
+        assert rotated.sha256 == _GOOD_TAR_SHA
+        assert rotated.expires_at == issued.expires_at
+        assert rotated.created_at == t0
+
+        # A fresh payment at the old fee, finalized after the original expiry
+        # (T0+24.5h), is held to the current fee even with the rotated token.
+        payment_lookup.return_value = None
+        _real_verifier_paid_at(
+            app,
+            paid_at=t0 + timedelta(hours=24, minutes=30),
+            paid_rao=40_000_000,
+            address=address,
+        )
+        data, files = _upload_agent_form(
+            keypair=_make_keypair(),
+            payment_block_hash="0x" + "c" * 64,
+            payment_extrinsic_index=3,
+        )
+        data["admission_token"] = check.json()["admission_token"]
+
+        upload = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert upload.status_code == 402, upload.text
+
+    async def test_rotation_keeps_created_and_expiry_in_the_query(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from ditto.db.queries import submission_settings as queries
+
+        t0 = datetime.now(UTC) - timedelta(hours=2)
+        issued = await _issue_reservation(
+            session_maker, sha256="f" * 64, now=t0, address="5Address"
+        )
+        async with session_maker() as session, session.begin():
+            rotated = await queries.reserve_upload_admission(
+                session,
+                miner_coldkey="5Coldkey",
+                miner_hotkey=_make_keypair().ss58_address,
+                sha256="e" * 64,
+                settings=queries.EffectiveSubmissionSettings(
+                    revision=2,
+                    cooldown_seconds=3600,
+                    payment_address="5Address",
+                    fee_amount_rao=90_000_000,
+                ),
+                replace_existing=True,
+                paid_at=t0 + timedelta(minutes=5),
+            )
+
+        assert rotated.token != issued.token
+        assert rotated.expires_at == issued.expires_at
+        assert rotated.fee_amount_rao == 40_000_000
+        row = await _reservation_row(session_maker)
+        assert row.created_at == t0

@@ -235,12 +235,10 @@ async def reserve_upload_admission(
             # after reassignment.
             existing.token = uuid.uuid4()
             existing.sha256 = sha256
-            # A reservation kept alive only by an in-time payment keeps its
-            # original expiry: extending it would let a new payment made now
-            # claim the old fee.
-            if existing.legacy_payment_cutoff_at is None and not kept_for_payment:
-                existing.created_at = current
-                existing.expires_at = current + UPLOAD_ADMISSION_TTL
+            # Rotation never moves created_at or expires_at, live or kept: the
+            # recovered payment is honoured by its own block time, and an
+            # extension would let a fresh payment made after the original
+            # expiry claim the old fee (repeatably, by recovering again).
             await session.flush()
             return UploadAdmission(
                 token=existing.token,
