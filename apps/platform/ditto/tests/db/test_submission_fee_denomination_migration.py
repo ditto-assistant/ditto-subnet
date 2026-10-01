@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ditto.db.queries.submission_settings import effective_submission_settings
 
-_BEFORE = "a2f4d9c51e60"
+_BEFORE = "b391f0e8c2d6"
 _PAYMENT_ADDRESS = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _SNAPSHOT = text(
     "SELECT revision, parent_revision, cooldown_seconds, fee_amount_rao, reason, "
