@@ -16,13 +16,14 @@ mkdir "$QA/source"
 git archive HEAD | tar -x -C "$QA/source"
 git init --bare --quiet "$QA/repo.git"
 git -C "$QA/repo.git" fetch --depth=1 "file://$ROOT" "$REVISION:refs/heads/main"
+git -C "$QA/repo.git" fsck --connectivity-only
 chmod -R a+rX "$QA"
 docker build --platform linux/amd64 --label "qa.source=$REVISION" \
   -f "$ROOT/infra/terraform/tests/collector-custody/Bootstrap.Dockerfile" \
   -t "$IMAGE" "$ROOT/infra/terraform/tests/collector-custody"
 docker image inspect "$IMAGE" --format '{{.Id}} {{json .Config.Labels}}'
 for role in registration transfer; do
-  docker run --rm --platform linux/amd64 --cpus 2 --memory 4g \
+  docker run --rm --platform linux/amd64 --cpus 2 --memory 4g --pids-limit 256 \
     --mount "type=bind,src=$QA,dst=/fixture,readonly" \
     "$IMAGE" "$role" "$REVISION"
 done

@@ -54,9 +54,14 @@ def install_shims():
         'for arg in "$@"; do\n'
         '  if [[ "$arg" == fetch ]]; then\n'
         "    if [[ -f /qa/fail-fetch ]]; then exit 73; fi\n"
+        # Local fixture transport has complete blobs; do not make a read-only
+        # local server negotiate a partial clone. Production command unchanged.
+        '    forwarded=(); for item in "$@"; do\n'
+        '      [[ "$item" == --filter=blob:none ]] || forwarded+=("$item")\n'
+        "    done\n"
         "    exec /usr/bin/git -c "
         "url.file:///fixture/repo.git.insteadOf="
-        'https://github.com/ditto-assistant/ditto-subnet.git "$@"\n'
+        'https://github.com/ditto-assistant/ditto-subnet.git "${forwarded[@]}"\n'
         "  fi\n"
         "done\n"
         'exec /usr/bin/git "$@"\n'
