@@ -1273,7 +1273,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -1802,7 +1803,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -2423,7 +2425,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -2555,7 +2558,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -2920,7 +2924,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -3400,7 +3405,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -3749,6 +3755,69 @@
           "output_tokens",
           "provider_cost_microusd",
           "latency_ms"
+        ],
+        "type": "object"
+      },
+      "EnforcingTreasuryPin": {
+        "properties": {
+          "approval": {
+            "$ref": "#/$defs/TreasuryPolicyApproval"
+          },
+          "epoch_index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_block": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fleet": {
+            "items": {
+              "$ref": "#/$defs/TreasuryFleetMember"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "type": "array"
+          },
+          "identity": {
+            "$ref": "#/$defs/TreasuryCollectorIdentity"
+          },
+          "mode": {
+            "const": "enforce",
+            "default": "enforce",
+            "type": "string"
+          },
+          "pinned_block": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pinned_block_hash": {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/$defs/TreasuryEmissionPolicy"
+          },
+          "policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "version": {
+            "const": 2,
+            "default": 2,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch_index",
+          "first_block",
+          "pinned_block",
+          "pinned_block_hash",
+          "policy",
+          "policy_digest",
+          "identity",
+          "approval",
+          "fleet"
         ],
         "type": "object"
       },
@@ -4176,7 +4245,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -4353,6 +4423,216 @@
           "longmem_stderr_micros",
           "case_count",
           "per_capability"
+        ],
+        "type": "object"
+      },
+      "TreasuryCollectorIdentity": {
+        "properties": {
+          "finalized_block": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized_block_hash": {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "genesis_hash": {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "hotkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "netuid": {
+            "const": 118,
+            "default": 118,
+            "type": "integer"
+          },
+          "owner_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "subnet_owner_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "uid": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "uid_hotkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "genesis_hash",
+          "finalized_block",
+          "finalized_block_hash",
+          "uid",
+          "hotkey",
+          "owner_coldkey",
+          "uid_hotkey",
+          "subnet_owner_coldkey"
+        ],
+        "type": "object"
+      },
+      "TreasuryEmissionBucket": {
+        "properties": {
+          "allocation_bps": {
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bucket_id": {
+            "pattern": "^[a-z][a-z0-9_]{1,47}$",
+            "type": "string"
+          },
+          "holding_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bucket_id",
+          "allocation_bps",
+          "holding_coldkey"
+        ],
+        "type": "object"
+      },
+      "TreasuryEmissionPolicy": {
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/$defs/TreasuryEmissionBucket"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
+          "collector_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "collector_hotkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "collector_policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "genesis_hash": {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "netuid": {
+            "const": 118,
+            "default": 118,
+            "type": "integer"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "genesis_hash",
+          "collector_hotkey",
+          "collector_coldkey",
+          "collector_policy_digest",
+          "buckets"
+        ],
+        "type": "object"
+      },
+      "TreasuryFleetMember": {
+        "properties": {
+          "approved_policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "collector_policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "protocol_version": {
+            "minimum": 30,
+            "type": "integer"
+          },
+          "treasury_dispatch_version": {
+            "const": 2,
+            "type": "integer"
+          },
+          "treasury_pin_version": {
+            "const": 2,
+            "type": "integer"
+          },
+          "validator_hotkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "treasury_pin_version",
+          "treasury_dispatch_version",
+          "approved_policy_digest",
+          "collector_policy_digest",
+          "validator_hotkey",
+          "protocol_version"
+        ],
+        "type": "object"
+      },
+      "TreasuryLedgerPin": {
+        "properties": {
+          "identity": {
+            "$ref": "#/$defs/TreasuryCollectorIdentity"
+          },
+          "mode": {
+            "const": "shadow",
+            "default": "shadow",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/$defs/TreasuryEmissionPolicy"
+          },
+          "policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy",
+          "policy_digest",
+          "identity"
+        ],
+        "type": "object"
+      },
+      "TreasuryPolicyApproval": {
+        "properties": {
+          "policy": {
+            "$ref": "#/$defs/TreasuryEmissionPolicy"
+          },
+          "signature": {
+            "pattern": "^0x[0-9a-f]{128}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy",
+          "signature"
         ],
         "type": "object"
       },
@@ -4797,7 +5077,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -4929,7 +5210,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -5294,7 +5576,8 @@
               10,
               11,
               12,
-              13
+              13,
+              14
             ],
             "type": "integer"
           },
@@ -5557,6 +5840,18 @@
         "default": false,
         "type": "boolean"
       },
+      "statistical_band_mode": {
+        "anyOf": [
+          {
+            "const": "capped",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "tie_weighting_mode": {
         "anyOf": [
           {
@@ -5574,6 +5869,20 @@
           "type": "integer"
         },
         "type": "object"
+      },
+      "treasury_pin": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TreasuryLedgerPin"
+          },
+          {
+            "$ref": "#/$defs/EnforcingTreasuryPin"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "v9_confirmation_mode": {
         "anyOf": [
@@ -7505,6 +7814,17 @@
             },
             "type": "array"
           },
+          "v14_scored_runtime_env": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V14ScoredRuntimeEnvEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "v7_calibration": {
             "anyOf": [
               {
@@ -7634,6 +7954,69 @@
         ],
         "type": "object"
       },
+      "TreasuryWeightCapability": {
+        "properties": {
+          "approved_policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "collector_policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "treasury_dispatch_version": {
+            "const": 2,
+            "type": "integer"
+          },
+          "treasury_pin_version": {
+            "const": 2,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "treasury_pin_version",
+          "treasury_dispatch_version",
+          "approved_policy_digest",
+          "collector_policy_digest"
+        ],
+        "type": "object"
+      },
+      "V14ScoredRuntimeEnvEvidence": {
+        "properties": {
+          "bench_version": {
+            "const": 14,
+            "type": "integer"
+          },
+          "injected_keys": {
+            "items": {
+              "maxLength": 128,
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "const": "scorer-injected-env-only",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "source_revision": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bench_version",
+          "scope",
+          "source_revision",
+          "injected_keys",
+          "sha256"
+        ],
+        "type": "object"
+      },
       "V7InferenceCalibration": {
         "properties": {
           "manifest_sha256": {
@@ -7701,6 +8084,17 @@
           "ticket_inference": {
             "default": false,
             "type": "boolean"
+          },
+          "treasury_weights": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TreasuryWeightCapability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [

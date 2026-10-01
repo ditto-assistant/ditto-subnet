@@ -1524,6 +1524,12 @@ tbody tr.champion .rank {
 /* Phone top bar: the footer links lost their icons above, so their labels
    come back here or the links would be invisible. */
 @media (max-width: 960px) {
+  .sidebar {
+    background: var(--bg);
+  }
+  .sidebar .nav-item {
+    padding-inline: 10px;
+  }
   #wandb-link .btn-label,
   #github-link .btn-label {
     display: inline;

@@ -257,6 +257,9 @@ func TestEffectReceiptV1BindsAndDeduplicatesOperation(t *testing.T) {
 	if got := len(s.Observed(c.ID)); got != 3 {
 		t.Fatalf("distinct model-backed effects=%d, want three", got)
 	}
+	if got := s.EffectAccounting(c.ID); got != (EffectAccounting{Attempts: 6, ReceiptReplays: 2, AppliedEffects: 3}) {
+		t.Fatalf("effect accounting=%+v", got)
+	}
 }
 
 func TestEffectReceiptV1RecoversOnlyAfterNotAppliedAndLegacyFailsClosed(t *testing.T) {
@@ -287,6 +290,9 @@ func TestEffectReceiptV1RecoversOnlyAfterNotAppliedAndLegacyFailsClosed(t *testi
 	}
 	if status, out := post(ts.URL); status != http.StatusOK || out.EffectState != "applied" || out.Result == "" {
 		t.Fatalf("same-ID retry status=%d receipt=%+v", status, out)
+	}
+	if got := s.EffectAccounting(c.ID); got != (EffectAccounting{Attempts: 2, SameHopRetries: 1, AppliedEffects: 1}) {
+		t.Fatalf("not-applied recovery accounting=%+v", got)
 	}
 	if got := len(s.Observed(c.ID)); got != 2 {
 		t.Fatalf("attempts=%d, want first failed and second applied", got)

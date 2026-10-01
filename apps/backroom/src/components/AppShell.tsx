@@ -54,8 +54,8 @@ const navigation = [
   },
   {
     to: '/burn' as const,
-    label: 'Emission burn',
-    description: 'Miner / owner-burn split',
+    label: 'Emissions & treasury',
+    description: 'Burn & service wallet policy',
     icon: Flame,
   },
   {

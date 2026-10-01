@@ -1593,6 +1593,26 @@ def test_ledger_entry_rejects_tampered_receipt() -> None:
     assert not verify_ledger_entry(entry.model_copy(update={"score_proofs": proofs}))
 
 
+@pytest.mark.parametrize("bench_version", [None, 6])
+def test_ledger_entry_rejects_unsigned_row_below_the_receipt_contract(
+    bench_version: int | None,
+) -> None:
+    forged = _signed_ledger_entry().model_copy(
+        update={
+            "bench_version": bench_version,
+            "composite": 1.0,
+            "signature": None,
+            "score_proofs": [],
+        }
+    )
+
+    assert not verify_ledger_entry(forged)
+
+
+def test_ledger_entry_rejects_signed_quorum_below_the_receipt_contract() -> None:
+    assert not verify_ledger_entry(_signed_ledger_entry(bench_version=6))
+
+
 def test_v9_ledger_entry_verifies_ordinary_signed_quorum() -> None:
     """Rollout eligibility must not make a valid v9 signature look invalid."""
     assert verify_ledger_entry(_signed_ledger_entry(bench_version=9))
@@ -1662,13 +1682,6 @@ def test_confirmation_receipt_guard_admits_every_confirmation_bench_version() ->
         # No receipt attached: the guard must still refuse, but for the missing
         # receipt rather than the version.
         assert not verify_v9_confirmation_receipt(entry)
-
-
-def test_legacy_unsigned_ledger_entry_remains_valid() -> None:
-    entry = _signed_ledger_entry().model_copy(
-        update={"bench_version": 6, "score_proofs": [], "signature": None}
-    )
-    assert verify_ledger_entry(entry)
 
 
 def test_v7_ledger_entry_requires_signed_quorum() -> None:

@@ -123,7 +123,15 @@ from ditto import __version__
 # held incumbent out of the pool until every recently-live weight setter
 # reports v28+, because a v27 validator ignores the additive field and would
 # crown and pay the runner-up instead.
-HEARTBEAT_PROTOCOL_VERSION = 28
+# v29 consumes ``LedgerResponse.statistical_band_mode=capped``. The marker
+# caps paired tie/cohort comparisons and unpaired dethrone/contested bands at
+# twice the KOTH margin. A v28 validator ignores the additive marker and folds
+# the historical bands, so Platform must withhold it until every recently-live
+# weight setter reports v29+. Heartbeat signing bytes are unchanged.
+# v30 adds signed exact-policy treasury pin/queued-dispatch capability. Only
+# a crypto-approved validator whose actual transport implements both guards
+# advertises it. V1 shadow ledgers retain the historical weight fold.
+HEARTBEAT_PROTOCOL_VERSION = 30
 
 
 @dataclass(frozen=True)

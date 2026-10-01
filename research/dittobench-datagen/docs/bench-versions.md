@@ -1094,6 +1094,32 @@ boundary and locked model, LongMemEval floors (`bench_version >= 9`, a floor,
 never an enumerated whitelist), and the v9 signed-evidence / score-gate /
 curve-v3 efficiency stack all carry forward unchanged.
 
+## Bench v14 (action-scoped declarative over-call scoring)
+
+Issue #2508 introduces a new identity for the scoring correction proposed in
+#2405. V13 is a frozen scored contract: its whole-case exclusion for
+`conversational-declarative` is retained, even for unrelated observed actions.
+V14 counts those cases in the memory over-call denominator and exempts only
+`save_memory`, `update_memory`, and `delete_memory` on that category. Memory
+reads and no-call baselines remain unpenalized. Unrelated and mixed actions
+count once per case. Legacy lifecycle-write cases stay excluded at all versions.
+
+The generated surface, question-family identifiers, envelope, grader policy,
+v13 gate postures, LongMem instrument, and public harness wire version (9) carry
+forward. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
+version. It introduces no deferred private surface research or screening-policy
+activation. `CurrentBenchVersion` stays at its existing value (8).
+
+For seed `123456789`, full profile, public surface salt 0,
+`TestV14KnownVector` pins:
+`8a08dfe713fd6df2d67ece92148118a3fbd64b5d0f6a90f78dccb9853e329d50`.
+Every v2–v13 generation and grading vector remains unchanged. The scorer also
+pins 1,536 historical composite replay vectors against source
+`861814b58a38c0582e9fc73848566d1b6fe8c325`.
+
+See [the separately gated rollout plan](../../../docs/benchmark-v14-rollout.md).
+Supporting v14 does not change Platform's active version or qualify a fleet.
+
 ## Auditing an old score
 
 Pin two things: the `bench_version` published with the score, and the **module

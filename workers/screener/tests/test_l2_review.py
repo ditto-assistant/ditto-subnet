@@ -8,8 +8,10 @@ import fcntl
 import hashlib
 import io
 import json
+import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -47,6 +49,7 @@ from ditto_screener.l2_review import (
     LayeredSourceReviewAgent,
     SolL2SourceReviewAgent,
     _cost,
+    _enforce_causal_authority,
     _extract_readonly_workspace,
     _finalize_without_l3,
     _has_mixed_causal_families,
@@ -85,12 +88,34 @@ from ditto_screening_protocol import (
     SourceReviewInvariant,
     SourceReviewInvariantDisposition,
 )
-from scripts.generate_starter_provenance import _tracked_files
+from scripts.generate_starter_provenance import (
+    RUNTIME_MANIFESTS,
+    STAGED_MANIFESTS,
+    manifests_in,
+    newest_manifest,
+    starter_files,
+)
 
 SYSTEM_PROMPT = _l2_review_system_prompt(SCREENING_POLICY_VERSION)
 
 ROOT = Path(__file__).resolve().parents[1]
+STARTER_KIT = ROOT.parents[1] / "miners" / "dittobench-starter-kit"
 ATTEMPT = UUID("96af45fd-65da-4f59-87f8-8ddf5d57f88c")
+
+
+def _stage_starter_kit(source: Path, destination: Path) -> dict[str, str]:
+    """Copy only the kit's tracked, submittable files, as a submission carries.
+
+    Local build output (``target/``) or secrets beside a checkout would
+    otherwise show up as miner-added files.
+    """
+    files = starter_files(source)
+    for relative in files:
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / relative, target)
+    return files
+
 
 _PASS_CLAUSES = {
     "i1_model_invocation": "genuine_model_result",
@@ -179,24 +204,43 @@ def test_l2_extraction_budget_allows_archives_over_twenty_mib(tmp_path: Path) ->
 
 
 def test_supported_starter_manifests_are_versioned_and_distinct() -> None:
-    manifests = [json.loads(path.read_text()) for path in L2_STARTER_MANIFESTS]
-    assert [manifest["revision"] for manifest in manifests] == [
-        "959cd69a1a8d3b0defbfb8296518adb7d4f17c14",
-        "60aab4e5e2839ddb0fe8c80492bd7b76ba2668fd",
-        "106076a40e4214cda821dfd0bee5c9c6785d425c",
-        "23d9e87039a66e08548ec95826e7201b90988c5a",
-    ]
-    assert all(
-        manifest["origin"] == "ditto-assistant/dittobench-starter-kit"
-        for manifest in manifests
-    )
-    assert [len(manifest["files"]) for manifest in manifests] == [38, 38, 42, 42]
-    assert [len(manifest["rust_functions"]) for manifest in manifests] == [
-        98,
-        103,
-        103,
-        111,
-    ]
+    manifests = {
+        path.name: json.loads(path.read_text()) for path in L2_STARTER_MANIFESTS
+    }
+    # The standalone-repository baselines are frozen: older honest derivatives
+    # must keep matching exactly, so these pins never move.
+    legacy = {
+        "starter-kit-provenance-v1.json": (
+            "959cd69a1a8d3b0defbfb8296518adb7d4f17c14",
+            38,
+            98,
+        ),
+        "starter-kit-provenance-v3.json": (
+            "60aab4e5e2839ddb0fe8c80492bd7b76ba2668fd",
+            38,
+            103,
+        ),
+        "starter-kit-provenance-v4.json": (
+            "106076a40e4214cda821dfd0bee5c9c6785d425c",
+            42,
+            103,
+        ),
+        "starter-kit-provenance-v5.json": (
+            "23d9e87039a66e08548ec95826e7201b90988c5a",
+            42,
+            111,
+        ),
+    }
+    # Runtime trust changes only by an explicit activation change: a staged
+    # manifest joins this set by moving into data/ together with this pin.
+    assert sorted(manifests) == sorted(legacy)
+    for name, (revision, file_count, function_count) in legacy.items():
+        manifest = manifests[name]
+        assert manifest["version"] == 2
+        assert manifest["origin"] == "ditto-assistant/dittobench-starter-kit"
+        assert manifest["revision"] == revision
+        assert len(manifest["files"]) == file_count
+        assert len(manifest["rust_functions"]) == function_count
 
 
 def test_starter_provenance_generator_ignores_untracked_build_outputs(
@@ -210,15 +254,13 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "add", "src/lib.rs"], cwd=root, check=True)
 
-    assert [path.relative_to(root).as_posix() for path in _tracked_files(root)] == [
-        "src/lib.rs"
-    ]
+    assert list(starter_files(root)) == ["src/lib.rs"]
 
 
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
     assert l2_prompt_revision(11) == "l2-terra-source-review-v37-policy-v11"
     assert l2_prompt_revision(10) == "l2-terra-source-review-v37-policy-v10"
-    assert L2_DOSSIER_REVISION == "language-neutral-source-v15"
+    assert L2_DOSSIER_REVISION == "language-neutral-source-v18"
     assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v27-policy-v11"
     assert l2_cause_tiebreaker_prompt_revision(11) == (
         "l3-sol-cause-disagreement-v7-policy-v11"
@@ -378,7 +420,7 @@ def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     assert "blocks the call before endpoint dispatch" in v13
     assert "external tool's actual name and argument schema" in v13
     assert "hypothetically use the same field name" in v13
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v46-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v50-policy-v13"
     assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v22-policy-v13"
     assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v26-policy-v13"
     assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
@@ -465,7 +507,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "validator mints `inference_base_url`" in v13
     assert "A URL derived from user text" in v13
     assert "validator mints `inference_base_url`" not in _l2_review_system_prompt(12)
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v46-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v50-policy-v13"
     assert "v13" not in _benchmark_contract_capsule(12)
     assert _benchmark_contract_capsule(12)["supported_versions"] == [3, 4, 5, 6]
     assert (
@@ -1408,6 +1450,34 @@ def test_l1_lead_packet_deduplicates_without_losing_note_provenance() -> None:
     ]
 
 
+def test_l1_lead_packet_collapses_repeated_diagnostics_but_keeps_all_indices() -> None:
+    repeated = {
+        "kind": "concern",
+        "path": "src/main.rs",
+        "line": 7,
+        "area": "answer_construction",
+        "category": "provider_bypass",
+        "summary": "Broker  selector  bypassed",
+    }
+    l1 = replace(
+        _l1("medium"),
+        notes=(
+            repeated,
+            {**repeated, "summary": " Broker selector bypassed "},
+            {**repeated, "summary": "Distinct direct call at this line"},
+        ),
+    )
+
+    lead = _l1_lead_packet(l1)[0]
+    assert lead["note_indices"] == [0, 1, 2]
+    assert lead["occurrences"] == 3
+    assert lead["diagnostics_untrusted"] == [
+        {"note_index": 0, "summary": "Broker selector bypassed"},
+        {"note_index": 2, "summary": "Distinct direct call at this line"},
+    ]
+    assert len(l1.notes) == 3
+
+
 def test_l1_unlocated_concern_remains_in_packet_and_blocks_medium_clear() -> None:
     l1 = replace(
         _l1("medium"),
@@ -1502,7 +1572,7 @@ def test_v13_medium_l1_requires_resolved_leads() -> None:
     l1 = _l1("medium")
     lead = _l1_lead_packet(l1)[0]
     candidate = _clearance_candidate(response_models=("openai/gpt-6-sol",))
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "dossier_tools": (),
         "analyst_cache_hit": False,
         "policy_version": 13,
@@ -2066,6 +2136,54 @@ def test_served_generator_constellation_cannot_auto_clear(
     assert held.clearance_path == "deterministic_served_generator_hold"
     assert held.critic_disposition == "not_required_static_hold"
     assert held.resolution_basis == "insufficient_static_evidence"
+    retained = _enforce_causal_authority(
+        held.observation, clearance_path=held.clearance_path
+    )
+    assert retained is held.observation
+    assert retained.finding_digest == held.observation.finding_digest
+    assert retained.clearance_certified is False
+    assert retained.risk_level == "medium"
+    assert (
+        _enforce_causal_authority(held.observation).error_code
+        == "l2-causal-role-incomplete"
+    )
+    finding = SourceReviewFinding.model_validate(held.observation.finding)
+    changed = finding.model_copy(
+        update={"summary": "Static evidence proves a violation"}
+    )
+    assert (
+        _enforce_causal_authority(
+            replace(held.observation, finding=changed.model_dump(mode="json")),
+            clearance_path=held.clearance_path,
+        ).error_code
+        == "l2-causal-role-incomplete"
+    )
+    assert finding.invariant_assessment is not None
+    breach = finding.model_copy(
+        update={
+            "invariant_assessment": finding.invariant_assessment.model_copy(
+                update={
+                    "decisions": [
+                        decision.model_copy(
+                            update={
+                                "disposition": SourceReviewInvariantDisposition.BREACH
+                            }
+                        )
+                        if decision.invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+                        else decision
+                        for decision in finding.invariant_assessment.decisions
+                    ]
+                }
+            )
+        }
+    )
+    assert (
+        _enforce_causal_authority(
+            replace(held.observation, finding=breach.model_dump(mode="json")),
+            clearance_path=held.clearance_path,
+        ).error_code
+        == "l2-causal-role-incomplete"
+    )
     finding = SourceReviewFinding.model_validate(held.observation.finding)
     assert finding.invariant_assessment is not None
     i5 = next(
@@ -2655,6 +2773,57 @@ async def test_inprocess_starter_diff_ignores_non_provenance_json(
     assert isinstance(payload["removed"], list)
 
 
+async def test_inprocess_starter_diff_reads_only_runtime_manifests(
+    tmp_path: Path,
+) -> None:
+    if not STARTER_KIT.is_dir():
+        pytest.skip("the monorepo starter kit is not part of this checkout")
+    staged = manifests_in(STAGED_MANIFESTS)
+    if not staged:
+        pytest.skip("no starter provenance manifest is staged")
+    workspace = tmp_path / "starter"
+    _stage_starter_kit(STARTER_KIT, workspace)
+    harness = InProcessAnalyzerHarness()
+
+    payload = json.loads(await harness.run(workspace, "starter_diff", {}))
+
+    # A staged manifest that equals this kit must not make it diff clean
+    # before activation: the analyzer ranks only the runtime-loaded set.
+    runtime_revisions = {
+        json.loads(path.read_text())["revision"] for path in L2_STARTER_MANIFESTS
+    }
+    staged_revisions = {json.loads(path.read_text())["revision"] for path in staged}
+    assert "error" not in payload, payload
+    assert {item["revision"] for item in payload["candidates"]} == runtime_revisions
+    assert payload["revision"] not in staged_revisions
+
+    # Installing the staged manifests beside the runtime set, as activation
+    # does, selects the newest one with no change.
+    activated = tmp_path / "activated"
+    activated.mkdir()
+    for path in (*L2_STARTER_MANIFESTS, *staged):
+        shutil.copyfile(path, activated / path.name)
+    harness._manifests = activated
+    newest = json.loads(
+        newest_manifest(RUNTIME_MANIFESTS, STAGED_MANIFESTS).read_text()
+    )
+
+    payload = json.loads(await harness.run(workspace, "starter_diff", {}))
+
+    assert "error" not in payload, payload
+    assert payload["revision"] == newest["revision"]
+    assert payload["origin"] == newest["origin"]
+    assert payload["unchanged"] == sorted(newest["files"])
+    assert payload["modified"] == []
+    assert payload["added"] == []
+    assert payload["removed"] == []
+    assert payload["truncated"] is False
+    assert payload["candidates"][0] == {
+        "revision": newest["revision"],
+        "changed_file_count": 0,
+    }
+
+
 async def test_inprocess_harness_rejects_unknown_command(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="non-allowlisted"):
         await InProcessAnalyzerHarness().run(tmp_path, "rm_rf", {})
@@ -2926,6 +3095,10 @@ class _FakeHarness:
     ) -> str:
         del deadline
         self.calls.append(command)
+        if command == "read_file":
+            return json.dumps(
+                {"path": _arguments.get("path"), "content": "1:fn main() {}"}
+            )
         return "{}"
 
 
@@ -3300,7 +3473,20 @@ async def test_terminal_l2_model_inconclusive_carries_bounded_signed_audit(
 
     async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
         return L2RunResult(
-            observation=l2_review._failure("l2-model-inconclusive", "inconclusive"),
+            observation=replace(
+                l2_review._failure("l2-model-inconclusive", "inconclusive"),
+                inconclusive_model_audit={
+                    "categories": ["benchmark_emulation"],
+                    "evidence": [{"path": "src/main.rs"}],
+                    "causal_path": [{"role": "decision"}],
+                    "invariants": [
+                        {
+                            "invariant": "i5_production_engine",
+                            "disposition": "inconclusive",
+                        }
+                    ],
+                },
+            ),
             analyzed_files=(),
             causal_path=(),
             tools=("read_file", "search", "submit_review"),
@@ -3325,6 +3511,13 @@ async def test_terminal_l2_model_inconclusive_carries_bounded_signed_audit(
     assert audit.model_steps_observed == 2
     assert audit.tool_calls_observed == 3
     assert audit.budget_stop_reason == "none"
+    assert audit.dossier_complete is True
+    assert audit.model_categories == ["benchmark_emulation"]
+    assert audit.model_inconclusive_invariants == [
+        SourceReviewInvariant.PRODUCTION_ENGINE
+    ]
+    assert audit.model_evidence_count == 1
+    assert audit.model_causal_role_count == 1
     assert "read_file" not in json.dumps(audit.model_dump(mode="json"))
 
 
@@ -3483,7 +3676,7 @@ async def test_dossier_incomplete_when_binary_analysis_fails(
         archive.addfile(info, io.BytesIO(model))
     repository = TarSourceRepository(str(archive_path))
     agent = _sol_agent(tmp_path, _FakeHarness(), None)
-    dossier, tools, complete, _ = await agent._build_dossier(
+    dossier, tools, complete, _, incomplete_components = await agent._build_dossier(
         tmp_path,
         repository,
         artifact_sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
@@ -3492,6 +3685,7 @@ async def test_dossier_incomplete_when_binary_analysis_fails(
         deadline=None,
     )
     assert not complete
+    assert "binary_analysis" in incomplete_components
     assert tools == l2_review._DOSSIER_ANALYZERS
     inventory = dossier["bounded_source_inventory"]
     assert isinstance(inventory, dict)
@@ -3499,6 +3693,66 @@ async def test_dossier_incomplete_when_binary_analysis_fails(
     assert entry["analysis_failed"] is True
     assert entry["analysis_truncated"] is True
     assert entry["format_confidence"] == "low"
+
+
+async def test_incomplete_dossier_components_are_signed_without_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+
+    async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
+        return L2RunResult(
+            observation=l2_review._failure(
+                "l2-only-clearance-unproven", "inconclusive"
+            ),
+            analyzed_files=(),
+            causal_path=(),
+            tools=("workspace_index", "read_file"),
+            usage=L2Usage(),
+            cache_hit=False,
+            response_models=("openai/gpt-5.6-sol-20260709",),
+            dossier_complete=False,
+            dossier_incomplete_components=("workspace_index", "binary_analysis"),
+            failure_subcode="dossier-incomplete",
+        )
+
+    monkeypatch.setattr(agent, "_review_uncached", review_uncached)
+    kwargs = {
+        "archive_path": str(tmp_path / "unused.tar"),
+        "artifact_sha256": "ab" * 32,
+        "attempt_id": ATTEMPT,
+        "l1_observation": _l1(),
+        "deadline": None,
+    }
+    first = await agent.review(**kwargs)
+    second = await agent.review(**kwargs)
+    for result in (first, second):
+        audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+        assert audit.dossier_incomplete_components == [
+            "workspace_index",
+            "binary_analysis",
+        ]
+        assert audit.dossier_complete is False
+        assert result.failure_subcode == "dossier-incomplete"
+        assert not result.observation.clearance_certified
+    assert second.cache_hit
+
+
+async def test_dossier_component_labels_name_only_truncated_analyzers(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+    agent = _sol_agent(tmp_path, _PartialHarness(), None)
+    _, _, complete, _, components = await agent._build_dossier(
+        tmp_path,
+        TarSourceRepository(str(archive)),
+        artifact_sha256=artifact_sha,
+        l1_observation=_l1(),
+        policy_version=SCREENING_POLICY_VERSION,
+        deadline=None,
+    )
+    assert not complete
+    assert components == l2_review._DOSSIER_ANALYZERS
 
 
 @pytest.mark.parametrize("recovers", [False, True])
@@ -3790,7 +4044,10 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
         record["causal_verification_reason"] == "causal-evidence-not-required"
         for record in records
     )
-    assert all(len(record["starter_revisions"]) == 4 for record in records)
+    assert all(
+        len(record["starter_revisions"]) == len(L2_STARTER_MANIFESTS)
+        for record in records
+    )
     assert all(record["budgets"]["max_cost_usd"] == 1.5 for record in records)
     assert all(record["budgets"]["max_analyzer_calls"] == 24 for record in records)
     assert all(
@@ -5538,6 +5795,40 @@ async def test_http_failure_is_single_shot_before_deadline(
     assert requests == 1
 
 
+async def test_http_429_logs_the_provider_limit_without_publishing_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The L2 public code keeps only the status; the log names the limit."""
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+    limit = "Rate limit exceeded: limit_rpm/moonshotai/kimi-k3 per key"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            request=request,
+            json={"error": {"code": 429, "message": limit}},
+        )
+
+    with caplog.at_level(logging.WARNING, logger=l2_review.__name__):
+        result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+            str(archive),
+            artifact_sha256=artifact_sha,
+            attempt_id=ATTEMPT,
+            l1_observation=_l1(),
+            deadline=None,
+        )
+
+    assert not result.observation.ok
+    assert "429" in (result.observation.error_code or "")
+    assert limit not in (result.observation.error_code or "")
+    assert limit not in repr(result.observation)
+    assert any(
+        "http-status=429 provider_limit=key_rpm" in record.getMessage()
+        for record in caplog.records
+    )
+    assert all(limit not in record.getMessage() for record in caplog.records)
+
+
 async def test_report_only_terminal_schema_is_local_to_single_layer(
     tmp_path: Path,
 ) -> None:
@@ -6229,8 +6520,13 @@ async def test_report_only_audit_records_fixed_incomplete_reason_without_body(
     assert "private-source-marker" not in audit_path.read_text()
 
 
-async def test_compact_safe_correction_names_missing_sections_without_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("compact_review_packet", [False, True])
+@pytest.mark.parametrize("empty_navigation", [None, "workspace_index", "read_file"])
+async def test_l3_off_safe_correction_requires_exact_source_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    compact_review_packet: bool,
+    empty_navigation: str | None,
 ) -> None:
     audit_path = tmp_path / "correction-audit.jsonl"
     agent = SolL2SourceReviewAgent(
@@ -6248,7 +6544,7 @@ async def test_compact_safe_correction_names_missing_sections_without_source(
         cache_ttl_seconds=86_400,
         l3_enabled=False,
         terminal_verdict_required=True,
-        compact_review_packet=True,
+        compact_review_packet=compact_review_packet,
     )
     deterministic = {
         name.removeprefix("deterministic."): {}
@@ -6267,12 +6563,23 @@ async def test_compact_safe_correction_names_missing_sections_without_source(
         lambda *_args, **_kwargs: (_safe(), [], [], "safe_clearance"),
     )
     requests: list[list[dict[str, object]]] = []
+    if empty_navigation is not None:
+
+        async def run_without_source(*_args: object, **_kwargs: object) -> str:
+            return json.dumps({"path": "src/main.rs", "content": ""})
+
+        monkeypatch.setattr(agent._harness, "run", run_without_source)
 
     async def post(
         _client: object, _key: object, items: list[dict[str, object]], **_kwargs: object
     ) -> httpx.Response:
         requests.append(list(items))
-        if len(requests) == 1:
+        if len(requests) == 1 and empty_navigation is not None:
+            return _response(
+                [_tool_call("nav", empty_navigation, {"path": "src/main.rs"})],
+                model="openai/gpt-6-sol",
+            )
+        if len(requests) == (1 if empty_navigation is None else 2):
             return _response(
                 [_tool_call("1", "submit_l2_review", {"disposition": "safe"})],
                 model="openai/gpt-6-sol",
@@ -6298,9 +6605,12 @@ async def test_compact_safe_correction_names_missing_sections_without_source(
                 deadline=None,
                 dossier_complete=True,
             )
-    correction = json.loads(requests[1][-1]["output"])
+    correction = json.loads(requests[-1][-1]["output"])
     assert correction["reason"] == "safe_coverage"
-    assert "bounded_source_inventory" in correction["message"]
+    if compact_review_packet:
+        assert "bounded_source_inventory" in correction["message"]
+    else:
+        assert "bounded_source_inventory" not in correction["message"]
     assert "read at least one exact source file" in correction["message"]
     events = [json.loads(line) for line in audit_path.read_text().splitlines()]
     event = next(
@@ -6309,9 +6619,33 @@ async def test_compact_safe_correction_names_missing_sections_without_source(
         if event["event_type"] == "report_only_submit_correction"
     )
     assert event["proposed_disposition"] == "safe"
-    assert event["missing_sections"] == list(l2_review._COMPACT_DOSSIER_SECTIONS)
+    assert event["missing_sections"] == (
+        list(l2_review._COMPACT_DOSSIER_SECTIONS) if compact_review_packet else []
+    )
     assert event["needs_source_read"] is True
     assert "private-source-marker" not in audit_path.read_text()
+
+
+@pytest.mark.parametrize(
+    "command, output, expected",
+    [
+        (
+            "workspace_index",
+            {"path": "src/main.rs", "content": "1:fn main() {}"},
+            False,
+        ),
+        ("read_file", {}, False),
+        ("read_file", {"content": ""}, False),
+        ("read_file", {"content": "  \n"}, False),
+        ("read_file", {"content": "1:fn main() {}", "error": "read-failed"}, False),
+        ("read_file", {"content": "1:fn main() {}", "truncated": True}, False),
+        ("read_file", {"content": "1:fn main() {}", "truncated": False}, True),
+    ],
+)
+def test_source_read_coverage_requires_complete_nonempty_read_file(
+    command: str, output: dict[str, object], expected: bool
+) -> None:
+    assert l2_review._successful_source_read(command, json.dumps(output)) is expected
 
 
 async def test_report_only_citation_correction_is_fixed_and_keeps_gate(
@@ -6948,6 +7282,40 @@ async def test_stock_kit_dossier_analyzers_are_complete() -> None:
         assert not l2_review._contains_truncation(json.loads(output)), command
 
 
+async def test_stock_kit_dossier_is_complete_in_every_section(tmp_path: Path) -> None:
+    starter = ROOT.parent.parent / "miners/dittobench-starter-kit"
+    archive_path = tmp_path / "starter.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        # A miner archive carries regular files only; the L2 extractor rejects
+        # links such as the kit's shared skill links.
+        for directory, _dirs, names in os.walk(starter):
+            for name in sorted(names):
+                path = Path(directory) / name
+                if not path.is_symlink():
+                    archive.add(path, arcname=path.relative_to(starter).as_posix())
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _extract_readonly_workspace(archive_path, workspace)
+    agent = _sol_agent(tmp_path, InProcessAnalyzerHarness(), None)  # type: ignore[arg-type]
+    dossier, tools, complete, _, components = await agent._build_dossier(
+        workspace,
+        TarSourceRepository(str(archive_path)),
+        artifact_sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+        l1_observation=_l1(),
+        policy_version=SCREENING_POLICY_VERSION,
+        deadline=None,
+    )
+    assert complete
+    assert components == ()
+    assert tools == l2_review._DOSSIER_ANALYZERS
+    # Every section the compact packet serves through dossier_section must be
+    # accepted as-is. A truncation marker there marks dossier_section pending,
+    # and the host rejects the final review until the model re-runs the tool.
+    for section in l2_review._COMPACT_DOSSIER_SECTIONS:
+        output = l2_review._dossier_section_output(dossier, section)
+        assert not l2_review._analysis_requires_correction(output), section
+
+
 async def test_search_accepts_exact_starter_model_on_stock_kit() -> None:
     starter = ROOT.parent.parent / "miners/dittobench-starter-kit"
     payload = (starter / "fixtures/models/cross-encoder.onnx").read_bytes()
@@ -6995,7 +7363,7 @@ async def test_search_keeps_unproven_large_file_incomplete(
 
 
 @pytest.mark.integration
-async def test_real_analyzer_container_isolated_and_canonical_starter_clean(
+async def test_real_analyzer_container_isolated_and_diffs_only_runtime_manifests(
     tmp_path: Path,
 ) -> None:
     starter_raw = os.environ.get("DITTO_STARTER_KIT_DIR")
@@ -7017,13 +7385,23 @@ async def test_real_analyzer_container_isolated_and_canonical_starter_clean(
     output, _ = await build.communicate()
     assert build.returncode == 0, output.decode(errors="replace")[-4_000:]
     harness = IsolatedCodingHarness(docker_bin="docker", image=image)
-    diff = json.loads(await harness.run(starter, "starter_diff", {}))
-    assert diff["revision"] == "106076a40e4214cda821dfd0bee5c9c6785d425c"
-    assert not diff["modified"]
-    assert not diff["added"]
-    assert not diff["removed"]
-    assert len(diff["unchanged"]) == 42
-    surfaces = json.loads(await harness.run(starter, "integrity_surfaces", {}))
+    # Diff the submittable kit, not the checkout: an untracked local target/
+    # is build output, never a miner-added file.
+    staged = tmp_path / "canonical-starter"
+    _stage_starter_kit(starter, staged)
+    diff = json.loads(await harness.run(staged, "starter_diff", {}))
+    # The image bakes exactly the runtime-loaded manifests and never a staged
+    # one, so it ranks the same candidates as the in-process analyzer over the
+    # package data. A kit is diff-clean here only once its manifest is active.
+    assert "error" not in diff, diff
+    assert diff == json.loads(
+        await InProcessAnalyzerHarness().run(staged, "starter_diff", {})
+    )
+    assert {item["revision"] for item in diff["candidates"]} == {
+        json.loads(path.read_text())["revision"] for path in L2_STARTER_MANIFESTS
+    }
+    assert not diff["truncated"]
+    surfaces = json.loads(await harness.run(staged, "integrity_surfaces", {}))
     assert not surfaces["truncated"]
     assert surfaces["surfaces"]["service_entry"]["count"] > 0
     assert surfaces["surfaces"]["model_authority"]["count"] > 0
@@ -7951,3 +8329,23 @@ async def test_a_low_risk_pass_is_not_adjudicated() -> None:
 
     assert court.calls == 0
     assert result.adjudication is None
+
+
+def test_v13_i5_minor_unit_guidance_requires_benchmark_causality() -> None:
+    v13 = _l2_review_system_prompt(13)
+    v12 = _l2_review_system_prompt(12)
+    assert "model-selected\nmoney amount in equivalent units" in v13
+    assert "evaluation-\nderived interpretation, operand or output recipe" in v13
+    assert "Copying\nthe model-authored ANSWER value" in v13
+    assert "host rewrite\nafter that value is final remains I4" in v13
+    assert "Preserve an I5 finding" in v13
+    assert "model-selected\nmoney amount in equivalent units" not in v12
+
+
+def test_v13_i5_wire_instructions_do_not_override_required_v3_proof() -> None:
+    legacy = _l2_review_system_prompt(12)
+    current = _l2_review_system_prompt(13)
+    assert "it must be a v2\nobject that binds" in legacy
+    assert "it must be a v2\nobject that binds" not in current
+    assert "schema_version 3 with i5_proof for an I5 breach" in current
+    assert "schema_version 2 with i5_proof null" in current

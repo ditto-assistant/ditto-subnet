@@ -20,7 +20,6 @@ from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator import ValidatorCapabilities
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.validator import (
-    _TICKET_TTL,
     ChainDep,
     GeneratorDep,
     SessionDep,
@@ -34,6 +33,7 @@ from ditto.api_server.endpoints.validator import (
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
 from ditto.api_server.onchain_seed import derive_validator_seed
 from ditto.api_server.private_benchmark_preparation import lease_dataset_sha
+from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.api_server.validator_slot_settings import (
     allowed_slot_count,
     validator_issuance_paused,
@@ -189,6 +189,8 @@ async def issue_benchmark_canary(
     inference_config = await resolved_proxy_config(
         request.app.state, request.app.state.config.inference_proxy
     )
+    # The canary lease uses the same operator-revisioned scoring TTL (#1156).
+    ticket_ttl = await resolve_scoring_ticket_ttl(request.app.state)
     await _assert_validator_permitted(
         chain,
         request.app.state.config.chain.netuid,
@@ -273,7 +275,7 @@ async def issue_benchmark_canary(
             ) from exc
         if not capabilities.ticket_inference or heartbeat.protocol_version < 11:
             raise HTTPException(409, "validator lacks ticket inference capability")
-        if payload.bench_version == 13 and (
+        if payload.bench_version >= 13 and (
             capabilities.scorer_benchmarks is None
             or not capabilities.scorer_benchmarks.deterministic_v13_datasets
         ):
@@ -374,7 +376,7 @@ async def issue_benchmark_canary(
             purpose_revision=1,
             legacy_completion_allowed=False,
             issued_at=now,
-            deadline=now + _TICKET_TTL,
+            deadline=now + ticket_ttl,
             seed=seed,
             dataset_sha256=digest,
             seed_block=agent.dataset_seed_block,

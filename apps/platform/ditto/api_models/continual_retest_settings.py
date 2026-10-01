@@ -90,6 +90,11 @@ class ContinualRetestSettings(BaseModel):
     retest planning, a mixed weight fold is a consensus split.
     """
 
+    statistical_band_mode: Literal["disabled", "fleet_ready"] = "disabled"
+    """Activate the protocol-29 statistical cap only after operator selection
+    and every recently-live weight setter reports support. The default keeps
+    the historical fold throughout a rolling upgrade."""
+
     ledger_pin_mode: Literal["live", "epoch"] = "epoch"
     """Whether ``GET /scoring/scores`` serves one pinned ledger per chain epoch.
 
@@ -283,6 +288,9 @@ class EffectiveContinualRetestSettings(BaseModel):
     aggregate_active: bool
     tie_weighting_fleet_ready: bool = False
     tie_weighting_active: bool = False
+    statistical_band_fleet_ready: bool = False
+    statistical_band_active: bool = False
+    statistical_band_required_protocol: int = 29
     crown_incumbent_fleet_ready: bool = False
     crown_incumbent_active: bool = False
     crown_incumbent_required_protocol: int = CROWN_INCUMBENT_PROTOCOL

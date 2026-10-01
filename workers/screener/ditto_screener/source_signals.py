@@ -11,15 +11,25 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import cast
 
 from ditto_screener.rust_test_items import test_only_item_lines
+from ditto_screener.source_masking import (
+    mask_comments,
+    mask_effect_literals,
+    mask_lead_comments,
+    mask_proven_comments,
+    mask_string_literals,
+)
 
 _MAX_LEADS = 32
 _MAX_LEADS_PER_RULE_FILE = 4
 _WINDOW_LINES = 18
 _MAX_STATIC_FINDINGS = 16
 _COMMAND_EXECUTION_EFFECT = re.compile(
-    r"\b(?:Command::new|subprocess\.|os\.system|child_process\.|execFile|spawn)\b"
+    r"\b(?:Command::new|subprocess\.|os\.system|child_process\.|execFile|spawn|"
+    r"ProcessBuilder|Process\.(?:run|start|Start)|Runtime(?:\.getRuntime\(\))?\.exec)\b"
+    r"|\b(?:shell_exec|system|popen|exec|eval|execSync)\s*\("
 )
 
 
@@ -1725,7 +1735,13 @@ def find_source_review_leads(
 ) -> list[dict[str, object]]:
     """Return bounded location-only review leads from readable source files."""
     leads: list[dict[str, object]] = []
-    for path, text in sorted(files, key=lambda item: _path_priority(item[0])):
+    # The lead cap is spent on executable and build files first. Docs and data
+    # fixtures keep their leads (a fixture can still be compiled in or read as
+    # an answer table), but only in the capacity the executable surface
+    # leaves, so they cannot starve a miner source file that sorts after them.
+    # Test-named modules count as executable: whether they are served cannot
+    # be proved from source text.
+    for path, text in sorted(files, key=lambda item: _lead_path_priority(item[0])):
         lines = text.splitlines()
         if not lines:
             continue
@@ -1733,8 +1749,9 @@ def find_source_review_leads(
         # reading the raw line: a suppressor is a false-positive guard, and a
         # guard that fires too readily costs a missed lead, while a role that
         # fires on prose costs a wrongly quarantined miner. The brief's
-        # asymmetry (prefer false negatives) picks the direction.
-        code_lines = _mask_comments(text).splitlines()
+        # asymmetry (prefer false negatives) picks the direction, which is why
+        # a language without a lexer still has its comment lines blanked here.
+        code_lines = mask_lead_comments(text, path).splitlines()
         code_lines.extend([""] * (len(lines) - len(code_lines)))
         for rule in _RULES:
             if rule.build_files_only and not _is_build_file(path):
@@ -1797,9 +1814,16 @@ def find_decisive_malicious_source(
     files: Iterable[tuple[str, str]],
     *,
     explicitly_executable_paths: frozenset[str] = frozenset(),
-    include_test_only: bool = False,
+    include_test_only: bool = True,
 ) -> list[dict[str, object]]:
-    """Return high-confidence, location-only findings for pre-build quarantine."""
+    """Return high-confidence, location-only findings for pre-build quarantine.
+
+    Rust ``#[cfg(test)]`` items are scanned by default: a build can compile
+    them into the served binary (``rustc --cfg test``, RUSTFLAGS from an ARG,
+    a base image, or a fetched script) without any text that proves it
+    otherwise. Only a proof step that separately masks test-only code may pass
+    ``include_test_only=False``.
+    """
     findings: list[dict[str, object]] = []
     for path, text in sorted(files, key=lambda item: _path_priority(item[0])):
         if path.removeprefix(
@@ -1809,66 +1833,93 @@ def find_decisive_malicious_source(
         lines = text.splitlines()
         if not lines:
             continue
-        # Rust test modules can live in the same file as the served entrypoint.
-        # The legacy preflight scans that entire file, so a test-only fixture
-        # must be blanked before its path and effect roles are paired. Keep
-        # line positions for the location-only finding and leave adjacent
-        # production items visible.
+        # Opt-in only: blank test-only items before pairing roles, keeping
+        # line positions and adjacent production items.
         if not include_test_only and path.casefold().endswith(".rs"):
-            test_item_lines = _rust_test_item_lines(_mask_comments(text).splitlines())
+            test_item_lines = _rust_test_item_lines(
+                mask_comments(text, path).splitlines()
+            )
             if test_item_lines:
                 text = "\n".join(_blank_lines(lines, test_item_lines))
-        # Three views of the same file, each with a different job:
-        #   ``comment_masked`` — comments gone, string literals intact. Target
-        #     roles (paths, secret names) live inside string literals.
-        #   ``executable_lines`` — comments and strings gone. Effect roles must
-        #     be real operations, not words inside a prompt literal.
-        #   ``lines`` — raw, used only to report the location back.
-        comment_masked = _mask_comments(text).splitlines()
-        comment_masked.extend([""] * (len(lines) - len(comment_masked)))
-        executable_lines = _mask_string_literals("\n".join(comment_masked)).splitlines()
-        executable_lines.extend([""] * (len(lines) - len(executable_lines)))
-        for rule in _STATIC_MALICIOUS_RULES:
-            role_hits = {
-                role.name: [
-                    line_number
-                    for line_number, line in enumerate(comment_masked, 1)
-                    if role.pattern.search(
-                        _static_role_search_text(
-                            role.name,
-                            line[:4096],
-                            executable_lines[line_number - 1][:4096],
-                        )
-                    )
-                    and line.strip()
-                ]
-                for role in rule.roles
+        comment_masked_text = mask_comments(text, path)
+        file_findings = _static_findings(path, lines, comment_masked_text)
+        if file_findings and comment_masked_text == text:
+            # No lexer masked this file. Where one lexes a prefix of it, that
+            # prefix is exact, so a comment there cannot carry a finding;
+            # everything after it is still read as code.
+            cited = {
+                location["line"]
+                for finding in file_findings
+                for location in cast(list[dict[str, int]], finding["locations"])
             }
-            if any(not hits for hits in role_hits.values()):
-                continue
-            for anchor in sorted(
-                {line for hits in role_hits.values() for line in hits}
-            ):
-                locations: list[dict[str, object]] = []
-                for role in rule.roles:
-                    nearby = min(
-                        role_hits[role.name],
-                        key=lambda line: (abs(line - anchor), line),
+            proven = mask_proven_comments(text, path, cited)
+            if proven != text:
+                file_findings = _static_findings(path, lines, proven)
+        for finding in file_findings:
+            if finding not in findings:
+                findings.append(finding)
+                if len(findings) >= _MAX_STATIC_FINDINGS:
+                    return findings
+    return findings
+
+
+def _static_findings(
+    path: str, lines: list[str], comment_masked_text: str
+) -> list[dict[str, object]]:
+    """Pair target and effect roles in one file's views.
+
+    ``comment_masked_text`` has comments gone and string literals intact:
+    target roles (paths, secret names) live inside string literals. Its
+    string-masked form drops literals too, since effect roles must be real
+    operations, not words inside a prompt literal. ``lines`` is the raw text,
+    used only to report locations.
+    """
+    findings: list[dict[str, object]] = []
+    comment_masked = comment_masked_text.splitlines()
+    comment_masked.extend([""] * (len(lines) - len(comment_masked)))
+    executable_lines = mask_effect_literals(comment_masked_text, path).splitlines()
+    executable_lines.extend([""] * (len(lines) - len(executable_lines)))
+    command_payload_lines = _command_payload_lines(
+        path, comment_masked, executable_lines
+    )
+    for rule in _STATIC_MALICIOUS_RULES:
+        role_hits = {
+            role.name: [
+                line_number
+                for line_number, line in enumerate(comment_masked, 1)
+                if role.pattern.search(
+                    _static_role_search_text(
+                        role.name,
+                        line[:4096],
+                        executable_lines[line_number - 1][:4096],
+                        command_payload=line_number in command_payload_lines,
                     )
-                    if abs(nearby - anchor) > _WINDOW_LINES:
-                        break
-                    locations.append({"path": path, "line": nearby, "role": role.name})
-                else:
-                    finding: dict[str, object] = {
-                        "category": rule.category,
-                        "kind": rule.kind,
-                        "locations": locations,
-                    }
-                    if finding not in findings:
-                        findings.append(finding)
+                )
+                and line.strip()
+            ]
+            for role in rule.roles
+        }
+        if any(not hits for hits in role_hits.values()):
+            continue
+        for anchor in sorted({line for hits in role_hits.values() for line in hits}):
+            locations: list[dict[str, object]] = []
+            for role in rule.roles:
+                nearby = min(
+                    role_hits[role.name],
+                    key=lambda line: (abs(line - anchor), line),
+                )
+                if abs(nearby - anchor) > _WINDOW_LINES:
                     break
-            if len(findings) >= _MAX_STATIC_FINDINGS:
-                return findings
+                locations.append({"path": path, "line": nearby, "role": role.name})
+            else:
+                finding: dict[str, object] = {
+                    "category": rule.category,
+                    "kind": rule.kind,
+                    "locations": locations,
+                }
+                if finding not in findings:
+                    findings.append(finding)
+                break
     return findings
 
 
@@ -1923,7 +1974,7 @@ def find_benchmark_emulation_fingerprints(
         raw_lines = text.splitlines()
         if not raw_lines:
             continue
-        code_lines = _mask_comments(text).splitlines()
+        code_lines = mask_lead_comments(text, path).splitlines()
         code_lines.extend([""] * (len(raw_lines) - len(code_lines)))
         test_item_lines: frozenset[int] | None = None
         for fingerprint in _EMULATION_FINGERPRINTS:
@@ -2065,7 +2116,11 @@ def mask_remote_urls(line: str) -> str:
 
 
 def _static_role_search_text(
-    role_name: str, source_line: str, executable_line: str
+    role_name: str,
+    source_line: str,
+    executable_line: str,
+    *,
+    command_payload: bool = False,
 ) -> str:
     """Keep dangerous targets visible while requiring effects to be executable.
 
@@ -2081,145 +2136,91 @@ def _static_role_search_text(
     """
     if role_name == "cross-user-path":
         return mask_remote_urls(source_line)
-    if not role_name.endswith("effect") or _COMMAND_EXECUTION_EFFECT.search(
-        source_line
+    if (
+        not role_name.endswith("effect")
+        or command_payload
+        or _COMMAND_EXECUTION_EFFECT.search(executable_line)
     ):
         return source_line
     return executable_line
 
 
-def _mask_comments(text: str) -> str:
-    """Blank comment content while preserving layout, strings, and line count.
+def _command_payload_lines(
+    path: str, source_lines: list[str], executable_lines: list[str]
+) -> set[int]:
+    """Keep nearby literal bindings consumed by a concrete command sink.
 
-    Prose is not behavior. A lead that fires on a comment cites something the
-    compiler never sees, which is how a submission whose *code* refuses to
-    write the graded slot can still be quarantined by three stale sentences
-    describing a design it no longer has.
-
-    The scanner is string-aware in both directions, because the cheap ways to
-    fool a line-prefix heuristic run both ways:
-
-    - ``"https://llm.example/v1"`` must not lose its second half to a ``//``
-      that is inside a string literal;
-    - ``let x = r#"*/"#;`` must not be able to terminate a block comment that
-      was never open, desynchronizing the mask for the rest of the file.
-
-    Rust raw strings (``r"..."``, ``r#"..."#``) and byte strings are handled
-    explicitly. A ``'`` is treated as a character literal only when it closes
-    within the three characters a character literal can span; otherwise it is
-    a lifetime (``&'a str``) and is left alone.
+    Only executable text can identify a sink or variable use: a prompt that
+    mentions ``exec`` must not enable itself. This is bounded local def/use
+    matching, not a complete language dataflow proof. Unmatched source stays
+    available to the source reviewer and ordinary review leads.
     """
-    chars = list(text)
-    length = len(text)
-    index = 0
-    while index < length:
-        char = text[index]
-        # Line comment: blank to end of line, newline preserved.
-        if text.startswith("//", index):
-            end = text.find("\n", index)
-            end = length if end < 0 else end
-            for offset in range(index, end):
-                chars[offset] = " "
-            index = end
-            continue
-        # Block comment: Rust nests them, so track depth. Newlines preserved.
-        if text.startswith("/*", index):
-            depth = 1
-            chars[index] = chars[index + 1] = " "
-            cursor = index + 2
-            while cursor < length and depth:
-                if text.startswith("/*", cursor):
-                    depth += 1
-                    chars[cursor] = chars[cursor + 1] = " "
-                    cursor += 2
-                elif text.startswith("*/", cursor):
-                    depth -= 1
-                    chars[cursor] = chars[cursor + 1] = " "
-                    cursor += 2
-                else:
-                    if text[cursor] != "\n":
-                        chars[cursor] = " "
-                    cursor += 1
-            index = cursor
-            continue
-        # Raw string: no escapes, terminated by the matching hash run.
-        if char in {"r", "b"} or text.startswith("br", index):
-            cursor = index + (2 if text.startswith("br", index) else 1)
-            hashes = 0
-            while cursor < length and text[cursor] == "#":
-                hashes += 1
-                cursor += 1
-            if cursor < length and text[cursor] == '"':
-                terminator = '"' + "#" * hashes
-                end = text.find(terminator, cursor + 1)
-                index = length if end < 0 else end + len(terminator)
+    sinks = {
+        i
+        for i, line in enumerate(executable_lines)
+        if _COMMAND_EXECUTION_EFFECT.search(line)
+    }
+    if path.casefold().endswith(".swift"):
+        # Foundation Process interprets the payload only when the same
+        # process runs a shell/interpreter with its command flag. Ordinary
+        # Process arguments (e.g. echo printing a prompt) remain inert data.
+        for i, line in enumerate(executable_lines):
+            match = re.search(
+                r"\b(?:let|var)\s+(\w+)\s*=\s*(?:Foundation\.)?Process\s*\(", line
+            )
+            if match is None:
                 continue
-        # Ordinary string literal: skip past it untouched, honoring escapes.
-        if char == '"':
-            cursor = index + 1
-            while cursor < length:
-                if text[cursor] == "\\":
-                    cursor += 2
-                    continue
-                if text[cursor] == '"':
-                    cursor += 1
-                    break
-                cursor += 1
-            index = cursor
-            continue
-        # Character literal vs lifetime.
-        if char == "'":
-            for span in (3, 4):
-                if text[index + span - 1 : index + span] == "'":
-                    index += span
-                    break
-            else:
-                index += 1
-            continue
-        index += 1
-    return "".join(chars)
-
-
-def _mask_string_literals(text: str) -> str:
-    """Replace quoted source text with spaces while preserving source layout."""
-    chars = list(text)
-    index = 0
-    quote: str | None = None
-    quote_width = 0
-    escaped = False
-    while index < len(chars):
-        char = chars[index]
-        if quote is None:
-            if char in {'"', "'", "`"}:
-                quote = char
-                quote_width = (
-                    3 if char != "`" and text[index : index + 3] == char * 3 else 1
+            name = re.escape(match[1])
+            end = min(len(executable_lines), i + _WINDOW_LINES + 1)
+            window = range(i + 1, end)
+            if not any(
+                re.search(rf"\b{name}\.run\s*\(", executable_lines[j]) for j in window
+            ):
+                continue
+            if not any(
+                re.search(rf"\b{name}\.executableURL\s*=", executable_lines[j])
+                and re.search(
+                    r'["\']/(?:usr/)?bin/(?:sh|bash|dash|zsh|python[0-9.]*)["\']',
+                    source_lines[j],
                 )
-                for offset in range(quote_width):
-                    chars[index + offset] = " "
-                index += quote_width
-                escaped = False
+                for j in window
+            ):
                 continue
-            index += 1
-            continue
-        if quote_width == 3 and text[index : index + 3] == quote * 3:
-            chars[index : index + 3] = [" ", " ", " "]
-            quote = None
-            quote_width = 0
-            escaped = False
-            index += 3
-            continue
-        if char not in {"\r", "\n"}:
-            chars[index] = " "
-        if escaped:
-            escaped = False
-        elif char == "\\" and quote != "`" and quote_width == 1:
-            escaped = True
-        elif quote_width == 1 and char == quote:
-            quote = None
-            quote_width = 0
-        index += 1
-    return "".join(chars)
+            sinks.update(
+                j
+                for j in window
+                if re.search(rf"\b{name}\.arguments\s*=", executable_lines[j])
+                and re.search(r'["\']-c["\']', source_lines[j])
+            )
+    payload: set[int] = set()
+    assignment = re.compile(r"(?<![\w.])(\w+)\s*(?::\s*[^=\n]+)?\s*=(?!=)")
+    for sink in sinks:
+        # Direct literals passed to a sink are operational payload too.
+        payload.add(sink + 1)
+        for k in range(sink + 1, min(len(executable_lines), sink + _WINDOW_LINES + 1)):
+            if executable_lines[k].strip():
+                break
+            if source_lines[k] != executable_lines[k]:
+                payload.add(k + 1)
+        names = set(re.findall(r"\b[A-Za-z_]\w*\b", executable_lines[sink]))
+        for name in names:
+            for j in range(sink - 1, max(-1, sink - _WINDOW_LINES - 1), -1):
+                bindings = [
+                    m for m in assignment.finditer(executable_lines[j]) if m[1] == name
+                ]
+                if not bindings:
+                    continue
+                # The nearest assignment wins, including an overwrite with
+                # code or a safe literal. Do not revive an older payload.
+                if source_lines[j] != executable_lines[j]:
+                    payload.add(j + 1)
+                    for k in range(j + 1, sink):
+                        if executable_lines[k].strip():
+                            break
+                        if source_lines[k] != executable_lines[k]:
+                            payload.add(k + 1)
+                break
+    return payload
 
 
 def _is_build_file(path: str) -> bool:
@@ -2355,6 +2356,12 @@ def _is_executable_source_path(path: str) -> bool:
     )
 
 
+def _lead_path_priority(path: str) -> tuple[int, int, str]:
+    """Executable and build files before every other file, then path order."""
+    executable = _is_executable_source_path(path) or _is_build_file(path)
+    return (0 if executable else 1, *_path_priority(path))
+
+
 def _path_priority(path: str) -> tuple[int, str]:
     normalized = path.casefold().removeprefix("./")
     if normalized.startswith("src/"):
@@ -2376,17 +2383,15 @@ def source_path_priority(path: str) -> tuple[int, str]:
     return _path_priority(path)
 
 
-def mask_comments(text: str) -> str:
-    """Blank comment content, preserving layout, strings, and line count."""
-    return _mask_comments(text)
-
-
 __all__ = [
     "find_benchmark_emulation_fingerprints",
     "find_decisive_malicious_source",
     "find_source_review_leads",
     "is_executable_source_path",
     "mask_comments",
+    "mask_lead_comments",
+    "mask_proven_comments",
     "mask_remote_urls",
+    "mask_string_literals",
     "source_path_priority",
 ]

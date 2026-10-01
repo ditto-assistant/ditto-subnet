@@ -2,6 +2,19 @@ import { AlertTriangle, Clock3 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { PageHeader } from './PageHeader'
 
+/**
+ * Active quarantines that still need a screening ruling. An active row behind
+ * an already banned agent is reconciliation work (ditto-subnet#2038), so the
+ * header and the queue tab count only actionable rows. Falls back to the raw
+ * total against a platform that predates `actionable_count`.
+ */
+export function actionableQuarantineCount(quarantines: {
+  count: number
+  actionable_count?: number | null
+}) {
+  return quarantines.actionable_count ?? quarantines.count
+}
+
 export function ScreeningRouteFrame({
   reviewCount,
   disputeCount,

@@ -614,9 +614,9 @@ func TestConfirmationSubjectEpochAllowListTracksEvidenceStack(t *testing.T) {
 	// A >= v9 floor bounded by the scorer's accepted set: every version
 	// scoregates accepts is a confirmable subject, and the first one it does not
 	// accept yet is refused.
-	unaccepted := scoregates.BenchVersionV13 + 1
+	unaccepted := scoregates.BenchVersionV14 + 1
 	for version, want := range map[int]bool{
-		8: false, 9: true, 10: true, 11: true, 12: true, 13: true, unaccepted: false, 0: false,
+		8: false, 9: true, 10: true, 11: true, 12: true, 13: true, 14: true, unaccepted: false, 0: false,
 	} {
 		if got := confirmationSubjectEpochSupported(version); got != want {
 			t.Fatalf("confirmationSubjectEpochSupported(%d) = %v, want %v", version, got, want)
@@ -663,7 +663,7 @@ func TestTrustedConfirmationExecuteAcceptsV13SubjectAgainstV9Instrument(t *testi
 	}
 	// The first version the scorer does not accept yet still fails closed at
 	// the request validator, before any runtime is acquired.
-	request.BenchVersion = scoregates.BenchVersionV13 + 1
+	request.BenchVersion = scoregates.BenchVersionV14 + 1
 	if _, err := executor.Execute(ctx, request); err == nil {
 		t.Fatal("unaccepted subject epoch passed the confirmation request validator")
 	}

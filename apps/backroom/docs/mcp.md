@@ -32,6 +32,18 @@ global concurrency limit. `checks_per_minute` and
 the latest heartbeat, and they are null, never zero, until a check completes. The
 tool is read-only and schedules nothing.
 
+`list_validator_assignments` reads live leases from
+`GET /api/v1/admin/validator-assignments`. Each lease carries `seed`, the exact
+decimal dataset seed the validator runs, as a string. A JSON number would round
+a 64-bit seed above 2^53, so two different seeds could compare equal. Two
+`continual_retest` leases on one agent with equal `seed` values are the same
+paired shared-seed run. That lets an operator confirm two simultaneous runs
+match before either is accepted, without copying the seed into a manual run.
+`seed` is null for a ticket with no seed yet, and for a Platform that predates
+the field. It is a seed id only. Dataset contents never leave Platform, and the
+confirmation plan's pending seeds stay server-side
+(`get_continual_retest_diagnostic` reports only `pending_seed_count`).
+
 `get_outlier_escalation` reads the anomalous-score escalation that can open ATH
 holds (`review_kind` `anomalous_score`) through
 `GET /api/v1/admin/outlier-escalation`. The escalation is configured only by
@@ -75,10 +87,43 @@ composite, modified z-score and evidence. Held agents are not replayed. Each
 row is judged against today's ledger, not the ledger at its own finalization.
 The tool opens no hold and changes no setting.
 
+`get_continual_retest_diagnostic` explains, for one exact agent UUID, what
+`get_leaderboard` and `get_agent_scores` cannot: why a scored generation is or
+is not its owner's emission representative, and why it is or is not earning
+shared-seed retests. It reads
+`GET /api/v1/admin/agents/{agent_id}/continual-retest-diagnostic` with
+`backroom:read`. The response carries the canonical and official continual
+composites with their sample counts and completed-wave depth, the same-owner
+family with the representative, its margin and the `owner_family_key` term that
+selected it (`representative_selection`), membership in the raw wave, folded
+emission set and resolved retest cohort, and the cohort and emission cutoffs as
+`{composite, gap, tie_band, within_tie_band}`. `admission_reason` is the
+exclusion reason. A negative `cohort_cutoff.gap` on an agent still outside the
+cohort is owner suppression, not a score it failed to reach;
+`same_owner_challenger` is the bounded catch-up admission, not a second
+emission slot. `claim` runs the issuance lane's own gates for an empty validator
+hotkey, so no lease, event or slot is attributed. It gives the scheduled round,
+catch-up set, spare-capacity window, idle-retest gate, route priority and
+`decision`, the first gate a polling validator would hit now. A
+`chain_unavailable` decision means the block read failed, not that the lane is
+idle. The tool also returns ticket counts and the latest ticket and accepted
+result. Outstanding work is only a count, `pending_seed_count`. Pending seed
+values, confirmation datasets, prompts and answer keys never leave Platform, and
+unknown upstream fields are stripped. The raw and folded seed IDs it returns
+are already-scored confirmation seeds, as exact decimal strings. The snapshot
+grants no work and changes nothing.
+
 `https://backroom.dittobench.ai/mcp` is an OAuth-protected Streamable HTTP MCP
 server exposing the same operations as the console: screening quarantines and
-disputes, validator queue/slot/inference policy, benchmark rollouts, scoring
-policy, scores and leaderboards, and the emission burn.
+disputes, validator queue/slot/inference policy, the scoring lease TTL,
+benchmark rollouts, scoring policy, scores and leaderboards, and the emission
+burn.
+
+`get_scoring_lease_settings` / `set_scoring_lease_settings` (#1156) read and
+revise the deadline stamped on new canonical and score-retest replacement
+tickets (default 180 minutes, bounded 60-240 so it stays inside the validator
+245-minute restart drain). A revision needs `expectedRevision`, a reason, and
+`APPLY SCORING TICKET TTL <n> MINUTES`; live tickets keep their minted deadline.
 
 It was ported from the private `ditto-assistant/backroom` repository, which
 keeps only `backroom.heyditto.ai` and the Ditto app surface. Feature flags and
@@ -271,6 +316,38 @@ so a compromised or stale process can be stopped. Both writes require
 `backroom:write` and forward the signed-in operator email as `X-Admin-Actor`.
 No key registration, capacity change, or live host enrollment is performed by
 these tools merely becoming available.
+
+## Report-only L2 canary preflight
+
+`get_l2_report_canary_preflight` runs the same exact-source guard predicate that
+`schedule_l2_report_canary` enforces (and that claim and completion recheck),
+without a lock, queue write, or storage read. Pass the values you intend to
+schedule with (`artifactSha256`, `expectedAgentStatus`, `expectedScoreCount`,
+and for a legacy null-SHA attempt `historicalRulingKind` / `historicalRulingId`).
+Each guard returns `passed`, `current`, `expected`, and the exact 409
+`conflict_detail` the scheduler answers when it is the first failure; an omitted
+expected value returns `passed=null` rather than a guess.
+
+The preflight is advisory and non-authorizing (`authority: "none"`): it grants
+nothing, and scheduling reruns the same predicate under row locks. The first
+guard that is not known to pass is where scheduling would refuse, with that
+guard's detail. With a historical ruling, scheduling checks the ruling first:
+`ath_clear_action` (`ATH clear action missing`), `historical_ruling`
+(`historical ruling changed`), then `source_object_verified`
+(`current source object differs from ruling`, or 503 when storage is
+unavailable). Only then does it check the exact-source guards and the arrival
+benchmark. An unavailable arrival benchmark version returns
+`arrival_bench_version: null` and a failed guard, which scheduling also refuses.
+
+The score guard compares the raw `Score` row count for the agent, not a filtered
+or accepted-score view. A legacy attempt with a null pinned artifact SHA always
+fails `attempt_artifact_sha256` without a historical ruling, and a ruling cannot
+schedule an attempt that has a pinned SHA. `source_object_verified` stays
+`null` because only scheduling re-hashes the stored object. The response also
+shows any active queued or leased canary for the attempt and whether the
+report-only scored-runtime packet a claim needs is currently available; a
+queued canary waits without a packet. The response carries no source text,
+signed URL, credential, or private challenge material.
 
 ## Finding a submission
 

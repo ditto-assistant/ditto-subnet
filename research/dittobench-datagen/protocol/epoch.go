@@ -161,6 +161,7 @@ const (
 	BenchVersionV11     = 11
 	BenchVersionV12     = 12
 	BenchVersionV13     = 13
+	BenchVersionV14     = 14
 	CurrentBenchVersion = BenchVersionV8
 
 	// BenchVersion is retained as a source-compatible alias for consumers that
@@ -182,6 +183,7 @@ var (
 	datasetEpochV11 = time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV12 = time.Date(2027, 4, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV13 = time.Date(2027, 5, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV14 = time.Date(2027, 6, 1, 0, 0, 0, 0, time.UTC)
 
 	// DatasetEpoch and DatasetEpochRFC3339 retain the v2 values for legacy
 	// package callers. Canonical versioned generation uses DatasetEpochForVersion.
@@ -198,7 +200,7 @@ var (
 var supportedBenchVersions = []int{
 	BenchVersionV2, BenchVersionV3, BenchVersionV4, BenchVersionV5,
 	BenchVersionV6, BenchVersionV7, BenchVersionV8, BenchVersionV9,
-	BenchVersionV10, BenchVersionV11, BenchVersionV12, BenchVersionV13,
+	BenchVersionV10, BenchVersionV11, BenchVersionV12, BenchVersionV13, BenchVersionV14,
 }
 
 // SupportedBenchVersions returns a copy of the ordered list of versions this
@@ -262,6 +264,8 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 		return datasetEpochV12, nil
 	case BenchVersionV13:
 		return datasetEpochV13, nil
+	case BenchVersionV14:
+		return datasetEpochV14, nil
 	default:
 		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: %s)", version, SupportedBenchVersionList())
 	}

@@ -15,6 +15,7 @@ func TestWithObservedTrajectory(t *testing.T) {
 	selfReport := protocol.RunResponse{
 		FinalText: "You live in Lisbon.",
 		ToolCalls: []protocol.ObservedToolCall{{Name: "search_memories"}},
+		BlockedToolCalls: []protocol.BlockedToolCall{{Name: "gmail_send", State: "blocked_before_execution"}},
 	}
 
 	// Observed calls win over the self-report: a laundering harness that hid its
@@ -23,6 +24,9 @@ func TestWithObservedTrajectory(t *testing.T) {
 	got := withObservedTrajectory(selfReport, observed)
 	if len(got.ToolCalls) != 1 || got.ToolCalls[0].Name != "gmail_send" {
 		t.Fatalf("observed trajectory must replace self-report: got %+v", got.ToolCalls)
+	}
+	if len(got.BlockedToolCalls) != 1 || got.BlockedToolCalls[0].State != "blocked_before_execution" {
+		t.Fatalf("blocked advisory record must remain separate from observed execution: %+v", got.BlockedToolCalls)
 	}
 
 	// Nothing observed (local stubbing or a pure recall answer): self-report kept.

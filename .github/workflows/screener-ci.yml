@@ -6,6 +6,9 @@ on:
     paths:
       - workers/screener/**
       - packages/ditto-screening-protocol/**
+      # The newest starter provenance manifest must match the kit; its drift
+      # guard is a screener test, so kit-only changes must run this workflow.
+      - miners/dittobench-starter-kit/**
       - .github/workflows/screener-ci.yml
 
 permissions:

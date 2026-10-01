@@ -31,6 +31,20 @@ DittoBench API, coding datagen, coding starter kit, and validator stack so the
 Python, Go, and Rust consumers cannot release against different canonical
 bytes. The package remains shadow-only and contains no private corpus material.
 
+Screener controller delivery does not depend on the legacy submission-builder
+image job. Fleet descriptors retain the protocol 1 builder-image field so
+existing hosts can accept them: a valid job digest wins, otherwise the producer
+uses `release/screener-fleet-builder.digest` and emits a warning. Builder failure
+or skip does not block descriptor promotion; cancellation still stops it. The
+builder job continues to report its own failures. If neither reference is
+valid, descriptor publication stops. Before publishing a fallback descriptor,
+the protected `prod` job authenticates through the existing build WIF identity
+and checks that the exact selected digest still exists in Artifact Registry.
+A missing image, lookup failure, or mismatched digest stops publication; a
+valid builder-job image skips this extra verification. Update the fallback only
+from an immutable builder reference in a published fleet descriptor or Artifact
+Registry.
+
 The `Release` workflow first rejects a merge that a newer queued `main` push
 already superseded. For the current merge, affected root surfaces and every
 selected component verify the exact source in parallel before one aggregate
@@ -180,8 +194,23 @@ break-glass path for an exact non-release commit; using it delegates the
 exception to the protected environment reviewer and is never automatic.
 The capacity-controller workflow's direct manual dispatch is a separate
 break-glass operator override: it intentionally bypasses
-`SCREENER_CAPACITY_CONTROLLER_ENABLED`, while still requiring the protected
-`prod` environment and an exact 40-character revision.
+`SCREENER_CAPACITY_CONTROLLER_ENABLED` and the automatic tag opt-in, while
+still requiring repository Actions access, the `prod` environment's branch
+policy, and an exact 40-character revision. The current `prod` environment
+has no required reviewer; manual dispatch is an explicit operator action,
+not a separate approval gate.
+
+Automatic capacity-controller deployment also requires the repository variable
+`SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG` to equal the exact semantic
+release tag emitted by that run. An absent, empty, or different tag skips the
+controller deploy even when `SCREENER_CAPACITY_CONTROLLER_ENABLED=true`. The
+called workflow rechecks the tag byte-for-byte before authenticating because
+GitHub expression equality is case-insensitive.
+The screener owner must review the release and deliberately opt in to one tag;
+clear the variable after that release to prevent a later matching rerun. A
+manual controller dispatch remains the explicit path to deploy an exact
+main-ancestry commit without enabling automatic deployment for later runs;
+it does not require that commit to have a published release tag.
 
 ## Protected environment configuration
 
@@ -217,11 +246,15 @@ Only the scoped Cloudflare deployment token belongs in the GitHub environment.
    bearer secret version out of band.
 3. Deploy Platform from a reviewed release so the trusted-build queue migration
    and controller API exist.
-4. Enable and converge the capacity controller. Later semantic releases deploy
-   the unit automatically; Ansible remains the
-   first-boot/configuration path.
+4. Enable and converge the capacity controller. For a later semantic release,
+   opt in to its exact tag before automatic controller deployment, or use the
+   protected manual dispatch for an already published release. Ansible remains
+   the first-boot/configuration path.
 5. Publish one screener image and verify the immutable digest registered in Platform.
-6. Exercise GCE worker scale `0 -> 1 -> 0` before retiring the pet screener.
+6. Exercise GCE worker scale-out `0 -> 1` and verify the desired target returns
+   to zero before retiring the pet screener. Physical scale-in remains deferred
+   until claims can be fenced throughout deletion; drain excess capacity under
+   operator control.
 
 Merging application source performs semantic release and automatic runtime
 deployment. Infrastructure remains separate: Terraform apply, first-boot

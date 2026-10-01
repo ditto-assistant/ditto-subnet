@@ -234,12 +234,23 @@ async def resolve_review(
         raise ValueError(
             f"resolve_review decision must be scored or banned, got {decision}"
         )
-    agent = await session.get(Agent, agent_id)
+    banning = decision == AgentStatus.BANNED
+    if banning:
+        from ditto.db.queries.terminal_quarantine_reconciliation import (
+            lock_active_quarantines,
+        )
+
+        # Screening resolvers lock the quarantine before the agent; keep that
+        # order so this ban cannot deadlock against one (ditto-subnet#2038).
+        await lock_active_quarantines(session, agent_id=agent_id)
+    agent = await session.get(
+        Agent, agent_id, with_for_update=True if banning else None
+    )
     if agent is None:
         return None
     if agent.status != AgentStatus.ATH_PENDING_REVIEW:
         raise ValueError(f"agent {agent_id} is {agent.status}, not ath_pending_review")
-    if decision == AgentStatus.BANNED:
+    if banning:
         from ditto.db.queries.benchmark_rollout import preserve_desired_authority
 
         await preserve_desired_authority(session, now=datetime.now(UTC))
@@ -247,6 +258,30 @@ async def resolve_review(
     if decision == AgentStatus.SCORED:
         agent.duplicate_of = None
         agent.review_reason = None
+    if banning:
+        from ditto.db.queries.terminal_quarantine_reconciliation import (
+            TerminalRuling,
+            close_quarantines_for_terminal_ruling,
+        )
+
+        # A ban must not leave an actionable-looking screening quarantine. This
+        # legacy exit never resolves an ath_reviews row, so the ruling it cites
+        # is the ban itself on this exact agent and artifact.
+        await close_quarantines_for_terminal_ruling(
+            session,
+            agent=agent,
+            ruling=TerminalRuling(
+                agent_status=agent.status.value,
+                artifact_sha256=agent.sha256,
+                ath_review_id=None,
+                ath_action_id=None,
+                ath_resolved_at=None,
+            ),
+            source="cli_ban",
+            actor="cli:scripts/resolve_review.py",
+            reason="Closed by the terminal ban recorded by scripts/resolve_review.py",
+            now=datetime.now(UTC),
+        )
     await session.flush()
     return agent
 

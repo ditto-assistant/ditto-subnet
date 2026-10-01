@@ -1,13 +1,13 @@
 # Public starter source control (issue #2515)
 
-This operator-only fixture is the unchanged public starter source at `v0.325.3`:
+This operator-only fixture is the unchanged public starter source at `v0.330.5`:
 
 | Identity | Pinned value |
 | --- | --- |
-| Release commit | `7b297ae96488cfa4790b8b9d9b788cc82c7d0442` |
-| `miners/dittobench-starter-kit` Git tree | `7c8044a1cc77e342b5f58a24fe31c9a86cc4fd6b` |
-| Reproducible submission archive SHA-256 | `6f0fb811e08558aab56f63dd13ea1d2e1462d85e711fd31b0362d0de5c611fef` |
-| Archive bytes | `4,912,491` |
+| Release commit | `940304019aeec55e7b473bc163a51851e99db907` |
+| `miners/dittobench-starter-kit` Git tree | `9ffd5370e21bbe3135f1ee830b7b68723950619b` |
+| Reproducible submission archive SHA-256 | `2f14f77cc8e21b57e96f304f3b621d9919e9af802076928a27301d57aa956d7e` |
+| Archive bytes | `4,915,701` |
 | Dockerfile SHA-256 | `d3a1a2a1e5d43b0465c28712457d95432942ac8f017fd10d538859a901a54641` |
 
 The archive contains exact release file bytes and executable bits, with the
@@ -16,16 +16,23 @@ secrets, and generated tarballs). The packaging script normalizes tar metadata
 and gzip headers; no source file is edited. Reproduce it from a public checkout:
 
 ```sh
-git fetch origin tag v0.325.3
-git rev-parse 7b297ae96488cfa4790b8b9d9b788cc82c7d0442:miners/dittobench-starter-kit
-python3 scripts/package_canonical_starter_control.py /tmp/canonical-starter-v0.325.3.tgz
-shasum -a 256 /tmp/canonical-starter-v0.325.3.tgz
+git fetch origin tag v0.330.5
+git rev-parse 940304019aeec55e7b473bc163a51851e99db907:miners/dittobench-starter-kit
+python3 scripts/package_canonical_starter_control.py /tmp/canonical-starter-v0.330.5.tgz
+shasum -a 256 /tmp/canonical-starter-v0.330.5.tgz
 ```
 
 The tree and archive digests must match the table. The same archive is packaged
 inside Platform; registration copies those exact bytes to the fixture object
 and rehashes the stored object. No operator supplies an archive URL, private
 artifact, or storage credential.
+
+The starter now emits an advisory `blocked_tool_calls` record for a legacy
+duplicate stopped before endpoint execution. The signed relay and endpoint
+ledgers remain authoritative for scoring. Its run-level unconsumed-emission
+count does not identify the blocked call on its own, so independent W11/W12
+review must reconcile the advisory record, model emission, and endpoint
+trajectory before treating this source as candidate benign.
 
 ## Control sequence
 

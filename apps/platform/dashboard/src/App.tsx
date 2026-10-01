@@ -55,6 +55,7 @@ import { OperationsPage } from "./pages/OperationsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { PipelinePage } from "./pages/PipelinePage";
 import { ActivityPage } from "./pages/ActivityPage";
+import { GammaPage } from "./pages/GammaPage";
 import { AthPage } from "./pages/AthPage";
 import { ReviewsPage } from "./pages/ReviewsPage";
 import { SubmissionsPage } from "./pages/SubmissionsPage";
@@ -378,6 +379,9 @@ export default function App(): JSX.Element {
               </Match>
               <Match when={currentPage() === "activity"}>
                 <ActivityPage />
+              </Match>
+              <Match when={currentPage() === "gamma"}>
+                <GammaPage />
               </Match>
               <Match when={currentPage() === "ath"}>
                 <AthPage />

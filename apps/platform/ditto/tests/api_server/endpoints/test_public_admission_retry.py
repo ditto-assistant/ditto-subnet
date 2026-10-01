@@ -1,9 +1,9 @@
 """Honest fail-once admission state on the public pipeline (issue #1215).
 
 ``admission_retry`` distinguishes parked provider failures, stuck Ditto
-infrastructure, and guarded retries. Only a Docker build infrastructure
-failure promises (and schedules) an automatic retry. ``lane`` names the
-admission lane only where Platform holds evidence for it.
+infrastructure, and guarded retries. Only a fleet-owned failure in
+``INFRA_AUTO_RETRY_REASON_CODES`` promises (and schedules) an automatic retry.
+``lane`` names the admission lane only where Platform holds evidence for it.
 """
 
 from __future__ import annotations
@@ -210,11 +210,15 @@ async def test_ditto_infrastructure_failure_reports_stuck(
     assert retry["next_retry_at"] is None
 
 
-async def test_docker_build_infrastructure_reports_the_scheduled_automatic_retry(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
+async def test_automatic_infrastructure_failure_reports_the_scheduled_retry(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    reason_code: str,
 ) -> None:
     agent_id = await _seed_agent(
-        maker, name="infra-auto", status=AgentStatus.SCREENING_FAILED
+        maker, name=f"infra-auto-{reason_code}", status=AgentStatus.SCREENING_FAILED
     )
     now = datetime.now(UTC)
     finished_at = now - timedelta(minutes=1)
@@ -223,7 +227,7 @@ async def test_docker_build_infrastructure_reports_the_scheduled_automatic_retry
         agent_id=agent_id,
         finished_at=finished_at,
         deadline=now + timedelta(minutes=60),
-        reason_code="docker-build-infrastructure",
+        reason_code=reason_code,
     )
     _install(app, maker)
 
@@ -498,7 +502,10 @@ async def test_running_attempt_reports_only_an_evidenced_lane(
         ("targon-runtime-unavailable", "runtime_smoke"),
         ("source-review-model-timeout", "source_review"),
         ("source-review-retryable-infra", "source_review"),
+        ("source-review-adjudicator-key-unavailable", "source_review"),
         ("executor-isolation-unavailable", None),
+        # Operator-retried and ambiguous about the lane: no evidence, no lane.
+        ("source-review-unavailable", None),
     ],
 )
 async def test_failed_attempt_reports_the_lane_its_reason_names(

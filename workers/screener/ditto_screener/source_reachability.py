@@ -78,9 +78,9 @@ _DYNAMIC_MARKERS = re.compile(
 )
 
 
-def _mask_rust_test_items(source: str) -> str:
+def _mask_rust_test_items(path: str, source: str) -> str:
     lines = source.splitlines()
-    for line_number in test_only_item_lines(mask_comments(source).splitlines()):
+    for line_number in test_only_item_lines(mask_comments(source, path).splitlines()):
         lines[line_number - 1] = ""
     return "\n".join(lines)
 
@@ -811,7 +811,7 @@ def analyze_reachability(files: Mapping[str, str]) -> dict[str, ReachabilityEvid
         unresolved = False
         if path.endswith(".rs"):
             references, unresolved = _rust_references(
-                path, _mask_rust_test_items(source)
+                path, _mask_rust_test_items(path, source)
             )
         elif path.endswith(".py"):
             references, unresolved = _python_references(path, source)

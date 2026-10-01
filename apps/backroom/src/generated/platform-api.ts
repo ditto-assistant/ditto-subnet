@@ -1857,6 +1857,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/scoring-lease-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Settings
+         * @description Current policy, append-only history, the default, and what is in force.
+         */
+        get: operations["get_settings_api_v1_admin_scoring_lease_settings_get"];
+        put?: never;
+        /**
+         * Create Settings Revision
+         * @description Append one optimistic, confirmation-gated revision.
+         *
+         *     Reaches ticket issuance within the resolver TTL, fleet-wide, with no
+         *     restart. Live tickets keep the deadline they were minted with.
+         */
+        post: operations["create_settings_revision_api_v1_admin_scoring_lease_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-bootstrap-grants": {
         parameters: {
             query?: never;
@@ -1928,7 +1955,12 @@ export interface paths {
         put?: never;
         /**
          * Schedule L2 Report Canary
-         * @description Queue one exact source once; this never reopens a screening attempt.
+         * @description Queue one exact source once under the claiming node's posture.
+         *
+         *     This never reopens a screening attempt. The request model refuses a
+         *     ``review_settings_revision`` key with 422: pinned canaries use
+         *     ``POST /pinned``, so a Platform build without pin support rejects the
+         *     route instead of ignoring the field.
          */
         post: operations["schedule_l2_report_canary_api_v1_admin_screener_l2_report_canaries_post"];
         delete?: never;
@@ -2017,6 +2049,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-l2-report-canaries/pinned": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Schedule Pinned L2 Report Canary
+         * @description Queue one exact source once under a pinned ``l2-report-canary*`` posture.
+         *
+         *     The separate route is the capability check. A Platform build that predates
+         *     pins has no such route and answers 405 or 404 without queueing anything,
+         *     where the plain route would ignore the unknown field and queue the canary
+         *     under the node's posture. This route therefore never answers 404 itself:
+         *     a missing revision is a 422.
+         */
+        post: operations["schedule_pinned_l2_report_canary_api_v1_admin_screener_l2_report_canaries_pinned_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-l2-report-canaries/preflight/{agent_id}/{source_attempt_id}": {
         parameters: {
             query?: never;
@@ -2026,7 +2084,14 @@ export interface paths {
         };
         /**
          * Get L2 Report Canary Preflight
-         * @description Expose exact guard inputs; scheduling still rechecks them under a lock.
+         * @description Evaluate the scheduler's own guard predicate; advisory only.
+         *
+         *     Read-only and non-authorizing: no row locks, no queue write, and no storage
+         *     read. It grants nothing; scheduling reruns the same predicate under row
+         *     locks and, for a historical ruling, re-hashes the stored object. Omitted
+         *     expected values report the current value with ``passed=null``. Scheduling
+         *     would refuse at the first guard not known to pass, with its
+         *     ``conflict_detail``.
          */
         get: operations["get_l2_report_canary_preflight_api_v1_admin_screener_l2_report_canaries_preflight__agent_id___source_attempt_id__get"];
         put?: never;
@@ -3370,6 +3435,23 @@ export interface paths {
         put?: never;
         /** Record Treasury Settings */
         post: operations["record_treasury_settings_api_v1_admin_treasury_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/treasury-settings/ledger-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Treasury Ledger Readiness */
+        get: operations["get_treasury_ledger_readiness_api_v1_admin_treasury_settings_ledger_readiness_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5322,7 +5404,11 @@ export interface paths {
         };
         /**
          * Screener Capacity Watchdog
-         * @description Tell the GCP-only watchdog whether the normal writer lease is stale.
+         * @description Publish controller health and policy-gated GCP safety-net activation.
+         *
+         *     The reason describes controller health; current operator routing and
+         *     primary admission can suppress activation even while the controller is
+         *     missing, stale or unready.
          */
         get: operations["screener_capacity_watchdog_api_v1_public_screener_capacity_watchdog_get"];
         put?: never;
@@ -5388,6 +5474,23 @@ export interface paths {
         };
         /** List Treasury Activity */
         get: operations["list_treasury_activity_api_v1_public_treasury_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/treasury-allocation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Public Treasury Allocation */
+        get: operations["get_public_treasury_allocation_api_v1_public_treasury_allocation_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7620,7 +7723,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /** Case Set Sha256 */
             case_set_sha256: string;
             /** Contract Version */
@@ -9387,6 +9490,8 @@ export interface components {
             previous_status?: string | null;
             /** Reason */
             reason: string;
+            /** Reconciled Quarantine Ids */
+            reconciled_quarantine_ids?: string[];
             /** Score Count */
             score_count?: number | null;
         };
@@ -9706,6 +9811,8 @@ export interface components {
             agent_status: string;
             /** Idempotent */
             idempotent: boolean;
+            /** Reconciled Quarantine Ids */
+            reconciled_quarantine_ids?: string[];
             review: components["schemas"]["AdminCopyReviewItem"];
         };
         /** AdminCopySimilarityEvidence */
@@ -10805,6 +10912,12 @@ export interface components {
              * @enum {string}
              */
             status: "applied" | "already_applied" | "failed";
+            /**
+             * Terminal Reconciliation
+             * @default false
+             */
+            terminal_reconciliation: boolean;
+            terminal_ruling?: components["schemas"]["AdminQuarantineTerminalRuling"] | null;
         };
         /** AdminQuarantineBatchExecuteRequest */
         AdminQuarantineBatchExecuteRequest: {
@@ -10862,6 +10975,12 @@ export interface components {
             resolution: "release" | "rescreen" | "reject";
             /** Resulting Agent Status */
             resulting_agent_status?: string | null;
+            /**
+             * Terminal Reconciliation
+             * @default false
+             */
+            terminal_reconciliation: boolean;
+            terminal_ruling?: components["schemas"]["AdminQuarantineTerminalRuling"] | null;
         };
         /** AdminQuarantineBatchPreviewRequest */
         AdminQuarantineBatchPreviewRequest: {
@@ -10910,6 +11029,8 @@ export interface components {
             agent_id: string;
             /** Agent Name */
             agent_name: string;
+            /** Agent Status */
+            agent_status?: string | null;
             /** Agent Version */
             agent_version?: number | null;
             /** Artifact Sha256 */
@@ -10982,13 +11103,27 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "resolved";
+            /**
+             * Terminal Ghost
+             * @default false
+             */
+            terminal_ghost: boolean;
         };
         /** AdminQuarantineList */
         AdminQuarantineList: {
+            /** Actionable Count */
+            actionable_count?: number | null;
             /** Count */
             count: number;
             /** Items */
             items: components["schemas"]["AdminQuarantineItem"][];
+            /** Oldest Actionable Created At */
+            oldest_actionable_created_at?: string | null;
+            /**
+             * Terminal Ghost Count
+             * @default 0
+             */
+            terminal_ghost_count: number;
         };
         /** AdminQuarantineResolutionEvent */
         AdminQuarantineResolutionEvent: {
@@ -11024,6 +11159,25 @@ export interface components {
             /** Agent Status */
             agent_status: string;
             quarantine: components["schemas"]["AdminQuarantineItem"];
+        };
+        /**
+         * AdminQuarantineTerminalRuling
+         * @description The exact ruling that holds a quarantine's agent terminal.
+         *
+         *     A batch preview signs this into its token, and execution re-derives it
+         *     under the quarantine and agent row locks; any change refuses the item.
+         */
+        AdminQuarantineTerminalRuling: {
+            /** Agent Status */
+            agent_status: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Ath Action Id */
+            ath_action_id?: string | null;
+            /** Ath Resolved At */
+            ath_resolved_at?: string | null;
+            /** Ath Review Id */
+            ath_review_id?: string | null;
         };
         /** AdminQueuePolicySettingsRequest */
         AdminQueuePolicySettingsRequest: {
@@ -11464,6 +11618,35 @@ export interface components {
             run_id: string;
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /** AdminScoringLeaseSettingsRequest */
+        AdminScoringLeaseSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["ScoringLeaseSettings"];
+        };
+        /** AdminScoringLeaseSettingsResponse */
+        AdminScoringLeaseSettingsResponse: {
+            /** Current */
+            current: components["schemas"]["ScoringLeaseSettingsRevision"][];
+            default: components["schemas"]["ScoringLeaseSettings"];
+            effective: components["schemas"]["EffectiveScoringLeaseSettings"];
+            /** History */
+            history: components["schemas"]["ScoringLeaseSettingsRevision"][];
         };
         /**
          * AdminScreenedImageRebuildDetail
@@ -12762,11 +12945,6 @@ export interface components {
         /** AdminTreasurySettingsRequest */
         AdminTreasurySettingsRequest: {
             /**
-             * Actor
-             * @default admin_api
-             */
-            actor: string;
-            /**
              * Confirmation
              * @constant
              */
@@ -13317,6 +13495,11 @@ export interface components {
             purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary";
             /** Score Count */
             score_count: number;
+            /**
+             * Seed
+             * @description Exact decimal dataset seed this lease runs, as a string so a 64-bit value survives JSON. For continual_retest it is the shared champion-anchored seed, so two leases for one agent with the same value are the same paired run. Null when the ticket has no seed yet.
+             */
+            seed?: string | null;
             /**
              * Slot Id
              * @default slot-0
@@ -14547,7 +14730,7 @@ export interface components {
              * Reviewed Archive Sha256
              * @constant
              */
-            reviewed_archive_sha256: "6f0fb811e08558aab56f63dd13ea1d2e1462d85e711fd31b0362d0de5c611fef";
+            reviewed_archive_sha256: "2f14f77cc8e21b57e96f304f3b621d9919e9af802076928a27301d57aa956d7e";
             /**
              * Reviewed Dockerfile Sha256
              * @constant
@@ -18230,7 +18413,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             composite_policy: components["schemas"]["ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -18275,7 +18458,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /** Checksum */
             checksum: string;
             composite: components["schemas"]["ConfirmationCompositeProfile"];
@@ -18627,6 +18810,12 @@ export interface components {
              * @enum {string}
              */
             rollout_standdown: "off" | "capable_validators" | "all";
+            /**
+             * Statistical Band Mode
+             * @default disabled
+             * @enum {string}
+             */
+            statistical_band_mode: "disabled" | "fleet_ready";
             /**
              * Tie Weighting Mode
              * @default disabled
@@ -19448,6 +19637,21 @@ export interface components {
              */
             source: "revision" | "default";
             /**
+             * Statistical Band Active
+             * @default false
+             */
+            statistical_band_active: boolean;
+            /**
+             * Statistical Band Fleet Ready
+             * @default false
+             */
+            statistical_band_fleet_ready: boolean;
+            /**
+             * Statistical Band Required Protocol
+             * @default 29
+             */
+            statistical_band_required_protocol: number;
+            /**
              * Tie Weighting Active
              * @default false
              */
@@ -19603,6 +19807,41 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["QueuePolicySettings"];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "revision" | "default";
+        };
+        /**
+         * EffectiveScoringLeaseSettings
+         * @description What the next minted lease will use, and where it came from.
+         */
+        EffectiveScoringLeaseSettings: {
+            /** Checksum */
+            checksum: string;
+            /** Max Age Seconds */
+            max_age_seconds: number;
+            /**
+             * Max Scoring Ticket Ttl Minutes
+             * @default 240
+             */
+            max_scoring_ticket_ttl_minutes: number;
+            /**
+             * Min Scoring Ticket Ttl Minutes
+             * @default 60
+             */
+            min_scoring_ticket_ttl_minutes: number;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["ScoringLeaseSettings"];
+            /**
+             * Settings Valid
+             * @default true
+             */
+            settings_valid: boolean;
             /**
              * Source
              * @enum {string}
@@ -19881,6 +20120,36 @@ export interface components {
             scope: string;
             settings: components["schemas"]["EmissionEligibilitySettings"];
         };
+        /** EnforcingTreasuryPin */
+        EnforcingTreasuryPin: {
+            approval: components["schemas"]["TreasuryPolicyApproval"];
+            /** Epoch Index */
+            epoch_index: number;
+            /** First Block */
+            first_block: number;
+            /** Fleet */
+            fleet: components["schemas"]["TreasuryFleetMember"][];
+            identity: components["schemas"]["TreasuryCollectorIdentity"];
+            /**
+             * Mode
+             * @default enforce
+             * @constant
+             */
+            mode: "enforce";
+            /** Pinned Block */
+            pinned_block: number;
+            /** Pinned Block Hash */
+            pinned_block_hash: string;
+            policy: components["schemas"]["TreasuryEmissionPolicy"];
+            /** Policy Digest */
+            policy_digest: string;
+            /**
+             * Version
+             * @default 2
+             * @constant
+             */
+            version: 2;
+        };
         /**
          * EvalPricingResponse
          * @description Returned by ``GET /upload/eval-pricing``.
@@ -20157,11 +20426,12 @@ export interface components {
             /**
              * Schema Version
              * @default 1
-             * @constant
+             * @enum {integer}
              */
-            schema_version: 1;
+            schema_version: 1 | 2;
             /** Task Id */
             task_id: number;
+            treasury_pin?: components["schemas"]["EnforcingTreasuryPin"] | null;
             /** Validator Hotkey */
             validator_hotkey: string;
             /** Weights */
@@ -21451,6 +21721,11 @@ export interface components {
         };
         /** L2CanaryClaimRequest */
         L2CanaryClaimRequest: {
+            /**
+             * Accepts Review Settings Override
+             * @default false
+             */
+            accepts_review_settings_override: boolean;
             /** Instance Id */
             instance_id: string;
             /** Settings Checksum */
@@ -21487,6 +21762,7 @@ export interface components {
             miner_hotkey: string;
             /** Policy Version */
             policy_version: number;
+            review_settings_override?: components["schemas"]["ScreenerReviewSettingsOverride"] | null;
             /**
              * Run Mode
              * @default source_only
@@ -21532,10 +21808,97 @@ export interface components {
             accepted: boolean;
         };
         /**
+         * L2CanaryGuardCheck
+         * @description One exact-source guard, in the order the scheduler evaluates it.
+         *
+         *     ``passed`` is null when the caller supplied no expected value to compare,
+         *     or, for ``source_object_verified``, because only scheduling re-hashes the
+         *     stored object. ``conflict_detail`` is the exact 409 detail the scheduler
+         *     answers when this is the first guard not known to pass.
+         */
+        L2CanaryGuardCheck: {
+            /** Conflict Detail */
+            conflict_detail: string;
+            /** Current */
+            current: string | number | null;
+            /** Expected */
+            expected: string | number | null;
+            /**
+             * Guard
+             * @enum {string}
+             */
+            guard: "ath_clear_action" | "attempt_owner" | "agent_artifact_sha256" | "attempt_policy_version" | "agent_status" | "score_row_count" | "attempt_artifact_sha256" | "historical_ruling_run_mode" | "historical_ruling" | "source_object_verified" | "arrival_bench_version";
+            /** Note */
+            note?: string | null;
+            /** Passed */
+            passed: boolean | null;
+        };
+        /**
+         * L2CanaryPinnedScheduleRequest
+         * @description ``POST /pinned``: the schedule request with a required posture pin.
+         */
+        L2CanaryPinnedScheduleRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Confirm Report Only
+             * @constant
+             */
+            confirm_report_only: true;
+            /** Expected Agent Status */
+            expected_agent_status: string;
+            /** Expected Score Count */
+            expected_score_count: number;
+            /** Historical Ruling Id */
+            historical_ruling_id?: string | null;
+            /** Historical Ruling Kind */
+            historical_ruling_kind?: ("ath_clear" | "screening_reject") | null;
+            /**
+             * Policy Version
+             * @constant
+             */
+            policy_version: 13;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Review Label
+             * @enum {string}
+             */
+            review_label: "candidate_clear" | "known_reject";
+            /** Review Settings Revision */
+            review_settings_revision: number;
+            /**
+             * Run Mode
+             * @default source_only
+             * @enum {string}
+             */
+            run_mode: "source_only" | "full_runtime";
+            /**
+             * Source Attempt Id
+             * Format: uuid
+             */
+            source_attempt_id: string;
+            /** Target Node Id */
+            target_node_id: string;
+        };
+        /**
          * L2CanaryPreflightView
-         * @description Current values of the scheduler's exact-source guards, before its recheck.
+         * @description The scheduler's exact-source guards on current state; advisory only.
+         *
+         *     It authorizes nothing: scheduling reruns the same predicate under row locks
+         *     and, for a historical ruling, re-hashes the stored object before queueing.
          */
         L2CanaryPreflightView: {
+            /** Active Canary Id */
+            active_canary_id: string | null;
             /** Agent Artifact Sha256 */
             agent_artifact_sha256: string;
             /**
@@ -21546,9 +21909,28 @@ export interface components {
             /** Agent Status */
             agent_status: string;
             /** Arrival Bench Version */
-            arrival_bench_version: number;
+            arrival_bench_version: number | null;
+            /**
+             * Attempt Agent Id
+             * Format: uuid
+             */
+            attempt_agent_id: string;
             /** Attempt Policy Version */
             attempt_policy_version: number;
+            /**
+             * Authority
+             * @default none
+             * @constant
+             */
+            authority: "none";
+            /** Guards */
+            guards: components["schemas"]["L2CanaryGuardCheck"][];
+            /** Guards Pass */
+            guards_pass: boolean | null;
+            /** Legacy Null Attempt Sha256 */
+            legacy_null_attempt_sha256: boolean;
+            /** Report Only Packet Available */
+            report_only_packet_available: boolean;
             /** Score Row Count */
             score_row_count: number;
             /** Source Attempt Artifact Sha256 */
@@ -21559,7 +21941,10 @@ export interface components {
              */
             source_attempt_id: string;
         };
-        /** L2CanaryScheduleRequest */
+        /**
+         * L2CanaryScheduleRequest
+         * @description The plain route: the canary runs under the claiming node's posture.
+         */
         L2CanaryScheduleRequest: {
             /**
              * Agent Id
@@ -21651,11 +22036,21 @@ export interface components {
             request_id: string;
             /** Review Label */
             review_label: string;
+            /** Review Settings Checksum */
+            review_settings_checksum?: string | null;
+            /** Review Settings Revision */
+            review_settings_revision?: number | null;
+            /** Review Settings Scope */
+            review_settings_scope?: string | null;
             /**
              * Run Mode
              * @enum {string}
              */
             run_mode: "source_only" | "full_runtime";
+            /** Settings Checksum */
+            settings_checksum?: string | null;
+            /** Settings Revision */
+            settings_revision?: number | null;
             /** Source Attempt Id */
             source_attempt_id: string | null;
             /** Source Attestation */
@@ -21960,6 +22355,11 @@ export interface components {
              */
             stale: boolean;
             /**
+             * Statistical Band Mode
+             * @description Protocol-29 consensus marker. When capped, paired tie and unpaired dethrone statistics are limited to twice the KOTH margin before decay. Absent preserves the legacy fold.
+             */
+            statistical_band_mode?: "capped" | null;
+            /**
              * Tie Weighting Mode
              * @description Consensus activation marker for tie-aware rank-share pooling. When set to pool, exact effective-score ties share the slots they occupy; non-exact ties require valid paired shared-seed evidence. Absent keeps the historical fixed rank shares.
              */
@@ -21971,6 +22371,11 @@ export interface components {
             track_shares_bps?: {
                 [key: string]: number;
             };
+            /**
+             * Treasury Pin
+             * @description Immutable epoch-bound treasury policy and collector observations. V1 is shadow-only and cannot alter weights or authorize spending. V2 requires offline approval and current finalized/fleet proof before service-first weight dispatch; it never authorizes spending. Absent preserves the legacy ledger wire.
+             */
+            treasury_pin?: components["schemas"]["TreasuryLedgerPin"] | components["schemas"]["EnforcingTreasuryPin"] | null;
             /**
              * V9 Confirmation Mode
              * @description Fail-closed marker: every Bench v9 entry must carry a valid full-confirmation receipt while present.
@@ -22075,7 +22480,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /** Case Set Digest */
             case_set_digest: string;
             /** Dataset Revision */
@@ -22657,6 +23062,7 @@ export interface components {
             public_reason?: string | null;
             /** Reason Code */
             reason_code?: string | null;
+            review_outcome?: components["schemas"]["MinerScreeningReviewOutcome"] | null;
             /**
              * Started At
              * Format: date-time
@@ -22678,6 +23084,27 @@ export interface components {
             attempts: components["schemas"]["MinerScreeningFailure"][];
             /** Miner Hotkey */
             miner_hotkey: string;
+        };
+        /**
+         * MinerScreeningReviewOutcome
+         * @description Bounded source-review outcome for the submitter of one attempt.
+         *
+         *     Deliberately two closed enums and nothing else. The notes ledger, cited
+         *     ``path:line`` locations, breached invariant, published clear clause, court
+         *     reason text, and refusal code stay operator-side: together they describe
+         *     what the screener inspects, so they are not part of the miner contract.
+         */
+        MinerScreeningReviewOutcome: {
+            /**
+             * Next Step
+             * @enum {string}
+             */
+            next_step: "none" | "await_operator_review" | "resubmit_after_fix" | "contact_operators";
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "cleared" | "rejected" | "held_for_operator_review";
         };
         /** MinerSessionView */
         MinerSessionView: {
@@ -23712,9 +24139,11 @@ export interface components {
          * PublicAdmissionRetry
          * @description Live admission state for a submission still in build & admission.
          *
-         *     Failed cost-bearing attempts never retry automatically, except a Docker build
-         *     infrastructure failure or a claim the worker released before starting it.
-         *     ``parked`` names a source-review/provider failure (including OpenRouter
+         *     Failed cost-bearing attempts never retry automatically, except a Ditto-owned
+         *     failure that never judged the artifact: a Docker build infrastructure
+         *     failure, a claim the worker released before starting it, missing scorer
+         *     runtime evidence, or a screening node whose source-review court could not
+         *     start. ``parked`` names a source-review/provider failure (including OpenRouter
          *     throttling), while ``stuck`` names another Ditto-owned infrastructure
          *     failure. Both require a guarded Backroom retry.
          *     ``retry_queued`` means a retry is waiting for a screener slot: either that
@@ -24892,7 +25321,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /**
              * Bundle Id
              * Format: uuid
@@ -24932,7 +25361,7 @@ export interface components {
         };
         /**
          * PublicConfirmationScore
-         * @description One append-only shared-seed score from a continual top-five retest.
+         * @description One append-only continual retest score, without its reusable seed.
          */
         PublicConfirmationScore: {
             /**
@@ -24944,11 +25373,6 @@ export interface components {
             bench_version: number;
             /** Composite */
             composite: number;
-            /**
-             * Seed
-             * @description Exact decimal shared seed, encoded without JS rounding.
-             */
-            seed: string;
             /** Validator Hotkey */
             validator_hotkey: string;
         };
@@ -27177,6 +27601,21 @@ export interface components {
             /** Summary */
             summary: string;
         };
+        /** PublicServiceBucket */
+        PublicServiceBucket: {
+            /** Allocation Bps */
+            allocation_bps: number;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Holding Coldkey */
+            holding_coldkey: string | null;
+            /** Payee Rules */
+            payee_rules: components["schemas"]["TreasuryPayeeRule"][];
+            /** Publish Payments */
+            publish_payments: boolean;
+            /** Purpose */
+            purpose: string;
+        };
         /**
          * PublicSubmissionFamily
          * @description The scored generations collapsed into one owner leaderboard position.
@@ -27302,6 +27741,11 @@ export interface components {
              */
             agent_id: string;
             artifact_release: components["schemas"]["PublicArtifactRelease"];
+            /**
+             * Confirmation Sample Composites
+             * @description Per-seed retest medians for this agent and active benchmark, sorted by composite without exposing reusable seed identifiers. These are display-only; cohort fold eligibility is authoritative only in the leaderboard.
+             */
+            confirmation_sample_composites?: number[];
             /** Confirmation Scores */
             confirmation_scores?: components["schemas"]["PublicConfirmationScore"][];
             dispute?: components["schemas"]["PublicScreeningDispute"] | null;
@@ -27641,6 +28085,71 @@ export interface components {
             /** Usage Unavailable */
             usage_unavailable: number;
         };
+        /** PublicTreasuryAllocation */
+        PublicTreasuryAllocation: {
+            /**
+             * Allocation Version
+             * @enum {integer}
+             */
+            allocation_version: 1 | 2;
+            /** Buckets */
+            buckets: components["schemas"]["PublicServiceBucket"][];
+            /** Burn Of Miner Remainder */
+            burn_of_miner_remainder: number;
+            /** Burn Revision */
+            burn_revision: number;
+            /** Collector Coldkey */
+            collector_coldkey: string | null;
+            /** Collector Hotkey */
+            collector_hotkey: string | null;
+            /**
+             * Denominator
+             * @enum {string}
+             */
+            denominator: "miner_emission" | "released_miner_emission";
+            /**
+             * Effective Service Share
+             * @default 0
+             * @constant
+             */
+            effective_service_share: 0;
+            /** Forecast Burn Share */
+            forecast_burn_share: number;
+            /** Forecast Miner Share */
+            forecast_miner_share: number;
+            /** Forecast Service Share */
+            forecast_service_share: number;
+            /**
+             * Mode
+             * @default shadow
+             * @constant
+             */
+            mode: "shadow";
+            /**
+             * Payment Observer Status
+             * @default not_activated
+             * @constant
+             */
+            payment_observer_status: "not_activated";
+            /** Policy Revision */
+            policy_revision: number;
+            /**
+             * Routing Status
+             * @default not_activated
+             * @constant
+             */
+            routing_status: "not_activated";
+            /** Service Bps */
+            service_bps: number;
+            /** Sweep Interval Hours */
+            sweep_interval_hours: number;
+            /**
+             * Sweep Status
+             * @default not_activated
+             * @constant
+             */
+            sweep_status: "not_activated";
+        };
         /** PublicTreasuryEvent */
         PublicTreasuryEvent: {
             /** Accepted Work Ref */
@@ -27821,7 +28330,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             score_gates: components["schemas"]["PublicV9ScoreGateEvidence"];
         };
         /**
@@ -29369,6 +29878,7 @@ export interface components {
             status: "fresh_verified" | "legacy_v2" | "unreachable" | "identity_mismatch";
             /** Supported Bench Versions */
             supported_bench_versions: number[];
+            v14_scored_runtime_env?: components["schemas"]["V14ScoredRuntimeEnvEvidence"] | null;
             v7_calibration?: components["schemas"]["V7InferenceCalibration"] | null;
         };
         /**
@@ -29406,6 +29916,43 @@ export interface components {
             outcome: "served" | "served_degraded" | "http_error" | "unreadable" | "timeout" | "connect_error" | "not_probed";
             /** Reason */
             reason?: ("invalid_json" | "malformed_capabilities" | "unsupported_bench_version" | "calibration_unreadable" | "identity_mismatch") | null;
+        };
+        /**
+         * ScoringLeaseSettings
+         * @description The complete scoring-lease clock policy.
+         */
+        ScoringLeaseSettings: {
+            /**
+             * Scoring Ticket Ttl Minutes
+             * @default 180
+             */
+            scoring_ticket_ttl_minutes: number;
+        };
+        /** ScoringLeaseSettingsRevision */
+        ScoringLeaseSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["ScoringLeaseSettings"];
+            /**
+             * Settings Valid
+             * @default true
+             */
+            settings_valid: boolean;
         };
         /**
          * ScreenEvidenceItem
@@ -29599,6 +30146,10 @@ export interface components {
             cause_detail?: ("lease_unavailable" | "review_disabled") | null;
             /** Cost Usd Used */
             cost_usd_used?: number | null;
+            /** Dossier Complete */
+            dossier_complete?: boolean | null;
+            /** Dossier Incomplete Components */
+            dossier_incomplete_components?: ("workspace_index" | "starter_diff" | "build_structure" | "integrity_surfaces" | "opaque_inventory" | "binary_analysis")[] | null;
             /** Elapsed Ms */
             elapsed_ms?: number | null;
             /** Final Stage */
@@ -29619,8 +30170,16 @@ export interface components {
             max_read_bytes?: number | null;
             /** Max Steps */
             max_steps: number;
+            /** Model Categories */
+            model_categories?: string[] | null;
+            /** Model Causal Role Count */
+            model_causal_role_count?: number | null;
             /** Model Disposition */
             model_disposition?: "inconclusive" | null;
+            /** Model Evidence Count */
+            model_evidence_count?: number | null;
+            /** Model Inconclusive Invariants */
+            model_inconclusive_invariants?: components["schemas"]["SourceReviewInvariant"][] | null;
             /** Model Steps Observed */
             model_steps_observed?: number | null;
             /** Model Tool Failure Subcode */
@@ -30072,6 +30631,8 @@ export interface components {
             heartbeat_seen_at?: string | null;
             /** Image Reference */
             image_reference?: string | null;
+            /** Instance Busy */
+            instance_busy?: boolean | null;
             /** Node Id */
             node_id: string;
             /**
@@ -30096,6 +30657,8 @@ export interface components {
         };
         /** ScreenerControllerNodesResponse */
         ScreenerControllerNodesResponse: {
+            /** Legacy Gcp Running Attempts */
+            legacy_gcp_running_attempts: number;
             /** Nodes */
             nodes: components["schemas"]["ScreenerControllerNodeState"][];
         };
@@ -30217,6 +30780,13 @@ export interface components {
          *     limits allow operators to reserve or disable a lane, while ``sandbox_slots``
          *     prevents both lanes from consuming twice the physical host capacity.
          *     Source review is CPU-light and has its own independent limit.
+         *
+         *     ``canary_concurrency`` caps report-only L2 canaries on the node, but only
+         *     while production admission is open (``screening_concurrency > 0``). Even
+         *     then a canary never takes one of the ``screening_concurrency`` workers
+         *     reserved for production. With admission closed the canary lane keeps its
+         *     legacy heartbeat-bounded cap. Revisions written before the field existed
+         *     load with the default of one.
          */
         ScreenerNodeChannelSettings: {
             /**
@@ -30224,6 +30794,11 @@ export interface components {
              * @default 0
              */
             build_concurrency: number;
+            /**
+             * Canary Concurrency
+             * @default 1
+             */
+            canary_concurrency: number;
             /**
              * Runtime Concurrency
              * @default 0
@@ -30297,6 +30872,16 @@ export interface components {
              * @default 0
              */
             build_active: number;
+            /**
+             * Canary Active
+             * @default 0
+             */
+            canary_active: number;
+            /**
+             * Canary Queued
+             * @default 0
+             */
+            canary_queued: number;
             /**
              * Runtime Active
              * @default 0
@@ -31516,14 +32101,15 @@ export interface components {
          */
         SourceReviewCausalEvidence: {
             authority_transition: components["schemas"]["SourceReviewAuthorityTransition"];
+            i5_proof?: components["schemas"]["SourceReviewI5Proof"] | null;
             /** Role Bindings */
             role_bindings: components["schemas"]["SourceReviewCausalRoleBinding"][];
             /**
              * Schema Version
              * @default 2
-             * @constant
+             * @enum {integer}
              */
-            schema_version: 2;
+            schema_version: 2 | 3;
             scorer_visible_effect: components["schemas"]["SourceReviewScorerVisibleEffect"];
         };
         /**
@@ -31597,6 +32183,18 @@ export interface components {
             risk_level: "low" | "medium" | "high";
             /** Summary */
             summary: string;
+        };
+        /**
+         * SourceReviewI5Proof
+         * @description Bounded, signed explanation of an alleged benchmark-specific recipe.
+         */
+        SourceReviewI5Proof: {
+            /** Assumption Evidence Index */
+            assumption_evidence_index: number;
+            /** Evaluation Assumption */
+            evaluation_assumption: string;
+            /** Ordinary Product Exclusion */
+            ordinary_product_exclusion: string;
         };
         /**
          * SourceReviewInvariant
@@ -31732,7 +32330,7 @@ export interface components {
             active_work_count: number;
             /**
              * Attempt Status Drift Ghost Count
-             * @description Agents whose latest screening attempt reports a status this endpoint's reason classification does not cover (e.g. a terminal passed/rejected verdict on an agent whose own status never advanced past screening) -- the same kind of attempts/agents drift as the two counts above, never folded into backlog_count.
+             * @description Agents whose latest screening attempt reports a status this endpoint's reason classification does not cover (e.g. a terminal passed/rejected verdict on an agent whose own status never advanced past screening) -- the same kind of attempts/agents drift as the stale-running and resolved-quarantine counts, never folded into backlog_count.
              */
             attempt_status_drift_ghost_count: number;
             /**
@@ -31751,7 +32349,7 @@ export interface components {
             generated_at: string;
             /**
              * Ghost Count
-             * @description Sum of the three reconciliation counts above.
+             * @description Sum of the four reconciliation counts above.
              */
             ghost_count: number;
             /** Infrastructure Backoff Count */
@@ -31792,9 +32390,14 @@ export interface components {
             resolved_quarantine_ghost_count: number;
             /**
              * Stale Running Ghost Count
-             * @description Agents whose latest screening attempt still looks 'running' although the agent already reached a terminal or progressed-past-screening status. Visible for reconciliation; never folded into the counts above. See ditto-subnet#2038.
+             * @description Agents whose latest screening attempt still looks 'running' although the agent already reached a terminal or progressed-past-screening status. Visible for reconciliation; never folded into the counts above.
              */
             stale_running_ghost_count: number;
+            /**
+             * Terminal Quarantine Ghost Count
+             * @description Active screening quarantines whose exact agent is already banned or rejected. Historical, never escalation backlog or oldest age; close each with a fenced batch reject. See ditto-subnet#2038.
+             */
+            terminal_quarantine_ghost_count: number;
             /**
              * Throughput Completed Count
              * @description Full (non-build-only) screening attempts reaching a passed or rejected verdict within the throughput window.
@@ -32582,8 +33185,245 @@ export interface components {
             /** Revision */
             revision: number;
         };
+        /**
+         * TreasuryCollectorIdentity
+         * @description Finalized read values, not a caller's unbound verified=True assertion.
+         */
+        TreasuryCollectorIdentity: {
+            /** Finalized Block */
+            finalized_block: number;
+            /** Finalized Block Hash */
+            finalized_block_hash: string;
+            /** Genesis Hash */
+            genesis_hash: string;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Netuid
+             * @default 118
+             * @constant
+             */
+            netuid: 118;
+            /** Owner Coldkey */
+            owner_coldkey: string;
+            /** Subnet Owner Coldkey */
+            subnet_owner_coldkey: string;
+            /** Uid */
+            uid: number;
+            /** Uid Hotkey */
+            uid_hotkey: string;
+        };
+        /** TreasuryEmissionBucket */
+        TreasuryEmissionBucket: {
+            /** Allocation Bps */
+            allocation_bps: number;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Holding Coldkey */
+            holding_coldkey: string;
+        };
+        /**
+         * TreasuryEmissionPolicy
+         * @description Public fold inputs only; no billing references, credentials or seed data.
+         */
+        TreasuryEmissionPolicy: {
+            /** Buckets */
+            buckets: components["schemas"]["TreasuryEmissionBucket"][];
+            /** Collector Coldkey */
+            collector_coldkey: string;
+            /** Collector Hotkey */
+            collector_hotkey: string;
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /** Genesis Hash */
+            genesis_hash: string;
+            /**
+             * Netuid
+             * @default 118
+             * @constant
+             */
+            netuid: 118;
+            /** Revision */
+            revision: number;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
+        /**
+         * TreasuryFleetMember
+         * @description Projection of one fresh authenticated weight-setter heartbeat.
+         */
+        TreasuryFleetMember: {
+            /** Approved Policy Digest */
+            approved_policy_digest: string;
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /** Protocol Version */
+            protocol_version: number;
+            /**
+             * Treasury Dispatch Version
+             * @constant
+             */
+            treasury_dispatch_version: 2;
+            /**
+             * Treasury Pin Version
+             * @constant
+             */
+            treasury_pin_version: 2;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * TreasuryLedgerPin
+         * @description V1 can record shadow evidence only. No weight or spending activation.
+         */
+        TreasuryLedgerPin: {
+            identity: components["schemas"]["TreasuryCollectorIdentity"];
+            /**
+             * Mode
+             * @default shadow
+             * @constant
+             */
+            mode: "shadow";
+            policy: components["schemas"]["TreasuryEmissionPolicy"];
+            /** Policy Digest */
+            policy_digest: string;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
+        /** TreasuryLedgerReadiness */
+        TreasuryLedgerReadiness: {
+            /** Blocking Reasons */
+            blocking_reasons: ("producer_disabled" | "no_epoch_pin" | "stored_pin_invalid" | "proposal_pin_mismatch" | "shadow_only" | "offline_policy_unverified" | "weight_adapter_not_active" | "fleet_gate_unimplemented" | "current_epoch_not_checked" | "fleet_not_ready" | "enforcing_pin_unverified")[];
+            /**
+             * Can Enforce Weights
+             * @default false
+             */
+            can_enforce_weights: boolean;
+            configured_proposal: components["schemas"]["TreasuryEmissionPolicy"] | null;
+            /**
+             * Enforcement Configured
+             * @default false
+             */
+            enforcement_configured: boolean;
+            /**
+             * Fleet Gate
+             * @default not_checked
+             * @enum {string}
+             */
+            fleet_gate: "not_checked" | "ready" | "not_ready";
+            /** Latest Stored Epoch Index */
+            latest_stored_epoch_index: number | null;
+            /** Latest Stored Ledger Digest */
+            latest_stored_ledger_digest: string | null;
+            /**
+             * Observer Scope
+             * @default this_platform_process
+             * @constant
+             */
+            observer_scope: "this_platform_process";
+            /**
+             * Observer Status
+             * @enum {string}
+             */
+            observer_status: "disabled" | "not_observed" | "observing" | "observed" | "unavailable";
+            /**
+             * Offline Epoch Verified
+             * @default false
+             */
+            offline_epoch_verified: boolean;
+            /**
+             * Offline Policy Verified
+             * @default false
+             * @constant
+             */
+            offline_policy_verified: false;
+            /**
+             * Proposal Approval Status
+             * @default not_configured
+             * @enum {string}
+             */
+            proposal_approval_status: "not_configured" | "verified" | "invalid";
+            /** Proposal Approved Policy Digest */
+            proposal_approved_policy_digest?: string | null;
+            stored_enforcing_pin?: components["schemas"]["EnforcingTreasuryPin"] | null;
+            stored_shadow_pin: components["schemas"]["TreasuryLedgerPin"] | null;
+            /**
+             * Weight Effect
+             * @default none
+             * @constant
+             */
+            weight_effect: "none";
+        };
+        /**
+         * TreasuryPayeeRule
+         * @description An exact chain-payment classification, never provider credit proof.
+         */
+        TreasuryPayeeRule: {
+            /**
+             * Asset
+             * @default TAO
+             * @enum {string}
+             */
+            asset: "TAO" | "SN28_ALPHA" | "SN118_ALPHA";
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Label */
+            label: string;
+            /** Recipient Coldkey */
+            recipient_coldkey: string;
+            /** Recipient Hotkey */
+            recipient_hotkey?: string | null;
+            /** Rule Id */
+            rule_id: string;
+        };
+        /** TreasuryPolicyApproval */
+        TreasuryPolicyApproval: {
+            policy: components["schemas"]["TreasuryEmissionPolicy"];
+            /** Signature */
+            signature: string;
+        };
+        /** TreasuryServiceBucket */
+        TreasuryServiceBucket: {
+            /**
+             * Allocation Bps
+             * @default 0
+             */
+            allocation_bps: number;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Holding Coldkey */
+            holding_coldkey?: string | null;
+            /** Payee Rules */
+            payee_rules?: components["schemas"]["TreasuryPayeeRule"][];
+            /**
+             * Publish Payments
+             * @default true
+             */
+            publish_payments: boolean;
+            /** Purpose */
+            purpose: string;
+            /** Service Account Ref */
+            service_account_ref?: string | null;
+        };
         /** TreasurySettings */
         TreasurySettings: {
+            /**
+             * Allocation Version
+             * @default 1
+             * @enum {integer}
+             */
+            allocation_version: 1 | 2;
             /** Gm Account Ref */
             gm_account_ref?: string | null;
             /**
@@ -32617,6 +33457,13 @@ export interface components {
              * @constant
              */
             mode: "shadow";
+            /** Service Buckets */
+            service_buckets?: components["schemas"]["TreasuryServiceBucket"][];
+            /**
+             * Sweep Interval Hours
+             * @default 24
+             */
+            sweep_interval_hours: number;
             /** Treasury Coldkey */
             treasury_coldkey?: string | null;
             /** Treasury Hotkey */
@@ -32656,6 +33503,26 @@ export interface components {
             /** Revision */
             revision: number;
             settings: components["schemas"]["TreasurySettings"];
+        };
+        /**
+         * TreasuryWeightCapability
+         * @description Exact policy and queued guard implemented by the reporting runtime.
+         */
+        TreasuryWeightCapability: {
+            /** Approved Policy Digest */
+            approved_policy_digest: string;
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /**
+             * Treasury Dispatch Version
+             * @constant
+             */
+            treasury_dispatch_version: 2;
+            /**
+             * Treasury Pin Version
+             * @constant
+             */
+            treasury_pin_version: 2;
         };
         /** TrustedImageBuildCreateRequest */
         TrustedImageBuildCreateRequest: {
@@ -33777,6 +34644,32 @@ export interface components {
             /** Paused */
             paused: boolean;
         };
+        /**
+         * V14ScoredRuntimeEnvEvidence
+         * @description Keys reported by a descriptor-verified scorer for its v14 sandbox.
+         *
+         *     A separate type pins each capability slot to its version, so neither the
+         *     model nor the published schema accepts one version's packet in the other's
+         *     slot.
+         */
+        V14ScoredRuntimeEnvEvidence: {
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 14;
+            /** Injected Keys */
+            injected_keys: string[];
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "scorer-injected-env-only";
+            /** Sha256 */
+            sha256: string;
+            /** Source Revision */
+            source_revision: string;
+        };
         /** V7InferenceCalibration */
         V7InferenceCalibration: {
             /** Manifest Sha256 */
@@ -33827,7 +34720,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Effective Composite Micros */
@@ -33920,7 +34813,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             composite_policy: components["schemas"]["V9ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -34013,7 +34906,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             /**
              * Bundle Id
              * Format: uuid
@@ -34326,7 +35219,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14;
             claim_provenance?: components["schemas"]["V13ClaimProvenanceGate"] | null;
             inference_latency?: components["schemas"]["V12InferenceLatencyGate"] | null;
             model_dependence?: components["schemas"]["V12ModelDependenceGate"] | null;
@@ -34399,6 +35292,7 @@ export interface components {
              * @default false
              */
             ticket_inference: boolean;
+            treasury_weights?: components["schemas"]["TreasuryWeightCapability"] | null;
         };
         /**
          * ValidatorCapacityAssignment
@@ -35376,13 +36270,10 @@ export interface components {
         WeightProvenance: {
             /** Bench Version */
             bench_version: number;
-            /**
-             * Champion Agent Id
-             * Format: uuid
-             */
-            champion_agent_id: string;
+            /** Champion Agent Id */
+            champion_agent_id: string | null;
             /** Champion Artifact Sha256 */
-            champion_artifact_sha256: string;
+            champion_artifact_sha256: string | null;
             /** Epoch Index */
             epoch_index: number;
             /** Ledger Digest */
@@ -38937,6 +39828,72 @@ export interface operations {
             };
         };
     };
+    get_settings_api_v1_admin_scoring_lease_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminScoringLeaseSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_scoring_lease_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminScoringLeaseSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoringLeaseSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_screener_bootstrap_grant_api_v1_admin_screener_bootstrap_grants_post: {
         parameters: {
             query?: never;
@@ -39218,9 +40175,51 @@ export interface operations {
             };
         };
     };
-    get_l2_report_canary_preflight_api_v1_admin_screener_l2_report_canaries_preflight__agent_id___source_attempt_id__get: {
+    schedule_pinned_l2_report_canary_api_v1_admin_screener_l2_report_canaries_pinned_post: {
         parameters: {
             query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["L2CanaryPinnedScheduleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["L2CanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_l2_report_canary_preflight_api_v1_admin_screener_l2_report_canaries_preflight__agent_id___source_attempt_id__get: {
+        parameters: {
+            query?: {
+                artifact_sha256?: string | null;
+                expected_agent_status?: string | null;
+                expected_score_count?: number | null;
+                historical_ruling_kind?: ("ath_clear" | "screening_reject") | null;
+                historical_ruling_id?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -41930,6 +42929,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TreasurySettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_treasury_ledger_readiness_api_v1_admin_treasury_settings_ledger_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasuryLedgerReadiness"];
                 };
             };
             /** @description Validation Error */
@@ -45191,6 +46221,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_public_treasury_allocation_api_v1_public_treasury_allocation_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicTreasuryAllocation"];
                 };
             };
         };

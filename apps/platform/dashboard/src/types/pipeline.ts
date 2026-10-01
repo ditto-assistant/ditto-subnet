@@ -283,11 +283,10 @@ export interface AcceptedScore {
   gate_evidence?: GateEvidence | null;
 }
 
-/** A shared-seed continual top-five retest result. */
+/** A continual top-five retest result. Reusable seed identifiers stay private. */
 export interface ConfirmationScore {
   composite: number;
   bench_version?: number | null;
-  seed?: string | number;
   validator_hotkey?: string;
   accepted_at?: string | null;
 }
@@ -355,6 +354,8 @@ export interface PipelinePayload {
   score_floor?: number | null;
   provisional_scores?: AcceptedScore[];
   confirmation_scores?: ConfirmationScore[];
+  /** Seed-free per-wave medians, including agents absent from the leaderboard. */
+  confirmation_sample_composites?: number[];
   validation_attempts?: ValidationAttempt[];
   inference_runs?: InferenceRun[];
   screening_attempts?: ScreeningAttempt[];

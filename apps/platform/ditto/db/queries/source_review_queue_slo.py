@@ -71,12 +71,12 @@ attempt status not covered by any bucket (e.g. a terminal ``passed``/
 NULL reason that still counted toward ``backlog_count`` while summing to
 none of the reason buckets. That drift is now its own reconciliation ghost,
 :attr:`SourceReviewQueueSloSnapshot.attempt_status_drift_ghost_count`,
-alongside the two #2038-owned ones below -- visible, but never actionable
-backlog.
+alongside the other reconciliation ghosts below -- visible, but never
+actionable backlog.
 
 Reconciliation ("ghost") rows are visible but never counted toward the
 actionable metrics -- see :class:`SourceReviewQueueSloSnapshot` for the
-three kinds this module distinguishes, and the cross-link to #2038 below.
+four kinds this module distinguishes, and the cross-link to #2038 below.
 """
 
 from __future__ import annotations
@@ -90,6 +90,9 @@ from sqlalchemy import select, text
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.db.models import Agent, ScreeningAttempt, ScreeningQuarantine
+from ditto.db.queries.terminal_quarantine_reconciliation import (
+    TERMINAL_QUARANTINE_AGENT_STATUSES,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -105,12 +108,18 @@ ORDINARY_REVIEW_ACTIONABLE_STATUSES = (
 
 # Peyton's terminal/progressed-past exclusion list, verbatim. A ghost is a
 # stale-looking active attempt whose agent has already reached one of these.
+# ``terminal_quarantine_ghost_count`` reads the terminal subset from
+# ``ditto.db.queries.terminal_quarantine_reconciliation`` instead.
 _GHOST_AGENT_STATUSES = (
     AgentStatus.REJECTED,
     AgentStatus.BANNED,
     AgentStatus.EVALUATING,
     AgentStatus.SCORED,
     AgentStatus.LIVE,
+)
+
+_TERMINAL_QUARANTINE_GHOST_STATUSES = tuple(
+    sorted(TERMINAL_QUARANTINE_AGENT_STATUSES, key=lambda status: status.value)
 )
 
 OrdinaryReviewReason = Literal[
@@ -148,15 +157,19 @@ class SourceReviewQueueSloSnapshot:
     throughput_completed_count: int
     throughput_per_hour: float
     # Reconciliation counts: visible, never folded into the counts above.
-    # Cross-link: ditto-subnet#2038 owns transactional cleanup so a
-    # screening-attempt row and its agent's status can no longer drift apart
-    # in production; until that lands, these counts are how an operator sees
-    # the drift instead of it silently inflating (or silently vanishing from)
-    # the actionable backlog. See
-    # ``test_ghost_rows_disagree_with_repaired_queue_until_2038`` for the
-    # regression this module commits to once #2038 lands.
+    # These counts are how an operator sees screening-attempt/agent drift
+    # instead of it silently inflating (or silently vanishing from) the
+    # actionable backlog. ditto-subnet#2038 made a terminal ATH reject close
+    # its matching active quarantine in the same transaction and gave
+    # operators a fenced reject to close pre-existing orphans;
+    # ``terminal_quarantine_ghost_count`` is the remaining orphan backlog.
+    # A stale ``running`` attempt is not a quarantine and stays a separate,
+    # visible ghost (see ``test_stale_running_ghost_stays_visible_after_2038``).
     stale_running_ghost_count: int
     resolved_quarantine_ghost_count: int
+    # An active quarantine whose exact agent is already banned or rejected:
+    # historical, never escalation backlog or oldest age (ditto-subnet#2038).
+    terminal_quarantine_ghost_count: int
     # A latest-attempt status this module's reason CASE does not cover (e.g.
     # a terminal 'passed'/'rejected' verdict recorded against an agent whose
     # own status never advanced past screening) -- the same kind of
@@ -176,6 +189,7 @@ class SourceReviewQueueSloSnapshot:
         return (
             self.stale_running_ghost_count
             + self.resolved_quarantine_ghost_count
+            + self.terminal_quarantine_ghost_count
             + self.attempt_status_drift_ghost_count
         )
 
@@ -257,6 +271,12 @@ ghosts_resolved_quarantine AS (
       LEFT JOIN active_quarantine aq ON aq.agent_id = a.agent_id
      WHERE a.status = 'quarantined' AND aq.agent_id IS NULL
 ),
+ghosts_terminal_quarantine AS (
+    SELECT a.agent_id
+      FROM agents a
+      JOIN active_quarantine aq ON aq.agent_id = a.agent_id
+     WHERE a.status IN ({_sql_status_list(_TERMINAL_QUARANTINE_GHOST_STATUSES)})
+),
 ghosts_attempt_status_drift AS (
     SELECT agent_id FROM classified WHERE reason IS NULL
 ),
@@ -286,6 +306,8 @@ SELECT
   (SELECT count(*) FROM ghosts_stale_running)::bigint AS stale_running_ghost_count,
   (SELECT count(*) FROM ghosts_resolved_quarantine)::bigint
       AS resolved_quarantine_ghost_count,
+  (SELECT count(*) FROM ghosts_terminal_quarantine)::bigint
+      AS terminal_quarantine_ghost_count,
   (SELECT count(*) FROM ghosts_attempt_status_drift)::bigint
       AS attempt_status_drift_ghost_count,
   (SELECT completed FROM throughput) AS throughput_completed_count,
@@ -357,6 +379,7 @@ async def load_source_review_queue_slo_snapshot(
         throughput_per_hour=throughput_completed_count / throughput_window_hours,
         stale_running_ghost_count=int(row["stale_running_ghost_count"]),
         resolved_quarantine_ghost_count=int(row["resolved_quarantine_ghost_count"]),
+        terminal_quarantine_ghost_count=int(row["terminal_quarantine_ghost_count"]),
         attempt_status_drift_ghost_count=int(row["attempt_status_drift_ghost_count"]),
         max_actionable_age_threshold_seconds=max_actionable_age_threshold_seconds,
         overdue_count=(

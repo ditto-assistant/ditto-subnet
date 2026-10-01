@@ -419,6 +419,7 @@ def test_orchestrator_change_is_isolated_from_validator_release(
     [
         "Dockerfile.screener-fleet-release",
         "scripts/build-screener-fleet-release.py",
+        "release/screener-fleet-builder.digest",
         "scripts/screener-fleet-auto-update.sh",
         "scripts/screener-fleet-drain.py",
         "scripts/screener-fleet-release-hold.sh",

@@ -236,9 +236,18 @@ def _review_value(digest: str) -> dict[str, object]:
             ],
             "generator_components": [],
             "causal_evidence": {
-                "schema_version": 2,
+                "schema_version": 3,
                 "authority_transition": "model_skipped",
                 "scorer_visible_effect": "answer",
+                "i5_proof": {
+                    "evaluation_assumption": (
+                        "A fixed evaluation answer replaces the request answer."
+                    ),
+                    "ordinary_product_exclusion": (
+                        "The served code skips the deciding model, not just guidance."
+                    ),
+                    "assumption_evidence_index": 0,
+                },
                 "role_bindings": [
                     {
                         "path": "src/main.rs",
@@ -358,6 +367,72 @@ def test_scorer_category_accepts_scorer_field_rewrite() -> None:
 
     assert verification.role_complete is True
     assert verification.reason_code == "causal-evidence-verified"
+
+
+def test_v13_i5_requires_signed_assumption_and_product_exclusion(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha, digest = _tar(
+        tmp_path, "request = read_request()\nanswer = 'fixed'\n"
+    )
+    value = _review_value(digest)
+    observation, _, _, _ = _parse_l2_review(
+        value,
+        artifact_sha256=artifact_sha,
+        repository=TarSourceRepository(str(archive)),
+    )
+    assert _enforce_causal_authority(observation).ok is True
+    finding = SourceReviewFinding.model_validate(observation.finding)
+    assert finding.causal_evidence is not None
+    assert finding.causal_evidence.i5_proof is not None
+    assert b'"i5_proof"' in finding.canonical_bytes()
+
+    legacy = _review_value(digest)
+    legacy_causal = legacy["causal_evidence"]
+    assert isinstance(legacy_causal, dict)
+    legacy_causal["schema_version"] = 2
+    legacy_causal.pop("i5_proof")
+    old_observation, _, _, _ = _parse_l2_review(
+        legacy,
+        artifact_sha256=artifact_sha,
+        repository=TarSourceRepository(str(archive)),
+    )
+    enforced = _enforce_causal_authority(old_observation)
+    assert enforced.failure_disposition == "inconclusive"
+    assert enforced.error_code == "l2-i5-proof-incomplete"
+
+    historical = SourceReviewFinding.model_validate(old_observation.finding)
+    historical = historical.model_copy(
+        update={"prompt_revision": "l2-terra-source-review-v47-policy-v13"}
+    )
+    assert verify_causal_finding(historical).role_complete is True
+    assert b'"i5_proof"' not in historical.canonical_bytes()
+    for revision in (48, 49, 100):
+        current = historical.model_copy(
+            update={"prompt_revision": f"l2-terra-source-review-v{revision}-policy-v13"}
+        )
+        verified = verify_causal_finding(current)
+        assert verified.role_complete is False
+        assert verified.reason_code == "i5-proof-incomplete"
+
+
+def test_v13_i5_assumption_index_must_bind_source_evidence(tmp_path: Path) -> None:
+    archive, artifact_sha, digest = _tar(
+        tmp_path, "request = read_request()\nanswer = 'fixed'\n"
+    )
+    value = _review_value(digest)
+    causal = value["causal_evidence"]
+    assert isinstance(causal, dict)
+    proof = causal["i5_proof"]
+    assert isinstance(proof, dict)
+    proof["assumption_evidence_index"] = 9
+
+    with pytest.raises(ValueError, match="I5 assumption is not bound"):
+        _parse_l2_review(
+            value,
+            artifact_sha256=artifact_sha,
+            repository=TarSourceRepository(str(archive)),
+        )
 
 
 def test_transition_effect_mismatch_is_inconclusive() -> None:
@@ -716,9 +791,24 @@ def _corpus_review_value(case: dict[str, object], digest: str) -> dict[str, obje
             {"path": "src/main.rs", "line": 2, "role": "effect"},
         ],
         causal_evidence={
-            "schema_version": 2,
+            "schema_version": 3 if category == "benchmark_emulation" else 2,
             "authority_transition": case["authority_transition"],
             "scorer_visible_effect": case["scorer_visible_effect"],
+            **(
+                {
+                    "i5_proof": {
+                        "evaluation_assumption": (
+                            "A fixed evaluation answer replaces the request answer."
+                        ),
+                        "ordinary_product_exclusion": (
+                            "The served code skips the deciding model entirely."
+                        ),
+                        "assumption_evidence_index": 0,
+                    }
+                }
+                if category == "benchmark_emulation"
+                else {}
+            ),
             "role_bindings": [
                 {
                     "path": "src/main.rs",

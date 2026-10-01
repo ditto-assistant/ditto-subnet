@@ -1,0 +1,170 @@
+"""Backend contract gate over all fresh authenticated weight-setter heartbeats.
+
+No score/scorer filter participates in this gate. The explicit producer switch
+is absent by default; an unavailable or mixed fleet must never downgrade an
+enforcing epoch to the legacy fold.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ditto.api_models.validator_capabilities import ValidatorCapabilities
+from ditto.db.models import ValidatorHeartbeat
+from ditto_screening_protocol.treasury import TreasuryLedgerPin
+from ditto_screening_protocol.treasury_approval import (
+    verify_policy_approval,
+    verify_public_signature,
+)
+from ditto_screening_protocol.treasury_enforcement import (
+    EnforcingTreasuryPin,
+    TreasuryFleetMember,
+    require_treasury_weight_authority,
+)
+
+TREASURY_FLEET_FRESHNESS = timedelta(minutes=15)
+
+
+def treasury_fleet_members(
+    heartbeats: list[Any], *, now: datetime, policy_digest: str, collector_digest: str
+) -> tuple[TreasuryFleetMember, ...]:
+    """Refuse empty, stale, unknown or mismatched signed runtime evidence."""
+    members = []
+    for row in heartbeats:
+        seen_at = row.seen_at
+        if seen_at.tzinfo is None:
+            seen_at = seen_at.replace(tzinfo=UTC)
+        if not now - TREASURY_FLEET_FRESHNESS <= seen_at <= now:
+            raise ValueError("treasury heartbeat is outside the freshness window")
+        capabilities = ValidatorCapabilities.model_validate_json(
+            json.dumps(row.capabilities)
+        )
+        capability = capabilities.treasury_weights
+        if capability is None:
+            raise ValueError("weight setter has no queued treasury guard")
+        member = TreasuryFleetMember(
+            **capability.model_dump(),
+            validator_hotkey=row.validator_hotkey,
+            protocol_version=row.protocol_version,
+        )
+        if (
+            member.approved_policy_digest != policy_digest
+            or member.collector_policy_digest != collector_digest
+        ):
+            raise ValueError("weight setter has a different approved policy")
+        members.append(member)
+    if not members or len({m.validator_hotkey for m in members}) != len(members):
+        raise ValueError("treasury weight-setting fleet is empty or ambiguous")
+    return tuple(sorted(members, key=lambda member: member.validator_hotkey))
+
+
+async def read_treasury_fleet(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    policy_digest: str,
+    collector_digest: str,
+    required_hotkeys: tuple[str, ...] = (),
+) -> tuple[TreasuryFleetMember, ...]:
+    rows = list(
+        await session.scalars(
+            select(ValidatorHeartbeat).where(
+                ValidatorHeartbeat.seen_at >= now - TREASURY_FLEET_FRESHNESS
+            )
+        )
+    )
+    fleet = treasury_fleet_members(
+        rows, now=now, policy_digest=policy_digest, collector_digest=collector_digest
+    )
+    if not set(required_hotkeys).issubset(
+        {member.validator_hotkey for member in fleet}
+    ):
+        raise ValueError("chain-permitted or pinned weight setter has no fresh proof")
+    return fleet
+
+
+async def enforcing_pin_from_observation(
+    app_state: Any,
+    session: AsyncSession,
+    shadow: TreasuryLedgerPin,
+    schedule: Any,
+    *,
+    now: datetime,
+) -> EnforcingTreasuryPin:
+    config = app_state.config
+    approval = config.treasury_shadow_approval
+    policy = verify_policy_approval(
+        approval,
+        expected_policy_digest=config.treasury_approved_policy_digest,
+        expected_collector_policy_digest=config.treasury_approved_collector_policy_digest,
+        verify_signature=verify_public_signature,
+    )
+    if policy != shadow.policy:
+        raise ValueError("finalized observation differs from approved policy")
+    required_hotkeys = await app_state.chain.get_treasury_weight_setters(
+        policy, block_hash=shadow.identity.finalized_block_hash
+    )
+    if not required_hotkeys:
+        raise ValueError("chain weight-setting authorization roster is empty")
+    fleet = await read_treasury_fleet(
+        session,
+        now=now,
+        policy_digest=policy.digest,
+        collector_digest=policy.collector_policy_digest,
+        required_hotkeys=required_hotkeys,
+    )
+    return EnforcingTreasuryPin(
+        epoch_index=schedule.subnet_epoch_index,
+        first_block=schedule.last_epoch_block,
+        pinned_block=schedule.block,
+        pinned_block_hash=schedule.block_hash,
+        policy=policy,
+        policy_digest=policy.digest,
+        identity=shadow.identity,
+        approval=approval,
+        fleet=fleet,
+    )
+
+
+async def require_enforcing_requester(
+    session: AsyncSession,
+    pin: EnforcingTreasuryPin,
+    hotkey: str,
+    *,
+    now: datetime,
+    app_state: Any,
+) -> None:
+    fleet = await read_treasury_fleet(
+        session,
+        now=now,
+        policy_digest=pin.policy_digest,
+        collector_digest=pin.policy.collector_policy_digest,
+        required_hotkeys=tuple(member.validator_hotkey for member in pin.fleet),
+    )
+    if fleet != pin.fleet or hotkey not in {
+        member.validator_hotkey for member in fleet
+    }:
+        raise ValueError("treasury requester or live fleet differs from immutable pin")
+    observed = await app_state.chain.get_treasury_dispatch_observation(pin.policy)
+    required = await app_state.chain.get_treasury_weight_setters(
+        pin.policy, block_hash=observed.finalized_block_hash
+    )
+    if not required or not set(required).issubset({m.validator_hotkey for m in fleet}):
+        raise ValueError("current chain weight setter lacks pinned runtime proof")
+    require_treasury_weight_authority(
+        pin,
+        expected_policy_digest=app_state.config.treasury_approved_policy_digest,
+        expected_collector_policy_digest=app_state.config.treasury_approved_collector_policy_digest,
+        local_capability=next(m for m in fleet if m.validator_hotkey == hotkey),
+        current_identity=observed.identity,
+        netuid=app_state.config.chain.netuid,
+        current_epoch_index=observed.epoch_index,
+        current_first_block=observed.first_block,
+        finalized_block=observed.finalized_block,
+        finalized_block_hash=observed.finalized_block_hash,
+    )

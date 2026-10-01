@@ -2,6 +2,9 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -9,6 +12,7 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.dependencies import get_session
+from ditto.db.models import LedgerEpochSnapshot
 
 pytestmark = pytest.mark.asyncio
 _TOKEN = "test-admin-token-at-least-32-characters"
@@ -41,7 +45,6 @@ def _payload(revision: int = 0) -> dict:
             "max_slippage_bps": 50,
         },
         "reason": "review both proposed allocations",
-        "actor": "operator@example.com",
         "confirmation": "RECORD TREASURY SHADOW POLICY",
     }
 
@@ -66,11 +69,96 @@ async def test_defaults_and_revision(
     assert current["revision"] == 1
     assert current["miner_bps"] == 9850
     assert current["weight_effect"] == "none"
-    assert current["history"][0]["actor"] == "operator@example.com"
+    assert current["history"][0]["actor"] == "platform_admin_token"
+
+    spoofed = _payload(1)
+    spoofed["actor"] = "other-human@example.com"
+    spoofed_response = await client.post(
+        _URL,
+        headers={**_HEADERS, "X-Admin-Actor": "claimed-human@example.com"},
+        json=spoofed,
+    )
+    assert spoofed_response.status_code == 200, spoofed_response.text
+    assert spoofed_response.json()["actor"] == "platform_admin_token"
 
     stale = await client.post(_URL, headers=_HEADERS, json=_payload())
     assert stale.status_code == 409
-    assert len((await client.get(_URL, headers=_HEADERS)).json()["history"]) == 1
+    assert len((await client.get(_URL, headers=_HEADERS)).json()["history"]) == 2
+
+
+async def test_ledger_readiness_is_read_only_and_never_funding_ready(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    response = await client.get(f"{_URL}/ledger-readiness", headers=_HEADERS)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["configured_proposal"] is None
+    assert result["observer_status"] == "disabled"
+    assert result["observer_scope"] == "this_platform_process"
+    assert result["latest_stored_epoch_index"] is None
+    assert result["stored_shadow_pin"] is None
+    assert result["offline_policy_verified"] is False
+    assert result["weight_effect"] == "none"
+    assert result["can_enforce_weights"] is False
+    assert "producer_disabled" in result["blocking_reasons"]
+    assert "no_epoch_pin" in result["blocking_reasons"]
+    # A second read cannot create an epoch observation as a side effect.
+    repeat = await client.get(f"{_URL}/ledger-readiness", headers=_HEADERS)
+    assert repeat.status_code == 200
+    assert repeat.json() == result
+
+
+async def test_ledger_readiness_requires_admin(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    assert (await client.get(f"{_URL}/ledger-readiness")).status_code in {401, 403}
+
+
+@pytest.mark.parametrize("context", [[], {"served": []}])
+async def test_ledger_readiness_reports_corrupt_json_without_rewriting_row(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    context: Any,
+) -> None:
+    _install(app, session_maker)
+    snapshot_id = uuid4()
+    async with session_maker() as session:
+        session.add(
+            LedgerEpochSnapshot(
+                snapshot_id=snapshot_id,
+                netuid=app.state.config.chain.netuid,
+                epoch_index=7,
+                last_epoch_block=100,
+                pinned_block=101,
+                pinned_block_hash="0x" + "ab" * 32,
+                pinned_at=datetime.now(UTC),
+                bench_version=14,
+                entries=[],
+                context=context,
+                ledger_digest="a" * 64,
+            )
+        )
+        await session.commit()
+    response = await client.get(f"{_URL}/ledger-readiness", headers=_HEADERS)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["latest_stored_epoch_index"] == 7
+    assert result["latest_stored_ledger_digest"] == "a" * 64
+    assert result["stored_shadow_pin"] is None
+    assert "stored_pin_invalid" in result["blocking_reasons"]
+    assert result["can_enforce_weights"] is False
+    async with session_maker() as session:
+        row = await session.get(LedgerEpochSnapshot, snapshot_id)
+        assert row is not None
+        assert row.context == context
+        assert row.ledger_digest == "a" * 64
 
 
 @pytest.mark.parametrize(
@@ -104,3 +192,100 @@ async def test_requires_admin(
 ) -> None:
     _install(app, session_maker)
     assert (await client.get(_URL)).status_code in {401, 403}
+
+
+async def test_v2_service_wallets_are_shadow_only_and_v1_history_is_preserved(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    legacy = await client.post(_URL, headers=_HEADERS, json=_payload())
+    assert legacy.status_code == 200, legacy.text
+
+    settings: dict[str, Any] = {
+        "allocation_version": 2,
+        "treasury_hotkey": ("5" + "a" * 47),
+        "treasury_coldkey": ("5" + "b" * 47),
+        "service_buckets": [
+            {
+                "bucket_id": "gm_credits",
+                "purpose": "GM inference credit",
+                "allocation_bps": 1000,
+                "holding_coldkey": ("5" + "c" * 47),
+                "service_account_ref": None,
+            },
+            {
+                "bucket_id": "bitsec_audits",
+                "purpose": "independent security audits",
+                "allocation_bps": 0,
+            },
+            {
+                "bucket_id": "bitcast_ads",
+                "purpose": "advertising campaigns",
+                "allocation_bps": 0,
+            },
+        ],
+    }
+    proposal = {
+        "expected_revision": 1,
+        "settings": settings,
+        "reason": "propose separate service wallets",
+        "confirmation": "RECORD TREASURY SHADOW POLICY",
+    }
+    created = await client.post(_URL, headers=_HEADERS, json=proposal)
+    assert created.status_code == 200, created.text
+    current = (await client.get(_URL, headers=_HEADERS)).json()
+    assert current["miner_bps"] == 9000
+    assert current["weight_effect"] == "none"
+    assert current["effective"]["service_buckets"][0]["bucket_id"] == "gm_credits"
+    assert current["history"][1]["settings"]["allocation_version"] == 1
+    assert current["history"][1]["settings"]["gm_bps"] == 50
+
+    invalid: list[dict[str, Any]] = [
+        {"service_buckets": [settings["service_buckets"][0]] * 2},
+        {
+            "service_buckets": [
+                settings["service_buckets"][0],
+                {
+                    **settings["service_buckets"][1],
+                    "allocation_bps": 1,
+                    "holding_coldkey": ("5" + "d" * 47),
+                },
+            ]
+        },
+        {
+            "service_buckets": [
+                settings["service_buckets"][0],
+                {
+                    **settings["service_buckets"][1],
+                    "allocation_bps": 1,
+                },
+            ]
+        },
+        {
+            "service_buckets": [
+                settings["service_buckets"][0],
+                {
+                    **settings["service_buckets"][1],
+                    "holding_coldkey": ("5" + "c" * 47),
+                },
+            ]
+        },
+        {"treasury_coldkey": ("5" + "c" * 47)},
+        {"treasury_hotkey": None},
+        {"gm_bps": 1},
+        {"max_daily_outflow_rao": 1},
+        {"mode": "active"},
+    ]
+    for change in invalid:
+        response = await client.post(
+            _URL,
+            headers=_HEADERS,
+            json={
+                **proposal,
+                "expected_revision": 2,
+                "settings": {**settings, **change},
+            },
+        )
+        assert response.status_code == 422, (change, response.text)

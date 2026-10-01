@@ -91,6 +91,8 @@ const quarantine: ScreeningQuarantine = {
   resolution: null,
   resolution_reason: null,
   resolution_reason_code: null,
+  agent_status: 'quarantined',
+  terminal_ghost: false,
 }
 
 const quarantineContext: ScreeningQuarantineContext = {
@@ -433,6 +435,9 @@ describe('ScreeningQuarantinePanel', () => {
     vi.mocked(listScreeningQuarantines).mockResolvedValue({
       items: [newer, older],
       count: 2,
+      terminal_ghost_count: 0,
+      actionable_count: 2,
+      oldest_actionable_created_at: null,
     })
     fireEvent.change(sort, { target: { value: 'newest' } })
 
@@ -444,6 +449,30 @@ describe('ScreeningQuarantinePanel', () => {
     expect(vi.mocked(listScreeningQuarantines)).toHaveBeenCalledWith({
       data: { status: 'active', sort: 'newest' },
     })
+  })
+
+  it('labels a quarantine behind a terminal agent as reconciliation, not a decision', () => {
+    // ditto-subnet#2038: the exact agent is already banned under an ATH
+    // ruling, so the active row must not read as an actionable review.
+    const ghost = {
+      ...quarantine,
+      quarantine_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      agent_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      agent_name: 'Banned agent',
+      agent_status: 'banned',
+      terminal_ghost: true,
+    }
+    render(
+      <ScreeningQuarantinePanel
+        initialItems={[quarantine, ghost]}
+        initialSubmissions={[submission]}
+        quarantineCount={1}
+        readOnly={false}
+      />,
+    )
+
+    expect(screen.getByText('Agent banned · reconcile')).toBeTruthy()
+    expect(screen.getAllByText('Needs decision')).toHaveLength(1)
   })
 
   it('puts the source download in the active review workspace', () => {
@@ -488,6 +517,8 @@ describe('ScreeningQuarantinePanel', () => {
         resulting_agent_status: 'screening_failed',
         public_reason_code: 'operator_rescreen',
         public_record_hash: 'ab'.repeat(32),
+        terminal_reconciliation: false,
+        terminal_ruling: null,
         message: 'will set submission status to screening_failed',
       })),
     })
@@ -496,13 +527,21 @@ describe('ScreeningQuarantinePanel', () => {
         quarantine_id: item.quarantine_id,
         status: 'applied' as const,
         agent_status: 'screening_failed',
+        terminal_reconciliation: false,
+        terminal_ruling: null,
         message: 'decision applied and audit event recorded',
       })),
       applied_count: 2,
       already_applied_count: 0,
       failed_count: 0,
     })
-    vi.mocked(listScreeningQuarantines).mockResolvedValue({ items: [], count: 0 })
+    vi.mocked(listScreeningQuarantines).mockResolvedValue({
+      items: [],
+      count: 0,
+      terminal_ghost_count: 0,
+      actionable_count: 0,
+      oldest_actionable_created_at: null,
+    })
 
     render(
       <ScreeningQuarantinePanel

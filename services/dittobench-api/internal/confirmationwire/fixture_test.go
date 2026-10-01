@@ -55,16 +55,16 @@ func TestBuildFixtureFollowsConfirmationInstrumentFloor(t *testing.T) {
 	// converter carries bench_version), but the builder must not fail a v13
 	// instrument closed, and must still refuse the unbuilt v10/v11 epochs and
 	// the first version the scorer does not accept.
-	fixture, err := BuildFixtureForBenchVersion(scoregates.BenchVersionV13)
-	if err != nil {
-		t.Fatalf("v13 confirmation fixture: %v", err)
+	for _, version := range []int{scoregates.BenchVersionV13, scoregates.BenchVersionV14} {
+		fixture, err := BuildFixtureForBenchVersion(version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fixture.LongMemEval.Evidence.BenchVersion != version || fixture.InferenceAblation.Evidence.BenchVersion != version || fixture.EmbeddingAblation.Evidence.BenchVersion != version {
+			t.Fatalf("producer evidence does not carry bench_version %d", version)
+		}
 	}
-	if fixture.LongMemEval.Evidence.BenchVersion != scoregates.BenchVersionV13 ||
-		fixture.InferenceAblation.Evidence.BenchVersion != scoregates.BenchVersionV13 ||
-		fixture.EmbeddingAblation.Evidence.BenchVersion != scoregates.BenchVersionV13 {
-		t.Fatal("v13 producer evidence does not carry bench_version 13")
-	}
-	for _, benchVersion := range []int{8, 10, 11, scoregates.BenchVersionV13 + 1} {
+	for _, benchVersion := range []int{8, 10, 11, scoregates.BenchVersionV14 + 1} {
 		if _, err := BuildFixtureForBenchVersion(benchVersion); err == nil {
 			t.Fatalf("confirmation fixture accepted bench_version %d", benchVersion)
 		}

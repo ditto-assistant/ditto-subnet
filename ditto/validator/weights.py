@@ -535,6 +535,7 @@ def compute_weights(
     dethrone_z: float = 0.0,
     tie_pooling: bool = False,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
     unpaid_agent_id: UUID | None = None,
 ) -> dict[str, float]:
@@ -611,6 +612,7 @@ def compute_weights(
         margin,
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_agent_id,
     )
     if len(rank_shares) != tail_size + 1:
@@ -627,6 +629,7 @@ def compute_weights(
             margin=margin,
             dethrone_z=dethrone_z,
             ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
         )
         if tie_pooling
         else []
@@ -647,7 +650,11 @@ def compute_weights(
         recipient_shares = list(rank_shares[: len(recipients)])
     if tie_pooling and not ceiling_cohort:
         recipient_shares = _pool_tied_rank_shares(
-            recipients, recipient_shares, dethrone_z=dethrone_z
+            recipients,
+            recipient_shares,
+            margin=margin,
+            dethrone_z=dethrone_z,
+            statistical_band_cap=statistical_band_cap,
         )
     weights = {
         (
@@ -665,7 +672,9 @@ def _pool_tied_rank_shares(
     recipients: Sequence[LedgerEntry],
     shares: Sequence[float],
     *,
+    margin: float,
     dethrone_z: float,
+    statistical_band_cap: bool = False,
 ) -> list[float]:
     """Average the occupied rank shares inside deterministic tie groups.
 
@@ -683,7 +692,11 @@ def _pool_tied_rank_shares(
         anchor = recipients[start]
         end = start + 1
         while end < len(recipients) and _weight_tied(
-            recipients[end], anchor, dethrone_z=dethrone_z
+            recipients[end],
+            anchor,
+            margin=margin,
+            dethrone_z=dethrone_z,
+            statistical_band_cap=statistical_band_cap,
         ):
             end += 1
         if end - start > 1:
@@ -694,7 +707,12 @@ def _pool_tied_rank_shares(
 
 
 def _weight_tied(
-    candidate: LedgerEntry, anchor: LedgerEntry, *, dethrone_z: float
+    candidate: LedgerEntry,
+    anchor: LedgerEntry,
+    *,
+    margin: float,
+    dethrone_z: float,
+    statistical_band_cap: bool = False,
 ) -> bool:
     """Whether two occupied slots may share weight without inventing evidence."""
     if _quality_primary_efficiency_active((candidate, anchor)):
@@ -707,7 +725,9 @@ def _weight_tied(
     if paired is None:
         return False
     mean_diff, _anchor_ref, se_diff = paired
-    return abs(mean_diff) <= dethrone_z * se_diff
+    if not statistical_band_cap:
+        return abs(mean_diff) <= dethrone_z * se_diff
+    return abs(mean_diff) <= _capped_statistical_band(margin, dethrone_z * se_diff)
 
 
 def _score_ceiling_cohort(
@@ -717,6 +737,7 @@ def _score_ceiling_cohort(
     margin: float,
     dethrone_z: float,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> list[LedgerEntry]:
     """Return the uncapped best-score cohort when KOTH cannot be dethroned.
 
@@ -738,13 +759,20 @@ def _score_ceiling_cohort(
         margin=margin,
         dethrone_z=dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     ):
         return []
 
     anchor = ranked[0]
     cohort = [anchor]
     for entry in ranked[1:]:
-        if not _weight_tied(entry, anchor, dethrone_z=dethrone_z):
+        if not _weight_tied(
+            entry,
+            anchor,
+            margin=margin,
+            dethrone_z=dethrone_z,
+            statistical_band_cap=statistical_band_cap,
+        ):
             break
         cohort.append(entry)
     return cohort if len(cohort) > 1 else []
@@ -773,6 +801,7 @@ def select_champion(
     margin: float,
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
 ) -> LedgerEntry | None:
     """Return the deterministic KOTH champion, or ``None`` for an empty pool."""
@@ -783,6 +812,7 @@ def select_champion(
             margin,
             dethrone_z,
             ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
             incumbent_agent_id=incumbent_agent_id,
         )
         if scored
@@ -1025,8 +1055,15 @@ def _quality_primary_efficiency_active(entries: Sequence[LedgerEntry]) -> bool:
     return any(_bounded_efficiency_factor(entry) is not None for entry in entries)
 
 
-def _indifference_band(margin: float, statistical: float | None) -> float:
-    """``max(margin, statistical)``, with the statistical term capped.
+def _capped_statistical_band(margin: float, statistical: float) -> float:
+    """Cap uncertainty without adding the dethrone margin to tie membership."""
+    return min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin)
+
+
+def _indifference_band(
+    margin: float, statistical: float | None, *, capped: bool = True
+) -> float:
+    """``max(margin, statistical)``; cap when that fold branch calls for it.
 
     A 3-shared-seed paired SE can explode from one outlier and ask for a
     0.03 lead on a 0.92-vs-0.88 board. The cap keeps uncertainty able to
@@ -1034,7 +1071,25 @@ def _indifference_band(margin: float, statistical: float | None) -> float:
     """
     if statistical is None:
         return margin
-    return max(margin, min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin))
+    if capped:
+        statistical = _capped_statistical_band(margin, statistical)
+    return max(margin, statistical)
+
+
+def _unpaired_statistical_band(
+    challenger: LedgerEntry, champion: LedgerEntry, dethrone_z: float
+) -> float | None:
+    """Statistical term on the comparison score scale, when both SEs exist."""
+    if dethrone_z <= 0.0:
+        return None
+    se_c = _entry_stderr(challenger)
+    se_champ = _entry_stderr(champion)
+    if se_c is None or se_champ is None:
+        return None
+    if not _quality_primary_efficiency_active((challenger, champion)):
+        se_c *= _efficiency_stderr_scale(challenger)
+        se_champ *= _efficiency_stderr_scale(champion)
+    return dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
 
 
 def _dethrone_composite(entry: LedgerEntry, *, quality_primary: bool) -> float:
@@ -1265,6 +1320,7 @@ def top5_confirmation_set(
     cohort_size: int | None = None,
     max_cohort_size: int = 25,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
     confirmation_seed_anchors: Iterable[object] | None = None,
 ) -> Top5ConfirmationPlan | None:
     """Plan one continual champion-anchored shared-seed round.
@@ -1298,7 +1354,11 @@ def top5_confirmation_set(
     if not scored:
         return None
     champion = _champion(
-        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+        scored,
+        margin,
+        dethrone_z,
+        ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     )
     # Never below the emission set, never above the cap: a platform that
     # reported something absurd (or a hostile one) cannot make this validator
@@ -1418,6 +1478,7 @@ def _beats(
     dethrone_z: float,
     *,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> bool:
     """Whether ``challenger`` dethrones ``champion``. The lead must exceed the
     **indifference band** = max(fixed composite-point margin, statistical band).
@@ -1425,18 +1486,20 @@ def _beats(
     When both entries carry aligned per-seed confirmation composites over at
     least two SHARED CRN seeds (P5) and ``dethrone_z > 0``, the statistical term
     is a **paired** z-test (:func:`_paired_dethrone`): the lead is the mean
-    per-seed difference and the band is ``dethrone_z * se_diff``, where se_diff is
-    the SEM of the paired differences. Pairing cancels shared dataset difficulty,
-    so the band is tighter than the unpaired form at the same confidence.
+    per-seed difference and the statistical term is ``dethrone_z * se_diff``,
+    where se_diff is the SEM of the paired differences. Pairing cancels shared
+    dataset difficulty, so the band is tighter at the same confidence.
 
-    Otherwise the **unpaired** rule applies (byte-identical to before):
+    Otherwise the **unpaired** rule applies:
 
-        band = max( margin,
-                    dethrone_z * sqrt(se_challenger² + se_champion²) )
+        band = max(margin, min(dethrone_z * sqrt(se_challenger² + se_champion²),
+                               KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin))
 
     a two-sample z-test that engages only when BOTH entries carry a
     ``composite_stderr`` and ``dethrone_z > 0``; with no stderr (or z=0) the band
-    is exactly the fixed composite-point margin. Both sides use
+    is exactly the fixed composite-point margin. Both statistical terms use
+    :func:`_indifference_band` before version decay and the optional ceiling
+    clamp. Both sides use
     :func:`_effective_composite` (the MEDIAN over confirmation seeds when present,
     else the raw composite). Pure and deterministic (consensus-safe).
 
@@ -1453,6 +1516,7 @@ def _beats(
         margin,
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     )
     return observed_score > required_score
 
@@ -1464,6 +1528,7 @@ def _dethrone_scores(
     dethrone_z: float,
     *,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> tuple[float, float]:
     """Return the observed and strictly-exceeded required challenger scores."""
     quality_primary = _quality_primary_efficiency_active((challenger, champion))
@@ -1479,17 +1544,11 @@ def _dethrone_scores(
 
     chall = _dethrone_composite(challenger, quality_primary=quality_primary)
     champ = _dethrone_composite(champion, quality_primary=quality_primary)
-    band = margin
-    if dethrone_z > 0.0:
-        se_c = _entry_stderr(challenger)
-        se_champ = _entry_stderr(champion)
-        if se_c is not None and se_champ is not None:
-            if not quality_primary:
-                se_c *= _efficiency_stderr_scale(challenger)
-                se_champ *= _efficiency_stderr_scale(champion)
-            stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
-            if stat_band > band:
-                band = stat_band
+    band = _indifference_band(
+        margin,
+        _unpaired_statistical_band(challenger, champion, dethrone_z),
+        capped=statistical_band_cap,
+    )
     band *= _dethrone_band_scale(challenger, champion, champ)
     band = _ceiling_capped_band(
         band, challenger, champion, champ, active=ceiling_band_clamp
@@ -1507,6 +1566,7 @@ def _score_ceiling_deadlocked(
     margin: float,
     dethrone_z: float,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> bool:
     """Whether even the challenger's maximum score cannot clear the crown."""
     observed_score, required_score = _dethrone_scores(
@@ -1515,6 +1575,7 @@ def _score_ceiling_deadlocked(
         margin,
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     )
     quality_primary = _quality_primary_efficiency_active((challenger, champion))
     ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
@@ -1527,6 +1588,7 @@ def _champion(
     dethrone_z: float = 0.0,
     *,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
 ) -> LedgerEntry:
     """The KOTH champion of a positive-composite entry set: fold in first-seen
@@ -1565,7 +1627,14 @@ def _champion(
         champ = ordered[0]
         challengers = ordered[1:]
     for e in challengers:
-        if _beats(e, champ, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp):
+        if _beats(
+            e,
+            champ,
+            margin,
+            dethrone_z,
+            ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
+        ):
             champ = e
     return champ
 
@@ -1613,6 +1682,7 @@ def agents_needing_rescore(
     tail_size: int,
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
 ) -> list[LedgerEntry]:
     """The champion + participation-tail entries scored under an **older**
@@ -1634,6 +1704,7 @@ def agents_needing_rescore(
         margin,
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_agent_id,
     )
     rewarded = [champion, *_tail(scored, champion, tail_size)]
@@ -1647,27 +1718,16 @@ def _unpaired_band(
     dethrone_z: float,
     *,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> float:
     """The unpaired indifference band :func:`_beats` applies to this pair:
-    ``max(margin, dethrone_z * sqrt(se_c² + se_champ²))``, the
-    statistical term engaging only when both entries carry a stderr."""
-    band = margin
-    if dethrone_z > 0.0:
-        se_c = _entry_stderr(challenger)
-        se_champ = _entry_stderr(champion)
-        if se_c is not None and se_champ is not None:
-            # Standard error is expressed on the same pre-efficiency score
-            # scale as the entry's quality.  The contested-set predicate must
-            # compare the same transformed distributions as ``_beats``;
-            # otherwise a curve-v3 penalty/bonus can make scheduling disagree
-            # with the actual dethrone decision. Quality-primary dethrones on
-            # quality, so leave stderr unscaled there.
-            if not _quality_primary_efficiency_active((challenger, champion)):
-                se_c *= _efficiency_stderr_scale(challenger)
-                se_champ *= _efficiency_stderr_scale(champion)
-            stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
-            if stat_band > band:
-                band = stat_band
+    ``max(margin, statistical)``, capped at the consensus multiple of margin.
+    The statistical term engages only when both entries carry a stderr."""
+    band = _indifference_band(
+        margin,
+        _unpaired_statistical_band(challenger, champion, dethrone_z),
+        capped=statistical_band_cap,
+    )
     champ = _dethrone_composite(
         champion,
         quality_primary=_quality_primary_efficiency_active((challenger, champion)),
@@ -1710,6 +1770,7 @@ def contested_confirmation_set(
     margin: float,
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
 ) -> list[LedgerEntry]:
     """The champion plus the current-version challengers whose crown decision
@@ -1754,6 +1815,7 @@ def contested_confirmation_set(
         margin,
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_agent_id,
     )
     if _entry_version(champion) != current_version:
@@ -1774,7 +1836,12 @@ def contested_confirmation_set(
             )
         )
         <= _unpaired_band(
-            e, champion, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+            e,
+            champion,
+            margin,
+            dethrone_z,
+            ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
         )
         and not _shares_confirmation_seeds(e, champion)
     ]

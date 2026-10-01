@@ -29,6 +29,12 @@ as the local scorer build advertises it; its gates are shadow and replayed
 locally with `--gates` (below). The wire `bench_version` a harness receives
 stays 9 in every contract.
 
+Bench 14 is also accepted for explicit preactivation rehearsal
+(`--bench-version 14 --gates`) when the local scorer advertises it. It carries
+the v13 surface and gates with action-scoped declarative over-call scoring.
+Adding this support does not change the live rehearsal default. See
+[`benchmark-v14-rollout.md`](../../../docs/benchmark-v14-rollout.md).
+
 ## Practice loops (do not collapse these)
 
 | Command | What it is | Use for |

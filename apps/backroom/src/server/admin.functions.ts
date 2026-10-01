@@ -48,6 +48,7 @@ import {
   setInferenceConcurrencySettingsInputSchema,
   setValidatorSlotSettingsInputSchema,
   setValidatorIssuancePauseInputSchema,
+  setScoringLeaseSettingsInputSchema,
   inferenceRouteCalibrationInputSchema,
   inferenceRoutingPolicyInputSchema,
   setConfirmationBundleSettingsInputSchema,
@@ -141,6 +142,8 @@ import {
   setInferenceConcurrencySettings as setInferenceConcurrencySettingsService,
   setValidatorSlotSettings as setValidatorSlotSettingsService,
   setValidatorIssuancePause as setValidatorIssuancePauseService,
+  fetchScoringLeaseSettings,
+  setScoringLeaseSettings as setScoringLeaseSettingsService,
   fetchConfirmationBundleSettings,
   setConfirmationBundleSettings as setConfirmationBundleSettingsService,
   fetchConfirmationBundles,
@@ -559,6 +562,25 @@ export const updateValidatorIssuancePause = createServerFn({ method: 'POST' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return setValidatorIssuancePauseService(data, context.session.email)
+  })
+
+// Scoring lease clocks (#1156). Separate from the slot policy read so either
+// board can load on its own on the validator-slots page.
+export const getScoringLeaseSettings = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(() => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchScoringLeaseSettings()
+  })
+
+export const updateScoringLeaseSettings = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(setScoringLeaseSettingsInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return setScoringLeaseSettingsService(data, context.session.email)
   })
 
 export const getInferenceConcurrencySettings = createServerFn({ method: 'GET' })

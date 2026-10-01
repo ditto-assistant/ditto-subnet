@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from ditto_screener.source_signals import find_benchmark_emulation_fingerprints
 
 _RUST_EMULATOR = """\
@@ -1348,3 +1350,98 @@ def test_keep_preference_findings_never_leak_matched_source_text() -> None:
         assert finding["category"] == "benchmark_emulation"
         for location in finding["locations"]:
             assert set(location) == {"path", "line", "role"}
+
+
+# Maintainer counterexample (review of #2567 at 556268ba9): nothing runnable
+# names scripts/ or the module, yet /run serves it through an encoded path.
+RUNTIME_LOADED_TEST_MODULE = [
+    (
+        "Dockerfile",
+        "FROM python:3.12\n"
+        "COPY . /app\n"
+        "WORKDIR /app\n"
+        "ENV CASE_MODULE_B64=c2NyaXB0cy90ZXN0X3JlaGVhcnNhbC5weQ==\n"
+        'CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]\n',
+    ),
+    (
+        "app.py",
+        "import base64\n"
+        "import os\n"
+        "import runpy\n"
+        "\n"
+        "loaded = runpy.run_path(\n"
+        '    base64.b64decode(os.environ["CASE_MODULE_B64"]).decode()\n'
+        ")\n"
+        "\n"
+        "\n"
+        "def run(question):\n"
+        '    return loaded["answer_case"](question)\n',
+    ),
+    (
+        "scripts/test_rehearsal.py",
+        "def answer_case(question):\n"
+        "    answer = lookup(question)\n"
+        "    return answer\n",
+    ),
+]
+
+
+def test_a_test_named_module_loaded_at_run_time_stays_fingerprinted() -> None:
+    # Source text cannot prove a test-named module is never served, so it is
+    # scanned like any other executable source.
+    findings = find_benchmark_emulation_fingerprints(RUNTIME_LOADED_TEST_MODULE)
+
+    assert {
+        str(location["path"])
+        for finding in findings
+        if finding["kind"] == "sync-answer-constructor"
+        for location in finding["locations"]  # type: ignore[attr-defined]
+    } == {"scripts/test_rehearsal.py"}
+
+
+_CFG_TEST_ZERO_TOKEN_REPLY = """\
+pub fn serve() {}
+
+#[cfg(test)]
+mod tests {
+    pub fn build_reply(question: &str) -> RunResponse {
+        RunResponse {
+            answer: question.to_string(),
+            prompt_tokens: 0,
+            output_tokens: 0,
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize(
+    "dockerfile",
+    [
+        "FROM rust:1\nCOPY . .\nRUN cargo build --locked --release\n",
+        'FROM rust:1\nARG P=RUST\nARG C=--c\nENV ${P}FLAGS="${C}fg test"\n'
+        "COPY . .\nRUN cargo build --release\n",
+        "FROM rust:1\nCOPY . .\n"
+        "RUN export RUSTFLAGS=$(echo LS1jZmcgdGVzdA== | base64 -d) && cargo build\n",
+        "FROM ghcr.io/example/rust-with-test-flags:1\nCOPY . .\n"
+        "RUN cargo build --release\n",
+        "FROM rust:1\nCOPY . .\nRUN curl -fsS https://example.invalid/setup | sh\n"
+        "RUN cargo build --release\n",
+    ],
+    ids=["plain-release", "arg-split-env", "decoded-flags", "base-image", "fetched"],
+)
+def test_cfg_test_items_stay_fingerprinted_whatever_the_build_shows(
+    dockerfile: str,
+) -> None:
+    # A base image, a fetched script, or a computed value can turn cfg(test)
+    # on without any text the archive shows, so no build proves a test item
+    # inert.
+    files = [
+        ("src/reply.rs", _CFG_TEST_ZERO_TOKEN_REPLY),
+        ("Cargo.toml", '[package]\nname = "serve"\n'),
+        ("Dockerfile", dockerfile),
+    ]
+
+    assert "zero-token-answer-constructor" in {
+        finding["kind"] for finding in find_benchmark_emulation_fingerprints(files)
+    }

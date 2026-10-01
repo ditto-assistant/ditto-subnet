@@ -431,8 +431,9 @@ def _tools() -> list[dict[str, Any]]:
         ),
         _tool(
             "get_my_screening_feedback",
-            "Return bounded private screening errors and log tails for one "
-            "of this miner's agents.",
+            "Return bounded private screening errors, log tails, and the "
+            "bounded source-review outcome and next step for one of this "
+            "miner's agents.",
             {
                 "type": "object",
                 "properties": {"agent_id": {"type": "string"}},

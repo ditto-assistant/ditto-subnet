@@ -126,6 +126,7 @@ from ditto.api_models.screener_review_settings import (
     INTEGRITY_DOUBLE_CHECK_SCOPE,
     EffectiveScreenerReviewSettings,
     ScreenerReviewSettings,
+    is_l2_report_canary_scope,
     policy_manifest_digest,
     review_settings_checksum,
 )
@@ -208,6 +209,10 @@ from ditto.db.queries.moderation_audit import (
     ACTION_ARTIFACT_SUPERSESSION,
     record_moderation_audit_if_enabled,
 )
+from ditto.db.queries.screener_capacity import (
+    screener_fallback_active,
+    screener_gcp_fallback_allowed,
+)
 from ditto.db.queries.screener_node_settings import (
     resolve_screener_node_channel_settings,
 )
@@ -278,45 +283,30 @@ async def _required_policy(
 async def _legacy_gcp_claim_is_authorized(
     session: AsyncSession, *, now: datetime
 ) -> bool:
-    """Keep the shared GCP principal behind the fenced overflow decision.
+    """Route authenticated legacy GCP workers through the watchdog safety net.
 
-    Registered nodes carry a provider identity and are admitted by the
-    per-node channel limits below. The pre-node GCP fleet instead shares the
-    legacy principal, so it has no node identity to route. It remains the
-    dispatcher for GCP and enrolled-fleet configurations, but must
-    wait behind every Hetzner-primary lane until the current controller
-    snapshot has requested GCP overflow. A stale, unready, or superseded
-    snapshot deliberately fails closed: existing leases can still complete,
-    but GCP cannot take new primary work away from Hetzner.
+    A missing, stale or unready controller permits GCP overflow only while
+    current operator policy allows it. Fresh, ready controllers still own the
+    bounded target and must match the current provider revision. Registered
+    nodes retain their separate per-node admission limits below.
     """
     revision, settings = await resolve_screener_provider_settings(
         session, environment="prod"
     )
-    lanes = (
-        settings.build_provider_priority,
-        settings.runtime_provider_priority,
-        settings.source_review_provider_priority,
-    )
-    if all(lane[0] != "hetzner" for lane in lanes):
-        return True
-    if not settings.gce_overflow_enabled:
+    if not await screener_gcp_fallback_allowed(
+        session, environment="prod", settings=settings
+    ):
         return False
-
     snapshot = await session.scalar(
         select(ScreenerCapacitySnapshot)
         .where(ScreenerCapacitySnapshot.environment == "prod")
         .with_for_update()
     )
-    if snapshot is None or not snapshot.provider_ready:
-        return False
-    lease_expiry = snapshot.controller_lease_expires_at
-    if lease_expiry.tzinfo is None:
-        lease_expiry = lease_expiry.replace(tzinfo=UTC)
-    return (
-        snapshot.provider_settings_revision == revision
-        and now < lease_expiry
-        and snapshot.gce_target > 0
-    )
+    fallback_active, _ = screener_fallback_active(snapshot, now)
+    if fallback_active:
+        return True
+    assert snapshot is not None
+    return snapshot.provider_settings_revision == revision and snapshot.gce_target > 0
 
 
 # How long a pre-signed artifact URL stays valid (mirrors the validator's).
@@ -2182,6 +2172,7 @@ async def update_screener_node_status(
 
 @router.get("/controller/nodes", response_model=ScreenerControllerNodesResponse)
 async def list_controller_nodes(
+    request: Request,
     _controller: ControllerDep,
     session: SessionDep,
     environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod",
@@ -2201,13 +2192,17 @@ async def list_controller_nodes(
         select(ScreenerHeartbeat).order_by(ScreenerHeartbeat.seen_at.desc())
     ):
         heartbeats.setdefault((row.screener_hotkey, row.instance_id), row)
-    active_hotkeys = set(
+    running_hotkeys = list(
         await session.scalars(
             select(ScreeningAttempt.screener_hotkey).where(
                 ScreeningAttempt.status == "running",
                 ScreeningAttempt.deadline > now,
             )
         )
+    )
+    active_hotkeys = set(running_hotkeys)
+    legacy_gcp_running_attempts = running_hotkeys.count(
+        request.app.state.config.screener_auth.hotkey
     )
     response: list[ScreenerControllerNodeState] = []
     enrolled_instance_ids = {node.node_id for node in nodes}
@@ -2273,9 +2268,16 @@ async def list_controller_nodes(
                 active_lease=heartbeat.screener_hotkey in active_hotkeys,
                 screening_concurrency=1,
                 heartbeat_seen_at=seen_at,
+                instance_busy=(
+                    heartbeat.state == "screening"
+                    or heartbeat.active_agent_id is not None
+                ),
             )
         )
-    return ScreenerControllerNodesResponse(nodes=tuple(response))
+    return ScreenerControllerNodesResponse(
+        nodes=tuple(response),
+        legacy_gcp_running_attempts=legacy_gcp_running_attempts,
+    )
 
 
 def _review_settings_checksum(settings: ScreenerReviewSettings) -> str:
@@ -2293,7 +2295,9 @@ async def _resolve_effective_review_settings(
     A persistent node can have multiple local heartbeat identities while
     keeping its credential and operator canary scope on the node. A worker's
     own override remains most specific, followed by its enrolled node scope,
-    then the global posture.
+    then the global posture. ``l2-report-canary*`` scopes are never a worker's
+    posture, even for a node or legacy instance named inside that namespace:
+    they exist only to be pinned to one report-only canary.
     """
     scopes = [instance_id]
     if (
@@ -2304,6 +2308,7 @@ async def _resolve_effective_review_settings(
         )
     ):
         scopes.append(enrolled_node_id)
+    scopes = [scope for scope in scopes if not is_l2_report_canary_scope(scope)]
     scopes.append("*")
     rows = list(
         await session.scalars(
@@ -4460,6 +4465,13 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
         return (
             "The scorer runtime evidence source review needs was unavailable "
             "before screening completed. This is operator-owned and is retried "
+            "automatically with backoff for a limited time, then held for an "
+            "operator retry."
+        )
+    if reason_code == "source-review-adjudicator-key-unavailable":
+        return (
+            "Source review was unavailable on the screening node before "
+            "screening completed. This is operator-owned and is retried "
             "automatically with backoff for a limited time, then held for an "
             "operator retry."
         )

@@ -295,6 +295,71 @@ func TestV13ToolReceiptLaterHopNeedsAnotherModelEmission(t *testing.T) {
 	}
 }
 
+func TestV13ToolReceiptNewHopIsOneAppliedEffectInSignedProvenance(t *testing.T) {
+	broker := newInferenceBroker(1)
+	const sessionID = "v13-receipt-accounting"
+	session := addV10ProvenanceSession(broker, sessionID)
+	session.benchVersion = protocol.BenchVersionV13
+	generation, _, err := broker.beginCaseSnapshot(sessionID, "case-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const emission = `{"choices":[{"message":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"set_theme","arguments":"{\"theme\":\"dark\"}"}}]}}]}`
+	recordV10ModelToolResponse(t, session, generation, emission)
+	endpoint := toolexec.NewServerWithEffectReceiptsV1()
+	endpoint.Register("case-a", toolexec.BuildFixture(7, protocol.ToolCase{ID: "case-a", Category: "settings_change"}))
+	route, stop, err := broker.registerToolWithProvenance(endpoint, "192.0.2.20", false, true, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	call := protocol.ToolExecRequest{CaseID: "case-a", UserID: "user-a", Name: "set_theme",
+		Args: json.RawMessage(`{"theme":"dark"}`), OperationID: "broker-operation-0001", EffectProtocol: protocol.ToolEffectProtocolV1}
+	if response := postProvenanceTool(t, broker, route, "case-a", call); response.Code != http.StatusOK {
+		t.Fatalf("first operation status=%d body=%s", response.Code, response.Body.String())
+	}
+	recordV10ModelToolResponse(t, session, generation, emission)
+	call.Hop = 1
+	replayed := postProvenanceTool(t, broker, route, "case-a", call)
+	var receipt protocol.ToolExecResponse
+	if replayed.Code != http.StatusOK || json.Unmarshal(replayed.Body.Bytes(), &receipt) != nil || !receipt.Replayed {
+		t.Fatalf("model-backed retry status=%d receipt=%+v", replayed.Code, receipt)
+	}
+	observed := endpoint.Observed("case-a")
+	accounting := endpoint.EffectAccounting("case-a")
+	if len(observed) != 1 || accounting != (toolexec.EffectAccounting{Attempts: 2, ReceiptReplays: 1, NewHopReplays: 1, AppliedEffects: 1}) {
+		t.Fatalf("observed=%+v accounting=%+v", observed, accounting)
+	}
+	after, err := broker.endCaseSnapshot(sessionID, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := &protocol.ToolProvenanceEvidence{ModelEmitted: int(after.ModelToolCalls), EndpointAttempts: int(after.EndpointAttempts),
+		Matched: int(after.MatchedToolCalls), Unmatched: int(after.UnmatchedToolCalls), Complete: after.ToolEvidenceComplete}
+	attachEffectAccounting(evidence, accounting)
+	graded := applyV10ToolProvenance(protocol.BenchVersionV13, scorer.ScopeScored,
+		protocol.CaseScore{Kind: protocol.KindTool, ToolScore: 1}, protocol.RunResponse{ToolCalls: observed}, observed,
+		runner.CaseExecution{ToolProvenance: evidence})
+	if graded.ToolScore != 1 || graded.ToolProvenance == nil || !graded.ToolProvenance.Complete ||
+		graded.ToolProvenance.AppliedEffects != 1 || graded.ToolProvenance.NewHopReplays != 1 {
+		t.Fatalf("receipt retry incorrectly changed scored trajectory: %+v", graded)
+	}
+}
+
+func TestV13ConfirmedNotAppliedSameHopRetryKeepsOneModelEmission(t *testing.T) {
+	observed := []protocol.ObservedToolCall{{Name: "search_web"}, {Name: "search_web"}}
+	evidence := &protocol.ToolProvenanceEvidence{
+		ModelEmitted: 1, EndpointAttempts: 2, Matched: 1, Complete: true,
+		EffectAttempts: 2, SameHopRetries: 1, AppliedEffects: 1,
+	}
+	graded := applyV10ToolProvenance(protocol.BenchVersionV13, scorer.ScopeScored,
+		protocol.CaseScore{Kind: protocol.KindTool, ToolScore: 1},
+		protocol.RunResponse{ToolCalls: observed}, observed, runner.CaseExecution{ToolProvenance: evidence})
+	if graded.ToolScore != 1 || graded.ToolProvenance == nil || !graded.ToolProvenance.Complete {
+		t.Fatalf("confirmed not-applied recovery lost credit: %+v", graded)
+	}
+}
+
 func TestV13ToolReceiptRecoveryRejectsChangedIdentity(t *testing.T) {
 	broker := newInferenceBroker(1)
 	const sessionID = "v13-receipt-identity"

@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
@@ -65,6 +65,7 @@ from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.miner_logs import ticket_log_is_stale
+from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.db.models import (
     Agent,
     BenchmarkRolloutMember,
@@ -125,7 +126,6 @@ from ditto.db.queries.retry_state import (
     work_available_validator_hotkeys,
 )
 from ditto.db.queries.score_retests import (
-    REPLACEMENT_TICKET_TTL,
     activate_next_score_retest,
     latest_retest_events_for_validator,
     retest_is_active,
@@ -2010,6 +2010,7 @@ async def inspect_validator_score_replacement(
 async def queue_validator_score_retests(
     validator_hotkey: str,
     payload: AdminValidatorScoreRetestQueueRequest,
+    request: Request,
     _admin: AdminDep,
     session: SessionDep,
     x_admin_actor: Annotated[str | None, Header()] = None,
@@ -2021,6 +2022,7 @@ async def queue_validator_score_retests(
     """
     actor = _require_actor(x_admin_actor)
     now = datetime.now(UTC)
+    replacement_ttl = await resolve_scoring_ticket_ttl(request.app.state)
     preliminary: dict[UUID, tuple[str, str | None]] = {}
     async with session.begin():
         for item in payload.items:
@@ -2182,6 +2184,7 @@ async def queue_validator_score_retests(
                 heartbeat is not None
                 and heartbeat_supports_version(heartbeat, now=now, version=version)
             ),
+            ttl=replacement_ttl,
         )
         latest_by_agent = await latest_retest_events_for_validator(
             session, validator_hotkey=validator_hotkey
@@ -2228,6 +2231,7 @@ async def replace_validator_score_after_infrastructure_failure(
     agent_id: UUID,
     validator_hotkey: str,
     payload: AdminValidatorScoreReplacementRequest,
+    request: Request,
     _admin: AdminDep,
     session: SessionDep,
     x_admin_actor: Annotated[str | None, Header()] = None,
@@ -2235,6 +2239,8 @@ async def replace_validator_score_after_infrastructure_failure(
     actor = x_admin_actor.strip() if x_admin_actor is not None else ""
     if not 1 <= len(actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    # Resolved on its own session before the transaction opens (#1156).
+    replacement_ttl = await resolve_scoring_ticket_ttl(request.app.state)
     async with session.begin():
         prior_entries = list(
             (
@@ -2329,7 +2335,7 @@ async def replace_validator_score_after_infrastructure_failure(
             raise HTTPException(status_code=409, detail=reason)
         assert target is not None and ticket is not None
         now = datetime.now(UTC)
-        deadline = now + REPLACEMENT_TICKET_TTL
+        deadline = now + replacement_ttl
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1
@@ -2378,6 +2384,7 @@ async def release_validator_score_retest_ticket(
     agent_id: UUID,
     validator_hotkey: str,
     payload: AdminValidatorScoreRetestReleaseRequest,
+    request: Request,
     _admin: AdminDep,
     session: SessionDep,
     x_admin_actor: Annotated[str | None, Header()] = None,
@@ -2385,6 +2392,8 @@ async def release_validator_score_retest_ticket(
     actor = x_admin_actor.strip() if x_admin_actor is not None else ""
     if not 1 <= len(actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    # Resolved on its own session before the transaction opens (#1156).
+    replacement_ttl = await resolve_scoring_ticket_ttl(request.app.state)
     async with session.begin():
         release_entries = list(
             (
@@ -2489,6 +2498,7 @@ async def release_validator_score_retest_ticket(
                 heartbeat is not None
                 and heartbeat_supports_version(heartbeat, now=now, version=version)
             ),
+            ttl=replacement_ttl,
         )
         await session.flush()
     return AdminValidatorScoreRetestReleaseResponse(

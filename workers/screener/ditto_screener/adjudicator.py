@@ -279,6 +279,11 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
 # the worker's default revision. Every actual court decision calls the
 # versioned helper, so an activated older policy cannot be stamped as current.
 ADJUDICATOR_PROMPT_REVISION = adjudicator_prompt_revision(SCREENING_POLICY_VERSION)
+# The node's court API key file is unset, unreadable, too short, or readable by
+# group/other. It is read before the submitted archive is opened, so only node
+# configuration produces this code; an archive the court cannot open stays
+# ``adjudicator-unavailable``. Policy turns it into a fleet-owned retry (#2449).
+ADJUDICATOR_KEY_UNAVAILABLE_CODE = "adjudicator-key-unavailable"
 _DEFAULT_MODEL = "z-ai/glm-5.3-flash"
 _MAX_STEPS = 128
 _MAX_COMPLETION_TOKENS = 6_000
@@ -1357,6 +1362,17 @@ class SourceReviewAdjudicator:
         note_count = len(notes)
         try:
             api_key = self._read_api_key()
+        except (OSError, ValueError) as error:
+            logger.warning("adjudication key unavailable on this node: %s", error)
+            return _escalate(
+                ADJUDICATOR_KEY_UNAVAILABLE_CODE,
+                "Automated adjudication could not read its key on this node; "
+                "held for retry",
+                model=self._model,
+                notes=note_count,
+                policy_version=policy_version,
+            )
+        try:
             repository = TarSourceRepository(archive_path)
         except (OSError, ValueError) as error:
             logger.warning("adjudication could not start: %s", error)
@@ -1696,7 +1712,10 @@ class SourceReviewAdjudicator:
                     policy_version=policy_version,
                 )
             if citation_admissibility(
-                normalized, repository.member_text(normalized), line
+                normalized,
+                repository.member_text(normalized),
+                line,
+                runtime_paths=repository.runtime_paths,
             ).admissible:
                 admissible.append(SourceReviewCitation(path=normalized, line=line))
         if not admissible:

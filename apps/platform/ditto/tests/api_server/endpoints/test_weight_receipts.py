@@ -393,3 +393,167 @@ async def test_validator_prefixed_receipt_signature_is_accepted(
     assert result.status_code == 200, result.text
     body["receipt"]["attempt"]["commit_block"] += 1
     assert (await _post(client, body)).status_code == 401
+
+
+async def _setup_enforcing(app, maker, *, empty=True):
+    from pathlib import Path
+
+    from ditto_screening_protocol.treasury_approval import (
+        TreasuryPolicyApproval,
+        approval_message,
+    )
+    from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
+
+    raw = await _setup(app, maker)
+    path = (
+        Path(__file__).resolve().parents[6]
+        / "packages/ditto-screening-protocol/tests/fixtures"
+        / "treasury_enforcing_pin_v2.json"
+    )
+    pin = EnforcingTreasuryPin.model_validate_json(path.read_text())
+    policy = pin.policy.model_copy(update={"netuid": app.state.config.chain.netuid})
+    approval = TreasuryPolicyApproval(
+        policy=policy, signature="0x" + _KEY.sign(approval_message(policy)).hex()
+    )
+    pin = EnforcingTreasuryPin.model_validate(
+        pin.model_copy(
+            update={
+                "epoch_index": 123,
+                "pinned_block_hash": "0x" + "01" * 32,
+                "policy": policy,
+                "policy_digest": policy.digest,
+                "approval": approval,
+                "identity": pin.identity.model_copy(
+                    update={
+                        "netuid": policy.netuid,
+                        "finalized_block_hash": "0x" + "01" * 32,
+                    }
+                ),
+                "fleet": (
+                    pin.fleet[0].model_copy(
+                        update={
+                            "validator_hotkey": _HOTKEY,
+                            "approved_policy_digest": policy.digest,
+                        }
+                    ),
+                ),
+            }
+        )
+    )
+    weights = (
+        {policy.collector_hotkey: 0.1, "owner": 0.9}
+        if empty
+        else {policy.collector_hotkey: 0.1, "miner": 0.81, "owner": 0.09}
+    )
+    raw.update(
+        schema_version=2, treasury_pin=pin.model_dump(mode="json"), weights=weights
+    )
+    raw["provenance"]["vector_digest"] = weight_vector_digest(weights)
+    if empty:
+        raw["provenance"].update(champion_agent_id=None, champion_artifact_sha256=None)
+    from uuid import UUID
+
+    async with maker() as session, session.begin():
+        row = await session.get(
+            LedgerEpochSnapshot, UUID(raw["provenance"]["ledger_snapshot_id"])
+        )
+        if empty:
+            row.entries = []
+            row.champion_agent_id = None
+        row.context = {
+            "served": {
+                "burn_share": 1 if empty else 0.1,
+                "treasury_pin": pin.model_dump(mode="json"),
+            }
+        }
+        row.ledger_digest = ledger_digest(row.entries, row.context["served"])
+        raw["provenance"]["ledger_digest"] = row.ledger_digest
+    body = {
+        name: raw[name]
+        for name in (
+            "schema_version",
+            "mechanism_id",
+            "weights",
+            "provenance",
+            "treasury_pin",
+        )
+    }
+    raw["request_digest"] = _digest(body)
+    return raw
+
+
+@pytest.mark.parametrize("empty", [True, False])
+async def test_enforcing_receipt_binds_exact_frozen_pin_and_allows_empty_competition(
+    app, client, session_maker, empty
+):
+    raw = await _setup_enforcing(app, session_maker, empty=empty)
+    first = await _post(client, _signed(raw))
+    assert first.status_code == 200, first.text
+    replay = await _post(client, _signed(raw))
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == first.json()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "no_stored_contract",
+        "changed_stored_pin",
+        "invalid_stored_crypto",
+        "legacy_receipt",
+    ],
+)
+async def test_enforcing_receipt_rejects_unbound_or_legacy_contract(
+    app, client, session_maker, fault
+):
+    from uuid import UUID
+
+    raw = await _setup_enforcing(app, session_maker, empty=False)
+    if fault == "legacy_receipt":
+        raw.update(schema_version=1)
+        raw.pop("treasury_pin")
+        raw["request_digest"] = _digest(
+            {
+                name: raw[name]
+                for name in ("schema_version", "mechanism_id", "weights", "provenance")
+            }
+        )
+    else:
+        async with session_maker() as session, session.begin():
+            row = await session.get(
+                LedgerEpochSnapshot, UUID(raw["provenance"]["ledger_snapshot_id"])
+            )
+            served = {**row.context["served"]}
+            if fault == "no_stored_contract":
+                served.pop("treasury_pin")
+            else:
+                p = json.loads(json.dumps(served["treasury_pin"]))
+                if fault == "changed_stored_pin":
+                    p["epoch_index"] += 1
+                else:
+                    p["approval"]["signature"] = "0x" + "00" * 64
+                served["treasury_pin"] = p
+            row.context = {"served": served}
+            row.ledger_digest = ledger_digest(row.entries, served)
+            raw["provenance"]["ledger_digest"] = row.ledger_digest
+        raw["request_digest"] = _digest(
+            {
+                name: raw[name]
+                for name in (
+                    "schema_version",
+                    "mechanism_id",
+                    "weights",
+                    "provenance",
+                    "treasury_pin",
+                )
+            }
+        )
+    result = await _post(client, _signed(raw))
+    assert result.status_code == 409, result.text
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(ValidatorWeightReceipt)
+            )
+            == 0
+        )

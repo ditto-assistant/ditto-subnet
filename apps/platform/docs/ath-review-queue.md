@@ -53,7 +53,11 @@ eval -> top five -> integrity double-check -> clear or reject
   with the double-check reason and `trigger: integrity_double_check`, and
   appends the enforced marker. Reason, actor
   (`platform:integrity-double-check`), and algorithm version
-  (`integrity-double-check-v1`) differ; the lifecycle does not.
+  (`integrity-double-check-v1`) differ; the lifecycle does not. Every top-five
+  entrant gets this hold, so its reason is neutral. Rows stored with the older
+  "integrity double-check" wording keep it in the operator queue, and the
+  public and miner projections show the current wording instead
+  (`public_review_reason`, #562).
 - **Stronger posture.** `claim_screening_attempts` binds the deep pass to the
   latest screener review revision in scope `integrity-double-check`. No worker
   heartbeats under that scope, so writing it never changes the fleet posture.
@@ -130,6 +134,40 @@ a UUID.
 empty.** The platform actor `platform:deferred-source-review` auto-resolves
 each quarantine to `rescreen` within milliseconds of it being raised. Active
 quarantines are a transient screener state, not operator work.
+
+The exception is a quarantine a scored policy rescreen records while the agent
+keeps its board position. If an ATH reject then bans that exact agent, the
+quarantine is a **terminal ghost**: the screening resolvers refuse to rule on a
+terminal agent, so before ditto-subnet#2038 nothing could close it.
+
+- `resolve_copy_review` (and every batched ATH ruling built on it) now closes
+  the agent's active quarantine in the same transaction as the reject, and
+  the legacy `resolve_review()` CLI ban does the same. The ruling locks the
+  quarantine before the agent, the same order as the screening resolvers, so
+  a concurrent screening resolution serializes behind it. The reject action's
+  evidence and the resolve response carry `reconciled_quarantine_ids`.
+- A pre-existing ghost is closed through the fenced
+  `/screening-quarantines/batch-preview` and `/batch-resolve` pair: `reject`
+  with the exact agent UUID and artifact SHA-256 is `ready` with
+  `terminal_reconciliation: true`; release and rescreen stay `conflict`. The
+  unfenced single-row resolver refuses the row.
+- The preview names the current terminal ruling (`terminal_ruling`: agent
+  status, artifact SHA-256, ATH review, and its newest action, which must be
+  the reject). No such ruling (no resolved reject, a later reopen, or a review
+  held on another digest) means "not reconcilable". The preview token signs
+  every item's ruling; execute re-derives them and refuses the batch if any
+  moved, then re-derives each one under the quarantine and agent row locks and
+  refuses the item if it moved. A reject of a quarantine already closed behind
+  a terminal ruling, by any path or operator, replays as `already_applied`.
+- Either path appends a `screening_quarantine_resolutions` row and a manual
+  `screening_review_events` snapshot whose `terminal_reconciliation` evidence
+  names the source and the ATH review. It never changes `agents.status`, the
+  miner-visible screening reason, or the public moderation record.
+- `GET /admin/screening-quarantines` flags each such row with
+  `terminal_ghost` and `agent_status`, and reports `terminal_ghost_count`,
+  `actionable_count`, and `oldest_actionable_created_at` beside the pagination
+  `count`. The source-review SLO reports `terminal_quarantine_ghost_count` and
+  keeps ghosts out of backlog and oldest age.
 
 **`GET /admin/screening-submissions` is the agent table, not the queue.** It
 pages every agent ever submitted; enumerating holds from it means sweeping the

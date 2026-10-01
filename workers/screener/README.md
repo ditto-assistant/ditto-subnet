@@ -76,6 +76,37 @@ when its root `Dockerfile` builds an image that serves the same `/health`,
 contract from a language manifest such as `Cargo.toml`, `package.json`,
 `pyproject.toml`, or `go.mod`.
 
+Source review exempts a submitted file from parts of its scrutiny only on an
+exact `path + sha256` match against a runtime manifest,
+`ditto_screener/data/starter-kit-provenance-v*.json`. The static preflight, the
+L1 provenance block, and the L2 analyzer image all load that set, so adding a
+manifest to it is an admission-relevant trust expansion that ships separately
+from the kit change.
+
+Every `miners/dittobench-starter-kit` change ships the next manifest, staged
+outside the runtime set. Commit the kit change, then run
+`scripts/generate_starter_provenance.py` from the repository root with the
+next version number into `staged-starter-provenance/`. The generator refuses to
+write into `ditto_screener/data/`. Screener CI runs on kit changes, and
+`tests/test_starter_provenance_current.py` fails, printing the exact command,
+until the newest manifest (staged or active) equals the kit's tracked,
+submittable files. No runtime path, and neither screener image, reads
+`staged-starter-provenance/`.
+
+Activating a staged manifest is its own reviewed change. It is made only after
+the independent canonical starter review described in the repository-root
+`docs/canonical-starter-source-control.md` is recorded and reconciled with the
+source-only fixture result, and only for a manifest whose files equal that
+reviewed fixture archive exactly. Staged `v6` equals
+`canonical-starter-v0.330.5.tgz`, and a test pins that. The activation change
+moves the file unrenamed with
+`git mv staged-starter-provenance/starter-kit-provenance-vN.json ditto_screener/data/`,
+adds that revision to `test_supported_starter_manifests_are_versioned_and_distinct`
+in `tests/test_l2_review.py`, keeps exact-file trust to the roles that evidence
+supports, and is released and deployed like any screener change, which rebuilds
+the analyzer image. Never edit or delete a published manifest, because older
+honest derivatives must keep matching.
+
 The only shared application boundary is the dependency-light
 `packages/ditto-screening-protocol` package. It owns request/response models,
 `AgentStatus`, `SCREENING_POLICY_VERSION`, artifact metadata, and the canonical
@@ -242,8 +273,11 @@ Required values are supplied through the production host's protected
 
 Static preflight v2 makes a source match decisive only when both its effective
 Docker/Cargo/runtime reachability and its category-specific source-to-sink flow
-are proven. Excluded or test-only code is inert. Dynamic and unsupported build
-or import forms remain advisory source-review leads. Roll out `shadow` first,
+are proven. Code excluded from the effective build is inert. Test-only code
+never makes a v2 match decisive, but the v1 detector scans it, including files
+reached only through `cfg(test)`-gated `include!` or `#[path]`, because no build
+flag can be proven off; a test-only match keeps its pre-build lead. Dynamic and
+unsupported build or import forms remain advisory source-review leads. Roll out `shadow` first,
 inspect only the sanitized private journal, and promote to `enforce` explicitly.
 
 Static source matches remain pre-execution leads. In `shadow`/`enforce`, the

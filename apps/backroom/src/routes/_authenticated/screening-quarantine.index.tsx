@@ -4,6 +4,7 @@ import { BenchmarkContractRefreshPanel } from '../../components/BenchmarkContrac
 import { ScreenedImageRebuildPanel } from '../../components/ScreenedImageRebuildPanel'
 import { ScreeningQuarantinePanel } from '../../components/ScreeningQuarantinePanel'
 import {
+  actionableQuarantineCount,
   ScreeningError,
   ScreeningPending,
   ScreeningRouteFrame,
@@ -42,7 +43,7 @@ function ScreeningQueuePage() {
   const { user } = Route.useRouteContext()
 
   return (
-    <ScreeningRouteFrame reviewCount={quarantines.count} disputeCount={disputes.count}>
+    <ScreeningRouteFrame reviewCount={actionableQuarantineCount(quarantines)} disputeCount={disputes.count}>
       <ValidatorAssignmentPanel
         initialItems={assignments.items}
         readOnly={user.accessLevel === 'read'}
@@ -56,7 +57,7 @@ function ScreeningQueuePage() {
         view="queue"
         initialItems={quarantines.items}
         initialSubmissions={[]}
-        quarantineCount={quarantines.count}
+        quarantineCount={actionableQuarantineCount(quarantines)}
         disputeCount={disputes.count}
         submissionCount={submissions.count}
         readOnly={user.accessLevel === 'read'}

@@ -446,3 +446,9 @@ cap.
 
 Every Platform setting above must also be readable through Backroom MCP, not
 only shown in the UI, as required by the repository's operator-visibility rule.
+# Superseded economic proposal
+
+The current service-treasury contract is in [sn118-service-treasury-v2.md](sn118-service-treasury-v2.md):
+one collector, a combined 1,000 bps pool before miner burn, and Peyton-owned
+service holding wallets. The historical proposal below does not authorize
+current weights, signer custody, or spending.

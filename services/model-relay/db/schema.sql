@@ -3975,6 +3975,47 @@ CREATE TABLE public.scores (
 
 
 --
+-- Name: scoring_lease_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scoring_lease_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_scoring_lease_settings_revisions_scoring_lease_setti_3377 CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_scoring_lease_settings_revisions_scoring_lease_setti_3fa0 CHECK ((scope = '*'::text)),
+    CONSTRAINT ck_scoring_lease_settings_revisions_scoring_lease_setti_47b6 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_scoring_lease_settings_revisions_scoring_lease_setti_a198 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_scoring_lease_settings_revisions_scoring_lease_setti_d4a0 CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: scoring_lease_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.scoring_lease_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: scoring_lease_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.scoring_lease_settings_revisions_revision_seq OWNED BY public.scoring_lease_settings_revisions.revision;
+
+
+--
 -- Name: screened_image_uploads; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4161,6 +4202,10 @@ CREATE TABLE public.screener_l2_report_canaries (
     source_attestation jsonb,
     source_kind text DEFAULT 'submission'::text NOT NULL,
     fixture_key text,
+    review_settings_revision integer,
+    review_settings_scope text,
+    review_settings_checksum text,
+    CONSTRAINT ck_screener_l2_report_canaries_review_settings_pin_check CHECK ((((review_settings_revision IS NULL) AND (review_settings_scope IS NULL) AND (review_settings_checksum IS NULL)) OR ((review_settings_revision IS NOT NULL) AND (review_settings_scope IS NOT NULL) AND (review_settings_checksum IS NOT NULL) AND (review_settings_revision > 0) AND (review_settings_scope ~ '^l2-report-canary(-|$)'::text) AND (review_settings_checksum ~ '^[0-9a-f]{64}$'::text)))),
     CONSTRAINT ck_screener_l2_report_canaries_run_mode_check CHECK ((run_mode = ANY (ARRAY['source_only'::text, 'full_runtime'::text]))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_label_check CHECK ((review_label = ANY (ARRAY['unreviewed'::text, 'candidate_clear'::text, 'known_reject'::text]))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_runtime_check CHECK (((runtime_evidence_sha256 IS NULL) OR (runtime_evidence_sha256 ~ '^[0-9a-f]{64}$'::text))),
@@ -5933,6 +5978,13 @@ ALTER TABLE ONLY public.score_audit_log ALTER COLUMN seq SET DEFAULT nextval('pu
 
 
 --
+-- Name: scoring_lease_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scoring_lease_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.scoring_lease_settings_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: screener_node_channel_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -7561,6 +7613,14 @@ ALTER TABLE ONLY public.scored_screening_snapshot_restorations
 
 
 --
+-- Name: scoring_lease_settings_revisions pk_scoring_lease_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scoring_lease_settings_revisions
+    ADD CONSTRAINT pk_scoring_lease_settings_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: screened_image_uploads pk_screened_image_uploads; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8054,6 +8114,14 @@ ALTER TABLE public.scores
 
 ALTER TABLE ONLY public.scores
     ADD CONSTRAINT scores_pkey PRIMARY KEY (agent_id, bench_version, validator_hotkey);
+
+
+--
+-- Name: scoring_lease_settings_revisions scoring_lease_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scoring_lease_settings_revisions
+    ADD CONSTRAINT scoring_lease_settings_scope_parent_key UNIQUE (scope, parent_revision);
 
 
 --
@@ -9265,6 +9333,13 @@ CREATE INDEX scores_bench_version_agent_composite_idx ON public.scores USING btr
 
 
 --
+-- Name: scoring_lease_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX scoring_lease_settings_scope_revision_idx ON public.scoring_lease_settings_revisions USING btree (scope, revision);
+
+
+--
 -- Name: screened_image_uploads_attempt_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9401,7 +9476,7 @@ CREATE INDEX screening_attempts_agent_started_idx ON public.screening_attempts U
 -- Name: screening_attempts_infra_failed_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = ANY (ARRAY['docker-build-infrastructure'::text, 'worker-claim-not-started'::text, 'l2-runtime-evidence-unavailable'::text])));
+CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = ANY (ARRAY['docker-build-infrastructure'::text, 'worker-claim-not-started'::text, 'l2-runtime-evidence-unavailable'::text, 'source-review-adjudicator-key-unavailable'::text])));
 
 
 --
@@ -11313,6 +11388,14 @@ ALTER TABLE ONLY public.screened_image_uploads
 
 ALTER TABLE ONLY public.screener_heartbeats
     ADD CONSTRAINT screener_heartbeats_active_agent_id_fkey FOREIGN KEY (active_agent_id) REFERENCES public.agents(agent_id) ON DELETE SET NULL;
+
+
+--
+-- Name: screener_l2_report_canaries screener_l2_canary_review_settings_revision_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT screener_l2_canary_review_settings_revision_fkey FOREIGN KEY (review_settings_scope, review_settings_revision) REFERENCES public.screener_review_settings_revisions(scope, revision) ON DELETE RESTRICT;
 
 
 --

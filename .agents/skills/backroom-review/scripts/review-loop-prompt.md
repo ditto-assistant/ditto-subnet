@@ -16,6 +16,9 @@ by the saved scheduled-task prompt per the backroom-review skill.
   platform-side unsticking, not a retry.
 - Skip `banned` rows. Park `evaluating` / `waiting_validator` rows for a
   later fire.
+- Skip quarantine rows with `terminal_ghost: true` (the agent is already
+  banned or rejected). They are not reviews; list them in the report for a
+  human to reconcile per the skill's "Terminal ghosts" section.
 - Leave rows with missing source, mixed evidence, or infrastructure failure
   unchanged and list them in the report with what would resolve them.
 - A quarantine release needs decisive lines read in source; a reject needs

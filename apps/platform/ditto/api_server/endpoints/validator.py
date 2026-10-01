@@ -96,6 +96,7 @@ from ditto.api_models.receipt_diagnostics import (
     SubmitReceiptDiagnostics,
     diagnostic_signing_message,
 )
+from ditto.api_models.scoring_lease_settings import DEFAULT_SCORING_TICKET_TTL
 from ditto.api_models.stack_health import (
     ValidatorStackHealth,
     validator_stack_health_signing_token,
@@ -218,6 +219,7 @@ from ditto.api_server.scoring_gate import (
     evaluate_duplicate_signals,
     evaluate_rejected_resubmission,
 )
+from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
 from ditto.api_server.validator_slot_settings import (
@@ -1684,6 +1686,7 @@ async def _issue_source_backfill_ticket(
         SIMILARITY_CONCURRENT_SUBMISSION_LIMIT_DEFAULT
     ),
     resume_only: bool = False,
+    ticket_ttl: timedelta = DEFAULT_SCORING_TICKET_TTL,
 ) -> ValidatorTicket | None:
     """Use otherwise-idle capacity after the desired era has nothing to give.
 
@@ -1768,7 +1771,7 @@ async def _issue_source_backfill_ticket(
             session,
             validator_hotkey=validator_hotkey,
             now=now,
-            ttl=_TICKET_TTL,
+            ttl=ticket_ttl,
             bench_version=rollout.from_version,
             artifact_mode=artifact_mode,
             validator_running_benchmark=validator_running_benchmark,
@@ -1872,7 +1875,7 @@ async def _issue_source_backfill_ticket(
         session,
         validator_hotkey=validator_hotkey,
         now=now,
-        ttl=_TICKET_TTL,
+        ttl=ticket_ttl,
         bench_version=rollout.from_version,
         artifact_mode=artifact_mode,
         validator_running_benchmark=validator_running_benchmark,
@@ -1901,6 +1904,7 @@ async def _issue_prev_gen_carryover_ticket(
     similarity_concurrent_submission_limit: int = (
         SIMILARITY_CONCURRENT_SUBMISSION_LIMIT_DEFAULT
     ),
+    ticket_ttl: timedelta = DEFAULT_SCORING_TICKET_TTL,
 ) -> ValidatorTicket | None:
     """Lease an adopted previous-generation submission in the new era.
 
@@ -1950,7 +1954,7 @@ async def _issue_prev_gen_carryover_ticket(
         session,
         validator_hotkey=validator_hotkey,
         now=now,
-        ttl=_TICKET_TTL,
+        ttl=ticket_ttl,
         bench_version=rollout.desired_version,
         artifact_mode="screened_only",
         validator_running_benchmark=validator_running_benchmark,
@@ -1988,17 +1992,12 @@ def _prev_gen_carryover_precedes_desired_era(
 # How long a pre-signed artifact URL stays valid.
 _ARTIFACT_URL_TTL = timedelta(minutes=5)
 
-# How long a validator has to redeem a ticket with a score before it lapses and
-# the slot re-opens for another validator.
-# Keep the lease longer than the validator's 165-minute benchmark cap.
-# The remaining fifteen minutes cover artifact/setup time and the validator's
-# explicit two-minute signed-report margin.
-# Production v11 canonical completions (21d): 8-wide p99 55 min / max 60 min;
-# including serial windows p99 101 min / max 114 min. Zero of 1014 scored
-# tickets exceeded 120 min. 180 is over-budgeted for that tail without the
-# 430-minute silent occupancy of a wedged scorer. The validator still has a
-# 15-minute unchanged-progress watchdog.
-_TICKET_TTL = timedelta(minutes=180)
+# How long a validator has to redeem a scoring ticket before it lapses is no
+# longer a constant here (#1156). Every issuance path resolves the operator's
+# Backroom revision with ``resolve_scoring_ticket_ttl`` and stamps it onto NEW
+# tickets only; ``DEFAULT_SCORING_TICKET_TTL`` (180 minutes, with its sizing
+# rationale in ``ditto.api_models.scoring_lease_settings``) governs until an
+# operator writes one and on any failure to read it.
 
 # Signed job claims outside this window are stale. A consumed nonce remains in
 # the database for the same window, making replay rejection consistent across
@@ -3407,6 +3406,10 @@ async def request_job(
     inference_settings = await request.app.state.inference_concurrency_settings.resolve(
         getattr(request.app.state, "session_maker", None)
     )
+    # Operator-revisioned lease clock (#1156), resolved on its own session like
+    # the boards above. It is stamped only onto a ticket minted in this poll; a
+    # resumed live ticket keeps the deadline it was issued with.
+    ticket_ttl = await resolve_scoring_ticket_ttl(request.app.state)
 
     job: JobResponse | None = None
     async with session.begin():
@@ -3741,6 +3744,7 @@ async def request_job(
                     required_basis=V9_CONTRACT_RETEST_BASIS,
                     allow_parallel_ordinary=True,
                     allow_parallel_contract_retests=True,
+                    ttl=ticket_ttl,
                 )
                 if target_benchmark_ready
                 else None
@@ -3756,7 +3760,7 @@ async def request_job(
                     session,
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
-                    ttl=_TICKET_TTL,
+                    ttl=ticket_ttl,
                     artifact_mode=artifact_mode,
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
@@ -3798,6 +3802,7 @@ async def request_job(
                     similarity_concurrent_submission_limit=(
                         queue_policy.similarity_budget.concurrent_submission_limit
                     ),
+                    ticket_ttl=ticket_ttl,
                 )
                 if relaxed_carryover_due
                 else None
@@ -3808,7 +3813,7 @@ async def request_job(
                         session,
                         validator_hotkey=payload.validator_hotkey,
                         now=now,
-                        ttl=_TICKET_TTL,
+                        ttl=ticket_ttl,
                         bench_version=rollout.desired_version,
                         artifact_mode="screened_only",
                         validator_running_benchmark=slot_running_benchmark,
@@ -3835,7 +3840,7 @@ async def request_job(
                     session,
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
-                    ttl=_TICKET_TTL,
+                    ttl=ticket_ttl,
                     bench_version=rollout.desired_version,
                     artifact_mode="screened_only",
                     validator_running_benchmark=slot_running_benchmark,
@@ -3875,6 +3880,7 @@ async def request_job(
                     similarity_concurrent_submission_limit=(
                         queue_policy.similarity_budget.concurrent_submission_limit
                     ),
+                    ticket_ttl=ticket_ttl,
                 )
         else:
             ticket = None
@@ -3937,6 +3943,7 @@ async def request_job(
                     similarity_concurrent_submission_limit=(
                         queue_policy.similarity_budget.concurrent_submission_limit
                     ),
+                    ticket_ttl=ticket_ttl,
                 )
             if ticket is None and rollout is None:
                 stale_ticket = await session.scalar(
@@ -3992,7 +3999,7 @@ async def request_job(
                         session,
                         validator_hotkey=payload.validator_hotkey,
                         now=now,
-                        ttl=_TICKET_TTL,
+                        ttl=ticket_ttl,
                         bench_version=canonical_version,
                         artifact_mode=artifact_mode,
                         validator_running_benchmark=slot_running_benchmark,
@@ -4024,6 +4031,7 @@ async def request_job(
                     ),
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
+                    ttl=ticket_ttl,
                 )
             if ticket is None and source_backfill_rollout is not None:
                 # Once the inherited top ten is fully established on the new
@@ -4059,6 +4067,7 @@ async def request_job(
                     similarity_concurrent_submission_limit=(
                         queue_policy.similarity_budget.concurrent_submission_limit
                     ),
+                    ticket_ttl=ticket_ttl,
                 )
             if ticket is None and rollout is not None:
                 # Every issuing lane an open rollout offers has been walked and
@@ -4095,16 +4104,20 @@ async def request_job(
             # The post-commit block hash keeps the seed unpredictable; binding
             # the validator hotkey makes it distinct and publicly reproducible.
             # Persist the pin on the ticket so retries cannot rotate datasets.
-            if ticket.bench_version == 13 and ticket.seed is None:
+            if ticket.bench_version >= 13 and ticket.seed is None:
                 if heartbeat is None or not heartbeat_supports_version(
-                    heartbeat, now=now, version=13
+                    heartbeat, now=now, version=ticket.bench_version
                 ):
                     raise HTTPException(
-                        503, "deterministic V13 scorer capability is unavailable"
+                        503,
+                        f"deterministic V{ticket.bench_version} scorer capability "
+                        "is unavailable",
                     )
                 if seed_block_hash is None or generator.run_size is None:
                     raise HTTPException(
-                        503, "deterministic V13 seed binding is unavailable"
+                        503,
+                        f"deterministic V{ticket.bench_version} seed binding "
+                        "is unavailable",
                     )
             if seed_block_hash is not None and generator.run_size is not None:
                 expected_seed = derive_validator_seed(
@@ -5184,6 +5197,7 @@ async def _canonical_tail_is_draining(
     requesting_validator: str,
     canonical_version: int,
     now: datetime,
+    ticket_ttl: timedelta = DEFAULT_SCORING_TICKET_TTL,
 ) -> bool:
     """Whether current-version quorum work is finishing or just finished.
 
@@ -5197,7 +5211,7 @@ async def _canonical_tail_is_draining(
     before the idle validators' next poll, recreating the idle gap this guard
     exists to fill.
     """
-    recently_settled_after = now - _TICKET_TTL
+    recently_settled_after = now - ticket_ttl
     active_agent_id = await session.scalar(
         select(ValidatorTicket.agent_id)
         .where(
@@ -5299,6 +5313,9 @@ async def request_top5_confirmation_job(
         getattr(request.app.state, "session_maker", None)
     )
     slot_settings = await _validator_slot_settings(request)
+    # Operator-revisioned lease clock (#1156): stamped only onto a lease minted
+    # here, and the tail-drain window is one current canonical lease long.
+    ticket_ttl = await resolve_scoring_ticket_ttl(request.app.state)
     # Bench v13+: read the finalized hash of any reign anchor whose height the
     # head has reached BEFORE the write transaction opens. The Substrate read
     # is a fresh websocket and three RPCs; holding a Platform row lock across
@@ -5607,6 +5624,7 @@ async def request_top5_confirmation_job(
                 requesting_validator=payload.validator_hotkey,
                 canonical_version=canonical_version,
                 now=now,
+                ticket_ttl=ticket_ttl,
             )
         )
         # Serialize the coverage read with ticket issuance. Catch-up is allowed
@@ -5761,12 +5779,16 @@ async def request_top5_confirmation_job(
             bench_version=canonical_version,
         )
         if canonical_version >= 3:
-            if canonical_version == 13 and (
+            if canonical_version >= 13 and (
                 heartbeat is None
-                or not heartbeat_supports_version(heartbeat, now=now, version=13)
+                or not heartbeat_supports_version(
+                    heartbeat, now=now, version=canonical_version
+                )
             ):
                 raise HTTPException(
-                    503, "deterministic V13 scorer capability is unavailable"
+                    503,
+                    f"deterministic V{canonical_version} scorer capability "
+                    "is unavailable",
                 )
             if generator.run_size is None:
                 raise HTTPException(
@@ -5836,7 +5858,7 @@ async def request_top5_confirmation_job(
             agent_id=selected_member_id,
             validator_hotkey=payload.validator_hotkey,
             now=now,
-            ttl=_TICKET_TTL,
+            ttl=ticket_ttl,
             bench_version=canonical_version,
             seed=(selected_wave_seed if confirmation_datasets else None),
             dataset_sha256=(
@@ -7968,7 +7990,7 @@ async def _mirror_late_transcript(
 
 async def _score_uses_private_dataset(session: AsyncSession, score: Score) -> bool:
     """Preserve the submit-transcript privacy rule for every public mirror."""
-    if score.bench_version == 13:
+    if score.bench_version >= 13:
         return True
     dataset_sha = (
         score.details.get("dataset_sha256") if isinstance(score.details, dict) else None

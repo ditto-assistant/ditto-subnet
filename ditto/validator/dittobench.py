@@ -41,6 +41,7 @@ from ditto.api_models.validator_capabilities import (
     ScorerLivenessProbe,
     ScorerProbeOutcome,
     ScorerProbeReason,
+    V14ScoredRuntimeEnvEvidence,
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_confirmation import (
@@ -1114,6 +1115,8 @@ class DittobenchClient:
         scored_runtime_env = None
         if 13 in observed_versions and payload.get("scored_runtime_env") is not None:
             try:
+                # The v13 type pins bench_version, so a v14 packet in this
+                # legacy slot is invalid and ignored like any other bad packet.
                 candidate = ScoredRuntimeEnvEvidence.model_validate(
                     payload["scored_runtime_env"]
                 )
@@ -1122,6 +1125,19 @@ class DittobenchClient:
             except ValueError:
                 # An invalid optional packet cannot upgrade the verified
                 # scorer identity or authorize a source review clearance.
+                pass
+        v14_scored_runtime_env = None
+        if (
+            14 in observed_versions
+            and payload.get("v14_scored_runtime_env") is not None
+        ):
+            try:
+                v14_candidate = V14ScoredRuntimeEnvEvidence.model_validate(
+                    payload["v14_scored_runtime_env"]
+                )
+                if v14_candidate.source_revision == source_revision:
+                    v14_scored_runtime_env = v14_candidate
+            except ValueError:
                 pass
         try:
             return ScorerBenchmarkCapability(
@@ -1141,6 +1157,7 @@ class DittobenchClient:
                 software_version=software_version,
                 source_revision=source_revision,
                 scored_runtime_env=scored_runtime_env,
+                v14_scored_runtime_env=v14_scored_runtime_env,
                 probe=self._record_scorer_probe(
                     "served",
                     observed_at=observed_at,

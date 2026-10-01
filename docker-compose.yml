@@ -269,12 +269,13 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "28"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "30"
     restart: unless-stopped
     # Longest live ticket plus five minutes for a signed final report:
-    # 4h confirmation outlives the 180-minute canonical lease. This must
-    # remain above the productive-run cap and aligned with both updater
-    # drain defaults.
+    # 4h confirmation outlives the canonical scoring lease (Backroom
+    # get_scoring_lease_settings, default 180 minutes). Platform refuses a
+    # scoring TTL above this minus five minutes (240). This must remain above
+    # the productive-run cap and aligned with both updater drain defaults.
     stop_grace_period: 245m
     environment:
       NETUID: "118"
@@ -371,10 +372,12 @@ services:
       # DITTO_INFERENCE_PUBLIC_BASE_URL.
       VALIDATOR_PLATFORM_INFERENCE_BASE_URL: ${VALIDATOR_PLATFORM_INFERENCE_BASE_URL:-https://dittobench.ai}
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
-      # Productive-run cap inside the 180-minute platform ticket. Production
-      # v11 8-wide completions max 60 min; serial successes max 114 min and
-      # historically died at 110/150. 165 minutes stays over that tail; the
-      # 15-minute unchanged-progress watchdog still kills wedges. Keep the
+      # Productive-run cap inside the default 180-minute platform ticket
+      # (Backroom scoring lease TTL). A shorter operator TTL binds instead via
+      # min(cap, lease - report margin). Production v11 8-wide completions
+      # max 60 min; serial successes max 114 min and historically died at
+      # 110/150. 165 minutes stays over that tail; the 15-minute
+      # unchanged-progress watchdog still kills wedges. Keep the default
       # platform ticket TTL above this.
       VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "9900"
       VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "2"

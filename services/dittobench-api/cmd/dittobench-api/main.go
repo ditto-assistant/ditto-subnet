@@ -436,7 +436,8 @@ type capabilitiesResponse struct {
 	// SoftwareVersionOrigin mirrors SourceRevisionOrigin for software_version.
 	SoftwareVersionOrigin release.Origin `json:"software_version_origin,omitempty"`
 	// Only keys injected by this binary into a Bench v13 sandbox are covered.
-	ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"scored_runtime_env,omitempty"`
+	ScoredRuntimeEnv    *scoredRuntimeEnvEvidence `json:"scored_runtime_env,omitempty"`
+	V14ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v14_scored_runtime_env,omitempty"`
 }
 
 type scoredRuntimeEnvEvidence struct {
@@ -448,34 +449,31 @@ type scoredRuntimeEnvEvidence struct {
 }
 
 func (s *server) scoredRuntimeEnvEvidence() *scoredRuntimeEnvEvidence {
+	return s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV13)
+}
+
+func (s *server) scoredRuntimeEnvEvidenceForVersion(version int) *scoredRuntimeEnvEvidence {
 	// A practice-only scorer does not launch screened miner images and cannot
 	// attest to the scored container environment.
 	if !s.allowScreenedImages || s.sourceRevisionOrigin != release.OriginBinary || s.sourceRevisionMismatch || !canonicalSourceRevision(s.sourceRevision) {
 		return nil
 	}
-	const version = protocol.BenchVersionV13
 	keys := make([]string, 0)
 	for key := range harnessSandboxEnv(nil, version) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	material := "scored-runtime-env-v1\n13\n" + s.sourceRevision + "\n" + strings.Join(keys, "\n")
+	material := fmt.Sprintf("scored-runtime-env-v1\n%d\n", version) + s.sourceRevision + "\n" + strings.Join(keys, "\n")
 	digest := sha256.Sum256([]byte(material))
 	return &scoredRuntimeEnvEvidence{version, "scorer-injected-env-only", s.sourceRevision, keys, hex.EncodeToString(digest[:])}
 }
 
-// advertisedMinBenchVersion / advertisedMaxBenchVersion bound the capability
-// set this build ADVERTISES to validators, as a window over
-// protocol.SupportedBenchVersions() rather than a retyped list. The generator
-// and scorer already accept v13 (protocol.SupportedBenchVersion,
-// scoregates.SupportedBenchVersion, efficiency.ProductionReadyForVersion), so
-// advertising it is exactly one pin: the v13 wiring-sweep PR (#1519) moves
-// advertisedMaxBenchVersion to V13 together with the validator
-// SUPPORTED_BENCH_VERSIONS, the release.yml identity gate, and the starter-kit
-// MAX_SUPPORTED_BENCH_VERSION, so the version never strands at one layer.
+// The advertised window derives from the generator's reproducible contracts
+// and technical readiness. Extending the ceiling does not activate a version:
+// Platform's reviewed rollout and exact scorer packet govern scheduling.
 const (
 	advertisedMinBenchVersion = protocol.BenchVersionV8
-	advertisedMaxBenchVersion = protocol.BenchVersionV13
+	advertisedMaxBenchVersion = protocol.BenchVersionV14
 )
 
 // supportedBenchVersions is the capability set this build can administer. It is
@@ -568,6 +566,7 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		SourceRevisionMismatch: s.sourceRevisionMismatch,
 		SoftwareVersionOrigin:  s.softwareVersionOrigin,
 		ScoredRuntimeEnv:       s.scoredRuntimeEnvEvidence(),
+		V14ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV14),
 	})
 }
 
@@ -2023,6 +2022,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		caseToolEndpoint := toolEndpoint.forCase(c.ID, toolRunUserID)
 		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, c.ID, caseToolEndpoint, toolRunUserID))
 		observed := toolSrv.Observed(c.ID)
+		attachEffectAccounting(execution.ToolProvenance, toolSrv.EffectAccounting(c.ID))
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
 		cs = applyV10ToolProvenance(req.BenchVersion, scope, cs, resp, observed, execution)
 		cs = applyV13RestraintProvenance(req.BenchVersion, c, cs, execution)
@@ -2194,6 +2194,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			caseToolEndpoint := toolEndpoint.forCase(mc.ID, uid)
 			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, mc.ID, caseToolEndpoint, uid))
 			observedCalls := toolSrv.Observed(mc.ID)
+			attachEffectAccounting(execution.ToolProvenance, toolSrv.EffectAccounting(mc.ID))
 			resp = withObservedTrajectory(resp, observedCalls)
 			gradedResp := resp
 			projected := projectedHarnessCase{Response: resp, Observed: observedCalls}

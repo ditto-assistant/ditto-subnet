@@ -50,7 +50,7 @@ from ditto_screener.source_signals import (
     find_decisive_malicious_source,
     find_source_review_leads,
     is_executable_source_path,
-    mask_comments,
+    mask_lead_comments,
     source_path_priority,
 )
 from ditto_screening_protocol import (
@@ -84,7 +84,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v28-policy-v13"
+        return "source-review-v30-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -188,23 +188,33 @@ def _record_note_feedback(
     if note is None:
         return {"recorded": False, "notes": len(notes)}
     site_fields = ("category", "path", "line")
-    repeated_site = (
-        note.get("kind") == "concern"
-        and isinstance(note.get("path"), str)
-        and isinstance(note.get("line"), int)
-        and any(
+    same_site_count = (
+        sum(
             existing.get("kind") == "concern"
             and all(existing.get(field) == note.get(field) for field in site_fields)
             for existing in notes
         )
+        if note.get("kind") == "concern"
+        and isinstance(note.get("path"), str)
+        and isinstance(note.get("line"), int)
+        else 0
     )
     recorded = _append_note(notes, note)
     feedback: dict[str, object] = {"recorded": recorded, "notes": len(notes)}
-    if repeated_site:
-        feedback["guidance"] = (
-            "This location already has a concern note. If this adds no distinct "
-            "causal evidence, inspect a different served-path location."
-        )
+    if same_site_count:
+        feedback["same_site_concerns"] = same_site_count + int(recorded)
+        if same_site_count >= 3:
+            feedback["guidance"] = (
+                "This site already has multiple concern notes. Do not restate "
+                "the same mechanism. If a distinct causal mechanism remains, "
+                "record it explicitly; otherwise inspect a different served-path "
+                "location or submit_review using the existing ledger."
+            )
+        else:
+            feedback["guidance"] = (
+                "This location already has a concern note. If this adds no distinct "
+                "causal evidence, inspect a different served-path location."
+            )
     return feedback
 
 
@@ -266,6 +276,14 @@ _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
 _OPAQUE_SIZE_LIMIT = 2 * 1024 * 1024
+# The starter kit compiles one committed model larger than the lead-scan limit
+# into its reference service. Only that exact path whose SHA-256 matches an
+# installed provenance manifest is accounted for instead of marking the lead
+# scan truncated, the same rule tools/l2_analyzer.py applies. Every other
+# oversized member, including an unrecognized binary, still truncates.
+_STARTER_MODEL_PATH = "fixtures/models/cross-encoder.onnx"
+_MAX_STARTER_MODEL_BYTES = 20 * 1024 * 1024
+_STARTER_MANIFEST_DIR = Path(__file__).parent / "data"
 _MAX_TOOL_OUTPUT_CHARS = 48_000
 _MAX_TOTAL_TOOL_CHARS = 8_000_000
 _MAX_READ_LINES = 400
@@ -293,6 +311,7 @@ _SOURCE_REVIEW_FAILURE_CODES: Mapping[str, str] = {
     "source archive contains a non-canonical path": "archive-invalid",
     "source archive contains a duplicate path": "archive-invalid",
     "provenance file could not be read": "archive-invalid",
+    "source archive changed during review": "archive-invalid",
     "static preflight mode must be off, shadow, or enforce": "detector-config-invalid",
     "max_completion_request_seconds must be finite and positive": (
         "request-timeout-config-invalid"
@@ -451,20 +470,84 @@ def _body_signature(payload: object) -> str:
         return "non-json"
     if not isinstance(payload, dict):
         return f"type={type(payload).__name__}"
-    keys = ",".join(sorted(str(key) for key in payload)[:10])
+    known_keys = {
+        "error",
+        "choices",
+        "output",
+        "id",
+        "object",
+        "model",
+        "usage",
+        "created",
+    }
+    keys = ",".join(
+        sorted(key for key in payload if isinstance(key, str) and key in known_keys)
+    )
+    unknown_count = sum(key not in known_keys for key in payload)
     error = payload.get("error")
     error_class = ""
     if isinstance(error, Mapping):
-        error_class = str(
-            error.get("code") or error.get("type") or error.get("error_type") or ""
-        )[:60]
+        code = error.get("code")
+        if isinstance(code, int) and 100 <= code <= 599:
+            error_class = str(code)
+        elif (
+            isinstance(code, str)
+            and len(code) == 3
+            and code.isascii()
+            and code.isdigit()
+        ):
+            error_class = code
     elif error:
-        error_class = str(error)[:60]
+        error_class = "non-object"
     choices = payload.get("choices")
-    return (
-        f"keys=[{keys}] error_class={error_class!r} "
+    signature = (
+        f"keys=[{keys}] other_keys={unknown_count} error_class={error_class!r} "
         f"choices={type(choices).__name__ if choices is not None else 'absent'}"
     )
+    provider_limit = _provider_limit_category(payload)
+    if provider_limit:
+        signature += f" provider_limit={provider_limit}"
+    return signature
+
+
+def _provider_limit_category(payload: object) -> str | None:
+    """Classify a provider refusal without copying upstream text into logs.
+
+    Provider error messages are untrusted: even an error-only envelope can echo
+    a request, source excerpt, account identifier, or credential. The log gets
+    only one of these fixed labels, never the provider's message or model name.
+    """
+    if not isinstance(payload, Mapping) or "choices" in payload or "output" in payload:
+        return None
+    error = payload.get("error")
+    if not isinstance(error, Mapping):
+        return None
+    message = error.get("message")
+    if not isinstance(message, str):
+        return None
+    lowered = message[:1000].casefold()
+    if "limit_rpm/" in lowered or "requests per minute" in lowered:
+        return "key_rpm"
+    if "insufficient credits" in lowered or "credit balance" in lowered:
+        return "credits"
+    if "upstream" in lowered and (
+        "capacity" in lowered or "rate limit" in lowered or "overloaded" in lowered
+    ):
+        return "upstream_capacity"
+    return None
+
+
+def _http_error_signature(response: httpx.Response) -> str:
+    """Describe a rejected HTTP status with the provider's bounded message."""
+    signature = f"http-status={response.status_code}"
+    try:
+        payload: object = response.json()
+    except ValueError:
+        return signature
+    provider_limit = _provider_limit_category(payload)
+    if provider_limit:
+        signature += f" provider_limit={provider_limit}"
+    return signature
 
 
 class SourceReviewBudgetExhausted(ValueError):
@@ -1866,6 +1949,14 @@ For build and security findings, trace the reachable lifecycle operation to an
 unauthorized read, disclosure, write, execution, persistence, privilege, or
 material availability effect; no model or scorer effect is required.
 
+For provider_bypass, do not infer the scored environment from Dockerfile ENV
+alone. The V13 scorer locks DITTOBENCH_PROVIDER=platform and supplies
+DITTOBENCH_INFERENCE_BASE_URL after caller environment. An external-provider
+default guarded only by the selector being absent is a conditional lead, not
+a proved scored-path bypass. Trace the effective served path for an override,
+ignored selector, or direct provider call that remains reachable under the
+locked environment. Preserve a concern when that alternate route is proved.
+
 Decide I1 through I8 independently. I8 EVALUATION INDEPENDENCE prohibits live
 case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
 markers, or `bench_version` from changing substantive retrieval, capability
@@ -1900,6 +1991,14 @@ applies, and the semantic or trajectory effect. Common formulas, finite domain
 vocabularies, typo handling, prescriptive wording, and fixture references alone
 are insufficient. Distributed compilation across routing, retrieval, prompts,
 calculators and finalizers remains one end-to-end mechanism.
+An instruction to restate a model-selected monetary amount in equivalent units
+because the current user requested minor units is not, by itself, proof of a
+benchmark-specific compiler. Check whether the prompt encodes an evaluation-
+derived interpretation, operand or output recipe beyond ordinary unit guidance;
+cite its activation and substantive effect. ANSWER-slot extraction that copies
+the model-authored value does not turn formatting advice into host authority.
+Keep post-finalization currency rescaling under I4 and proven benchmark-family
+prompt compilation under I5; do not infer either solely from the word cents.
 
 I7 also prohibits incorrect host removal of an applicable, authorized and
 available capability. Check quoted titles, entity names, compound requests,
@@ -2221,7 +2320,7 @@ def _rust_runtime_references(source: str) -> tuple[set[str], bool]:
             ("identifier", "include"),
             ("punctuation", "!"),
             ("punctuation", "("),
-        ] and not _rust_reference_is_test_only(tokens, index):
+        ]:
             argument = index + 3
             if argument < len(tokens) and tokens[argument][0] == "string":
                 references.add(tokens[argument][1])
@@ -2260,7 +2359,7 @@ def _rust_runtime_references(source: str) -> tuple[set[str], bool]:
             ("punctuation", "["),
             ("identifier", "path"),
             ("punctuation", "="),
-        ] and not _rust_reference_is_test_only(tokens, index):
+        ]:
             argument = index + 4
             if argument < len(tokens) and tokens[argument][0] == "string":
                 references.add(tokens[argument][1])
@@ -2268,34 +2367,6 @@ def _rust_runtime_references(source: str) -> tuple[set[str], bool]:
                 unresolved = True
         index += 1
     return references, unresolved
-
-
-def _rust_reference_is_test_only(
-    tokens: list[tuple[str, str]], reference_index: int
-) -> bool:
-    """Return whether a Rust source indirection is guarded only for tests."""
-    start = reference_index - 1
-    while start >= 0 and tokens[start] not in {
-        ("punctuation", ";"),
-        ("punctuation", "{"),
-        ("punctuation", "}"),
-    }:
-        start -= 1
-    start += 1
-
-    cfg_test = [
-        ("punctuation", "#"),
-        ("punctuation", "["),
-        ("identifier", "cfg"),
-        ("punctuation", "("),
-        ("identifier", "test"),
-        ("punctuation", ")"),
-        ("punctuation", "]"),
-    ]
-    return any(
-        tokens[cursor : cursor + len(cfg_test)] == cfg_test
-        for cursor in range(start, reference_index)
-    )
 
 
 def _is_standalone_shell_script(path: str) -> bool:
@@ -2415,13 +2486,20 @@ class TarSourceRepository:
     """A read-only, size-bounded view over regular files in a verified tarball."""
 
     def __init__(
-        self, archive_path: str, *, static_preflight_v2_mode: str = "off"
+        self,
+        archive_path: str,
+        *,
+        static_preflight_v2_mode: str = "off",
+        provenance_manifest_paths: tuple[str, ...] | None = None,
     ) -> None:
         if static_preflight_v2_mode not in {"off", "shadow", "enforce"}:
             raise ValueError("static preflight mode must be off, shadow, or enforce")
         self._archive_path = archive_path
+        self._archive_identity = self._current_archive_identity()
         self._static_preflight_v2_mode = static_preflight_v2_mode
+        self._provenance_manifest_paths = provenance_manifest_paths
         self._binary_analysis_cache: dict[str, dict[str, object]] = {}
+        self._member_digests: dict[str, str] | None = None
         members: list[_Member] = []
         seen: set[str] = set()
         with tarfile.open(archive_path, mode="r:gz") as archive:
@@ -2445,6 +2523,17 @@ class TarSourceRepository:
                 seen.add(normalized)
                 members.append(_Member(normalized, member.name, member.size))
         self._members = {member.name: member for member in members}
+        self._runtime_paths: frozenset[str] | None = None
+
+    def runtime_paths(self) -> frozenset[str]:
+        """Members the build or served code explicitly makes executable.
+
+        Computed once: the archive members are immutable for the lifetime of
+        the repository.
+        """
+        if self._runtime_paths is None:
+            self._runtime_paths = self._explicit_runtime_paths()
+        return self._runtime_paths
 
     def _explicit_runtime_paths(self) -> frozenset[str]:
         """Resolve Cargo-declared and Rust-included source outside normal roots.
@@ -2628,13 +2717,29 @@ class TarSourceRepository:
                 opaque = opaque[: max(0, len(opaque) // 2)]
                 binary_analysis = binary_analysis[: len(opaque)]
 
-    def review_leads(self) -> dict[str, object]:
-        """Precompute bounded location-only leads without exposing source text."""
+    def review_leads(
+        self, provenance_manifest_paths: tuple[str, ...] | None = None
+    ) -> dict[str, object]:
+        """Precompute bounded location-only leads without exposing source text.
+
+        Rule leads and emulation fingerprints point the reviewer at code the
+        miner wrote. A file whose exact path and sha256 ship in a runtime
+        starter manifest was not, so it stays out of those two scans; a staged
+        manifest grants nothing, and one changed byte breaks the match and
+        keeps every lead. Reachability, static-v2 advisories, and the other
+        whole-program analyses still read every file, because a miner-authored
+        chain can run through an unmodified starter file.
+        """
+        manifests = self._starter_manifests(provenance_manifest_paths)
+        trusted_digests = _trusted_starter_digests(manifests)
         readable: list[tuple[str, str]] = []
+        miner_readable: list[tuple[str, str]] = []
+        trusted_starter_skipped = 0
         bytes_scanned = 0
         files_scanned = 0
         members_considered = 0
         truncated = False
+        nontext: list[dict[str, object]] = []
         with tarfile.open(self._archive_path, mode="r:gz") as archive:
             # Runtime sources get the bounded scan budget before docs, tests,
             # and other decoys, while the latter remain available to the broad
@@ -2646,7 +2751,11 @@ class TarSourceRepository:
             for name in ordered_names:
                 member_info = self._members[name]
                 if member_info.size > _OPAQUE_SIZE_LIMIT:
-                    truncated = True
+                    model = self._published_starter_model(archive, name, manifests)
+                    if model is None:
+                        truncated = True
+                    else:
+                        nontext.append(model)
                     continue
                 if members_considered >= _MAX_LEAD_SCAN_FILES:
                     truncated = True
@@ -2667,6 +2776,12 @@ class TarSourceRepository:
                     continue
                 readable.append((name, text))
                 files_scanned += 1
+                # Only a path some manifest pins can match, so hash just those.
+                pinned = trusted_digests.get(name)
+                if pinned and hashlib.sha256(raw).hexdigest() in pinned:
+                    trusted_starter_skipped += 1
+                else:
+                    miner_readable.append((name, text))
         static_advisories: list[dict[str, object]] = []
         if self._static_preflight_v2_mode != "off":
             reachability = analyze_reachability(dict(readable))
@@ -2682,13 +2797,15 @@ class TarSourceRepository:
                 for item in static_v2.advisory[:16]
             ]
         return {
-            "items": [*find_source_review_leads(readable), *static_advisories][
+            "items": [*find_source_review_leads(miner_readable), *static_advisories][
                 :_MAX_LEAD_SCAN_FILES
             ],
-            "emulation_fingerprints": find_benchmark_emulation_fingerprints(readable),
+            "emulation_fingerprints": find_benchmark_emulation_fingerprints(
+                miner_readable
+            ),
             "unmatchable_category_guards": guard_report(
                 find_unmatchable_category_guards(
-                    (path, mask_comments(text)) for path, text in readable
+                    (path, mask_lead_comments(text, path)) for path, text in readable
                 )
             ),
             "generator_mirroring": self._generator_mirroring_analysis(readable),
@@ -2696,9 +2813,55 @@ class TarSourceRepository:
                 self._review_adaptive_model_routing_analysis(readable)
             ),
             "files_scanned": files_scanned,
+            "trusted_starter_skipped": trusted_starter_skipped,
             "members_considered": members_considered,
             "bytes_scanned": bytes_scanned,
+            "nontext": nontext,
             "truncated": truncated,
+        }
+
+    def _starter_manifests(self, override: tuple[str, ...] | None) -> tuple[str, ...]:
+        """A per-call manifest set, else the repository's, else the runtime set.
+
+        Only ``None`` falls through; an explicit empty tuple trusts nothing.
+        """
+        return _starter_manifest_paths(
+            override if override is not None else self._provenance_manifest_paths
+        )
+
+    def _published_starter_model(
+        self, archive: tarfile.TarFile, name: str, manifests: tuple[str, ...]
+    ) -> dict[str, object] | None:
+        """Account for an oversized member only as the exact starter model."""
+        member_info = self._members[name]
+        if name != _STARTER_MODEL_PATH or member_info.size > _MAX_STARTER_MODEL_BYTES:
+            return None
+        digests = _starter_model_digests(manifests)
+        if not digests:
+            return None
+        member = archive.getmember(member_info.archive_name)
+        # getmember resolves a name to its last entry, and extractfile follows
+        # links. The constructor admits one regular file per path, so anything
+        # else here is a later link or special entry it skipped. Never let that
+        # entry's bytes vouch for the admitted file; the analyzer's workspace
+        # walk likewise never follows links.
+        if not member.isfile():
+            return None
+        extracted = archive.extractfile(member)
+        if extracted is None:
+            return None
+        digest = hashlib.sha256()
+        hashed = 0
+        while chunk := extracted.read(1024 * 1024):
+            hashed += len(chunk)
+            digest.update(chunk)
+        if hashed != member_info.size or digest.hexdigest() not in digests:
+            return None
+        return {
+            "path": name,
+            "bytes": member_info.size,
+            "sha256": digest.hexdigest(),
+            "provenance": "starter_manifest_digest",
         }
 
     @staticmethod
@@ -2786,23 +2949,12 @@ class TarSourceRepository:
         if mode not in {"off", "shadow", "enforce"}:
             raise ValueError("static preflight mode must be off, shadow, or enforce")
         readable: list[tuple[str, str]] = []
-        manifests = provenance_manifest_paths or tuple(
-            str(path)
-            for path in sorted(
-                (Path(__file__).parent / "data").glob("starter-kit-provenance-*.json")
-            )
+        trusted_digests = _trusted_starter_digests(
+            self._starter_manifests(provenance_manifest_paths)
         )
-        trusted_digests: dict[str, set[str]] = {}
-        for manifest_path in manifests:
-            manifest = _load_provenance_manifest(Path(manifest_path))
-            files = manifest["files"]
-            assert isinstance(files, dict)
-            for path, digest in files.items():
-                assert isinstance(path, str) and isinstance(digest, str)
-                trusted_digests.setdefault(path, set()).add(digest)
         bytes_scanned = 0
         members_considered = 0
-        runtime_paths = self._explicit_runtime_paths()
+        runtime_paths = self.runtime_paths()
         all_readable: dict[str, str] = {}
         trusted_paths: set[str] = set()
         with tarfile.open(self._archive_path, mode="r:gz") as archive:
@@ -2829,7 +2981,7 @@ class TarSourceRepository:
                     continue
                 raw = extracted.read(member_info.size + 1)
                 trusted = hashlib.sha256(raw).hexdigest() in trusted_digests.get(
-                    name, set()
+                    name, ()
                 )
                 if trusted:
                     trusted_paths.add(name)
@@ -2841,8 +2993,11 @@ class TarSourceRepository:
                 all_readable[name] = text
                 if not trusted and name in runtime_paths:
                     readable.append((name, text))
+        # Test-only Rust items stay in scope: no build flag can be proven off.
         legacy_matches = find_decisive_malicious_source(
-            readable, explicitly_executable_paths=runtime_paths
+            readable,
+            explicitly_executable_paths=runtime_paths,
+            include_test_only=True,
         )
         if not legacy_matches and mode == "off":
             return None
@@ -3149,6 +3304,13 @@ class TarSourceRepository:
                 for dimension, minimum in local_minimums.items()
             ):
                 continue
+            # A large ordinary agent file can contain question examples,
+            # retrieval vocabulary, model calls, and answer returns without
+            # implementing a deterministic answer path. Those file-wide words
+            # remain aggregate review leads, but cannot select the automatic
+            # served-generator hold by themselves.
+            if "direct_answer" not in local["deterministic_answer_path"]:
+                continue
             for dimension in sorted(required):
                 marker_lines = local[dimension]
                 if marker_lines:
@@ -3387,6 +3549,7 @@ class TarSourceRepository:
         return _bounded_json({"hits": hits, "truncated": False})
 
     def _read_text(self, path: str) -> str | None:
+        self._assert_archive_unchanged()
         member_info = self._members[path]
         if member_info.size > 2 * 1024 * 1024:
             return None
@@ -3402,16 +3565,53 @@ class TarSourceRepository:
             return None
 
     def _member_sha256(self, path: str) -> str:
-        member_info = self._members[path]
-        digest = hashlib.sha256()
+        self._assert_archive_unchanged()
+        if self._member_digests is None:
+            self._member_digests = self._hash_members()
+        self._assert_archive_unchanged()
+        return self._member_digests[path]
+
+    def _current_archive_identity(self) -> tuple[int, int, int, int, int]:
+        stat = Path(self._archive_path).stat()
+        return (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
+
+    def _assert_archive_unchanged(self) -> None:
+        if self._current_archive_identity() != self._archive_identity:
+            raise ValueError("source archive changed during review")
+
+    def _hash_members(self) -> dict[str, str]:
+        """Hash every validated member in one sequential pass over the archive.
+
+        Provenance compares each supported manifest file by digest; reopening
+        the gzip stream per file re-decompressed the archive prefix every time.
+        """
+        digests: dict[str, str] = {}
         with tarfile.open(self._archive_path, mode="r:gz") as archive:
-            member = archive.getmember(member_info.archive_name)
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                raise ValueError("provenance file could not be read")
-            while chunk := extracted.read(1024 * 1024):
-                digest.update(chunk)
-        return digest.hexdigest()
+            for member in archive:
+                name = member.name.removeprefix("./")
+                member_info = self._members.get(name)
+                if (
+                    member_info is None
+                    or member_info.archive_name != member.name
+                    or not member.isfile()
+                ):
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise ValueError("provenance file could not be read")
+                digest = hashlib.sha256()
+                while chunk := extracted.read(1024 * 1024):
+                    digest.update(chunk)
+                digests[name] = digest.hexdigest()
+        if digests.keys() != self._members.keys():
+            raise ValueError("provenance file could not be read")
+        return digests
 
     def member_sha256(self, path: str) -> str:
         """Return the digest of one validated regular archive member."""
@@ -3483,14 +3683,7 @@ class OpenRouterSourceReviewAgent:
         self._provenance_manifest_files = (
             (provenance_manifest_file,)
             if provenance_manifest_file is not None
-            else tuple(
-                str(path)
-                for path in sorted(
-                    (Path(__file__).parent / "data").glob(
-                        "starter-kit-provenance-*.json"
-                    )
-                )
-            )
+            else _starter_manifest_paths()
         )
         self._transport = transport
 
@@ -3509,6 +3702,7 @@ class OpenRouterSourceReviewAgent:
             repository = TarSourceRepository(
                 archive_path,
                 static_preflight_v2_mode=self._static_preflight_v2_mode,
+                provenance_manifest_paths=self._provenance_manifest_files,
             )
             result, clearance_certified = await self._run(
                 repository,
@@ -3902,7 +4096,7 @@ class OpenRouterSourceReviewAgent:
             except httpx.HTTPStatusError as error:
                 status = error.response.status_code
                 fault = str(status) if status == 429 or status >= 500 else None
-                signature = f"http-status={status}"
+                signature = _http_error_signature(error.response)
                 caught: BaseException = error
             except (TimeoutError, httpx.TimeoutException) as error:
                 # ``asyncio.timeout`` raises the built-in TimeoutError, which
@@ -4373,7 +4567,10 @@ def _parse_review(
         cited_line = item["line"]
         assert isinstance(cited_line, int)
         verdict = citation_admissibility(
-            cited_path, repository.member_text(cited_path), cited_line
+            cited_path,
+            repository.member_text(cited_path),
+            cited_line,
+            runtime_paths=repository.runtime_paths,
         )
         if verdict.admissible:
             admissible_evidence.append(item)
@@ -4484,6 +4681,22 @@ def _bounded_json(value: object) -> str:
     )
 
 
+def _starter_model_digests(manifests: tuple[str, ...]) -> set[str]:
+    """Starter-model SHA-256 values published by the given manifests."""
+    digests: set[str] = set()
+    try:
+        for manifest in manifests:
+            files = _load_provenance_manifest(Path(manifest))["files"]
+            if isinstance(files, dict) and isinstance(
+                files.get(_STARTER_MODEL_PATH), str
+            ):
+                digests.add(files[_STARTER_MODEL_PATH])
+    except (OSError, ValueError):
+        # An unreadable manifest set proves nothing; keep the member truncated.
+        return set()
+    return digests
+
+
 def _load_provenance_manifest(path: Path) -> dict[str, object]:
     raw = path.read_bytes()
     if len(raw) > 128_000:
@@ -4544,6 +4757,60 @@ def _load_provenance_manifest(path: Path) -> dict[str, object]:
         ):
             raise ValueError("provenance manifest Rust function entry is invalid")
     return value
+
+
+def _starter_manifest_paths(
+    override: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
+    """The runtime starter manifests, unless a caller pins its own set.
+
+    ``None`` means the runtime set, and only ``data/`` is globbed, so a
+    manifest staged outside it is never trusted. An explicit tuple is used as
+    given: an empty one trusts nothing.
+    """
+    if override is not None:
+        return override
+    return tuple(
+        str(path)
+        for path in sorted(_STARTER_MANIFEST_DIR.glob("starter-kit-provenance-*.json"))
+    )
+
+
+def _trusted_starter_digests(
+    override: tuple[str, ...] | None = None,
+) -> dict[str, frozenset[str]]:
+    """Map each starter path to every exact sha256 a runtime manifest pins.
+
+    Trust is exact path plus digest only; there is no near or fuzzy match. A
+    manifest set that cannot be read or parsed grants no trust at all, as the
+    starter-model accounting does, so every file is scanned as the miner's.
+    The L1 provenance block still fails such a set with ``provenance-invalid``.
+    """
+    trusted: dict[str, set[str]] = {}
+    for manifest_path in _starter_manifest_paths(override):
+        try:
+            manifest = _load_provenance_manifest(Path(manifest_path))
+        except (OSError, ValueError) as error:
+            logger.warning(
+                "starter provenance manifests are unreadable (%s); "
+                "granting no starter trust",
+                type(error).__name__,
+            )
+            return {}
+        files = manifest["files"]
+        assert isinstance(files, dict)
+        for path, digest in files.items():
+            assert isinstance(path, str) and isinstance(digest, str)
+            # Older append-only manifests pinned the development environment
+            # template. It is excluded from honest submission archives; never
+            # grant the new lead-skip authority to any environment file.
+            if any(
+                part == ".env" or part.startswith(".env.")
+                for part in PurePosixPath(path).parts
+            ):
+                continue
+            trusted.setdefault(path, set()).add(digest)
+    return {path: frozenset(digests) for path, digests in trusted.items()}
 
 
 _TOOLS: list[dict[str, object]] = [

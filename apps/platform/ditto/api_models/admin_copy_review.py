@@ -207,6 +207,9 @@ class AdminCopyReviewAction(BaseModel):
     previous_status: str | None = None
     artifact_sha256: str | None = None
     score_count: int | None = None
+    reconciled_quarantine_ids: list[UUID] = Field(default_factory=list)
+    """Active screening quarantines this terminal ruling closed in the same
+    transaction (ditto-subnet#2038). Empty for every other action."""
 
 
 class AdminCopyReviewAudit(BaseModel):
@@ -304,6 +307,9 @@ class AdminCopyReviewResolveResponse(BaseModel):
     review: AdminCopyReviewItem
     agent_status: str
     idempotent: bool
+    reconciled_quarantine_ids: list[UUID] = Field(default_factory=list)
+    """Active screening quarantines a terminal reject closed atomically with
+    the ruling; each keeps its own resolution and review-event audit rows."""
 
 
 class AdminCopyReviewPrecedent(BaseModel):

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ScreenerCapacityView, TrustedImageBuild } from '../lib/admin.schemas'
 import { ScreenerCapacityPanel } from './ScreenerCapacityPanel'
@@ -378,5 +378,120 @@ describe('ScreenerCapacityPanel', () => {
       })
     })
     expect(screen.getByText('queued')).toBeTruthy()
+  })
+
+  it('writes the report-only canary cap with the node limits it confirms', async () => {
+    const settings = {
+      screening_concurrency: 2,
+      sandbox_slots: 2,
+      build_concurrency: 2,
+      runtime_concurrency: 2,
+      source_review_concurrency: 2,
+      canary_concurrency: 1,
+    }
+    const revision = {
+      environment: 'prod',
+      node_id: 'subnet-screener-1',
+      revision: 4,
+      parent_revision: 3,
+      settings,
+      reason: 'Open two production lanes on the primary',
+      actor: 'operator@example.com',
+      created_at: '2026-09-28T00:00:00Z',
+    }
+    const usage = {
+      screening_active: 1,
+      sandbox_active: 1,
+      build_active: 1,
+      runtime_active: 0,
+      source_review_active: 0,
+      canary_active: 1,
+      canary_queued: 3,
+    }
+    const control = { current: revision, history: [revision], usage }
+    updateScreenerNodeChannelSettings.mockResolvedValue({
+      ...control,
+      current: { ...revision, revision: 5, settings: { ...settings, canary_concurrency: 0 } },
+    })
+
+    render(
+      <ScreenerCapacityPanel
+        initialState={capacity({ node_controls: [control] })}
+        readOnly={false}
+      />,
+    )
+
+    const node = within(
+      screen.getByRole('heading', { name: 'subnet-screener-1' }).closest('section') as HTMLElement,
+    )
+    // Leased and waiting report canaries sit beside production usage.
+    expect(node.getByText(/report canaries: 1 active, 3 queued/)).toBeTruthy()
+    expect(node.getByText('Applies only while full screens is above 0')).toBeTruthy()
+    fireEvent.change(node.getByLabelText('Report canaries'), { target: { value: '0' } })
+    const expected =
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=2 SANDBOX=2 BUILD=2 RUNTIME=2 SOURCE_REVIEW=2 CANARY=0'
+    expect(node.getByText(expected)).toBeTruthy()
+    fireEvent.change(node.getByLabelText('Audit reason'), {
+      target: { value: 'Keep report canaries off while admission is open' },
+    })
+    fireEvent.change(node.getByLabelText(/Type to confirm/), { target: { value: expected } })
+    fireEvent.click(node.getByRole('button', { name: 'Append node capacity revision' }))
+
+    await waitFor(() => {
+      expect(updateScreenerNodeChannelSettings).toHaveBeenCalledWith({
+        data: {
+          nodeId: 'subnet-screener-1',
+          expectedRevision: 4,
+          settings: { ...settings, canary_concurrency: 0 },
+          reason: 'Keep report canaries off while admission is open',
+          confirmation: expected,
+        },
+      })
+    })
+  })
+
+  it('shows draining canaries without a configured-cap denominator once admission closes', () => {
+    // Admission closed with canaries still leased: Platform then applies the
+    // legacy canary cap, not canary_concurrency, so 2/0 would misstate it.
+    const settings = {
+      screening_concurrency: 0,
+      sandbox_slots: 2,
+      build_concurrency: 2,
+      runtime_concurrency: 2,
+      source_review_concurrency: 2,
+      canary_concurrency: 0,
+    }
+    const revision = {
+      environment: 'prod',
+      node_id: 'subnet-screener-1',
+      revision: 6,
+      parent_revision: 5,
+      settings,
+      reason: 'Close production admission for the rollout',
+      actor: 'operator@example.com',
+      created_at: '2026-09-29T00:00:00Z',
+    }
+    const usage = {
+      screening_active: 0,
+      sandbox_active: 0,
+      build_active: 0,
+      runtime_active: 0,
+      source_review_active: 0,
+      canary_active: 2,
+      canary_queued: 1,
+    }
+
+    render(
+      <ScreenerCapacityPanel
+        initialState={capacity({ node_controls: [{ current: revision, history: [revision], usage }] })}
+        readOnly
+      />,
+    )
+
+    const node = within(
+      screen.getByRole('heading', { name: 'subnet-screener-1' }).closest('section') as HTMLElement,
+    )
+    expect(node.getByText(/report canaries: 2 active, 1 queued/)).toBeTruthy()
+    expect(node.queryByText(/2\/0/)).toBeNull()
   })
 })

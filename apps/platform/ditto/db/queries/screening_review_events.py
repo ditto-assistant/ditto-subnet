@@ -218,11 +218,15 @@ async def append_manual_review_event(
     next_agent_status: object,
     created_at: datetime,
     verified_court_clear: dict[str, object] | None = None,
+    terminal_reconciliation: dict[str, object] | None = None,
 ) -> ScreeningReviewEvent:
     """Snapshot an operator resolution before later rescreens change agent state.
 
     ``verified_court_clear`` records the re-verified signed court evidence a
-    held v13 clear was released on.
+    held v13 clear was released on. ``terminal_reconciliation`` records the
+    terminal agent ruling an orphaned quarantine was closed behind; that
+    closure leaves the agent's public status unchanged, so it publishes no
+    moderation record of its own.
     """
     attempt = await session.get(ScreeningAttempt, quarantine.attempt_id)
     if attempt is None:
@@ -260,11 +264,16 @@ async def append_manual_review_event(
                 if verified_court_clear is not None
                 else {}
             ),
+            **(
+                {"terminal_reconciliation": terminal_reconciliation}
+                if terminal_reconciliation is not None
+                else {}
+            ),
         },
         created_at=created_at,
     )
     session.add(event)
-    if resolution in ACTION_TYPES:
+    if resolution in ACTION_TYPES and terminal_reconciliation is None:
         related = None
         if (
             resolution == "release"

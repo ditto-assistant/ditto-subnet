@@ -98,6 +98,7 @@ from ditto.api_server.endpoints import (
     admin_quarantine_router,
     admin_queue_policy_settings_router,
     admin_retirement_router,
+    admin_scoring_lease_settings_router,
     admin_scoring_readiness_router,
     admin_screener_capacity_router,
     admin_screener_fanout_shadow_router,
@@ -189,6 +190,7 @@ from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
 from ditto.api_server.runtime_profiles import RuntimeProfileStore
+from ditto.api_server.scoring_lease_settings import ScoringLeaseSettingsResolver
 from ditto.api_server.screener_capacity_event_janitor import (
     ScreenerCapacityEventJanitor,
 )
@@ -560,6 +562,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # no activation is due (or in unit tests without a session maker).
     app.state.screener_policy_activation = ScreenerPolicyActivationResolver()
     app.state.inference_concurrency_settings = InferenceConcurrencySettingsResolver()
+    # Operator-revisioned scoring lease TTL (#1156). Stamped only onto NEW
+    # canonical and replacement tickets; falls back to the shipped 180 minutes.
+    app.state.scoring_lease_settings = ScoringLeaseSettingsResolver()
     app.state.runtime_profiles = RuntimeProfileStore()
     # Exact public verification profiles are release assets. Provider
     # credentials never enter this registry; claim-time grants remain the only
@@ -628,6 +633,11 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
         return app
     app.include_router(activity_router, prefix="/api/v1")
     app.include_router(treasury_activity_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.public_treasury_allocation import (
+        router as treasury_allocation_router,
+    )
+
+    app.include_router(treasury_allocation_router, prefix="/api/v1")
     app.include_router(attestation_router, prefix="/api/v1")
     app.include_router(name_claims_router, prefix="/api/v1")
     app.include_router(miner_avatars_router, prefix="/api/v1")
@@ -669,6 +679,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_inference_admission_router, prefix="/api/v1")
     app.include_router(admin_v13_scorer_cohort_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
+    app.include_router(admin_scoring_lease_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")

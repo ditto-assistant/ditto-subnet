@@ -2975,9 +2975,8 @@ class TestPublicLeaderboard:
         # Both reigns sit under ``KOTH_BAND_DECAY_START_COMPOSITE`` (0.60) so the
         # v6-and-later indifference-band decay leaves the required lead at its
         # unscaled value. What is on trial here is the dethrone decision itself
-        # -- that a real 0.05 lead is still short of the statistical bar -- and
-        # the decay has its own test; on the live era a 0.80 champion shrinks the
-        # band enough to flip this challenger and hide the distinction entirely.
+        # -- that a real 0.05 lead is still short of the legacy statistical
+        # bar without the protocol-29 marker -- and the decay has its own test.
         incumbent_id = await _seed_k3(
             session_maker,
             miner=_MINER_A,
@@ -7773,6 +7772,114 @@ class TestPublicActivity:
         assert entry["review_original_reason"] == original_reason
         assert "operator@example.com" not in response.text
 
+    async def test_legacy_double_check_reason_projects_neutrally(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A stored top-five double-check hold reads neutrally in public (#562).
+
+        Rows written before the reason changed keep the legacy text, which
+        reads as an integrity accusation against every top-five entrant.
+        """
+        legacy_reason = (
+            "Top-five rank qualified this submission for an integrity double-check"
+        )
+        neutral_reason = (
+            "Top-five rank qualified this submission for a routine double-check "
+            "of its source"
+        )
+        held_id = UUID(
+            await _seed_k3(
+                session_maker,
+                miner=_MINER_A,
+                composites=[0.71, 0.72, 0.73],
+                status=AgentStatus.ATH_PENDING_REVIEW,
+            )
+        )
+        # A hold whose agent carries the reason without a durable review row
+        # reads ``agents.review_reason`` directly.
+        rowless_id = UUID(
+            await _seed_k3(
+                session_maker,
+                miner=_MINER_B,
+                composites=[0.61, 0.62, 0.63],
+                status=AgentStatus.ATH_PENDING_REVIEW,
+            )
+        )
+        opened_at = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
+        async with session_maker() as session, session.begin():
+            rowless = await session.get(Agent, rowless_id)
+            assert rowless is not None
+            rowless.review_reason = legacy_reason
+            held = await session.get(Agent, held_id)
+            assert held is not None
+            held.review_reason = legacy_reason
+            session.add(
+                AthReview(
+                    review_id=uuid4(),
+                    agent_id=held_id,
+                    status="pending",
+                    opened_at=opened_at,
+                    original_duplicate_of=None,
+                    original_reason=legacy_reason,
+                    original_policy_version=13,
+                    original_evidence={
+                        "sha256": held.sha256,
+                        "deferred_review": {
+                            "triggers": ["top_five"],
+                            "integrity_double_check": True,
+                        },
+                    },
+                    algorithm_provenance={
+                        "review_kind": "deferred_source_review",
+                        "algorithm_version": "integrity-double-check-v1",
+                        "trigger": "integrity_double_check",
+                    },
+                )
+            )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+
+        response = await client.get(
+            "/api/v1/public/activity?status=under_review&limit=200"
+        )
+        assert response.status_code == 200
+        entry = next(
+            row for row in response.json()["entries"] if row["agent_id"] == str(held_id)
+        )
+        assert entry["review_event"] == "opened"
+        assert entry["review_reason"] == neutral_reason
+        assert entry["review_original_reason"] == neutral_reason
+        assert entry["deferred_review_triggers"] == ["top_five"]
+        rowless_entry = next(
+            row
+            for row in response.json()["entries"]
+            if row["agent_id"] == str(rowless_id)
+        )
+        assert rowless_entry["review_reason"] == neutral_reason
+
+        summary = await client.get(f"/api/v1/public/agent/{held_id}/summary")
+        assert summary.status_code == 200
+        assert summary.json()["review_reason"] == neutral_reason
+        assert summary.json()["review_original_reason"] == neutral_reason
+        rowless_summary = await client.get(f"/api/v1/public/agent/{rowless_id}/summary")
+        assert rowless_summary.status_code == 200
+        assert rowless_summary.json()["review_reason"] == neutral_reason
+        for body in (response.text, summary.text, rowless_summary.text):
+            assert legacy_reason not in body
+
+        # The stored row keeps the legacy text for the operator queue and the
+        # lifecycle guard that compares it with ``agents.review_reason``.
+        async with session_maker() as session:
+            stored = await session.scalar(
+                select(AthReview).where(AthReview.agent_id == held_id)
+            )
+            agent = await session.get(Agent, held_id)
+        assert stored is not None and stored.original_reason == legacy_reason
+        assert agent is not None and agent.review_reason == legacy_reason
+
     async def test_direct_policy_rejection_supersedes_public_similarity_evidence(
         self,
         app: FastAPI,
@@ -11042,17 +11149,36 @@ class TestPublicActivity:
             )
         _install_db(app, session_maker)
 
-        body = (await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")).json()
+        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        assert response.status_code == 200
+        body = response.json()
 
         assert body["score_count"] == body["quorum"] == 3
         assert len(body["provisional_scores"]) == 3
-        assert [
-            (score["seed"], score["composite"]) for score in body["confirmation_scores"]
-        ] == [
-            ("111", pytest.approx(0.94)),
-            ("222", pytest.approx(0.95)),
+        assert all("seed" in score for score in body["provisional_scores"])
+        assert [score["composite"] for score in body["confirmation_scores"]] == [
+            pytest.approx(0.94),
+            pytest.approx(0.95),
         ]
+        assert body["confirmation_sample_composites"] == [
+            pytest.approx(0.94),
+            pytest.approx(0.95),
+        ]
+        assert all("seed" not in score for score in body["confirmation_scores"])
         assert all("run_id" not in score for score in body["confirmation_scores"])
+        # The public projection redacts the reusable CRN seed; the append-only
+        # internal ledger still retains it for validator assignment and audit.
+        async with session_maker() as session:
+            from ditto.db.models import ConfirmationScore
+
+            saved = list(
+                await session.scalars(
+                    select(ConfirmationScore)
+                    .where(ConfirmationScore.agent_id == agent_id)
+                    .order_by(ConfirmationScore.seed)
+                )
+            )
+            assert [score.seed for score in saved] == [111, 222]
         assert {
             attempt["validator_hotkey"]: attempt["purpose"]
             for attempt in body["validation_attempts"]
@@ -12395,8 +12521,10 @@ def _install_generator(app: FastAPI, generator: object) -> None:
 
 
 class TestPublicDatasetReveal:
+    @pytest.mark.parametrize("bench_version", [13, 14])
     async def test_v13_reveal_waits_for_work_set_closure(
         self,
+        bench_version: int,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
@@ -12409,7 +12537,7 @@ class TestPublicDatasetReveal:
                 select(Score).where(Score.agent_id == UUID(agent_id))
             )
             for score in scores:
-                score.bench_version = 13
+                score.bench_version = bench_version
         _install_db(app, session_maker)
         generator = _FakeRevealGenerator()
         _install_generator(app, generator)

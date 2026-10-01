@@ -533,6 +533,40 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(read)).toEqual([])
   })
 
+  it('recognizes a scoring lease revision as write-scoped and its read as not', async () => {
+    const write = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'set_scoring_lease_settings',
+          arguments: {
+            expectedRevision: 0,
+            settings: { scoring_ticket_ttl_minutes: 150 },
+            reason: 'v11 completions fit well inside 150 minutes',
+            confirmation: 'APPLY SCORING TICKET TTL 150 MINUTES',
+          },
+        },
+      }),
+    })
+    expect(await callsWriteTool(write)).toBe(true)
+    expect(await requiredScopesForRequest(write)).toEqual([BACKROOM_WRITE_SCOPE])
+
+    const read = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'get_scoring_lease_settings', arguments: {} },
+      }),
+    })
+    expect(await callsWriteTool(read)).toBe(false)
+    expect(await requiredScopesForRequest(read)).toEqual([])
+  })
+
   it('scopes confirmation policy and retest mutations without scoping audit reads', async () => {
     for (const name of [
       'set_confirmation_bundle_settings',

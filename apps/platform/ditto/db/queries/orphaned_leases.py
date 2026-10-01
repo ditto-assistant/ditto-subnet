@@ -107,9 +107,10 @@ if TYPE_CHECKING:
 OCCUPANCY_REPORTING_PROTOCOL_VERSION = 16
 
 # How far back the eviction ledger is read. Comfortably longer than the longest
-# benchmark lease (180 minutes for canonical scoring) so a run evicted at the
-# start of its lease is still tracked when it finally exits, and short enough
-# that the scan stays trivial on the ``recorded_at`` index.
+# benchmark lease (the Backroom scoring TTL: 180 minutes by default, 240 at most)
+# so a run evicted at the start of its lease is still tracked when it finally
+# exits, and short enough that the scan stays trivial on the ``recorded_at``
+# index.
 EVICTION_LOOKBACK = timedelta(hours=12)
 
 # How long past the lease's original deadline an *unproven* orphan keeps being

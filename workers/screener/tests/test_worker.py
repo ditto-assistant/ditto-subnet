@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -17,6 +18,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from ditto_screener.adjudicator import SourceReviewAdjudicator
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.errors import (
     PlatformAuthOnlyFailure,
@@ -34,6 +36,7 @@ from ditto_screener.l2_review import L2RunResult, L2Usage
 from ditto_screener.platform import PlatformClient
 from ditto_screener.policy import (
     CORE_ONLY_MANIFEST,
+    SOURCE_REVIEW_KEY_UNAVAILABLE_CODE,
     PolicyEngine,
     PolicyEvidence,
     ScreeningDecision,
@@ -461,6 +464,101 @@ async def test_report_only_canary_emits_active_progress_and_clears_heartbeat(
     )
     assert platform.heartbeats[-1].state == "polling"
     assert platform.heartbeats[-1].active_agent_id is None
+
+
+async def test_pinned_canary_leaves_primary_gate_and_next_claim_on_node_settings(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An operator canary posture never leaks into the authoritative lane."""
+    from ditto_screener import l2_report_canary
+
+    from .test_l2_report_canary import _pinned_claim, _pinned_posture
+
+    class Platform(_FakePlatform):
+        def __init__(self, queues: list[list[ScreenerQueueItem]]) -> None:
+            super().__init__(queues)
+            self.primary_claim_settings: list[Any] = []
+            self.canary_claim: dict[str, Any] | None = None
+            self.canary_completions: list[dict[str, Any]] = []
+
+        async def claim_next(
+            self, *, policy_version: int, review_settings: Any, instance_id: str
+        ) -> ScreenerQueueResponse:
+            self.primary_claim_settings.append(review_settings)
+            return await super().claim_next(
+                policy_version=policy_version,
+                review_settings=review_settings,
+                instance_id=instance_id,
+            )
+
+        async def claim_l2_report_canary(self, **_kwargs: Any) -> Any:
+            claim, self.canary_claim = self.canary_claim, None
+            return claim
+
+        async def complete_l2_report_canary(self, *_args: Any, **kwargs: Any) -> None:
+            self.canary_completions.append(kwargs)
+
+    agent = uuid4()
+    # Sweep 1 finds the primary queue empty and runs the pinned canary; sweep 2
+    # screens an authoritative attempt.
+    platform = Platform([[], [_item(agent)]])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    gate._client = object()  # type: ignore[attr-defined]
+    worker = _worker(make_config(), platform, gate)
+    node = platform.review_settings
+    pin = _pinned_posture(node)
+    platform.review_settings_revisions[pin.revision] = pin
+    platform.canary_claim = _pinned_claim(pin)
+    canary_configs: list[ScreenerConfig] = []
+
+    class CanaryGate:
+        def __init__(self, canary_config: ScreenerConfig, *_a: Any, **_k: Any):
+            canary_configs.append(canary_config)
+
+        async def screen(self, **_kwargs: Any) -> ScreeningDecision:
+            return _decision(ScreeningOutcome.INCONCLUSIVE)
+
+        def pop_shadow_review(self, _attempt_id: UUID) -> L2RunResult:
+            return L2RunResult(
+                observation=SourceReviewObservation(
+                    ok=True, risk_level="low", finding_digest=None, categories=()
+                ),
+                analyzed_files=(),
+                causal_path=(),
+                tools=(),
+                usage=L2Usage(),
+                cache_hit=False,
+            )
+
+        def pop_preview_l1_review(self, _attempt_id: UUID) -> None:
+            return None
+
+    monkeypatch.setattr(l2_report_canary, "BuildGate", CanaryGate)
+    monkeypatch.setattr(
+        l2_report_canary, "load_policy_engine", lambda *_a, **_k: object()
+    )
+
+    assert await worker._sweep(asyncio.Event()) == 1
+    (completion,) = platform.canary_completions
+    assert completion["status"] == "succeeded"
+    assert completion["report"]["settings_revision"] == pin.revision
+    assert canary_configs[0].l2_timeout_seconds == 777.0
+
+    assert await worker._sweep(asyncio.Event()) == 1
+    assert gate.calls == [agent]
+    # Both primary claims, including the one right after the pinned canary,
+    # carry the node posture, and the primary gate never saw the pin.
+    assert [s.revision for s in platform.primary_claim_settings] == [
+        node.revision,
+        node.revision,
+    ]
+    assert gate.applied_review_settings
+    assert all(
+        (s.revision, s.checksum) == (node.revision, node.checksum)
+        for s in gate.applied_review_settings
+    )
+    assert worker._review_settings_status.revision == node.revision
+    assert worker._review_settings_status.checksum == node.checksum
 
 
 async def test_screen_one_pass_posts_signed_pass_verdict(
@@ -1297,6 +1395,39 @@ async def test_worker_prefers_the_deciding_reason_in_signed_verdicts(
     if outcome != ScreeningOutcome.RETRYABLE_INFRA:
         assert request.evidence is not None
         assert request.evidence[-1].code == "module-cleared"
+
+
+async def test_group_readable_court_key_submits_the_fleet_retry_code(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Any
+) -> None:
+    """A 0644 key on a node parks nothing: Platform retries the exact code."""
+    key = tmp_path / "adjudicator.key"
+    key.write_text("sk-test-private-adjudicator")
+    os.chmod(key, 0o644)
+    adjudication = await SourceReviewAdjudicator(
+        api_key_file=str(key), base_url="https://openrouter.test/api/v1"
+    ).adjudicate(str(tmp_path / "never-opened.tar.gz"), notes=[])
+    observation = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-oserror",
+        failure_disposition="retryable_infra",
+        adjudication=adjudication.model_dump(mode="json"),
+    )
+    decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        observation
+    )
+    platform = _FakePlatform([])
+    worker = _worker(make_config(), platform, _FakeGate(decision))
+
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+
+    assert len(platform.verdicts) == 1
+    request = _signed_request(platform.verdicts[0])
+    assert request.outcome == ScreenResultOutcome.RETRYABLE_INFRA
+    assert request.reason_code == SOURCE_REVIEW_KEY_UNAVAILABLE_CODE
 
 
 async def test_shadow_seed_observation_keeps_quarantine_verdict_signed(

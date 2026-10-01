@@ -1277,8 +1277,8 @@ func answerPoolForVersion(attr string, pool []string, benchVersion int) []string
 	if benchVersion < protocol.BenchVersionV8 {
 		return pool
 	}
-	// V8 through V13 are published generation contracts. Stage the correction
-	// for the next contract; protocol must explicitly support that version
+	// V8 through V14 retain their historical answer pools. Stage the correction
+	// for a separate future contract; protocol must explicitly support that version
 	// across the stack before these pools can be generated in a scored run.
 	if benchVersion >= answerPoolFixBenchVersion {
 		switch attr {
@@ -1302,7 +1302,9 @@ func answerPoolForVersion(attr string, pool []string, benchVersion int) []string
 	}
 }
 
-const answerPoolFixBenchVersion = 14
+// V14 is the action-scoped scoring contract and retains historical pools.
+// This independent research change still needs its own reviewed contract.
+const answerPoolFixBenchVersion = 15
 
 var (
 	v14MiddleNamesOnce sync.Once

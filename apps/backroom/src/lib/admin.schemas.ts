@@ -53,6 +53,7 @@ export const confirmationBenchVersionSchema = z.union([
   z.literal(11),
   z.literal(12),
   z.literal(13),
+  z.literal(14),
 ])
 
 // Exact set equality against the contract, checked in BOTH directions. A plain
@@ -485,17 +486,60 @@ export const l2ReportCanaryLookupInputSchema = z.object({
 export const l2ReportCanaryPreflightInputSchema = z.object({
   agentId: z.string().uuid(),
   sourceAttemptId: z.string().uuid(),
+  // Optional expected values: each supplied one is judged by the scheduler's
+  // own guard predicate; omitted ones are reported with passed=null.
+  artifactSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  expectedAgentStatus: z.string().min(1).max(64).optional(),
+  expectedScoreCount: z.number().int().nonnegative().optional(),
+  historicalRulingKind: z.enum(['ath_clear', 'screening_reject']).optional(),
+  historicalRulingId: z.string().uuid().optional(),
+}).superRefine((input, ctx) => {
+  if ((input.historicalRulingKind === undefined) !== (input.historicalRulingId === undefined)) {
+    ctx.addIssue({ code: 'custom', message: 'historical ruling kind and id must be supplied together' })
+  }
+  if (input.historicalRulingKind !== undefined && input.artifactSha256 === undefined) {
+    ctx.addIssue({ code: 'custom', message: 'a historical ruling preflight requires artifactSha256' })
+  }
+})
+
+export const l2CanaryGuardCheckSchema = z.object({
+  guard: z.enum([
+    'ath_clear_action',
+    'attempt_owner',
+    'agent_artifact_sha256',
+    'attempt_policy_version',
+    'agent_status',
+    'score_row_count',
+    'attempt_artifact_sha256',
+    'historical_ruling_run_mode',
+    'historical_ruling',
+    'source_object_verified',
+    'arrival_bench_version',
+  ]),
+  passed: z.boolean().nullable(),
+  current: z.union([z.string(), z.number()]).nullable(),
+  expected: z.union([z.string(), z.number()]).nullable(),
+  conflict_detail: z.string(),
+  note: z.string().nullable().optional(),
 })
 
 export const l2ReportCanaryPreflightViewSchema = z.object({
+  // Advisory only: scheduling reruns the same guards and authorizes nothing here.
+  authority: z.literal('none'),
   agent_id: z.string().uuid(),
   source_attempt_id: z.string().uuid(),
   agent_artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
   source_attempt_artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
   agent_status: z.string(),
   attempt_policy_version: z.number().int().nonnegative(),
-  arrival_bench_version: z.number().int().nonnegative(),
+  arrival_bench_version: z.number().int().nonnegative().nullable(),
   score_row_count: z.number().int().nonnegative(),
+  attempt_agent_id: z.string().uuid(),
+  legacy_null_attempt_sha256: z.boolean(),
+  active_canary_id: z.string().uuid().nullable(),
+  report_only_packet_available: z.boolean(),
+  guards: z.array(l2CanaryGuardCheckSchema).max(16),
+  guards_pass: z.boolean().nullable(),
 })
 
 export const scheduleL2ReportCanaryInputSchema = z.object({
@@ -510,6 +554,7 @@ export const scheduleL2ReportCanaryInputSchema = z.object({
   runMode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   historicalRulingKind: z.enum(['ath_clear', 'screening_reject']).optional(),
   historicalRulingId: z.string().uuid().optional(),
+  reviewSettingsRevision: z.number().int().positive().optional(),
   confirmation: z.literal('QUEUE REPORT ONLY L2 CANARY'),
 }).superRefine((input, ctx) => {
   if ((input.historicalRulingKind === undefined) !== (input.historicalRulingId === undefined)) {
@@ -537,6 +582,12 @@ export const l2ReportCanaryViewSchema = z.object({
   review_label: z.string(),
   run_mode: z.enum(['source_only', 'full_runtime']).default('source_only'),
   source_attestation: z.record(z.string(), z.unknown()).nullable().optional(),
+  // Scheduled l2-report-canary* posture pin, and the posture the claim bound.
+  review_settings_revision: z.number().int().positive().nullable().optional(),
+  review_settings_scope: z.string().nullable().optional(),
+  review_settings_checksum: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
+  settings_revision: z.number().int().nonnegative().nullable().optional(),
+  settings_checksum: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
   status: z.string(),
   claimed_instance_id: z.string().nullable(),
   lease_expires_at: z.string().nullable().optional(),
@@ -547,9 +598,9 @@ export const l2ReportCanaryViewSchema = z.object({
 })
 
 export const canonicalStarterPreflightSchema = z.object({
-  release: z.literal('v0.325.3'),
-  release_commit: z.literal('7b297ae96488cfa4790b8b9d9b788cc82c7d0442'),
-  source_tree: z.literal('7c8044a1cc77e342b5f58a24fe31c9a86cc4fd6b'),
+  release: z.literal('v0.330.5'),
+  release_commit: z.literal('940304019aeec55e7b473bc163a51851e99db907'),
+  source_tree: z.literal('9ffd5370e21bbe3135f1ee830b7b68723950619b'),
   archive_sha256: z.string().regex(/^[0-9a-f]{64}$/),
   archive_size_bytes: z.number().int().positive(),
   fixture: l2ReportCanaryViewSchema.nullable(),
@@ -567,7 +618,7 @@ export const registerCanonicalStarterInputSchema = z.object({
 export const reviewCanonicalStarterInputSchema = z.object({
   canaryId: z.string().uuid(),
   reviewerEvidenceSha256: z.string().regex(/^[0-9a-f]{64}$/),
-  reviewedArchiveSha256: z.literal('6f0fb811e08558aab56f63dd13ea1d2e1462d85e711fd31b0362d0de5c611fef'),
+  reviewedArchiveSha256: z.literal('2f14f77cc8e21b57e96f304f3b621d9919e9af802076928a27301d57aa956d7e'),
   reviewedDockerfileSha256: z.literal('d3a1a2a1e5d43b0465c28712457d95432942ac8f017fd10d538859a901a54641'),
   builtImageDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
   reviewerEvidenceUrl: z.string().url().startsWith('https://github.com/ditto-assistant/ditto-subnet/'),
@@ -723,6 +774,14 @@ export const screenerNodeChannelSettingsSchema = z.object({
   build_concurrency: z.number().int().min(0).max(16),
   runtime_concurrency: z.number().int().min(0).max(16),
   source_review_concurrency: z.number().int().min(0).max(32),
+  // Report-only L2 canaries; Platform applies it only while admission is open.
+  canary_concurrency: z.number().int().min(0).max(8),
+})
+
+// Writes must name every limit. A Platform build that predates the canary cap
+// omits it on reads, so fill Platform's own default rather than fail the panel.
+const screenerNodeChannelSettingsReadSchema = screenerNodeChannelSettingsSchema.extend({
+  canary_concurrency: screenerNodeChannelSettingsSchema.shape.canary_concurrency.default(1),
 })
 
 export const screenerNodeChannelSettingsRevisionSchema = z.object({
@@ -730,7 +789,7 @@ export const screenerNodeChannelSettingsRevisionSchema = z.object({
   node_id: z.string().min(1),
   revision: z.number().int().nonnegative(),
   parent_revision: z.number().int().nonnegative(),
-  settings: screenerNodeChannelSettingsSchema,
+  settings: screenerNodeChannelSettingsReadSchema,
   reason: z.string().min(1),
   actor: z.string().min(1),
   created_at: z.string().nullable(),
@@ -745,6 +804,8 @@ export const screenerNodeChannelSettingsControlSchema = z.object({
     build_active: z.number().int().nonnegative(),
     runtime_active: z.number().int().nonnegative(),
     source_review_active: z.number().int().nonnegative(),
+    canary_active: z.number().int().nonnegative().default(0),
+    canary_queued: z.number().int().nonnegative().default(0),
   }).nullable(),
 })
 
@@ -806,7 +867,7 @@ export function screenerNodeChannelSettingsConfirmation(
   nodeId: string,
   settings: z.infer<typeof screenerNodeChannelSettingsSchema>,
 ) {
-  const confirmation = `APPLY SCREENER NODE ${nodeId} SCREENING=${settings.screening_concurrency} SANDBOX=${settings.sandbox_slots} BUILD=${settings.build_concurrency} RUNTIME=${settings.runtime_concurrency} SOURCE_REVIEW=${settings.source_review_concurrency}`
+  const confirmation = `APPLY SCREENER NODE ${nodeId} SCREENING=${settings.screening_concurrency} SANDBOX=${settings.sandbox_slots} BUILD=${settings.build_concurrency} RUNTIME=${settings.runtime_concurrency} SOURCE_REVIEW=${settings.source_review_concurrency} CANARY=${settings.canary_concurrency}`
   // Mirrors Platform: closing admission stops this node from taking production work.
   return settings.screening_concurrency === 0
     ? `${confirmation} CLOSE PRODUCTION ADMISSION`
@@ -869,6 +930,7 @@ export const screenerFleetReleaseSchema = z.object({
   revision: z.string().regex(/^[0-9a-f]{40}$/).nullish().transform((value) => value ?? null),
   version: z.string().min(1).nullish().transform((value) => value ?? null),
   activated_at: z.number().int().nonnegative().nullish().transform((value) => value ?? null),
+  source_fixture_v1: z.boolean().default(false),
 })
 
 const screenerDockerHealthSchema = z.object({
@@ -1759,6 +1821,7 @@ const checkCohortCeiling = (
 const continualRetestSettingsBaseSchema = z.object({
   aggregate_mode: z.enum(['disabled', 'fleet_ready', 'enabled']),
   tie_weighting_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
+  statistical_band_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
   // Serving change only: one frozen ledger per chain epoch so every validator
   // folds identical bytes. Like wave_membership, the read default mirrors the
   // platform's shipped default (`epoch`); a build old enough to omit the field
@@ -1821,6 +1884,7 @@ export const continualRetestSettingsSchema =
 export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSchema
   .extend({
     tie_weighting_mode: z.enum(['disabled', 'fleet_ready']),
+    statistical_band_mode: z.enum(['disabled', 'fleet_ready']),
     ledger_pin_mode: z.enum(['live', 'epoch']),
     crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']),
     wave_membership: z.enum(['strict', 'participants', 'per_agent']),
@@ -1902,6 +1966,9 @@ export const effectiveContinualRetestSettingsSchema = z.object({
   aggregate_active: z.boolean(),
   tie_weighting_fleet_ready: z.boolean().default(false),
   tie_weighting_active: z.boolean().default(false),
+  statistical_band_fleet_ready: z.boolean().default(false),
+  statistical_band_active: z.boolean().default(false),
+  statistical_band_required_protocol: z.number().int().default(29),
   crown_incumbent_fleet_ready: z.boolean().default(false),
   crown_incumbent_active: z.boolean().default(false),
   crown_incumbent_required_protocol: z.number().int().positive().default(27),
@@ -1962,6 +2029,12 @@ type ContinualRetestExtendedFieldSpec = {
 }
 
 export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExtendedFieldSpec> = [
+  {
+    field: 'statistical_band_mode',
+    label: 'a capped KOTH statistical band',
+    legacyValue: () => 'disabled',
+    legacyBehaviour: () => 'the historical statistical bands remain in effect',
+  },
   {
     field: 'tie_weighting_mode',
     label: 'a tie-aware weight policy',
@@ -4125,6 +4198,88 @@ export type SetValidatorIssuancePauseInput = z.infer<
   typeof setValidatorIssuancePauseInputSchema
 >
 
+// Scoring lease clocks (ditto-subnet #1156). One TTL governs the deadline
+// stamped on NEW canonical scoring tickets and on new score-retest replacement
+// tickets; a live ticket keeps the deadline it was minted with. The bounds
+// mirror ditto-platform's `ScoringLeaseSettings`: the floor stays above the
+// observed 8-wide v11 completion maximum, and the ceiling is the validator
+// Compose stop grace (245 minutes) minus five minutes for the signed report.
+// The platform stays the authority and its 409/422 text is surfaced verbatim.
+export const SCORING_LEASE_SETTINGS_SCOPE = '*'
+export const SCORING_TICKET_TTL_MIN_MINUTES = 60
+export const SCORING_TICKET_TTL_MAX_MINUTES = 240
+export const SCORING_TICKET_TTL_DEFAULT_MINUTES = 180
+
+// Required, never defaulted: a revision stores the whole policy, so a field
+// left out of a write must be refused rather than filled with a default.
+export const scoringLeaseSettingsSchema = z.object({
+  scoring_ticket_ttl_minutes: z
+    .number()
+    .int()
+    .min(SCORING_TICKET_TTL_MIN_MINUTES)
+    .max(SCORING_TICKET_TTL_MAX_MINUTES),
+})
+
+export const scoringLeaseSettingsRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: scoringLeaseSettingsSchema,
+  settings_valid: z.boolean().optional(),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+  checksum: z.string().regex(/^[0-9a-f]{64}$/),
+})
+
+export const scoringLeaseSettingsControlSchema = z.object({
+  current: z.array(scoringLeaseSettingsRevisionSchema),
+  history: z.array(scoringLeaseSettingsRevisionSchema),
+  default: scoringLeaseSettingsSchema,
+  effective: z.object({
+    revision: z.number().int().nonnegative(),
+    scope: z.string(),
+    settings: scoringLeaseSettingsSchema,
+    settings_valid: z.boolean().optional(),
+    // Revision 0 is the shipped default and carries no checksum.
+    checksum: z.string().regex(/^(?:[0-9a-f]{64})?$/),
+    source: z.enum(['revision', 'default']),
+    min_scoring_ticket_ttl_minutes: z.number().int().positive(),
+    max_scoring_ticket_ttl_minutes: z.number().int().positive(),
+    // Upper bound in seconds on how long a write takes to reach issuance.
+    max_age_seconds: z.number().nonnegative(),
+  }),
+})
+
+// Names the RESULTING TTL so the number is stated twice in one request. The
+// caller supplies both halves; this only checks that they agree.
+export function scoringLeaseConfirmation(scoringTicketTtlMinutes: number) {
+  return `APPLY SCORING TICKET TTL ${scoringTicketTtlMinutes} MINUTES`
+}
+
+export const setScoringLeaseSettingsInputSchema = z
+  .object({
+    scope: z.literal(SCORING_LEASE_SETTINGS_SCOPE).default(SCORING_LEASE_SETTINGS_SCOPE),
+    expectedRevision: z.number().int().nonnegative(),
+    settings: scoringLeaseSettingsSchema,
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = scoringLeaseConfirmation(input.settings.scoring_ticket_ttl_minutes)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}, naming the TTL this revision applies`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+export type ScoringLeaseSettings = z.infer<typeof scoringLeaseSettingsSchema>
+export type ScoringLeaseSettingsControl = z.infer<typeof scoringLeaseSettingsControlSchema>
+export type SetScoringLeaseSettingsInput = z.infer<typeof setScoringLeaseSettingsInputSchema>
+
 // What the operator screen needs from the fleet to choose a cap, read from the
 // platform's existing public validator heartbeat view. It is decoration, not
 // policy: the cap is a subnet-global number and the platform resolves it without
@@ -4478,12 +4633,20 @@ const sourceReviewCausalRoleBindingSchema = z.strictObject({
 
 export const sourceReviewCausalEvidenceSchema = z
   .strictObject({
-    schema_version: z.literal(2),
+    schema_version: z.union([z.literal(2), z.literal(3)]),
     authority_transition: sourceReviewAuthorityTransitionSchema,
     scorer_visible_effect: sourceReviewScorerVisibleEffectSchema,
     role_bindings: z.array(sourceReviewCausalRoleBindingSchema).min(1).max(32),
+    i5_proof: z.strictObject({
+      evaluation_assumption: z.string().min(12).max(240),
+      ordinary_product_exclusion: z.string().min(12).max(240),
+      assumption_evidence_index: z.number().int().min(0).max(15),
+    }).nullish(),
   } satisfies PlatformResponseShape<GeneratedSourceReviewCausalEvidence>)
   .superRefine((causal, context) => {
+    if ((causal.schema_version === 3) !== (causal.i5_proof != null)) {
+      context.addIssue({ code: 'custom', message: 'causal evidence v3 requires an I5 proof' })
+    }
     const bindings = causal.role_bindings.map((binding) =>
       [binding.path, binding.line, binding.category, binding.role].join('\u0000'))
     if (new Set(bindings).size !== bindings.length) {
@@ -4639,6 +4802,11 @@ export const sourceReviewFindingSchema = z
           })
         }
       }
+      const proof = finding.causal_evidence.i5_proof
+      if (proof && !['benchmark_emulation', 'embedded_evaluator_logic'].includes(
+        finding.evidence[proof.assumption_evidence_index]?.category ?? '')) {
+        context.addIssue({ code: 'custom', message: 'I5 assumption is not bound to source evidence' })
+      }
     }
     if (finding.invariant_assessment) {
       const elevated = finding.invariant_assessment.decisions.some(
@@ -4734,6 +4902,12 @@ export const screeningQuarantineSchema = z.object({
   // string rather than an enum: a platform that learns a new resolution value
   // must not blank the panel here.
   resolution_reason_code: z.string().nullish().default(null),
+  // The exact agent's live status, and whether this active row sits behind an
+  // already banned/rejected agent (ditto-subnet#2038): historical
+  // reconciliation work, never actionable review. Nullish/defaulted for a
+  // platform that predates the fields.
+  agent_status: z.string().nullish().default(null),
+  terminal_ghost: z.boolean().nullish().default(false),
 }).transform(({ reason_code, ...rest }) => ({
   ...rest,
   screening_reason_code: screeningOriginCode(rest.screening_reason_code, reason_code),
@@ -4742,6 +4916,11 @@ export const screeningQuarantineSchema = z.object({
 export const screeningQuarantineListSchema = z.object({
   items: z.array(screeningQuarantineSchema),
   count: z.number().int().nonnegative(),
+  // `count` is the pagination total. Terminal ghosts are counted separately
+  // and kept out of the actionable count and oldest actionable age.
+  terminal_ghost_count: z.number().int().nonnegative().nullish().default(0),
+  actionable_count: z.number().int().nonnegative().nullish().default(null),
+  oldest_actionable_created_at: z.string().nullish().default(null),
 })
 
 const screeningReviewEventSchema = z.object({
@@ -5471,6 +5650,16 @@ export const screeningQuarantineBatchPreviewInputSchema = z
     }
   })
 
+// The exact ruling holding a quarantine's agent terminal (ditto-subnet#2038).
+// The preview token signs it and execution re-derives it under lock.
+export const screeningQuarantineTerminalRulingSchema = z.object({
+  agent_status: z.string(),
+  artifact_sha256: z.string(),
+  ath_review_id: z.string().uuid().nullable().default(null),
+  ath_action_id: z.string().uuid().nullable().default(null),
+  ath_resolved_at: z.string().nullable().default(null),
+})
+
 export const screeningQuarantineBatchPreviewItemSchema = z.object({
   quarantine_id: z.string().uuid(),
   agent_id: z.string().uuid().nullable().default(null),
@@ -5482,6 +5671,10 @@ export const screeningQuarantineBatchPreviewItemSchema = z.object({
   resulting_agent_status: z.string().nullable().default(null),
   public_reason_code: z.string().nullable().default(null),
   public_record_hash: z.string().nullable().default(null),
+  // A reject that closes an orphaned quarantine behind an already-terminal
+  // agent without changing that agent's ruling (ditto-subnet#2038).
+  terminal_reconciliation: z.boolean().nullish().default(false),
+  terminal_ruling: screeningQuarantineTerminalRulingSchema.nullish().default(null),
   message: z.string(),
 })
 
@@ -5506,6 +5699,8 @@ export const screeningQuarantineBatchExecuteItemSchema = z.object({
   quarantine_id: z.string().uuid(),
   status: z.enum(['applied', 'already_applied', 'failed']),
   agent_status: z.string().nullable().default(null),
+  terminal_reconciliation: z.boolean().nullish().default(false),
+  terminal_ruling: screeningQuarantineTerminalRulingSchema.nullish().default(null),
   message: z.string(),
 })
 
@@ -5679,6 +5874,15 @@ export const validatorAssignmentSchema = z.object({
     .default(null),
   agent_status: z.string().nullish().default(null),
   first_reported_at: z.string().nullish().default(null),
+  // Exact decimal dataset seed the lease runs. A string, never a number: a
+  // 64-bit seed above 2**53 would round in JSON and two different continual
+  // retest seeds could read as the same paired run. Null against a platform
+  // that predates the field or a ticket with no seed yet.
+  seed: z
+    .string()
+    .regex(/^(0|[1-9][0-9]*)$/)
+    .nullish()
+    .default(null),
 })
 
 export const validatorAssignmentListSchema = z.object({
@@ -7467,6 +7671,11 @@ export const screenReviewAuditSchema = z.object({
   cost_usd_used: z.number().nonnegative().nullish().default(null),
   model_disposition: z.enum(['inconclusive']).nullish().default(null),
   resolution_basis: z.enum(['insufficient_static_evidence']).nullish().default(null),
+  dossier_complete: z.boolean().nullish().default(null),
+  model_categories: z.array(z.string().regex(/^[a-z][a-z_]{0,63}$/)).max(8).nullish().default(null),
+  model_inconclusive_invariants: z.array(sourceReviewInvariantSchema).max(8).nullish().default(null),
+  model_evidence_count: z.number().int().min(0).max(16).nullish().default(null),
+  model_causal_role_count: z.number().int().min(0).max(16).nullish().default(null),
   model_steps_observed: z.number().int().min(0).max(10_000).nullish().default(null),
   tool_calls_observed: z.number().int().min(0).max(10_000).nullish().default(null),
   budget_stop_reason: z.enum(['none', 'step', 'tool', 'aggregate', 'token', 'cost', 'time']).nullish().default(null),
@@ -7650,6 +7859,9 @@ export const resolveCopyReviewResponseSchema = z.object({
   review: copyReviewItemSchema,
   agent_status: z.string(),
   idempotent: z.boolean(),
+  // Active screening quarantines a terminal reject closed in the same
+  // transaction (ditto-subnet#2038).
+  reconciled_quarantine_ids: z.array(z.string().uuid()).nullish().default([]),
 })
 
 export const getAthReviewInputSchema = z.object({
@@ -7713,6 +7925,7 @@ export const athReviewAuditSchema = z.object({
     previous_status: z.string().nullable(),
     artifact_sha256: z.string().nullable(),
     score_count: z.number().int().nonnegative().nullable(),
+    reconciled_quarantine_ids: z.array(z.string().uuid()).nullish().default([]),
   })).default([]),
 })
 
@@ -8559,10 +8772,10 @@ export const scoreLeaderboardPageSchema = z.object({
  * throws on `JSON.stringify` without a custom replacer.
  *
  * This also matches the platform's own precedent: the pipeline endpoint already
- * declares `PublicProvisionalScore.seed` / `PublicConfirmationScore.seed` as
- * `str` with pattern `^\d+$` and the comment "Encoded as a string to avoid
- * JavaScript integer rounding". The score endpoints Backroom reads simply never
- * got the same treatment.
+ * declares `PublicProvisionalScore.seed` as `str` with pattern `^\d+$` and
+ * the comment "Encoded as a string to avoid JavaScript integer rounding".
+ * Reusable confirmation seeds are intentionally absent from public responses.
+ * The score endpoints Backroom reads simply never got the same treatment.
  *
  * Platform seeds are non-negative (`derive_seed` masks to 63 bits), but the
  * column is a signed `BigInteger`, so a leading `-` is accepted rather than
@@ -9260,6 +9473,8 @@ export const sourceReviewQueueSloSchema = z.object({
   throughput_per_hour: z.number().nonnegative(),
   stale_running_ghost_count: z.number().int().nonnegative(),
   resolved_quarantine_ghost_count: z.number().int().nonnegative(),
+  // Active quarantines behind an already banned/rejected agent (#2038).
+  terminal_quarantine_ghost_count: z.number().int().nonnegative().nullish().default(0),
   attempt_status_drift_ghost_count: z.number().int().nonnegative(),
   ghost_count: z.number().int().nonnegative(),
   max_actionable_age_threshold_seconds: z.number().int().positive().nullable(),

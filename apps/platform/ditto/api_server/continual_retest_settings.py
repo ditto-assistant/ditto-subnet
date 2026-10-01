@@ -60,6 +60,13 @@ def tie_weighting_is_active(
     return settings.tie_weighting_mode == "fleet_ready" and fleet_protocol_ready
 
 
+def statistical_band_cap_is_active(
+    settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
+) -> bool:
+    """Resolve the operator-selected protocol-29 fold only for a ready fleet."""
+    return settings.statistical_band_mode == "fleet_ready" and fleet_protocol_ready
+
+
 def crown_incumbent_is_active(
     settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
 ) -> bool:

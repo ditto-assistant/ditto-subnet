@@ -866,22 +866,17 @@ class TestPublicProjectionSafety:
 
 
 class Test2038CrossLink:
-    async def test_ghost_rows_disagree_with_repaired_queue_until_2038(
+    async def test_stale_running_ghost_stays_visible_after_2038(
         self, session: AsyncSession
     ) -> None:
-        """Regression contract for ditto-subnet#2038.
+        """A stale running attempt is not a quarantine #2038 reconciles.
 
-        Today, nothing transactionally guarantees a screening_attempts row
-        closes out when its agent moves on some other way -- that is exactly
-        the drift #2038's transactional cleanup will close. This module's
-        answer, until then, is to keep the actionable metric correct (the
-        stale row never counts as backlog) while surfacing the drift as a
-        separate, visible ghost count rather than erasing it. Once #2038
-        lands, constructing this exact scenario should become impossible (or
-        the sweep should immediately reconcile it), at which point
-        ``stale_running_ghost_count`` for this fixture should drop to 0 --
-        this test's assertion of ``== 1`` is the tripwire that will fail and
-        point back here.
+        ditto-subnet#2038 closes an active quarantine in the same transaction
+        as the terminal ATH ruling that makes it unactionable, and gives
+        operators a fenced reject for pre-existing orphans. It does not own
+        screening_attempts rows, so an attempt still reading ``running`` after
+        its agent moved on stays a separate, visible ghost: never backlog,
+        never erased.
         """
         now = datetime.now(UTC)
         agent_id = uuid4()
@@ -893,8 +888,62 @@ class Test2038CrossLink:
 
         snapshot = await load_source_review_queue_slo_snapshot(session)
         # The metric (this module) and a naively "repaired" queue (one that
-        # trusted screening_attempts.status alone) disagree today: the naive
-        # reading would still show this as an open attempt. That disagreement
-        # is the whole reason ghost_count exists as a separate, visible field.
+        # trusted screening_attempts.status alone) disagree: the naive reading
+        # would still show this as an open attempt. That disagreement is the
+        # whole reason ghost_count exists as a separate, visible field.
         assert snapshot.backlog_count == 0
         assert snapshot.stale_running_ghost_count == 1
+        assert snapshot.terminal_quarantine_ghost_count == 0
+
+    @pytest.mark.parametrize(
+        "terminal_status", [AgentStatus.BANNED, AgentStatus.REJECTED]
+    )
+    async def test_active_quarantine_behind_terminal_agent_is_a_ghost(
+        self, session: AsyncSession, terminal_status: AgentStatus
+    ) -> None:
+        """An orphaned quarantine never reads as escalation or oldest age."""
+        now = datetime.now(UTC)
+        ghost_id, held_id = uuid4(), uuid4()
+        ghost_attempt, held_attempt = uuid4(), uuid4()
+        async with session.begin():
+            session.add(
+                _agent(
+                    status=terminal_status,
+                    created_at=now - timedelta(days=6),
+                    agent_id=ghost_id,
+                )
+            )
+            session.add(
+                _agent(
+                    status=AgentStatus.QUARANTINED,
+                    created_at=now - timedelta(hours=2),
+                    agent_id=held_id,
+                )
+            )
+            session.add(
+                _attempt(
+                    agent_id=ghost_id,
+                    status="quarantined",
+                    started_at=now - timedelta(days=6),
+                    attempt_id=ghost_attempt,
+                )
+            )
+            session.add(
+                _attempt(
+                    agent_id=held_id,
+                    status="quarantined",
+                    started_at=now - timedelta(hours=2),
+                    attempt_id=held_attempt,
+                )
+            )
+            await session.flush()
+            session.add(_quarantine(agent_id=ghost_id, attempt_id=ghost_attempt))
+            session.add(_quarantine(agent_id=held_id, attempt_id=held_attempt))
+
+        snapshot = await load_source_review_queue_slo_snapshot(session)
+        assert snapshot.backlog_count == snapshot.escalation_count == 1
+        assert snapshot.terminal_quarantine_ghost_count == 1
+        assert snapshot.ghost_count == 1
+        # The six-day-old orphan does not drive the oldest actionable age.
+        assert snapshot.oldest_age_seconds is not None
+        assert snapshot.oldest_age_seconds < timedelta(hours=3).total_seconds()

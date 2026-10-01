@@ -95,6 +95,13 @@ class ProviderRouting:
         )
 
 
+@dataclass(frozen=True)
+class NodeInventory:
+    states: dict[str, dict[str, Any]]
+    # None when Platform predates the count, so GCE attribution is unknown.
+    legacy_gcp_running_attempts: int | None
+
+
 def desired_slots(*, runnable: int, active: int, jobs_per_slot: int, cap: int) -> int:
     """Keep every active lease supplied and add bounded catch-up capacity."""
     if min(runnable, active, cap) < 0 or jobs_per_slot < 1:
@@ -117,10 +124,7 @@ def gce_overflow_target(
 ) -> tuple[int, str]:
     """Choose GCE only for an explicit GCP route, outage, or queue overflow.
 
-    Precedence: explicit operator GCP routing wins, and it is the only outage
-    failover for a closed or unknown primary; a stale revision that still names
-    the retired Targon provider does not bypass the stop and falls back to GCE
-    only for a primary known to be open. Then a primary whose admission is
+    A primary whose admission is
     known to be closed (``admission_open`` false, or ``screening_concurrency ==
     0`` from a Platform that predates that field) is an operator closure: a
     global full stop that GCE never overflows, whatever the backlog,
@@ -133,8 +137,6 @@ def gce_overflow_target(
     """
     if jobs_per_slot < 1 or global_cap < 0:
         raise ValueError("capacity inputs are out of range")
-    if routing.gcp_first:
-        return min(global_cap, demand.desired), "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
     primary = primary_node or {}
     primary_ready = primary.get("status") == "active" and primary.get("ready") is True
     screening_concurrency = int(primary.get("screening_concurrency", 0))
@@ -142,10 +144,16 @@ def gce_overflow_target(
     if admission_open is None and "screening_concurrency" in primary:
         # Platform releases before admission_open still report concurrency.
         admission_open = screening_concurrency > 0
-    if admission_open is False:
+    if admission_open is False or (
+        "screening_concurrency" in primary and screening_concurrency == 0
+    ):
         # A known operator closure holds through any host health change, so a
         # failed heartbeat cannot reopen screening through GCE.
         return 0, "HETZNER_PRIMARY_ADMISSION_CLOSED"
+    if admission_open is None:
+        return 0, "HETZNER_PRIMARY_UNKNOWN"
+    if routing.gcp_first:
+        return min(global_cap, demand.desired), "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
     if any(
         priority and priority[0] == "targon"
         for priority in (
@@ -156,8 +164,6 @@ def gce_overflow_target(
     ):
         # A stale revision naming the retired provider still falls back to GCE,
         # but only behind the same operator stop: never for an unknown primary.
-        if admission_open is None:
-            return 0, "HETZNER_PRIMARY_UNKNOWN"
         return min(global_cap, demand.desired), "RETIRED_PROVIDER_ROUTING"
     policy = routing.overflow
     if not routing.hetzner_first or not policy.enabled:
@@ -165,8 +171,6 @@ def gce_overflow_target(
     cap = min(global_cap, policy.max_instances)
     if cap == 0:
         return 0, "GCE_OVERFLOW_CAPPED_AT_ZERO"
-    if admission_open is None:
-        return 0, "HETZNER_PRIMARY_UNKNOWN"
     if not primary_ready:
         return min(cap, demand.desired), "HETZNER_PRIMARY_UNAVAILABLE"
     threshold = max(
@@ -251,6 +255,90 @@ def _json_request(
         raise ControllerError("Platform returned invalid JSON") from error
 
 
+def _parse_provider_routing(body: object) -> ProviderRouting:
+    """Validate a provider-settings body from Platform or the state cache."""
+    if not isinstance(body, dict):
+        raise ControllerError("Platform provider settings response is invalid")
+    revision = body.get("revision")
+    values = body.get("settings")
+    if not isinstance(revision, int) or revision < 0 or not isinstance(values, dict):
+        raise ControllerError("Platform provider settings response is invalid")
+
+    def priority(
+        field: str,
+    ) -> tuple[Literal["hetzner", "targon", "gcp"], ...]:
+        raw = values.get(field)
+        if (
+            not isinstance(raw, list)
+            or not raw
+            or not all(
+                isinstance(item, str) and item in {"hetzner", "targon", "gcp"}
+                for item in raw
+            )
+            or len(raw) != len(set(raw))
+            or "gcp" not in raw
+        ):
+            raise ControllerError("Platform provider priority is invalid")
+        return cast(tuple[Literal["hetzner", "targon", "gcp"], ...], tuple(raw))
+
+    try:
+        overflow = OverflowPolicy(
+            enabled=bool(values["gce_overflow_enabled"]),
+            primary_node_id=(
+                str(values["primary_node_id"])
+                if values.get("primary_node_id") is not None
+                else None
+            ),
+            backlog_multiplier=int(values["gce_overflow_backlog_multiplier"]),
+            min_backlog=int(values["gce_overflow_min_backlog"]),
+            max_instances=int(values["gce_overflow_max_instances"]),
+        )
+    except (KeyError, TypeError, ValueError, OverflowError) as error:
+        raise ControllerError("Platform overflow settings are invalid") from error
+    if (
+        not 2 <= overflow.backlog_multiplier <= 20
+        or not 1 <= overflow.min_backlog <= 1000
+        or not 0 <= overflow.max_instances <= 32
+        or (overflow.enabled and not overflow.primary_node_id)
+    ):
+        raise ControllerError("Platform overflow settings are invalid")
+
+    return ProviderRouting(
+        revision=revision,
+        runtime_provider_priority=priority("runtime_provider_priority"),
+        source_review_provider_priority=priority("source_review_provider_priority"),
+        build_provider_priority=priority("build_provider_priority"),
+        overflow=overflow,
+    )
+
+
+def _routing_to_state(routing: ProviderRouting) -> dict[str, Any]:
+    """Serialize a routing revision in the Platform provider-settings shape."""
+    return {
+        "revision": routing.revision,
+        "settings": {
+            "runtime_provider_priority": list(routing.runtime_provider_priority),
+            "source_review_provider_priority": list(
+                routing.source_review_provider_priority
+            ),
+            "build_provider_priority": list(routing.build_provider_priority),
+            "gce_overflow_enabled": routing.overflow.enabled,
+            "primary_node_id": routing.overflow.primary_node_id,
+            "gce_overflow_backlog_multiplier": routing.overflow.backlog_multiplier,
+            "gce_overflow_min_backlog": routing.overflow.min_backlog,
+            "gce_overflow_max_instances": routing.overflow.max_instances,
+        },
+    }
+
+
+def _routing_from_state(value: object) -> ProviderRouting | None:
+    """Rebuild the cached routing, or None when it is missing or malformed."""
+    try:
+        return _parse_provider_routing(value)
+    except ControllerError:
+        return None
+
+
 class PlatformControl:
     def __init__(self, *, base_url: str, token: str, environment: str) -> None:
         self._base = base_url.rstrip("/")
@@ -285,65 +373,13 @@ class PlatformControl:
         return body
 
     def provider_routing(self) -> ProviderRouting:
-        body = _json_request(
-            "GET",
-            f"{self._base}/api/v1/screener/controller/provider-settings"
-            f"?environment={self.environment}",
-            token=self._token,
-        )
-        if not isinstance(body, dict):
-            raise ControllerError("Platform provider settings response is invalid")
-        revision = body.get("revision")
-        values = body.get("settings")
-        if (
-            not isinstance(revision, int)
-            or revision < 0
-            or not isinstance(values, dict)
-        ):
-            raise ControllerError("Platform provider settings response is invalid")
-
-        def priority(
-            field: str,
-        ) -> tuple[Literal["hetzner", "targon", "gcp"], ...]:
-            raw = values.get(field)
-            if (
-                not isinstance(raw, list)
-                or not raw
-                or not all(item in {"hetzner", "targon", "gcp"} for item in raw)
-                or len(raw) != len(set(raw))
-                or "gcp" not in raw
-            ):
-                raise ControllerError("Platform provider priority is invalid")
-            return cast(tuple[Literal["hetzner", "targon", "gcp"], ...], tuple(raw))
-
-        try:
-            overflow = OverflowPolicy(
-                enabled=bool(values["gce_overflow_enabled"]),
-                primary_node_id=(
-                    str(values["primary_node_id"])
-                    if values.get("primary_node_id") is not None
-                    else None
-                ),
-                backlog_multiplier=int(values["gce_overflow_backlog_multiplier"]),
-                min_backlog=int(values["gce_overflow_min_backlog"]),
-                max_instances=int(values["gce_overflow_max_instances"]),
+        return _parse_provider_routing(
+            _json_request(
+                "GET",
+                f"{self._base}/api/v1/screener/controller/provider-settings"
+                f"?environment={self.environment}",
+                token=self._token,
             )
-        except (KeyError, TypeError, ValueError) as error:
-            raise ControllerError("Platform overflow settings are invalid") from error
-        if (
-            not 2 <= overflow.backlog_multiplier <= 20
-            or not 1 <= overflow.min_backlog <= 1000
-            or not 0 <= overflow.max_instances <= 32
-            or (overflow.enabled and not overflow.primary_node_id)
-        ):
-            raise ControllerError("Platform overflow settings are invalid")
-
-        return ProviderRouting(
-            revision=revision,
-            runtime_provider_priority=priority("runtime_provider_priority"),
-            source_review_provider_priority=priority("source_review_provider_priority"),
-            build_provider_priority=priority("build_provider_priority"),
-            overflow=overflow,
         )
 
     def fence(self, *, epoch: str) -> None:
@@ -359,6 +395,9 @@ class PlatformControl:
         )
 
     def node_states(self) -> dict[str, dict[str, Any]]:
+        return self.node_inventory().states
+
+    def node_inventory(self) -> NodeInventory:
         body = _json_request(
             "GET",
             f"{self._base}/api/v1/screener/controller/nodes"
@@ -378,22 +417,16 @@ class PlatformControl:
                 continue
             result[str(row["node_id"])] = row
             result[str(row["provider_resource_id"])] = row
-        return result
-
-    def drain_node(
-        self, *, node_id: str, epoch: str, reason: str = "capacity scale-down"
-    ) -> None:
-        _json_request(
-            "PUT",
-            f"{self._base}/api/v1/screener/controller/nodes/{node_id}",
-            token=self._token,
-            payload={
-                "environment": self.environment,
-                "status": "draining",
-                "reason": f"capacity controller {reason}",
-                "controller_epoch": epoch,
-            },
-            allow_not_found=True,
+        running = body.get("legacy_gcp_running_attempts")
+        return NodeInventory(
+            states=result,
+            legacy_gcp_running_attempts=(
+                running
+                if isinstance(running, int)
+                and not isinstance(running, bool)
+                and running >= 0
+                else None
+            ),
         )
 
 
@@ -479,6 +512,30 @@ class GCEFleet:
                 pending += 1
         return ProviderCounts(healthy=healthy, pending=pending, draining=draining)
 
+    def running_instances(self) -> set[str]:
+        """Name the running instances the managed group is not already changing."""
+        output = self._run(
+            "compute",
+            "instance-groups",
+            "managed",
+            "list-instances",
+            self.mig,
+            "--region",
+            self.region,
+            "--format=json(instance,instanceStatus,currentAction)",
+        )
+        try:
+            rows = json.loads(output)
+        except json.JSONDecodeError as error:
+            raise ControllerError("GCE instance list is invalid") from error
+        return {
+            str(row.get("instance", "")).rsplit("/", 1)[-1]
+            for row in (rows if isinstance(rows, list) else [])
+            if isinstance(row, dict)
+            and str(row.get("instanceStatus", "")).upper() == "RUNNING"
+            and str(row.get("currentAction", "")).upper() in {"NONE", ""}
+        } - {""}
+
     def _autoscaler_mode(self) -> str:
         output = self._run(
             "compute",
@@ -508,48 +565,53 @@ class GCEFleet:
             mode,
         )
 
-    def ensure_watchdog(self, *, enabled: bool) -> None:
-        """Align the raw-queue watchdog with the controller's bounded target.
+    def ensure_watchdog(self) -> None:
+        """Keep the independent safety net ready, including at zero capacity.
 
-        The Google autoscaler sees only queue depth; it cannot prove that the
-        primary Hetzner node is ready or apply the overflow threshold.  It must
-        therefore stay off while this controller has selected zero GCE slots.
+        The metric publishes zero while Platform's watchdog suppresses fallback.
+        ONLY_SCALE_OUT cannot delete workers or race the controller's scale-in.
         """
-        desired_mode = self.WATCHDOG_MODE if enabled else "OFF"
-        if self._autoscaler_mode() != desired_mode:
-            self._set_autoscaler_mode("only-scale-out" if enabled else "off")
+        if self._autoscaler_mode() != self.WATCHDOG_MODE:
+            self._set_autoscaler_mode("only-scale-out")
 
-    def resize(self, target: int, *, watchdog_enabled: bool) -> None:
+    def _paused_mutation(self, operation: str, *arguments: str) -> None:
         # Compute rejects manual resize while any autoscaler mode is active,
         # including ONLY_SCALE_OUT. Keep the emergency policy configured, pause
-        # it only around the fenced mutation. Restore it only when the bounded
-        # controller target is nonzero; otherwise the raw queue-depth signal
-        # would immediately recreate GCE workers that Hetzner is meant to
-        # handle.
-        resize_error: ControllerError | None = None
+        # it only around the fenced mutation and always restore it. Platform's
+        # policy-aware metric suppresses fallback at zero capacity.
+        mutation_error: ControllerError | None = None
         try:
             self._set_autoscaler_mode("off")
             self._run(
                 "compute",
                 "instance-groups",
                 "managed",
-                "resize",
+                operation,
                 self.mig,
                 "--region",
                 self.region,
-                "--size",
-                str(target),
+                *arguments,
             )
         except ControllerError as error:
-            resize_error = error
+            mutation_error = error
         try:
-            self._set_autoscaler_mode("only-scale-out" if watchdog_enabled else "off")
+            self._set_autoscaler_mode("only-scale-out")
         except ControllerError as restore_error:
             raise ControllerError(
                 "GCE autoscaler watchdog restore failed"
             ) from restore_error
-        if resize_error is not None:
-            raise resize_error
+        if mutation_error is not None:
+            raise mutation_error
+
+    def resize(self, target: int) -> None:
+        self._paused_mutation("resize", "--size", str(target))
+
+    def delete_instances(self, names: list[str]) -> None:
+        """Delete named instances; the managed group shrinks by the same count."""
+        self._paused_mutation(
+            "delete-instances",
+            f"--instances={','.join(names)}",
+        )
 
 
 class GCPBootstrapTokenMinter:
@@ -587,6 +649,41 @@ class GCPBootstrapTokenMinter:
         return token
 
 
+@dataclass(frozen=True)
+class ScaleInDeferral:
+    """A reported GCE scale-in whose physical deletion is still deferred.
+
+    The pair is recorded once the fenced renew carrying the target change
+    succeeds; ``reason`` stays None until the completed renew carrying the
+    deferral event succeeds. Platform has no event idempotency key, so a lost
+    renew response or state write sends that event once more: delivery is at
+    least once.
+    """
+
+    source: int
+    target: int
+    reason: str | None
+
+    def to_state(self) -> dict[str, Any]:
+        return {"from": self.source, "to": self.target, "reason": self.reason}
+
+    @classmethod
+    def from_state(cls, value: object) -> ScaleInDeferral | None:
+        """Rebuild the delivered deferral, or None when missing or malformed."""
+        if not isinstance(value, dict):
+            return None
+        source, target, reason = value.get("from"), value.get("to"), value.get("reason")
+        if (
+            not isinstance(source, int)
+            or isinstance(source, bool)
+            or not isinstance(target, int)
+            or isinstance(target, bool)
+            or not (reason is None or isinstance(reason, str))
+        ):
+            return None
+        return cls(source=source, target=target, reason=reason)
+
+
 def _load_state(path: Path) -> dict[str, Any]:
     try:
         loaded = json.loads(path.read_text()) if path.exists() else {}
@@ -620,13 +717,16 @@ def _persist_provider_state(
     ready: bool,
     error_code: str | None,
     error_at: str | None,
+    delivered: dict[str, Any] | None = None,
 ) -> None:
+    """Record readiness, plus any other state the same renew delivered."""
     state = _load_state(path)
     state.update(
         {
             "provider_ready": ready,
             "last_provider_error_code": error_code,
             "last_provider_error_at": error_at,
+            **(delivered or {}),
         }
     )
     _write_state(path, state)
@@ -649,6 +749,9 @@ class Settings:
     gce_impersonate_service_account: str | None
     lock_file: Path
     dry_run: bool
+    # Consecutive passes that keep the GCE target while a Platform routing or
+    # node-inventory read fails, so a Platform deploy cannot flap the MIG.
+    inventory_failure_hold_passes: int = 4
 
 
 def _snapshot(
@@ -724,6 +827,78 @@ def _record_provider_failure(
         platform.renew(failed)
 
 
+def _plan_gce_scale_in(
+    platform: PlatformControl,
+    gce_fleet: GCEFleet,
+    *,
+    target: int,
+    current_target: int,
+    claims_fenced_at_zero: bool,
+) -> tuple[list[str], str | None]:
+    """Check whether scale-in is safe, or explain why it must wait.
+
+    Runs after the fenced renew. A GCE worker may have claimed since the first
+    inventory read, so leases are read again here. At zero a ready,
+    Hetzner-primary route's renew withdraws overflow claims only until its
+    watchdog lease expires. A GCP-first route or an unready snapshot cannot
+    fence them even temporarily. Both zero and partial scale-in therefore
+    wait for a claim fence that outlives the physical GCE mutation.
+    """
+    try:
+        inventory = platform.node_inventory()
+    except ControllerError:
+        return [], "inventory_unavailable"
+    rows = {
+        str(row["node_id"]): row
+        for row in inventory.states.values()
+        if row.get("provider") == "gcp"
+    }
+    running = inventory.legacy_gcp_running_attempts
+    if target == 0:
+        if not claims_fenced_at_zero:
+            return [], "legacy_claims_not_fenced"
+        if running is None:
+            return [], "attribution_incomplete"
+        if running > 0 or any(row.get("active_lease") is True for row in rows.values()):
+            return [], "gce_active_lease"
+        members = gce_fleet.running_instances()
+        if len(members) != current_target or any(
+            (row := rows.get(member)) is None
+            or row.get("ready") is not True
+            or row.get("instance_busy") is not False
+            for member in members
+        ):
+            return [], "instance_inventory_incomplete"
+        # The controller lease is only 180 seconds. GCE resize and deletion
+        # may still be in progress when it expires, at which point Platform
+        # can admit a new legacy claim on a VM being removed. An idle reread
+        # and the current lease cannot prove deletion safe.
+        return [], "durable_claim_fence_unavailable"
+    legacy = [row for row in rows.values() if row.get("instance_busy") is not None]
+    busy = sum(row["instance_busy"] is True for row in legacy)
+    if running is None or running > busy:
+        return [], "attribution_incomplete"
+    # A heartbeat stays ready for minutes after its VM is deleted, so only
+    # current managed-group members are candidates.
+    members = gce_fleet.running_instances()
+    idle = sorted(
+        (
+            row
+            for row in legacy
+            if row.get("ready") is True
+            and row.get("instance_busy") is False
+            and row["node_id"] in members
+        ),
+        key=lambda row: str(row.get("heartbeat_seen_at") or ""),
+    )
+    excess = current_target - target
+    if len(idle) < excess:
+        return [], "insufficient_idle_instances"
+    # The shared legacy hotkey can claim on any instance while target is
+    # nonzero. Deleting a merely idle instance can orphan a new lease.
+    return [], "per_instance_claim_fence_unavailable"
+
+
 def reconcile(settings: Settings) -> dict[str, Any]:
     token = _read_secret_file(settings.platform_token_file)
     platform = PlatformControl(
@@ -734,19 +909,22 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     demand = platform.demand(
         jobs_per_slot=settings.jobs_per_slot, cap=settings.global_cap
     )
+    state = _load_state(settings.state_file)
     provider_routing_available = True
+    cached_routing: ProviderRouting | None = None
     try:
         provider_routing = platform.provider_routing()
     except ControllerError:
-        # Platform is deployed before the controller in the normal release, but
-        # a rolling boundary or transient read failure must leave GCE as the
-        # bounded fallback until a routing revision can be read.
+        # Without the current routing revision we cannot prove that operator
+        # admission is open. Keep existing capacity while recording the failure;
+        # the policy-aware metric may activate fallback independently.
         provider_routing_available = False
-        provider_routing = ProviderRouting(
+        cached_routing = _routing_from_state(state.get("last_good_provider_routing"))
+        provider_routing = cached_routing or ProviderRouting(
             revision=0,
-            runtime_provider_priority=("gcp",),
-            source_review_provider_priority=("gcp",),
-            build_provider_priority=("gcp",),
+            runtime_provider_priority=("hetzner", "gcp"),
+            source_review_provider_priority=("hetzner", "gcp"),
+            build_provider_priority=("hetzner", "gcp"),
         )
     node_states_available = True
     try:
@@ -759,11 +937,42 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     except ControllerError:
         node_states_available = False
         node_states = {}
+    failed_reads = [
+        name
+        for name, available in (
+            ("routing", provider_routing_available),
+            ("nodes", node_states_available),
+        )
+        if not available
+    ]
+    prior_failures = state.get("inventory_failures")
+    if (
+        not isinstance(prior_failures, int)
+        or isinstance(prior_failures, bool)
+        or prior_failures < 0
+    ):
+        prior_failures = 0
+    inventory_failures = prior_failures + 1 if failed_reads else 0
+    holding = bool(failed_reads) and (
+        inventory_failures <= settings.inventory_failure_hold_passes
+    )
+    if not settings.dry_run:
+        # Keep the last good routing even if a later provider read fails. The
+        # failure count advances only once the first fenced renew delivers its
+        # transition events.
+        if provider_routing_available:
+            state["last_good_provider_routing"] = _routing_to_state(provider_routing)
+        _write_state(settings.state_file, state)
     provider_success_at: str | None = None
     provider_error_code: str | None = None
     provider_error_at: str | None = None
-    if not provider_routing_available:
+    if not provider_routing_available and (cached_routing is None or not holding):
         provider_error_code = "PROVIDER_ROUTING_UNAVAILABLE"
+        provider_error_at = datetime.now(UTC).isoformat()
+    elif not node_states_available and not holding:
+        # After the transient hold, let the policy-aware watchdog supply an
+        # open primary's backlog while this controller lacks safe inventory.
+        provider_error_code = "PLATFORM_INVENTORY_UNAVAILABLE"
         provider_error_at = datetime.now(UTC).isoformat()
     gce_fleet = GCEFleet(
         project=settings.gce_project,
@@ -776,15 +985,18 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     provider_success_at = datetime.now(UTC).isoformat()
 
     primary_node = node_states.get(provider_routing.overflow.primary_node_id or "")
-    target, reason = gce_overflow_target(
-        demand=demand,
-        routing=provider_routing,
-        primary_node=primary_node,
-        jobs_per_slot=settings.jobs_per_slot,
-        global_cap=settings.global_cap,
-    )
-    if not provider_routing_available:
-        reason = "PROVIDER_ROUTING_UNAVAILABLE"
+    if provider_routing_available:
+        target, reason = gce_overflow_target(
+            demand=demand,
+            routing=provider_routing,
+            primary_node=primary_node,
+            jobs_per_slot=settings.jobs_per_slot,
+            global_cap=settings.global_cap,
+        )
+    else:
+        # A cached revision can retain claim compatibility, but cannot
+        # authorize a physical resize without a fresh policy read.
+        target, reason = current_target, "PROVIDER_ROUTING_UNAVAILABLE"
     gce_has_active_lease = any(
         node.get("provider") == "gcp" and node.get("active_lease") is True
         for node in node_states.values()
@@ -797,13 +1009,55 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         # attempts belongs to GCE. Keep current capacity until the authoritative
         # inventory returns instead of guessing during scale-in.
         target = current_target
+    if holding:
+        # A Platform deploy or transient read failure must not flap the MIG in
+        # either direction. The hold never adds capacity, so a primary closure
+        # already observed keeps GCE at zero; once the hold expires an unknown
+        # primary fails closed as usual.
+        target = current_target
+        reason = "PLATFORM_INVENTORY_UNAVAILABLE"
+    # A deferred scale-in republishes the same lower target on every pass until
+    # the group is drained. Its change and deferral were sent when it began, so
+    # send them once per transition rather than on every pass.
+    delivered_deferral = ScaleInDeferral.from_state(state.get("gce_scale_in_deferral"))
+    continuing_deferral = (
+        delivered_deferral
+        if delivered_deferral is not None
+        and target < current_target
+        and (delivered_deferral.source, delivered_deferral.target)
+        == (current_target, target)
+        else None
+    )
     events: list[dict[str, Any]] = []
-    if target != current_target:
+    if target != current_target and continuing_deferral is None:
+        # A decision, sent before any mutation: a deferred scale-in that later
+        # goes ahead does not send it again.
         events.append(
             {
                 "event_type": "gce_target_changed",
                 "provider": "gcp",
                 "detail": f"GCE target {current_target} -> {target}",
+            }
+        )
+    failed_detail = f"{' and '.join(failed_reads)} read"
+    if inventory_failures == 1:
+        events.append(
+            {
+                "event_type": "platform_inventory_unavailable",
+                "provider": "gcp",
+                "detail": f"{failed_detail} failed"
+                + (f"; holding GCE target {current_target}" if holding else ""),
+            }
+        )
+    hold_passes = settings.inventory_failure_hold_passes
+    if hold_passes > 0 and inventory_failures == hold_passes + 1:
+        events.append(
+            {
+                "event_type": "platform_inventory_hold_expired",
+                "provider": "gcp",
+                "detail": (
+                    f"{failed_detail} still failing after {hold_passes} held passes"
+                ),
             }
         )
     last_reason = _load_state(settings.state_file).get("last_fallback_reason")
@@ -846,13 +1100,23 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     # The renewed snapshot delivered any reason-change event; record the
     # reason now so a later failed mutation cannot repeat the transition.
     state = _load_state(settings.state_file)
+    state["inventory_failures"] = inventory_failures
     state["last_fallback_reason"] = reason
+    state["gce_scale_in_deferral"] = (
+        (
+            continuing_deferral
+            or ScaleInDeferral(source=current_target, target=target, reason=None)
+        ).to_state()
+        if target < current_target
+        else None
+    )
     _write_state(settings.state_file, state)
-    watchdog_enabled = target > 0
-    if target == current_target:
+    # Scale-in may defer indefinitely. Restore an autoscaler left OFF by an
+    # interrupted prior mutation even when the desired target is lower.
+    if target <= current_target:
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.ensure_watchdog(enabled=watchdog_enabled)
+            gce_fleet.ensure_watchdog()
         except ControllerError:
             _record_provider_failure(
                 platform,
@@ -866,7 +1130,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         # Bring fallback capacity up before any later reconciliation work.
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.resize(target, watchdog_enabled=watchdog_enabled)
+            gce_fleet.resize(target)
             current_target = target
         except ControllerError:
             _record_provider_failure(
@@ -877,12 +1141,32 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 detail="GCE fallback scale-up failed",
             )
             raise
+    scale_in_deferral: str | None = None
     if target < current_target:
-        # Zero is intentional.  Scale-in happens only when active leases have
-        # fallen to zero because desired_slots includes every active lease.
+        # The overflow target ignores active leases, and the lease guard above
+        # used the first inventory read. The post-renew re-read below is the
+        # guard that keeps a screening GCE worker from being deleted.
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.resize(target, watchdog_enabled=watchdog_enabled)
+            instances, scale_in_deferral = _plan_gce_scale_in(
+                platform,
+                gce_fleet,
+                target=target,
+                current_target=current_target,
+                claims_fenced_at_zero=(
+                    starting_provider_ready
+                    and any(
+                        priority[0] == "hetzner"
+                        for priority in (
+                            provider_routing.build_provider_priority,
+                            provider_routing.runtime_provider_priority,
+                            provider_routing.source_review_provider_priority,
+                        )
+                    )
+                ),
+            )
+            if scale_in_deferral is None and target > 0:
+                gce_fleet.delete_instances(instances)
         except ControllerError:
             _record_provider_failure(
                 platform,
@@ -895,18 +1179,47 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     provider_ready = provider_error_code is None
     completed = {
         **snapshot,
+        # The fenced first renew already delivered this pass's events.
+        "events": [],
         "provider_ready": provider_ready,
         "last_provider_error_code": (None if provider_ready else provider_error_code),
         "last_provider_error_at": None if provider_ready else provider_error_at,
     }
+    deferral: ScaleInDeferral | None = None
+    if scale_in_deferral is not None:
+        # A deferral is not a provider failure. Keep publishing the lower
+        # target: republishing the live fleet would reopen overflow claims the
+        # fenced renew withdrew, even for a closed or unknown primary, while
+        # existing leases complete either way.
+        deferral = ScaleInDeferral(
+            source=current_target, target=target, reason=scale_in_deferral
+        )
+        completed["fallback_reason"] = "GCE_SCALE_IN_DEFERRED"
+        if deferral != continuing_deferral:
+            # A new target or deferral reason; an unchanged one was already sent.
+            completed["events"] = [
+                {
+                    "event_type": "gce_scale_in_deferred",
+                    "provider": "gcp",
+                    "detail": (
+                        f"GCE target {current_target} -> {target} deferred: "
+                        f"{scale_in_deferral}"
+                    ),
+                }
+            ]
     # Readiness describes a fully completed reconciliation pass. Persist it so
     # a failed pass cannot publish an optimistic heartbeat on the next retry.
     platform.renew(completed)
+    # One write records what the completed renew delivered: its readiness and
+    # its deferral. Platform cannot deduplicate events, and the controller
+    # cannot tell a renew that committed from one that did not, so losing this
+    # write (a full disk or a kill) sends a new deferral once more next pass.
     _persist_provider_state(
         settings.state_file,
         ready=provider_ready,
         error_code=completed["last_provider_error_code"],
         error_at=completed["last_provider_error_at"],
+        delivered={"gce_scale_in_deferral": deferral.to_state() if deferral else None},
     )
     return completed
 
@@ -928,7 +1241,15 @@ def _settings(args: argparse.Namespace) -> Settings:
         gce_impersonate_service_account=args.gce_impersonate_service_account,
         lock_file=Path(args.lock_file),
         dry_run=args.dry_run,
+        inventory_failure_hold_passes=args.inventory_failure_hold_passes,
     )
+
+
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be at least 0")
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -939,6 +1260,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--global-cap", type=int, default=6)
     parser.add_argument("--jobs-per-slot", type=int, default=6)
     parser.add_argument("--interval-seconds", type=int, default=30)
+    parser.add_argument(
+        "--inventory-failure-hold-passes", type=_non_negative_int, default=4
+    )
     parser.add_argument(
         "--state-file", default="/var/lib/ditto-screener-capacity/state.json"
     )

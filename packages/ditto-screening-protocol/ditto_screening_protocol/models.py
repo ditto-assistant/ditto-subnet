@@ -878,17 +878,30 @@ class SourceReviewCausalRoleBinding(BaseModel):
     role: SourceReviewEvidenceRole
 
 
+class SourceReviewI5Proof(BaseModel):
+    """Bounded, signed explanation of an alleged benchmark-specific recipe."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    evaluation_assumption: Annotated[str, Field(min_length=12, max_length=240)]
+    ordinary_product_exclusion: Annotated[str, Field(min_length=12, max_length=240)]
+    assumption_evidence_index: Annotated[int, Field(ge=0, le=15)]
+
+
 class SourceReviewCausalEvidence(BaseModel):
     """Opt-in v2 causal evidence carried alongside the legacy location list."""
 
     model_config = ConfigDict(extra="ignore")
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[2, 3] = 2
     authority_transition: SourceReviewAuthorityTransition
     scorer_visible_effect: SourceReviewScorerVisibleEffect
     role_bindings: Annotated[
         list[SourceReviewCausalRoleBinding], Field(min_length=1, max_length=32)
     ]
+    i5_proof: SourceReviewI5Proof | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_unique_bindings(self) -> Self:
@@ -905,6 +918,8 @@ class SourceReviewCausalEvidence(BaseModel):
             raise ValueError(
                 "scorer-visible effect is incompatible with authority transition"
             )
+        if (self.schema_version == 3) != (self.i5_proof is not None):
+            raise ValueError("causal evidence v3 requires an I5 proof")
         return self
 
 
@@ -971,6 +986,13 @@ class SourceReviewFinding(BaseModel):
                     raise ValueError(
                         "causal role binding does not reference finding evidence"
                     )
+            proof = self.causal_evidence.i5_proof
+            if proof is not None and (
+                proof.assumption_evidence_index >= len(self.evidence)
+                or self.evidence[proof.assumption_evidence_index].category
+                not in {"benchmark_emulation", "embedded_evaluator_logic"}
+            ):
+                raise ValueError("I5 assumption is not bound to source evidence")
         if self.invariant_assessment is not None:
             for decision in self.invariant_assessment.decisions:
                 if any(
@@ -1069,7 +1091,7 @@ class SourceReviewFinding(BaseModel):
             "summary": self.summary,
         }
         if self.causal_evidence is not None:
-            payload["causal_evidence"] = {
+            causal_payload: dict[str, object] = {
                 "schema_version": self.causal_evidence.schema_version,
                 "authority_transition": (
                     self.causal_evidence.authority_transition.value
@@ -1095,6 +1117,14 @@ class SourceReviewFinding(BaseModel):
                     )
                 ],
             }
+            if self.causal_evidence.i5_proof is not None:
+                proof = self.causal_evidence.i5_proof
+                causal_payload["i5_proof"] = {
+                    "evaluation_assumption": proof.evaluation_assumption,
+                    "ordinary_product_exclusion": proof.ordinary_product_exclusion,
+                    "assumption_evidence_index": proof.assumption_evidence_index,
+                }
+            payload["causal_evidence"] = causal_payload
         if self.invariant_assessment is not None:
             payload["invariant_assessment"] = {
                 "schema_version": self.invariant_assessment.schema_version,
@@ -1150,6 +1180,35 @@ class ScreenReviewAudit(BaseModel):
     # absent fields out of the digest so older signed audits still validate.
     model_disposition: Literal["inconclusive"] | None = None
     resolution_basis: Literal["insufficient_static_evidence"] | None = None
+    dossier_complete: bool | None = None
+    dossier_incomplete_components: (
+        Annotated[
+            list[
+                Literal[
+                    "workspace_index",
+                    "starter_diff",
+                    "build_structure",
+                    "integrity_surfaces",
+                    "opaque_inventory",
+                    "binary_analysis",
+                ]
+            ],
+            Field(max_length=6),
+        ]
+        | None
+    ) = None
+    model_categories: (
+        Annotated[
+            list[Annotated[str, Field(pattern=r"^[a-z][a-z_]{0,63}$")]],
+            Field(max_length=8),
+        ]
+        | None
+    ) = None
+    model_inconclusive_invariants: (
+        Annotated[list[SourceReviewInvariant], Field(max_length=8)] | None
+    ) = None
+    model_evidence_count: Annotated[int | None, Field(ge=0, le=16)] = None
+    model_causal_role_count: Annotated[int | None, Field(ge=0, le=16)] = None
     model_steps_observed: Annotated[int | None, Field(ge=0, le=10_000)] = None
     tool_calls_observed: Annotated[int | None, Field(ge=0, le=10_000)] = None
     budget_stop_reason: (
@@ -1163,12 +1222,15 @@ class ScreenReviewAudit(BaseModel):
     ] = None
     final_stage: Literal["preflight", "analyst", "critic", "adjudicator"] | None = None
     cause_detail: Literal["lease_unavailable", "review_disabled"] | None = None
-    model_tool_failure_subcode: Literal[
-        "invalid_submit_call_id",
-        "no_tool_call_after_corrections",
-        "malformed_tool_arguments_json",
-        "invalid_tool_call_shape",
-    ] | None = None
+    model_tool_failure_subcode: (
+        Literal[
+            "invalid_submit_call_id",
+            "no_tool_call_after_corrections",
+            "malformed_tool_arguments_json",
+            "invalid_tool_call_shape",
+        ]
+        | None
+    ) = None
     max_elapsed_ms: Annotated[int | None, Field(ge=1, le=3_600_000)] = None
     elapsed_ms: Annotated[int | None, Field(ge=0, le=3_600_000)] = None
 
@@ -1192,6 +1254,12 @@ class ScreenReviewAudit(BaseModel):
         diagnostic_fields = {
             "model_disposition",
             "resolution_basis",
+            "dossier_complete",
+            "dossier_incomplete_components",
+            "model_categories",
+            "model_inconclusive_invariants",
+            "model_evidence_count",
+            "model_causal_role_count",
             "model_steps_observed",
             "tool_calls_observed",
             "budget_stop_reason",

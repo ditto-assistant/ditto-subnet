@@ -639,12 +639,14 @@ class ScreeningAttempt(Base):
             postgresql_where=text(
                 "status = 'failed' AND reason_code IN "
                 "('docker-build-infrastructure', 'worker-claim-not-started', "
-                "'l2-runtime-evidence-unavailable')"
+                "'l2-runtime-evidence-unavailable', "
+                "'source-review-adjudicator-key-unavailable')"
             ),
             sqlite_where=text(
                 "status = 'failed' AND reason_code IN "
                 "('docker-build-infrastructure', 'worker-claim-not-started', "
-                "'l2-runtime-evidence-unavailable')"
+                "'l2-runtime-evidence-unavailable', "
+                "'source-review-adjudicator-key-unavailable')"
             ),
         ),
         Index(
@@ -7067,8 +7069,16 @@ class ScreenerL2ReportCanary(Base):
     # A newly verified current object for an older null-SHA attempt. This does
     # not claim what the historical attempt executed and never changes it.
     source_attestation: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    # Scheduling-time posture pin: an immutable ``l2-report-canary*`` revision
+    # this canary runs under instead of the claiming node's effective posture,
+    # so a canary experiment never needs a node- or worker-scoped revision.
+    review_settings_revision: Mapped[int | None] = mapped_column(Integer)
+    review_settings_scope: Mapped[str | None] = mapped_column(Text)
+    review_settings_checksum: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     claimed_instance_id: Mapped[str | None] = mapped_column(Text)
+    # Claim-time binding the completion report must echo; equals the pin above
+    # when one is set, else the claiming worker's node-effective revision.
     settings_revision: Mapped[int | None] = mapped_column(Integer)
     settings_checksum: Mapped[str | None] = mapped_column(Text)
     runtime_evidence_sha256: Mapped[str | None] = mapped_column(Text)
@@ -7089,9 +7099,37 @@ class ScreenerL2ReportCanary(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(["target_node_id"], ["screener_nodes.node_id"]),
+        # The stamped scope must be the pinned revision's own scope (through
+        # the unique ``(scope, revision)`` index), so the CHECK below guards
+        # the revision actually pinned, not only a copied label.
+        ForeignKeyConstraint(
+            ["review_settings_scope", "review_settings_revision"],
+            [
+                "screener_review_settings_revisions.scope",
+                "screener_review_settings_revisions.revision",
+            ],
+            ondelete="RESTRICT",
+            name="screener_l2_canary_review_settings_revision_fkey",
+        ),
         UniqueConstraint("request_id", name="screener_l2_canary_request_key"),
         CheckConstraint(
             "artifact_sha256 ~ '^[0-9a-f]{64}$'", name="screener_l2_canary_sha_check"
+        ),
+        # Verbatim from 2026_09_29_bind_l2_canary_review_settings_pin.py. The
+        # scope clause is the database backstop that a pin can never name a
+        # production (``*``, node, or worker) scope; it admits exactly what
+        # ``is_l2_report_canary_scope`` admits.
+        CheckConstraint(
+            "(review_settings_revision IS NULL "
+            "AND review_settings_scope IS NULL "
+            "AND review_settings_checksum IS NULL) OR "
+            "(review_settings_revision IS NOT NULL "
+            "AND review_settings_scope IS NOT NULL "
+            "AND review_settings_checksum IS NOT NULL "
+            "AND review_settings_revision > 0 "
+            "AND review_settings_scope ~ '^l2-report-canary(-|$)' "
+            "AND review_settings_checksum ~ '^[0-9a-f]{64}$')",
+            name="review_settings_pin_check",
         ),
         CheckConstraint(
             "policy_version = 13 AND bench_version = 13",
@@ -9430,6 +9468,58 @@ class InferenceConcurrencySettingsRevision(Base):
             "scope",
             "parent_revision",
             name="inference_concurrency_settings_scope_parent_key",
+        ),
+    )
+
+
+class ScoringLeaseSettingsRevision(Base):
+    """Append-only operator policy for scoring lease clocks (#1156).
+
+    Governs the deadline stamped on NEW canonical scoring and score-retest
+    replacement tickets. A live ticket keeps the deadline it was minted with.
+    Each revision stores the whole policy; see
+    ``ditto.api_models.scoring_lease_settings`` for the bounds.
+    """
+
+    __tablename__ = "scoring_lease_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="scoring_lease_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="scoring_lease_settings_checksum_check"
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="scoring_lease_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="scoring_lease_settings_reason_check"
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="scoring_lease_settings_actor_check",
+        ),
+        Index(
+            "scoring_lease_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="scoring_lease_settings_scope_parent_key",
         ),
     )
 

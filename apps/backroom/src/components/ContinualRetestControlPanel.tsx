@@ -12,6 +12,7 @@ import {
 
 type AggregateMode = 'disabled' | 'fleet_ready' | 'enabled'
 type TieWeightingMode = 'disabled' | 'fleet_ready'
+type StatisticalBandMode = 'disabled' | 'fleet_ready'
 type LedgerPinMode = 'live' | 'epoch'
 type CrownIncumbentMode = 'disabled' | 'fleet_ready'
 type RolloutStanddown = 'off' | 'capable_validators' | 'all'
@@ -51,6 +52,24 @@ const tieWeightingModes: Array<{
     value: 'disabled',
     label: 'Fixed rank shares (rollback)',
     detail: 'Keep 65/14/10/7/4 even when secondary ordering is the only separator.',
+  },
+]
+
+const statisticalBandModes: Array<{
+  value: StatisticalBandMode
+  label: string
+  detail: string
+}> = [
+  {
+    value: 'fleet_ready',
+    label: 'Cap statistical bands (fleet ready)',
+    detail:
+      'After protocol 29 fleet readiness, cap paired tie and unpaired dethrone uncertainty at twice the KOTH margin on the next epoch pin.',
+  },
+  {
+    value: 'disabled',
+    label: 'Legacy statistical bands (rollback)',
+    detail: 'Keep the pre-protocol-29 statistical band rule.',
   },
 ]
 
@@ -178,6 +197,9 @@ export function ContinualRetestControlPanel({
   const [tieWeightingMode, setTieWeightingMode] = useState<TieWeightingMode>(
     initialState.effective.settings.tie_weighting_mode,
   )
+  const [statisticalBandMode, setStatisticalBandMode] = useState<StatisticalBandMode>(
+    initialState.effective.settings.statistical_band_mode,
+  )
   const [ledgerPinMode, setLedgerPinMode] = useState<LedgerPinMode>(
     initialState.effective.settings.ledger_pin_mode,
   )
@@ -217,6 +239,7 @@ export function ContinualRetestControlPanel({
   const cohortSizingSupported = state.field_support.retest_cohort_size
   const membershipSupported = state.field_support.wave_membership
   const tieWeightingSupported = state.field_support.tie_weighting_mode
+  const statisticalBandSupported = state.field_support.statistical_band_mode
   const ledgerPinSupported = state.field_support.ledger_pin_mode
   const crownIncumbentSupported = state.field_support.crown_incumbent_mode
   const eligibilitySupported =
@@ -256,6 +279,8 @@ export function ContinualRetestControlPanel({
     mode !== effective.settings.aggregate_mode ||
     (tieWeightingSupported &&
       tieWeightingMode !== effective.settings.tie_weighting_mode) ||
+    (statisticalBandSupported &&
+      statisticalBandMode !== effective.settings.statistical_band_mode) ||
     (ledgerPinSupported && ledgerPinMode !== effective.settings.ledger_pin_mode) ||
     (crownIncumbentSupported &&
       crownIncumbentMode !== effective.settings.crown_incumbent_mode) ||
@@ -282,6 +307,7 @@ export function ContinualRetestControlPanel({
   function reset(next = state) {
     setMode(next.effective.settings.aggregate_mode)
     setTieWeightingMode(next.effective.settings.tie_weighting_mode)
+    setStatisticalBandMode(next.effective.settings.statistical_band_mode)
     setLedgerPinMode(next.effective.settings.ledger_pin_mode)
     setCrownIncumbentMode(next.effective.settings.crown_incumbent_mode)
     setIdleRetests(next.effective.settings.idle_retests_enabled)
@@ -326,6 +352,9 @@ export function ContinualRetestControlPanel({
           settings: {
             aggregate_mode: mode,
             tie_weighting_mode: tieWeightingSupported ? tieWeightingMode : 'disabled',
+            statistical_band_mode: state.field_support.statistical_band_mode
+              ? statisticalBandMode
+              : 'disabled',
             ledger_pin_mode: ledgerPinSupported ? ledgerPinMode : 'live',
             crown_incumbent_mode: crownIncumbentSupported ? crownIncumbentMode : 'disabled',
             idle_retests_enabled: idleRetests,
@@ -388,6 +417,7 @@ export function ContinualRetestControlPanel({
           <div><dt className="text-[var(--muted)]">Fleet gate</dt><dd className="mt-1 font-semibold">{effective.fleet_protocol_ready ? 'Ready' : 'Not ready'}</dd></div>
           <div><dt className="text-[var(--muted)]">Aggregate fold</dt><dd className="mt-1 font-semibold">{effective.aggregate_active ? 'Active' : 'Inactive'}</dd></div>
           <div><dt className="text-[var(--muted)]">Tie + ceiling payout</dt><dd className="mt-1 font-semibold">{effective.tie_weighting_active ? 'Active' : effective.settings.tie_weighting_mode === 'fleet_ready' ? 'Waiting for fleet' : 'Disabled'}</dd></div>
+          <div><dt className="text-[var(--muted)]">Statistical cap</dt><dd className="mt-1 font-semibold">{effective.statistical_band_active ? 'Active' : effective.settings.statistical_band_mode === 'fleet_ready' ? 'Waiting for fleet' : 'Disabled'}</dd></div>
           <div>
             <dt className="text-[var(--muted)]">Retest lane</dt>
             <dd
@@ -451,6 +481,35 @@ export function ContinualRetestControlPanel({
               </span>
             </button>
           ))}
+        </div>
+
+        <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
+          <h3 className="text-xs font-semibold text-[var(--muted-strong)]">KOTH statistical band cap</h3>
+          <p className="mt-1 text-[11px] leading-4 text-[var(--muted)]">
+            Caps tie-pooling and unpaired dethrone uncertainty at twice the KOTH margin.
+            Fleet ready waits for every recently-live weight setter to report protocol{' '}
+            {effective.statistical_band_required_protocol}; the next epoch pin activates the fold.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {statisticalBandModes.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                disabled={readOnly || loading || !statisticalBandSupported}
+                onClick={() => setStatisticalBandMode(item.value)}
+                className={`min-h-16 rounded-lg border p-3 text-left disabled:opacity-45 ${
+                  statisticalBandMode === item.value
+                    ? 'border-[var(--amber)]/40 bg-[var(--amber-dim)]'
+                    : 'border-[var(--line)] bg-[var(--panel)] hover:border-[var(--line-strong)]'
+                }`}
+              >
+                <span className="block text-sm font-semibold">{item.label}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-[var(--muted)]">
+                  {item.detail}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">

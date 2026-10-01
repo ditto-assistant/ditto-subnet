@@ -10,6 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.queue_policy_settings import DeferredSourceReviewSettings
 from ditto.api_server.deferred_source_review import (
+    DEFERRED_REVIEW_REASON,
+    INTEGRITY_DOUBLE_CHECK_REASON,
+    LEGACY_INTEGRITY_DOUBLE_CHECK_REASON,
     DeferredReviewDecision,
     deep_review_attempt_id,
     evaluate_deferred_review,
@@ -17,6 +20,7 @@ from ditto.api_server.deferred_source_review import (
     is_no_finding_reason_code,
     public_deferred_review_triggers,
     public_review_conclusion,
+    public_review_reason,
     verified_review_notes,
 )
 from ditto.api_server.endpoints.validator import (
@@ -685,6 +689,40 @@ async def test_copy_hold_survives_every_deferred_mode(
     assert review.algorithm_provenance["review_kind"] == "copy"
 
 
+def test_double_check_reason_is_neutral_for_new_and_stored_rows() -> None:
+    """Every top-five entrant gets the double-check, so its public reason must
+    not read as an integrity finding (#562), including on rows stored with the
+    legacy wording."""
+    assert "integrity" not in INTEGRITY_DOUBLE_CHECK_REASON.lower()
+    # Operator reason searches for the double-check still match new rows.
+    assert "double-check" in INTEGRITY_DOUBLE_CHECK_REASON
+    assert INTEGRITY_DOUBLE_CHECK_REASON != DEFERRED_REVIEW_REASON
+    assert (
+        public_review_reason(
+            "Top-five rank qualified this submission for an integrity double-check"
+        )
+        == INTEGRITY_DOUBLE_CHECK_REASON
+    )
+    assert (
+        public_review_reason(LEGACY_INTEGRITY_DOUBLE_CHECK_REASON)
+        == INTEGRITY_DOUBLE_CHECK_REASON
+    )
+    assert (
+        public_review_reason(INTEGRITY_DOUBLE_CHECK_REASON)
+        == INTEGRITY_DOUBLE_CHECK_REASON
+    )
+    # Anything else, operator prose included, is exact-match only and passes
+    # through unchanged.
+    for reason in (
+        DEFERRED_REVIEW_REASON,
+        "Manual benchmark-integrity review of the scored artifact.",
+        f"{LEGACY_INTEGRITY_DOUBLE_CHECK_REASON}.",
+        "",
+    ):
+        assert public_review_reason(reason) == reason
+    assert public_review_reason(None) is None
+
+
 def test_double_check_counts_held_rows_so_holds_cannot_cascade() -> None:
     """Held rows vanish from the ledger but keep their slot.
 
@@ -793,6 +831,8 @@ async def test_double_check_holds_fully_reviewed_top_five_once(
     assert review.original_evidence["deferred_review"]["bench_version"] == 8
     assert review.original_evidence["deferred_review"]["rank"] == 1
     assert agents[0].review_reason == review.original_reason
+    assert review.original_reason == INTEGRITY_DOUBLE_CHECK_REASON
+    assert "integrity" not in review.original_reason.lower()
     markers = list(
         await session.scalars(
             select(ScoreAuditEntry).where(

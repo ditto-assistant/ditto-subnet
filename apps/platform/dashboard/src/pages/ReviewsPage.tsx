@@ -126,6 +126,40 @@ interface MinerScreeningFailure {
   detail?: string | null;
   log_tail?: string | null;
   captured_at?: string | null;
+  /**
+   * Bounded source-review outcome (#1249). Review notes, cited locations, and
+   * the court's basis stay operator-side, so the panel never reads any other
+   * review field, including from older cached response shapes.
+   */
+  review_outcome?: MinerScreeningReviewOutcome | null;
+}
+
+interface MinerScreeningReviewOutcome {
+  outcome: string;
+  next_step: string;
+}
+
+const REVIEW_OUTCOME_COPY: Record<string, string> = {
+  cleared: "Source review cleared this submission.",
+  rejected: "Source review rejected this submission.",
+  held_for_operator_review: "Source review is holding this submission for an operator.",
+};
+
+const REVIEW_NEXT_STEP_COPY: Record<string, string> = {
+  none: "No action needed.",
+  await_operator_review: "No action needed now; an operator will decide.",
+  resubmit_after_fix:
+    "Fix the submission and upload a new one, or appeal from the submission page.",
+  contact_operators: "Contact the subnet operators for next steps.",
+};
+
+/** Fixed neutral copy for a known outcome; unknown values render nothing. */
+function reviewOutcomeCopy(review?: MinerScreeningReviewOutcome | null): string {
+  if (!review) return "";
+  const outcome = REVIEW_OUTCOME_COPY[review.outcome];
+  if (!outcome) return "";
+  const next = REVIEW_NEXT_STEP_COPY[review.next_step];
+  return next ? `${outcome} ${next}` : outcome;
 }
 
 interface MinerScreeningFeedback {
@@ -1145,6 +1179,9 @@ function AccountPanel(): JSX.Element {
                                 </Show>
                                 <Show when={attempt.log_tail}>
                                   <pre>{attempt.log_tail}</pre>
+                                </Show>
+                                <Show when={reviewOutcomeCopy(attempt.review_outcome)}>
+                                  {(copy) => <p class="account-review-outcome">{copy()}</p>}
                                 </Show>
                               </li>
                             )}

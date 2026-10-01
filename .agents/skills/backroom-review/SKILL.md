@@ -135,6 +135,36 @@ the observed-tool path. Runtime/concurrency diagnosis is
 8. Re-read every quarantine context and refresh the queue. A timeout is
    ambiguous; verify whether the write landed before retrying.
 
+### Terminal ghosts
+
+An active row with `terminal_ghost: true` sits behind an exact agent that is
+already `banned` or `rejected` (read `agent_status`). It is reconciliation
+work, not a review: `terminal_ghost_count`, `actionable_count`, and
+`oldest_actionable_created_at` keep it out of the actionable queue and age,
+and `get_source_review_queue_slo` reports it as
+`terminal_quarantine_ghost_count`. Do not re-judge the artifact, and never
+release or rescreen it to undo a terminal ruling.
+
+1. Confirm the terminal ruling on that exact UUID (`get_ath_review` for a ban).
+2. Preview `reject` with the exact agent UUID and artifact SHA-256 and a reason
+   naming that ruling. Require `disposition: ready`, `terminal_reconciliation:
+   true`, `resulting_agent_status` equal to the current terminal status, and a
+   `terminal_ruling` whose `ath_review_id` / `ath_action_id` match the current
+   reject in `get_ath_review`. A preview with no `terminal_ruling` is "not
+   reconcilable" (no current ATH reject for that exact agent and artifact, for
+   example a `rejected` screening agent): leave it and escalate.
+3. Execute with the preview token. The token is fenced to that ruling: if the
+   ruling or terminal state moved, the batch (or the item, if it moved under
+   lock) is refused; preview again. The quarantine closes with its own
+   resolution row and review event naming the ATH review and reject action;
+   the agent's status, miner-visible reason, and public record stay unchanged.
+
+A reject on a row already closed behind a terminal ruling (by the ruling itself
+or another operator) returns `already_applied`, never a conflict. The unfenced
+single-row resolver refuses these rows. A terminal ATH reject now closes the
+matching active quarantine in the same transaction, so new ghosts should not
+appear; treat one as a pre-fix row or a bug to report.
+
 ## ATH board
 
 Search **both** reporters, then apply the same holding to the same pattern
@@ -186,6 +216,9 @@ published policy or transfer a finding to another artifact.
 7. Write a specific miner-visible reason: pattern, file:line, which limb or
    engine test failed or passed, and the cited precedent.
 8. Re-read the agent. A timeout is ambiguous; verify before retrying.
+   A `reject` also closes the agent's active screening quarantine in the same
+   transaction; `reconciled_quarantine_ids` on the response and on the
+   `get_ath_review` reject action names each one.
 
 ### Batched rulings (5-20 decisions from one board review)
 
@@ -258,7 +291,7 @@ running, and exits cleanly when a `stop` file is touched in that directory.
 A loop fire may resolve rows (release/reject/clear) with the same bar as an
 interactive fire, but it never rescreens, and miner-requested holds,
 family-dedupe holds, and stranded holds (409 "agent is no longer held") are
-always left for a human.
+always left for a human, as are terminal-ghost quarantine rows.
 
 The loop prompt is a scheduled-run entry point, not the screener's Python
 prompt. Interactive reviews enter through this skill and the same court

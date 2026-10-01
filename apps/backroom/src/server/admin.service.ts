@@ -14,6 +14,7 @@ export async function fetchSubmissionAttempt(agentId: string, referenceAgentId?:
   ))
 }
 
+import { treasuryLedgerReadinessSchema } from '../lib/treasury-ledger.schemas'
 import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
 
 export async function previewTreasuryTopup(rawInput: unknown) {
@@ -30,7 +31,9 @@ export async function previewTreasuryTopup(rawInput: unknown) {
     quote,
     policy_revision: policy.revision,
     checks: {
-      gm_allocation_proposed: proposed.gm_bps > 0,
+      gm_allocation_proposed: proposed.allocation_version === 2
+        ? proposed.service_buckets.some(bucket => bucket.bucket_id === 'gm_credits' && bucket.allocation_bps > 0)
+        : proposed.gm_bps > 0,
       single_topup_within_limit: quote.tao_path.amount_rao <= proposed.max_single_topup_rao,
       price_impact_within_limit: quoteImpact <= proposed.max_slippage_bps,
       linked_wallet_verified: false,
@@ -52,6 +55,12 @@ export async function fetchTreasurySettings() {
   return treasuryControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-settings'))
 }
 
+export async function fetchTreasuryLedgerReadiness() {
+  return treasuryLedgerReadinessSchema.parse(
+    await platformAdminRequest('/api/v1/admin/treasury-settings/ledger-readiness'),
+  )
+}
+
 export async function recordTreasurySettings(rawInput: unknown, actor: string) {
   const input = recordTreasurySettingsInputSchema.parse(rawInput)
   const revision = await platformAdminRequest('/api/v1/admin/treasury-settings', {
@@ -61,7 +70,6 @@ export async function recordTreasurySettings(rawInput: unknown, actor: string) {
       expected_revision: input.expectedRevision,
       settings: input.settings,
       reason: input.reason,
-      actor,
       confirmation: input.confirmation,
     },
   })
@@ -329,6 +337,8 @@ import {
   claimProvenanceCasesSchema,
   queuePolicySettingsControlSchema,
   setInferenceConcurrencySettingsInputSchema,
+  scoringLeaseSettingsControlSchema,
+  setScoringLeaseSettingsInputSchema,
   runtimeProfileArtifactSchema,
   runtimeProfileCaptureInputSchema,
   runtimeProfileDownloadSchema,
@@ -692,33 +702,71 @@ export async function fetchL2ReportCanary(rawInput: unknown) {
 
 export async function fetchL2ReportCanaryPreflight(rawInput: unknown) {
   const input = l2ReportCanaryPreflightInputSchema.parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.artifactSha256 !== undefined) params.set('artifact_sha256', input.artifactSha256)
+  if (input.expectedAgentStatus !== undefined) {
+    params.set('expected_agent_status', input.expectedAgentStatus)
+  }
+  if (input.expectedScoreCount !== undefined) {
+    params.set('expected_score_count', String(input.expectedScoreCount))
+  }
+  if (input.historicalRulingKind !== undefined) {
+    params.set('historical_ruling_kind', input.historicalRulingKind)
+  }
+  if (input.historicalRulingId !== undefined) {
+    params.set('historical_ruling_id', input.historicalRulingId)
+  }
+  const query = params.toString()
   const payload = await platformAdminRequest(
-    `/api/v1/admin/screener-l2-report-canaries/preflight/${input.agentId}/${input.sourceAttemptId}`,
+    `/api/v1/admin/screener-l2-report-canaries/preflight/${input.agentId}/${input.sourceAttemptId}${query ? `?${query}` : ''}`,
   )
   return l2ReportCanaryPreflightViewSchema.parse(payload)
 }
 
 export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
   const input = scheduleL2ReportCanaryInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/screener-l2-report-canaries', {
-    method: 'POST',
-    actor,
-    body: {
-      request_id: input.requestId,
-      agent_id: input.agentId,
-      source_attempt_id: input.sourceAttemptId,
-      artifact_sha256: input.artifactSha256,
-      policy_version: 13,
-      expected_agent_status: input.expectedAgentStatus,
-      expected_score_count: input.expectedScoreCount,
-      target_node_id: input.targetNodeId,
-      review_label: input.reviewLabel,
-      run_mode: input.runMode,
-      historical_ruling_kind: input.historicalRulingKind,
-      historical_ruling_id: input.historicalRulingId,
-      confirm_report_only: true,
-    },
-  })
+  const pinned = input.reviewSettingsRevision !== undefined
+  // Platform ignores unknown request fields, so a pin sent on the plain route
+  // to a build that predates pins would queue the canary under the node's
+  // posture. A pin therefore travels only on its own route. A build without
+  // that route answers 405 (the path matches GET /{canary_id}) or 404 during
+  // routing and queues nothing; the route itself never answers 404.
+  const path = `/api/v1/admin/screener-l2-report-canaries${pinned ? '/pinned' : ''}`
+  let payload: unknown
+  try {
+    payload = await platformAdminRequest(path, {
+      method: 'POST',
+      actor,
+      body: {
+        request_id: input.requestId,
+        agent_id: input.agentId,
+        source_attempt_id: input.sourceAttemptId,
+        artifact_sha256: input.artifactSha256,
+        policy_version: 13,
+        expected_agent_status: input.expectedAgentStatus,
+        expected_score_count: input.expectedScoreCount,
+        target_node_id: input.targetNodeId,
+        review_label: input.reviewLabel,
+        run_mode: input.runMode,
+        historical_ruling_kind: input.historicalRulingKind,
+        historical_ruling_id: input.historicalRulingId,
+        ...(pinned ? { review_settings_revision: input.reviewSettingsRevision } : {}),
+        confirm_report_only: true,
+      },
+    })
+  } catch (error) {
+    if (
+      pinned &&
+      error instanceof PlatformAdminError &&
+      (error.status === 404 || error.status === 405)
+    ) {
+      throw new Error(
+        'This Platform build does not support canary review settings pins yet, so nothing was queued. ' +
+          'Retry reviewSettingsRevision after Platform is deployed with POST /admin/screener-l2-report-canaries/pinned.',
+      )
+    }
+    throw error
+  }
   return l2ReportCanaryViewSchema.parse(payload)
 }
 
@@ -1965,6 +2013,52 @@ export async function setValidatorIssuancePause(rawInput: unknown, actor: string
     throw validatorSlotRefusal(cause) ?? cause
   }
   return fetchValidatorSlotSettings()
+}
+
+const SCORING_LEASE_SETTINGS_PATH = '/api/v1/admin/scoring-lease-settings'
+
+export async function fetchScoringLeaseSettings() {
+  const payload = await platformAdminRequest(SCORING_LEASE_SETTINGS_PATH)
+  return scoringLeaseSettingsControlSchema.parse(payload)
+}
+
+// The platform owns the wording of every refusal: a stale `expected_revision`,
+// a concurrent write, a confirmation that does not name the resulting TTL, an
+// out-of-range TTL, or a blank audit field. Keep its text verbatim and append
+// the recovery for THAT refusal. Re-reading the revision only fixes a stale or
+// concurrent write; advising it for an input refusal sends the operator back
+// to repeat the same failing request.
+function scoringLeaseRefusal(cause: unknown) {
+  if (!(cause instanceof PlatformAdminError)) return null
+  if (cause.status !== 409 && cause.status !== 422) return null
+  const recovery = /confirmation/i.test(cause.message)
+    ? 'Nothing was applied: the confirmation must name the TTL this revision applies, typed out as "APPLY SCORING TICKET TTL <n> MINUTES" rather than derived from the number above it.'
+    : cause.status === 422
+      ? 'Nothing was applied and the revision did not change: correct the refused input (a whole-minute scoring_ticket_ttl_minutes inside the bounds get_scoring_lease_settings reports, and a reason of at least 8 non-blank characters) and resubmit with the same expectedRevision.'
+      : 'Nothing was applied: re-read get_scoring_lease_settings and resubmit with the revision it reports.'
+  return new Error(`${cause.message}. ${recovery}`)
+}
+
+/** Append one scoring lease revision. It applies to NEW leases only. */
+export async function setScoringLeaseSettings(rawInput: unknown, actor: string) {
+  const input = setScoringLeaseSettingsInputSchema.parse(rawInput)
+  try {
+    await platformAdminRequest(SCORING_LEASE_SETTINGS_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        scope: input.scope,
+        expected_revision: input.expectedRevision,
+        settings: input.settings,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+  } catch (cause) {
+    throw scoringLeaseRefusal(cause) ?? cause
+  }
+  return fetchScoringLeaseSettings()
 }
 
 // The platform's existing public heartbeat view. It is the only place the two

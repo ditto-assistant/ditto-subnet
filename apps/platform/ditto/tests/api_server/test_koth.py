@@ -694,6 +694,80 @@ def test_paired_statistical_tie_pools_but_unpaired_stderr_does_not() -> None:
     assert emission_shares(without_pairs, tie_pooling=True) == (0.65, 0.14)
 
 
+def test_erratic_paired_member_cannot_join_tie_or_ceiling_cohort() -> None:
+    seeds = tuple(range(15))
+    champion = _entry(1, 0.9975, minutes=0, confirmations=(0.9975,) * 15, seeds=seeds)
+    erratic = _entry(
+        2,
+        11 / 15,
+        minutes=1,
+        confirmations=(1.0,) * 11 + (0.0,) * 4,
+        seeds=seeds,
+    )
+    projection = project_koth(
+        [champion, erratic], distinct_hotkeys=True, statistical_band_cap=True
+    )
+
+    assert projection is not None
+    assert emission_shares(projection, tie_pooling=True, statistical_band_cap=True) == (
+        0.65,
+        0.14,
+    )
+    allocation = emission_allocation(
+        [champion, erratic],
+        projection,
+        tie_pooling=True,
+        statistical_band_cap=True,
+    )
+    assert allocation.mode == "ranked"
+    assert allocation.shares == (0.65, 0.14)
+
+
+@pytest.mark.parametrize("champion_score", [0.90, 0.9975])
+def test_low_variance_difference_below_margin_does_not_join_tie_or_cohort(
+    champion_score: float,
+) -> None:
+    seeds = tuple(range(15))
+    champion = _entry(
+        1, champion_score, minutes=0, confirmations=(champion_score,) * 15, seeds=seeds
+    )
+    candidate_score = champion_score - 0.004
+    candidate = _entry(
+        2,
+        candidate_score,
+        minutes=1,
+        confirmations=tuple(
+            champion_score - (0.003 if seed % 2 else 0.005) for seed in seeds
+        ),
+        seeds=seeds,
+    )
+    paired = _paired_statistic(candidate, champion)
+    assert paired is not None
+    assert 0.0 < 1.64 * paired.standard_error < abs(paired.mean_difference) < 0.007
+    projection = project_koth(
+        [champion, candidate], distinct_hotkeys=True, statistical_band_cap=True
+    )
+
+    assert projection is not None
+    assert projection.champion == champion
+    if champion_score > 0.99:
+        assert _dethrone_decision(
+            candidate, champion, statistical_band_cap=True
+        ).ceiling_deadlocked
+    assert emission_shares(projection, tie_pooling=True, statistical_band_cap=True) == (
+        0.65,
+        0.14,
+    )
+    allocation = emission_allocation(
+        [champion, candidate],
+        projection,
+        tie_pooling=True,
+        statistical_band_cap=True,
+    )
+    assert allocation.mode == "ranked"
+    assert allocation.shares == (0.65, 0.14)
+
+
 def test_tie_aware_projection_deduplicates_hotkey_destinations() -> None:
     incumbent = _entry(1, 0.90, minutes=0)
     first = _entry(2, 0.80, minutes=1)
@@ -714,9 +788,9 @@ def test_tie_aware_projection_deduplicates_hotkey_destinations() -> None:
 
 def test_statistical_band_matches_validator_unpaired_rule() -> None:
     incumbent = _entry(2, 0.80, minutes=0, stderr=0.03)
-    raw_leader = _entry(1, 0.85, minutes=1, stderr=0.03)
+    raw_leader = _entry(1, 0.81, minutes=1, stderr=0.03)
 
-    projection = project_koth([raw_leader, incumbent])
+    projection = project_koth([raw_leader, incumbent], statistical_band_cap=True)
 
     assert projection is not None
     decision = projection.raw_leader_decision
@@ -724,7 +798,7 @@ def test_statistical_band_matches_validator_unpaired_rule() -> None:
     assert projection.champion == incumbent
     assert decision.margin_lead == pytest.approx(0.007)
     assert decision.statistical_lead == pytest.approx(1.64 * (0.03**2 + 0.03**2) ** 0.5)
-    assert decision.required_lead == decision.statistical_lead
+    assert decision.required_lead == pytest.approx(0.014)
     assert decision.method == "unpaired"
 
 

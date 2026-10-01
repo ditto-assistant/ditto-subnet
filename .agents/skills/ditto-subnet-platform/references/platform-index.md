@@ -17,6 +17,7 @@
 | Shadow coding revocation adapter | `services/dittobench-api/internal/codinggrantrevoke/`, `services/dittobench-api/docs/coding-private-runtime-adapters-shadow.md` |
 | Hippius sealed Coding evidence | `apps/platform/ditto/api_server/coding_hippius_evidence.py`, `apps/platform/ditto/db/queries/coding_evidence.py`, `apps/platform/docs/coding-hippius-sealed-evidence-mediator.md` |
 | Hippius Coding custody/recovery | `apps/platform/ditto/api_server/coding_hippius_custody.py`, `apps/platform/docs/coding-hippius-custody-recovery.md` |
+| Owner representative and continual retest admission diagnosis | `apps/platform/ditto/api_server/endpoints/admin_leaderboard.py` (`continual-retest-diagnostic`), `endpoints/validator.py` (`_current_retest_cohort`), Backroom MCP `get_continual_retest_diagnostic`, `apps/backroom/docs/mcp.md` |
 | Affected-component graph | `release/components.toml` |
 | Production DB and Targon logs (read-only) | `.agents/skills/gcloud-ditto-readonly/` |
 
@@ -75,3 +76,4 @@ git diff --check
 - Backroom is public subnet operations only; private Ditto app operations stay in the private product Backroom.
 - Authenticated Worker responses are `no-store`; writes require same-origin protection.
 - API changes mark `platform_api`, `platform`, and `backroom` affected. Dashboard changes mark `platform_dashboard` and `platform` only.
+- A guarded admin write and its Backroom preflight read call one shared predicate (for example `_evaluate_exact_source` behind `schedule_l2_report_canary` and `get_l2_report_canary_preflight`), so an operator sees the exact guard, current and expected values, and 409 detail instead of a generic conflict.

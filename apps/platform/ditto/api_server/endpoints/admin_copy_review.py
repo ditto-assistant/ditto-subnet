@@ -86,6 +86,11 @@ from ditto.db.queries.scores import (
     LedgerRow,
     list_scores_for_agent,
 )
+from ditto.db.queries.terminal_quarantine_reconciliation import (
+    TerminalRuling,
+    close_quarantines_for_terminal_ruling,
+    lock_active_quarantines,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -260,6 +265,9 @@ def _audit(
                 previous_status=action.evidence.get("previous_status"),
                 artifact_sha256=action.evidence.get("sha256"),
                 score_count=action.evidence.get("score_count"),
+                reconciled_quarantine_ids=action.evidence.get(
+                    "reconciled_quarantine_ids", []
+                ),
             )
             for action in actions or []
         ],
@@ -1030,7 +1038,13 @@ async def resolve_copy_review(
     canonical = {"release": "clear", "ban": "reject"}.get(
         payload.resolution, payload.resolution
     )
+    reconciled_quarantine_ids: list[UUID] = []
     async with session.begin():
+        if canonical == "reject":
+            # Take the screening resolvers' lock order (quarantine, then agent)
+            # so a terminal ruling and a concurrent screening resolution of the
+            # same agent serialize instead of deadlocking (ditto-subnet#2038).
+            await lock_active_quarantines(session, agent_id=agent_id)
         row = await _get_review(session, agent_id, lock=True)
         if row is None:
             raise HTTPException(status_code=404, detail="copy review not found")
@@ -1123,14 +1137,39 @@ async def resolve_copy_review(
         review.resolved_by = actor
         review.resolution = canonical
         review.resolution_reason = payload.reason
+        action_id = uuid4()
+        if canonical == "reject":
+            # A terminal ruling must not leave an actionable-looking screening
+            # quarantine behind: no guarded resolver could close it afterwards.
+            # The closure cites this exact review and the reject action below.
+            reconciled_quarantine_ids = await close_quarantines_for_terminal_ruling(
+                session,
+                agent=agent,
+                ruling=TerminalRuling(
+                    agent_status=agent.status.value,
+                    artifact_sha256=agent.sha256,
+                    ath_review_id=review.review_id,
+                    ath_action_id=action_id,
+                    ath_resolved_at=now,
+                ),
+                source="ath_ruling",
+                actor=actor,
+                reason=f"Closed by terminal ATH ruling: {payload.reason}",
+                now=now,
+            )
+        action_evidence: dict[str, Any] = {"previous_status": previous_status}
+        if reconciled_quarantine_ids:
+            action_evidence["reconciled_quarantine_ids"] = [
+                str(quarantine_id) for quarantine_id in reconciled_quarantine_ids
+            ]
         session.add(
             AthReviewAction(
-                action_id=uuid4(),
+                action_id=action_id,
                 review_id=review.review_id,
                 action=canonical,
                 reason=payload.reason,
                 actor=actor,
-                evidence={"previous_status": previous_status},
+                evidence=action_evidence,
                 created_at=review.resolved_at,
             )
         )
@@ -1148,6 +1187,7 @@ async def resolve_copy_review(
         ),
         agent_status=agent.status.value,
         idempotent=False,
+        reconciled_quarantine_ids=reconciled_quarantine_ids,
     )
 
 

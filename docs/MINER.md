@@ -659,10 +659,15 @@ The platform collapses version and filler tokens, so `Jupiter`,
 only claim a stem you have already used on a submission.
 
 A claim starts `pending`. It becomes `upheld` after **three** distinct
-entrenched miner families endorse it. Entrenched means the endorser already
-has a full-benchmark scored agent family whose earliest upload is at least
-seven days old — not a brand-new hotkey. Your own family cannot endorse
-yourself.
+entrenched miner families endorse it. Entrenched means the endorser's owner
+family already has a full-benchmark scored agent (status `scored`, a
+full-benchmark score above zero) that was uploaded at least seven days ago —
+not a brand-new hotkey. The seven days count from the family's earliest
+full-benchmark scored upload, not its earliest upload of any kind: a family
+that first uploaded a month ago but got its first full-benchmark score two
+days ago cannot endorse yet. Hotkeys in one owner family (same payment
+coldkey or an active owner attestation) share that history. Your own family
+cannot endorse yourself.
 
 An upheld claim is a strong action, so it requires those three distinct
 families. Once upheld it:

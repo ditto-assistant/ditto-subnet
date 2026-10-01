@@ -80,6 +80,38 @@ async def test_l2_canary_completion_retries_identical_body_after_502(
     assert bodies[0] == bodies[1]
 
 
+async def test_l2_canary_claim_declares_pinned_posture_support(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """Platform leases a pinned canary only to a worker that applies the pin."""
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        _assert_auth(request)
+        assert request.url.path.endswith("/l2-report-canaries/claim")
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200, content=b"null", headers={"content-type": "application/json"}
+        )
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        claimed = await client.claim_l2_report_canary(
+            instance_id="subnet-screener-1-worker-1",
+            settings_revision=124,
+            settings_checksum="d" * 64,
+        )
+    assert claimed is None
+    assert bodies == [
+        {
+            "instance_id": "subnet-screener-1-worker-1",
+            "settings_revision": 124,
+            "settings_checksum": "d" * 64,
+            "accepts_review_settings_override": True,
+        }
+    ]
+
+
 async def test_l2_canary_completion_does_not_retry_expired_or_conflicting_lease(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

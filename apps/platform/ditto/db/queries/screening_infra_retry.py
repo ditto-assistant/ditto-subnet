@@ -3,9 +3,10 @@
 A screener that reports ``docker-build-infrastructure`` (Docker daemon, BuildKit,
 or the build host failed; the miner's archive was never judged), a retryable
 ``l2-runtime-evidence-unavailable`` (no signed scorer-cohort lease was available
-at claim), or
-``worker-claim-not-started`` (the worker settled a durable claim before fetching
-the artifact) parks the agent as ``screening_failed``. Unlike the provider codes in
+at claim), ``worker-claim-not-started`` (the worker settled a durable claim
+before fetching the artifact), or ``source-review-adjudicator-key-unavailable``
+(the node's source-review court key was unusable) parks the agent as
+``screening_failed``. Unlike the provider codes in
 ``PROVIDER_BACKOFF_REASON_CODES`` it is retried without an operator, so this
 module owns three things and nothing else:
 
@@ -101,10 +102,19 @@ if TYPE_CHECKING:
 # ``claim_next`` and ``_screen_one`` (stop during a multi-item claim, a policy
 # change during the claim, an out-of-range item policy, an unparseable claim
 # response), before the artifact is fetched, built, or reviewed (#2446).
+# ``source-review-adjudicator-key-unavailable`` qualifies because the worker
+# emits it only when the source-review court's API key file on the node is unset,
+# unreadable, too short, or readable by group/other. The key is read before the
+# archive is opened, so the artifact decides only whether the court is consulted,
+# never whether it fails. A court that cannot open or read the archive (which the
+# archive itself can cause) and a screen whose source reviewer never started
+# report ``source-review-unavailable`` instead, which stays on the operator
+# retry (#2449).
 INFRA_AUTO_RETRY_REASON_CODES: tuple[str, ...] = (
     "docker-build-infrastructure",
     "worker-claim-not-started",
     "l2-runtime-evidence-unavailable",
+    "source-review-adjudicator-key-unavailable",
 )
 
 INFRA_RETRY_BASE_BACKOFF = timedelta(minutes=10)

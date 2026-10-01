@@ -517,6 +517,7 @@ async def test_resolved_review_reopens_without_rewriting_original_evidence(
         "previous_status": "live",
         "artifact_sha256": sha256,
         "score_count": 3,
+        "reconciled_quarantine_ids": [],
     }
 
     recleared = await client.post(

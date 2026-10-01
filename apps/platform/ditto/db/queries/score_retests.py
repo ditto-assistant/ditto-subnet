@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.scoring_lease_settings import DEFAULT_SCORING_TICKET_TTL
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.db.models import (
     Agent,
@@ -41,7 +42,10 @@ from ditto.db.queries.lease_liveness import (
     record_lease_revocation,
 )
 
-REPLACEMENT_TICKET_TTL = timedelta(minutes=180)
+# Default only: paired with the canonical scoring TTL and, since #1156, both
+# come from the operator's scoring lease revision. Callers pass the resolved
+# value as ``ttl``; a promoted replacement stamps it onto its NEW deadline.
+REPLACEMENT_TICKET_TTL = DEFAULT_SCORING_TICKET_TTL
 V9_CONTRACT_RETEST_BASIS = "v9_contract_mismatch"
 MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS = 1
 _FINALIZED_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
@@ -303,6 +307,7 @@ async def activate_next_score_retest(
     required_basis: str | None = None,
     allow_parallel_ordinary: bool = False,
     allow_parallel_contract_retests: bool = False,
+    ttl: timedelta = REPLACEMENT_TICKET_TTL,
 ) -> ValidatorTicket | None:
     """Resume the active re-test or promote the oldest runnable queued item.
 
@@ -526,7 +531,7 @@ async def activate_next_score_retest(
             continue
 
         assert ticket is not None
-        deadline = now + REPLACEMENT_TICKET_TTL
+        deadline = now + ttl
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1

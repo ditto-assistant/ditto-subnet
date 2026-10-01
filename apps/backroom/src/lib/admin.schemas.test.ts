@@ -5,6 +5,9 @@ import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   SCREENING_SUBMISSION_AGENT_STATUSES,
+  scoringLeaseConfirmation,
+  scoringLeaseSettingsControlSchema,
+  setScoringLeaseSettingsInputSchema,
   emissionEligibilityControlSchema,
   auditReasonSchema,
   baselineDiffManifestSchema,
@@ -98,8 +101,11 @@ import {
   listLeaseRevocationsInputSchema,
   leaseRevocationsListSchema,
   screenerCapacityViewSchema,
+  screenerFleetReleaseSchema,
   screeningInfraRetryViewSchema,
   screenerNodeChannelSettingsConfirmation,
+  screenerNodeChannelSettingsControlSchema,
+  setScreenerNodeChannelSettingsInputSchema,
   screenerProviderSettingsConfirmation,
   screenerProviderSettingsSchema,
   authorizeConfirmationBundleRetestInputSchema,
@@ -315,6 +321,17 @@ describe('admin API schemas', () => {
     expect(screenerCapacityViewSchema.parse(base).legacy_bearer_accepted).toBeNull()
   })
 
+  it('preserves the signed fixture capability and defaults older releases to false', () => {
+    const release = {
+      builtin_policy_version: 13,
+      revision: 'a'.repeat(40),
+      version: 'v0.330.16',
+      activated_at: 1_800_000_000,
+    }
+    expect(screenerFleetReleaseSchema.parse({ ...release, source_fixture_v1: true }).source_fixture_v1).toBe(true)
+    expect(screenerFleetReleaseSchema.parse(release).source_fixture_v1).toBe(false)
+  })
+
   it('preserves the fenced multi-provider capacity contract', () => {
     const parsed = screenerCapacityViewSchema.parse({
       snapshot: {
@@ -476,19 +493,77 @@ describe('admin API schemas', () => {
       build_concurrency: 4,
       runtime_concurrency: 4,
       source_review_concurrency: 4,
+      canary_concurrency: 1,
     }
 
     expect(screenerNodeChannelSettingsConfirmation('subnet-screener-1', settings)).toBe(
-      'APPLY SCREENER NODE subnet-screener-1 SCREENING=0 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4 CLOSE PRODUCTION ADMISSION',
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=0 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4 CANARY=1 CLOSE PRODUCTION ADMISSION',
     )
     expect(
       screenerNodeChannelSettingsConfirmation('subnet-screener-1', {
         ...settings,
         screening_concurrency: 4,
+        canary_concurrency: 0,
       }),
     ).toBe(
-      'APPLY SCREENER NODE subnet-screener-1 SCREENING=4 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4',
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=4 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4 CANARY=0',
     )
+  })
+
+  it('reads a pre-canary node revision with the Platform default but writes all six limits', () => {
+    const legacy = {
+      screening_concurrency: 2,
+      sandbox_slots: 2,
+      build_concurrency: 2,
+      runtime_concurrency: 2,
+      source_review_concurrency: 2,
+    }
+    const revision = {
+      environment: 'prod',
+      node_id: 'subnet-screener-1',
+      revision: 3,
+      parent_revision: 2,
+      settings: legacy,
+      reason: 'Open two production lanes on the primary',
+      actor: 'operator@example.com',
+      created_at: null,
+    }
+    const control = screenerNodeChannelSettingsControlSchema.parse({
+      current: revision,
+      history: [revision],
+      usage: {
+        screening_active: 1,
+        sandbox_active: 0,
+        build_active: 0,
+        runtime_active: 0,
+        source_review_active: 0,
+      },
+    })
+    expect(control.current.settings.canary_concurrency).toBe(1)
+    expect(control.usage?.canary_active).toBe(0)
+    expect(control.usage?.canary_queued).toBe(0)
+
+    const write = {
+      nodeId: 'subnet-screener-1',
+      expectedRevision: 3,
+      reason: 'Reserve both production lanes on the primary',
+      confirmation: 'unused',
+    }
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.safeParse({ ...write, settings: legacy }).success,
+    ).toBe(false)
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.safeParse({
+        ...write,
+        settings: { ...legacy, canary_concurrency: 9 },
+      }).success,
+    ).toBe(false)
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.parse({
+        ...write,
+        settings: { ...legacy, canary_concurrency: 0 },
+      }).settings.canary_concurrency,
+    ).toBe(0)
   })
 
   it('parses aggregate inference controls and rejects unsafe operator input', () => {
@@ -859,6 +934,8 @@ describe('admin API schemas', () => {
     })
     expect(assignments.items[0].score_count).toBe(2)
     expect(assignments.items[0].provisional_composite).toBe(1.25)
+    // A platform that predates the field reads as "no seed", not a guess.
+    expect(assignments.items[0].seed).toBeNull()
     expect(() =>
       releaseValidatorAssignmentInputSchema.parse({
         agentId: assignments.items[0].agent_id,
@@ -867,6 +944,40 @@ describe('admin API schemas', () => {
         reason: 'short',
       }),
     ).toThrow()
+  })
+
+  it('keeps a continual retest lease seed exact and rejects a lossy number', () => {
+    const lease = {
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      agent_name: 'memory-agent',
+      miner_hotkey: '5Miner',
+      validator_hotkey: '5Validator',
+      issued_at: '2026-09-22T17:35:16Z',
+      deadline: '2026-09-22T20:35:16Z',
+      bench_version: 13,
+      attempt_count: 1,
+      score_count: 3,
+      provisional_composite: 0.9,
+      purpose: 'continual_retest',
+      seed: '9007199254740993',
+    }
+    const parsed = validatorAssignmentListSchema.parse({
+      count: 1,
+      generation: 'active',
+      active_bench_version: 13,
+      items: [lease],
+    })
+    expect(parsed.items[0].seed).toBe('9007199254740993')
+    for (const seed of [Number.MAX_SAFE_INTEGER + 2, '-1', '01', '1e3']) {
+      expect(() =>
+        validatorAssignmentListSchema.parse({
+          count: 1,
+          generation: 'active',
+          active_bench_version: 13,
+          items: [{ ...lease, seed }],
+        }),
+      ).toThrow()
+    }
   })
 })
 
@@ -1941,6 +2052,23 @@ describe('source review causal evidence schema', () => {
     expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
   })
 
+  it('retains signed v3 I5 proof and rejects an unbound assumption', () => {
+    const proof = {
+      evaluation_assumption: 'A fixed evaluation answer replaces the request answer.',
+      ordinary_product_exclusion: 'The served code skips the deciding model entirely.',
+      assumption_evidence_index: 0,
+    }
+    const finding = {
+      ...generatedFinding,
+      causal_evidence: { ...generatedFinding.causal_evidence, schema_version: 3, i5_proof: proof },
+    } as const
+    expect(sourceReviewFindingSchema.parse(finding).causal_evidence?.i5_proof).toEqual(proof)
+    expect(() => sourceReviewFindingSchema.parse({
+      ...finding,
+      causal_evidence: { ...finding.causal_evidence, i5_proof: { ...proof, assumption_evidence_index: 9 } },
+    })).toThrow(/not bound to source evidence/)
+  })
+
   it('parses and retains the complete policy-v10 invariant sweep', () => {
     const parsed = sourceReviewFindingSchema.parse({
       ...generatedFinding,
@@ -2289,6 +2417,26 @@ describe('screen review audit schema', () => {
     expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
     expect(() => screenReviewAuditSchema.parse({ ...audit, max_steps: 257 })).toThrow()
     expect(() => screenReviewAuditSchema.parse({ ...audit, output_tokens_used: 1_000_001 })).toThrow()
+  })
+
+  it('preserves bounded inconclusive choices without accepting source text', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l2-model-inconclusive', prompt_revision: 'l2-v13',
+      max_steps: 256, steps_used: 7, dossier_complete: false,
+      model_categories: ['benchmark_emulation'],
+      model_inconclusive_invariants: ['i5_production_engine'],
+      model_evidence_count: 1, model_causal_role_count: 2,
+    }
+    expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_categories: ['src/secret.py'],
+    })).toThrow()
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_inconclusive_invariants: ['private finding'],
+    })).toThrow()
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_evidence_count: 17,
+    })).toThrow()
   })
 
   it('preserves exact V13 preflight cause and budgets in Backroom diagnostics', () => {
@@ -3527,6 +3675,7 @@ describe('continual retest cohort sizing against an older platform', () => {
   })
   const legacySupport = {
     tie_weighting_mode: false,
+    statistical_band_mode: false,
     ledger_pin_mode: false,
     crown_incumbent_mode: false,
     retest_cohort_size: false,
@@ -3543,6 +3692,7 @@ describe('continual retest cohort sizing against an older platform', () => {
   const legacyPolicy = {
     aggregate_mode: 'enabled' as const,
     tie_weighting_mode: 'disabled' as const,
+    statistical_band_mode: 'disabled' as const,
     ledger_pin_mode: 'live' as const,
     crown_incumbent_mode: 'disabled' as const,
     idle_retests_enabled: true,
@@ -3644,6 +3794,7 @@ describe('continual retest cohort sizing against an older platform', () => {
 
     expect(continualRetestFieldSupport(partial)).toEqual({
       tie_weighting_mode: false,
+      statistical_band_mode: false,
       ledger_pin_mode: false,
       crown_incumbent_mode: false,
       retest_cohort_size: false,
@@ -3660,6 +3811,7 @@ describe('continual retest write contract', () => {
   const complete = {
     aggregate_mode: 'fleet_ready' as const,
     tie_weighting_mode: 'fleet_ready' as const,
+    statistical_band_mode: 'disabled' as const,
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'fleet_ready' as const,
     idle_retests_enabled: false,
@@ -3679,6 +3831,7 @@ describe('continual retest write contract', () => {
     // collapsed cohort, a discarded tie band.
     for (const field of [
       'tie_weighting_mode',
+      'statistical_band_mode',
       'ledger_pin_mode',
       'crown_incumbent_mode',
       'wave_membership',
@@ -3743,6 +3896,7 @@ describe('continual retest write contract', () => {
     ).toEqual({
       aggregate_mode: 'fleet_ready',
       tie_weighting_mode: 'disabled',
+      statistical_band_mode: 'disabled',
       ledger_pin_mode: 'epoch',
       crown_incumbent_mode: 'disabled',
       idle_retests_enabled: false,
@@ -4951,5 +5105,48 @@ describe('emission eligibility policy schema', () => {
       fleet_protocol_ready: false,
       required_protocol: 28,
     })
+  })
+})
+
+describe('scoring lease settings (#1156)', () => {
+  it('mirrors the generated Platform response shape', () => {
+    expectTypeOf<keyof ZodOutput<typeof scoringLeaseSettingsControlSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminScoringLeaseSettingsResponse']
+    >()
+    expectTypeOf<
+      keyof ZodOutput<typeof scoringLeaseSettingsControlSchema>['effective']
+    >().toEqualTypeOf<keyof PlatformComponents['schemas']['EffectiveScoringLeaseSettings']>()
+  })
+
+  it('requires the whole policy, the 60-240 bound, and a confirmation naming the TTL', () => {
+    const base = {
+      expectedRevision: 0,
+      settings: { scoring_ticket_ttl_minutes: 150 },
+      reason: 'v11 completions fit well inside 150 minutes',
+      confirmation: scoringLeaseConfirmation(150),
+    }
+    expect(setScoringLeaseSettingsInputSchema.parse(base)).toMatchObject({
+      scope: '*',
+      settings: { scoring_ticket_ttl_minutes: 150 },
+    })
+    expect(scoringLeaseConfirmation(150)).toBe('APPLY SCORING TICKET TTL 150 MINUTES')
+    expect(() =>
+      setScoringLeaseSettingsInputSchema.parse({ ...base, settings: {} }),
+    ).toThrow()
+    for (const minutes of [59, 241]) {
+      expect(() =>
+        setScoringLeaseSettingsInputSchema.parse({
+          ...base,
+          settings: { scoring_ticket_ttl_minutes: minutes },
+          confirmation: scoringLeaseConfirmation(minutes),
+        }),
+      ).toThrow()
+    }
+    expect(() =>
+      setScoringLeaseSettingsInputSchema.parse({
+        ...base,
+        confirmation: scoringLeaseConfirmation(180),
+      }),
+    ).toThrow(/APPLY SCORING TICKET TTL 150 MINUTES/)
   })
 })

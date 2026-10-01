@@ -25,7 +25,7 @@ import hashlib
 import json
 import logging
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -36,6 +36,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from ditto.api_models import LedgerEntry, LedgerResponse
 from ditto.api_models.validator import ConfirmationSeedAnchorPin
 from ditto.api_server.koth import koth_entries_from_ledger, project_koth
+from ditto.api_server.treasury_shadow import observe_shadow_treasury
 from ditto.chain.errors import ChainError
 from ditto.db.queries.ledger_epochs import (
     LedgerPinDraft,
@@ -44,6 +45,11 @@ from ditto.db.queries.ledger_epochs import (
     latest_pin,
 )
 from ditto.metrics import LEDGER_PIN_LOOP_RUNS, LEDGER_PIN_MATERIALIZATIONS
+from ditto_screening_protocol.treasury import TreasuryLedgerPin
+from ditto_screening_protocol.treasury_enforcement import (
+    EnforcingTreasuryPin,
+    TreasuryPin,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -148,8 +154,10 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
     readiness and are identical for every reader.
     """
     served = pin.context.get("served", {})
+    treasury = treasury_pin_from_context(pin)
     age = max(0, int((now - pin.pinned_at).total_seconds()))
     return LedgerResponse(
+        treasury_pin=treasury,
         entries=list(pin.entries),
         active_bench_version=pin.bench_version,
         v9_confirmation_mode=served.get("v9_confirmation_mode"),
@@ -158,6 +166,7 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
         reward_eligibility_mode=served.get("reward_eligibility_mode"),
         tie_weighting_mode=served.get("tie_weighting_mode"),
         dethrone_band_mode=served.get("dethrone_band_mode"),
+        statistical_band_mode=served.get("statistical_band_mode"),
         count=len(pin.entries),
         generated_at=pin.pinned_at,
         stale=stale,
@@ -183,12 +192,111 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
     )
 
 
+def _validated_treasury_pin(
+    raw: Any,
+    *,
+    netuid: int,
+    epoch_index: int,
+    first_block: int,
+    pinned_block: int,
+    pinned_block_hash: str,
+) -> TreasuryPin:
+    if isinstance(raw, dict) and raw.get("version") == 2:
+        treasury = EnforcingTreasuryPin.model_validate(raw)
+        if (
+            treasury.policy.netuid != netuid
+            or treasury.epoch_index != epoch_index
+            or treasury.first_block != first_block
+            or treasury.pinned_block != pinned_block
+            or treasury.pinned_block_hash != pinned_block_hash
+        ):
+            raise ValueError("enforcing treasury differs from immutable epoch")
+        return treasury
+    if isinstance(raw, EnforcingTreasuryPin):
+        return _validated_treasury_pin(
+            raw.model_dump(mode="json"),
+            netuid=netuid,
+            epoch_index=epoch_index,
+            first_block=first_block,
+            pinned_block=pinned_block,
+            pinned_block_hash=pinned_block_hash,
+        )
+    treasury = TreasuryLedgerPin.model_validate(raw)
+    treasury.require_epoch(
+        netuid=netuid, first_block=first_block, pinned_block=pinned_block
+    )
+    if (
+        treasury.identity.finalized_block == pinned_block
+        and treasury.identity.finalized_block_hash != pinned_block_hash
+    ):
+        raise ValueError("treasury identity block hash differs from ledger pin")
+    return treasury
+
+
+def treasury_pin_from_context(pin: LedgerPin) -> TreasuryPin | None:
+    """Replay stored known fields only; malformed treasury evidence is never dropped."""
+    if not isinstance(pin.context, dict):
+        raise ValueError("stored ledger context must be an object")
+    served = pin.context.get("served", {})
+    if not isinstance(served, dict):
+        raise ValueError("stored served context must be an object")
+    if "treasury_pin" not in served:
+        return None
+    raw = served["treasury_pin"]
+    treasury = _validated_treasury_pin(
+        raw,
+        netuid=pin.netuid,
+        epoch_index=pin.epoch_index,
+        first_block=pin.last_epoch_block,
+        pinned_block=pin.pinned_block,
+        pinned_block_hash=pin.pinned_block_hash,
+    )
+    if ledger_digest(canonical_entries(pin.entries), served) != pin.ledger_digest:
+        raise ValueError("treasury ledger digest mismatch")
+    return treasury
+
+
 # Revealed weights are u16-quantized (value / sum), so two folds of the same
 # recipients agree to well under a thousandth; a real tail swap moves 3% or more.
 PIN_SHARE_TOLERANCE = 0.002
 
 
 def pin_expected_shares(pin: Any) -> dict[str, float] | None:
+    shares = _pin_competitive_shares(pin)
+    if "treasury_pin" not in (pin.context or {}).get("served", {}):
+        return shares
+    treasury = treasury_pin_from_context(
+        LedgerPin.from_row(pin) if not isinstance(pin, LedgerPin) else pin
+    )
+    if not isinstance(treasury, EnforcingTreasuryPin):
+        return shares
+    vector = pin_expected_treasury_vector(pin, burn_hotkey="__burn_projection__")
+    paid = {key: value for key, value in vector.items() if key != "__burn_projection__"}
+    total = sum(paid.values())
+    return {key: value / total for key, value in paid.items()} if total else None
+
+
+def pin_expected_treasury_vector(pin: Any, *, burn_hotkey: str) -> dict[str, float]:
+    """Exact V2 service-first projection, including empty or fully burned pools."""
+    from ditto_screening_protocol.treasury_weight_math import service_first_weights
+
+    projection = pin if isinstance(pin, LedgerPin) else LedgerPin.from_row(pin)
+    treasury = treasury_pin_from_context(projection)
+    if not isinstance(treasury, EnforcingTreasuryPin):
+        raise ValueError("service vector requires enforcing treasury pin")
+    shares = _pin_competitive_shares(pin)
+    return service_first_weights(
+        shares or {},
+        service_bps=treasury.policy.service_bps,
+        burn_share=pin.context["served"]["burn_share"],
+        paid_miner_fraction=sum(shares.values()) if shares else 0,
+        collector_hotkey=treasury.policy.collector_hotkey,
+        collector_verified=True,
+        burn_hotkey=burn_hotkey,
+    )
+
+
+def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
     """The miner shares the pin's fold prescribes, keyed by hotkey.
 
     Re-runs the Platform fold over the pin's stored entries under the pin's
@@ -213,10 +321,12 @@ def pin_expected_shares(pin: Any) -> dict[str, float] | None:
     )
     tie_pooling = served.get("tie_weighting_mode") == "pool"
     clamp = served.get("dethrone_band_mode") == "headroom_capped"
+    statistical_cap = served.get("statistical_band_mode") == "capped"
     projection = project_koth(
         fold_entries,
         distinct_hotkeys=tie_pooling,
         ceiling_band_clamp=clamp,
+        statistical_band_cap=statistical_cap,
         incumbent_agent_id=(
             pin.incumbent_agent_id if served.get("crown_mode") == "incumbent" else None
         ),
@@ -224,7 +334,11 @@ def pin_expected_shares(pin: Any) -> dict[str, float] | None:
     if projection is None:
         return None
     allocation = emission_allocation(
-        fold_entries, projection, tie_pooling=tie_pooling, ceiling_band_clamp=clamp
+        fold_entries,
+        projection,
+        tie_pooling=tie_pooling,
+        ceiling_band_clamp=clamp,
+        statistical_band_cap=statistical_cap,
     )
     total = sum(allocation.shares)
     if total <= 0.0:
@@ -438,6 +552,35 @@ class LedgerPinMaterializer:
                 now=now,
                 requesting_validator_hotkey=None,
             )
+        treasury: TreasuryPin | None = await observe_shadow_treasury(
+            app_state, schedule
+        )
+        if getattr(app_state.config, "treasury_weight_enforcement", False):
+            from ditto.api_server.treasury_weights import enforcing_pin_from_observation
+
+            if treasury is None:
+                raise ValueError("enforcing treasury requires finalized observation")
+            async with session_maker() as session:
+                treasury = await enforcing_pin_from_observation(
+                    app_state, session, treasury, schedule, now=now
+                )
+        if treasury is not None:
+            # Preserve the shared snapshot cache; this observation belongs only
+            # to the epoch being materialized and is replayed from its stored pin.
+            snapshot = replace(snapshot, treasury_pin=treasury)
+            if isinstance(treasury, EnforcingTreasuryPin):
+                collector = treasury.policy.collector_hotkey
+                snapshot = replace(
+                    snapshot,
+                    entries=[
+                        e for e in snapshot.entries if e.miner_hotkey != collector
+                    ],
+                    withheld_entries=[
+                        e
+                        for e in (snapshot.withheld_entries or [])
+                        if e.miner_hotkey != collector
+                    ],
+                )
         draft = build_pin_draft(
             schedule,
             snapshot=snapshot,
@@ -494,6 +637,19 @@ def build_pin_draft(
         "continual_retest_cohort_size": snapshot.continual_retest_cohort_size,
         "crown_mode": snapshot.crown_mode,
     }
+    raw_treasury = getattr(snapshot, "treasury_pin", None)
+    if raw_treasury is not None:
+        treasury = _validated_treasury_pin(
+            raw_treasury,
+            netuid=schedule.netuid,
+            epoch_index=schedule.subnet_epoch_index,
+            first_block=schedule.last_epoch_block,
+            pinned_block=schedule.block,
+            pinned_block_hash=schedule.block_hash,
+        )
+        served["treasury_pin"] = treasury.model_dump(mode="json")
+    if getattr(snapshot, "statistical_band_mode", None) == "capped":
+        served["statistical_band_mode"] = "capped"
     # Bench v13+: freeze the pinned confirmation seed anchors with the pin so a
     # validator re-deriving the champion-anchored family from a pin sees the
     # same binding a live read would have served. Keyed only when present, so
@@ -560,6 +716,8 @@ def build_pin_draft(
         ),
         distinct_hotkeys=snapshot.tie_weighting_mode == "pool",
         ceiling_band_clamp=snapshot.dethrone_band_mode == "headroom_capped",
+        statistical_band_cap=getattr(snapshot, "statistical_band_mode", None)
+        == "capped",
         incumbent_agent_id=(incumbent if snapshot.crown_mode == "incumbent" else None),
     )
     champion_id = projection.champion.agent_id if projection is not None else None

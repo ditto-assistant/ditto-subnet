@@ -10,6 +10,7 @@
 import { bootParams } from "./config";
 
 export type PageName =
+  | "gamma"
   | "activity"
   | "overview"
   | "leaderboard"
@@ -28,6 +29,7 @@ const OPERATIONS_VIEW_SET = new Set<OperationsView>(["validators", "screeners", 
 // benchmark subtitle is rewritten in place once the live bench version is
 // known.
 export const PAGES: Record<PageName, { title: string; sub: string }> = {
+  gamma: { title: "Gamma", sub: "Beta · service allocations and public wallet activity" },
   activity: {
     title: "Admin activity",
     sub: "Public history of Backroom actions and operational changes",

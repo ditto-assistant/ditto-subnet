@@ -19,6 +19,7 @@ from ditto.api_models.screener_review_settings import (
     AppliedScreenerReviewSettings,
     ScreenerPolicyManifestView,
     ScreenerReviewSettings,
+    is_l2_report_canary_scope,
     policy_manifest_digest,
     review_settings_checksum,
 )
@@ -89,9 +90,11 @@ def _effective_row(
     *,
     node_id: str | None = None,
 ) -> ScreenerReviewSettingsRevision | None:
-    # Match the screener fetch path: worker, enrolled node, then global.
+    # Match the screener fetch path: worker, enrolled node, then global. A
+    # canary-only scope is never a worker's posture, whatever the worker is
+    # called.
     for scope in (instance_id, node_id):
-        if scope is None:
+        if scope is None or is_l2_report_canary_scope(scope):
             continue
         row = current_by_scope.get(scope)
         if row is not None and row.settings.get("mode") != "inherit":
