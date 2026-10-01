@@ -33154,6 +33154,14 @@ export interface components {
              * @constant
              */
             offline_policy_verified: false;
+            /**
+             * Proposal Approval Status
+             * @default not_configured
+             * @enum {string}
+             */
+            proposal_approval_status: "not_configured" | "verified" | "invalid";
+            /** Proposal Approved Policy Digest */
+            proposal_approved_policy_digest?: string | null;
             stored_shadow_pin: components["schemas"]["TreasuryLedgerPin"] | null;
             /**
              * Weight Effect

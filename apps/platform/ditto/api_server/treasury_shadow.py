@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from ditto.api_models.treasury_readiness import (
     ObserverStatus,
@@ -11,6 +11,10 @@ from ditto.api_models.treasury_readiness import (
 )
 from ditto.chain.models import EpochSchedule
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
+from ditto_screening_protocol.treasury_approval import (
+    verify_policy_approval,
+    verify_public_signature,
+)
 
 
 async def observe_shadow_treasury(
@@ -53,6 +57,25 @@ def shadow_readiness(app_state: Any, ledger_pin: Any | None) -> TreasuryLedgerRe
 
     policy = getattr(app_state.config, "treasury_shadow_policy", None)
     raw_status = getattr(app_state, "treasury_shadow_observer_status", "not_observed")
+    approval = getattr(app_state.config, "treasury_shadow_approval", None)
+    approval_status: Literal["not_configured", "verified", "invalid"] = "not_configured"
+    approved_digest = None
+    if approval is not None:
+        try:
+            approved_policy = verify_policy_approval(
+                approval,
+                expected_policy_digest=app_state.config.treasury_approved_policy_digest,
+                expected_collector_policy_digest=(
+                    app_state.config.treasury_approved_collector_policy_digest
+                ),
+                verify_signature=verify_public_signature,
+            )
+            if approved_policy != policy:
+                raise ValueError("approval differs from configured proposal")
+            approval_status = "verified"
+            approved_digest = approved_policy.digest
+        except (ValueError, TypeError, AttributeError):
+            approval_status = "invalid"
     statuses: dict[str, ObserverStatus] = {
         "disabled": "disabled",
         "not_observed": "not_observed",
@@ -95,6 +118,8 @@ def shadow_readiness(app_state: Any, ledger_pin: Any | None) -> TreasuryLedgerRe
         reasons.append("no_epoch_pin")
     return TreasuryLedgerReadiness(
         configured_proposal=policy,
+        proposal_approval_status=approval_status,
+        proposal_approved_policy_digest=approved_digest,
         observer_status=status,
         latest_stored_epoch_index=ledger_pin.epoch_index if ledger_pin else None,
         latest_stored_ledger_digest=ledger_pin.ledger_digest if ledger_pin else None,

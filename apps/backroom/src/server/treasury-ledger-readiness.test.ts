@@ -4,6 +4,8 @@ import { fetchTreasuryLedgerReadiness } from './admin.service'
 const originalToken = process.env.DITTO_ADMIN_API_TOKEN
 const observation = {
   configured_proposal: null,
+  proposal_approval_status: 'not_configured',
+  proposal_approved_policy_digest: null,
   observer_status: 'disabled',
   observer_scope: 'this_platform_process',
   latest_stored_epoch_index: null,
@@ -22,6 +24,14 @@ afterEach(() => {
 })
 
 describe('treasury ledger observation boundary', () => {
+  it('defaults missing new proposal-proof fields without creating authority', async () => {
+    const legacy: Partial<typeof observation> = { ...observation }
+    delete legacy.proposal_approval_status
+    delete legacy.proposal_approved_policy_digest
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-test-token'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(legacy)))
+    expect(await fetchTreasuryLedgerReadiness()).toEqual(observation)
+  })
   it('preserves known shadow evidence and ignores future fields at every level', async () => {
     const pin = JSON.parse(readFileSync(new URL(
       '../../../../packages/ditto-screening-protocol/tests/fixtures/treasury_ledger_pin_v1.json',
@@ -49,11 +59,30 @@ describe('treasury ledger observation boundary', () => {
     expect(await fetchTreasuryLedgerReadiness()).toEqual(expected)
   })
 
+  it('shows proposal approval distinctly while epoch and funding authority stay false', async () => {
+    const pin = JSON.parse(readFileSync(new URL(
+      '../../../../packages/ditto-screening-protocol/tests/fixtures/treasury_ledger_pin_v1.json',
+      import.meta.url,
+    ), 'utf8'))
+    const response = {
+      ...observation,
+      configured_proposal: pin.policy,
+      proposal_approval_status: 'verified',
+      proposal_approved_policy_digest: pin.policy_digest,
+    }
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-test-token'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(response)))
+    expect(await fetchTreasuryLedgerReadiness()).toEqual(response)
+  })
+
   it.each([
     { configured_proposal: {} },
     { stored_shadow_pin: { mode: 'active' } },
     { observer_status: 'future_state' },
     { blocking_reasons: ['unbounded_new_reason'] },
+    { proposal_approval_status: 'verified' },
+    { proposal_approved_policy_digest: 'a'.repeat(64) },
+    { proposal_approval_status: 'verified', proposal_approved_policy_digest: 'a'.repeat(64) },
   ])('refuses malformed known observation fields: %j', async (change) => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-test-token'
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ...observation, ...change })))

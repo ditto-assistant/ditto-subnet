@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ditto.api_models.inference_concurrency_settings import (
@@ -58,6 +59,11 @@ from ditto.api_server.validator_names import (
 from ditto.chain import ChainConfig, parse_chain_config_from_env
 from ditto.db import PostgresConfig, parse_postgres_config_from_env
 from ditto_screening_protocol.treasury import TreasuryEmissionPolicy
+from ditto_screening_protocol.treasury_approval import (
+    TreasuryPolicyApproval,
+    verify_policy_approval,
+    verify_public_signature,
+)
 
 # Substrate SS58 base58 alphabet, 47-48 chars. Same shape Pydantic
 # enforces on the wire; mirrored here so a bad payment address fails
@@ -327,6 +333,11 @@ class ApiServerConfig:
 
     treasury_shadow_policy: TreasuryEmissionPolicy | None = None
     """Optional public proposal for finalized shadow observation, never funding."""
+
+    treasury_shadow_approval: TreasuryPolicyApproval | None = None
+    treasury_approved_policy_digest: str | None = None
+    treasury_approved_collector_policy_digest: str | None = None
+    """Optional offline proposal proof and immutable public digest; no funding."""
 
     private_preparation: PrivatePreparationConfig = field(
         default_factory=PrivatePreparationConfig
@@ -848,6 +859,10 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             "DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE must be non-negative (0 disables)"
         )
 
+    treasury_policy = parse_treasury_shadow_policy()
+    treasury_approval, treasury_approved_digest, collector_policy_digest = (
+        parse_treasury_shadow_approval(treasury_policy)
+    )
     return ApiServerConfig(
         conversation_shadow_enabled=os.environ.get(
             "DITTO_CONVERSATION_SHADOW_ENABLED", "false"
@@ -859,7 +874,10 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             os.environ.get("DITTO_SOURCE_EMISSION_CONFIRMATION_ENABLED", "true").lower()
             in _TRUTHY
         ),
-        treasury_shadow_policy=parse_treasury_shadow_policy(),
+        treasury_shadow_policy=treasury_policy,
+        treasury_shadow_approval=treasury_approval,
+        treasury_approved_policy_digest=treasury_approved_digest,
+        treasury_approved_collector_policy_digest=collector_policy_digest,
         host=host,
         port=port,
         log_level=log_level,
@@ -929,6 +947,42 @@ def parse_treasury_shadow_policy() -> TreasuryEmissionPolicy | None:
     except ValueError:
         # Do not echo arbitrary operator input into boot logs.
         raise ApiServerConfigError("invalid public treasury shadow policy") from None
+
+
+def parse_treasury_shadow_approval(
+    proposal: TreasuryEmissionPolicy | None,
+) -> tuple[TreasuryPolicyApproval | None, str | None, str | None]:
+    path = os.environ.get("DITTO_TREASURY_SHADOW_APPROVAL_FILE", "").strip()
+    expected = os.environ.get("DITTO_TREASURY_APPROVED_POLICY_DIGEST", "").strip()
+    collector_expected = os.environ.get(
+        "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST", ""
+    ).strip()
+    if not path and not expected and not collector_expected:
+        return None, None, None
+    if not path or not expected or not collector_expected or proposal is None:
+        raise ApiServerConfigError(
+            "treasury approval requires file, immutable digests and public proposal"
+        )
+    try:
+        with Path(path).open("rb") as stream:
+            raw = stream.read(8193)
+        if len(raw) > 8192:
+            raise ValueError("approval exceeds bound")
+        approval = TreasuryPolicyApproval.model_validate_json(raw)
+        verified = verify_policy_approval(
+            approval,
+            expected_policy_digest=expected,
+            expected_collector_policy_digest=collector_expected,
+            verify_signature=verify_public_signature,
+        )
+        if verified != proposal:
+            raise ValueError("approval differs from observer proposal")
+    except (OSError, ValueError):
+        # Paths, arbitrary file contents and crypto errors do not enter boot logs.
+        raise ApiServerConfigError(
+            "invalid offline treasury proposal approval"
+        ) from None
+    return approval, expected, collector_expected
 
 
 def parse_ditto_link_config_from_env() -> DittoLinkConfig:

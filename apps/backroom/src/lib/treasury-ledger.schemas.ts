@@ -43,6 +43,8 @@ const pin = z.object({
 
 export const treasuryLedgerReadinessSchema = z.object({
   configured_proposal: policy.nullable(),
+  proposal_approval_status: z.enum(['not_configured', 'verified', 'invalid']).default('not_configured'),
+  proposal_approved_policy_digest: digest.nullable().default(null),
   observer_status: z.enum(['disabled', 'not_observed', 'observing', 'observed', 'unavailable']),
   observer_scope: z.literal('this_platform_process'),
   latest_stored_epoch_index: z.number().int().nonnegative().nullable(),
@@ -56,4 +58,9 @@ export const treasuryLedgerReadinessSchema = z.object({
   offline_policy_verified: z.literal(false),
   weight_effect: z.literal('none'),
   can_enforce_weights: z.literal(false),
+}).superRefine((value, context) => {
+  if ((value.proposal_approval_status === 'verified') !== (value.proposal_approved_policy_digest !== null)
+    || (value.proposal_approval_status === 'verified' && value.configured_proposal === null)) {
+    context.addIssue({ code: 'custom', message: 'Proposal approval must bind its exact digest and policy' })
+  }
 }) satisfies z.ZodType<components['schemas']['TreasuryLedgerReadiness']>

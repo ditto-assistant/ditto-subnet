@@ -51,3 +51,31 @@ all-fleet capability gate. Durable public receipt/activity ingestion and vendor
 credit confirmation also remain separate work. Provisioning, binding this
 proposal, registration, signing, transfers and live weight changes require the
 user's separate action-time authorization.
+
+## Optional offline proposal approval
+
+The public proposal can separately carry an offline collector-coldkey signature.
+Its domain is `ditto-treasury-emission-policy-v1:<canonical public policy digest>`;
+the existing collector executor policy uses a different signature domain. A
+signature cannot be reused to approve another action or modified known fields.
+Unknown envelope/policy fields are ignored and never enter canonical authority.
+
+Platform accepts this optional proof only with all three deployment inputs:
+`DITTO_TREASURY_SHADOW_APPROVAL_FILE` (a bounded public JSON envelope),
+`DITTO_TREASURY_APPROVED_POLICY_DIGEST` (immutable public emission-policy digest)
+and `DITTO_TREASURY_COLLECTOR_POLICY_DIGEST` (immutable executor-policy digest).
+The existing explicit observer proposal must exactly match the signed policy.
+Missing/partial inputs, malformed proof, wrong signer, changed destination,
+revision or chain, and mismatched deployment digests refuse boot. No environment
+value, file, secret or deployment binding is installed by this change.
+
+Readiness re-verifies the configured proposal's proof and reports
+`proposal_approval_status` and `proposal_approved_policy_digest`. This is scoped
+to the configured proposal in this process. It neither approves a stored epoch
+retroactively nor authorizes registration, signing, spending or weights.
+The existing `offline_policy_verified=false`, `weight_effect=none` and
+`can_enforce_weights=false` remain unchanged for V1 shadow epoch pins. A shared
+consumer helper also binds approval to a validated epoch's policy, chain,
+recipient and block window, but does not query live finality or registration.
+The active adapter, all-fleet gate and fresh pre-dispatch identity revalidation
+remain required.
