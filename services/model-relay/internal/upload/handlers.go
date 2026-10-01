@@ -90,18 +90,31 @@ type settings struct {
 	cooldownSeconds int32
 	feeAmountRao    int64
 	paymentAddress  string
+	// quotable is false only when read with requireQuotable=false from a
+	// revision in an unreviewed denomination; feeAmountRao must then never be
+	// quoted.
+	quotable bool
 }
 
-func (d *Deps) effectiveSettings(ctx context.Context, q *postgres.Queries) (settings, error) {
+// effectiveSettings reads the latest settings. Quoting (requireQuotable)
+// fails closed on an unreviewed denomination; reads that need only the
+// cooldown, or that honour an already-issued reservation, pass false and must
+// check quotable before issuing a new quote. This mirrors Python's
+// effective_submission_settings(require_quotable=...).
+func (d *Deps) effectiveSettings(ctx context.Context, q *postgres.Queries, requireQuotable bool) (settings, error) {
 	out := settings{
 		cooldownSeconds: defaultCooldownSeconds,
 		feeAmountRao:    defaultFeeAmountRao,
 		paymentAddress:  d.Cfg.Upload.PaymentAddress,
+		quotable:        true,
 	}
 	row, err := q.GetLatestSubmissionSettings(ctx)
 	if err == nil {
 		if row.FeeDenomination != feeDenominationFixedTAO {
-			return settings{}, fmt.Errorf("%w: revision %d uses %q", errUnsupportedFeeDenomination, row.Revision, row.FeeDenomination)
+			if requireQuotable {
+				return settings{}, fmt.Errorf("%w: revision %d uses %q", errUnsupportedFeeDenomination, row.Revision, row.FeeDenomination)
+			}
+			out.quotable = false
 		}
 		out.revision = row.Revision
 		out.cooldownSeconds = row.CooldownSeconds
@@ -133,7 +146,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func (d *Deps) handleEvalPricing(w http.ResponseWriter, r *http.Request) {
-	value, err := d.effectiveSettings(r.Context(), d.Queries)
+	value, err := d.effectiveSettings(r.Context(), d.Queries, true)
 	if err != nil {
 		d.dbError(w, r, "upload pricing", err)
 		return
@@ -274,8 +287,10 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now tim
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := d.Queries.WithTx(tx)
 	// Match Python's transaction boundary: bind the reservation to the latest
-	// append-only settings revision inside the transaction that writes it.
-	current, err := d.effectiveSettings(ctx, q)
+	// append-only settings revision inside the transaction that writes it. An
+	// already-issued reservation is honoured even when that revision cannot be
+	// quoted; only issuing a new quote below fails closed.
+	current, err := d.effectiveSettings(ctx, q, false)
 	if err != nil {
 		return nil, settings{}, err
 	}
@@ -318,6 +333,9 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now tim
 	}
 	if blocked != nil {
 		return nil, current, &cooldownError{retryAt: *blocked}
+	}
+	if !current.quotable {
+		return nil, current, fmt.Errorf("%w: revision %d cannot be quoted", errUnsupportedFeeDenomination, current.revision)
 	}
 	token := uuid.New()
 	expires := now.Add(admissionTTL)
@@ -409,7 +427,10 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	current, err := d.effectiveSettings(r.Context(), d.Queries)
+	// Only the cooldown is needed here, so an unquotable revision must not turn
+	// validation failures (bad signature, ban, size) into 503; a new quote is
+	// refused inside reserve instead.
+	current, err := d.effectiveSettings(r.Context(), d.Queries, false)
 	if err != nil {
 		d.dbError(w, r, "settings lookup", err)
 		return

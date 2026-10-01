@@ -496,3 +496,81 @@ func TestUnsupportedFeeDenominationFailsClosed(t *testing.T) {
 		t.Fatalf("reservations=%d; an unsupported denomination must not issue a quote", reservations)
 	}
 }
+
+// dropDenominationCheck removes the fixed_tao CHECK in this scratch database so
+// a test can model a newer writer's revision the relay cannot price.
+func dropDenominationCheck(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `
+		DO $$
+		DECLARE name text;
+		BEGIN
+			FOR name IN SELECT conname FROM pg_constraint
+				WHERE conrelid = 'submission_settings_revisions'::regclass
+				  AND pg_get_constraintdef(oid) LIKE '%fee_denomination%'
+			LOOP
+				EXECUTE format('ALTER TABLE submission_settings_revisions DROP CONSTRAINT %I', name);
+			END LOOP;
+		END $$`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Mirrors Python's TestReservedQuoteUnderUnquotablePricing: an issued,
+// same-hotkey same-archive reservation is honoured while the current revision
+// cannot be quoted, and validation failures are reported, not turned into 503.
+func TestIssuedReservationHonouredUnderUnquotablePricing(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	secret, hotkey := newSignedHotkey(t)
+	coldkey := "5IssuedQuoteColdkey"
+	sha := strings.Repeat("e", 64)
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	d := uploadDeps(pool, coldkey, now)
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO submission_settings_revisions
+		(parent_revision, cooldown_seconds, fee_amount_rao, fee_denomination, reason, actor)
+		VALUES (0, 1800, 40000000, 'fixed_tao', 'quoted fixed TAO fee', 'go-test')`); err != nil {
+		t.Fatal(err)
+	}
+	issued, _, err := d.reserve(t.Context(), coldkey, hotkey, sha, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropDenominationCheck(t, pool)
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO submission_settings_revisions
+		(parent_revision, cooldown_seconds, fee_amount_rao, fee_denomination, reason, actor)
+		SELECT max(revision), 1800, 5000000000, 'usd_indexed', 'a five dollar target, not rao', 'go-test'
+		FROM submission_settings_revisions`); err != nil {
+		t.Fatal(err)
+	}
+
+	got := serveCheck(t, d, signedCheckJSON(t, secret, hotkey, sha, map[string]any{"reserve_submission_slot": true}))
+	if !got.OK || got.AdmissionToken == nil || *got.AdmissionToken != issued.token {
+		t.Fatalf("issued reservation was not honoured: %+v", got)
+	}
+	if got.PaymentAmountRao == nil || *got.PaymentAmountRao != 40_000_000 {
+		t.Fatalf("issued fee changed: %+v", got)
+	}
+
+	// A validation failure is still reported as such, not as a pricing 503.
+	_, otherHotkey := newSignedHotkey(t)
+	bad := validCheckJSONFor(otherHotkey)
+	w := httptest.NewRecorder()
+	d.handleCheck(w, httptest.NewRequest(http.MethodPost, "/api/v1/upload/check", strings.NewReader(bad)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var rejected checkResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &rejected); err != nil {
+		t.Fatal(err)
+	}
+	if rejected.OK || len(rejected.ErrorCodes) == 0 || rejected.ErrorCodes[0] != errorBadSignature {
+		t.Fatalf("expected a bad-signature rejection: %+v", rejected)
+	}
+}
+
+func validCheckJSONFor(hotkey string) string {
+	return `{"hotkey":"` + hotkey + `","sha256":"` + strings.Repeat("a", 64) +
+		`","file_size_bytes":1,"signature":"` + strings.Repeat("ab", 64) + `"}`
+}
