@@ -218,7 +218,7 @@ operator selected on consent, and the account's live level. Consent can narrow
 a request but never widen it: a `scope=backroom:read` request yields a
 read-only grant whatever is selected, and a client that needs more must
 reconnect and request the broader scope (the step-up challenge above names it).
-The unauthenticated `/mcp` 401 challenge advertises all three scopes, because
+The unauthenticated `/mcp` 401 challenge advertises all three ordinary scopes, because
 MCP clients request exactly the challenged scope: a first connection asks for
 everything, and the operator narrows it on consent. The consent screen always
 shows all four levels and disables any this request or account cannot receive,
@@ -241,6 +241,39 @@ and write access at once. `get_backroom_access` reports that access-token
 `expires_at`. Signed artifact download URLs stay on their own short lifetime
 and are not extended with the session. There is no refresh path for the
 identity itself — when the session ends, the operator authorizes again.
+
+### Dedicated treasury receipt observer
+
+An observer must request **only** `backroom:treasury:observe`. This scope is
+advertised in OAuth metadata but deliberately excluded from the ordinary 401
+scope bundle: mixing it with read, source or write is refused. The staff member
+must explicitly select receipt observation and remain write-level at consent,
+code exchange, refresh and each MCP request. The original seven-day staff
+session and token TTL limits still apply; blocking, removing write entitlement
+or revoking the grant prevents further observation. No grant is issued by
+deploying this code.
+
+The dedicated server exposes exactly two tools, without the general read floor:
+
+- `get_treasury_settings` **requires** an exact positive `revision`. It returns
+  a singleton `history` containing the immutable revision, checksum and raw
+  settings JSON (at most 64 KiB), including future fields needed to verify the
+  checksum. It omits actor, reason and unrelated history. Corrupt or oversized
+  history is refused, never replaced by default settings. The ordinary read
+  tool keeps its existing current/history response when revision is omitted.
+- `record_treasury_receipt` verifies one finalized selection, requires the exact
+  receipt confirmation, and attributes it to the authorizing staff email.
+  Platform's chain, policy, replay and append-only checks are unchanged. Vendor
+  payment is not proof of provider credits or authority to spend.
+
+Only stateless POST initialize/initialized/ping/tools-list and calls to those
+two tools are permitted. Direct requests for other tools, resource reads,
+downloads, JSON-RPC batches and bodies over 64 KiB fail before Platform access.
+The observer performs fresh tool discovery and refuses a broader catalog; its
+local allowlist alone is not credential custody protection. An operator must
+separately approve and obtain the dedicated grant through ordinary browser
+consent. No desktop credential copying, mint/refresh helper, secret provisioning
+or observer activation is included.
 
 ## Bindings
 

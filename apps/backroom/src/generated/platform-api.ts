@@ -3442,6 +3442,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/treasury-settings/revisions/{revision}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Treasury Observer Settings */
+        get: operations["get_treasury_observer_settings_api_v1_admin_treasury_settings_revisions__revision__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/trusted-image-builds": {
         parameters: {
             query?: never;
@@ -33269,6 +33286,20 @@ export interface components {
             weight_effect: "none";
         };
         /**
+         * TreasuryObserverSettings
+         * @description One exact immutable revision for the receipt observer, not latest policy.
+         */
+        TreasuryObserverSettings: {
+            /** Checksum */
+            checksum: string;
+            /** Revision */
+            revision: number;
+            /** Settings */
+            settings: {
+                [key: string]: unknown;
+            };
+        };
+        /**
          * TreasuryPayeeRule
          * @description An exact chain-payment classification, never provider credit proof.
          */
@@ -42949,6 +42980,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TreasuryLedgerReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_treasury_observer_settings_api_v1_admin_treasury_settings_revisions__revision__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                revision: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasuryObserverSettings"];
                 };
             };
             /** @description Validation Error */

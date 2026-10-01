@@ -1,4 +1,5 @@
 import '@tanstack/react-start/server-only'
+import { z } from 'zod'
 import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema } from '../lib/treasury-receipts.schemas'
 
 export async function recordTreasuryReceipt(rawInput: unknown, actor: string) {
@@ -50,6 +51,17 @@ export async function fetchTreasuryQuote(rawInput: unknown) {
 
 export async function fetchTreasurySettings() {
   return treasuryControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-settings'))
+}
+
+export async function fetchTreasuryObserverSettings(revision: number) {
+  const selected = z.number().int().min(1).max(2_147_483_647).parse(revision)
+  const row = z.object({
+    revision: z.number().int().min(1).max(2_147_483_647),
+    checksum: z.string().regex(/^[0-9a-f]{64}$/),
+    settings: z.record(z.string(), z.unknown()),
+  }).parse(await platformAdminRequest(`/api/v1/admin/treasury-settings/revisions/${selected}`))
+  if (row.revision !== selected) throw new Error('Historical treasury revision mismatch')
+  return { history: [row] }
 }
 
 export async function fetchTreasuryLedgerReadiness() {

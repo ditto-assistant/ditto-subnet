@@ -6,7 +6,8 @@ import hashlib
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.treasury_readiness import TreasuryLedgerReadiness
 from ditto.api_models.treasury_settings import (
     AdminTreasurySettingsRequest,
+    TreasuryObserverSettings,
     TreasurySettings,
     TreasurySettingsControl,
     TreasurySettingsRevision,
@@ -128,6 +130,44 @@ async def get_treasury_ledger_readiness(
             ],
         }
     )
+
+
+@router.get("/revisions/{revision}", response_model=TreasuryObserverSettings)
+async def get_treasury_observer_settings(
+    revision: Annotated[int, Path(gt=0, le=2_147_483_647)],
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> TreasuryObserverSettings:
+    response.headers["Cache-Control"] = "no-store"
+    row = await session.get(RevisionRow, revision)
+    if row is None:
+        raise HTTPException(
+            404,
+            "Historical treasury revision not found",
+            headers={"Cache-Control": "no-store"},
+        )
+    try:
+        # Validate supported semantics, but retain the full raw JSON for the
+        # independent checksum. Never substitute defaults for corrupt history.
+        TreasurySettings.model_validate(row.settings)
+        encoded = json.dumps(
+            row.settings, sort_keys=True, separators=(",", ":")
+        ).encode()
+        if len(encoded) > 65_536:
+            raise ValueError("historical settings exceed observer bound")
+        checksum = hashlib.sha256(encoded).hexdigest()
+        if checksum != row.checksum:
+            raise ValueError("historical checksum mismatch")
+        return TreasuryObserverSettings(
+            revision=row.revision, checksum=row.checksum, settings=row.settings
+        )
+    except (ValidationError, ValueError, TypeError):
+        raise HTTPException(
+            409,
+            "Historical treasury settings are invalid",
+            headers={"Cache-Control": "no-store"},
+        ) from None
 
 
 @router.get("", response_model=TreasurySettingsControl)

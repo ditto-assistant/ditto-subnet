@@ -38,7 +38,7 @@ function ConsentPage() {
   const details = Route.useLoaderData()
   const { user } = Route.useRouteContext()
   const { request } = Route.useSearch()
-  const [accessLevel, setAccessLevel] = useState<'read' | 'artifact' | 'write' | 'full'>('read')
+  const [accessLevel, setAccessLevel] = useState<'read' | 'artifact' | 'write' | 'full' | 'observe'>(details.observerOnly ? 'observe' : 'read')
   const [pending, setPending] = useState<'allow' | 'deny' | null>(null)
   const [error, setError] = useState('')
   // A level is selectable only when the OAuth client requested its scope AND
@@ -119,9 +119,20 @@ function ConsentPage() {
           </div>
 
           <div className="space-y-3 px-6 py-6 sm:px-8">
+            {details.observerOnly && <PermissionOption
+              selected={accessLevel === 'observe'}
+              onSelect={() => setAccessLevel('observe')}
+              disabledReason={!privilegedAccount ? 'Requires a write-level Backroom account' : undefined}
+              icon={Eye}
+              title="Observe treasury receipts"
+              badge="Dedicated access"
+              description="Read one historical treasury revision and record independently verified finalized payment observations. Cannot sign, spend, change policy or inspect unrelated subnet data."
+              items={['Exact historical treasury settings only', 'Verified receipt ingestion with confirmation', 'No source downloads or general read/write tools', 'Vendor payment remains distinct from provider credits']}
+            />}
             <PermissionOption
               selected={accessLevel === 'read'}
               onSelect={() => setAccessLevel('read')}
+              disabledReason={details.observerOnly ? 'Not part of this dedicated observer request' : undefined}
               icon={Eye}
               title="Read only"
               badge="Recommended"
@@ -187,8 +198,9 @@ function ConsentPage() {
               <div className="flex items-start gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
                 <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-[var(--muted)]" />
                 <p className="text-xs leading-5 text-[var(--muted)]">
-                  Your Backroom account is read-only, so this connection can only receive read
-                  access. Source downloads and production changes require a write-level account.
+                  {details.observerOnly
+                    ? 'Your account cannot authorize a treasury observer. A write-level Backroom account is required.'
+                    : 'Your Backroom account is read-only, so this connection can only receive read access. Source downloads and production changes require a write-level account.'}
                 </p>
               </div>
             ) : !canGrantArtifact || !canGrantWrite ? (
@@ -227,11 +239,13 @@ function ConsentPage() {
             <button
               type="button"
               onClick={() => decide('allow')}
-              disabled={pending !== null}
+              disabled={pending !== null || (details.observerOnly && !privilegedAccount)}
               className="inline-flex items-center justify-center gap-2 rounded-lg bg-[var(--acid)] px-5 py-3 text-sm font-semibold text-[#11150d] transition-colors hover:bg-[var(--acid-hover)] disabled:opacity-50"
             >
               {pending === 'allow'
                 ? 'Authorizing…'
+                : accessLevel === 'observe'
+                  ? 'Allow receipt observations'
                 : accessLevel === 'artifact'
                   ? 'Allow source downloads'
                   : accessLevel === 'write'

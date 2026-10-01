@@ -127,6 +127,17 @@ class PublicActivityMCP:
                 },
             )
             self.request("notifications/initialized", {}, notification=True)
+            tools = self.request("tools/list", {})
+            expected = {"get_treasury_settings", "record_treasury_receipt"}
+            if (
+                not isinstance(tools, dict)
+                or tools.get("nextCursor")
+                or not isinstance(tools.get("tools"), list)
+                or len(tools["tools"]) != 2
+                or any(not isinstance(item, dict) for item in tools["tools"])
+                or {item.get("name") for item in tools["tools"]} != expected
+            ):
+                raise ValueError("a dedicated receipt-only OAuth grant is required")
         except BaseException:
             self.close()
             raise
@@ -362,7 +373,7 @@ def observer_tick(
         expected_collector_policy_digest=config.approval.policy.collector_policy_digest,
         verify_signature=verify_public_signature,
     )
-    control = mcp.call("get_treasury_settings", {})
+    control = mcp.call("get_treasury_settings", {"revision": policy.revision})
     revisions = [r for r in control["history"] if r["revision"] == policy.revision]
     if (
         len(revisions) != 1
