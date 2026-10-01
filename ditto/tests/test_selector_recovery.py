@@ -375,3 +375,161 @@ def test_staged_unit_requires_operator_owned_existing_directories():
     assert "ProtectSystem=strict" in unit
     with pytest.raises(FileNotFoundError):
         handoff().directories()
+
+
+@pytest.mark.parametrize(
+    "schema", ["absent_metadata", "malformed_metadata", "absent_operations", "complete"]
+)
+def test_readonly_snapshot_metadata_refusal_preserves_source_and_other_sql_errors(
+    tmp_path, schema
+):
+    from ditto.treasury.activity_export import export_snapshot_distributions
+
+    tmp_path.chmod(0o700)
+    path = tmp_path / "snapshot.sqlite"
+    policy = SimpleNamespace(digest="a" * 64)
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE pin(digest,role)")
+        db.execute("INSERT INTO pin VALUES(?,'transfer')", (policy.digest,))
+        if schema == "malformed_metadata":
+            db.execute("CREATE TABLE snapshot_meta(wrong_column)")
+        elif schema != "absent_metadata":
+            db.execute("CREATE TABLE snapshot_meta(version,rows,last_operation)")
+            db.execute("INSERT INTO snapshot_meta VALUES(1,0,0)")
+        if schema != "absent_operations":
+            db.execute(
+                "CREATE TABLE operations(id,role,state,source_block,bucket,amount,"
+                "settlement_json)"
+            )
+    path.chmod(0o600)
+    before = path.read_bytes()
+    seen = []
+
+    def epoch_at(_block):
+        raise AssertionError("no source row requires chain read")
+
+    def export():
+        return export_snapshot_distributions(
+            path,
+            policy,
+            epoch_at,
+            after_id=0,
+            minimum=(0, 0),
+            validate_history=lambda _db: seen.append("validated"),
+        )
+
+    if schema == "absent_metadata":
+        with pytest.raises(
+            ValueError, match="snapshot history lost, rolled back or changed"
+        ):
+            export()
+        assert seen == []
+    elif schema in {"malformed_metadata", "absent_operations"}:
+        with pytest.raises(sqlite3.OperationalError):
+            export()
+        assert seen == []
+    else:
+        assert export() == ([], (0, 0))
+        assert seen == ["validated"]
+    assert path.read_bytes() == before
+    assert not any(
+        Path(str(path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")
+    )
+
+
+def test_publisher_signed_policy_mismatch_is_argparse_refusal_before_io(
+    tmp_path, monkeypatch, capsys
+):
+    from scripts import treasury_selector_publisher as cli
+
+    raw = json.dumps({"enabled": True, "selector_handoff": asdict(handoff())}).encode()
+    path = tmp_path / "config.json"
+    path.write_bytes(raw)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("policy mismatch cannot open state or network")
+
+    monkeypatch.setattr(
+        cli, "load_policy", lambda *_args: SimpleNamespace(digest="b" * 64)
+    )
+    monkeypatch.setattr(cli, "SelectorPublisher", forbidden)
+    monkeypatch.setattr(cli, "PublicEpochReader", forbidden)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cli",
+            "--config",
+            str(path),
+            "--config-sha256",
+            hashlib.sha256(raw).hexdigest(),
+            "--snapshot",
+            "/absent/snapshot",
+            "--state",
+            "/absent/state",
+            "--policy",
+            "/absent/policy",
+            "--policy-sha256",
+            "b" * 64,
+        ],
+    )
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "selector exporter signed collector policy differs" in stderr
+    assert "Traceback" not in stderr
+
+
+@pytest.mark.parametrize("failure_site", ["tick", "epoch"])
+@pytest.mark.parametrize("failure_kind", ["runtime", "state", "auth", "protocol"])
+def test_actual_reader_cleanup_preserves_terminal_publisher_failure_without_retry(
+    failure_site, failure_kind
+):
+    from websockets.exceptions import ConnectionClosedError, InvalidHandshake
+    from websockets.frames import Close
+
+    from ditto.treasury.selector_handoff import run_publisher
+    from scripts.treasury_selector_publisher import PublicEpochReader
+
+    original = {
+        "runtime": ValueError("original runtime policy failure"),
+        "state": sqlite3.OperationalError("original publisher state failure"),
+        "auth": InvalidHandshake("original authentication failure"),
+        "protocol": ConnectionClosedError(
+            Close(1008, "original protocol refusal"), None
+        ),
+    }[failure_kind]
+    calls = []
+
+    def fail(*_args):
+        calls.append(failure_site)
+        raise original
+
+    def close():
+        calls.append("close")
+        raise RuntimeError("unrelated teardown failure")
+
+    reader = PublicEpochReader.__new__(PublicEpochReader)
+    reader.subtensor = SimpleNamespace(get_block_hash=fail, close=close)
+
+    class Publisher:
+        def recover(self):
+            pass
+
+        def tick(self, _path, epoch_at):
+            if failure_site == "tick":
+                return fail()
+            return epoch_at(120)
+
+    def factory():
+        calls.append("connect")
+        return reader
+
+    def forbidden_sleep(_seconds):
+        raise AssertionError("terminal failure must not back off/retry")
+
+    with pytest.raises(type(original)) as error:
+        run_publisher(Publisher(), None, factory, sleep=forbidden_sleep)
+    assert error.value is original
+    assert calls == ["connect", failure_site, "close"]

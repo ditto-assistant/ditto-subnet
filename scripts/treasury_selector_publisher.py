@@ -61,8 +61,9 @@ class PublicEpochReader:
         )
 
     def close(self):
-        # Close only; pending selector/cursor state is retained.
-        with suppress(SelectorChainUnavailable):
+        # Read-only network teardown is best-effort; it must not replace an
+        # original publisher failure. Tick/epoch error classification is unchanged.
+        with suppress(Exception):
             chain_read(self.subtensor.close)
 
 
@@ -102,7 +103,7 @@ def main():
         parser.error(str(exc))
     policy = load_policy(args.policy, args.policy_sha256)
     if policy.digest != config.collector_policy_digest:
-        raise ValueError("selector exporter signed collector policy differs")
+        parser.error("selector exporter signed collector policy differs")
     # Import/connect only after explicit enablement. Public chain observations
     # select coordinates; Platform, not this exporter, proves finality/effects.
     publisher = SelectorPublisher(args.state, config, initialize=args.initialize_state)

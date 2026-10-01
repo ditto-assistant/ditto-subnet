@@ -191,6 +191,16 @@ def _export_finalized_distributions(
         ):
             raise ValueError("journal policy or signer role differs")
         if snapshot_minimum is not None:
+            if (
+                db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='snapshot_meta'"
+                ).fetchone()
+                is None
+            ):
+                raise ValueError(
+                    "selector snapshot history lost, rolled back or changed"
+                )
             mode = db.execute("PRAGMA journal_mode").fetchone()[0]
             meta = db.execute(
                 "SELECT version,rows,last_operation FROM snapshot_meta"
