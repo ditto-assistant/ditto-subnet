@@ -70,7 +70,9 @@ export function SubmissionCooldownControlPanel({
   const [reason, setReason] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [preview, setPreview] = useState<SubmissionSettingsPreview | null>(null)
-  const [loading, setLoading] = useState(false)
+  // Which request is in flight, so each control names its own pending action.
+  const [busy, setBusy] = useState<'refresh' | 'preview' | 'apply' | null>(null)
+  const loading = busy !== null
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
@@ -160,23 +162,32 @@ export function SubmissionCooldownControlPanel({
   }
 
   const refresh = async () => {
-    setLoading(true)
+    // A draft survives a refresh (only its preview and confirmation are
+    // dropped), so "refresh, then preview again" after a stale preview does not
+    // make the operator re-enter the change.
+    const keepDraft = dirty
+    setBusy('refresh')
     setError('')
     setSuccess('')
     try {
       const next = await refreshState()
       setState(next)
-      clearForm(next.current.fee_amount_rao, next.current.cooldown_seconds)
+      if (keepDraft) {
+        setPreview(null)
+        setConfirmation('')
+      } else {
+        clearForm(next.current.fee_amount_rao, next.current.cooldown_seconds)
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to refresh submission settings')
     } finally {
-      setLoading(false)
+      setBusy(null)
     }
   }
 
   const runPreview = async () => {
     if (proposal === null || !changed) return
-    setLoading(true)
+    setBusy('preview')
     setError('')
     setSuccess('')
     setConfirmation('')
@@ -186,13 +197,13 @@ export function SubmissionCooldownControlPanel({
       setPreview(null)
       setError(cause instanceof Error ? cause.message : 'Unable to preview submission settings')
     } finally {
-      setLoading(false)
+      setBusy(null)
     }
   }
 
   const submit = async () => {
     if (!ready || proposal === null) return
-    setLoading(true)
+    setBusy('apply')
     setError('')
     setSuccess('')
     try {
@@ -213,7 +224,7 @@ export function SubmissionCooldownControlPanel({
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to update submission settings')
     } finally {
-      setLoading(false)
+      setBusy(null)
     }
   }
 
@@ -234,7 +245,8 @@ export function SubmissionCooldownControlPanel({
               <p className="mt-1 max-w-[70ch] text-xs leading-5 text-[var(--muted)]">
                 Applies per owner coldkey. The fee is a fixed TAO amount (never a USD target) and
                 takes effect on apply, without a deploy. Compatible miner clients reserve an upload
-                slot and its fee before payment. A finalized payment remains reusable for 24 hours,
+                slot and its fee before payment. A finalized payment remains reusable for{' '}
+                {quoteLifetimeHours ? `${quoteLifetimeHours} hours` : 'the quote lifetime'},
                 while an unpaid reservation only excludes competing archives for the short
                 anti-race window.
               </p>
@@ -429,7 +441,8 @@ export function SubmissionCooldownControlPanel({
               {currentPreview.stale ? (
                 <p className="mt-3 text-[var(--red)]">
                   The policy changed since this page loaded (current revision{' '}
-                  {currentPreview.current.revision}). Refresh before applying.
+                  {currentPreview.current.revision}). Refresh policy (your draft is kept), then
+                  preview again.
                 </p>
               ) : null}
             </section>
@@ -487,7 +500,7 @@ export function SubmissionCooldownControlPanel({
               disabled={loading || !ready}
               className="min-h-11 rounded-lg bg-[var(--acid)] px-4 text-xs font-semibold text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
             >
-              {loading ? 'Applying…' : 'Apply settings'}
+              {busy === 'apply' ? 'Applying…' : 'Apply settings'}
             </button>
           </div>
         </div>

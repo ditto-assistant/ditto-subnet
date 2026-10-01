@@ -12985,6 +12985,12 @@ export interface components {
             current: components["schemas"]["SubmissionSettingsRevision"];
             /** History */
             history: components["schemas"]["SubmissionSettingsRevision"][];
+            /**
+             * History Incomplete
+             * @description True when a historical revision in a denomination this build cannot price was omitted from history. The current revision never is: it fails closed instead.
+             * @default false
+             */
+            history_incomplete: boolean;
             /** Quote Lifetime Seconds */
             quote_lifetime_seconds?: number | null;
         };
@@ -27696,8 +27702,11 @@ export interface components {
             fee_denomination: "fixed_tao";
             /** Fee Effective At */
             fee_effective_at: string | null;
-            /** Fee Revision */
-            fee_revision: number;
+            /**
+             * Fee Revision
+             * @description Revision in which the current fee took effect: 0 while it is still the built-in default, null when the bounded history scan could not reach the change that set it.
+             */
+            fee_revision: number | null;
             /** History */
             history: components["schemas"]["PublicSubmissionFeeRevision"][];
             /**

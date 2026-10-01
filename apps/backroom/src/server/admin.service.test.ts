@@ -80,6 +80,12 @@ import {
   setConfirmationBundleSettings,
 } from './admin.service'
 import { deriveRequestId } from '../lib/idempotency'
+import {
+  SUBMISSION_COOLDOWN_MAX_SECONDS,
+  SUBMISSION_COOLDOWN_MIN_SECONDS,
+  SUBMISSION_FEE_MAX_RAO,
+  SUBMISSION_FEE_MIN_RAO,
+} from '../lib/admin.schemas'
 
 const originalToken = process.env.DITTO_ADMIN_API_TOKEN
 const originalBaseUrl = process.env.DITTO_PLATFORM_API_BASE_URL
@@ -1820,11 +1826,17 @@ describe('submission cooldown administration', () => {
       parent_revision: 0,
       cooldown_seconds: 3600,
       fee_amount_rao: 40_000_000,
+      fee_amount_tao: '0.040000000',
+      fee_denomination: 'fixed_tao',
+      previous_fee_amount_rao: 40_000_000,
+      previous_cooldown_seconds: 3600,
       reason: 'Initialize existing one-hour submission cooldown',
       actor: 'migration',
       created_at: '2026-07-24T12:00:00Z',
     },
     history: [],
+    history_incomplete: false,
+    quote_lifetime_seconds: 86_400,
     bounds: {
       min_fee_amount_rao: 1_000_000,
       max_fee_amount_rao: 10_000_000_000,
@@ -1832,6 +1844,67 @@ describe('submission cooldown administration', () => {
       max_cooldown_seconds: 86_400,
     },
   }
+
+  it('rejects a control response that omits or changes the denomination', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const { fee_denomination: _omitted, ...legacy } = control.current
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json({ ...control, current: legacy }))
+        .mockResolvedValueOnce(
+          Response.json({
+            ...control,
+            current: { ...control.current, fee_denomination: 'usd_indexed' },
+          }),
+        ),
+    )
+    await expect(fetchSubmissionSettingsControl()).rejects.toThrow()
+    await expect(fetchSubmissionSettingsControl()).rejects.toThrow()
+  })
+
+  it('surfaces a no-op apply refusal from Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValueOnce(
+        Response.json(
+          {
+            error_code: 3002,
+            message: 'proposed submission settings equal the current revision; nothing to apply',
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+    await expect(
+      updateSubmissionSettings('operator@omniaura.ai', {
+        expectedRevision: 1,
+        cooldownSeconds: 3600,
+        feeAmountRao: 40_000_000,
+        reason: 'no-op apply from an agent',
+        confirmation: 'SET SUBMISSION COOLDOWN 3600 SECONDS FEE 40000000 RAO',
+      }),
+    ).rejects.toThrow(/nothing to apply/)
+  })
+
+  it('pins the Backroom input limits to Platform safe bounds', async () => {
+    const { readFileSync } = await import('node:fs')
+    const source = readFileSync(
+      new URL('../../../platform/ditto/api_models/submission_settings.py', import.meta.url),
+      'utf8',
+    )
+    const constant = (name: string) => {
+      const match = new RegExp(`^${name} = ([0-9_]+)`, 'm').exec(source)
+      expect(match, name).not.toBeNull()
+      return Number(match![1].replaceAll('_', ''))
+    }
+    expect(SUBMISSION_FEE_MIN_RAO).toBe(constant('MIN_SUBMISSION_FEE_RAO'))
+    expect(SUBMISSION_FEE_MAX_RAO).toBe(constant('MAX_SUBMISSION_FEE_RAO'))
+    expect(SUBMISSION_COOLDOWN_MIN_SECONDS).toBe(constant('MIN_SUBMISSION_COOLDOWN_SECONDS'))
+    expect(SUBMISSION_COOLDOWN_MAX_SECONDS).toBe(constant('MAX_SUBMISSION_COOLDOWN_SECONDS'))
+  })
 
   it('rejects a control response that omits the server bounds', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
@@ -1857,12 +1930,7 @@ describe('submission cooldown administration', () => {
       )
     vi.stubGlobal('fetch', fetchMock)
 
-    // A revision without the explicit denomination field reads as fixed TAO
-    // (the only denomination ever priced); the bounds come from the server.
-    await expect(fetchSubmissionSettingsControl()).resolves.toEqual({
-      ...control,
-      current: { ...control.current, fee_denomination: 'fixed_tao' },
-    })
+    await expect(fetchSubmissionSettingsControl()).resolves.toEqual(control)
     await updateSubmissionSettings('operator@omniaura.ai', {
       expectedRevision: 1,
       cooldownSeconds: 1800,

@@ -1305,7 +1305,9 @@ const SUBMISSION_FEE_HISTORICAL_MIN_RAO = 1
 const SUBMISSION_FEE_HISTORICAL_MAX_RAO = 1_000_000_000_000
 export const RAO_PER_TAO = 1_000_000_000
 const RAO_PER_TAO_BIGINT = 1_000_000_000n
-const TAO_DECIMAL_PATTERN = /^(\d{1,4})(?:\.(\d{1,9}))?$/
+// "0.04", "1", "0." and ".5" are all exact decimals; at least one digit is
+// required and never more than nine fractional digits (rao precision).
+const TAO_DECIMAL_PATTERN = /^(?=\.?\d)(\d{0,4})(?:\.(\d{0,9}))?$/
 
 /**
  * Parse an operator-typed TAO amount into integer rao without floating point.
@@ -1315,7 +1317,7 @@ const TAO_DECIMAL_PATTERN = /^(\d{1,4})(?:\.(\d{1,9}))?$/
 export function parseTaoToRao(value: string): number | null {
   const match = TAO_DECIMAL_PATTERN.exec(value.trim())
   if (!match) return null
-  const whole = BigInt(match[1])
+  const whole = BigInt(match[1] || '0')
   const fraction = BigInt((match[2] ?? '').padEnd(9, '0'))
   const rao = whole * RAO_PER_TAO_BIGINT + fraction
   return rao > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(rao)
@@ -1355,7 +1357,10 @@ const submissionCooldownSecondsSchema = z
 // fixed_tao is the only reviewed denomination. A Platform that predates the
 // explicit field priced in fixed TAO, so absence means fixed_tao; any other
 // value fails the parse instead of being displayed as a TAO fee.
-const submissionFeeDenominationSchema = z.literal('fixed_tao').default('fixed_tao')
+// Responses must state the denomination: fixed_tao is the only reviewed one,
+// and a missing or different value fails the parse rather than being
+// assumed. Inputs (below) default to fixed_tao.
+const submissionFeeDenominationSchema = z.literal('fixed_tao')
 const exactTaoSchema = z.string().regex(/^\d+\.\d{9}$/)
 
 export const submissionSettingsRevisionSchema = z.object({
@@ -1363,10 +1368,10 @@ export const submissionSettingsRevisionSchema = z.object({
   parent_revision: z.number().int().nonnegative(),
   cooldown_seconds: submissionCooldownSecondsSchema,
   fee_amount_rao: submissionFeeRaoSchema,
-  fee_amount_tao: exactTaoSchema.nullable().optional(),
+  fee_amount_tao: exactTaoSchema.nullable(),
   fee_denomination: submissionFeeDenominationSchema,
-  previous_fee_amount_rao: submissionFeeRaoSchema.nullable().optional(),
-  previous_cooldown_seconds: submissionCooldownSecondsSchema.nullable().optional(),
+  previous_fee_amount_rao: submissionFeeRaoSchema.nullable(),
+  previous_cooldown_seconds: submissionCooldownSecondsSchema.nullable(),
   reason: z.string(),
   actor: z.string(),
   created_at: z.string().nullable(),
@@ -1385,7 +1390,8 @@ export const submissionSettingsControlSchema = z.object({
   // Required: the panel validates operator input against these, so a response
   // without server bounds must fail rather than fall back to local constants.
   bounds: submissionFeeBoundsSchema,
-  quote_lifetime_seconds: z.number().int().positive().nullable().optional(),
+  history_incomplete: z.boolean(),
+  quote_lifetime_seconds: z.number().int().positive().nullable(),
 } satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsResponse>)
 
 export const updateSubmissionSettingsInputSchema = z.object({

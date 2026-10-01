@@ -38,6 +38,7 @@ const initial: SubmissionSettingsControl = submissionSettingsControlSchema.parse
     created_at: '2026-07-24T12:00:00Z',
   },
   history: [],
+  history_incomplete: false,
   bounds: {
     min_fee_amount_rao: 1_000_000,
     max_fee_amount_rao: 10_000_000_000,
@@ -270,6 +271,45 @@ describe('SubmissionCooldownControlPanel', () => {
     expect(minutes.getAttribute('aria-invalid')).toBe('true')
   })
 
+  it('names the pending action and keeps the draft across a stale refresh', async () => {
+    let releasePreview: (value: SubmissionSettingsPreview) => void = () => undefined
+    previewSubmissionSettingsChange.mockImplementation(
+      (input) =>
+        new Promise<SubmissionSettingsPreview>((resolve) => {
+          releasePreview = (value) => resolve(value)
+          void input
+        }),
+    )
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    fireEvent.change(screen.getByLabelText('Submission fee in TAO'), {
+      target: { value: '0.05' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview change' }))
+    // Previewing is not applying.
+    expect(screen.queryByText('Applying…')).toBeNull()
+    releasePreview({
+      ...previewFor({
+        data: { expectedRevision: 1, cooldownSeconds: 3600, feeAmountRao: 50_000_000 },
+      }),
+      stale: true,
+      applicable: false,
+    })
+    await screen.findByText(/your draft is kept/)
+
+    getSubmissionSettingsControl.mockResolvedValueOnce({
+      ...initial,
+      current: { ...initial.current, revision: 2 },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Refresh policy/ }))
+    await waitFor(() => expect(getSubmissionSettingsControl).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect((screen.getByLabelText('Submission fee in TAO') as HTMLInputElement).value).toBe(
+        '0.05',
+      ),
+    )
+    expect(screen.queryByLabelText('Change preview')).toBeNull()
+  })
+
   it('does not enable apply for a stale preview', async () => {
     previewSubmissionSettingsChange.mockImplementation(async (input) => ({
       ...previewFor(input),
@@ -282,7 +322,7 @@ describe('SubmissionCooldownControlPanel', () => {
       target: { value: '0.05' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Preview change' }))
-    await screen.findByText(/Refresh before applying/)
+    await screen.findByText(/your draft is kept/)
     expect(screen.queryByLabelText('Operator reason')).toBeNull()
     expect(
       (screen.getByRole('button', { name: 'Apply settings' }) as HTMLButtonElement).disabled,
@@ -327,19 +367,25 @@ describe('exact TAO conversion', () => {
     expect(formatRaoAsTao(1)).toBe('0.000000001')
   })
 
-  it('defaults a missing denomination to fixed_tao and rejects any other', () => {
+  it('rejects a revision that omits or changes the denomination', () => {
     const { fee_denomination: _omitted, ...legacy } = initial.current
-    expect(
-      submissionSettingsControlSchema.parse({ current: legacy, history: [], bounds: initial.bounds })
-        .current
-        .fee_denomination,
-    ).toBe('fixed_tao')
+    expect(() =>
+      submissionSettingsControlSchema.parse({ ...initial, current: legacy }),
+    ).toThrow()
     expect(() =>
       submissionSettingsControlSchema.parse({
+        ...initial,
         current: { ...initial.current, fee_denomination: 'usd_indexed' },
-        history: [],
-        bounds: initial.bounds,
       }),
     ).toThrow()
   })
+
+  it('accepts exact decimals written with a bare leading or trailing point', () => {
+    expect(parseTaoToRao('.5')).toBe(500_000_000)
+    expect(parseTaoToRao('0.')).toBe(0)
+    expect(parseTaoToRao('1.')).toBe(1_000_000_000)
+    expect(parseTaoToRao('.')).toBeNull()
+    expect(parseTaoToRao('')).toBeNull()
+  })
+
 })
