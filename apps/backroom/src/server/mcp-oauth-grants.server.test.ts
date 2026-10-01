@@ -170,6 +170,7 @@ async function authorize(
     }),
     { ...h.env, OAUTH_PROVIDER: h.oauth },
   )
+  if (complete.status !== 200) throw new Error(`Authorization refused HTTP ${complete.status}`)
   const { redirectTo } = (await complete.json()) as { redirectTo: string }
   const code = new URL(redirectTo).searchParams.get('code') ?? ''
   return { details, code, verifier }
@@ -299,10 +300,11 @@ describe('Backroom MCP OAuth grants (issue #2080)', () => {
     const clientId = await registerClient(h)
     await expect(authorize(h, clientId, `${OBSERVE} ${BACKROOM_READ_SCOPE}`, 'observe')).rejects.toThrow('cannot be mixed')
     for (const choice of ['read', 'artifact', 'write', 'full'] as const) {
-      await expect(authorize(h, clientId, OBSERVE, choice)).rejects.toThrow()
+      await expect(authorize(h, clientId, OBSERVE, choice)).rejects.toThrow('HTTP 403')
     }
     h.env.BACKROOM_ADMIN_EMAILS = ''
-    await expect(authorize(h, clientId, OBSERVE, 'observe')).rejects.toThrow()
+    await expect(authorize(h, clientId, OBSERVE, 'observe')).rejects.toThrow('HTTP 403')
+    expect((await h.oauth.listUserGrants(session.uid)).items).toEqual([])
   })
 
   it('rechecks dedicated staff authority at both code exchange and refresh', async () => {
