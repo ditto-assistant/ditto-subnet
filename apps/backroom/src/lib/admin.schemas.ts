@@ -1326,16 +1326,6 @@ export function parseTaoToRaoExact(value: string): bigint | null {
   return whole * RAO_PER_TAO_BIGINT + fraction
 }
 
-/**
- * Parse an operator-typed TAO amount into integer rao as a JS number. Returns
- * null for malformed text, and for a well-formed amount too large to be a safe
- * integer (which is outside every fee bound anyway).
- */
-export function parseTaoToRao(value: string): number | null {
-  const rao = parseTaoToRaoExact(value)
-  if (rao === null) return null
-  return rao > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(rao)
-}
 
 /** Exact TAO rendering of integer rao with trailing zeros trimmed (0.04, 1). */
 export function formatRaoAsTao(rao: number): string {

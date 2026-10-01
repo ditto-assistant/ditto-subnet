@@ -39,7 +39,7 @@ function formatWhen(value: string | null | undefined) {
 function formatDuration(seconds: number) {
   if (seconds % 3600 === 0) return `${seconds / 3600} ${seconds === 3600 ? 'hour' : 'hours'}`
   if (seconds % 60 === 0) return `${seconds / 60} minutes`
-  return `${seconds} seconds`
+  return `${seconds.toLocaleString('en-US')} seconds`
 }
 
 type Proposal = { cooldownSeconds: number; feeAmountRao: number; expectedRevision: number }
@@ -81,16 +81,17 @@ export function SubmissionCooldownControlPanel({
   // derived from them so a Platform change cannot leave stale UI copy.
   const minCooldownMinutes = Math.ceil(bounds.min_cooldown_seconds / 60)
   const maxCooldownMinutes = Math.floor(bounds.max_cooldown_seconds / 60)
-  const parsedMinutes = minutes.trim() === '' ? Number.NaN : Number(minutes)
-  // New values are whole minutes, but the applied cooldown may be any whole
-  // number of seconds (the API and MCP accept them). Keeping it unchanged must
-  // not block a fee-only change.
-  const candidateSeconds =
-    minutes === String(state.current.cooldown_seconds / 60)
-      ? state.current.cooldown_seconds
-      : Number.isInteger(parsedMinutes)
-        ? parsedMinutes * 60
-        : null
+  // New values are whole minutes written as plain digits ("0x10", "1e1",
+  // " 5", "-1" and "1.5" are malformed, not silently converted). The applied
+  // cooldown may be any whole number of seconds (the API and MCP accept them),
+  // so keeping it unchanged must not block a fee-only change.
+  const minutesUntouched = minutes === String(state.current.cooldown_seconds / 60)
+  const minutesWellFormed = minutesUntouched || /^\d+$/.test(minutes)
+  const candidateSeconds = minutesUntouched
+    ? state.current.cooldown_seconds
+    : minutesWellFormed
+      ? Number(minutes) * 60
+      : null
   const selectedSeconds =
     candidateSeconds !== null &&
     candidateSeconds >= bounds.min_cooldown_seconds &&
@@ -135,7 +136,8 @@ export function SubmissionCooldownControlPanel({
     preview !== null ||
     reason !== '' ||
     confirmation !== ''
-  const invalidMinutes = minutes.trim() !== '' && selectedSeconds === null
+  const invalidMinutes = minutes !== '' && selectedSeconds === null
+  const minutesFormatInvalid = invalidMinutes && !minutesWellFormed
   const invalidFee = feeTao.trim() !== '' && selectedFeeRao === null
   const feeFormatInvalid = invalidFee && parsedFeeRao === null
 
@@ -342,11 +344,10 @@ export function SubmissionCooldownControlPanel({
             <label className="text-xs font-medium text-[var(--muted-strong)]">
               Cooldown in minutes ({minCooldownMinutes}–{maxCooldownMinutes})
               <input
-                type="number"
+                // Text, not number: the browser must not coerce or silently
+                // drop what the operator typed; validation below is exact.
+                type="text"
                 inputMode="numeric"
-                min={minCooldownMinutes}
-                max={maxCooldownMinutes}
-                step={1}
                 value={minutes}
                 disabled={readOnly || loading}
                 onChange={(event) => {
@@ -358,8 +359,9 @@ export function SubmissionCooldownControlPanel({
               />
               {invalidMinutes ? (
                 <span className="mt-1 block text-[11px] text-[var(--red)]">
-                  Enter a whole number from {minCooldownMinutes} through {maxCooldownMinutes}{' '}
-                  minutes.
+                  {minutesFormatInvalid
+                    ? 'Enter whole minutes as digits only.'
+                    : `Enter a whole number from ${minCooldownMinutes} through ${maxCooldownMinutes} minutes.`}
                 </span>
               ) : null}
             </label>

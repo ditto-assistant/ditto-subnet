@@ -4,7 +4,6 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   formatRaoAsTao,
-  parseTaoToRao,
   parseTaoToRaoExact,
   submissionSettingsConfirmation,
   submissionSettingsControlSchema,
@@ -188,8 +187,6 @@ describe('SubmissionCooldownControlPanel', () => {
     render(<SubmissionCooldownControlPanel initialState={narrow} readOnly={false} />)
 
     const minutes = screen.getByLabelText(/Cooldown in minutes \(2–120\)/) as HTMLInputElement
-    expect(minutes.min).toBe('2')
-    expect(minutes.max).toBe('120')
     fireEvent.change(minutes, { target: { value: '121' } })
     expect(screen.getByText('Enter a whole number from 2 through 120 minutes.')).toBeTruthy()
     expect(screen.queryByText(/1 through 1440/)).toBeNull()
@@ -371,6 +368,23 @@ describe('SubmissionCooldownControlPanel', () => {
     }
   })
 
+  it('separates malformed minutes from out-of-range minutes', () => {
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    const minutes = screen.getByLabelText(/Cooldown in minutes/)
+    for (const value of ['0x10', '1e1', ' 5', '-1', '1.5']) {
+      fireEvent.change(minutes, { target: { value } })
+      expect(minutes.getAttribute('aria-invalid'), value).toBe('true')
+      expect(screen.getByText('Enter whole minutes as digits only.'), value).toBeTruthy()
+    }
+    for (const value of ['0', '1441']) {
+      fireEvent.change(minutes, { target: { value } })
+      expect(
+        screen.getByText('Enter a whole number from 1 through 1440 minutes.'),
+        value,
+      ).toBeTruthy()
+    }
+  })
+
   it('does not enable apply for a stale preview', async () => {
     previewSubmissionSettingsChange.mockImplementation(async (input) => ({
       ...previewFor(input),
@@ -414,19 +428,18 @@ describe('SubmissionCooldownControlPanel', () => {
 
 describe('exact TAO conversion', () => {
   it('round-trips rao without floating point', () => {
-    expect(parseTaoToRao('0.037271710')).toBe(37_271_710)
-    expect(parseTaoToRao('0.1')).toBe(100_000_000)
-    expect(parseTaoToRao('1')).toBe(1_000_000_000)
-    expect(parseTaoToRao('0.000000001')).toBe(1)
+    expect(parseTaoToRaoExact('0.037271710')).toBe(37_271_710n)
+    expect(parseTaoToRaoExact('0.1')).toBe(100_000_000n)
+    expect(parseTaoToRaoExact('1')).toBe(1_000_000_000n)
+    expect(parseTaoToRaoExact('0.000000001')).toBe(1n)
     // 0.1 + 0.2 style float drift must never reach a fee.
-    expect(parseTaoToRao('0.3')).toBe(300_000_000)
-    expect(parseTaoToRao('0.0000000001')).toBeNull()
-    expect(parseTaoToRao('1e-3')).toBeNull()
+    expect(parseTaoToRaoExact('0.3')).toBe(300_000_000n)
+    expect(parseTaoToRaoExact('0.0000000001')).toBeNull()
+    expect(parseTaoToRaoExact('1e-3')).toBeNull()
     // Well-formed but large amounts parse; range is the bounds check's job.
-    expect(parseTaoToRao('12345')).toBe(12_345_000_000_000)
+    expect(parseTaoToRaoExact('12345')).toBe(12_345_000_000_000n)
     expect(parseTaoToRaoExact('99999999999999')).toBe(99_999_999_999_999_000_000_000n)
-    expect(parseTaoToRao('99999999999999')).toBeNull()
-    expect(parseTaoToRao('-0.1')).toBeNull()
+    expect(parseTaoToRaoExact('-0.1')).toBeNull()
     expect(formatRaoAsTao(37_271_710)).toBe('0.03727171')
     expect(formatRaoAsTao(1_000_000_000)).toBe('1')
     expect(formatRaoAsTao(1)).toBe('0.000000001')
@@ -446,11 +459,11 @@ describe('exact TAO conversion', () => {
   })
 
   it('accepts exact decimals written with a bare leading or trailing point', () => {
-    expect(parseTaoToRao('.5')).toBe(500_000_000)
-    expect(parseTaoToRao('0.')).toBe(0)
-    expect(parseTaoToRao('1.')).toBe(1_000_000_000)
-    expect(parseTaoToRao('.')).toBeNull()
-    expect(parseTaoToRao('')).toBeNull()
+    expect(parseTaoToRaoExact('.5')).toBe(500_000_000n)
+    expect(parseTaoToRaoExact('0.')).toBe(0n)
+    expect(parseTaoToRaoExact('1.')).toBe(1_000_000_000n)
+    expect(parseTaoToRaoExact('.')).toBeNull()
+    expect(parseTaoToRaoExact('')).toBeNull()
   })
 
 })

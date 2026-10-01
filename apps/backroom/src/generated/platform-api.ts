@@ -12912,7 +12912,10 @@ export interface components {
             current: components["schemas"]["SubmissionSettingsRevision"];
             /** Expected Revision */
             expected_revision: number;
-            /** Fee Change Ratio */
+            /**
+             * Fee Change Ratio
+             * @description Proposed ÷ current fee, rounded away from 1 to four decimals (four significant digits when below 0.0001); null if unchanged.
+             */
             fee_change_ratio: string | null;
             /** Fee Changed */
             fee_changed: boolean;
