@@ -145,9 +145,11 @@ export function SubmissionCooldownControlPanel({
     preview !== null ||
     reason !== '' ||
     confirmation !== ''
+  // Any non-empty value that does not validate gets a hint, including
+  // whitespace-only text (the format hint); only a truly empty field gets none.
   const invalidMinutes = minutes !== '' && selectedSeconds === null
   const minutesFormatInvalid = invalidMinutes && !minutesWellFormed
-  const invalidFee = feeTao.trim() !== '' && selectedFeeRao === null
+  const invalidFee = feeTao !== '' && selectedFeeRao === null
   const feeFormatInvalid = invalidFee && parsedFeeRao === null
 
   const resetDraft = () => {

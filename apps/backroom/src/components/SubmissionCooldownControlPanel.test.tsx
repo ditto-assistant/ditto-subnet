@@ -433,6 +433,33 @@ describe('SubmissionCooldownControlPanel', () => {
   })
 })
 
+describe('SubmissionCooldownControlPanel input hints', () => {
+  afterEach(cleanup)
+
+  it('shows the format hint for whitespace-only input and no hint when empty', () => {
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    const minutes = screen.getByLabelText(/Cooldown in minutes/)
+    const fee = screen.getByLabelText('Submission fee in TAO')
+
+    fireEvent.change(minutes, { target: { value: '   ' } })
+    fireEvent.change(fee, { target: { value: '   ' } })
+    expect(screen.getByText('Enter whole minutes as digits only.')).toBeTruthy()
+    expect(screen.getByText('Enter a TAO amount as digits with at most nine decimals.')).toBeTruthy()
+    expect(minutes.getAttribute('aria-invalid')).toBe('true')
+    expect(fee.getAttribute('aria-invalid')).toBe('true')
+    expect(
+      (screen.getByRole('button', { name: 'Preview change' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+
+    fireEvent.change(minutes, { target: { value: '' } })
+    fireEvent.change(fee, { target: { value: '' } })
+    expect(screen.queryByText('Enter whole minutes as digits only.')).toBeNull()
+    expect(screen.queryByText('Enter a TAO amount as digits with at most nine decimals.')).toBeNull()
+    expect(minutes.getAttribute('aria-invalid')).toBe('false')
+    expect(fee.getAttribute('aria-invalid')).toBe('false')
+  })
+})
+
 describe('SubmissionCooldownControlPanel preset highlight', () => {
   afterEach(cleanup)
 
