@@ -47,6 +47,24 @@ def _publishable(row: SubmissionSettingsRevision | None) -> bool:
     return True
 
 
+def _same_published_fee(
+    row: SubmissionSettingsRevision, previous: SubmissionSettingsRevision | None
+) -> bool:
+    """Whether ``row`` repeats its parent's fee (a cooldown-only revision).
+
+    Only a publishable parent with the same denomination and the same amount
+    counts. A change of denomination, even at an equal number, is a fee change;
+    so is following an unpublishable parent, whose number is not a TAO fee.
+    """
+    return (
+        previous is not None
+        and _publishable(row)
+        and _publishable(previous)
+        and previous.fee_denomination == row.fee_denomination
+        and previous.fee_amount_rao == row.fee_amount_rao
+    )
+
+
 def _fee_change(
     row: SubmissionSettingsRevision, previous: SubmissionSettingsRevision | None
 ) -> PublicSubmissionFeeRevision:
@@ -86,7 +104,7 @@ async def public_submission_fee(
     # current quote; it is omitted and the history is reported incomplete.
     omitted_unsupported = False
     for row, previous in rows:
-        if previous is not None and previous.fee_amount_rao == row.fee_amount_rao:
+        if _same_published_fee(row, previous):
             continue
         try:
             changes.append(_fee_change(row, previous))

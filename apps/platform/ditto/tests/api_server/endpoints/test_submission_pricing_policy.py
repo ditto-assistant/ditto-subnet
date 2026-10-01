@@ -925,3 +925,50 @@ async def test_preview_counts_recently_expired_quotes_separately(
     assert _instant(preview["recoverable_expired_quotes_until"]) == (
         recent.expires_at + UPLOAD_ADMISSION_TTL
     )
+
+
+async def test_public_current_fee_is_dated_from_a_denomination_change_at_equal_rao(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A supported revision whose unsupported parent had the same number is a
+    fee change: the current quote's revision and time are the latest row's."""
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+
+    def _row(revision: int, rao: int, denomination: str, days_ago: int):  # type: ignore[no-untyped-def]
+        return SubmissionSettingsRevision(
+            revision=revision,
+            parent_revision=revision - 1,
+            cooldown_seconds=3600,
+            fee_amount_rao=rao,
+            fee_denomination=denomination,
+            reason="history fixture",
+            actor="test",
+            created_at=now - timedelta(days=days_ago),
+        )
+
+    genesis = _row(1, 40_000_000, "fixed_tao", 3)
+    usd = _row(2, 40_000_000, "usd_indexed", 2)
+    current = _row(3, 40_000_000, "fixed_tao", 1)
+
+    async def _history(
+        _session: AsyncSession, **_kwargs: object
+    ) -> list[tuple[SubmissionSettingsRevision, SubmissionSettingsRevision | None]]:
+        return [(current, usd), (usd, genesis), (genesis, None)]
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.public_submission_fee.submission_settings_history",
+        _history,
+    )
+
+    body = (await client.get(_PUBLIC)).json()
+
+    assert body["fee_revision"] == 3
+    assert _instant(body["fee_effective_at"]) == current.created_at
+    assert body["history"][0]["revision"] == 3
+    assert body["history"][0]["previous_fee_amount_rao"] is None
+    assert [row["revision"] for row in body["history"]] == [3, 1]
+    assert body["history_truncated"] is True
