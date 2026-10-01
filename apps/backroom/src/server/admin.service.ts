@@ -1,5 +1,6 @@
 import '@tanstack/react-start/server-only'
 import { z } from 'zod'
+import { treasuryLedgerReadinessSchema } from '../lib/treasury-ledger.schemas'
 import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
 
 export async function previewTreasuryTopup(rawInput: unknown) {
@@ -39,19 +40,6 @@ export async function fetchTreasuryQuote(rawInput: unknown) {
 export async function fetchTreasurySettings() {
   return treasuryControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-settings'))
 }
-
-const treasuryLedgerReadinessSchema = z.object({
-  configured_proposal: z.record(z.string(), z.unknown()).nullable(),
-  observer_status: z.enum(['disabled', 'not_observed', 'observing', 'observed', 'unavailable']),
-  observer_scope: z.literal('this_platform_process'),
-  latest_stored_epoch_index: z.number().int().nonnegative().nullable(),
-  latest_stored_ledger_digest: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
-  stored_shadow_pin: z.record(z.string(), z.unknown()).nullable(),
-  blocking_reasons: z.array(z.string()).max(20),
-  offline_policy_verified: z.literal(false),
-  weight_effect: z.literal('none'),
-  can_enforce_weights: z.literal(false),
-})
 
 export async function fetchTreasuryLedgerReadiness() {
   return treasuryLedgerReadinessSchema.parse(

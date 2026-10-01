@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ditto.api_models.treasury_readiness import (
+    ObserverStatus,
     TreasuryBlockReason,
     TreasuryLedgerReadiness,
 )
@@ -51,7 +52,19 @@ def shadow_readiness(app_state: Any, ledger_pin: Any | None) -> TreasuryLedgerRe
     from ditto.api_server.ledger_pin import LedgerPin, treasury_pin_from_context
 
     policy = getattr(app_state.config, "treasury_shadow_policy", None)
-    status = getattr(app_state, "treasury_shadow_observer_status", "not_observed")
+    raw_status = getattr(app_state, "treasury_shadow_observer_status", "not_observed")
+    statuses: dict[str, ObserverStatus] = {
+        "disabled": "disabled",
+        "not_observed": "not_observed",
+        "observing": "observing",
+        "observed": "observed",
+        "unavailable": "unavailable",
+    }
+    status: ObserverStatus = (
+        statuses.get(raw_status, "unavailable")
+        if isinstance(raw_status, str)
+        else "unavailable"
+    )
     reasons: list[TreasuryBlockReason] = [
         "shadow_only",
         "offline_policy_unverified",
@@ -65,6 +78,9 @@ def shadow_readiness(app_state: Any, ledger_pin: Any | None) -> TreasuryLedgerRe
     stored = None
     if ledger_pin is not None:
         try:
+            # Validate before from_row can coerce a malformed JSON container.
+            if not isinstance(ledger_pin.context, dict):
+                raise ValueError("stored ledger context must be an object")
             projection = (
                 ledger_pin
                 if isinstance(ledger_pin, LedgerPin)

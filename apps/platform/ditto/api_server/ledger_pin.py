@@ -190,7 +190,11 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
 
 def treasury_pin_from_context(pin: LedgerPin) -> TreasuryLedgerPin | None:
     """Replay stored known fields only; malformed treasury evidence is never dropped."""
+    if not isinstance(pin.context, dict):
+        raise ValueError("stored ledger context must be an object")
     served = pin.context.get("served", {})
+    if not isinstance(served, dict):
+        raise ValueError("stored served context must be an object")
     if "treasury_pin" not in served:
         return None
     raw = served["treasury_pin"]

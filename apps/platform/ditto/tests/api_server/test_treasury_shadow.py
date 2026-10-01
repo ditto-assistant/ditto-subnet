@@ -150,21 +150,49 @@ def test_readiness_stored_observation_never_attests_funding_or_freshness():
     app.chain.get_treasury_collector_pin.assert_not_called()
 
 
-@pytest.mark.parametrize("fault", ["digest", "null_pin", "null_served"])
-def test_readiness_corrupt_stored_evidence_is_bounded_and_unavailable(fault):
+@pytest.mark.parametrize(
+    "fault", ["digest", "null_pin", "null_served", "list_served", "list_context"]
+)
+@pytest.mark.parametrize("projection", [True, False])
+def test_readiness_corrupt_stored_evidence_is_bounded_and_unavailable(
+    fault, projection
+):
     stored = stored_pin()
     if fault == "digest":
         stored = replace(stored, ledger_digest="00" * 32)
     elif fault == "null_pin":
         stored = replace(stored, context={"served": {"treasury_pin": None}})
-    else:
+    elif fault == "null_served":
         stored = replace(stored, context={"served": None})
+    elif fault == "list_served":
+        stored = replace(stored, context={"served": []})
+    else:
+        stored = replace(stored, context=[])
+    if not projection:
+        stored = SimpleNamespace(**vars(stored))
     result = shadow_readiness(state(pin().policy), stored)
     assert result.latest_stored_epoch_index == 7
     assert result.latest_stored_ledger_digest == stored.ledger_digest
     assert result.stored_shadow_pin is None
     assert "stored_pin_invalid" in result.blocking_reasons
     assert result.can_enforce_weights is False
+
+
+@pytest.mark.parametrize("status", ["future_state", [], None])
+def test_readiness_unknown_process_status_is_unavailable(status):
+    app = state(pin().policy)
+    app.treasury_shadow_observer_status = status
+    result = shadow_readiness(app, None)
+    assert result.observer_status == "unavailable"
+    assert result.can_enforce_weights is False
+
+
+def test_readiness_legacy_object_without_treasury_pin_remains_absent():
+    stored = replace(stored_pin(), context={"served": {}})
+    result = shadow_readiness(state(pin().policy), stored)
+    assert result.stored_shadow_pin is None
+    assert "no_epoch_pin" in result.blocking_reasons
+    assert "stored_pin_invalid" not in result.blocking_reasons
 
 
 def test_readiness_current_proposal_drift_does_not_rewrite_stored_policy():
