@@ -12,6 +12,7 @@ readonly METADATA=http://metadata.google.internal/computeMetadata/v1
 readonly BOOTSTRAP_USER=collector-bootstrap
 readonly UV_VERSION=0.11.28
 readonly UV_SHA256=49fe42df9f42056037473f3876adec1615709b57d3470ed39178ff420f3afb9f
+readonly ORIGIN=https://github.com/ditto-assistant/ditto-subnet.git
 
 [[ "$${ROLE}" == registration || "$${ROLE}" == transfer ]]
 [[ "$${PROJECT}" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]
@@ -32,10 +33,22 @@ apt-get install -y -qq ca-certificates curl git procps python3 python3-venv
 id -u "$${BOOTSTRAP_USER}" >/dev/null 2>&1 || useradd --system --home-dir "$${ROOT}" --shell /usr/sbin/nologin "$${BOOTSTRAP_USER}"
 chown "$${BOOTSTRAP_USER}:$${BOOTSTRAP_USER}" "$${ROOT}"
 runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" init --quiet
-runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" remote add origin https://github.com/ditto-assistant/ditto-subnet.git
+if origin="$(runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" remote get-url --all origin 2>/dev/null)"; then
+  test "$${origin}" = "$${ORIGIN}"
+else
+  runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" remote add origin "$${ORIGIN}"
+fi
+# A failed first fetch leaves no HEAD and may resume against the validated
+# origin. Existing source must already match this pin and stay unmodified;
+# never replace a different checkout or erase ceremony state during recovery.
+if head="$(runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" rev-parse --verify HEAD 2>/dev/null)"; then
+  test "$${head}" = "$${REVISION}"
+  runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" diff-index --quiet HEAD --
+fi
 runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" fetch --filter=blob:none origin refs/heads/main:refs/remotes/origin/main
 runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" merge-base --is-ancestor "$${REVISION}" refs/remotes/origin/main
 runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" checkout --detach "$${REVISION}"
+runuser -u "$${BOOTSTRAP_USER}" -- git -C "$${ROOT}" diff-index --quiet HEAD --
 runuser -u "$${BOOTSTRAP_USER}" -- python3 -m venv "$${ROOT}/bootstrap-venv"
 printf 'uv==%s --hash=sha256:%s\n' "$${UV_VERSION}" "$${UV_SHA256}" >"$${ROOT}/uv-requirements.txt"
 chown "$${BOOTSTRAP_USER}:$${BOOTSTRAP_USER}" "$${ROOT}/uv-requirements.txt"

@@ -27,3 +27,12 @@ jobs:
         run: python3 -m unittest discover -s ditto/tests -p test_collector_delegate_ceremony.py -v
       - name: Credentials-free concrete resource and IAM plans
         run: bash scripts/test-collector-custody.sh
+  bootstrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Debian13 rendered bootstrap and public-fixture SDK path
+        run: bash infra/terraform/tests/collector-custody/test-bootstrap.sh

@@ -10,6 +10,8 @@ enable_validator_prod = true
 # Treasury hosts remain physically absent until separately reviewed applies.
 enable_treasury_host         = false
 enable_treasury_planner_host = false
+# Collector delegate custody is prepared only; no resource/secret activation.
+enable_collector_custody = false
 # Shadow coding remains physically absent until a separately reviewed protected
 # apply creates the complete three-host executor cohort. No worker, daemon, or
 # provider route is activated by this default.
