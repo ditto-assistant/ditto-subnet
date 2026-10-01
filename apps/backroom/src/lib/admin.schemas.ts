@@ -1347,6 +1347,8 @@ type GeneratedSubmissionSettingsProposal =
   PlatformComponents['schemas']['SubmissionSettingsProposal']
 type GeneratedAdminSubmissionSettingsPreview =
   PlatformComponents['schemas']['AdminSubmissionSettingsPreview']
+type GeneratedUnsupportedSubmissionSettingsRevision =
+  PlatformComponents['schemas']['UnsupportedSubmissionSettingsRevision']
 
 const submissionFeeRaoSchema = z
   .number()
@@ -1378,6 +1380,31 @@ export const submissionSettingsRevisionSchema = z.object({
   created_at: z.string().nullable(),
 } satisfies PlatformResponseShape<GeneratedSubmissionSettingsRevision>)
 
+// The effective revision when Platform cannot price its denomination. Its
+// amount is a raw number in that denomination's unit, never a TAO amount.
+export const unsupportedSubmissionSettingsRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  cooldown_seconds: submissionCooldownSecondsSchema,
+  fee_denomination: z.string().min(1),
+  fee_amount_raw: z.number().int(),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string().nullable(),
+} satisfies PlatformResponseShape<GeneratedUnsupportedSubmissionSettingsRevision>)
+
+// Exactly one of current and unsupported_current describes the effective
+// revision.
+function oneEffectiveRevision(value: {
+  current: unknown
+  unsupported_current?: unknown
+}) {
+  return (value.current === null) !== (value.unsupported_current == null)
+}
+const oneEffectiveRevisionMessage = {
+  message: 'exactly one of current and unsupported_current must be set',
+}
+
 export const submissionFeeBoundsSchema = z.object({
   min_fee_amount_rao: z.number().int().positive(),
   max_fee_amount_rao: z.number().int().positive(),
@@ -1385,15 +1412,18 @@ export const submissionFeeBoundsSchema = z.object({
   max_cooldown_seconds: z.number().int().positive(),
 } satisfies PlatformResponseShape<GeneratedSubmissionFeeBounds>)
 
-export const submissionSettingsControlSchema = z.object({
-  current: submissionSettingsRevisionSchema,
-  history: z.array(submissionSettingsRevisionSchema).max(100),
-  // Required: the panel validates operator input against these, so a response
-  // without server bounds must fail rather than fall back to local constants.
-  bounds: submissionFeeBoundsSchema,
-  history_incomplete: z.boolean(),
-  quote_lifetime_seconds: z.number().int().positive().nullable(),
-} satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsResponse>)
+export const submissionSettingsControlSchema = z
+  .object({
+    current: submissionSettingsRevisionSchema.nullable(),
+    unsupported_current: unsupportedSubmissionSettingsRevisionSchema.nullable().default(null),
+    history: z.array(submissionSettingsRevisionSchema).max(100),
+    // Required: the panel validates operator input against these, so a response
+    // without server bounds must fail rather than fall back to local constants.
+    bounds: submissionFeeBoundsSchema,
+    history_incomplete: z.boolean(),
+    quote_lifetime_seconds: z.number().int().positive().nullable(),
+  } satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsResponse>)
+  .refine(oneEffectiveRevision, oneEffectiveRevisionMessage)
 
 export const updateSubmissionSettingsInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
@@ -1419,8 +1449,10 @@ export const previewSubmissionSettingsInputSchema = z.object({
   feeDenomination: z.literal('fixed_tao').default('fixed_tao'),
 })
 
-export const submissionSettingsPreviewSchema = z.object({
-  current: submissionSettingsRevisionSchema,
+export const submissionSettingsPreviewSchema = z
+  .object({
+  current: submissionSettingsRevisionSchema.nullable(),
+  unsupported_current: unsupportedSubmissionSettingsRevisionSchema.nullable().default(null),
   proposed: z.object({
     cooldown_seconds: submissionCooldownSecondsSchema,
     fee_amount_rao: submissionFeeRaoSchema,
@@ -1443,6 +1475,7 @@ export const submissionSettingsPreviewSchema = z.object({
   recoverable_expired_quotes_at_other_fees: z.number().int().nonnegative(),
   recoverable_expired_quotes_until: z.string().nullable(),
 } satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsPreview>)
+  .refine(oneEffectiveRevision, oneEffectiveRevisionMessage)
 
 export function submissionSettingsConfirmation(seconds: number, feeAmountRao: number) {
   return `SET SUBMISSION COOLDOWN ${seconds} SECONDS FEE ${feeAmountRao} RAO`
@@ -1450,6 +1483,41 @@ export function submissionSettingsConfirmation(seconds: number, feeAmountRao: nu
 
 export type SubmissionSettingsControl = z.infer<typeof submissionSettingsControlSchema>
 export type SubmissionSettingsPreview = z.infer<typeof submissionSettingsPreviewSchema>
+
+/** The effective policy as the panel uses it; fee is null when unsupported. */
+export type EffectiveSubmissionPolicy = {
+  revision: number
+  cooldownSeconds: number
+  feeAmountRao: number | null
+  createdAt: string | null
+  unsupported: { denomination: string; amountRaw: number } | null
+}
+
+export function effectiveSubmissionPolicy(
+  value: Pick<SubmissionSettingsControl, 'current' | 'unsupported_current'>,
+): EffectiveSubmissionPolicy {
+  if (value.current !== null) {
+    return {
+      revision: value.current.revision,
+      cooldownSeconds: value.current.cooldown_seconds,
+      feeAmountRao: value.current.fee_amount_rao,
+      createdAt: value.current.created_at,
+      unsupported: null,
+    }
+  }
+  const unsupported = value.unsupported_current
+  if (unsupported == null) throw new Error('submission settings have no effective revision')
+  return {
+    revision: unsupported.revision,
+    cooldownSeconds: unsupported.cooldown_seconds,
+    feeAmountRao: null,
+    createdAt: unsupported.created_at,
+    unsupported: {
+      denomination: unsupported.fee_denomination,
+      amountRaw: unsupported.fee_amount_raw,
+    },
+  }
+}
 
 export const activeHotkeyBanSchema = z.object({
   hotkey: z.string().min(1),

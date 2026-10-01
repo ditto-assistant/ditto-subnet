@@ -1834,6 +1834,7 @@ describe('submission cooldown administration', () => {
       actor: 'migration',
       created_at: '2026-07-24T12:00:00Z',
     },
+    unsupported_current: null,
     history: [],
     history_incomplete: false,
     quote_lifetime_seconds: 86_400,
@@ -1974,6 +1975,7 @@ describe('submission fee preview', () => {
   }
   const preview = {
     current,
+    unsupported_current: null,
     proposed: {
       cooldown_seconds: 3600,
       fee_amount_rao: 37_271_710,

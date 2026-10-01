@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, History, RefreshCw, Timer } from 'lucide-react'
 import {
+  effectiveSubmissionPolicy,
   formatRaoAsTao,
   parseTaoToRaoExact,
   type SubmissionSettingsControl,
@@ -14,7 +15,12 @@ import {
 } from '../server/admin.functions'
 
 const presets = [15, 30, 60, 120] as const
-const HISTORY_ROWS = 12
+
+// An unsupported effective fee has no TAO rendering; the fee input starts
+// empty so recovery always names an explicit fixed-TAO amount.
+function feeText(feeAmountRao: number | null) {
+  return feeAmountRao === null ? '' : formatRaoAsTao(feeAmountRao)
+}
 
 function formatTimestamp(value: string | null | undefined, missing: string) {
   if (!value) return missing
@@ -65,8 +71,9 @@ export function SubmissionCooldownControlPanel({
   const previewSettings = useServerFn(previewSubmissionSettingsChange)
   const applySettings = useServerFn(setSubmissionSettings)
   const [state, setState] = useState(initialState)
-  const [minutes, setMinutes] = useState(String(initialState.current.cooldown_seconds / 60))
-  const [feeTao, setFeeTao] = useState(formatRaoAsTao(initialState.current.fee_amount_rao))
+  const initialPolicy = effectiveSubmissionPolicy(initialState)
+  const [minutes, setMinutes] = useState(String(initialPolicy.cooldownSeconds / 60))
+  const [feeTao, setFeeTao] = useState(feeText(initialPolicy.feeAmountRao))
   const [reason, setReason] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [preview, setPreview] = useState<SubmissionSettingsPreview | null>(null)
@@ -77,6 +84,7 @@ export function SubmissionCooldownControlPanel({
   const [success, setSuccess] = useState('')
 
   const bounds = state.bounds
+  const policy = effectiveSubmissionPolicy(state)
   // Server-provided bounds are authoritative; every hint and input limit is
   // derived from them so a Platform change cannot leave stale UI copy.
   const minCooldownMinutes = Math.ceil(bounds.min_cooldown_seconds / 60)
@@ -85,10 +93,10 @@ export function SubmissionCooldownControlPanel({
   // " 5", "-1" and "1.5" are malformed, not silently converted). The applied
   // cooldown may be any whole number of seconds (the API and MCP accept them),
   // so keeping it unchanged must not block a fee-only change.
-  const minutesUntouched = minutes === String(state.current.cooldown_seconds / 60)
+  const minutesUntouched = minutes === String(policy.cooldownSeconds / 60)
   const minutesWellFormed = minutesUntouched || /^\d+$/.test(minutes)
   const candidateSeconds = minutesUntouched
-    ? state.current.cooldown_seconds
+    ? policy.cooldownSeconds
     : minutesWellFormed
       ? Number(minutes) * 60
       : null
@@ -111,13 +119,14 @@ export function SubmissionCooldownControlPanel({
       ? {
           cooldownSeconds: selectedSeconds,
           feeAmountRao: selectedFeeRao,
-          expectedRevision: state.current.revision,
+          expectedRevision: policy.revision,
         }
       : null
+  // Any fixed-TAO fee changes an unsupported effective fee (its denomination).
   const changed =
     proposal !== null &&
-    (proposal.cooldownSeconds !== state.current.cooldown_seconds ||
-      proposal.feeAmountRao !== state.current.fee_amount_rao)
+    (proposal.cooldownSeconds !== policy.cooldownSeconds ||
+      proposal.feeAmountRao !== policy.feeAmountRao)
   const currentPreview = sameProposal(preview, proposal) ? preview : null
   const expectedConfirmation = currentPreview?.required_confirmation ?? ''
   const ready =
@@ -131,8 +140,8 @@ export function SubmissionCooldownControlPanel({
   // does not parse yet; Cancel must stay available so an invalid draft can
   // always be discarded.
   const dirty =
-    minutes !== String(state.current.cooldown_seconds / 60) ||
-    feeTao !== formatRaoAsTao(state.current.fee_amount_rao) ||
+    minutes !== String(policy.cooldownSeconds / 60) ||
+    feeTao !== feeText(policy.feeAmountRao) ||
     preview !== null ||
     reason !== '' ||
     confirmation !== ''
@@ -149,12 +158,9 @@ export function SubmissionCooldownControlPanel({
     setSuccess('')
   }
 
-  const clearForm = (
-    feeAmountRao = state.current.fee_amount_rao,
-    cooldownSeconds = state.current.cooldown_seconds,
-  ) => {
-    setMinutes(String(cooldownSeconds / 60))
-    setFeeTao(formatRaoAsTao(feeAmountRao))
+  const clearForm = (next = policy) => {
+    setMinutes(String(next.cooldownSeconds / 60))
+    setFeeTao(feeText(next.feeAmountRao))
     setPreview(null)
     setReason('')
     setConfirmation('')
@@ -172,21 +178,22 @@ export function SubmissionCooldownControlPanel({
     const keepDraft = dirty
     // Fields the operator has not touched follow the refreshed policy, so a
     // concurrent change cannot leave an untouched field stale or invalid.
-    const cooldownUntouched = minutes === String(state.current.cooldown_seconds / 60)
-    const feeUntouched = feeTao === formatRaoAsTao(state.current.fee_amount_rao)
+    const cooldownUntouched = minutes === String(policy.cooldownSeconds / 60)
+    const feeUntouched = feeTao === feeText(policy.feeAmountRao)
     setBusy('refresh')
     setError('')
     setSuccess('')
     try {
       const next = await refreshState()
+      const nextPolicy = effectiveSubmissionPolicy(next)
       setState(next)
       if (keepDraft) {
         setPreview(null)
         setConfirmation('')
-        if (cooldownUntouched) setMinutes(String(next.current.cooldown_seconds / 60))
-        if (feeUntouched) setFeeTao(formatRaoAsTao(next.current.fee_amount_rao))
+        if (cooldownUntouched) setMinutes(String(nextPolicy.cooldownSeconds / 60))
+        if (feeUntouched) setFeeTao(feeText(nextPolicy.feeAmountRao))
       } else {
-        clearForm(next.current.fee_amount_rao, next.current.cooldown_seconds)
+        clearForm(nextPolicy)
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to refresh submission settings')
@@ -230,7 +237,7 @@ export function SubmissionCooldownControlPanel({
       setSuccess(
         `Submission settings updated: ${formatDuration(proposal.cooldownSeconds)} cooldown, ${formatRaoAsTao(proposal.feeAmountRao)} TAO fee.`,
       )
-      clearForm(next.current.fee_amount_rao, next.current.cooldown_seconds)
+      clearForm(effectiveSubmissionPolicy(next))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to update submission settings')
     } finally {
@@ -278,32 +285,46 @@ export function SubmissionCooldownControlPanel({
             <div>
               <p className="text-xs text-[var(--muted)]">Effective cooldown</p>
               <p className="mt-2 text-3xl font-semibold tracking-tight">
-                {formatDuration(state.current.cooldown_seconds)}
+                {formatDuration(policy.cooldownSeconds)}
               </p>
             </div>
             <dl className="grid gap-3 text-xs sm:grid-cols-4 sm:text-right">
               <div>
                 <dt className="text-[var(--muted)]">Submission fee</dt>
                 <dd className="mt-1 font-medium">
-                  {formatRaoAsTao(state.current.fee_amount_rao)} TAO
+                  {policy.feeAmountRao === null
+                    ? 'Not quotable'
+                    : `${formatRaoAsTao(policy.feeAmountRao)} TAO`}
                 </dd>
               </div>
               <div>
                 <dt className="text-[var(--muted)]">Denomination</dt>
-                <dd className="mt-1 font-medium">Fixed TAO</dd>
+                <dd className="mt-1 font-medium">
+                  {policy.unsupported ? `Unsupported: ${policy.unsupported.denomination}` : 'Fixed TAO'}
+                </dd>
               </div>
               <div>
                 <dt className="text-[var(--muted)]">Revision</dt>
-                <dd className="mt-1 font-medium">{state.current.revision}</dd>
+                <dd className="mt-1 font-medium">{policy.revision}</dd>
               </div>
               <div>
                 <dt className="text-[var(--muted)]">Applied</dt>
-                <dd className="mt-1 font-medium">
-                  {formatPolicyApplied(state.current.created_at)}
-                </dd>
+                <dd className="mt-1 font-medium">{formatPolicyApplied(policy.createdAt)}</dd>
               </div>
             </dl>
           </div>
+
+          {policy.unsupported ? (
+            <div
+              role="alert"
+              className="mt-5 rounded-lg border border-[var(--red)]/30 px-4 py-3 text-xs leading-5 text-[var(--red)]"
+            >
+              Revision {policy.revision} uses the {policy.unsupported.denomination} denomination,
+              which Platform cannot price (stored amount {policy.unsupported.amountRaw} in that
+              denomination&apos;s unit, not TAO). New quotes are refused; quotes already issued are
+              still honoured. Enter a fixed TAO fee and apply it to recover.
+            </div>
+          ) : null}
 
           <div className="mt-5 rounded-lg border border-[var(--amber)]/25 bg-[var(--amber-dim)] px-4 py-3 text-xs leading-5 text-[var(--amber)]">
             <div className="flex items-start gap-3">
@@ -334,7 +355,7 @@ export function SubmissionCooldownControlPanel({
               >
                 <span className="block text-sm font-semibold">{formatDuration(value * 60)}</span>
                 <span className="mt-1 block text-[11px] text-[var(--muted)]">
-                  {state.current.cooldown_seconds === value * 60 ? 'Current value' : 'Set cadence'}
+                  {policy.cooldownSeconds === value * 60 ? 'Current value' : 'Set cadence'}
                 </span>
               </button>
             ))}
@@ -417,17 +438,21 @@ export function SubmissionCooldownControlPanel({
                 <div>
                   <dt className="text-[var(--muted)]">Fee</dt>
                   <dd className="mt-1 font-medium">
-                    {formatRaoAsTao(currentPreview.current.fee_amount_rao)} →{' '}
+                    {currentPreview.current
+                      ? `${formatRaoAsTao(currentPreview.current.fee_amount_rao)} → `
+                      : `Unsupported (${currentPreview.unsupported_current?.fee_denomination ?? 'unknown'}) → `}
                     {formatRaoAsTao(currentPreview.proposed.fee_amount_rao)} TAO
                     {currentPreview.fee_change_ratio
                       ? ` (×${currentPreview.fee_change_ratio})`
-                      : ' (unchanged)'}
+                      : currentPreview.fee_changed
+                        ? ''
+                        : ' (unchanged)'}
                   </dd>
                 </div>
                 <div>
                   <dt className="text-[var(--muted)]">Cooldown</dt>
                   <dd className="mt-1 font-medium">
-                    {formatDuration(currentPreview.current.cooldown_seconds)} →{' '}
+                    {formatDuration(effectiveSubmissionPolicy(currentPreview).cooldownSeconds)} →{' '}
                     {formatDuration(currentPreview.proposed.cooldown_seconds)}
                   </dd>
                 </div>
@@ -453,7 +478,7 @@ export function SubmissionCooldownControlPanel({
               {currentPreview.stale ? (
                 <p className="mt-3 text-[var(--red)]">
                   The policy changed since this page loaded (current revision{' '}
-                  {currentPreview.current.revision}). Refresh policy (your draft is kept), then
+                  {effectiveSubmissionPolicy(currentPreview).revision}). Refresh policy (your draft is kept), then
                   preview again.
                 </p>
               ) : null}
@@ -532,7 +557,7 @@ export function SubmissionCooldownControlPanel({
           <p className="p-4 text-xs text-[var(--muted)] sm:px-5">No revisions recorded.</p>
         ) : (
           <ol className="divide-y divide-[var(--line)]" aria-label="Submission settings revisions">
-            {state.history.slice(0, HISTORY_ROWS).map((row) => (
+            {state.history.map((row) => (
               <li key={row.revision} className="grid gap-1 p-4 text-xs sm:px-5">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <span className="font-medium">

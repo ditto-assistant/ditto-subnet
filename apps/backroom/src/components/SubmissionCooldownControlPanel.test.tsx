@@ -48,12 +48,19 @@ const initial: SubmissionSettingsControl = submissionSettingsControlSchema.parse
   quote_lifetime_seconds: 86_400,
 })
 
+function appliedRevision(control: SubmissionSettingsControl) {
+  if (control.current === null) throw new Error('fixture has no supported current revision')
+  return control.current
+}
+const applied = appliedRevision(initial)
+
 function previewFor(input: {
   data: { expectedRevision: number; cooldownSeconds: number; feeAmountRao: number }
 }): SubmissionSettingsPreview {
   const { expectedRevision, cooldownSeconds, feeAmountRao } = input.data
   return {
-    current: initial.current,
+    current: applied,
+    unsupported_current: null,
     proposed: {
       cooldown_seconds: cooldownSeconds,
       fee_amount_rao: feeAmountRao,
@@ -86,7 +93,7 @@ describe('SubmissionCooldownControlPanel', () => {
     previewSubmissionSettingsChange.mockReset().mockImplementation(async (input) => previewFor(input))
     setSubmissionSettings.mockReset().mockResolvedValue({
       ...initial,
-      current: { ...initial.current, revision: 2, parent_revision: 1, cooldown_seconds: 1800 },
+      current: { ...applied, revision: 2, parent_revision: 1, cooldown_seconds: 1800 },
     })
   })
 
@@ -231,10 +238,10 @@ describe('SubmissionCooldownControlPanel', () => {
   it('shows a neutral time for history rows without a timestamp', () => {
     const control = submissionSettingsControlSchema.parse({
       ...initial,
-      current: { ...initial.current, revision: 0, created_at: null },
+      current: { ...applied, revision: 0, created_at: null },
       history: [
-        { ...initial.current, revision: 2, created_at: null },
-        { ...initial.current, revision: 1, created_at: 'not-a-date' },
+        { ...applied, revision: 2, created_at: null },
+        { ...applied, revision: 1, created_at: 'not-a-date' },
       ],
     })
     render(<SubmissionCooldownControlPanel initialState={control} readOnly />)
@@ -249,7 +256,7 @@ describe('SubmissionCooldownControlPanel', () => {
   it('keeps a non-minute applied cooldown valid for a fee-only change', async () => {
     const control = submissionSettingsControlSchema.parse({
       ...initial,
-      current: { ...initial.current, cooldown_seconds: 90 },
+      current: { ...applied, cooldown_seconds: 90 },
     })
     render(<SubmissionCooldownControlPanel initialState={control} readOnly={false} />)
     const minutes = screen.getByLabelText(/Cooldown in minutes/) as HTMLInputElement
@@ -296,7 +303,7 @@ describe('SubmissionCooldownControlPanel', () => {
 
     getSubmissionSettingsControl.mockResolvedValueOnce({
       ...initial,
-      current: { ...initial.current, revision: 2 },
+      current: { ...applied, revision: 2 },
     })
     fireEvent.click(screen.getByRole('button', { name: /Refresh policy/ }))
     await waitFor(() => expect(getSubmissionSettingsControl).toHaveBeenCalledTimes(1))
@@ -311,7 +318,7 @@ describe('SubmissionCooldownControlPanel', () => {
   it('notes when Platform could not return the whole revision history', () => {
     const control = submissionSettingsControlSchema.parse({
       ...initial,
-      history: [{ ...initial.current }],
+      history: [{ ...applied }],
       history_incomplete: true,
     })
     render(<SubmissionCooldownControlPanel initialState={control} readOnly />)
@@ -329,7 +336,7 @@ describe('SubmissionCooldownControlPanel', () => {
   it('re-seeds an untouched non-minute cooldown when refresh finds a new one', async () => {
     const control = submissionSettingsControlSchema.parse({
       ...initial,
-      current: { ...initial.current, cooldown_seconds: 90 },
+      current: { ...applied, cooldown_seconds: 90 },
     })
     // Another operator meanwhile set the cooldown to 150 s.
     getSubmissionSettingsControl.mockResolvedValueOnce({
@@ -409,7 +416,7 @@ describe('SubmissionCooldownControlPanel', () => {
       ...initial,
       history: [
         {
-          ...initial.current,
+          ...applied,
           revision: 3,
           parent_revision: 2,
           fee_amount_rao: 37_271_710,
@@ -423,6 +430,101 @@ describe('SubmissionCooldownControlPanel', () => {
 
     expect(screen.getByText(/Revision 3 · 0.1 → 0.03727171 TAO/)).toBeTruthy()
     expect(screen.getByText('operator@example.com: measured platform cost')).toBeTruthy()
+  })
+})
+
+describe('SubmissionCooldownControlPanel history and unsupported policy', () => {
+  afterEach(cleanup)
+
+  beforeEach(() => {
+    previewSubmissionSettingsChange.mockReset()
+  })
+
+  it('renders every returned revision, not only the newest few', () => {
+    const history = Array.from({ length: 30 }, (_, index) => ({
+      ...applied,
+      revision: 30 - index,
+      parent_revision: 29 - index,
+      created_at: null,
+    }))
+    render(
+      <SubmissionCooldownControlPanel
+        initialState={submissionSettingsControlSchema.parse({ ...initial, history })}
+        readOnly
+      />,
+    )
+    const list = screen.getByRole('list', { name: 'Submission settings revisions' })
+    expect(list.querySelectorAll('li')).toHaveLength(30)
+    expect(screen.getByText(/Revision 1 ·/)).toBeTruthy()
+    expect(screen.queryByText('Some revisions are not shown.')).toBeNull()
+  })
+
+  it('shows an unsupported effective revision and previews an explicit TAO recovery', async () => {
+    const unsupported = submissionSettingsControlSchema.parse({
+      ...initial,
+      current: null,
+      unsupported_current: {
+        revision: 7,
+        parent_revision: 6,
+        cooldown_seconds: 3600,
+        fee_denomination: 'usd_indexed',
+        fee_amount_raw: 5_000_000,
+        reason: 'usd target from a newer writer',
+        actor: 'future-platform',
+        created_at: '2026-07-24T12:00:00Z',
+      },
+      history_incomplete: true,
+    })
+    previewSubmissionSettingsChange.mockImplementation(async (input) => ({
+      ...previewFor(input),
+      current: null,
+      unsupported_current: unsupported.unsupported_current,
+      fee_changed: true,
+      fee_change_ratio: null,
+    }))
+    render(<SubmissionCooldownControlPanel initialState={unsupported} readOnly={false} />)
+
+    expect(screen.getByRole('alert').textContent).toMatch(
+      /Revision 7 uses the usd_indexed denomination.*not TAO/,
+    )
+    expect(screen.getByText('Not quotable')).toBeTruthy()
+    const fee = screen.getByLabelText('Submission fee in TAO') as HTMLInputElement
+    expect(fee.value).toBe('')
+    const previewButton = screen.getByRole('button', { name: 'Preview change' })
+    expect((previewButton as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.change(fee, { target: { value: '0.05' } })
+    fireEvent.click(previewButton)
+
+    await waitFor(() =>
+      expect(previewSubmissionSettingsChange).toHaveBeenCalledWith({
+        data: { expectedRevision: 7, cooldownSeconds: 3600, feeAmountRao: 50_000_000 },
+      }),
+    )
+    const preview = await screen.findByLabelText('Change preview')
+    expect(preview.textContent).toMatch(/Unsupported \(usd_indexed\) → 0.05 TAO/)
+    expect(preview.textContent).not.toMatch(/unchanged/)
+  })
+
+  it('requires exactly one effective revision in the response', () => {
+    expect(() =>
+      submissionSettingsControlSchema.parse({ ...initial, current: null }),
+    ).toThrow()
+    expect(() =>
+      submissionSettingsControlSchema.parse({
+        ...initial,
+        unsupported_current: {
+          revision: 1,
+          parent_revision: 0,
+          cooldown_seconds: 3600,
+          fee_denomination: 'usd_indexed',
+          fee_amount_raw: 1,
+          reason: 'x',
+          actor: 'y',
+          created_at: null,
+        },
+      }),
+    ).toThrow()
   })
 })
 
@@ -446,14 +548,14 @@ describe('exact TAO conversion', () => {
   })
 
   it('rejects a revision that omits or changes the denomination', () => {
-    const { fee_denomination: _omitted, ...legacy } = initial.current
+    const { fee_denomination: _omitted, ...legacy } = applied
     expect(() =>
       submissionSettingsControlSchema.parse({ ...initial, current: legacy }),
     ).toThrow()
     expect(() =>
       submissionSettingsControlSchema.parse({
         ...initial,
-        current: { ...initial.current, fee_denomination: 'usd_indexed' },
+        current: { ...applied, fee_denomination: 'usd_indexed' },
       }),
     ).toThrow()
   })
