@@ -2539,3 +2539,98 @@ class TestCheckValidatesBeforePricingRefusal:
 
         assert response.status_code == 503, response.text
         assert response.json()["error_code"] == 3100
+
+
+class TestNoFeeBranchesUnderUnquotablePricing:
+    """Only charging the current fee is gated by quotability: credit
+    redemption and archive validation are not, a fresh payment still is."""
+
+    async def test_recorded_credit_is_redeemed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        deps = _wire_full_stack(app)
+        _unquotable_policy(monkeypatch)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        credit = SimpleNamespace(
+            agent_id=None,
+            credit_for_agent_id=uuid4(),
+            miner_hotkey=kp.ss58_address,
+            miner_coldkey="5Coldkey",
+            timestamp=datetime.now(UTC),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(side_effect=[credit, credit]),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        data, files = _upload_agent_form(keypair=kp, sha256=_GOOD_TAR_SHA)
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["payment_disposition"] == "credit_consumed"
+        deps["verifier"].verify_payment.assert_not_awaited()
+
+    async def test_fresh_payment_without_reservation_fails_closed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        deps = _wire_full_stack(app)
+        _unquotable_policy(monkeypatch)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        data, files = _upload_agent_form(keypair=kp, sha256=_GOOD_TAR_SHA)
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 503, response.text
+        assert response.json()["error_code"] == 3100
+        deps["verifier"].verify_payment.assert_not_awaited()
+        deps["storage"].put_object.assert_not_awaited()
+
+    async def test_already_recorded_payment_on_check_is_reported(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_session(app)
+        override_get_chain_client(app)
+        verifier = _override_payment_verifier(app)
+        _unquotable_policy(monkeypatch)
+        credit = SimpleNamespace(
+            agent_id=None,
+            credit_for_agent_id=uuid4(),
+            miner_hotkey=_make_keypair().ss58_address,
+            miner_coldkey="5Coldkey",
+            timestamp=datetime.now(UTC),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=credit),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(),
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["payment_required"] is False
+        verifier.verify_payment.assert_not_awaited()

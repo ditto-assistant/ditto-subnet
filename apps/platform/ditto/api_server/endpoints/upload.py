@@ -170,14 +170,19 @@ class _PaymentTerms:
     destination and amnesty bind payments finalized before
     ``reserved_terms_expire_at``; a later payment must match the current fee,
     which is ``None`` (fail closed) when the current revision is unquotable.
-    Honouring an issued quote never requires the current revision to be
-    quotable; quoting without a reservation always does.
+
+    Reading the terms never refuses an unquotable revision: many branches
+    charge no current fee (an issued reservation, a recorded credit, an exact
+    retry, an already-recorded payment, a validation failure). The single
+    fail-closed gate is ``_quoted_amount``, called only where a payment is
+    verified against the current fee, plus ``reserve_upload_admission`` for a
+    new quote and the verifier's post-expiry fallback.
     """
 
     settings: EffectiveSubmissionSettings
     expected_amount_rao: int | None
-    """``None`` only for a deferred read with no reservation and an unquotable
-    revision: verifying a payment must then fail closed."""
+    """``None`` only with no reservation and an unquotable revision: verifying
+    a payment must then fail closed (``_quoted_amount``)."""
     legacy_amount_cutoff_at: datetime | None
     expected_send_address: str
     reserved_terms_expire_at: datetime | None
@@ -190,19 +195,12 @@ async def _payment_terms(
     *,
     reservation: UploadAdmissionReservation | None,
     default_payment_address: str,
-    defer_quotability: bool = False,
 ) -> _PaymentTerms:
-    """Snapshot the payment terms.
-
-    ``defer_quotability`` (``/upload/check``) reads the revision without
-    refusing it up front: the check may only need the cooldown, or the request
-    may fail validation anyway. Fail-closed then happens where a current fee
-    would actually be used (verifying a recovery or issuing a reservation).
-    """
+    """Snapshot the payment terms without refusing an unquotable revision."""
     settings = await effective_submission_settings(
         session,
         default_payment_address=default_payment_address,
-        require_quotable=reservation is None and not defer_quotability,
+        require_quotable=False,
     )
     current_fee_rao = settings.fee_amount_rao if settings.quotable else None
     if reservation is None:
@@ -381,7 +379,6 @@ async def check(
         session,
         reservation=own_reservation,
         default_payment_address=request.app.state.config.upload_payment_address,
-        defer_quotability=True,
     )
     settings = recovery_terms.settings
     recovery_payment_verified = False
@@ -708,8 +705,9 @@ async def upload_agent(
     # lifetime. The payment's block time (not this upload's arrival) decides:
     # the verifier applies these reserved terms only when the payment predates
     # ``reserved_terms_expire_at`` and otherwise requires the current fee.
-    # Honouring an already-issued quote never depends on the current revision
-    # being quotable; only the current-fee fallback does (fail closed).
+    # Honouring an already-issued quote, redeeming a recorded credit, or
+    # rejecting an invalid archive never depends on the current revision being
+    # quotable; only charging the current fee does (``_quoted_amount``).
     terms = await _payment_terms(
         session,
         reservation=admission,
