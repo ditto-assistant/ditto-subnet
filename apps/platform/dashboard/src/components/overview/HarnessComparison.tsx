@@ -19,18 +19,40 @@ import {
   harnessMethodText,
   loadMemoryField,
   memoryFieldRevision,
+  memoryChartVersion,
   memoryFieldSnapshot,
   memoryTimelineHtml,
+  memoryVersionHtml,
 } from "./memory-timeline";
+import { leaderboardVersionView } from "../board/board-state";
+
+/** "version" follows the leaderboard's selected benchmark version; "all"
+ * is the every-contract comparison. */
+export type MemoryChartMode = "version" | "all";
+
+/** The crown is a fact about the current rollout; an archive view has none. */
+function viewingCurrent(): boolean {
+  return leaderboardVersionView() === "current";
+}
 
 export function HarnessComparison(props: { store: LeaderboardStore }): JSX.Element {
   const store = props.store;
   const timeline = useEndpoint<TimelinePayload>("/public/bench/timeline", { pollMs: REFRESH_MS });
-
+  const [mode, setMode] = createSignal<MemoryChartMode>("version");
   // Last-good data survives a failed tick; only a failure with nothing to
   // show renders the explicit unavailable state (load() catch, 4728–4730).
   const [lastData, setLastData] = createSignal<TimelinePayload | null>(null);
   const failed = (): boolean => Boolean(timeline.error());
+
+  // The contract the one-version chart shows (see memoryChartVersion).
+  const chartVersion = createMemo<number | null>(() =>
+    memoryChartVersion({
+      settledView: store.settledView(),
+      bench: store.bench(),
+      rolloutActive: store.rollout()?.active_version,
+      releases: lastData()?.releases,
+    }),
+  );
   createEffect(() => {
     if (timeline.error()) return;
     let data: TimelinePayload | undefined;
@@ -42,7 +64,10 @@ export function HarnessComparison(props: { store: LeaderboardStore }): JSX.Eleme
     if (!data) return;
     setLastData(data);
     const versions = (data.releases || []).map((release) => Number(release.bench_version));
-    void loadMemoryField(versions, Math.max(...versions.concat([0])));
+    const live = [Math.max(...versions.concat([0]))];
+    const active = Number(store.rollout()?.active_version);
+    if (active > 0 && !live.includes(active)) live.push(active);
+    void loadMemoryField(versions, live);
   });
 
   const shownVersions = createMemo<Record<number, boolean>>(() => {
@@ -93,8 +118,11 @@ export function HarnessComparison(props: { store: LeaderboardStore }): JSX.Eleme
     memoryFieldRevision();
     const data = lastData();
     const rollout = store.rollout();
+    const chartMode = mode();
+    const version = chartVersion();
     const championHotkey =
-      store.emissions()?.allocation_mode === "score_ceiling_pool"
+      store.emissions()?.allocation_mode === "score_ceiling_pool" ||
+      (chartMode === "version" && !viewingCurrent())
         ? null
         : (store.emissions()?.champion_miner_hotkey ?? null);
     const isFailed = failed();
@@ -113,14 +141,22 @@ export function HarnessComparison(props: { store: LeaderboardStore }): JSX.Eleme
         ? !window.matchMedia("(min-width: 1181px)").matches
         : false;
     const snapshot = memoryFieldSnapshot();
-    const result = memoryTimelineHtml(data, {
+    const chartOptions = {
       width: measured,
       phoneViewport,
       rollout,
       championHotkey,
       fieldByVersion: snapshot.fieldByVersion,
       pendingByVersion: snapshot.pendingByVersion,
-    });
+      // The version chart runs to "now". A ten-minute clock keeps an
+      // unchanged poll from shifting the markup a pixel and replacing the
+      // DOM (and its focus and animations) every tick.
+      now: Math.floor(Date.now() / 600_000) * 600_000,
+    };
+    const result =
+      chartMode === "all"
+        ? memoryTimelineHtml(data, chartOptions)
+        : memoryVersionHtml(data, version, chartOptions);
     if (result.kind === "state") {
       const resultKey = "state:" + result.text;
       if (renderedResult === resultKey) return;
@@ -129,7 +165,7 @@ export function HarnessComparison(props: { store: LeaderboardStore }): JSX.Eleme
       target.textContent = result.text;
       return;
     }
-    const resultKey = "chart:" + result.html;
+    const resultKey = "chart:" + chartMode + ":" + result.html;
     if (renderedResult === resultKey) return;
     renderedResult = resultKey;
     target.className = "";
@@ -146,15 +182,49 @@ export function HarnessComparison(props: { store: LeaderboardStore }): JSX.Eleme
       }}
     >
       <div class="harness-comparison-head">
+        <span class="harness-comparison-mark" aria-hidden="true">
+          <svg class="ic" viewBox="0 0 24 24">
+            <ellipse cx="12" cy="5" rx="8" ry="3" />
+            <path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5" />
+            <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" />
+          </svg>
+        </span>
         <div class="harness-comparison-title">
-          <h2 id="harness-comparison-title">How far miners have taken memory</h2>
+          <h2 id="harness-comparison-title">
+            {mode() === "all"
+              ? "How far miners have taken memory"
+              : chartVersion() != null
+                ? "Memory scores on Bench v" + chartVersion()
+                : "Memory scores"}
+          </h2>
           <p class="harness-comparison-lead">
             <Tip text="This isolates memory performance. The public leaderboard ranks agents by the full composite, not this subscore alone.">
               Memory subscores only
             </Tip>
-            . Follow the best finalized miner as each benchmark generation unfolds, with Hermes
-            Agent and OpenClaw measured retrospectively where reference runs are available.
+            {mode() === "all"
+              ? ". Follow the best finalized miner as each benchmark generation unfolds, with Hermes Agent and OpenClaw measured retrospectively where reference runs are available."
+              : ". Every finalized run on the benchmark version the leaderboard is showing, and the record as it was beaten."}
           </p>
+        </div>
+        <div class="harness-comparison-modes" role="group" aria-label="Chart scope">
+          <button
+            type="button"
+            class="harness-comparison-mode"
+            data-chart-mode="version"
+            aria-pressed={mode() === "version" ? "true" : "false"}
+            onClick={() => setMode("version")}
+          >
+            {chartVersion() != null ? "Bench v" + chartVersion() : "This version"}
+          </button>
+          <button
+            type="button"
+            class="harness-comparison-mode"
+            data-chart-mode="all"
+            aria-pressed={mode() === "all" ? "true" : "false"}
+            onClick={() => setMode("all")}
+          >
+            All versions
+          </button>
         </div>
       </div>
       <div class="harness-comparison-body">

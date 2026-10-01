@@ -3,16 +3,18 @@
 // the flow reads as its own surface. Every panel consumes exactly ONE
 // /public/operations snapshot per tick, and the snapshot note states the
 // reconciliation plus its age (skew is visible, not papered over).
-import { createMemo, onMount } from "solid-js";
+import { createMemo, createSignal, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 import {
   IntegrityReviewBranch,
   PipelineBoard,
   RescreenNotice,
+  ScoringDetail,
 } from "../components/operations/PipelineBoard";
 import type { FleetReportExt } from "../components/operations/fleet";
-import type { PipelineEntryExt } from "../components/operations/pipeline";
+import { pipelineColumnViews } from "../components/operations/pipeline";
+import type { IndexedEntry, PipelineEntryExt } from "../components/operations/pipeline";
 import { operationsResource } from "../data/operations";
 import { useEndpoint } from "../data/useEndpoint";
 import type { ResourceState } from "../data/useEndpoint";
@@ -39,6 +41,25 @@ export function PipelinePage(
   const benchVersion = createMemo(() => {
     const report = snap.ops()?.validators as FleetReportExt | undefined;
     return Number(report?.active_bench_version) || Number(snap.ops()?.active_bench_version) || null;
+  });
+
+  // The run-progress panel follows one Scoring submission. Undefined means
+  // "the first one", so the panel has content without a click; null means the
+  // reader closed it. A selection that has since left Scoring falls back to
+  // the first rather than showing runs that no longer exist.
+  const [chosenScoring, setChosenScoring] = createSignal<string | null | undefined>(undefined);
+  const scoringItems = createMemo<IndexedEntry[]>(() => {
+    if (snap.opsUnavailable() || snap.opsLoading()) return [];
+    const lane = pipelineColumnViews(pipelineEntries(), statusCounts(), false, benchVersion()).find(
+      (column) => column.def.status === "evaluating",
+    );
+    return lane?.items ?? [];
+  });
+  const selectedScoring = createMemo<IndexedEntry | null>(() => {
+    const chosen = chosenScoring();
+    if (chosen === null) return null;
+    const items = scoringItems();
+    return (chosen && items.find((item) => item.key === chosen)) || items[0] || null;
   });
 
   return (
@@ -69,7 +90,10 @@ export function PipelinePage(
               loading={snap.opsLoading()}
               screeners={latest(screeners) ?? null}
               activeVersion={benchVersion()}
+              selectedScoringKey={selectedScoring()?.key ?? null}
+              onSelectScoring={setChosenScoring}
             />
+            <ScoringDetail item={selectedScoring()} onClose={() => setChosenScoring(null)} />
             <IntegrityReviewBranch
               entries={pipelineEntries()}
               statusCounts={statusCounts()}

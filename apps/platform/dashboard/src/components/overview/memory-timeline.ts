@@ -306,12 +306,17 @@ export function resetMemoryFieldCache(): void {
   memoryPendingByVersion = {};
 }
 
+/** Fetch each contract's finalized board. Settled contracts are fetched once
+ * and kept; `liveVersions` are the contracts that can still receive scores
+ * (the newest release, and the active version while a rollout collects), and
+ * they refetch on every call. */
 export function loadMemoryField(
   versions: number[],
-  activeVersion: number,
+  liveVersions: number | readonly number[],
 ): Promise<Record<number, MemoryFieldEntry[]>> {
+  const live = typeof liveVersions === "number" ? [liveVersions] : liveVersions;
   const wanted = versions.filter(
-    (version) => !memoryFieldByVersion[version] || version === activeVersion,
+    (version) => !memoryFieldByVersion[version] || live.includes(version),
   );
   if (!wanted.length) return Promise.resolve(memoryFieldByVersion);
   return poolMap(wanted, 3, (version) =>
@@ -368,6 +373,8 @@ export interface MemoryTimelineOptions {
   championHotkey: string | null;
   fieldByVersion: Record<number, MemoryFieldEntry[]>;
   pendingByVersion: Record<number, number>;
+  /** Clock for the single-version axis end; defaults to Date.now(). */
+  now?: number;
 }
 
 export type MemoryTimelineResult =
@@ -555,14 +562,20 @@ export function memoryTimelineHtml(
   const tight = width < 400 && options.phoneViewport;
   const height = narrow
     ? Math.max(300, Math.round(width * 0.86))
-    : Math.max(272, Math.min(376, Math.round(width * 0.34)));
+    : Math.max(300, Math.min(380, Math.round(width * 0.36)));
   const left = tight ? 32 : narrow ? 40 : 58;
   const right = narrow ? 14 : 26;
   // Reserve a slim annotation gutter above the plot. The reigning champion
   // plate lives here so a high score cannot cover the latest record line or
   // the finalized-run cloud it is meant to explain.
-  const top = narrow ? 28 : 34;
-  const bottom = narrow ? 52 : 62;
+  // On the landscape chart each generation is named at the head of its own
+  // band, above the annotation gutter, so the version and its release date
+  // read before the runs beneath them. The phone keeps them under the plot,
+  // where the narrow portrait has the room.
+  const labelsOnTop = !narrow;
+  const header = labelsOnTop ? 46 : 0;
+  const top = header + (narrow ? 28 : 34);
+  const bottom = labelsOnTop ? 20 : 52;
   const plotWidth = width - left - right;
   const plotHeight = height - top - bottom;
   const bandWidth = plotWidth / eras.length;
@@ -701,6 +714,22 @@ export function memoryTimelineHtml(
       );
     }
   });
+  if (labelsOnTop) {
+    svg.push(
+      '<rect class="timeline-header-band" x="' +
+        left +
+        '" y="0" width="' +
+        plotWidth.toFixed(2) +
+        '" height="' +
+        header +
+        '"></rect>',
+    );
+    svg.push(
+      '<text class="timeline-axis-title" transform="translate(14 ' +
+        (top + plotHeight / 2).toFixed(2) +
+        ') rotate(-90)" text-anchor="middle">Memory subscore</text>',
+    );
+  }
   ticks.forEach((tick) => {
     svg.push(
       '<line class="timeline-grid" x1="' +
@@ -731,7 +760,7 @@ export function memoryTimelineHtml(
           '" x2="' +
           bandStart(era.index).toFixed(2) +
           '" y1="' +
-          top +
+          (labelsOnTop ? 0 : top) +
           '" y2="' +
           (height - bottom) +
           '"></line>',
@@ -760,7 +789,7 @@ export function memoryTimelineHtml(
       '<text class="timeline-era-label" x="' +
         bandCenter(era.index).toFixed(2) +
         '" y="' +
-        (height - bottom + (narrow ? 20 : 22)) +
+        (labelsOnTop ? 20 : height - bottom + 20) +
         '" text-anchor="middle" style="fill:' +
         era.color +
         '" tabindex="0" role="img" aria-label="' +
@@ -777,7 +806,7 @@ export function memoryTimelineHtml(
       '<text class="timeline-era-date" x="' +
         bandCenter(era.index).toFixed(2) +
         '" y="' +
-        (height - bottom + (narrow ? 34 : 38)) +
+        (labelsOnTop ? 37 : height - bottom + 34) +
         '" text-anchor="middle">' +
         esc(timelineDate(era.release.released_at as string)) +
         "</text>",
@@ -1206,6 +1235,671 @@ export function memoryTimelineHtml(
           esc(row.placed) +
           "</td><td>" +
           esc(row.measured) +
+          "</td><td>" +
+          (row.score == null ? "—" : fx(row.score)) +
+          "</td></tr>",
+      )
+      .join("") +
+    "</tbody></table></div></details>";
+  return { kind: "chart", html };
+}
+
+// ── One contract at a time ────────────────────────────────────
+// The all-versions chart above gives every contract an equal band because a
+// wall clock cannot hold contracts that ran for hours beside ones that ran
+// for days. Inside ONE contract that objection is gone, and time is the
+// honest axis: the record steps up at the moment each record finalized, and
+// the field shows when the competition arrived. Scores are only comparable
+// within a version, so this is also the view that never invites comparing
+// two contracts on one scale.
+
+const HOUR = 3_600_000;
+const TICK_STEPS_HOURS = [1, 2, 3, 6, 12, 24, 48, 72, 96, 168, 336];
+
+function utcClock(t: number): string {
+  return new Date(t).toISOString().slice(11, 16);
+}
+
+/**
+ * Which contract the one-version chart shows. It follows the version the
+ * board is ranked by (the settled version mid-rollout, never the one still
+ * collecting). The timeline is its own endpoint, so a missing board falls
+ * back to the rollout's active version, then to the newest release, rather
+ * than leaving the chart waiting on data that may never arrive.
+ */
+export function memoryChartVersion(input: {
+  settledView: boolean;
+  bench: { active: number | null; current: number | null };
+  rolloutActive: number | null | undefined;
+  releases: readonly TimelineRelease[] | null | undefined;
+}): number | null {
+  const fromBoard = Number(input.settledView ? input.bench.active : input.bench.current);
+  if (fromBoard > 0) return fromBoard;
+  const active = Number(input.rolloutActive);
+  if (active > 0) return active;
+  const newest = Math.max(
+    0,
+    ...(input.releases || []).map((release) => Number(release.bench_version) || 0),
+  );
+  return newest > 0 ? newest : null;
+}
+
+/** Evenly stepped UTC time ticks inside [start, end], aligned to the step so
+ * a label never reads "13:47". */
+export function timeTicks(start: number, end: number, maxTicks: number): number[] {
+  const span = Math.max(end - start, HOUR);
+  const hours =
+    TICK_STEPS_HOURS.find((step) => span / (step * HOUR) <= Math.max(2, maxTicks)) ??
+    (TICK_STEPS_HOURS[TICK_STEPS_HOURS.length - 1] as number);
+  const step = hours * HOUR;
+  const ticks: number[] = [];
+  for (let t = Math.ceil(start / step) * step; t <= end; t += step) ticks.push(t);
+  return ticks;
+}
+
+interface VersionRecord {
+  at: number;
+  score: number;
+  name: string;
+  agentId: string | undefined;
+  recordedAt: string;
+}
+
+/** One contract's memory scores on a real time axis. Same data as the
+ * all-versions chart (the per-version finalized field, the record series,
+ * and the reference records), scoped to `version`. */
+export function memoryVersionHtml(
+  data: TimelinePayload | null,
+  version: number | null,
+  options: MemoryTimelineOptions,
+): MemoryTimelineResult {
+  const releases = ((data && data.releases) || [])
+    .slice()
+    .sort((a, b) => Number(a.bench_version) - Number(b.bench_version));
+  if (!releases.length) {
+    return {
+      kind: "state",
+      text: "Benchmark release history is temporarily unavailable. No substitute timeline is shown.",
+    };
+  }
+  if (version == null || !Number.isFinite(version)) {
+    return { kind: "state", text: "Waiting for the leaderboard's benchmark version…" };
+  }
+  const release = releases.find((item) => Number(item.bench_version) === version);
+  if (!release) {
+    return {
+      kind: "state",
+      text:
+        "Bench v" +
+        version +
+        " has no published release in the benchmark timeline, so there is no memory history to chart.",
+    };
+  }
+  const nextRelease = releases.find((item) => Number(item.bench_version) > version) ?? null;
+  const releasedAt = releaseTime(release);
+  const pending = options.pendingByVersion[version] || 0;
+  let open = false;
+  if (options.rollout) {
+    const status = String(options.rollout.status || "");
+    open =
+      status !== "activated" &&
+      status !== "superseded" &&
+      Number(options.rollout.desired_version) === version;
+  }
+
+  const records: VersionRecord[] = ((data && data.points) || [])
+    .filter(
+      (point) =>
+        Number(point.bench_version) === version &&
+        Number.isFinite(Number(point.memory_mean)) &&
+        Date.parse(point.recorded_at ?? ""),
+    )
+    .map((point) => ({
+      at: Date.parse(point.recorded_at ?? ""),
+      score: Number(point.memory_mean),
+      name: agentName(point.agent_name),
+      agentId: point.agent_id,
+      recordedAt: point.recorded_at as string,
+    }))
+    .sort((a, b) => a.at - b.at);
+  const field = (options.fieldByVersion[version] || [])
+    .slice()
+    .sort((a, b) => a.firstSeen - b.firstSeen || a.score - b.score);
+
+  if (!records.length && !field.length) {
+    return {
+      kind: "state",
+      text:
+        "No finalized runs on Bench v" +
+        version +
+        " yet." +
+        (pending
+          ? " " +
+            pending +
+            (pending === 1 ? " scored submission is" : " scored submissions are") +
+            " awaiting quorum and will appear once validators finalize " +
+            (pending === 1 ? "it." : "them.")
+          : ""),
+    };
+  }
+
+  // ── Geometry ──
+  const width = Math.max(300, Math.min(1200, options.width || 960));
+  const narrow = width < 560 && options.phoneViewport;
+  const height = narrow
+    ? Math.max(300, Math.round(width * 0.86))
+    : Math.max(300, Math.min(380, Math.round(width * 0.36)));
+  const left = narrow ? 40 : 58;
+  const right = narrow ? 14 : 26;
+  const top = narrow ? 30 : 36;
+  const bottom = narrow ? 46 : 50;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const inset = Math.min(18, plotWidth * 0.03);
+  const now = options.now ?? Date.now();
+  const times = records
+    .map((record) => record.at)
+    .concat(field.map((entry) => entry.firstSeen).filter((t) => t > 0));
+  const start = Number.isFinite(releasedAt) ? releasedAt : Math.min(...times);
+  // The newest contract is still running, so its axis runs to now; a
+  // superseded one ends at its last score (scores can land after the next
+  // release while that rollout is collecting).
+  let end = Math.max(start + HOUR, ...times);
+  if (!nextRelease) end = Math.max(end, now);
+  const x = (t: number): number =>
+    left +
+    inset +
+    ((Math.max(start, Math.min(end, t)) - start) / (end - start)) * (plotWidth - 2 * inset);
+  const y = (value: number): number => top + (1 - Math.max(0, Math.min(1, value))) * plotHeight;
+  const dotR = narrow ? 2.6 : 3.2;
+  const recordR = narrow ? 3.8 : 5;
+  const valueTicks = narrow ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
+  const color = "var(--era-to)";
+
+  const svg: string[] = [];
+  if (open) {
+    svg.push(
+      '<rect class="timeline-band open" x="' +
+        left +
+        '" y="' +
+        top +
+        '" width="' +
+        plotWidth +
+        '" height="' +
+        plotHeight +
+        '"></rect>',
+    );
+  }
+  svg.push(
+    '<text class="timeline-axis-title" transform="translate(14 ' +
+      (top + plotHeight / 2).toFixed(2) +
+      ') rotate(-90)" text-anchor="middle">Memory subscore</text>',
+  );
+  valueTicks.forEach((tick) => {
+    svg.push(
+      '<line class="timeline-grid" x1="' +
+        left +
+        '" x2="' +
+        (width - right) +
+        '" y1="' +
+        y(tick) +
+        '" y2="' +
+        y(tick) +
+        '"></line><text class="timeline-axis-label" x="' +
+        (left - 10) +
+        '" y="' +
+        (y(tick) + 3) +
+        '" text-anchor="end">' +
+        tick.toFixed(2).replace(/^0/, "") +
+        "</text>",
+    );
+  });
+
+  // Time axis: UTC ticks, the date written once per day it changes.
+  const tickList = timeTicks(start, end, Math.max(2, Math.floor(plotWidth / (narrow ? 90 : 120))));
+  const coarse =
+    tickList.length > 1 && (tickList[1] as number) - (tickList[0] as number) >= 24 * HOUR;
+  let lastDay = "";
+  tickList.forEach((tick) => {
+    const tx = x(tick).toFixed(2);
+    const day = timelineDate(tick);
+    const firstOfDay = day !== lastDay;
+    lastDay = day;
+    svg.push(
+      '<line class="timeline-time-grid" x1="' +
+        tx +
+        '" x2="' +
+        tx +
+        '" y1="' +
+        top +
+        '" y2="' +
+        (height - bottom) +
+        '"></line><text class="timeline-time-label" x="' +
+        tx +
+        '" y="' +
+        (height - bottom + 18) +
+        '" text-anchor="middle">' +
+        esc(coarse ? day : utcClock(tick)) +
+        "</text>" +
+        (!coarse && firstOfDay
+          ? '<text class="timeline-era-date" x="' +
+            tx +
+            '" y="' +
+            (height - bottom + 34) +
+            '" text-anchor="middle">' +
+            esc(day) +
+            "</text>"
+          : ""),
+    );
+  });
+  svg.push(
+    '<text class="timeline-axis-unit" x="' +
+      (width - right) +
+      '" y="' +
+      (height - 4) +
+      '" text-anchor="end">UTC</text>',
+  );
+  // Where the contract was superseded, when that happened inside the window.
+  if (nextRelease) {
+    const supersededAt = releaseTime(nextRelease);
+    if (Number.isFinite(supersededAt) && supersededAt > start && supersededAt < end) {
+      const sx = x(supersededAt).toFixed(2);
+      const note =
+        "Bench v" + nextRelease.bench_version + " released " + timelineDate(supersededAt);
+      svg.push(
+        '<g class="timeline-successor" tabindex="0" role="img" aria-label="' +
+          esc(note) +
+          '" data-timeline-tooltip="' +
+          esc(note) +
+          '"><line x1="' +
+          sx +
+          '" x2="' +
+          sx +
+          '" y1="' +
+          top +
+          '" y2="' +
+          (height - bottom) +
+          '"></line><text transform="translate(' +
+          (Number(sx) - 6).toFixed(2) +
+          " " +
+          (top + plotHeight / 2).toFixed(2) +
+          ') rotate(-90)" text-anchor="middle">v' +
+          esc(nextRelease.bench_version) +
+          " released</text><title>" +
+          esc(note) +
+          "</title></g>",
+      );
+    }
+  }
+
+  // Reference harnesses: one flat level per series measured on this contract.
+  const references = THIRD_PARTY_HARNESSES.map((evidence) => ({
+    evidence,
+    point: (evidence.points || []).find(
+      (point) =>
+        Number(point.benchVersion) === version && Number.isFinite(Number(point.memoryMean)),
+    ),
+  }));
+  const unmeasured = references.filter((ref) => !ref.point);
+  const usedLabelYs: number[] = [];
+  references.forEach(({ evidence, point }) => {
+    if (!point) return;
+    const ry = y(Number(point.memoryMean));
+    const tip =
+      evidence.subject +
+      " · v" +
+      version +
+      " · memory " +
+      fx(Number(point.memoryMean)) +
+      " (" +
+      point.memoryCorrect +
+      "/" +
+      point.memoryCases +
+      ") · " +
+      (point.model || evidence.model) +
+      " · " +
+      (point.route || evidence.route) +
+      " · seed " +
+      (point.seed || evidence.seed) +
+      " · measured " +
+      (point.measuredAt || evidence.measuredAt);
+    // Two close reference levels must not print their labels over each other.
+    let labelY = ry - 7;
+    usedLabelYs.forEach((used) => {
+      if (Math.abs(used - labelY) < 14) labelY = used - 14;
+    });
+    labelY = Math.max(top + 12, labelY);
+    usedLabelYs.push(labelY);
+    svg.push(
+      '<g class="timeline-reference ' +
+        evidence.id +
+        '" tabindex="0" role="img" aria-label="' +
+        esc(tip) +
+        '" data-timeline-tooltip="' +
+        esc(tip) +
+        '"><line class="timeline-path ' +
+        evidence.id +
+        '" x1="' +
+        left +
+        '" x2="' +
+        (width - right) +
+        '" y1="' +
+        ry.toFixed(2) +
+        '" y2="' +
+        ry.toFixed(2) +
+        '"></line><text class="timeline-reference-label" x="' +
+        (width - right - 6) +
+        '" y="' +
+        labelY.toFixed(2) +
+        '" text-anchor="end">' +
+        esc(evidence.label + " " + fx(Number(point.memoryMean))) +
+        "</text><title>" +
+        esc(tip) +
+        "</title></g>",
+    );
+  });
+  if (unmeasured.length) {
+    const labels = unmeasured.map((ref) => ref.evidence.label).join(" · ");
+    const note =
+      labels +
+      " " +
+      (unmeasured.length === 1 ? "has" : "have") +
+      " no run on v" +
+      version +
+      ". The absence is a missing measurement, not a score of zero.";
+    svg.push(
+      '<g class="timeline-unmeasured" tabindex="0" role="img" aria-label="' +
+        esc(note) +
+        '" data-timeline-tooltip="' +
+        esc(note) +
+        '"><text x="' +
+        (width - right - 8) +
+        '" y="' +
+        (height - bottom - 12) +
+        '" text-anchor="end">' +
+        esc(narrow ? "No reference run on v" + version : labels + " not measured on v" + version) +
+        "</text><title>" +
+        esc(note) +
+        "</title></g>",
+    );
+  }
+
+  // The field: every finalized run at its upload time.
+  const championHotkey = options.championHotkey;
+  let crown: { cx: number; cy: number; entry: MemoryFieldEntry } | null = null;
+  field.forEach((entry, i) => {
+    const carried = !entry.firstSeen || entry.firstSeen < start;
+    const cx = x(carried ? start : entry.firstSeen);
+    const cy = y(entry.score);
+    const champion = Boolean(championHotkey && entry.hotkey === championHotkey);
+    const tip =
+      entry.name +
+      " · v" +
+      version +
+      " · memory " +
+      fx(entry.score) +
+      " · composite " +
+      fx(entry.composite) +
+      " · " +
+      (carried
+        ? "upload predates the v" + version + " release"
+        : "uploaded " + timelineDate(entry.firstSeen) + " " + utcClock(entry.firstSeen) + " UTC");
+    if (champion) crown = { cx, cy, entry };
+    svg.push(
+      '<circle class="timeline-field' +
+        (champion ? " champion" : "") +
+        '" cx="' +
+        cx.toFixed(2) +
+        '" cy="' +
+        cy.toFixed(2) +
+        '" r="' +
+        (champion ? recordR + 1 : dotR) +
+        '" style="fill:' +
+        color +
+        "; --i:" +
+        Math.min(i, 28) +
+        '" role="img" aria-label="' +
+        esc(tip) +
+        '" data-timeline-tooltip="' +
+        esc(tip) +
+        '"><title>' +
+        esc(tip) +
+        "</title></circle>",
+    );
+  });
+
+  // The record: a step that holds until it is beaten, then holds to the end.
+  const latest = records[records.length - 1] ?? null;
+  if (latest) {
+    const steps = records
+      .map((record, i) =>
+        i
+          ? "H" + x(record.at).toFixed(2) + " V" + y(record.score).toFixed(2)
+          : "M" + x(record.at).toFixed(2) + " " + y(record.score).toFixed(2),
+      )
+      .join(" ");
+    svg.push(
+      '<path class="timeline-path miner record-step" pathLength="1" d="' +
+        steps +
+        '" style="stroke:' +
+        color +
+        '"></path><path class="timeline-path record-hold" d="M' +
+        x(latest.at).toFixed(2) +
+        " " +
+        y(latest.score).toFixed(2) +
+        " H" +
+        x(end).toFixed(2) +
+        '" style="stroke:' +
+        color +
+        '"></path>',
+    );
+    records.forEach((record) => {
+      svg.push(
+        timelinePoint(
+          {
+            at: record.at,
+            score: record.score,
+            version,
+            tooltip:
+              "Record · " +
+              record.name +
+              " · v" +
+              version +
+              " · memory " +
+              fx(record.score) +
+              " · finalized " +
+              timelineDate(record.recordedAt) +
+              " " +
+              utcClock(record.at) +
+              " UTC",
+            source: record.name,
+            measured: record.recordedAt,
+            agentId: record.agentId,
+            x: x(record.at),
+            y: y(record.score),
+          },
+          "miner",
+          color,
+          recordR,
+        ),
+      );
+    });
+  }
+
+  // The reigning champion, crowned exactly as on the all-versions chart.
+  const crowned = crown as { cx: number; cy: number; entry: MemoryFieldEntry } | null;
+  if (crowned) {
+    const cx = crowned.cx.toFixed(2);
+    const cy = crowned.cy.toFixed(2);
+    const crownName = crowned.entry.name;
+    const crownScore = fx(crowned.entry.score);
+    const plateW = Math.min(
+      Math.max((crownName.length + 2) * 6.7 + 74, 124),
+      Math.max(plotWidth - 8, 110),
+    );
+    const plateH = 21;
+    const plateX = Math.min(
+      Math.max(crowned.cx - plateW / 2, left + 2),
+      width - right - plateW - 2,
+    );
+    const plateY = top - plateH - 5;
+    const label = "Reigning champion · " + crownName + " · memory " + crownScore;
+    svg.push(
+      '<line class="timeline-champion-drop" x1="' +
+        cx +
+        '" x2="' +
+        cx +
+        '" y1="' +
+        (crowned.cy + 8).toFixed(2) +
+        '" y2="' +
+        (height - bottom) +
+        '"></line><circle class="timeline-champion-halo" cx="' +
+        cx +
+        '" cy="' +
+        cy +
+        '" r="' +
+        (recordR + 13) +
+        '"></circle><circle class="timeline-champion-pulse" cx="' +
+        cx +
+        '" cy="' +
+        cy +
+        '" r="' +
+        (recordR + 5) +
+        '"></circle><circle class="timeline-champion-ring" cx="' +
+        cx +
+        '" cy="' +
+        cy +
+        '" r="' +
+        (recordR + 5) +
+        '"></circle><g class="timeline-champion-plate" tabindex="0" role="img" aria-label="' +
+        esc("Reigning champion " + crownName + ", memory " + crownScore) +
+        '" data-timeline-tooltip="' +
+        esc(label) +
+        '"><rect x="' +
+        plateX.toFixed(2) +
+        '" y="' +
+        plateY.toFixed(2) +
+        '" width="' +
+        plateW.toFixed(2) +
+        '" height="' +
+        plateH +
+        '" rx="3"></rect><text x="' +
+        (plateX + 9).toFixed(2) +
+        '" y="' +
+        (plateY + 14.5).toFixed(2) +
+        '">♛ ' +
+        esc(crownName) +
+        '</text><text class="crown-score" x="' +
+        (plateX + plateW - 9).toFixed(2) +
+        '" y="' +
+        (plateY + 14.5).toFixed(2) +
+        '" text-anchor="end">' +
+        esc(crownScore) +
+        "</text><title>" +
+        esc(label) +
+        "</title></g>",
+    );
+  }
+
+  // ── Summary, legend, notes, exact data ──
+  const summary =
+    '<p class="harness-comparison-summary">' +
+    (field.length ? "<span><strong>" + field.length + "</strong> finalized runs</span>" : "") +
+    "<span><strong>" +
+    records.length +
+    "</strong> " +
+    (records.length === 1 ? "record" : "records") +
+    "</span>" +
+    (latest
+      ? "<span>Record <strong>" +
+        fx(latest.score) +
+        "</strong> by <strong>" +
+        esc(latest.name) +
+        "</strong></span>"
+      : "") +
+    (pending ? "<span><strong>" + pending + "</strong> awaiting quorum</span>" : "") +
+    (open ? '<span class="collecting">Rollout collecting</span>' : "") +
+    "</p>";
+  const legend =
+    '<div class="memory-timeline-legend" aria-label="Timeline legend">' +
+    '<span class="field-dot"><i style="background:' +
+    color +
+    '"></i>Finalized run</span>' +
+    '<span class="record-line"><i style="border-color:' +
+    color +
+    '"></i>Record</span>' +
+    references
+      .map(
+        (ref) =>
+          '<span class="' +
+          ref.evidence.id +
+          '"><i></i>' +
+          esc(ref.evidence.label) +
+          (ref.point ? "" : " <em>· not on v" + esc(version) + "</em>") +
+          "</span>",
+      )
+      .join("") +
+    "</div>";
+  const rows = records
+    .map((record) => ({
+      source: record.name,
+      placed: timelineDate(record.at) + " " + utcClock(record.at),
+      score: record.score as number | null,
+      agentId: record.agentId,
+    }))
+    .concat(
+      references.map((ref) => ({
+        source: ref.evidence.subject,
+        placed: ref.point
+          ? String(ref.point.measuredAt || ref.evidence.measuredAt)
+          : "not yet measured",
+        score: ref.point ? Number(ref.point.memoryMean) : null,
+        agentId: undefined,
+      })),
+    );
+  const unmeasuredNote = unmeasured.length
+    ? " " +
+      unmeasured.map((ref) => ref.evidence.label).join(" and ") +
+      " " +
+      (unmeasured.length === 1 ? "has" : "have") +
+      " no run on this contract, so no reference level is drawn for " +
+      (unmeasured.length === 1 ? "it." : "them.")
+    : "";
+  const html =
+    summary +
+    legend +
+    '<div class="memory-timeline-frame" tabindex="0" role="region" aria-label="Bench v' +
+    esc(version) +
+    ' memory-score timeline, horizontally scrollable on small screens"><svg class="memory-timeline-svg" data-timeline-version="' +
+    esc(version) +
+    '" viewBox="0 0 ' +
+    width +
+    " " +
+    height +
+    '" role="img" aria-labelledby="memory-timeline-title memory-timeline-desc"><title id="memory-timeline-title">Memory scores on DittoBench v' +
+    esc(version) +
+    '</title><desc id="memory-timeline-desc">Memory score from zero to one against time in UTC, from the v' +
+    esc(version) +
+    " release. Dots are every finalized run at its upload time; the stepped line is the record, rising at the moment each record finalized and holding until beaten. Flat dashed lines are third-party reference runs measured on this contract.</desc>" +
+    svg.join("") +
+    '</svg><div class="memory-timeline-tooltip" role="tooltip" hidden></div></div>' +
+    '<details class="timeline-data-details"><summary>How to read this chart</summary>' +
+    '<p class="memory-timeline-note">This chart shows one benchmark contract: the version the leaderboard is showing. Dots are every finalized run on v' +
+    esc(version) +
+    ", placed at upload time (a run uploaded before the release sits at the release). The stepped line is the record: it rises at the moment a new record finalized and holds until beaten. Runs that have scored but not reached quorum are not plotted, so nothing here can move retroactively. Scores compare only within one version; switch to All versions to see each contract's record side by side." +
+    esc(unmeasuredNote) +
+    (open
+      ? " The v" + esc(version) + " rollout is still collecting, so this chart can still change."
+      : "") +
+    "</p></details>" +
+    '<details class="timeline-data-details"><summary>Exact timeline data</summary><div class="timeline-data-table-wrap"><table class="timeline-data-table"><thead><tr><th>Series</th><th>Placed at (UTC)</th><th>Memory</th></tr></thead><tbody>' +
+    rows
+      .map(
+        (row) =>
+          "<tr><td>" +
+          (row.agentId ? entityAnchorHtml(row.agentId, row.source) : esc(row.source)) +
+          "</td><td>" +
+          esc(row.placed) +
           "</td><td>" +
           (row.score == null ? "—" : fx(row.score)) +
           "</td></tr>",

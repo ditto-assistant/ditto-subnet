@@ -287,7 +287,7 @@ export const PIPELINE_COLUMNS: readonly PipelineColumnDef[] = [
     countId: "pipeline-admission-count",
     titleId: "pipeline-admission-title",
     title: "Build & admission",
-    node: "1",
+    node: "01",
     empty: "No submissions awaiting admission.",
   },
   {
@@ -297,7 +297,7 @@ export const PIPELINE_COLUMNS: readonly PipelineColumnDef[] = [
     countId: "pipeline-wait-validator-count",
     titleId: "pipeline-wait-validator-title",
     title: "Waiting for validators",
-    node: "2",
+    node: "02",
     empty: "No submissions waiting.",
   },
   {
@@ -307,7 +307,7 @@ export const PIPELINE_COLUMNS: readonly PipelineColumnDef[] = [
     countId: "pipeline-evaluating-count",
     titleId: "pipeline-evaluating-title",
     title: "Scoring",
-    node: "3",
+    node: "03",
     empty: "No active evaluation.",
   },
   {
@@ -317,7 +317,7 @@ export const PIPELINE_COLUMNS: readonly PipelineColumnDef[] = [
     countId: "pipeline-scored-count",
     titleId: "pipeline-scored-title",
     title: "Scored & live",
-    node: "4",
+    node: "04",
     empty: "No scores yet. Finalized agents will appear here.",
   },
 ];
