@@ -62,15 +62,35 @@ remain read-only and refuse unaudited runtime/schema transitions.
 
 ## Activation blockers
 
-The observer is **not ready for a live OAuth binding**. Existing Backroom
-`backroom:write` is broad; the client's two-tool allowlist does not constrain a
-stolen token invoking other administrative tools. Do not provision that grant.
-A separately reviewed, server-enforced, mutually exclusive
-`backroom:treasury:observe` scope must permit only bounded historical treasury
-settings read and verified receipt ingestion. It must refuse mixed broad grants,
-other tools/resources/downloads, preserve live staff/session revalidation and
-refresh narrowing/revocation, and pass actual OAuth/direct-call negative tests.
-That change is a separate follow-up; this ingress adds no such grant.
+The staged `infra/systemd/sn118-treasury-activity-observer.service` supplies an
+already separately approved credential with systemd `LoadCredential` and
+`--token-file`. Private ownership/mode, regular-file/no-follow and content bounds
+are enforced. No token appears in the command or activation.env. The unit is
+not installed/enabled by release, has no signing identity/journal mount and
+does not restart after semantic/auth refusal. See
+[gamma-activation-packet.md](gamma-activation-packet.md) for installation gates
+and the unresolved cross-host distribution-selector handoff. Disabled config
+reads no credential or network in the CLI, even with a supplied token-file path.
+systemd credential copying occurs before launch, so an absent activation.env is
+the unit's default-off boundary; creating that marker requires separate review.
+
+The observer is **not activated and has no live OAuth binding**. Existing
+`backroom:write` is broad; a client's local allowlist cannot constrain a stolen
+token. Never provision that broad grant for this observer. The dedicated
+`backroom:treasury:observe` implementation requires exclusive authorization and
+explicit write-level staff consent. Its server exposes only exact historical
+settings read and verified receipt ingestion, with no general read floor.
+Requests for other tools/resources/downloads and JSON-RPC batches refuse.
+Live staff level/session expiry are checked at consent, issuance, refresh and
+every request; ordinary grant replacement and revocation still apply.
+
+Startup discovers exactly the two allowed tools and refuses a broader token
+catalog. The settings call selects the approved policy's exact revision even
+when it is older than the latest 200 history entries. A missing, corrupt or
+oversized row refuses without default substitution. The complete raw JSON
+checksum and all configured destinations remain independently checked.
+Code, tests and release do not authorize a grant: approved credentials must be
+obtained through the normal browser consent flow, separately from deployment.
 
 Runtime adoption, separately authorized immutable configuration and the scoped
 OAuth binding, deployment/supervision and a bounded accepted receipt remain

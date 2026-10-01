@@ -129,6 +129,7 @@ class MCP:
 
     def call(self, name, arguments):
         if name == "get_treasury_settings":
+            assert arguments == {"revision": self.config.approval.policy.revision}
             return {
                 "history": [
                     {
@@ -220,6 +221,8 @@ def test_actual_cli_disabled_without_token_or_chain(tmp_path):
             str(path),
             "--config-sha256",
             hashlib.sha256(raw).hexdigest(),
+            "--token-file",
+            str(tmp_path / "absent-credential"),
             "--once",
         ],
         cwd=Path(__file__).resolve().parents[2],
@@ -346,11 +349,16 @@ def test_public_mcp_only_bounded_transport_and_no_general_tools():
         requests.append(body)
         if body["method"] == "notifications/initialized":
             return httpx.Response(202)
-        result = (
-            {}
-            if body["method"] == "initialize"
-            else {"structuredContent": {"history": []}}
-        )
+        result = {}
+        if body["method"] == "tools/list":
+            result = {
+                "tools": [
+                    {"name": "get_treasury_settings"},
+                    {"name": "record_treasury_receipt"},
+                ]
+            }
+        elif body["method"] != "initialize":
+            result = {"structuredContent": {"history": []}}
         return httpx.Response(
             200,
             json={"jsonrpc": "2.0", "id": body["id"], "result": result},
@@ -362,7 +370,37 @@ def test_public_mcp_only_bounded_transport_and_no_general_tools():
     with pytest.raises(ValueError):
         mcp.call("set_treasury_settings", {})
     mcp.close()
-    assert len(requests) == 3
+    assert len(requests) == 4
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [],
+        [{"name": "get_treasury_settings"}],
+        [
+            {"name": "get_treasury_settings"},
+            {"name": "record_treasury_receipt"},
+            {"name": "set_treasury_settings"},
+        ],
+    ],
+)
+def test_observer_refuses_generic_or_incomplete_token_catalog(tools):
+    def handler(request):
+        body = json.loads(request.content)
+        if body["method"] == "notifications/initialized":
+            return httpx.Response(202)
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": {"tools": tools} if body["method"] == "tools/list" else {},
+            },
+        )
+
+    with pytest.raises(ValueError, match="dedicated receipt-only"):
+        PublicActivityMCP("SYNTHETIC", transport=httpx.MockTransport(handler))
 
 
 @pytest.mark.parametrize("status", [401, 403, 429, 503, 302])
@@ -382,9 +420,21 @@ def test_lost_http_ack_is_retryable_but_explicit_protocol_refusal_is_not():
         body = json.loads(request.content)
         if body["method"] == "notifications/initialized":
             return httpx.Response(202)
-        if body["method"] == "initialize":
+        if body["method"] in {"initialize", "tools/list"}:
             return httpx.Response(
-                200, json={"jsonrpc": "2.0", "id": body["id"], "result": {}}
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {}
+                    if body["method"] == "initialize"
+                    else {
+                        "tools": [
+                            {"name": "get_treasury_settings"},
+                            {"name": "record_treasury_receipt"},
+                        ]
+                    },
+                },
             )
         if explicit_refusal:
             return httpx.Response(

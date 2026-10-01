@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -22,6 +22,15 @@ PUBLIC_ADDRESS_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 def public_wallet_address(value: str | None) -> str | None:
     """Legacy policies allowed free text; never publish it as an address."""
     return value if value and re.fullmatch(PUBLIC_ADDRESS_PATTERN, value) else None
+
+
+class TreasuryObserverSettings(BaseModel):
+    """One exact immutable revision for the receipt observer, not latest policy."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+    revision: Annotated[int, Field(gt=0, le=2_147_483_647)]
+    checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    settings: dict[str, Any]
 
 
 class TreasuryPayeeRule(BaseModel):

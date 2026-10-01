@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from ditto.treasury.activity_observer import (
     ActivityObserverConfig,
     PublicActivityMCP,
+    observer_token,
     run_observer,
 )
 from ditto.treasury.collector_chain import PublicCollectorChain
@@ -73,6 +74,7 @@ def main():
     parser.add_argument("--config-sha256", required=True)
     parser.add_argument("--state", type=Path)
     parser.add_argument("--transfer-journal", type=Path)
+    parser.add_argument("--token-file", type=Path)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--poll-seconds", type=int, default=60)
     args = parser.parse_args()
@@ -98,7 +100,10 @@ def main():
         parser.error("approved observer activation requires private state path")
     # Existing approved binding only. This program cannot mint/refresh OAuth,
     # read desktop credentials or install a token/secret on any host.
-    token = os.environ.get("BACKROOM_ACTIVITY_OBSERVER_TOKEN", "")
+    token = observer_token(
+        args.token_file,
+        environment_token=os.environ.get("BACKROOM_ACTIVITY_OBSERVER_TOKEN", ""),
+    )
     import bittensor as bt
 
     with bt.Subtensor(network="finney") as subtensor:

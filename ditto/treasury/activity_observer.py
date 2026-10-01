@@ -32,6 +32,43 @@ PUBLIC_MCP = "https://backroom.dittobench.ai/mcp"
 MAX_PENDING = 1000
 
 
+def observer_token(path: Path | None, *, environment_token: str = "") -> str:
+    """Read an already approved private credential; never mint or log it.
+
+    A supplied file is authoritative. Failure cannot fall back to an environment
+    grant. systemd LoadCredential mounts a private per-unit file for this path.
+    """
+    if path is None:
+        token = environment_token
+    else:
+        if environment_token:
+            raise ValueError("ambiguous observer credential bindings")
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid not in {0, os.geteuid()}
+                or info.st_mode & 0o077
+                or not 0 < info.st_size <= 8192
+            ):
+                raise ValueError("observer credential must be a bounded private file")
+            raw = os.read(fd, 8193)
+            if len(raw) > 8192:
+                raise ValueError("observer credential exceeds bound")
+            token = raw.decode("ascii").removesuffix("\n")
+        finally:
+            os.close(fd)
+    if (
+        not token
+        or len(token) > 8192
+        or not token.isascii()
+        or any(c.isspace() or ord(c) < 33 or ord(c) > 126 for c in token)
+    ):
+        raise ValueError("approved observer OAuth binding absent or malformed")
+    return token
+
+
 class ObservationUnavailable(RuntimeError):
     """Transient transport outage; durable selections may be safely redelivered."""
 
@@ -127,6 +164,17 @@ class PublicActivityMCP:
                 },
             )
             self.request("notifications/initialized", {}, notification=True)
+            tools = self.request("tools/list", {})
+            expected = {"get_treasury_settings", "record_treasury_receipt"}
+            if (
+                not isinstance(tools, dict)
+                or tools.get("nextCursor")
+                or not isinstance(tools.get("tools"), list)
+                or len(tools["tools"]) != 2
+                or any(not isinstance(item, dict) for item in tools["tools"])
+                or {item.get("name") for item in tools["tools"]} != expected
+            ):
+                raise ValueError("a dedicated receipt-only OAuth grant is required")
         except BaseException:
             self.close()
             raise
@@ -362,7 +410,7 @@ def observer_tick(
         expected_collector_policy_digest=config.approval.policy.collector_policy_digest,
         verify_signature=verify_public_signature,
     )
-    control = mcp.call("get_treasury_settings", {})
+    control = mcp.call("get_treasury_settings", {"revision": policy.revision})
     revisions = [r for r in control["history"] if r["revision"] == policy.revision]
     if (
         len(revisions) != 1

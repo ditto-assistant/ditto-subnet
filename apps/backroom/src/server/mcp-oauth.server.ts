@@ -1,4 +1,5 @@
 import '@tanstack/react-start/server-only'
+import { BACKROOM_TREASURY_OBSERVE_SCOPE, observerGrant } from './treasury-observer-access.server'
 
 import { OAuthError } from '@cloudflare/workers-oauth-provider'
 import type {
@@ -30,6 +31,7 @@ const SUPPORTED_SCOPES = new Set([
   BACKROOM_READ_SCOPE,
   BACKROOM_ARTIFACT_SCOPE,
   BACKROOM_WRITE_SCOPE,
+  BACKROOM_TREASURY_OBSERVE_SCOPE,
 ])
 
 type PendingAuthorization = {
@@ -49,6 +51,7 @@ export type McpConsentDetails = {
   requestedScopes: Array<string>
   canRequestArtifact: boolean
   canRequestWrite: boolean
+  observerOnly?: boolean
   csrf: string
 }
 
@@ -63,6 +66,7 @@ function noStoreJson(value: unknown, status = 200) {
 }
 
 export function accessLevelForScopes(scopes: Array<string>) {
+  try { if (observerGrant(scopes)) return 'treasury-observer' } catch { return 'invalid' }
   const artifact = scopes.includes(BACKROOM_ARTIFACT_SCOPE)
   const write = scopes.includes(BACKROOM_WRITE_SCOPE)
   return write ? (artifact ? 'full' : 'read-write') : artifact ? 'read-artifacts' : 'read-only'
@@ -71,7 +75,8 @@ export function accessLevelForScopes(scopes: Array<string>) {
 /**
  * The scopes a consent actually grants: the intersection of what the OAuth
  * client requested, what the operator selected on the consent screen, and what
- * the operator's live Backroom level entitles. Read is always the floor. A
+ * the operator's live Backroom level entitles. Ordinary grants keep a read
+ * floor; the exclusive receipt observer has none. A
  * client that needs more must re-authorize with the broader scope (the MCP
  * endpoint answers insufficient_scope with exactly that step-up challenge), so
  * consent can never widen a read-only request into artifact or write access.
@@ -82,9 +87,14 @@ export function grantedMcpScopes({
   accountLevel,
 }: {
   requested: Array<string>
-  selected: 'read' | 'artifact' | 'write' | 'full'
+  selected: 'read' | 'artifact' | 'write' | 'full' | 'observe'
   accountLevel: 'read' | 'write'
 }) {
+  if (observerGrant(requested)) {
+    if (selected !== 'observe' || accountLevel !== 'write') throw new Error('Observer consent requires write-level staff and explicit observer selection')
+    return [BACKROOM_TREASURY_OBSERVE_SCOPE]
+  }
+  if (selected === 'observe') throw new Error('Observer scope was not requested')
   const privileged = accountLevel === 'write'
   const artifact =
     privileged &&
@@ -106,6 +116,7 @@ function normalizeScopes(scopes: Array<string>) {
   if (requested.some((scope) => !SUPPORTED_SCOPES.has(scope))) {
     throw new Error('The client requested an unsupported Backroom scope')
   }
+  if (observerGrant(requested)) return [BACKROOM_TREASURY_OBSERVE_SCOPE]
   if (
     (requested.includes(BACKROOM_ARTIFACT_SCOPE) || requested.includes(BACKROOM_WRITE_SCOPE)) &&
     !requested.includes(BACKROOM_READ_SCOPE)
@@ -188,6 +199,7 @@ export async function getMcpConsentDetails(
     requestedScopes: scopes,
     canRequestArtifact: scopes.includes(BACKROOM_ARTIFACT_SCOPE),
     canRequestWrite: scopes.includes(BACKROOM_WRITE_SCOPE),
+    ...(observerGrant(scopes) ? { observerOnly: true } : {}),
     csrf: pending.csrf,
   }
 }
@@ -232,7 +244,7 @@ export async function completeMcpAuthorization(
       requestToken: z.string().min(32).max(32_768),
       csrf: z.string().min(16).max(256),
       decision: z.enum(['allow', 'deny']),
-      accessLevel: z.enum(['read', 'artifact', 'write', 'full']).default('read'),
+      accessLevel: z.enum(['read', 'artifact', 'write', 'full', 'observe']).default('read'),
     })
     .safeParse(body)
   if (!parsed.success) {
@@ -278,11 +290,14 @@ export async function completeMcpAuthorization(
   session = { ...session, accessLevel }
 
   const requestedScopes = normalizeScopes(pending.request.scope)
-  const scopes = grantedMcpScopes({
+  let scopes: Array<string>
+  try { scopes = grantedMcpScopes({
     requested: requestedScopes,
     selected: input.accessLevel,
     accountLevel: session.accessLevel,
-  })
+  }) } catch {
+    return noStoreJson({ error: 'access_denied', error_description: 'The selected access is not permitted for this request and account' }, 403)
+  }
 
   const props: McpGrantProps = {
     session,
@@ -320,6 +335,7 @@ export async function completeMcpAuthorization(
 export function mcpTokenExchange(
   options: TokenExchangeCallbackOptions,
   now = Date.now(),
+  env?: Pick<BackroomEnv, 'BACKROOM_ADMIN_EMAILS' | 'BACKROOM_BLOCKED_EMAILS'>,
 ): TokenExchangeCallbackResult {
   const props = options.props as McpGrantProps | undefined
   // A grant is only ever as live as the operator session that authorized it.
@@ -332,6 +348,17 @@ export function mcpTokenExchange(
       description: 'The Backroom staff session expired; authorize again',
       statusCode: 400,
     })
+  }
+  try {
+    const observer = observerGrant(props.scopes)
+    if (observerGrant(options.scope) !== observer || (observer && !observerGrant(options.requestedScope))) {
+      throw new Error('observer grant scope mismatch')
+    }
+    if (observer && (!env || accessLevelForEmail(props.session.email, env.BACKROOM_ADMIN_EMAILS, env.BACKROOM_BLOCKED_EMAILS) !== 'write')) {
+      throw new Error('observer staff entitlement revoked')
+    }
+  } catch {
+    throw new OAuthError('invalid_grant', { description: 'Dedicated observer grant is not authorized', statusCode: 400 })
   }
   // The token can never outlive the session. Workers KV will not accept an
   // expiration under MIN_ACCESS_TOKEN_TTL_SECONDS, so a session with less life

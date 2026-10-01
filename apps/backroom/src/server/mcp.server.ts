@@ -13,10 +13,12 @@ import {
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
+import { observerGrant } from './treasury-observer-access.server'
+import { createTreasuryObserverServer } from './treasury-observer-mcp.server'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
 import { fetchTreasuryReceipts, recordTreasuryReceipt } from './admin.service'
-import { fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
+import { fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
   cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema } from '../lib/benchmark-canary.schemas'
@@ -904,7 +906,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read effective burn, miner remainder, revision and live validator fold coverage. Optional newest-first history, default 0.',
   get_emission_eligibility_policy:
     'Read emission gate posture, fleet fold, stored/default revision, windows and shadow withheld count. Optional history.',
-  get_treasury_settings: 'Read shadow treasury buckets and history. No weights or funds move.',
+  get_treasury_settings: 'Read shadow treasury buckets/history or one exact revision. No weights or funds move.',
   get_treasury_ledger_readiness: 'Read shadow proposal, stored epoch identity and funding blockers. No activation.',
   record_treasury_settings: 'Record a shadow treasury revision with CAS and confirmation. No weights or funds move.',
   get_treasury_receipts: 'Read verified private treasury receipt history and publication state.',
@@ -970,6 +972,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
 }
 
 export function createBackroomMcpServer(props: McpGrantProps) {
+  if (observerGrant(props.scopes)) return createTreasuryObserverServer(props)
   if (!hasReadAccess(props)) {
     throw new Error('The OAuth grant does not include Backroom read access')
   }
@@ -3456,10 +3459,13 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_treasury_settings',
     {
       title: 'Get SN118 treasury shadow policy',
-      description: 'Read shadow-only treasury proposals and revision history. V1 preserves separate GM/maintenance shares and the 500 bps combined limit. V2 describes one collector and configurable holding wallets under a combined 1000 bps pool, reserved before miner-remainder burn. Includes distribution interval, exact payee rules and publication controls; private billing references are available only in authenticated settings. Weight effect is none; funding, signing and payment observation are not activated. Requires backroom:read.',
+      description: 'Read shadow-only treasury proposals and revision history. Optional revision returns only that immutable raw settings/checksum row; missing or invalid history refuses without defaults. V1 preserves separate GM/maintenance shares and the 500 bps combined limit. V2 describes one collector and configurable holding wallets under a combined 1000 bps pool, reserved before miner-remainder burn. Includes distribution interval, exact payee rules and publication controls; private billing references are available only in authenticated settings. Weight effect is none; funding, signing and payment observation are not activated. Requires backroom:read.',
       annotations: toolAnnotations('read'),
+      inputSchema: { revision: z.number().int().min(1).max(2_147_483_647).optional() },
     },
-    async () => result(await fetchTreasurySettings()),
+    async (input) => result(input.revision === undefined
+      ? await fetchTreasurySettings()
+      : await fetchTreasuryObserverSettings(input.revision)),
   )
 
   registerTool(

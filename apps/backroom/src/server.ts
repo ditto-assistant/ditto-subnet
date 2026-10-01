@@ -1,5 +1,6 @@
 import handler from '@tanstack/react-start/server-entry'
 import OAuthProvider from '@cloudflare/workers-oauth-provider'
+import { BACKROOM_TREASURY_OBSERVE_SCOPE } from './server/treasury-observer-access.server'
 import {
   BACKROOM_ARTIFACT_SCOPE,
   BACKROOM_CHALLENGE_SCOPE,
@@ -101,6 +102,7 @@ const defaultHandler = {
         ],
         code_challenge_methods_supported: ['S256'],
         scopes_supported: [
+          BACKROOM_TREASURY_OBSERVE_SCOPE,
           BACKROOM_READ_SCOPE,
           BACKROOM_ARTIFACT_SCOPE,
           BACKROOM_WRITE_SCOPE,
@@ -126,39 +128,41 @@ const defaultHandler = {
   },
 }
 
-const oauthProvider = new OAuthProvider<BackroomEnv>({
-  apiRoute: '/mcp',
-  apiHandler: BackroomMcpHandler,
-  defaultHandler,
-  authorizeEndpoint: '/authorize',
-  tokenEndpoint: '/token',
-  clientRegistrationEndpoint: '/register',
-  scopesSupported: [BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE, BACKROOM_WRITE_SCOPE],
-  resourceMetadata: {
-    scopes_supported: [BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE, BACKROOM_WRITE_SCOPE],
-    bearer_methods_supported: ['header'],
-    resource_name: 'SN118 Backroom MCP',
-  },
-  allowImplicitFlow: false,
-  allowPlainPKCE: false,
-  allowTokenExchangeGrant: false,
-  disallowPublicClientRegistration: false,
-  clientIdMetadataDocumentEnabled: true,
-  accessTokenTTL: MAX_ACCESS_TOKEN_TTL_SECONDS,
-  refreshTokenTTL: SESSION_MAX_AGE_SECONDS,
-  clientRegistrationTTL: 90 * 24 * 60 * 60,
-  // Tokens never outlive the authorizing staff session, carry only scopes the
-  // grant's consent recorded, and name their exact grant (see mcpTokenExchange).
-  tokenExchangeCallback: (options) => mcpTokenExchange(options),
-  onError({ status, code, description, internal }) {
-    console.warn('Backroom OAuth error', {
-      status,
-      code,
-      description,
-      internal,
-    })
-  },
-})
+function createOAuthProvider(env: BackroomEnv) {
+  return new OAuthProvider<BackroomEnv>({
+    apiRoute: '/mcp',
+    apiHandler: BackroomMcpHandler,
+    defaultHandler,
+    authorizeEndpoint: '/authorize',
+    tokenEndpoint: '/token',
+    clientRegistrationEndpoint: '/register',
+    scopesSupported: [BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE, BACKROOM_WRITE_SCOPE, BACKROOM_TREASURY_OBSERVE_SCOPE],
+    resourceMetadata: {
+      scopes_supported: [BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE, BACKROOM_WRITE_SCOPE, BACKROOM_TREASURY_OBSERVE_SCOPE],
+      bearer_methods_supported: ['header'],
+      resource_name: 'SN118 Backroom MCP',
+    },
+    allowImplicitFlow: false,
+    allowPlainPKCE: false,
+    allowTokenExchangeGrant: false,
+    disallowPublicClientRegistration: false,
+    clientIdMetadataDocumentEnabled: true,
+    accessTokenTTL: MAX_ACCESS_TOKEN_TTL_SECONDS,
+    refreshTokenTTL: SESSION_MAX_AGE_SECONDS,
+    clientRegistrationTTL: 90 * 24 * 60 * 60,
+    // Tokens never outlive the authorizing staff session, carry only scopes the
+    // grant's consent recorded, and name their exact grant (see mcpTokenExchange).
+    tokenExchangeCallback: (options) => mcpTokenExchange(options, Date.now(), env),
+    onError({ status, code, description, internal }) {
+      console.warn('Backroom OAuth error', {
+        status,
+        code,
+        description,
+        internal,
+      })
+    },
+  })
+}
 
 function applySecurityHeaders(response: Response, request: Request) {
   const secured = new Response(response.body, response)
@@ -176,7 +180,7 @@ function applySecurityHeaders(response: Response, request: Request) {
 export default {
   async fetch(request: Request, env: BackroomEnv, ctx: ExecutionContext) {
     const oauthEnv = cacheOAuthTokenReads(env, request, ctx)
-    const response = await oauthProvider.fetch(request, oauthEnv, ctx)
+    const response = await createOAuthProvider(env).fetch(request, oauthEnv, ctx)
     if (new URL(request.url).pathname === '/mcp' && response.status === 401) {
       const challenged = new Response(response.body, response)
       const challenge = challenged.headers.get('WWW-Authenticate') ?? 'Bearer'
@@ -195,6 +199,6 @@ export default {
     env: BackroomEnv,
     ctx: ExecutionContext,
   ) {
-    ctx.waitUntil(oauthProvider.purgeExpiredData(env, { batchSize: 100 }))
+    ctx.waitUntil(createOAuthProvider(env).purgeExpiredData(env, { batchSize: 100 }))
   },
 } satisfies ExportedHandler<BackroomEnv>
