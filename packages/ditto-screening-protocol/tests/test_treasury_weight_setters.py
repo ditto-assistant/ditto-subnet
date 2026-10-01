@@ -1,5 +1,6 @@
 """Permit roster includes unreported validators and binds reciprocal identities."""
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -28,11 +29,12 @@ def context():
     return pin, values, SimpleNamespace(query=AsyncMock(side_effect=read))
 
 
-@pytest.mark.asyncio
-async def test_complete_permitted_roster_at_one_observation_hash():
+def test_complete_permitted_roster_at_one_observation_hash():
     pin, _, client = context()
-    assert await read_finalized_weight_setters(
-        client, pin.policy, block_hash=pin.identity.finalized_block_hash
+    assert asyncio.run(
+        read_finalized_weight_setters(
+            client, pin.policy, block_hash=pin.identity.finalized_block_hash
+        )
     ) == (pin.fleet[0].validator_hotkey,)
     assert client.query.await_count == 3
     calls = client.query.await_args_list
@@ -53,11 +55,12 @@ async def test_complete_permitted_roster_at_one_observation_hash():
         ("ValidatorPermit", [0, 1]),
     ],
 )
-@pytest.mark.asyncio
-async def test_roster_absence_drift_and_coercion_refuse(field, value):
+def test_roster_absence_drift_and_coercion_refuse(field, value):
     pin, values, client = context()
     values[field] = value
     with pytest.raises(ValueError):
-        await read_finalized_weight_setters(
-            client, pin.policy, block_hash=pin.identity.finalized_block_hash
+        asyncio.run(
+            read_finalized_weight_setters(
+                client, pin.policy, block_hash=pin.identity.finalized_block_hash
+            )
         )
