@@ -806,7 +806,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_lease_revocations:
     'Page ended leases with operator_evicted and exact verdicts. Evidence is WHOLE AND UNTYPED validator_lease_audit context. AN EMPTY RESULT IS A FINDING, NOT AN UNWIRED FEATURE.',
   list_stuck_submissions:
-    'Page stuck-submission urgency order with ticket counts and silent_expiry_count. generation=all spans benchmarks; get_validation_retry includes infra_retry_grants.',
+    'Page stuck urgency, ticket counts and silent_expiry_count; generation=all. infra_retry_grants: get_validation_retry.',
   list_screening_submissions:
     'Newest-first submissions/latest attempt. For name/hotkey/coldkey/SHA/status/reason code use search_submissions, never page and grep.',
   search_submissions:
@@ -842,9 +842,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_agent_scores:
     'Read accepted validator scores for one agent and benchmark version, with exact seeds and aggregates. Defaults to the current applicable benchmark.',
   get_continual_retest_diagnostic:
-    'Read one exact agent UUID current owner-family scoring, sample counts, cutoff and tie-band comparison, continual retest cohort reason, and whether a validator could claim it now. Changes nothing.',
+    'Exact agent scoring, owner-family cutoff/tie band, cohort reason and claim eligibility. Read-only.',
   get_validator_slot_settings:
-    'Read effective validator slot and disk policy plus optional newest-first revision history. A validator advertising more slots than the cap is not an underutilized host. historyLimit defaults to 0.',
+    'Read slot/disk policy/history (default 0). A validator advertising above cap is not an underutilized host.',
   get_validator_fleet:
     'Read validator heartbeats, stack identity, and version histogram.',
   get_scoring_lease_settings:
@@ -856,9 +856,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_validator_capacity:
     'Read serviceable vs claimed validator slots, run progress estimates, queue age, and relay saturation.',
   get_miner_owner_footprint:
-    'Trace payment-record links for one miner hotkey or coldkey. Payment provenance is a common-control signal, not ownership; confirm metagraph ownership separately.',
+    'Trace miner payment links: common-control signal, not ownership. Verify metagraph separately.',
   get_inference_concurrency_settings:
-    'Read effective hosted-inference budgets, embedding limits, v10 case concurrency, and relay delay-fingerprint policy plus optional newest-first revision history.',
+    'Read hosted budgets/concurrency, relay policy and optional history (default 0).',
   set_source_release_policy:
     'Apply the complete source disclosure policy with expectedRevision and reason. Confirm "SET SOURCE EMBARGO <hours> HOURS" or "SET SOURCE DISCLOSURE NEVER". Shortening may immediately publish eligible source; never stops future publication but cannot recall releases.',
   set_efficiency_bonus_settings:
@@ -897,7 +897,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_hotkey_bans: 'Hotkey bans.',
   unban_hotkey: 'Unban.',
   get_confirmation_bundle_settings:
-    'Read isolated LongMem confirmation issuance settings and optional audit history. Shadow cannot full-confirm. This does not activate rewards.',
+    'Read LongMem issuance settings/history. Shadow cannot full-confirm or activate rewards.',
   set_confirmation_bundle_settings:
     'Apply a complete bounded confirmation policy with revision guard, reason, and exact mode phrase. Does not activate rewards.',
   list_confirmation_bundles:
@@ -919,7 +919,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   remove_failed_submission_from_queue:
     'Withdraw an exhausted submission using a fresh snapshot and "REMOVE FROM VALIDATOR QUEUE". Preserves the record, scores, artifact, payment, and history. Use evict_live_validator_leases instead when live leases still consume capacity.',
   get_score_history:
-    'Read authoritative accepted-score aggregates across benchmark versions for one agent. Seeds remain exact decimal strings; omitted versions were never scored. Versions are returned newest-first.',
+    'Accepted scores for one agent; exact decimal seeds, newest versions first; unscored versions omitted.',
   get_screening_review_queue:
     'Oldest-first unresolved ATH holds, with identity and hold kind. Defaults generation=all; filter reviewKind. Read agent_status: a pending row outside ath_pending_review is stranded and resolve returns 409. Distinct from screener quarantines.',
   // The two quarantine reads below get catalog summaries in the same change
@@ -936,12 +936,12 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_screening_quarantine_context:
     'Before a decision: verified findings/locations, evidence, attempts, miner history and duplicates. shadow_review is advisory; divergence requires source review, never authorizes a decision.',
   search_screening_source:
-    'Grep one screened submission\'s readable source (regex, or mode=literal) for {path, line, text} matches with optional context — the "where is X" tool for a 10,000-line baseline.rs. Scope with pathGlob; has_more is the paging signal; opaque_skipped counts binaries never searched. Requires backroom:artifact:read.',
+    'Search readable source: regex/literal, pathGlob, context, has_more paging, opaque_skipped binaries. Returns path/line/text. Artifact scope.',
   // Paired with the tool above: an operator now arrives here already holding a
   // line number, so the catalog entry says where to get one instead of
   // repeating the excerpt semantics that get_backroom_tool_help carries.
   read_screening_source_file:
-    'Read a bounded line range (max 400 lines) from one file in a screened submission. Get the line first from search_screening_source, or from flagged path:line evidence. Requires backroom:artifact:read.',
+    'Read source range (max 400 lines); locate via search_screening_source or finding citations. Artifact scope.',
 }
 
 export function createBackroomMcpServer(props: McpGrantProps) {

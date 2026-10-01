@@ -1196,6 +1196,26 @@ describe('Backroom MCP tools', () => {
     expect(eligibility.guidance).toContain('in_ledger')
     expect(eligibility.guidance).toContain('awaiting_next_window')
 
+    const catalog = await client.listTools()
+    for (const tool of [
+      'get_treasury_ledger_readiness', 'get_continual_retest_diagnostic',
+      'get_validator_slot_settings', 'get_miner_owner_footprint',
+      'get_inference_concurrency_settings', 'get_score_history',
+      'list_stuck_submissions', 'get_confirmation_bundle_settings',
+      'search_screening_source', 'read_screening_source_file',
+    ]) {
+      const entry = catalog.tools.find(item => item.name === tool)
+      expect(entry?.annotations?.readOnlyHint).toBe(true)
+      const help = readJsonResult(await client.callTool({
+        name: 'get_backroom_tool_help', arguments: { tool },
+      })) as { guidance: string }
+      expect(help.guidance.length).toBeGreaterThan(entry?.description?.length ?? 0)
+      if (tool === 'get_treasury_ledger_readiness') {
+        expect(help.guidance).toContain('enforcement is false')
+        expect(help.guidance).toContain('no chain read')
+      }
+    }
+
     await client.close()
     await server.close()
   })
