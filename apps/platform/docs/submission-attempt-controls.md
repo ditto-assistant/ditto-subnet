@@ -32,6 +32,11 @@ source screening and scoring retain their existing contracts.
   lexical/content differences, not semantic novelty or a calibrated admission
   decision. Source text, fingerprints and profiles remain
   internal and are not persisted or returned.
+- `feedback_status` describes the reference's latest screening outcome as of the
+  candidate's timestamp. A quarantined reference stays `pending` until a release
+  or reject ruling recorded before that timestamp, which reports `completed`
+  with the operator ruling code and time; a rescreen ruling stays `pending`.
+  Failed, expired and unknown attempt states are never reported as completed.
 
 ## V13 authority
 

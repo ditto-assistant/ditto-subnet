@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import case, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.admin_quarantine import resolution_reason_code
 from ditto.api_models.ticket_status import TicketPurpose
 from ditto.api_server.submission_attempts import MAX_OWNER_LINKS, ProfileUnavailable
 from ditto.db.models import (
@@ -14,6 +15,8 @@ from ditto.db.models import (
     EvaluationPayment,
     OwnerAttestation,
     ScreeningAttempt,
+    ScreeningQuarantine,
+    ScreeningQuarantineResolution,
     ValidatorTicket,
 )
 
@@ -146,8 +149,6 @@ async def reference_feedback(session: AsyncSession, *, agent_id: UUID, as_of: da
         and screening.reason_code in INFRA_AUTO_RETRY_REASON_CODES
     ):
         return "infrastructure", screening.reason_code, screening.finished_at
-    if screening.status in {"failed", "expired"}:
-        return "pending", screening.reason_code, screening.finished_at
     if screening.status == "rejected":
         from ditto.api_server.submission_attempts import REPAIR_REASONS
 
@@ -156,4 +157,41 @@ async def reference_feedback(session: AsyncSession, *, agent_id: UUID, as_of: da
             screening.reason_code,
             screening.finished_at,
         )
-    return "completed", screening.reason_code, screening.finished_at
+    if screening.status == "passed":
+        return "completed", screening.reason_code, screening.finished_at
+    if screening.status == "quarantined":
+        # A ruling never rewrites the attempt, so the append-only resolution
+        # history says whether the hold had been ruled on by the cutoff.
+        ruling = (
+            await session.execute(
+                select(
+                    ScreeningQuarantineResolution.resolution,
+                    ScreeningQuarantineResolution.created_at,
+                )
+                .join(
+                    ScreeningQuarantine,
+                    ScreeningQuarantine.quarantine_id
+                    == ScreeningQuarantineResolution.quarantine_id,
+                )
+                .where(
+                    ScreeningQuarantine.attempt_id == screening.attempt_id,
+                    ScreeningQuarantineResolution.created_at <= as_of,
+                )
+                .order_by(
+                    ScreeningQuarantineResolution.created_at.desc(),
+                    ScreeningQuarantineResolution.resolution_id.desc(),
+                )
+                .limit(1)
+            )
+        ).one_or_none()
+        if ruling is not None:
+            return (
+                "completed"
+                if ruling.resolution in {"release", "reject"}
+                else "pending",
+                resolution_reason_code(ruling.resolution),
+                ruling.created_at,
+            )
+    # Failed, expired and unruled quarantined attempts await a retry or ruling.
+    # A status this build does not know is never reported as completed.
+    return "pending", screening.reason_code, screening.finished_at

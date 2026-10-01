@@ -17,6 +17,8 @@ from ditto.db.models import (
     EvaluationPayment,
     OwnerAttestation,
     ScreeningAttempt,
+    ScreeningQuarantine,
+    ScreeningQuarantineResolution,
     ValidatorTicket,
 )
 from ditto.tests.submission_attempt_fixtures import archive, paid_submission, source
@@ -270,6 +272,109 @@ async def test_feedback_cutoff_and_expiry_never_infers_infrastructure(
     response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
     assert response.status_code == 200, response.text
     assert response.json()["classification"] == expected
+
+
+@pytest.mark.parametrize(
+    "status,hold,rulings,expected",
+    [
+        ("passed", None, [], ("completed", None, -40)),
+        ("quarantined", None, [], ("pending", "source-review-flagged", -40)),
+        ("quarantined", "active", [], ("pending", "source-review-flagged", -40)),
+        (
+            "quarantined",
+            "resolved",
+            [("release", -10)],
+            ("completed", "operator-released-quarantine", -10),
+        ),
+        (
+            "quarantined",
+            "resolved",
+            [("reject", -10)],
+            ("completed", "operator-rejected-quarantine", -10),
+        ),
+        (
+            "quarantined",
+            "resolved",
+            [("rescreen", -10)],
+            ("pending", "operator-rescreened-quarantine", -10),
+        ),
+        # Rulings after the candidate's timestamp were not feedback yet.
+        (
+            "quarantined",
+            "resolved",
+            [("release", 10)],
+            ("pending", "source-review-flagged", -40),
+        ),
+        (
+            "quarantined",
+            "resolved",
+            [("reject", -10), ("release", 10)],
+            ("completed", "operator-rejected-quarantine", -10),
+        ),
+    ],
+)
+async def test_quarantine_feedback_follows_rulings_at_candidate_timestamp(
+    client, observations, session_maker, status, hold, rulings, expected
+):
+    attempt_id = uuid4()
+    reason = None if status == "passed" else "source-review-flagged"
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=observations["prior"],
+                screener_hotkey="worker",
+                policy_version=13,
+                status=status,
+                started_at=NOW - timedelta(minutes=50),
+                deadline=NOW + timedelta(minutes=30),
+                finished_at=NOW - timedelta(minutes=40),
+                reason_code=reason,
+            )
+        )
+        if hold is not None:
+            await session.flush()
+            quarantine_id = uuid4()
+            last = rulings[-1] if rulings else None
+            session.add(
+                ScreeningQuarantine(
+                    quarantine_id=quarantine_id,
+                    agent_id=observations["prior"],
+                    attempt_id=attempt_id,
+                    screener_hotkey="worker",
+                    policy_version=13,
+                    manifest_digest="a" * 64,
+                    reason_code="source-review-flagged",
+                    status=hold,
+                    created_at=NOW - timedelta(minutes=40),
+                    resolved_at=NOW + timedelta(minutes=last[1]) if last else None,
+                    resolved_by="operator" if last else None,
+                    resolution=last[0] if last else None,
+                )
+            )
+            await session.flush()
+            for resolution, minutes in rulings:
+                session.add(
+                    ScreeningQuarantineResolution(
+                        resolution_id=uuid4(),
+                        quarantine_id=quarantine_id,
+                        resolution=resolution,
+                        reason="operator ruling",
+                        actor="operator",
+                        created_at=NOW + timedelta(minutes=minutes),
+                    )
+                )
+    response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    feedback_status, feedback_reason, minutes = expected
+    assert body["feedback_status"] == feedback_status
+    assert body["feedback_reason"] == feedback_reason
+    assert datetime.fromisoformat(body["feedback_at"]) == NOW + timedelta(
+        minutes=minutes
+    )
+    # Feedback is context only: an identical runtime is still the same delta.
+    assert body["classification"] == "small_source_delta"
 
 
 async def test_no_prior_submission_and_timestamp_ties(
