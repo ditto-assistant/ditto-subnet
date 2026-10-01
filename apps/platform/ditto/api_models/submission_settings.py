@@ -131,8 +131,12 @@ class AdminSubmissionSettingsPreview(BaseModel):
     """``expected_revision`` is not the current revision; an apply returns 409."""
     fee_changed: bool
     cooldown_changed: bool
-    fee_change_ratio: str | None
-    """Proposed fee divided by the current fee, four decimals; ``None`` if equal."""
+    fee_change_ratio: str | None = Field(
+        description=(
+            "Proposed ÷ current fee, rounded away from 1 to four decimals (four "
+            "significant digits when below 0.0001); null if unchanged."
+        )
+    )
     applicable: bool
     """Not stale and changes something; an apply with the confirmation succeeds."""
     required_confirmation: str
