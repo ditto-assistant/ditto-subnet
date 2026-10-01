@@ -863,3 +863,65 @@ async def test_preview_validates_the_same_denomination_as_apply(
         params={**params, "fee_denomination": "usd_indexed"},
     )
     assert refused.status_code == 422
+
+
+async def test_preview_counts_recently_expired_quotes_separately(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A reservation that expired within the recovery window may still bind an
+    in-time payment, so the preview reports it apart from live quotes; one that
+    expired longer ago than the window is no longer counted anywhere."""
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        settings = await effective_submission_settings(
+            session, default_payment_address=_PAYMENT_ADDRESS
+        )
+        # Live.
+        await reserve_upload_admission(
+            session,
+            miner_coldkey="coldkey-live",
+            miner_hotkey="hotkey-live",
+            sha256="1" * 64,
+            settings=settings,
+            now=now,
+        )
+        # Expired an hour ago: still inside the recovery window.
+        recent = await reserve_upload_admission(
+            session,
+            miner_coldkey="coldkey-recent",
+            miner_hotkey="hotkey-recent",
+            sha256="2" * 64,
+            settings=settings,
+            now=now - UPLOAD_ADMISSION_TTL - timedelta(hours=1),
+        )
+        # Expired longer ago than the recovery window.
+        await reserve_upload_admission(
+            session,
+            miner_coldkey="coldkey-stale",
+            miner_hotkey="hotkey-stale",
+            sha256="3" * 64,
+            settings=settings,
+            now=now - 2 * UPLOAD_ADMISSION_TTL - timedelta(minutes=1),
+        )
+
+    preview = (
+        await client.get(
+            _PREVIEW,
+            headers=_HEADERS,
+            params={
+                "expected_revision": 1,
+                "cooldown_seconds": 3600,
+                "fee_amount_rao": 60_000_000,
+            },
+        )
+    ).json()
+
+    assert preview["in_flight_quotes"] == 1
+    assert preview["recoverable_expired_quotes"] == 1
+    assert preview["recoverable_expired_quotes_at_other_fees"] == 1
+    assert _instant(preview["recoverable_expired_quotes_until"]) == (
+        recent.expires_at + UPLOAD_ADMISSION_TTL
+    )

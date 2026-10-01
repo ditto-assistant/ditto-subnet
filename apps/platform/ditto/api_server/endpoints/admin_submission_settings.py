@@ -3,8 +3,9 @@
 Every change is one append-only revision guarded by ``expected_revision``, an
 operator reason, and an exact confirmation phrase. A stale or concurrent write
 returns 409 and changes nothing. A new revision takes effect on commit, with no
-deploy; reservations issued earlier keep the fee they were quoted at until they
-are consumed or expire (``UPLOAD_ADMISSION_TTL``).
+deploy. A reservation issued earlier binds the fee it was quoted at for any
+payment that finalizes before it expires (``UPLOAD_ADMISSION_TTL`` after issue);
+that payment stays recoverable for the same window after its block time.
 """
 
 from __future__ import annotations
@@ -176,6 +177,9 @@ async def preview_settings_revision(
         in_flight_quotes=quotes.count,
         in_flight_quotes_at_other_fees=quotes.at_other_fees,
         in_flight_quotes_expire_by=quotes.expire_by,
+        recoverable_expired_quotes=quotes.recoverable_expired,
+        recoverable_expired_quotes_at_other_fees=quotes.recoverable_expired_at_other_fees,
+        recoverable_expired_quotes_until=quotes.recoverable_until,
     )
 
 

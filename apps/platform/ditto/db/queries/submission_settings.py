@@ -438,6 +438,9 @@ class InFlightQuotes:
     count: int
     at_other_fees: int
     expire_by: datetime | None
+    recoverable_expired: int = 0
+    recoverable_expired_at_other_fees: int = 0
+    recoverable_until: datetime | None = None
 
 
 async def in_flight_quotes(
@@ -446,22 +449,53 @@ async def in_flight_quotes(
     proposed_fee_amount_rao: int,
     now: datetime | None = None,
 ) -> InFlightQuotes:
-    """Summarize unexpired reservations, which keep their issued fee."""
+    """Summarize reservations whose issued fee can still bind a payment.
+
+    Unexpired reservations bind any payment made before they expire. An
+    expired one still binds a payment that finalized before its expiry, and
+    such a payment is recoverable for ``UPLOAD_ADMISSION_TTL`` after its block
+    time, so a reservation that expired less than that long ago may still be
+    honoured. That second group is an upper bound: which of them actually
+    back an in-time payment is only known when the payment is presented.
+    """
     current = _utc(now or datetime.now(UTC))
+    other_fee = UploadAdmissionReservation.fee_amount_rao != proposed_fee_amount_rao
     live = UploadAdmissionReservation.expires_at > current
-    count, at_other_fees, expire_by = (
+    recoverable = (UploadAdmissionReservation.expires_at <= current) & (
+        UploadAdmissionReservation.expires_at > current - UPLOAD_ADMISSION_TTL
+    )
+    (
+        count,
+        at_other_fees,
+        expire_by,
+        recoverable_count,
+        recoverable_other,
+        recoverable_last_expiry,
+    ) = (
         await session.execute(
             select(
-                func.count(),
-                func.count().filter(
-                    UploadAdmissionReservation.fee_amount_rao != proposed_fee_amount_rao
-                ),
-                func.max(UploadAdmissionReservation.expires_at),
-            ).where(live)
+                func.count().filter(live),
+                func.count().filter(live & other_fee),
+                func.max(UploadAdmissionReservation.expires_at).filter(live),
+                func.count().filter(recoverable),
+                func.count().filter(recoverable & other_fee),
+                func.max(UploadAdmissionReservation.expires_at).filter(recoverable),
+            ).where(
+                UploadAdmissionReservation.expires_at > current - UPLOAD_ADMISSION_TTL
+            )
         )
     ).one()
     return InFlightQuotes(
         count=int(count),
         at_other_fees=int(at_other_fees),
         expire_by=_utc(expire_by) if expire_by is not None else None,
+        recoverable_expired=int(recoverable_count),
+        recoverable_expired_at_other_fees=int(recoverable_other),
+        # A payment made just before the last expiry is recoverable until then
+        # plus the recovery window.
+        recoverable_until=(
+            _utc(recoverable_last_expiry) + UPLOAD_ADMISSION_TTL
+            if recoverable_last_expiry is not None
+            else None
+        ),
     )

@@ -130,11 +130,35 @@ class AdminSubmissionSettingsPreview(BaseModel):
     bounds: SubmissionFeeBounds
     quote_lifetime_seconds: int
     in_flight_quotes: int
-    """Unexpired reserved quotes; each keeps the fee it was issued at."""
+    """Unexpired reserved quotes; each binds its issued fee for payments made
+    before it expires."""
     in_flight_quotes_at_other_fees: int
     """Of those, how many were issued at a fee other than the proposed one."""
     in_flight_quotes_expire_by: datetime | None
-    """Latest in-flight expiry; after it only the new fee can be paid."""
+    """Latest in-flight expiry; a payment made after it must pay the new fee."""
+    recoverable_expired_quotes: int = Field(
+        default=0,
+        description=(
+            "Reservations that expired less than quote_lifetime_seconds ago. "
+            "Each still binds its issued fee only for a payment that finalized "
+            "before it expired (that payment stays recoverable for "
+            "quote_lifetime_seconds after its block time), so this is an upper "
+            "bound on expired quotes that may still be honoured."
+        ),
+    )
+    recoverable_expired_quotes_at_other_fees: int = Field(
+        default=0,
+        description=(
+            "Of recoverable_expired_quotes, how many differ from the proposed fee."
+        ),
+    )
+    recoverable_expired_quotes_until: datetime | None = Field(
+        default=None,
+        description=(
+            "Latest time an in-time payment against one of those reservations "
+            "can still be recovered."
+        ),
+    )
 
 
 class PublicSubmissionFeeRevision(BaseModel):
