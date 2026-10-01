@@ -7,11 +7,11 @@ export async function fetchSubmissionAttemptPolicy() {
 }
 
 export async function fetchSubmissionAttempt(agentId: string, referenceAgentId?: string) {
-  const query = new URLSearchParams()
-  if (referenceAgentId) query.set('reference_agent_id', referenceAgentId)
-  const suffix = query.size ? `?${query}` : ''
+  const params = new URLSearchParams()
+  if (referenceAgentId) params.set('reference_agent_id', referenceAgentId)
+  const query = params.toString()
   return attemptRecordSchema.parse(await platformAdminRequest(
-    `/api/v1/admin/submission-attempts/${encodeURIComponent(agentId)}${suffix}`,
+    `/api/v1/admin/submission-attempts/${encodeURIComponent(agentId)}${query ? `?${query}` : ''}`,
   ))
 }
 

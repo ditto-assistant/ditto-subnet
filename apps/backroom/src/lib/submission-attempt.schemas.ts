@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { components } from '../generated/platform-api'
 
 export const attemptLookupInputSchema = z.object({
   agent_id: z.string().uuid(),
@@ -19,12 +20,12 @@ export const attemptPolicySchema = z.object({
   max_members: z.number().int(),
   max_owner_links: z.number().int(),
   small_delta_jaccard: z.number(),
-})
+}) satisfies z.ZodType<components['schemas']['AttemptObservationPolicy']>
 
 export const attemptRecordSchema = z.object({
   policy: attemptPolicySchema,
   agent_id: z.string().uuid(),
-  reference_agent_id: z.string().uuid().nullable(),
+  reference_agent_id: z.string().uuid().nullish(),
   as_of: z.string(),
   classification: z.enum([
     'first_submission', 'infrastructure_retry', 'packaging_only_repair',
@@ -32,8 +33,8 @@ export const attemptRecordSchema = z.object({
   ]),
   reason: z.string(),
   sha256: z.string(),
-  reference_sha256: z.string().nullable(),
+  reference_sha256: z.string().nullish(),
   feedback_status: z.enum(['infrastructure', 'repairable', 'completed', 'pending']),
-  feedback_reason: z.string().nullable(),
-  feedback_at: z.string().nullable(),
-})
+  feedback_reason: z.string().nullish(),
+  feedback_at: z.string().nullish(),
+}) satisfies z.ZodType<components['schemas']['AttemptComparison']>

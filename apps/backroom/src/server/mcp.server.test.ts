@@ -81,8 +81,17 @@ describe('Backroom MCP tools', () => {
       feedback_status: 'completed', feedback_reason: null, feedback_at: null,
       profile: { source: 'should never be emitted', fingerprint: [1, 2, 3] },
     }
+    // Platform declares the reference and feedback fields optional, so a first
+    // submission may omit them entirely rather than sending null.
+    const firstSubmission = {
+      policy, agent_id: agentId, as_of: '2026-09-29T12:00:00Z',
+      classification: 'first_submission', reason: 'No earlier paid submission by this owner.',
+      sha256: 'c'.repeat(64), feedback_status: 'pending',
+    }
     const fetchMock = vi.fn(async (url: string) => Response.json(
-      String(url).endsWith('/submission-attempts') ? policy : record,
+      String(url).endsWith('/submission-attempts')
+        ? policy
+        : String(url).includes('?') ? record : firstSubmission,
     ))
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
@@ -104,6 +113,13 @@ describe('Backroom MCP tools', () => {
     expect(readJsonResult(response)).not.toHaveProperty('profile')
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/submission-attempts/${agentId}?reference_agent_id=${referenceId}`,
+      expect.objectContaining({ method: 'GET' }),
+    )
+    const first = await client.callTool({ name: 'get_submission_attempt', arguments: { agent_id: agentId } })
+    expect(first.isError).not.toBe(true)
+    expect(readJsonResult(first)).toMatchObject({ classification: 'first_submission', feedback_status: 'pending' })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/submission-attempts/${agentId}`,
       expect.objectContaining({ method: 'GET' }),
     )
     const readPolicy = await client.callTool({ name: 'get_submission_attempt_policy', arguments: {} })
