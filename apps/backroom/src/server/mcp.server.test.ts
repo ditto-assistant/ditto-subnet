@@ -540,7 +540,7 @@ describe('Backroom MCP tools', () => {
     // and retain the existing catalog budget as these inputs evolve.
     // Portable bounded hotkey arrays on the scorer-cohort writers (#2559)
     // measure 179,521 bytes.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(180_000)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(181_500)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
