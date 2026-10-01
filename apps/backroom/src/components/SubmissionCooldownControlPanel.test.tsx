@@ -229,6 +229,47 @@ describe('SubmissionCooldownControlPanel', () => {
     expect(cancel.disabled).toBe(true)
   })
 
+  it('shows a neutral time for history rows without a timestamp', () => {
+    const control = submissionSettingsControlSchema.parse({
+      ...initial,
+      current: { ...initial.current, revision: 0, created_at: null },
+      history: [
+        { ...initial.current, revision: 2, created_at: null },
+        { ...initial.current, revision: 1, created_at: 'not-a-date' },
+      ],
+    })
+    render(<SubmissionCooldownControlPanel initialState={control} readOnly />)
+
+    // Only the effective policy can be the built-in default.
+    expect(screen.getAllByText('Built-in default')).toHaveLength(1)
+    const rows = screen.getByRole('list', { name: 'Submission settings revisions' })
+    expect(rows.textContent).not.toContain('Built-in default')
+    expect(rows.textContent?.match(/—/g)).toHaveLength(2)
+  })
+
+  it('keeps a non-minute applied cooldown valid for a fee-only change', async () => {
+    const control = submissionSettingsControlSchema.parse({
+      ...initial,
+      current: { ...initial.current, cooldown_seconds: 90 },
+    })
+    render(<SubmissionCooldownControlPanel initialState={control} readOnly={false} />)
+    const minutes = screen.getByLabelText(/Cooldown in minutes/) as HTMLInputElement
+    expect(minutes.value).toBe('1.5')
+    expect(minutes.getAttribute('aria-invalid')).toBe('false')
+
+    fireEvent.change(screen.getByLabelText('Submission fee in TAO'), {
+      target: { value: '0.05' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview change' }))
+    await waitFor(() => expect(previewSubmissionSettingsChange).toHaveBeenCalledTimes(1))
+    expect(previewSubmissionSettingsChange).toHaveBeenCalledWith({
+      data: { expectedRevision: 1, cooldownSeconds: 90, feeAmountRao: 50_000_000 },
+    })
+    // A newly typed fractional minute is still refused.
+    fireEvent.change(minutes, { target: { value: '2.5' } })
+    expect(minutes.getAttribute('aria-invalid')).toBe('true')
+  })
+
   it('does not enable apply for a stale preview', async () => {
     previewSubmissionSettingsChange.mockImplementation(async (input) => ({
       ...previewFor(input),

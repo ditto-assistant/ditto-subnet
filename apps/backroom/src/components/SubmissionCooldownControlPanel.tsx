@@ -16,12 +16,24 @@ import {
 const presets = [15, 30, 60, 120] as const
 const HISTORY_ROWS = 12
 
-function formatWhen(value: string | null) {
-  if (!value) return 'Built-in default'
+function formatTimestamp(value: string | null | undefined, missing: string) {
+  if (!value) return missing
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: 'medium',
     timeStyle: 'short',
-  }).format(new Date(value))
+  }).format(date)
+}
+
+// Only the effective policy can be the built-in default (revision 0 has no
+// timestamp); anywhere else a missing time is shown neutrally.
+function formatPolicyApplied(value: string | null) {
+  return formatTimestamp(value, 'Built-in default')
+}
+
+function formatWhen(value: string | null | undefined) {
+  return formatTimestamp(value, '—')
 }
 
 function formatDuration(seconds: number) {
@@ -67,12 +79,21 @@ export function SubmissionCooldownControlPanel({
   // derived from them so a Platform change cannot leave stale UI copy.
   const minCooldownMinutes = Math.ceil(bounds.min_cooldown_seconds / 60)
   const maxCooldownMinutes = Math.floor(bounds.max_cooldown_seconds / 60)
-  const parsedMinutes = Number(minutes)
+  const parsedMinutes = minutes.trim() === '' ? Number.NaN : Number(minutes)
+  // New values are whole minutes, but the applied cooldown may be any whole
+  // number of seconds (the API and MCP accept them). Keeping it unchanged must
+  // not block a fee-only change.
+  const candidateSeconds =
+    minutes === String(state.current.cooldown_seconds / 60)
+      ? state.current.cooldown_seconds
+      : Number.isInteger(parsedMinutes)
+        ? parsedMinutes * 60
+        : null
   const selectedSeconds =
-    Number.isInteger(parsedMinutes) &&
-    parsedMinutes * 60 >= bounds.min_cooldown_seconds &&
-    parsedMinutes * 60 <= bounds.max_cooldown_seconds
-      ? parsedMinutes * 60
+    candidateSeconds !== null &&
+    candidateSeconds >= bounds.min_cooldown_seconds &&
+    candidateSeconds <= bounds.max_cooldown_seconds
+      ? candidateSeconds
       : null
   const parsedFeeRao = parseTaoToRao(feeTao)
   const selectedFeeRao =
@@ -255,7 +276,9 @@ export function SubmissionCooldownControlPanel({
               </div>
               <div>
                 <dt className="text-[var(--muted)]">Applied</dt>
-                <dd className="mt-1 font-medium">{formatWhen(state.current.created_at)}</dd>
+                <dd className="mt-1 font-medium">
+                  {formatPolicyApplied(state.current.created_at)}
+                </dd>
               </div>
             </dl>
           </div>
