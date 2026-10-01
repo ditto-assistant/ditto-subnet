@@ -65,6 +65,7 @@ from ditto.api_server.payment_verifier import (
     PaymentReplayedError,
     PaymentVerifier,
 )
+from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
 from ditto.api_server.source_inspect import (
     SourceInspectError,
     validate_upload_archive,
@@ -174,7 +175,9 @@ class _PaymentTerms:
     """
 
     settings: EffectiveSubmissionSettings
-    expected_amount_rao: int
+    expected_amount_rao: int | None
+    """``None`` only for a deferred read with no reservation and an unquotable
+    revision: verifying a payment must then fail closed."""
     legacy_amount_cutoff_at: datetime | None
     expected_send_address: str
     reserved_terms_expire_at: datetime | None
@@ -187,17 +190,25 @@ async def _payment_terms(
     *,
     reservation: UploadAdmissionReservation | None,
     default_payment_address: str,
+    defer_quotability: bool = False,
 ) -> _PaymentTerms:
+    """Snapshot the payment terms.
+
+    ``defer_quotability`` (``/upload/check``) reads the revision without
+    refusing it up front: the check may only need the cooldown, or the request
+    may fail validation anyway. Fail-closed then happens where a current fee
+    would actually be used (verifying a recovery or issuing a reservation).
+    """
     settings = await effective_submission_settings(
         session,
         default_payment_address=default_payment_address,
-        require_quotable=reservation is None,
+        require_quotable=reservation is None and not defer_quotability,
     )
     current_fee_rao = settings.fee_amount_rao if settings.quotable else None
     if reservation is None:
         return _PaymentTerms(
             settings=settings,
-            expected_amount_rao=settings.fee_amount_rao,
+            expected_amount_rao=current_fee_rao,
             legacy_amount_cutoff_at=None,
             expected_send_address=settings.payment_address,
             reserved_terms_expire_at=None,
@@ -215,6 +226,16 @@ async def _payment_terms(
         fallback_amount_rao=current_fee_rao,
         fallback_send_address=settings.payment_address,
     )
+
+
+def _quoted_amount(terms: _PaymentTerms) -> int:
+    """The amount a payment must match; fails closed when nothing is quotable."""
+    if terms.expected_amount_rao is None:
+        raise UnsupportedFeeDenominationError(
+            "no reservation binds this payment and the current submission fee "
+            "cannot be quoted"
+        )
+    return terms.expected_amount_rao
 
 
 # Hard cap shared with /upload/check. Tarballs above this size are
@@ -360,6 +381,7 @@ async def check(
         session,
         reservation=own_reservation,
         default_payment_address=request.app.state.config.upload_payment_address,
+        defer_quotability=True,
     )
     settings = recovery_terms.settings
     recovery_payment_verified = False
@@ -404,6 +426,7 @@ async def check(
                 rollback_result = session.rollback()
                 if inspect.isawaitable(rollback_result):
                     await rollback_result
+            recovery_amount_rao = _quoted_amount(recovery_terms)
             try:
                 verified = await verifier.verify_payment(
                     PaymentProof(
@@ -412,7 +435,7 @@ async def check(
                         extrinsic_index=body.payment_extrinsic_index,
                     ),
                     expected_hotkey=body.hotkey,
-                    expected_amount_rao=recovery_terms.expected_amount_rao,
+                    expected_amount_rao=recovery_amount_rao,
                     legacy_amount_cutoff_at=recovery_terms.legacy_amount_cutoff_at,
                     expected_send_address=recovery_terms.expected_send_address,
                     reserved_terms_expire_at=recovery_terms.reserved_terms_expire_at,
@@ -729,7 +752,7 @@ async def upload_agent(
                     extrinsic_index=payment_extrinsic_index,
                 ),
                 expected_hotkey=hotkey,
-                expected_amount_rao=terms.expected_amount_rao,
+                expected_amount_rao=_quoted_amount(terms),
                 legacy_amount_cutoff_at=terms.legacy_amount_cutoff_at,
                 expected_send_address=terms.expected_send_address,
                 reserved_terms_expire_at=terms.reserved_terms_expire_at,

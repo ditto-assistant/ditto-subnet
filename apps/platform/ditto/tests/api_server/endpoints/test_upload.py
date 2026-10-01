@@ -2487,3 +2487,55 @@ class TestCheckRecoveryUsesOnlyTheCallersReservation:
         assert response.status_code == expected_status, response.text
         if expected_status == 402:
             assert response.json()["error_code"] == ERROR_CODE_PAYMENT_AMOUNT_MISMATCH
+
+
+class TestCheckValidatesBeforePricingRefusal:
+    """Mirrors the Go relay: an unquotable revision refuses a new quote, but
+    never hides a validation failure behind a pricing 503."""
+
+    async def test_bad_signature_is_reported_not_503(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_session(app)
+        override_get_chain_client(app)
+        _override_payment_verifier(app)
+        _unquotable_policy(monkeypatch)
+        body = _signed_request_body()
+        body["signature"] = _BAD_SIG
+
+        response = await client.post("/api/v1/upload/check", json=body)
+
+        assert response.status_code == 200, response.text
+        assert ERROR_CODE_BAD_SIGNATURE in response.json()["error_codes"]
+
+    async def test_new_reservation_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
+
+        override_get_session(app)
+        override_get_chain_client(app)
+        _override_payment_verifier(app)
+        _unquotable_policy(monkeypatch)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.reserve_upload_admission",
+            AsyncMock(side_effect=UnsupportedFeeDenominationError("usd_indexed")),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={**_signed_request_body(), "reserve_submission_slot": True},
+        )
+
+        assert response.status_code == 503, response.text
+        assert response.json()["error_code"] == 3100
