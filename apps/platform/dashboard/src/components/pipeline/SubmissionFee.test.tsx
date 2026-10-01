@@ -38,7 +38,7 @@ describe("SubmissionFee", () => {
     const amount = await screen.findByText("0.1 TAO");
     expect(amount.getAttribute("data-fee-rao")).toBe("100000000");
     expect(screen.getByText(/Fixed TAO · revision 5 · since/)).toBeTruthy();
-    expect(screen.getByText(/keeps its fee for 24 hours/)).toBeTruthy();
+    expect(screen.getByText(/within 24 hours of reserving keeps the reserved fee/)).toBeTruthy();
 
     const history = document.querySelector("details.submission-fee-history");
     expect(history).not.toBeNull();

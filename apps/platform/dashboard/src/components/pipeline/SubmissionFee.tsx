@@ -1,7 +1,8 @@
 // The current miner submission fee and its public change history, read from
 // /public/submission-fee. The fee is operator policy (fixed TAO, revisioned in
 // Backroom); the quote a miner actually pays is the one `ditto upload`
-// reserves, which keeps its fee for the quote lifetime even if this changes.
+// reserves: a payment made within the quote lifetime keeps that fee even if
+// this changes.
 import { For, Show } from "solid-js";
 import type { JSX } from "solid-js";
 
@@ -45,7 +46,7 @@ export function SubmissionFee(): JSX.Element {
                 {feeDate(current().fee_effective_at)}
               </span>
               <span class="submission-fee-note">
-                A reserved quote keeps its fee for {lifetimeHours()} hours.
+                A payment made within {lifetimeHours()} hours of reserving keeps the reserved fee.
               </span>
             </div>
             <details class="submission-fee-history">
