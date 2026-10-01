@@ -101,7 +101,14 @@ def test_identity_must_belong_to_pinned_epoch(block):
 
 
 @pytest.mark.parametrize(
-    "change", ["overflow", "duplicate_id", "duplicate_wallet", "collector_wallet"]
+    "change",
+    [
+        "overflow",
+        "duplicate_id",
+        "duplicate_wallet",
+        "collector_wallet",
+        "collector_hotkey",
+    ],
 )
 def test_invalid_service_pool_rejected(change):
     raw = pin_payload()["policy"]
@@ -118,6 +125,9 @@ def test_invalid_service_pool_rejected(change):
         bucket.update(bucket_id="beta", allocation_bps=0)
         raw["buckets"].append(bucket)
     else:
-        raw["buckets"][0]["holding_coldkey"] = raw["collector_coldkey"]
+        role = (
+            "collector_hotkey" if change == "collector_hotkey" else "collector_coldkey"
+        )
+        raw["buckets"][0]["holding_coldkey"] = raw[role]
     with pytest.raises(ValidationError):
         TreasuryEmissionPolicy.model_validate(raw)

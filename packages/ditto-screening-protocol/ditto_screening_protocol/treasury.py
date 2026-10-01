@@ -66,7 +66,10 @@ class TreasuryEmissionPolicy(BaseModel):
         if len({b.bucket_id for b in self.buckets}) != len(self.buckets):
             raise ValueError("duplicate treasury bucket")
         wallets = [b.holding_coldkey for b in self.buckets]
-        if len(set(wallets)) != len(wallets) or self.collector_coldkey in wallets:
+        if len(set(wallets)) != len(wallets) or {
+            self.collector_hotkey,
+            self.collector_coldkey,
+        }.intersection(wallets):
             raise ValueError("holding coldkeys must be distinct from collector")
         if self.service_bps > 1000:
             raise ValueError("combined service allocation exceeds 1000 bps")
