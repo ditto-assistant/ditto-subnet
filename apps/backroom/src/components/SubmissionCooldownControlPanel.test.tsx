@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   formatRaoAsTao,
   parseTaoToRao,
+  parseTaoToRaoExact,
   submissionSettingsConfirmation,
   submissionSettingsControlSchema,
   type SubmissionSettingsControl,
@@ -200,7 +201,7 @@ describe('SubmissionCooldownControlPanel', () => {
     const fee = screen.getByLabelText('Submission fee in TAO')
     fireEvent.change(fee, { target: { value: '0.01' } })
     expect(
-      screen.getByText('Enter 0.02 to 0.5 TAO with at most nine decimals.'),
+      screen.getByText('Enter 0.02 to 0.5 TAO.'),
     ).toBeTruthy()
     fireEvent.change(fee, { target: { value: '0.6' } })
     expect(fee.getAttribute('aria-invalid')).toBe('true')
@@ -354,6 +355,22 @@ describe('SubmissionCooldownControlPanel', () => {
     )
   })
 
+  it('reports out-of-range amounts with the bounds and malformed text as format', () => {
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    const fee = screen.getByLabelText('Submission fee in TAO')
+    for (const value of ['12345', '99999999999999', '0.0000001', '11']) {
+      fireEvent.change(fee, { target: { value } })
+      expect(screen.getByText('Enter 0.001 to 10 TAO.'), value).toBeTruthy()
+    }
+    for (const value of ['abc', '-1', '4e-2', '0.0400000001', '1,5']) {
+      fireEvent.change(fee, { target: { value } })
+      expect(
+        screen.getByText('Enter a TAO amount as digits with at most nine decimals.'),
+        value,
+      ).toBeTruthy()
+    }
+  })
+
   it('does not enable apply for a stale preview', async () => {
     previewSubmissionSettingsChange.mockImplementation(async (input) => ({
       ...previewFor(input),
@@ -405,6 +422,10 @@ describe('exact TAO conversion', () => {
     expect(parseTaoToRao('0.3')).toBe(300_000_000)
     expect(parseTaoToRao('0.0000000001')).toBeNull()
     expect(parseTaoToRao('1e-3')).toBeNull()
+    // Well-formed but large amounts parse; range is the bounds check's job.
+    expect(parseTaoToRao('12345')).toBe(12_345_000_000_000)
+    expect(parseTaoToRaoExact('99999999999999')).toBe(99_999_999_999_999_000_000_000n)
+    expect(parseTaoToRao('99999999999999')).toBeNull()
     expect(parseTaoToRao('-0.1')).toBeNull()
     expect(formatRaoAsTao(37_271_710)).toBe('0.03727171')
     expect(formatRaoAsTao(1_000_000_000)).toBe('1')

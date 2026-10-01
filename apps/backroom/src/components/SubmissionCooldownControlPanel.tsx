@@ -3,7 +3,7 @@ import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, History, RefreshCw, Timer } from 'lucide-react'
 import {
   formatRaoAsTao,
-  parseTaoToRao,
+  parseTaoToRaoExact,
   type SubmissionSettingsControl,
   type SubmissionSettingsPreview,
 } from '../lib/admin.schemas'
@@ -97,13 +97,14 @@ export function SubmissionCooldownControlPanel({
     candidateSeconds <= bounds.max_cooldown_seconds
       ? candidateSeconds
       : null
-  const parsedFeeRao = parseTaoToRao(feeTao)
-  const selectedFeeRao =
+  // Parse exactly (BigInt) and compare to bounds before any narrowing, so a
+  // well-formed but huge amount reports the bounds, not a format error.
+  const parsedFeeRao = parseTaoToRaoExact(feeTao)
+  const feeInBounds =
     parsedFeeRao !== null &&
-    parsedFeeRao >= bounds.min_fee_amount_rao &&
-    parsedFeeRao <= bounds.max_fee_amount_rao
-      ? parsedFeeRao
-      : null
+    parsedFeeRao >= BigInt(bounds.min_fee_amount_rao) &&
+    parsedFeeRao <= BigInt(bounds.max_fee_amount_rao)
+  const selectedFeeRao = feeInBounds ? Number(parsedFeeRao) : null
   const proposal: Proposal | null =
     selectedSeconds !== null && selectedFeeRao !== null
       ? {
@@ -136,6 +137,7 @@ export function SubmissionCooldownControlPanel({
     confirmation !== ''
   const invalidMinutes = minutes.trim() !== '' && selectedSeconds === null
   const invalidFee = feeTao.trim() !== '' && selectedFeeRao === null
+  const feeFormatInvalid = invalidFee && parsedFeeRao === null
 
   const resetDraft = () => {
     setPreview(null)
@@ -382,9 +384,11 @@ export function SubmissionCooldownControlPanel({
                 id="submission-fee-hint"
                 className={`mt-1 block text-[11px] ${invalidFee ? 'text-[var(--red)]' : 'text-[var(--muted)]'}`}
               >
-                {invalidFee
-                  ? `Enter ${formatRaoAsTao(bounds.min_fee_amount_rao)} to ${formatRaoAsTao(bounds.max_fee_amount_rao)} TAO with at most nine decimals.`
-                  : selectedFeeRao !== null
+                {feeFormatInvalid
+                  ? 'Enter a TAO amount as digits with at most nine decimals.'
+                  : invalidFee
+                    ? `Enter ${formatRaoAsTao(bounds.min_fee_amount_rao)} to ${formatRaoAsTao(bounds.max_fee_amount_rao)} TAO.`
+                    : selectedFeeRao !== null
                     ? `Exactly ${selectedFeeRao.toLocaleString('en-US')} rao`
                     : ''}
               </span>

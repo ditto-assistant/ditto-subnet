@@ -1306,20 +1306,34 @@ const SUBMISSION_FEE_HISTORICAL_MAX_RAO = 1_000_000_000_000
 export const RAO_PER_TAO = 1_000_000_000
 const RAO_PER_TAO_BIGINT = 1_000_000_000n
 // "0.04", "1", "0." and ".5" are all exact decimals; at least one digit is
-// required and never more than nine fractional digits (rao precision).
-const TAO_DECIMAL_PATTERN = /^(?=\.?\d)(\d{0,4})(?:\.(\d{0,9}))?$/
+// required and never more than nine fractional digits (rao precision). The
+// integer part is unbounded here: magnitude is a bounds question, never a
+// format one.
+const TAO_DECIMAL_PATTERN = /^(?=\.?\d)(\d*)(?:\.(\d{0,9}))?$/
 
 /**
- * Parse an operator-typed TAO amount into integer rao without floating point.
- * Accepts at most nine decimals (rao precision); anything finer, negative,
- * exponential, or non-numeric is refused rather than rounded.
+ * Parse an operator-typed TAO amount into exact integer rao (BigInt).
+ * Returns null only for malformed text: more than nine decimals, a sign, an
+ * exponent, or non-numeric input is refused rather than rounded. Any
+ * well-formed amount parses, however large, so range errors are reported by
+ * the bounds check, not as a format error.
  */
-export function parseTaoToRao(value: string): number | null {
+export function parseTaoToRaoExact(value: string): bigint | null {
   const match = TAO_DECIMAL_PATTERN.exec(value.trim())
   if (!match) return null
   const whole = BigInt(match[1] || '0')
   const fraction = BigInt((match[2] ?? '').padEnd(9, '0'))
-  const rao = whole * RAO_PER_TAO_BIGINT + fraction
+  return whole * RAO_PER_TAO_BIGINT + fraction
+}
+
+/**
+ * Parse an operator-typed TAO amount into integer rao as a JS number. Returns
+ * null for malformed text, and for a well-formed amount too large to be a safe
+ * integer (which is outside every fee bound anyway).
+ */
+export function parseTaoToRao(value: string): number | null {
+  const rao = parseTaoToRaoExact(value)
+  if (rao === null) return null
   return rao > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(rao)
 }
 
