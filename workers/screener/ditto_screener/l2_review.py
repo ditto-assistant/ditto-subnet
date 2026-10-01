@@ -3252,6 +3252,7 @@ class TerraSolSourceReviewAgent:
                     model_steps_observed=len(result.response_models),
                     tool_calls_observed=len(result.tools),
                     budget_stop_reason="none",
+                    final_stage=_inconclusive_final_stage(result),
                 )
                 result = replace(
                     result,
@@ -6569,6 +6570,20 @@ def _has_mixed_causal_families(
     return (
         bool(analyst_families & l1_families) and len(analyst_families | l1_families) > 1
     )
+
+
+def _inconclusive_final_stage(result: L2RunResult) -> str:
+    """Name the layer whose bounded disposition ended an inconclusive review.
+
+    Every role shares one trajectory parser, so the reason code alone reads
+    as an L2 analyst stop even when the L3 critic or safety adjudicator was
+    the layer that could not settle.
+    """
+    if result.adjudicator_disposition is not None:
+        return "adjudicator"
+    if result.critic_disposition not in (None, "not_required"):
+        return "critic"
+    return "analyst"
 
 
 # An unsettled L1 escalates only while the deep review can still run a turn;

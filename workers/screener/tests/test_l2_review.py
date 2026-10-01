@@ -3748,6 +3748,54 @@ async def test_terminal_l2_model_inconclusive_carries_bounded_signed_audit(
     ]
     assert audit.model_evidence_count == 1
     assert audit.model_causal_role_count == 1
+    # No critic or adjudicator ran, so the analyst ended the review.
+    assert audit.final_stage == "analyst"
+
+
+@pytest.mark.parametrize(
+    ("dispositions", "stage"),
+    [
+        ({"critic_disposition": "inconclusive"}, "critic"),
+        (
+            {
+                "critic_disposition": "confirm",
+                "adjudicator_disposition": "inconclusive",
+            },
+            "adjudicator",
+        ),
+    ],
+)
+async def test_inconclusive_audit_names_the_layer_that_could_not_settle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dispositions: dict[str, str],
+    stage: str,
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+
+    async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
+        return L2RunResult(
+            observation=l2_review._failure("l2-model-inconclusive", "inconclusive"),
+            analyzed_files=(),
+            causal_path=(),
+            tools=("read_file",),
+            usage=L2Usage(),
+            cache_hit=False,
+            response_models=("reviewer",),
+            resolution_basis="insufficient_static_evidence",
+            **dispositions,  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr(agent, "_review_uncached", review_uncached)
+    result = await agent.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+    audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+    assert audit.final_stage == stage
     assert "read_file" not in json.dumps(audit.model_dump(mode="json"))
 
 
