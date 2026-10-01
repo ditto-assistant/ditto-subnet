@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from ditto.treasury.activity_observer import (
     run_observer,
 )
 from ditto.treasury.collector_chain import PublicCollectorChain
+from ditto.treasury.selector_handoff import SelectorHandoff
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
     chain_uint,
@@ -76,6 +78,7 @@ def main():
     parser.add_argument("--transfer-journal", type=Path)
     parser.add_argument("--token-file", type=Path)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--initialize-selector-state", action="store_true")
     parser.add_argument("--poll-seconds", type=int, default=60)
     args = parser.parse_args()
     raw = args.config.read_bytes()
@@ -85,6 +88,15 @@ def main():
     ):
         parser.error("immutable observer config or bounded poll interval invalid")
     body = json.loads(raw)
+    handoff = body.get("selector_handoff")
+    if handoff is not None:
+        handoff = SelectorHandoff(
+            **{
+                field.name: handoff[field.name]
+                for field in fields(SelectorHandoff)
+                if field.name in handoff
+            }
+        )
     config = ActivityObserverConfig(
         approval=TreasuryPolicyApproval.model_validate(body["approval"]),
         settings_checksum=body["settings_checksum"],
@@ -92,12 +104,17 @@ def main():
         enabled=body.get("enabled", False),
         max_blocks=body.get("max_blocks", 16),
         max_deliveries=body.get("max_deliveries", 100),
+        selector_handoff=handoff,
     )
     if not config.enabled:
         print(json.dumps({"status": "disabled", "authority": "none"}))
         return
     if args.state is None:
         parser.error("approved observer activation requires private state path")
+    if args.initialize_selector_state and (not args.once or handoff is None):
+        parser.error("selector initialization requires handoff and --once")
+    if handoff is not None and args.transfer_journal is not None:
+        parser.error("selector watcher cannot read the private journal")
     # Existing approved binding only. This program cannot mint/refresh OAuth,
     # read desktop credentials or install a token/secret on any host.
     token = observer_token(
@@ -117,6 +134,7 @@ def main():
             poll_seconds=args.poll_seconds,
             once=args.once,
             emit=lambda result: print(json.dumps(result), flush=True),
+            initialize_selector_state=args.initialize_selector_state,
         )
 
 

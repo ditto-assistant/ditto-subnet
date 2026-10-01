@@ -6,7 +6,10 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-from ditto.treasury.activity_export import export_finalized_distributions
+from ditto.treasury.activity_export import (
+    export_finalized_distributions,
+    write_selector_snapshot,
+)
 from ditto.treasury.collector import CollectorJournal, tick
 from ditto.treasury.collector_chain import PublicCollectorChain, load_policy
 
@@ -20,8 +23,19 @@ def main() -> None:
     parser.add_argument("--watch-only", action="store_true")
     parser.add_argument("--initialize-journal", action="store_true")
     parser.add_argument("--export-activity", action="store_true")
+    parser.add_argument("--selector-snapshot", type=Path)
+    parser.add_argument("--snapshot-only", action="store_true")
     args = parser.parse_args()
     policy = load_policy(args.policy, args.policy_sha256)
+    if args.snapshot_only and (not args.selector_snapshot or not args.journal):
+        parser.error("snapshot-only requires existing transfer journal and snapshot")
+    if args.selector_snapshot is not None and (
+        args.role != "transfer"
+        or args.initialize_journal
+        or args.watch_only
+        or args.export_activity
+    ):
+        parser.error("selector snapshot requires ordinary transfer tick only")
     if args.export_activity:
         if (
             args.role != "transfer"
@@ -61,6 +75,18 @@ def main() -> None:
     if not args.watch_only and not policy.enabled:
         print(json.dumps({"status": "disabled", "policy": policy.digest}))
         return
+    if args.snapshot_only:
+        # Explicit observation recovery uses existing custody-owned journal;
+        # no chain client, key loading, signing or money tick is called.
+        journal = CollectorJournal(args.journal, policy, args.role)
+        try:
+            write_selector_snapshot(journal.db, args.selector_snapshot, policy)
+            print(
+                json.dumps({"status": "selector_snapshot_ready", "authority": "none"})
+            )
+        finally:
+            journal.close()
+        return
     import bittensor as bt
 
     with bt.Subtensor(network="finney") as subtensor:
@@ -83,6 +109,22 @@ def main() -> None:
         journal = CollectorJournal(args.journal, policy, args.role)
         try:
             result = tick(journal, policy, chain, args.role)
+            if args.selector_snapshot is not None:
+                try:
+                    write_selector_snapshot(journal.db, args.selector_snapshot, policy)
+                except Exception:
+                    # Durable money tick is already complete. Do not retry it
+                    # to repair observation; expose the independent halt.
+                    print(
+                        json.dumps(
+                            {
+                                "status": "selector_snapshot_failed",
+                                "signer_status": result,
+                                "policy": policy.digest,
+                            }
+                        )
+                    )
+                    raise SystemExit(1) from None
             print(json.dumps({"status": result, "policy": policy.digest}))
         finally:
             journal.close()

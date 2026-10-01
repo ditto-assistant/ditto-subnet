@@ -1,0 +1,42 @@
+[Unit]
+Description=SN118 public selector publisher (operator staged, default off)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/sn118-treasury-selector/activation.env
+
+[Service]
+Type=simple
+User=sn118-collector-transfer
+Group=sn118-collector-transfer
+SupplementaryGroups=sn118-selector-handoff
+UMask=0077
+EnvironmentFile=/etc/sn118-treasury-selector/activation.env
+ExecStart=/opt/sn118-collector/.venv/bin/python /opt/sn118-collector/scripts/treasury_selector_publisher.py --config /etc/sn118-treasury-selector/config.json --config-sha256 ${CONFIG_SHA256} --policy /etc/sn118-collector/transfer/policy.json --policy-sha256 ${POLICY_SHA256} --snapshot /var/lib/sn118-collector-transfer/selector-snapshot.db --state /var/lib/sn118-selector-publisher/state.sqlite
+StateDirectory=sn118-selector-publisher
+StateDirectoryMode=0700
+ReadOnlyPaths=/var/lib/sn118-collector-transfer
+ReadWritePaths=/var/lib/sn118-selector-publisher /var/lib/sn118-selector-handoff/outbox
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+LimitCORE=0
+CapabilityBoundingSet=
+Restart=no
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target
+
+# Same transfer-owner UID reads its private allowlisted snapshot read-only.
+# This program never loads a delegate, signs, broadcasts or authorizes funds.
+# A distinct watcher has only read access to the public outbox and writes ACKs.
+# Only classified public chain transport failures reconnect with bounded internal
+# backoff. Missing state, policy/runtime conflict, unknown ACK or auth failures
+# stop the unit. No blind restart or initialization. Release installs none.
