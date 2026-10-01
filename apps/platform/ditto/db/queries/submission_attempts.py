@@ -47,14 +47,18 @@ async def paid_agent(session: AsyncSession, agent_id: UUID) -> PaidAgent | None:
 async def owner_scope(
     session: AsyncSession, *, coldkey: str, netuid: int, as_of: datetime
 ) -> set[str]:
+    # The budget counts distinct peer coldkeys, not attestation rows: one active
+    # link exists per hotkey pair, so a coldkey pair can hold many rows, and a
+    # link between two hotkeys of this coldkey names no peer at all.
+    peer = case(
+        (OwnerAttestation.lo_signer == coldkey, OwnerAttestation.hi_signer),
+        else_=OwnerAttestation.lo_signer,
+    )
+    labeled_peer = peer.label("peer")
     peers = list(
         await session.scalars(
-            select(
-                case(
-                    (OwnerAttestation.lo_signer == coldkey, OwnerAttestation.hi_signer),
-                    else_=OwnerAttestation.lo_signer,
-                )
-            )
+            select(labeled_peer)
+            .distinct()
             .where(
                 OwnerAttestation.netuid == netuid,
                 OwnerAttestation.lo_key_kind == "coldkey",
@@ -68,7 +72,9 @@ async def owner_scope(
                     OwnerAttestation.lo_signer == coldkey,
                     OwnerAttestation.hi_signer == coldkey,
                 ),
+                peer != coldkey,
             )
+            .order_by(labeled_peer)
             .limit(MAX_OWNER_LINKS + 1)
         )
     )

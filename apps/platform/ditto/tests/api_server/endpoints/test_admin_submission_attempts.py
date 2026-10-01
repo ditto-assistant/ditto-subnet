@@ -330,3 +330,25 @@ async def test_excess_owner_links_are_inconclusive_before_download(
     assert response.json()["classification"] == "inconclusive"
     assert "owner-link budget" in response.json()["reason"]
     observations["storage"].get_object.assert_not_awaited()
+
+
+@pytest.mark.parametrize("extra", ["second_hotkey_pair", "same_coldkey_link"])
+async def test_owner_link_budget_counts_distinct_peers(
+    client, observations, session_maker, monkeypatch, extra
+):
+    from ditto.db.queries import submission_attempts
+
+    monkeypatch.setattr(submission_attempts, "MAX_OWNER_LINKS", 1)
+    async with session_maker() as session, session.begin():
+        # One active link per hotkey pair, so one coldkey pair can hold several
+        # rows; a link between two hotkeys of one coldkey names no new peer.
+        session.add(attestation(hi="other"))
+        session.add(
+            attestation(hi="other")
+            if extra == "second_hotkey_pair"
+            else attestation(lo="owner", hi="owner")
+        )
+    response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    assert response.json()["classification"] == "small_source_delta"
+    assert response.json()["reference_agent_id"] == str(observations["prior"])
