@@ -30,7 +30,10 @@ from ditto.api_server.endpoints.admin_v13_scorer_cohort import (
 )
 from ditto.api_server.endpoints.admin_validator_slot_settings import _checksum
 from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
-from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
+from ditto.api_server.v13_scorer_cohort import (
+    pinned_validator_allowed,
+    pinned_validator_may_submit,
+)
 from ditto.db.models import (
     V13ScorerCohortPin,
     V13ScorerCohortRotation,
@@ -230,15 +233,25 @@ async def test_v13_pin_requires_outsider_pause_then_routes_only_exact_members(
             ).encode()
         ).hexdigest(),
     }
-    async with session_maker() as session, session.begin():
-        for hotkey in _HOTKEYS:
-            heartbeat = await session.get(ValidatorHeartbeat, hotkey)
-            assert heartbeat is not None
-            replacement = managed(hotkey, next_packet)
-            heartbeat.stack = replacement.stack
-            heartbeat.capabilities = replacement.capabilities
+
+    async def adopt(hotkeys: tuple[str, ...]) -> None:
+        async with session_maker() as session, session.begin():
+            for hotkey in hotkeys:
+                heartbeat = await session.get(ValidatorHeartbeat, hotkey)
+                assert heartbeat is not None
+                replacement = managed(hotkey, next_packet)
+                heartbeat.stack = replacement.stack
+                heartbeat.capabilities = replacement.capabilities
+
+    # Mid-rollout: one member auto-updated first. New work pauses because the
+    # members disagree, but a lease issued before the update may still submit.
+    await adopt(_HOTKEYS[:1])
     async with session_maker() as session:
         assert not await pinned_validator_allowed(session, hotkey=_HOTKEYS[0], now=now)
+        assert not await pinned_validator_allowed(session, hotkey=_HOTKEYS[1], now=now)
+        assert await pinned_validator_may_submit(session, hotkey=_HOTKEYS[0], now=now)
+        assert await pinned_validator_may_submit(session, hotkey=_HOTKEYS[1], now=now)
+        assert not await pinned_validator_may_submit(session, hotkey=_OUTSIDER, now=now)
         assert (
             await issue_confirmation_ticket(
                 session,
@@ -261,6 +274,32 @@ async def test_v13_pin_requires_outsider_pause_then_routes_only_exact_members(
             )
             is None
         )
+    # Converged: authority follows the unanimous release without a rotation,
+    # while the stored pin still records the last operator-approved packet.
+    await adopt(_HOTKEYS[1:])
+    async with session_maker() as session:
+        assert await pinned_validator_allowed(session, hotkey=_HOTKEYS[0], now=now)
+        assert not await pinned_validator_allowed(session, hotkey=_OUTSIDER, now=now)
+        followed = await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=uuid4(),
+            artifact_sha256="f" * 64,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        assert followed is not None
+        assert followed.scorer_source_revision == next_source
+        followed_maintenance = await issue_confirmation_ticket(
+            session,
+            agent_id=maintenance_agent_id,
+            validator_hotkey=_HOTKEYS[0],
+            now=now,
+            ttl=timedelta(minutes=30),
+            bench_version=13,
+        )
+        assert followed_maintenance is not None
+        await session.rollback()
         report_evidence = await scored_runtime_evidence_for_lease(
             session,
             attempt_id=uuid4(),

@@ -1,4 +1,9 @@
-"""Exact, append-only V13 scorer routing and signed packet checks."""
+"""Exact, append-only V13 scorer cohort routing and signed packet checks.
+
+The pinned three hotkeys are the scoring authority. The scorer packet follows
+whatever verified managed release all three currently sign, so routine fleet
+auto-updates never require a manual pin rotation.
+"""
 
 from __future__ import annotations
 
@@ -91,6 +96,12 @@ async def current_pin(
 async def pinned_validator_allowed(
     session: AsyncSession, *, hotkey: str, now: datetime
 ) -> bool:
+    """Admit new V13 work only for a member running the cohort's shared packet.
+
+    The pinned hotkeys are the authority. The packet follows the release all
+    three members currently sign, so a fleet auto-update pauses issuance until
+    the members converge instead of stranding it behind a stale stored packet.
+    """
     pin = await current_pin(session)
     if pin is None:
         return True  # Before activation, existing V13 routing remains in force.
@@ -98,7 +109,45 @@ async def pinned_validator_allowed(
         return False
     heartbeat = await session.get(ValidatorHeartbeat, hotkey)
     packet = packet_for_heartbeat(heartbeat, now=now)
-    return packet is not None and packet.model_dump(mode="json") == pin.packet
+    return packet is not None and packet == await _consensus_packet(
+        session, pin, now=now
+    )
+
+
+async def pinned_validator_may_submit(
+    session: AsyncSession, *, hotkey: str, now: datetime
+) -> bool:
+    """Accept a V13 score from a member still running a verified release.
+
+    Issuance already required unanimity, so a lease that outlives a fleet
+    update is not rejected merely because its validator updated first.
+    """
+    pin = await current_pin(session)
+    if pin is None:
+        return True
+    if hotkey not in pin.hotkeys:
+        return False
+    heartbeat = await session.get(ValidatorHeartbeat, hotkey)
+    return packet_for_heartbeat(heartbeat, now=now) is not None
+
+
+async def _consensus_packet(
+    session: AsyncSession,
+    pin: V13ScorerCohortPin | V13ScorerCohortRotation,
+    *,
+    now: datetime,
+) -> V13ScorerPacket | None:
+    """Return the packet every pinned member currently signs, if unanimous."""
+    if len(pin.hotkeys) != 3 or len(set(pin.hotkeys)) != 3:
+        return None
+    packets = [
+        packet_for_heartbeat(await session.get(ValidatorHeartbeat, hotkey), now=now)
+        for hotkey in pin.hotkeys
+    ]
+    first = packets[0]
+    if first is None or any(packet != first for packet in packets[1:]):
+        return None
+    return first
 
 
 async def pinned_cohort_packet(
@@ -123,15 +172,16 @@ async def _cohort_packet(
     if len(pin.hotkeys) != 3 or len(set(pin.hotkeys)) != 3:
         return None
     try:
-        expected = V13ScorerPacket.model_validate(pin.packet)
+        V13ScorerPacket.model_validate(pin.packet)
     except ValidationError:
         return None
-    if report_only:
-        first = await session.get(ValidatorHeartbeat, pin.hotkeys[0])
-        current = packet_for_heartbeat(first, now=now)
-        if current is None:
-            return None
-        expected = current
+    # Authority follows the release the members unanimously sign; the stored
+    # packet records the last operator rotation and no longer gates leases.
+    # ``report_only`` keeps its historical reader name for the same answer.
+    del report_only
+    expected = await _consensus_packet(session, pin, now=now)
+    if expected is None:
+        return None
     settings = await latest_validator_slot_settings_revision(session)
     if settings is None:
         return None

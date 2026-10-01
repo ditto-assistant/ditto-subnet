@@ -221,7 +221,10 @@ from ditto.api_server.scoring_gate import (
 )
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.api_server.storage import S3StorageClient
-from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
+from ditto.api_server.v13_scorer_cohort import (
+    pinned_validator_allowed,
+    pinned_validator_may_submit,
+)
 from ditto.api_server.validator_slot_settings import (
     DEFAULT_SETTINGS as SLOT_SETTINGS_DEFAULT,
 )
@@ -6765,7 +6768,7 @@ async def submit_score(
         if (
             report_version == 13
             and (prior_ticket is None or prior_ticket.status != TicketStatus.SCORED)
-            and not await pinned_validator_allowed(
+            and not await pinned_validator_may_submit(
                 session, hotkey=payload.validator_hotkey, now=datetime.now(UTC)
             )
         ):
