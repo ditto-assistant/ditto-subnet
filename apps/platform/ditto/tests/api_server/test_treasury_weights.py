@@ -324,7 +324,9 @@ def test_backend_prescribed_vector_keeps_service_pool_when_miners_burn(empty, bu
     assert sum(vector.values()) == pytest.approx(1)
 
 
-@pytest.mark.parametrize("configured,has_v2", [(True, False), (False, True), (None, True)])
+@pytest.mark.parametrize(
+    "configured,has_v2", [(True, False), (False, True), (None, True)]
+)
 def test_cached_ledger_refuses_legacy_fallback_when_enforcing(configured, has_v2):
     from ditto.api_server.endpoints.scoring import _serve_last_known
 
