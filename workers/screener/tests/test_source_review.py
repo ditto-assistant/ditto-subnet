@@ -25,6 +25,7 @@ from ditto_screener.source_reachability import ReachabilityState, analyze_reacha
 from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
+    l1_verdict_unsettled,
     ledger_disposition,
 )
 from ditto_screener.source_signals import (
@@ -5175,7 +5176,7 @@ async def test_malformed_or_unavailable_reviewer_is_retryable_not_reject(
         ),
     ],
 )
-async def test_internally_inconsistent_review_is_retryable_not_a_weak_finding(
+async def test_internally_inconsistent_review_holds_as_unsettled_not_a_weak_finding(
     tmp_path: Path, final: dict[str, object], expected_error_code: str
 ) -> None:
     key = tmp_path / "key"
@@ -5189,6 +5190,12 @@ async def test_internally_inconsistent_review_is_retryable_not_a_weak_finding(
 
     assert not observation.ok
     assert observation.error_code == expected_error_code
+    # The reviewer, not infrastructure, ran out: hold with the exact ledger
+    # instead of burning an infra retry on the same model and source.
+    assert observation.failure_disposition == "inconclusive"
+    assert observation.review_audit is not None
+    assert observation.review_audit["budget_stop_reason"] == "step"
+    assert l1_verdict_unsettled(observation)
 
 
 async def test_expired_lease_deadline_stops_review_before_first_call(

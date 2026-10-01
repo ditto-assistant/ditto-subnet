@@ -563,9 +563,11 @@ class SourceReviewBudgetExhausted(ValueError):
         read_files_used: int,
         max_read_bytes: int = _MAX_TOTAL_TOOL_CHARS,
         policy_version: int = SCREENING_POLICY_VERSION,
+        verdict_unsettled: bool = False,
     ) -> None:
         super().__init__(code)
         self.code = code
+        self.verdict_unsettled = verdict_unsettled
         self.max_steps = max_steps
         self.steps_used = steps_used
         self.read_bytes_used = read_bytes_used
@@ -582,7 +584,25 @@ class SourceReviewBudgetExhausted(ValueError):
             steps_used=self.steps_used,
             max_read_bytes=self.max_read_bytes,
             read_bytes_used=self.read_bytes_used,
+            budget_stop_reason="step" if self.verdict_unsettled else None,
         )
+
+
+def l1_verdict_unsettled(observation: object) -> bool:
+    """Whether L1 spent its steps without one host-valid verdict.
+
+    The specific inconsistency stays in ``error_code`` for diagnosis; the
+    audit's step stop marks that the reviewer, not infrastructure, ran out.
+    """
+    audit = getattr(observation, "review_audit", None)
+    code = getattr(observation, "error_code", None)
+    return (
+        isinstance(audit, Mapping)
+        and audit.get("stage") == "l1"
+        and audit.get("budget_stop_reason") == "step"
+        and isinstance(code, str)
+        and code.startswith("source-review-inconsistent-verdict")
+    )
 
 
 def policy_v10_static_assessment(
@@ -3761,8 +3781,12 @@ class OpenRouterSourceReviewAgent:
             # positive coverage admits it; a clean-but-thin ledger holds and
             # shows exactly how far inspection got. The budgets therefore
             # tune inspection depth, not fate.
+            # A reviewer that never produced a valid verdict holds rather than
+            # admitting on its ledger; policy v13 escalates it to L2/L3.
             disposition = (
-                ledger_disposition(
+                "inconclusive"
+                if budget is not None and budget.verdict_unsettled
+                else ledger_disposition(
                     notes,
                     concern_hold_count=self._concern_hold_count,
                     clear_min_notes=self._clear_min_notes,
@@ -4045,7 +4069,25 @@ class OpenRouterSourceReviewAgent:
                 if progress is not None:
                     progress(min(_step + 1, self._max_steps), self._max_steps)
         if last_schema_error is not None:
-            raise last_schema_error
+            # The reviewer kept submitting verdicts the host could not accept
+            # until its steps ran out. That is a reviewer budget outcome with
+            # an exact ledger, not an infrastructure fault: retrying the same
+            # model on the same source burns the attempt without new evidence.
+            logger.warning(
+                "source review verdict never validated: %s: %s",
+                type(last_schema_error).__name__,
+                last_schema_error,
+            )
+            raise SourceReviewBudgetExhausted(
+                _source_review_failure_code(last_schema_error),
+                max_steps=self._max_steps,
+                steps_used=self._max_steps,
+                read_bytes_used=delivered,
+                read_files_used=len(read_files),
+                max_read_bytes=self._max_read_bytes,
+                policy_version=policy_version,
+                verdict_unsettled=True,
+            ) from last_schema_error
         raise SourceReviewBudgetExhausted(
             "source-review-step-budget-exhausted",
             max_steps=self._max_steps,

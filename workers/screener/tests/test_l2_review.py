@@ -63,6 +63,7 @@ from ditto_screener.l2_review import (
     _require_complete_analysis,
     _response_output_and_usage,
     _review_adaptation_hold,
+    _routes_inconclusive_to_l3,
     _safety_clearance_gaps,
     _served_generator_hold,
     _validate_lead_dispositions,
@@ -421,7 +422,7 @@ def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     assert "external tool's actual name and argument schema" in v13
     assert "hypothetically use the same field name" in v13
     assert l2_prompt_revision(13) == "l2-terra-source-review-v50-policy-v13"
-    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v22-policy-v13"
+    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v23-policy-v13"
     assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v26-policy-v13"
     assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
     assert "Use at most four targeted analyzer" not in (
@@ -8349,3 +8350,184 @@ def test_v13_i5_wire_instructions_do_not_override_required_v3_proof() -> None:
     assert "it must be a v2\nobject that binds" not in current
     assert "schema_version 3 with i5_proof for an I5 breach" in current
     assert "schema_version 2 with i5_proof null" in current
+
+
+def _inconclusive_review(digest: str) -> dict[str, object]:
+    return {
+        "disposition": "inconclusive",
+        "risk_level": "low",
+        "confidence": 0.5,
+        "resolution_basis": "insufficient_static_evidence",
+        "categories": ["none"],
+        "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+        "evidence": [],
+        "causal_path": [],
+        "summary": "sanitized",
+    }
+
+
+async def test_v13_inconclusive_analyst_routes_to_l3_which_can_clear(
+    tmp_path: Path,
+) -> None:
+    source = "fn main() { call_model_inference(); }\nfn helper() {}"
+    archive, artifact_sha = _tar(tmp_path, source)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    requests: list[dict[str, object]] = []
+    safe = _clearance_certificate(
+        {
+            "disposition": "safe",
+            "risk_level": "low",
+            "confidence": 1.0,
+            "resolution_basis": "authoritative_model_tool_path",
+            "categories": ["none"],
+            "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+            "evidence": [],
+            "summary": "sanitized",
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return _response(
+                [_tool_call("1", "submit_l2_review", _inconclusive_review(digest))],
+                model="openai/gpt-5.6-terra-20260709",
+            )
+        if len(requests) == 3:
+            return _response([_tool_call("3", "read_file", {"path": "src/main.rs"})])
+        return _response([_tool_call(str(len(requests)), "submit_l2_review", safe)])
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    # Analyst, critic, then the safety adjudicator (one read, one verdict):
+    # the inconclusive analyst no longer ends the review at L2.
+    assert len(requests) == 4
+    assert "provisional result is unresolved, not a clearance" in json.dumps(
+        requests[1]
+    )
+    assert result.observation.ok
+    assert result.observation.risk_level == "low"
+    assert result.clearance_path == "l3_adjudicated_safe"
+
+
+def test_only_policy_v13_inconclusive_analysts_route_to_l3() -> None:
+    inconclusive = _model_result(
+        l2_review._failure("l2-model-inconclusive", "inconclusive")
+    )
+    infra = _model_result(l2_review._failure("l2-http-503", "retryable_infra"))
+
+    assert _routes_inconclusive_to_l3(inconclusive, 13)
+    assert not _routes_inconclusive_to_l3(inconclusive, 12)
+    assert not _routes_inconclusive_to_l3(infra, 13)
+    assert not _routes_inconclusive_to_l3(_model_result(_safe()), 13)
+
+
+async def test_no_call_correction_budget_resets_after_a_tool_call(
+    tmp_path: Path,
+) -> None:
+    source = "fn main() { read_secret(); }\nfn read_secret() { send_outbound(); }"
+    archive, artifact_sha = _tar(tmp_path, source)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    requests = 0
+    violation = {
+        "disposition": "violation",
+        "risk_level": "high",
+        "confidence": 0.99,
+        "resolution_basis": "credential_exfiltration",
+        "categories": ["credential_access"],
+        "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+        "evidence": [
+            {
+                "path": "src/main.rs",
+                "line": line,
+                "file_sha256": digest,
+                "category": "credential_access",
+                "role": role,
+            }
+            for line, role in ((1, "trigger"), (2, "effect"))
+        ],
+        "causal_path": [
+            {"path": "src/main.rs", "line": 1, "role": "trigger"},
+            {"path": "src/main.rs", "line": 2, "role": "effect"},
+        ],
+        "summary": "sanitized",
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        # Two empty turns, a tool call, two more empty turns, then a verdict.
+        # Four lapses in total, never more than two in a row.
+        if requests in {1, 2, 4, 5}:
+            return _response([])
+        if requests == 3:
+            return _response([_tool_call("3", "read_file", {"path": "src/main.rs"})])
+        return _response([_tool_call(str(requests), "submit_l2_review", violation)])
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert requests == 6
+    assert result.observation.ok
+    assert result.observation.risk_level == "high"
+
+
+def _unsettled_l1() -> SourceReviewObservation:
+    return SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-inconsistent-verdict-invariant",
+        failure_disposition="inconclusive",
+        review_audit={
+            "stage": "l1",
+            "reason_code": "source-review-inconsistent-verdict-invariant",
+            "budget_stop_reason": "step",
+        },
+    )
+
+
+async def test_v13_unsettled_l1_verdict_escalates_to_the_deep_review() -> None:
+    l1 = _FakeL1(_unsettled_l1())
+    l2 = _FakeL2(_model_result(_safe()))
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused", artifact_sha256="ab" * 32, attempt_id=ATTEMPT, policy_version=13
+    )
+
+    assert l1.calls == l2.calls == 1
+    assert result.ok
+
+
+async def test_l1_infra_failure_and_pre_v13_unsettled_l1_do_not_escalate() -> None:
+    infra = replace(
+        _unsettled_l1(),
+        error_code="source-review-http-503",
+        failure_disposition="retryable_infra",
+        review_audit=None,
+    )
+    for observation, policy_version in ((infra, 13), (_unsettled_l1(), 12)):
+        l1 = _FakeL1(observation)
+        l2 = _FakeL2(_model_result(_safe()))
+        layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+        result = await layered.review(
+            "unused",
+            artifact_sha256="ab" * 32,
+            attempt_id=ATTEMPT,
+            policy_version=policy_version,
+        )
+        assert l2.calls == 0
+        assert not result.ok

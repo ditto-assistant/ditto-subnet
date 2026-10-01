@@ -41,6 +41,7 @@ from ditto_screener.source_review import (
     _body_signature,
     _http_error_signature,
     _retryable_model_error_type,
+    l1_verdict_unsettled,
     ledger_disposition,
     policy_v10_static_assessment,
     review_gateway_headers,
@@ -122,7 +123,7 @@ def l2_prompt_revision(policy_version: int) -> str:
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-adversarial-critic-v22-policy-v13"
+        return "l3-sol-adversarial-critic-v23-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
@@ -1370,6 +1371,13 @@ def _assert_l2_policy_tails_differ() -> None:
     assert _L2_POLICY_TAILS[13].startswith(_L2_POLICY_TAILS[12])
 
 
+_INCONCLUSIVE_ANALYST_CRITIC_TASK = (
+    "The L2 analyst could not settle this artifact; its provisional result is "
+    "unresolved, not a clearance. Review the source independently and decide. "
+    "Submit safe only with a complete clearance certificate, violation only "
+    "with a grounded causal path, and inconclusive only when the shipped "
+    "source itself cannot settle an invariant. "
+)
 _VIOLATION_CAUSE_TASK = """\
 Adjudicate the primary causal mechanism of the provisional violation. The
 violation disposition is not authority to infer its cause. Re-read the smallest
@@ -3869,21 +3877,22 @@ class TerraSolSourceReviewAgent:
                         dossier_complete=adjudicator.dossier_complete,
                         analyst_cache_hit=analyst_cache_hit,
                     )
-                return L2RunResult(
-                    observation=analyst.observation,
-                    analyzed_files=analyst.analyzed_files,
-                    causal_path=analyst.causal_path,
-                    tools=dossier_tools + analyst.tools,
-                    usage=analyst.usage,
-                    cache_hit=False,
-                    analyst_tools=analyst.tools,
-                    response_models=analyst.response_models,
-                    response_providers=analyst.response_providers,
-                    resolution_basis=analyst.resolution_basis,
-                    clearance_path="l2_violation",
-                    dossier_complete=analyst.dossier_complete,
-                    analyst_cache_hit=analyst_cache_hit,
-                )
+                if not _routes_inconclusive_to_l3(analyst, policy_version):
+                    return L2RunResult(
+                        observation=analyst.observation,
+                        analyzed_files=analyst.analyzed_files,
+                        causal_path=analyst.causal_path,
+                        tools=dossier_tools + analyst.tools,
+                        usage=analyst.usage,
+                        cache_hit=False,
+                        analyst_tools=analyst.tools,
+                        response_models=analyst.response_models,
+                        response_providers=analyst.response_providers,
+                        resolution_basis=analyst.resolution_basis,
+                        clearance_path="l2_violation",
+                        dossier_complete=analyst.dossier_complete,
+                        analyst_cache_hit=analyst_cache_hit,
+                    )
             if (
                 _qualifies_for_direct_clear(
                     l1_observation, analyst, expected_model=self._model
@@ -3906,13 +3915,15 @@ class TerraSolSourceReviewAgent:
                     dossier_complete=analyst.dossier_complete,
                     analyst_cache_hit=analyst_cache_hit,
                 )
-            provisional_analyst_result = {
+            provisional_analyst_result: dict[str, object] = {
                 "finding_digest": analyst.observation.finding_digest,
                 "categories": list(analyst.observation.categories),
                 "resolution_basis": analyst.resolution_basis,
                 "analyzed_files": list(analyst.analyzed_files),
                 "causal_path": list(analyst.causal_path),
             }
+            if _routes_inconclusive_to_l3(analyst, policy_version):
+                provisional_analyst_result["analyst_disposition"] = "inconclusive"
             critic_cache_hit = False
             critic = self._load_cache(f"{analyst_cache_key}.critic")
             if critic is not None and not (
@@ -4479,6 +4490,11 @@ class TerraSolSourceReviewAgent:
                     )
         elif role == "critic":
             task = (
+                _INCONCLUSIVE_ANALYST_CRITIC_TASK
+                if isinstance(provisional_result, Mapping)
+                and provisional_result.get("analyst_disposition") == "inconclusive"
+                else ""
+            ) + (
                 "Adversarially falsify the provisional safe result, then try to "
                 "falsify your own proposed challenge against every legitimate "
                 "boundary. "
@@ -4872,6 +4888,10 @@ class TerraSolSourceReviewAgent:
                     continue
                 logger.warning("L2 model-tool-contract: no tool call after corrections")
                 raise failure("model-tool-contract", "no_tool_call_after_corrections")
+            # The correction budget bounds consecutive empty turns. A turn that
+            # calls a tool is progress, so a long trajectory is not failed for
+            # two lapses many steps apart; the step budget still bounds it.
+            no_call_corrections = 0
             submitted = [
                 item for item in calls if item.get("name") == "submit_l2_review"
             ]
@@ -6065,8 +6085,13 @@ class LayeredSourceReviewAgent:
             or os.environ.get("SCREENER_L2_ALWAYS_ESCALATE", "").strip().lower()
             in {"1", "true", "yes", "on"}
         )
+        # An L1 that never produced a valid verdict carries its ledger but no
+        # decision. Under the two-outcome policy the deep review still owes
+        # one, so it escalates on the recorded notes rather than ending here.
+        unsettled_l1 = policy_version >= 13 and not l1.ok and l1_verdict_unsettled(l1)
         should_escalate = (
             always_escalate
+            or unsettled_l1
             or l1.risk_level in {"medium", "high"}
             or (l1.risk_level == "low" and not l1.clearance_certified)
         )
@@ -6095,7 +6120,7 @@ class LayeredSourceReviewAgent:
             report(10)
             return adjudicated
 
-        if self._mode == "off" or not l1.ok or not should_escalate:
+        if self._mode == "off" or not (l1.ok or unsettled_l1) or not should_escalate:
             report(9)
             return await settle(l1)
         report(6)
@@ -6478,6 +6503,21 @@ def _has_mixed_causal_families(
     # Escalate when Terra retained one L1 family but narrowed away another.
     return (
         bool(analyst_families & l1_families) and len(analyst_families | l1_families) > 1
+    )
+
+
+def _routes_inconclusive_to_l3(analyst: L2RunResult, policy_version: int) -> bool:
+    """Policy v13 has two outcomes, so an unsettled L2 analyst goes to L3.
+
+    The analyst's inconclusive disposition is a reviewer state, not a policy
+    verdict. Ending the review there parks the artifact with no path to CLEAR
+    or REJECT; the independent critic and safety adjudicator still apply every
+    clearance-certificate and violation-evidence guard.
+    """
+    return (
+        policy_version >= 13
+        and not analyst.observation.ok
+        and analyst.observation.error_code == "l2-model-inconclusive"
     )
 
 
