@@ -2,6 +2,7 @@
 # automatically in local and GitHub Actions plans so an omitted CLI flag cannot
 # silently propose destroying an already-managed optional service.
 
+project               = "ditto-app-dev"
 manage_dns            = true
 enable_datapipeline   = true
 enable_embedder       = true
