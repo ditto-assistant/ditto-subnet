@@ -4673,6 +4673,7 @@ class TestRequestJob:
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A forced allocator interleaving neither waits nor burns the claim."""
         agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
@@ -4681,6 +4682,21 @@ class TestRequestJob:
         _install_chain(app)
         claim = _job_payload(slot_id=_SLOT_ID)
         nonce = UUID(claim["nonce"])
+        fence_entered = asyncio.Event()
+        release_contender = asyncio.Event()
+        real_try_lock = validator_endpoint.try_lock_rollout_dispatch
+        fence_results: list[bool] = []
+
+        async def synchronized_try_lock(session: AsyncSession) -> bool:
+            fence_entered.set()
+            await release_contender.wait()
+            result = await real_try_lock(session)
+            fence_results.append(result)
+            return result
+
+        monkeypatch.setattr(
+            validator_endpoint, "try_lock_rollout_dispatch", synchronized_try_lock
+        )
 
         async with session_maker() as holder:
             await holder.begin()
@@ -4688,11 +4704,25 @@ class TestRequestJob:
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
                 {"lock_key": ROLLOUT_DISPATCH_LOCK_KEY},
             )
-            response = await asyncio.wait_for(
-                client.post("/api/v1/validator/job", headers=_AUTH_HEADER, json=claim),
-                timeout=0.5,
+            contender = asyncio.create_task(
+                client.post("/api/v1/validator/job", headers=_AUTH_HEADER, json=claim)
             )
+            try:
+                # Loaded xdist workers can spend the old half-second budget in
+                # ASGI/auth setup before reaching the allocator. Synchronize at
+                # the real fence, then retain that budget for the actual query
+                # and response. The holder stays locked through both stages.
+                await asyncio.wait_for(fence_entered.wait(), timeout=5)
+                async with asyncio.timeout(0.5):
+                    release_contender.set()
+                    response = await contender
+            finally:
+                if not contender.done():
+                    contender.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await contender
             assert response.status_code == 204
+            assert fence_results == [False]
             async with session_maker() as probe:
                 assert await probe.get(ValidatorRequestNonce, nonce) is None
                 assert (
@@ -4709,6 +4739,7 @@ class TestRequestJob:
             "/api/v1/validator/job", headers=_AUTH_HEADER, json=claim
         )
         assert retry.status_code == 200, retry.text
+        assert fence_results == [False, True]
         assert retry.json()["agent_id"] == str(agent_id)
         async with session_maker() as probe:
             assert await probe.get(ValidatorRequestNonce, nonce) is not None
