@@ -9485,6 +9485,66 @@ export const sourceReviewQueueSloSchema = z.object({
 
 export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
 
+// Subnet liveness signals, ditto-subnet#2600 invariant 1. Read-only: every
+// value is higher-is-worse against a named Platform threshold; nothing pages.
+type GeneratedSubnetLiveness = PlatformComponents['schemas']['SubnetLiveness']
+type GeneratedSubnetLivenessSignal = PlatformComponents['schemas']['SubnetLivenessSignal']
+type GeneratedSubnetLivenessUnavailableSignal =
+  PlatformComponents['schemas']['SubnetLivenessUnavailableSignal']
+
+const livenessStatusSchema = z.enum(['ok', 'warn', 'breach'])
+
+const subnetLivenessSignalSchema = z.object({
+  name: z.enum([
+    'screening_admission',
+    'oldest_claimable_upload',
+    'scoring_throughput',
+    'v13_scorer_cohort_pin',
+    'oldest_actionable_hold',
+    'lease_overrun',
+    'source_emission_collector',
+  ]),
+  status: livenessStatusSchema,
+  value: z.number().nonnegative().nullable(),
+  unit: z.enum(['seconds', 'members']),
+  warn_threshold: z.number().positive().nullable(),
+  threshold: z.number().positive(),
+  since: z.string().nullable(),
+  hint: z.string(),
+  detail: z.record(z.string(), z.union([z.number(), z.string(), z.boolean(), z.null()])),
+} satisfies PlatformResponseShape<GeneratedSubnetLivenessSignal>)
+
+const subnetLivenessUnavailableSignalSchema = z.object({
+  name: z.string(),
+  reason: z.string(),
+} satisfies PlatformResponseShape<GeneratedSubnetLivenessUnavailableSignal>)
+
+// A Platform that ships a new signal (or unit) before this Backroom must not
+// cost the operator the signals it does know: unknown entries are dropped, not
+// a whole-read parse failure. Platform and Backroom deploy independently.
+const knownSubnetLivenessSignalsSchema = z
+  .array(z.unknown())
+  .transform((items) =>
+    items.flatMap((item) => {
+      const parsed = subnetLivenessSignalSchema.safeParse(item)
+      return parsed.success ? [parsed.data] : []
+    }),
+  )
+
+export const subnetLivenessSchema = z.object({
+  generated_at: z.string(),
+  environment: z.string(),
+  status: livenessStatusSchema,
+  signals: knownSubnetLivenessSignalsSchema,
+  unavailable: z.array(subnetLivenessUnavailableSignalSchema),
+} satisfies PlatformResponseShape<GeneratedSubnetLiveness>)
+
+export type SubnetLiveness = z.infer<typeof subnetLivenessSchema>
+export type SubnetLivenessSignal = z.infer<typeof subnetLivenessSignalSchema>
+export type SubnetLivenessOutcome =
+  | { ok: true; view: SubnetLiveness }
+  | { ok: false; status: number | null; message: string }
+
 // Fleet validator capacity, ditto-subnet#2036 telemetry slice. Read-only:
 // progress rates and remaining slot-minutes are estimates, null when unknown.
 type GeneratedValidatorCapacityAssignment =

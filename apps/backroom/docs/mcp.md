@@ -132,6 +132,47 @@ API this deployment holds no credentials for. `src/lib/subnet-surface.test.ts`
 enforces both halves of that boundary — the MCP must be wired, those tools must
 not be.
 
+## Subnet liveness
+
+`get_subnet_liveness` reads `GET /api/v1/admin/subnet-liveness`
+(ditto-subnet#2600, invariant 1). It is the first read when every miner seems
+stuck at once. Each of #2474, #2490, #2231 and #1745 went unnoticed for hours
+or days while each component reported itself healthy. The same signals render
+as the Subnet liveness panel at the top of the signed-in landing page
+(`/screener-capacity`).
+
+Every signal has a `value` where higher is worse, a `unit`, a `warn_threshold`,
+a breach `threshold`, a `status` (`ok`, `warn` or `breach`), a `since` (the
+start of the measured clock when durable state records it), a short `hint`,
+and a small `detail` map. The top-level `status` is the worst signal.
+
+| Signal | `value` | Default warn / breach | First follow-up |
+|---|---|---|---|
+| `screening_admission` | seconds effective admission has been 0 while a claimable upload waits; `detail.effective_slots` sums `screening_concurrency` over ready enrolled nodes, plus ready legacy GCP workers while that route is open | 5 / 15 min | `get_screener_capacity` node controls and heartbeats (a leftover `screening_concurrency=0` revision caused #2474) |
+| `oldest_claimable_upload` | age of the oldest upload a production claim could take now | 1 / 4 h | `get_source_review_queue_slo`, `get_screener_capacity` |
+| `scoring_throughput` | seconds without an accepted validator score while leaseable work waits (the allocator's fleet-wide candidate filter, so withdrawn, retired and closed-era `evaluating` rows do not count); `detail.scores_last_hour`, `scoring_queue`, `open_validator_leases` | 1 / 3 h | `v13_scorer_cohort_pin`, `get_validator_capacity`, `agent_scoring_readiness` |
+| `v13_scorer_cohort_pin` | pinned members declined v13 work (#2490); null when no pin governs dispatch. `detail.members_without_fresh_packet` are offline, restarting or unmanaged validators, and rotation is refused for them. `detail.members_with_different_packet` are fresh members on another release | breach at 1 with the three-member pin and quorum 3 | no fresh packet: bring the validator back. Different packet with `fresh_packets_agree`: `get_v13_report_only_current_packet`, then `rotate_v13_scorer_cohort`. Packets disagree: converge releases first |
+| `oldest_actionable_hold` | age of the oldest active screening quarantine or pending ATH review, excluding holds whose agent is already banned or rejected (#2554) | 24 / 72 h | `get_screening_review_queue` |
+| `lease_overrun` | seconds the most overdue validator ticket or screening attempt has stayed open past its deadline. Tickets expire only when a `/job` poll reaches ticket issuance, so either nothing polls or every poll is declined first (pin, pause, allocator, provider outage). Attempts expire on screener claims and controller heartbeats | 5 / 30 min | `get_validator_capacity`, `v13_scorer_cohort_pin`, `get_screener_capacity` |
+| `source_emission_collector` | age of the finalized-block cursor (#2231); `detail.blocked_reason_class` names only the exception class, never its message | 15 / 60 min | `get_source_release_policy` release gate, Platform logs |
+
+The thresholds are named constants in
+`apps/platform/ditto/api_server/subnet_liveness.py`. They are liveness alarms,
+not policy clocks: in particular, holds still have no published terminal clock
+(#2100). `unavailable` lists the #2600 signals that durable state cannot
+support: disk and database headroom (#1745, a host metric; see the release-ops
+`platform-host-disk` reference) and a count of pin dispatch declines (a
+Prometheus counter and log line only).
+
+The read covers the whole deployment, so only `environment=prod` is accepted.
+It runs in one `READ ONLY` transaction with a five-second timeout per
+statement, and Backroom bounds the whole request at ten seconds. The panel
+renders even when the capacity read on the same page fails, and Backroom drops
+signals it does not know rather than failing the read. Every query is bounded by a partial index, a primary key or a `LIMIT`,
+and none reads `inference_requests`. It requires only `backroom:read`, changes
+nothing and pages nobody. Alert delivery is a #2600 follow-up that should
+consume this endpoint rather than re-derive it.
+
 ## Authorization
 
 `get_coding_private_v2_releases` reads native private-v2 registration digests and

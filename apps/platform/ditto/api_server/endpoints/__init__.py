@@ -134,6 +134,9 @@ from ditto.api_server.endpoints.admin_submission_deposit_address import (
 from ditto.api_server.endpoints.admin_submission_settings import (
     router as admin_submission_settings_router,
 )
+from ditto.api_server.endpoints.admin_subnet_liveness import (
+    router as admin_subnet_liveness_router,
+)
 from ditto.api_server.endpoints.admin_traces import (
     router as admin_traces_router,
 )
@@ -278,6 +281,7 @@ __all__ = [
     "admin_screening_infra_retry_router",
     "admin_screener_policy_activation_router",
     "admin_source_review_queue_slo_router",
+    "admin_subnet_liveness_router",
     "admin_v13_private_generation_router",
     "admin_submission_settings_router",
     "admin_submission_deposit_address_router",

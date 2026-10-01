@@ -157,7 +157,10 @@ from ditto.api_server.endpoints.validator import (
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
 from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
-from ditto.api_server.screener_node_identity import is_enrolled_node_heartbeat_instance
+from ditto.api_server.screener_node_identity import (
+    is_enrolled_node_heartbeat_instance,
+    screener_heartbeat_ready,
+)
 from ditto.api_server.screener_policy_activation import (
     EffectiveScreenerPolicy,
     resolve_screener_policy_activation,
@@ -209,10 +212,7 @@ from ditto.db.queries.moderation_audit import (
     ACTION_ARTIFACT_SUPERSESSION,
     record_moderation_audit_if_enabled,
 )
-from ditto.db.queries.screener_capacity import (
-    screener_fallback_active,
-    screener_gcp_fallback_allowed,
-)
+from ditto.db.queries.screener_capacity import legacy_gcp_claim_authorized
 from ditto.db.queries.screener_node_settings import (
     resolve_screener_node_channel_settings,
 )
@@ -285,28 +285,10 @@ async def _legacy_gcp_claim_is_authorized(
 ) -> bool:
     """Route authenticated legacy GCP workers through the watchdog safety net.
 
-    A missing, stale or unready controller permits GCP overflow only while
-    current operator policy allows it. Fresh, ready controllers still own the
-    bounded target and must match the current provider revision. Registered
-    nodes retain their separate per-node admission limits below.
+    See :func:`ditto.db.queries.screener_capacity.legacy_gcp_claim_authorized`;
+    the claim path locks the controller snapshot it decides on.
     """
-    revision, settings = await resolve_screener_provider_settings(
-        session, environment="prod"
-    )
-    if not await screener_gcp_fallback_allowed(
-        session, environment="prod", settings=settings
-    ):
-        return False
-    snapshot = await session.scalar(
-        select(ScreenerCapacitySnapshot)
-        .where(ScreenerCapacitySnapshot.environment == "prod")
-        .with_for_update()
-    )
-    fallback_active, _ = screener_fallback_active(snapshot, now)
-    if fallback_active:
-        return True
-    assert snapshot is not None
-    return snapshot.provider_settings_revision == revision and snapshot.gce_target > 0
+    return await legacy_gcp_claim_authorized(session, now=now, lock=True)
 
 
 # How long a pre-signed artifact URL stays valid (mirrors the validator's).
@@ -714,7 +696,6 @@ async def require_screener_controller(
 
 
 ControllerDep = Annotated[None, Depends(require_screener_controller)]
-_CONTROLLER_HEARTBEAT_READY_SECONDS = 180
 _NODE_TOKEN_ROTATION_GRACE_SECONDS = 120
 _TRUSTED_BUILD_LEASE_TTL = timedelta(minutes=45)
 _SUBMISSION_BUILD_LEASE_TTL = timedelta(minutes=50)
@@ -2225,9 +2206,12 @@ async def list_controller_nodes(
         ready = bool(
             node.status == "active"
             and heartbeat is not None
-            and seen_at is not None
-            and now - seen_at <= timedelta(seconds=_CONTROLLER_HEARTBEAT_READY_SECONDS)
-            and heartbeat.policy_version == required_policy
+            and screener_heartbeat_ready(
+                seen_at=seen_at,
+                policy_version=heartbeat.policy_version,
+                now=now,
+                required_policy=required_policy,
+            )
         )
         response.append(
             ScreenerControllerNodeState.model_validate(
@@ -2254,9 +2238,11 @@ async def list_controller_nodes(
         seen_at = heartbeat.seen_at
         if seen_at.tzinfo is None:
             seen_at = seen_at.replace(tzinfo=UTC)
-        ready = bool(
-            now - seen_at <= timedelta(seconds=_CONTROLLER_HEARTBEAT_READY_SECONDS)
-            and heartbeat.policy_version == required_policy
+        ready = screener_heartbeat_ready(
+            seen_at=seen_at,
+            policy_version=heartbeat.policy_version,
+            now=now,
+            required_policy=required_policy,
         )
         response.append(
             ScreenerControllerNodeState(

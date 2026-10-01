@@ -262,6 +262,7 @@ import {
   fetchScoringLeaseSettings,
   fetchInferenceRuntimeMetrics,
   fetchSourceReviewQueueSlo,
+  fetchSubnetLiveness,
   fetchOutlierEscalation,
   fetchClaimProvenanceCases,
   fetchOutlierEscalationDryRun,
@@ -801,6 +802,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read inference load and relay health.',
   get_source_review_queue_slo:
     'Read ordinary source-review queue age, throughput, and reconciliation ghosts.',
+  get_subnet_liveness:
+    'Read admission, scoring, v13 pin, hold, lease, collector liveness vs thresholds.',
   get_claim_provenance_cases:
     'Explain flagged v13 claim-provenance cases for an exact agent, artifact SHA and run.',
   get_outlier_escalation:
@@ -3235,6 +3238,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchSourceReviewQueueSlo()),
+  )
+
+  registerTool(
+    'get_subnet_liveness',
+    {
+      title: 'Get subnet liveness',
+      description:
+        'First read in a subnet-wide incident (ditto-subnet#2600). Seven signals from durable Platform state, each with value (higher is worse), unit, warn_threshold, threshold (breach), status ok|warn|breach, since (start of the measured clock when recorded), hint, and detail: screening_admission (seconds effective admission has been 0 while claimable uploads wait; detail.effective_slots sums screening_concurrency over ready enrolled nodes, #2474), oldest_claimable_upload, scoring_throughput (seconds without an accepted validator score while leaseable work waits; detail.scores_last_hour), v13_scorer_cohort_pin (pinned members declined v13 work, #2490; detail splits members_without_fresh_packet, an offline validator to bring back, from members_with_different_packet, rotate only when fresh_packets_agree), oldest_actionable_hold (quarantine or ATH hold, banned/rejected terminal ghosts excluded), lease_overrun (an open lease past its deadline: tickets expire only when a /job poll reaches issuance, so nothing polls or every poll is declined first), and source_emission_collector (finalized-block cursor age, #2231). unavailable names signals not derivable here (disk/DB headroom, pin decline counts). Thresholds are liveness alarms, not policy clocks. Whole-deployment (prod) read; pages nobody, changes nothing; requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchSubnetLiveness()),
   )
 
   registerTool(

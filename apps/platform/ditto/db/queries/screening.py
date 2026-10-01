@@ -410,6 +410,35 @@ def claim_canary_scopes(
     return frozenset(scopes)
 
 
+def _fresh_work_claimable(
+    candidate_payment: type[EvaluationPayment],
+    *,
+    now: datetime,
+    review_settings_scopes: Collection[str] | None,
+    netuid: int,
+) -> ColumnElement[bool]:
+    """The claim's own exclusions for the two fresh-work arms.
+
+    ``candidate_payment`` must be outer-joined to the agent's payment row.
+    """
+    # No canary policy version, deliberately. In these two arms a pending
+    # scored release only narrows which pinned posture is usable; it never
+    # makes an agent claimable. Ignoring it (``None``) therefore reports a
+    # superset of what any worker's claim selects. That can over-hold a
+    # yielding lane but never hide work from production, and it holds for
+    # workers of any build. The released scored rescreen is the SCORED/LIVE
+    # arm, which this read does not model.
+    _, release_criteria, can_claim_scored_rescreen = scored_policy_release_filter(None)
+    return and_(
+        ~screening_running_or_backoff(now),
+        ~screening_deferred_behind_earlier_owner(candidate_payment, netuid=netuid),
+        screening_canary_revision_usable(
+            allowed_scopes=review_settings_scopes,
+            release_criteria=release_criteria if can_claim_scored_rescreen else None,
+        ),
+    )
+
+
 async def has_claimable_screening_work(
     session: AsyncSession,
     *,
@@ -444,21 +473,11 @@ async def has_claimable_screening_work(
     it never queues behind or delays a production claim.
     """
     candidate_payment = aliased(EvaluationPayment)
-    # No canary policy version, deliberately. In these two arms a pending
-    # scored release only narrows which pinned posture is usable; it never
-    # makes an agent claimable. Ignoring it (``None``) therefore reports a
-    # superset of what any worker's claim selects. That can over-hold a
-    # yielding lane but never hide work from production, and it holds for
-    # workers of any build. The released scored rescreen is the SCORED/LIVE
-    # arm, which this read does not model.
-    _, release_criteria, can_claim_scored_rescreen = scored_policy_release_filter(None)
-    claimable = and_(
-        ~screening_running_or_backoff(now),
-        ~screening_deferred_behind_earlier_owner(candidate_payment, netuid=netuid),
-        screening_canary_revision_usable(
-            allowed_scopes=review_settings_scopes,
-            release_criteria=release_criteria if can_claim_scored_rescreen else None,
-        ),
+    claimable = _fresh_work_claimable(
+        candidate_payment,
+        now=now,
+        review_settings_scopes=review_settings_scopes,
+        netuid=netuid,
     )
 
     def fresh_work(*arm: ColumnElement[bool]) -> ColumnElement[bool]:
@@ -476,6 +495,39 @@ async def has_claimable_screening_work(
         failed_screening_retry_authorized(),
     )
     return bool(await session.scalar(select(or_(uploaded, authorized_retry))))
+
+
+async def claimable_screening_upload_backlog(
+    session: AsyncSession, *, now: datetime, netuid: int
+) -> tuple[int, datetime | None]:
+    """Count claimable fresh uploads and return the oldest one's upload time.
+
+    The upload arm of :func:`has_claimable_screening_work` with the same
+    exclusions, as an aggregate for the subnet liveness read: how many
+    ``uploaded`` submissions a production claim could take right now and since
+    when the oldest has waited. Unpinned only (``review_settings_scopes`` is
+    ``None``): a fresh upload has no retry override or scored release to pin
+    it. One unlocked aggregate over the partial ``agents_status_uploaded_idx``
+    index; it takes no advisory lock and writes nothing.
+    """
+    candidate_payment = aliased(EvaluationPayment)
+    row = (
+        await session.execute(
+            select(func.count(Agent.agent_id), func.min(Agent.created_at))
+            .select_from(Agent)
+            .outerjoin(candidate_payment, candidate_payment.agent_id == Agent.agent_id)
+            .where(
+                Agent.status == AgentStatus.UPLOADED,
+                _fresh_work_claimable(
+                    candidate_payment,
+                    now=now,
+                    review_settings_scopes=None,
+                    netuid=netuid,
+                ),
+            )
+        )
+    ).one()
+    return int(row[0] or 0), row[1]
 
 
 def screening_score_count() -> ScalarSelect[int]:

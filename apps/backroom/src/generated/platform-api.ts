@@ -3280,6 +3280,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/subnet-liveness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Subnet Liveness
+         * @description Screening admission, scoring throughput, pin, hold, lease and collector.
+         */
+        get: operations["get_subnet_liveness_api_v1_admin_subnet_liveness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/traces": {
         parameters: {
             query?: never;
@@ -32846,6 +32866,84 @@ export interface components {
             stored: true;
         };
         /**
+         * SubnetLiveness
+         * @description Read-only liveness rollup; it pages nobody and changes nothing.
+         */
+        SubnetLiveness: {
+            /** Environment */
+            environment: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Signals */
+            signals: components["schemas"]["SubnetLivenessSignal"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "warn" | "breach";
+            /** Unavailable */
+            unavailable: components["schemas"]["SubnetLivenessUnavailableSignal"][];
+        };
+        /**
+         * SubnetLivenessSignal
+         * @description One liveness signal: a measured value compared against its thresholds.
+         *
+         *     Higher ``value`` is always worse. ``status`` is ``breach`` when ``value``
+         *     reaches ``threshold``, ``warn`` when it reaches ``warn_threshold``, and
+         *     ``ok`` otherwise. A null ``value`` means the signal does not apply right
+         *     now (for example no scorer pin is active); it is always ``ok``.
+         */
+        SubnetLivenessSignal: {
+            /** Detail */
+            detail?: {
+                [key: string]: number | string | boolean | null;
+            };
+            /** Hint */
+            hint: string;
+            /**
+             * Name
+             * @enum {string}
+             */
+            name: "screening_admission" | "oldest_claimable_upload" | "scoring_throughput" | "v13_scorer_cohort_pin" | "oldest_actionable_hold" | "lease_overrun" | "source_emission_collector";
+            /**
+             * Since
+             * @description Start of the measured clock when it is derivable from durable state; null when the value is zero, not applicable, or the start is not recorded.
+             */
+            since?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "warn" | "breach";
+            /**
+             * Threshold
+             * @description Breach threshold, in the same unit as value.
+             */
+            threshold: number;
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "seconds" | "members";
+            /** Value */
+            value?: number | null;
+            /** Warn Threshold */
+            warn_threshold?: number | null;
+        };
+        /**
+         * SubnetLivenessUnavailableSignal
+         * @description A #2600 liveness signal this read cannot derive from durable state.
+         */
+        SubnetLivenessUnavailableSignal: {
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
          * SystemMetrics
          * @description One bounded and intentionally coarse host-health sample.
          */
@@ -42571,6 +42669,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmissionSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_subnet_liveness_api_v1_admin_subnet_liveness_get: {
+        parameters: {
+            query?: {
+                environment?: "prod";
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubnetLiveness"];
                 };
             };
             /** @description Validation Error */

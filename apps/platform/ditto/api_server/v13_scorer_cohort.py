@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError
 from sqlalchemy import select
@@ -74,6 +74,26 @@ def packet_for_heartbeat(
         return None
 
 
+PinMemberState = Literal["match", "no_fresh_packet", "different_packet"]
+
+
+def pin_member_state(
+    heartbeat: ValidatorHeartbeat | None, *, pin_packet: dict, now: datetime
+) -> PinMemberState:
+    """Classify one pinned member against the pin's exact signed packet.
+
+    ``no_fresh_packet`` covers an offline, restarting or unmanaged validator:
+    no fresh v13 heartbeat yields a packet at all, so rotating cannot help.
+    ``different_packet`` is a fresh member on another scorer release.
+    """
+    packet = packet_for_heartbeat(heartbeat, now=now)
+    if packet is None:
+        return "no_fresh_packet"
+    return (
+        "match" if packet.model_dump(mode="json") == pin_packet else "different_packet"
+    )
+
+
 async def current_pin(
     session: AsyncSession,
 ) -> V13ScorerCohortPin | V13ScorerCohortRotation | None:
@@ -97,8 +117,7 @@ async def pinned_validator_allowed(
     if hotkey not in pin.hotkeys:
         return False
     heartbeat = await session.get(ValidatorHeartbeat, hotkey)
-    packet = packet_for_heartbeat(heartbeat, now=now)
-    return packet is not None and packet.model_dump(mode="json") == pin.packet
+    return pin_member_state(heartbeat, pin_packet=pin.packet, now=now) == "match"
 
 
 async def pinned_cohort_packet(

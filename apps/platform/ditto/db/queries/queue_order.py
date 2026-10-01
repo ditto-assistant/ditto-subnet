@@ -76,6 +76,8 @@ from ditto.db.models import (
     EvaluationPayment,
     OwnerAttestation,
     Score,
+    ScreeningAttempt,
+    ScreeningQuarantine,
     ValidatorHeartbeat,
     ValidatorTicket,
 )
@@ -1497,6 +1499,49 @@ async def unleased_queue_backlog(
                     artifact_mode=preview_artifact_mode(bench_version),
                     rollout=rollout,
                 ),
+            )
+        )
+    ).one()
+    return int(count), earliest
+
+
+async def scoring_queue_backlog(
+    session: AsyncSession,
+    *,
+    bench_version: int,
+    rollout: BenchmarkRollout | None,
+) -> tuple[int, datetime | None]:
+    """Count fleet-eligible scoring work, leased or not, and when it entered.
+
+    The rows :func:`queue_candidate_predicate` admits: submissions a validator
+    could lease for ``bench_version``. A withdrawn, retired, closed-era or
+    dataset-less ``evaluating`` row is not scoring work and is excluded, so an
+    idle subnet does not read as a stalled one. A row's entry time is the
+    latest of its upload, its last screening finish and its last quarantine
+    resolution, so an old upload that only just passed review starts fresh.
+    """
+    last_screening = (
+        select(func.max(ScreeningAttempt.finished_at))
+        .where(ScreeningAttempt.agent_id == Agent.agent_id)
+        .correlate(Agent)
+        .scalar_subquery()
+    )
+    last_release = (
+        select(func.max(ScreeningQuarantine.resolved_at))
+        .where(ScreeningQuarantine.agent_id == Agent.agent_id)
+        .correlate(Agent)
+        .scalar_subquery()
+    )
+    # GREATEST ignores NULLs, so an agent with no attempt keeps its upload time.
+    entered = func.greatest(Agent.created_at, last_screening, last_release)
+    count, earliest = (
+        await session.execute(
+            select(func.count(), func.min(entered)).where(
+                *queue_candidate_predicate(
+                    bench_version=bench_version,
+                    artifact_mode=preview_artifact_mode(bench_version),
+                    rollout=rollout,
+                )
             )
         )
     ).one()

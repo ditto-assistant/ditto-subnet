@@ -273,6 +273,7 @@ describe('Backroom MCP tools', () => {
         'get_inference_concurrency_settings',
         'get_inference_runtime_metrics',
         'get_source_review_queue_slo',
+        'get_subnet_liveness',
         'get_outlier_escalation',
         'get_outlier_escalation_dry_run',
         'get_inference_failure_taxonomy',
@@ -537,6 +538,8 @@ describe('Backroom MCP tools', () => {
     // 179,468 bytes before the optional review-posture pin, node cap and
     // expected-value canary guard inputs. Keep operational tutorials in help
     // and retain the existing catalog budget as these inputs evolve.
+    // The no-input subnet liveness read (#2600) adds one ~350-byte entry; its
+    // signal notes live in tool help. Measured 179,894 bytes together.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(180_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
@@ -3914,6 +3917,74 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  it('reads subnet liveness read-only with the admin token server-side', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const signal = (name: string, status: string, value: number | null) => ({
+      name,
+      status,
+      value,
+      unit: name === 'v13_scorer_cohort_pin' ? 'members' : 'seconds',
+      warn_threshold: name === 'v13_scorer_cohort_pin' ? null : 300,
+      threshold: name === 'v13_scorer_cohort_pin' ? 1 : 900,
+      since: value ? '2026-09-30T22:00:00Z' : null,
+      hint: `${name} hint`,
+      detail: name === 'screening_admission' ? { effective_slots: 0, claimable_uploads: 3 } : {},
+    })
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        generated_at: '2026-10-01T00:00:00Z',
+        environment: 'prod',
+        status: 'breach',
+        signals: [
+          signal('screening_admission', 'breach', 7200),
+          signal('oldest_claimable_upload', 'warn', 7300),
+          signal('scoring_throughput', 'ok', 0),
+          signal('v13_scorer_cohort_pin', 'ok', null),
+          signal('oldest_actionable_hold', 'ok', 600),
+          signal('lease_overrun', 'ok', 0),
+          signal('source_emission_collector', 'ok', 30),
+          // A signal from a newer Platform is dropped, not a failed read.
+          signal('db_headroom', 'breach', 99),
+        ],
+        unavailable: [{ name: 'disk_and_db_headroom', reason: 'host metrics' }],
+        admin_token_echo: 'must-not-escape',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const tools = await client.listTools()
+      const tool = tools.tools.find((item) => item.name === 'get_subnet_liveness')
+      expect(tool?.annotations?.readOnlyHint).toBe(true)
+      expect(tool?.annotations?.destructiveHint).toBe(false)
+
+      const response = await client.callTool({ name: 'get_subnet_liveness', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        status: 'breach',
+        signals: expect.arrayContaining([
+          expect.objectContaining({
+            name: 'screening_admission',
+            status: 'breach',
+            detail: { effective_slots: 0, claimable_uploads: 3 },
+          }),
+        ]),
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/admin/subnet-liveness')
+      expect(init.method ?? 'GET').toBe('GET')
+      const body = readJsonResult(response) as { signals: Array<{ name: string }> }
+      expect(body.signals).toHaveLength(7)
+      expect(body.signals.map((item) => item.name)).not.toContain('db_headroom')
+      const text = JSON.stringify(readTextResult(response))
+      expect(text).not.toContain('platform-admin-token')
+      expect(text).not.toContain('must-not-escape')
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   const outlierEscalationPayload = () => ({
