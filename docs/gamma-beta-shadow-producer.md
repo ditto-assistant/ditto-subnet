@@ -1,8 +1,9 @@
 # Gamma treasury: optional finalized shadow observation
 
 The served ledger contract can now be prepared with an actual read-only chain
-observation. This component remains disabled by default and cannot route
-weights, sign a transaction, provision a key or verify offline policy approval.
+observation. This component remains disabled by default. It can verify only
+offline approval of the exact pinned public proposal; it cannot grant epoch or
+funding authority, route weights, sign a transaction or provision a key.
 
 ## Producer
 
