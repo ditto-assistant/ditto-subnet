@@ -5,6 +5,7 @@ import { installFixtureFetch, loadFixture } from "../../test-fixtures";
 import type { SubmissionFeePayload } from "../../types/submission-fee";
 import { SubmissionFee } from "./SubmissionFee";
 import {
+  changeLabel,
   feeChangeText,
   feeDirection,
   isFixedTao,
@@ -120,7 +121,56 @@ describe("SubmissionFee edge payloads", () => {
     expect(meta).toContain("revision 5");
     expect(meta).not.toContain("since");
     expect(meta).not.toContain("Not recorded");
-    expect(document.querySelector(".submission-fee-count")?.textContent).toBe("0");
+    // No changes to list: the empty history control is not rendered.
+    expect(document.querySelector("details.submission-fee-history")).toBeNull();
+  });
+});
+
+describe("SubmissionFee revision states", () => {
+  it("names the built-in default when no operator revision set the fee", async () => {
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    serve({
+      ...fixture,
+      fee_revision: 0,
+      fee_effective_at: null,
+      history: [],
+      history_truncated: false,
+    });
+    render(() => <SubmissionFee />);
+    await screen.findByText("0.1 TAO");
+    const meta = document.querySelector(".submission-fee-meta")?.textContent ?? "";
+    expect(meta).toBe("Built-in default (no operator revision yet)");
+    expect(document.querySelector("details.submission-fee-history")).toBeNull();
+  });
+
+  it("says when the revision is outside the scanned history", async () => {
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    serve({ ...fixture, fee_revision: null, fee_effective_at: null, history_truncated: true });
+    render(() => <SubmissionFee />);
+    await screen.findByText("0.1 TAO");
+    expect(document.querySelector(".submission-fee-meta")?.textContent).toBe(
+      "Fixed TAO · revision not in the scanned history",
+    );
+  });
+
+  it("calls a row initial only when it is the first fee of a complete history", async () => {
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    const [newest, middle, oldest] = fixture.history;
+    serve({
+      ...fixture,
+      history: [
+        newest,
+        { ...middle, previous_fee_amount_rao: null, previous_fee_amount_tao: null },
+        oldest,
+      ],
+      history_truncated: true,
+    });
+    render(() => <SubmissionFee />);
+    await screen.findByText("0.1 TAO");
+    const labels = Array.from(document.querySelectorAll(".submission-fee-direction")).map(
+      (node) => node.textContent,
+    );
+    expect(labels).toEqual(["down 50%", "previous fee not shown", "previous fee not shown"]);
   });
 });
 
@@ -148,5 +198,8 @@ describe("submission fee helpers", () => {
     expect(quoteLifetimeText(3_600)).toBe("1 hour");
     expect(quoteLifetimeText(5_400)).toBe("90 minutes");
     expect(quoteLifetimeText(0)).toBe("the quote lifetime");
+    expect(changeLabel(null, 40_000_000, true)).toBe("initial");
+    expect(changeLabel(null, 40_000_000, false)).toBe("previous fee not shown");
+    expect(changeLabel(40_000_000, 40_000_000, false)).toBe("same amount");
   });
 });

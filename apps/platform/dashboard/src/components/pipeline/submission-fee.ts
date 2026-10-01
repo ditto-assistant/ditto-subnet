@@ -49,3 +49,16 @@ export function quoteLifetimeText(seconds: number): string {
   const minutes = Math.ceil(seconds / 60);
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
+
+/** Meta line for the current fee's revision. */
+export function feeRevisionText(revision: number | null): string {
+  if (revision === 0) return "Built-in default (no operator revision yet)";
+  if (revision === null) return "Fixed TAO · revision not in the scanned history";
+  return `Fixed TAO · revision ${revision}`;
+}
+
+/** Direction of one change; "initial" only for the true first fee. */
+export function changeLabel(previousRao: number | null, rao: number, isGenesis: boolean): string {
+  if (previousRao === null) return isGenesis ? "initial" : "previous fee not shown";
+  return feeDirection(previousRao, rao) || "same amount";
+}

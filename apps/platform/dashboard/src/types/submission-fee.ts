@@ -17,7 +17,8 @@ export interface SubmissionFeePayload {
   fee_denomination: string;
   fee_amount_rao: number;
   fee_amount_tao: string;
-  fee_revision: number;
+  /** 0 while the built-in default applies; null when the scan could not find it. */
+  fee_revision: number | null;
   fee_effective_at: string | null;
   quote_lifetime_seconds: number;
   history: SubmissionFeeRevision[];

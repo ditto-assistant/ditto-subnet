@@ -9,9 +9,10 @@ import type { JSX } from "solid-js";
 import { useEndpoint } from "../../data/useEndpoint";
 import type { SubmissionFeePayload, SubmissionFeeRevision } from "../../types/submission-fee";
 import {
+  changeLabel,
   feeChangeText,
   feeDate,
-  feeDirection,
+  feeRevisionText,
   isFixedTao,
   quoteLifetimeText,
   raoToTao,
@@ -54,7 +55,7 @@ export function SubmissionFee(): JSX.Element {
                 {raoToTao(current().fee_amount_rao)} TAO
               </strong>
               <span class="submission-fee-meta">
-                Fixed TAO · revision {current().fee_revision}
+                {feeRevisionText(current().fee_revision)}
                 <Show when={current().fee_effective_at}>
                   {(at) => <> · since {feeDate(at())}</>}
                 </Show>
@@ -64,34 +65,41 @@ export function SubmissionFee(): JSX.Element {
                 reserving keeps the reserved fee.
               </span>
             </div>
-            <details class="submission-fee-history">
-              <summary>
-                Fee history
-                <span class="submission-fee-count">
-                  {history().length}
-                  {incomplete() ? "+" : ""}
-                </span>
-              </summary>
-              <ol aria-label="Submission fee changes, newest first">
-                <For each={history()}>
-                  {(change) => (
-                    <li data-fee-revision={change.revision}>
-                      <time datetime={change.effective_at ?? undefined}>
-                        {feeDate(change.effective_at)}
-                      </time>
-                      <span class="submission-fee-change">
-                        {feeChangeText(change.previous_fee_amount_rao, change.fee_amount_rao)}
-                      </span>
-                      <span class="submission-fee-direction">
-                        {feeDirection(change.previous_fee_amount_rao, change.fee_amount_rao) ||
-                          "initial"}
-                      </span>
-                      <span class="submission-fee-revision">rev {change.revision}</span>
-                    </li>
-                  )}
-                </For>
-              </ol>
-            </details>
+            <Show when={history().length > 0 || incomplete()}>
+              <details class="submission-fee-history">
+                <summary>
+                  Fee history
+                  <span class="submission-fee-count">
+                    {history().length}
+                    {incomplete() ? "+" : ""}
+                  </span>
+                </summary>
+                <ol aria-label="Submission fee changes, newest first">
+                  <For each={history()}>
+                    {(change, index) => (
+                      <li data-fee-revision={change.revision}>
+                        <time datetime={change.effective_at ?? undefined}>
+                          {feeDate(change.effective_at)}
+                        </time>
+                        <span class="submission-fee-change">
+                          {feeChangeText(change.previous_fee_amount_rao, change.fee_amount_rao)}
+                        </span>
+                        <span class="submission-fee-direction">
+                          {changeLabel(
+                            change.previous_fee_amount_rao,
+                            change.fee_amount_rao,
+                            // Only the oldest row of a complete history is the
+                            // genuine first fee.
+                            index() === history().length - 1 && !incomplete(),
+                          )}
+                        </span>
+                        <span class="submission-fee-revision">rev {change.revision}</span>
+                      </li>
+                    )}
+                  </For>
+                </ol>
+              </details>
+            </Show>
           </>
         )}
       </Show>
