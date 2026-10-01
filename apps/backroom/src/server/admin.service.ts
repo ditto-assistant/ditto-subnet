@@ -1077,12 +1077,16 @@ export async function fetchSubmissionSettingsControl() {
 
 export async function previewSubmissionSettings(rawInput: unknown) {
   const input = previewSubmissionSettingsInputSchema.parse(rawInput)
-  const query = new URLSearchParams({
-    expected_revision: String(input.expectedRevision),
-    cooldown_seconds: String(input.cooldownSeconds),
-    fee_amount_rao: String(input.feeAmountRao),
-    fee_denomination: input.feeDenomination,
-  })
+  // An omitted fee is left out of the query, never sent as "undefined": a
+  // fee-less preview keeps the current fee under Platform's rule.
+  const query = new URLSearchParams([
+    ['expected_revision', String(input.expectedRevision)],
+    ['cooldown_seconds', String(input.cooldownSeconds)],
+    ...(input.feeAmountRao === undefined
+      ? []
+      : [['fee_amount_rao', String(input.feeAmountRao)]]),
+    ['fee_denomination', input.feeDenomination],
+  ])
   const payload = await platformAdminRequest(`${SUBMISSION_SETTINGS_PATH}/preview?${query}`)
   return submissionSettingsPreviewSchema.parse(payload)
 }
@@ -1095,7 +1099,7 @@ export async function updateSubmissionSettings(actor: string, rawInput: unknown)
     body: {
       expected_revision: input.expectedRevision,
       cooldown_seconds: input.cooldownSeconds,
-      fee_amount_rao: input.feeAmountRao,
+      ...(input.feeAmountRao === undefined ? {} : { fee_amount_rao: input.feeAmountRao }),
       fee_denomination: input.feeDenomination,
       reason: input.reason,
       actor,

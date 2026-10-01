@@ -2025,6 +2025,39 @@ describe('submission fee preview', () => {
     expect(init.method ?? 'GET').toBe('GET')
   })
 
+  it('omits the fee from a fee-less preview and apply rather than sending undefined', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const control = {
+      current,
+      unsupported_current: null,
+      history: [],
+      history_incomplete: false,
+      bounds: preview.bounds,
+      quote_lifetime_seconds: 86_400,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(preview))
+      .mockResolvedValueOnce(Response.json(current))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await previewSubmissionSettings({ expectedRevision: 4, cooldownSeconds: 1800 })
+    await updateSubmissionSettings('operator@omniaura.ai', {
+      expectedRevision: 4,
+      cooldownSeconds: 1800,
+      reason: 'reduce cadence for the current capacity window',
+      confirmation: 'SET SUBMISSION COOLDOWN 1800 SECONDS FEE 40000000 RAO',
+    })
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/submission-settings/preview?expected_revision=4&cooldown_seconds=1800&fee_denomination=fixed_tao',
+    )
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body as string)
+    expect(body).not.toHaveProperty('fee_amount_rao')
+    expect(body.cooldown_seconds).toBe(1800)
+  })
+
   it('refuses out-of-bounds or fractional fees before calling Platform', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi.fn()

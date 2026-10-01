@@ -1371,10 +1371,12 @@ export const submissionSettingsRevisionSchema = z.object({
   parent_revision: z.number().int().nonnegative(),
   cooldown_seconds: submissionCooldownSecondsSchema,
   fee_amount_rao: submissionFeeRaoSchema,
-  fee_amount_tao: exactTaoSchema.nullable(),
+  // Optional in the generated contract (a defaulted field may be omitted):
+  // accept exactly what Platform's OpenAPI allows, no stricter.
+  fee_amount_tao: exactTaoSchema.nullish(),
   fee_denomination: submissionFeeDenominationSchema,
-  previous_fee_amount_rao: submissionFeeRaoSchema.nullable(),
-  previous_cooldown_seconds: submissionCooldownSecondsSchema.nullable(),
+  previous_fee_amount_rao: submissionFeeRaoSchema.nullish(),
+  previous_cooldown_seconds: submissionCooldownSecondsSchema.nullish(),
   reason: z.string(),
   actor: z.string(),
   created_at: z.string().nullable(),
@@ -1421,7 +1423,7 @@ export const submissionSettingsControlSchema = z
     // without server bounds must fail rather than fall back to local constants.
     bounds: submissionFeeBoundsSchema,
     history_incomplete: z.boolean(),
-    quote_lifetime_seconds: z.number().int().positive().nullable(),
+    quote_lifetime_seconds: z.number().int().positive().nullish(),
   } satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsResponse>)
   .refine(oneEffectiveRevision, oneEffectiveRevisionMessage)
 
@@ -1432,7 +1434,14 @@ export const updateSubmissionSettingsInputSchema = z.object({
     .int()
     .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
     .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
-  feeAmountRao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  // Optional, as on Platform: omitted means a cooldown-only change that keeps
+  // the current fee when it is fixed TAO within bounds (otherwise 422).
+  feeAmountRao: z
+    .number()
+    .int()
+    .min(SUBMISSION_FEE_MIN_RAO)
+    .max(SUBMISSION_FEE_MAX_RAO)
+    .optional(),
   feeDenomination: z.literal('fixed_tao').default('fixed_tao'),
   reason: auditReasonSchema(8),
   confirmation: z.string(),
@@ -1445,7 +1454,14 @@ export const previewSubmissionSettingsInputSchema = z.object({
     .int()
     .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
     .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
-  feeAmountRao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  // Optional, as on Platform: omitted means a cooldown-only change that keeps
+  // the current fee when it is fixed TAO within bounds (otherwise 422).
+  feeAmountRao: z
+    .number()
+    .int()
+    .min(SUBMISSION_FEE_MIN_RAO)
+    .max(SUBMISSION_FEE_MAX_RAO)
+    .optional(),
   feeDenomination: z.literal('fixed_tao').default('fixed_tao'),
 })
 
@@ -1473,7 +1489,7 @@ export const submissionSettingsPreviewSchema = z
   in_flight_quotes_expire_by: z.string().nullable(),
   recoverable_expired_quotes: z.number().int().nonnegative(),
   recoverable_expired_quotes_at_other_fees: z.number().int().nonnegative(),
-  recoverable_expired_quotes_until: z.string().nullable(),
+  recoverable_expired_quotes_until: z.string().nullish(),
 } satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsPreview>)
   .refine(oneEffectiveRevision, oneEffectiveRevisionMessage)
 

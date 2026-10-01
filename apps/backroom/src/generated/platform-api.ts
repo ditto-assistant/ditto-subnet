@@ -19038,8 +19038,11 @@ export interface components {
         };
         /** ConversationObservations */
         ConversationObservations: {
-            /** Current Submission Fee Rao */
-            current_submission_fee_rao: number;
+            /**
+             * Current Submission Fee Rao
+             * @description Current fixed-TAO submission fee in rao; null when the effective revision is in a denomination this build cannot price (its number is not a rao amount).
+             */
+            current_submission_fee_rao: number | null;
             /** Daily Budget Microusd */
             daily_budget_microusd: number;
             fee_change_request: components["schemas"]["AdminSubmissionSettingsRequest"];
