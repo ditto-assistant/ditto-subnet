@@ -32,6 +32,43 @@ PUBLIC_MCP = "https://backroom.dittobench.ai/mcp"
 MAX_PENDING = 1000
 
 
+def observer_token(path: Path | None, *, environment_token: str = "") -> str:
+    """Read an already approved private credential; never mint or log it.
+
+    A supplied file is authoritative. Failure cannot fall back to an environment
+    grant. systemd LoadCredential mounts a private per-unit file for this path.
+    """
+    if path is None:
+        token = environment_token
+    else:
+        if environment_token:
+            raise ValueError("ambiguous observer credential bindings")
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid not in {0, os.geteuid()}
+                or info.st_mode & 0o077
+                or not 0 < info.st_size <= 8192
+            ):
+                raise ValueError("observer credential must be a bounded private file")
+            raw = os.read(fd, 8193)
+            if len(raw) > 8192:
+                raise ValueError("observer credential exceeds bound")
+            token = raw.decode("ascii").removesuffix("\n")
+        finally:
+            os.close(fd)
+    if (
+        not token
+        or len(token) > 8192
+        or not token.isascii()
+        or any(c.isspace() or ord(c) < 33 or ord(c) > 126 for c in token)
+    ):
+        raise ValueError("approved observer OAuth binding absent or malformed")
+    return token
+
+
 class ObservationUnavailable(RuntimeError):
     """Transient transport outage; durable selections may be safely redelivered."""
 

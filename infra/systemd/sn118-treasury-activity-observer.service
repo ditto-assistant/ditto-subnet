@@ -1,0 +1,40 @@
+[Unit]
+Description=SN118 receipt-only treasury activity observer (operator staged, default off)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/sn118-treasury-observer/activation.env
+
+[Service]
+Type=simple
+User=sn118-treasury-observer
+Group=sn118-treasury-observer
+UMask=0077
+EnvironmentFile=/etc/sn118-treasury-observer/activation.env
+LoadCredential=backroom-observe:/etc/sn118-treasury-observer/credentials/backroom-observe
+ExecStart=/opt/sn118-treasury-observer/.venv/bin/python /opt/sn118-treasury-observer/scripts/treasury_activity_observer.py --config /etc/sn118-treasury-observer/config.json --config-sha256 ${CONFIG_SHA256} --state /var/lib/sn118-treasury-observer/queue.sqlite --token-file ${CREDENTIALS_DIRECTORY}/backroom-observe
+StateDirectory=sn118-treasury-observer
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+LimitCORE=0
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/sn118-treasury-observer
+Restart=no
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target
+
+# No signing key, GCP signer service account or transfer journal access. This
+# unit scans holding-wallet payments. Service distributions require the
+# separately reviewed selector handoff described in the activation packet.
+# Transport retry is internal and bounded; semantic/auth refusals stop the unit
+# without automatic restart. Release never installs/enables this unit.

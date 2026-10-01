@@ -62,6 +62,18 @@ remain read-only and refuse unaudited runtime/schema transitions.
 
 ## Activation blockers
 
+The staged `infra/systemd/sn118-treasury-activity-observer.service` supplies an
+already separately approved credential with systemd `LoadCredential` and
+`--token-file`. Private ownership/mode, regular-file/no-follow and content bounds
+are enforced. No token appears in the command or activation.env. The unit is
+not installed/enabled by release, has no signing identity/journal mount and
+does not restart after semantic/auth refusal. See
+[gamma-activation-packet.md](gamma-activation-packet.md) for installation gates
+and the unresolved cross-host distribution-selector handoff. Disabled config
+reads no credential or network in the CLI, even with a supplied token-file path.
+systemd credential copying occurs before launch, so an absent activation.env is
+the unit's default-off boundary; creating that marker requires separate review.
+
 The observer is **not activated and has no live OAuth binding**. Existing
 `backroom:write` is broad; a client's local allowlist cannot constrain a stolen
 token. Never provision that broad grant for this observer. The dedicated

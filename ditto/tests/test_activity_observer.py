@@ -221,6 +221,8 @@ def test_actual_cli_disabled_without_token_or_chain(tmp_path):
             str(path),
             "--config-sha256",
             hashlib.sha256(raw).hexdigest(),
+            "--token-file",
+            str(tmp_path / "absent-credential"),
             "--once",
         ],
         cwd=Path(__file__).resolve().parents[2],
