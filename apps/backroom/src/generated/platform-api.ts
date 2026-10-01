@@ -20002,6 +20002,36 @@ export interface components {
             scope: string;
             settings: components["schemas"]["EmissionEligibilitySettings"];
         };
+        /** EnforcingTreasuryPin */
+        EnforcingTreasuryPin: {
+            approval: components["schemas"]["TreasuryPolicyApproval"];
+            /** Epoch Index */
+            epoch_index: number;
+            /** First Block */
+            first_block: number;
+            /** Fleet */
+            fleet: components["schemas"]["TreasuryFleetMember"][];
+            identity: components["schemas"]["TreasuryCollectorIdentity"];
+            /**
+             * Mode
+             * @default enforce
+             * @constant
+             */
+            mode: "enforce";
+            /** Pinned Block */
+            pinned_block: number;
+            /** Pinned Block Hash */
+            pinned_block_hash: string;
+            policy: components["schemas"]["TreasuryEmissionPolicy"];
+            /** Policy Digest */
+            policy_digest: string;
+            /**
+             * Version
+             * @default 2
+             * @constant
+             */
+            version: 2;
+        };
         /**
          * EvalPricingResponse
          * @description Returned by ``GET /upload/eval-pricing``.
@@ -20278,11 +20308,12 @@ export interface components {
             /**
              * Schema Version
              * @default 1
-             * @constant
+             * @enum {integer}
              */
-            schema_version: 1;
+            schema_version: 1 | 2;
             /** Task Id */
             task_id: number;
+            treasury_pin?: components["schemas"]["EnforcingTreasuryPin"] | null;
             /** Validator Hotkey */
             validator_hotkey: string;
             /** Weights */
@@ -22222,8 +22253,11 @@ export interface components {
             track_shares_bps?: {
                 [key: string]: number;
             };
-            /** @description Immutable epoch-bound treasury policy and collector observations. V1 is shadow-only and cannot alter weights or authorize spending. Absent preserves the legacy ledger wire. */
-            treasury_pin?: components["schemas"]["TreasuryLedgerPin"] | null;
+            /**
+             * Treasury Pin
+             * @description Immutable epoch-bound treasury policy and collector observations. V1 is shadow-only and cannot alter weights or authorize spending. V2 requires offline approval and current finalized/fleet proof before service-first weight dispatch; it never authorizes spending. Absent preserves the legacy ledger wire.
+             */
+            treasury_pin?: components["schemas"]["TreasuryLedgerPin"] | components["schemas"]["EnforcingTreasuryPin"] | null;
             /**
              * V9 Confirmation Mode
              * @description Fail-closed marker: every Bench v9 entry must carry a valid full-confirmation receipt while present.
@@ -33101,6 +33135,30 @@ export interface components {
             version: 1;
         };
         /**
+         * TreasuryFleetMember
+         * @description Projection of one fresh authenticated weight-setter heartbeat.
+         */
+        TreasuryFleetMember: {
+            /** Approved Policy Digest */
+            approved_policy_digest: string;
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /** Protocol Version */
+            protocol_version: number;
+            /**
+             * Treasury Dispatch Version
+             * @constant
+             */
+            treasury_dispatch_version: 2;
+            /**
+             * Treasury Pin Version
+             * @constant
+             */
+            treasury_pin_version: 2;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
          * TreasuryLedgerPin
          * @description V1 can record shadow evidence only. No weight or spending activation.
          */
@@ -33125,14 +33183,24 @@ export interface components {
         /** TreasuryLedgerReadiness */
         TreasuryLedgerReadiness: {
             /** Blocking Reasons */
-            blocking_reasons: ("producer_disabled" | "no_epoch_pin" | "stored_pin_invalid" | "proposal_pin_mismatch" | "shadow_only" | "offline_policy_unverified" | "weight_adapter_not_active" | "fleet_gate_unimplemented" | "current_epoch_not_checked")[];
+            blocking_reasons: ("producer_disabled" | "no_epoch_pin" | "stored_pin_invalid" | "proposal_pin_mismatch" | "shadow_only" | "offline_policy_unverified" | "weight_adapter_not_active" | "fleet_gate_unimplemented" | "current_epoch_not_checked" | "fleet_not_ready" | "enforcing_pin_unverified")[];
             /**
              * Can Enforce Weights
              * @default false
-             * @constant
              */
-            can_enforce_weights: false;
+            can_enforce_weights: boolean;
             configured_proposal: components["schemas"]["TreasuryEmissionPolicy"] | null;
+            /**
+             * Enforcement Configured
+             * @default false
+             */
+            enforcement_configured: boolean;
+            /**
+             * Fleet Gate
+             * @default not_checked
+             * @enum {string}
+             */
+            fleet_gate: "not_checked" | "ready" | "not_ready";
             /** Latest Stored Epoch Index */
             latest_stored_epoch_index: number | null;
             /** Latest Stored Ledger Digest */
@@ -33149,6 +33217,11 @@ export interface components {
              */
             observer_status: "disabled" | "not_observed" | "observing" | "observed" | "unavailable";
             /**
+             * Offline Epoch Verified
+             * @default false
+             */
+            offline_epoch_verified: boolean;
+            /**
              * Offline Policy Verified
              * @default false
              * @constant
@@ -33162,6 +33235,7 @@ export interface components {
             proposal_approval_status: "not_configured" | "verified" | "invalid";
             /** Proposal Approved Policy Digest */
             proposal_approved_policy_digest?: string | null;
+            stored_enforcing_pin?: components["schemas"]["EnforcingTreasuryPin"] | null;
             stored_shadow_pin: components["schemas"]["TreasuryLedgerPin"] | null;
             /**
              * Weight Effect
@@ -33194,6 +33268,12 @@ export interface components {
             recipient_hotkey?: string | null;
             /** Rule Id */
             rule_id: string;
+        };
+        /** TreasuryPolicyApproval */
+        TreasuryPolicyApproval: {
+            policy: components["schemas"]["TreasuryEmissionPolicy"];
+            /** Signature */
+            signature: string;
         };
         /** TreasuryServiceBucket */
         TreasuryServiceBucket: {
@@ -33305,6 +33385,26 @@ export interface components {
             /** Revision */
             revision: number;
             settings: components["schemas"]["TreasurySettings"];
+        };
+        /**
+         * TreasuryWeightCapability
+         * @description Exact policy and queued guard implemented by the reporting runtime.
+         */
+        TreasuryWeightCapability: {
+            /** Approved Policy Digest */
+            approved_policy_digest: string;
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /**
+             * Treasury Dispatch Version
+             * @constant
+             */
+            treasury_dispatch_version: 2;
+            /**
+             * Treasury Pin Version
+             * @constant
+             */
+            treasury_pin_version: 2;
         };
         /** TrustedImageBuildCreateRequest */
         TrustedImageBuildCreateRequest: {
@@ -35074,6 +35174,7 @@ export interface components {
              * @default false
              */
             ticket_inference: boolean;
+            treasury_weights?: components["schemas"]["TreasuryWeightCapability"] | null;
         };
         /**
          * ValidatorCapacityAssignment
@@ -36051,13 +36152,10 @@ export interface components {
         WeightProvenance: {
             /** Bench Version */
             bench_version: number;
-            /**
-             * Champion Agent Id
-             * Format: uuid
-             */
-            champion_agent_id: string;
+            /** Champion Agent Id */
+            champion_agent_id: string | null;
             /** Champion Artifact Sha256 */
-            champion_artifact_sha256: string;
+            champion_artifact_sha256: string | null;
             /** Epoch Index */
             epoch_index: number;
             /** Ledger Digest */
