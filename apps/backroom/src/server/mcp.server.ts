@@ -1,3 +1,5 @@
+import { attemptLookupInputSchema } from '../lib/submission-attempt.schemas'
+import { fetchSubmissionAttemptPolicy, fetchSubmissionAttempt } from './admin.service'
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import {
@@ -472,6 +474,8 @@ export const WRITE_TOOL_NAMES = new Set([
 ])
 
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
+  ['get_submission_attempt_policy', BACKROOM_READ_SCOPE],
+  ['get_submission_attempt', BACKROOM_READ_SCOPE],
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
@@ -911,6 +915,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   preview_treasury_topup: 'Dry-run a GM route against shadow limits. Execution disabled.',
   get_agent_emission_eligibility:
     'Exact agent eligibility: earning/withheld reason, clear activation time and validator fold visibility.',
+  get_submission_attempt_policy:
+    'Read report-only classifier/build provenance and bounds.',
+  get_submission_attempt:
+    'Compare bounded past paid archives; report-only, with no admission or source/integrity clearance effect.',
   get_submission_cooldown:
     'Current miner fee and owner-coldkey cooldown; optional newest-first history, historyLimit=0 default.',
   list_hotkey_bans: 'Hotkey bans.',
@@ -2289,6 +2297,29 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => unbanHotkey(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_submission_attempt_policy',
+    {
+      title: 'Get report-only submission comparison provenance',
+      description: 'Read classifier identity, current reference corpus, resource bounds and explicit no-authority flags.',
+      inputSchema: {},
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchSubmissionAttemptPolicy()),
+  )
+
+  registerTool(
+    'get_submission_attempt',
+    {
+      title: 'Compare past paid submission archives',
+      description: 'Compare past paid archives on explicit operator request. Default reference is the latest earlier paid submission in the proven payer scope; supply an exact older reference to investigate a repack. Only direct mutually coldkey-signed links apply at the candidate timestamp. Reads at most two bounded objects; unavailable, changed or oversized artifacts are inconclusive. Classification never changes admission, holds, scores, source or integrity authority. No source text or persistent profile is returned.',
+      inputSchema: attemptLookupInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ agent_id, reference_agent_id }) =>
+      result(await fetchSubmissionAttempt(agent_id, reference_agent_id)),
   )
 
   registerTool(

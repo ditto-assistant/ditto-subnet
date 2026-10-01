@@ -1,5 +1,20 @@
 import '@tanstack/react-start/server-only'
 import { z } from 'zod'
+import { attemptPolicySchema, attemptRecordSchema } from '../lib/submission-attempt.schemas'
+
+export async function fetchSubmissionAttemptPolicy() {
+  return attemptPolicySchema.parse(await platformAdminRequest('/api/v1/admin/submission-attempts'))
+}
+
+export async function fetchSubmissionAttempt(agentId: string, referenceAgentId?: string) {
+  const params = new URLSearchParams()
+  if (referenceAgentId) params.set('reference_agent_id', referenceAgentId)
+  const query = params.toString()
+  return attemptRecordSchema.parse(await platformAdminRequest(
+    `/api/v1/admin/submission-attempts/${encodeURIComponent(agentId)}${query ? `?${query}` : ''}`,
+  ))
+}
+
 import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema } from '../lib/treasury-receipts.schemas'
 
 export async function recordTreasuryReceipt(rawInput: unknown, actor: string) {

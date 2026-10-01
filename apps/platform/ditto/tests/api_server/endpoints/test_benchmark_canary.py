@@ -13,8 +13,10 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError
 
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator import ScoreReport
+from ditto.api_server.dependencies import get_storage_client
 from ditto.api_server.endpoints import admin_benchmark_canary, validator
 from ditto.api_server.private_benchmark_preparation import (
     PrivatePreparationConfig,
@@ -25,6 +27,7 @@ from ditto.db.models import (
     BenchmarkRollout,
     PrivateBenchmarkPreparation,
     Score,
+    ScreeningAttempt,
     ValidatorHeartbeat,
     ValidatorTicket,
 )
@@ -38,6 +41,12 @@ from ditto.tests.api_server.endpoints.test_admin_benchmark_rollout import (
     _capabilities,
     _install,
     _StubGenerator,
+)
+from ditto.tests.submission_attempt_fixtures import (
+    archive,
+    paid_submission,
+    payment,
+    source,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -673,3 +682,99 @@ async def test_cancel_and_expiry_do_not_spend_miner_budget(
         assert not ticket_retry_budget_spent(ticket)
         assert ticket.retry_after is None
         assert await counts(session) == (3, 0)
+
+
+# Every label the comparison can give a changed or retried artifact, including
+# the most lenient infrastructure retry, against both V13 hold kinds.
+_HOLD_COMPARISONS = {
+    "material_new_work": (
+        {"main.py": source("planning")},
+        {"main.py": source("memory")},
+        False,
+    ),
+    "packaging_only_repair": (
+        {"main.py": source("memory"), "Dockerfile": b"FROM b"},
+        {"main.py": source("memory"), "Dockerfile": b"FROM a"},
+        False,
+    ),
+    "infrastructure_retry": (
+        {"main.py": source("memory")},
+        {"main.py": source("memory")},
+        True,
+    ),
+}
+
+
+@pytest.mark.parametrize("label", sorted(_HOLD_COMPARISONS))
+@pytest.mark.parametrize(
+    "held_status", [AgentStatus.QUARANTINED, AgentStatus.ATH_PENDING_REVIEW]
+)
+async def test_comparison_label_does_not_clear_v13_source_or_integrity_hold(
+    client, ready, app, session_maker, held_status, label
+):
+    current_files, prior_files, infrastructure = _HOLD_COMPARISONS[label]
+    current = archive(current_files)
+    prior = archive(prior_files)
+    async with session_maker() as session, session.begin():
+        agent = await session.get(Agent, UUID(ready["agent_id"]))
+        agent.sha256 = hashlib.sha256(current).hexdigest()
+        agent.size_bytes = len(current)
+        agent.status = held_status
+        session.add(payment(agent, "proven-payer"))
+        reference = paid_submission(
+            session,
+            prior,
+            coldkey="proven-payer",
+            created_at=agent.created_at - timedelta(minutes=10),
+        )
+        await session.flush()
+        reference_id = reference.agent_id
+        if infrastructure:
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=uuid4(),
+                    agent_id=reference_id,
+                    screener_hotkey="worker",
+                    policy_version=13,
+                    status="failed",
+                    started_at=agent.created_at - timedelta(minutes=9),
+                    deadline=agent.created_at + timedelta(minutes=30),
+                    finished_at=agent.created_at - timedelta(minutes=5),
+                    reason_code="docker-build-infrastructure",
+                )
+            )
+    objects = {
+        f"{ready['agent_id']}/agent.tar.gz": current,
+        f"{reference_id}/agent.tar.gz": prior,
+    }
+    storage = MagicMock()
+
+    async def download(*, key, max_bytes):
+        assert max_bytes == 2 * 1024 * 1024
+        return objects[key]
+
+    storage.get_object = AsyncMock(side_effect=download)
+    app.dependency_overrides[get_storage_client] = lambda: storage
+    comparison = await client.get(
+        f"/api/v1/admin/submission-attempts/{ready['agent_id']}",
+        headers=_HEADERS,
+    )
+    assert comparison.status_code == 200, comparison.text
+    result = comparison.json()
+    assert result["classification"] == label
+    assert result["policy"]["report_only"] is True
+    assert result["policy"]["admission_effect"] == "none"
+    assert result["policy"]["source_clearance"] is False
+    assert result["policy"]["integrity_clearance"] is False
+    ready["expected_artifact_sha256"] = hashlib.sha256(current).hexdigest()
+    refused = await client.post(
+        "/api/v1/admin/benchmark-canaries", headers=_HEADERS, json=ready
+    )
+    assert refused.status_code == 409, refused.text
+    assert "not an eligible immutable screened canary target" in refused.text
+    async with session_maker() as session:
+        agent = await session.get(Agent, UUID(ready["agent_id"]))
+        assert agent.status == held_status
+        assert (
+            await session.scalar(select(func.count()).select_from(BenchmarkCanary)) == 0
+        )

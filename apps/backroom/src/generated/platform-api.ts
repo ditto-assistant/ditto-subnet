@@ -3244,6 +3244,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/submission-attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Policy */
+        get: operations["get_policy_api_v1_admin_submission_attempts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/submission-attempts/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compare Paid Submission */
+        get: operations["compare_paid_submission_api_v1_admin_submission_attempts__agent_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/submission-deposit-address": {
         parameters: {
             query?: never;
@@ -14272,6 +14306,90 @@ export interface components {
              * @description Expected SHA-256 of the tarball, lowercase hex.
              */
             sha256: string;
+        };
+        /** AttemptComparison */
+        AttemptComparison: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /**
+             * Classification
+             * @enum {string}
+             */
+            classification: "first_submission" | "infrastructure_retry" | "packaging_only_repair" | "small_source_delta" | "material_new_work" | "inconclusive";
+            /** Feedback At */
+            feedback_at?: string | null;
+            /** Feedback Reason */
+            feedback_reason?: string | null;
+            /**
+             * Feedback Status
+             * @default pending
+             * @enum {string}
+             */
+            feedback_status: "infrastructure" | "repairable" | "completed" | "pending";
+            policy: components["schemas"]["AttemptObservationPolicy"];
+            /** Reason */
+            reason: string;
+            /** Reference Agent Id */
+            reference_agent_id?: string | null;
+            /** Reference Sha256 */
+            reference_sha256?: string | null;
+            /** Sha256 */
+            sha256: string;
+        };
+        /** AttemptObservationPolicy */
+        AttemptObservationPolicy: {
+            /**
+             * Admission Effect
+             * @default none
+             * @constant
+             */
+            admission_effect: "none";
+            /** Classifier Version */
+            classifier_version: number;
+            /**
+             * Integrity Clearance
+             * @default false
+             * @constant
+             */
+            integrity_clearance: false;
+            /** Max Archive Bytes */
+            max_archive_bytes: number;
+            /** Max Members */
+            max_members: number;
+            /** Max Owner Links */
+            max_owner_links: number;
+            /** Max Unpacked Bytes */
+            max_unpacked_bytes: number;
+            /** Reference Corpus */
+            reference_corpus: {
+                [key: string]: string;
+            };
+            /**
+             * Report Only
+             * @default true
+             * @constant
+             */
+            report_only: true;
+            /** Settings Digest */
+            settings_digest: string;
+            /** Small Delta Jaccard */
+            small_delta_jaccard: number;
+            /** Source Build */
+            source_build: string;
+            /**
+             * Source Clearance
+             * @default false
+             * @constant
+             */
+            source_clearance: false;
         };
         /**
          * BenchDatasetConfig
@@ -42470,6 +42588,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceReviewQueueSlo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_policy_api_v1_admin_submission_attempts_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttemptObservationPolicy"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_paid_submission_api_v1_admin_submission_attempts__agent_id__get: {
+        parameters: {
+            query?: {
+                reference_agent_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttemptComparison"];
                 };
             };
             /** @description Validation Error */
