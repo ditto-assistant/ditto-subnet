@@ -314,6 +314,42 @@ async def failed_attempt(client):
     )
 
 
+async def test_observations_read_survives_an_unsupported_fee_denomination(
+    app, client, session_maker, monkeypatch
+):
+    """Listing observations only reads the fee; an effective revision in an
+    unreviewed denomination must not fail it, and its number is never shown
+    as rao. The funding proposal stays the explicit fixed-TAO request."""
+    from ditto.db.models import SubmissionSettingsRevision
+    from ditto.db.queries import submission_settings as queries
+
+    await install(app, session_maker, monkeypatch, enabled=False)
+    usd = SubmissionSettingsRevision(
+        revision=7,
+        parent_revision=6,
+        cooldown_seconds=1800,
+        fee_amount_rao=5_000_000,
+        fee_denomination="usd_indexed",
+        reason="usd target from a newer writer",
+        actor="future-platform",
+        created_at=datetime.now(UTC),
+    )
+    monkeypatch.setattr(
+        queries, "latest_submission_settings", AsyncMock(return_value=usd)
+    )
+
+    response = await client.get(BASE, headers=HEADERS)
+
+    assert response.status_code == 200, response.text
+    observation = response.json()
+    assert observation["current_submission_fee_rao"] is None
+    assert 5_000_000 not in observation.values()
+    proposal = observation["fee_change_request"]
+    assert proposal["expected_revision"] == 7
+    assert proposal["cooldown_seconds"] == 1800
+    assert proposal["fee_amount_rao"] == 200_000_000
+
+
 async def test_manual_retry_preserves_history_and_never_retries_twice(
     app, client, session_maker, monkeypatch
 ):
