@@ -184,15 +184,19 @@ def classify_pair(
     infrastructure_failure: bool,
 ) -> tuple[AttemptKind, str]:
     same_runtime = candidate["runtime_hash"] == reference["runtime_hash"]
-    if same_runtime and infrastructure_failure:
-        return (
-            "infrastructure_retry",
-            "Same runtime after recorded infrastructure failure.",
-        )
+    # Content first: an infrastructure retry is an unchanged runtime AND
+    # unchanged packaging. A packaging change after an infrastructure failure
+    # is reported as a packaging change; the caller keeps the infrastructure
+    # feedback visible on its own field, so neither fact is hidden.
     if same_runtime and candidate["packaging_hash"] != reference["packaging_hash"]:
         return (
             "packaging_only_repair",
             "Only packaging inputs changed; runtime hashes match.",
+        )
+    if same_runtime and infrastructure_failure:
+        return (
+            "infrastructure_retry",
+            "Same runtime and packaging after recorded infrastructure failure.",
         )
     if same_runtime:
         return (

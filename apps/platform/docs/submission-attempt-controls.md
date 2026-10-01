@@ -28,7 +28,10 @@ source screening and scoring retain their existing contracts.
   Only authoritative infrastructure feedback completed before the candidate's
   submission can establish an infrastructure retry. Expiry alone is not proof
   of an infrastructure fault. Canonical ticket infrastructure failures count;
-  diagnostic canaries, scoring errors and sandbox OOMs do not. Labels describe
+  diagnostic canaries, scoring errors and sandbox OOMs do not. An infrastructure
+  retry also requires unchanged runtime and packaging inputs: a packaging change
+  after an infrastructure failure is reported as packaging-only repair, with the
+  failure still visible as `feedback_status=infrastructure`. Labels describe
   lexical/content differences, not semantic novelty or a calibrated admission
   decision. Source text, fingerprints and profiles remain
   internal and are not persisted or returned.

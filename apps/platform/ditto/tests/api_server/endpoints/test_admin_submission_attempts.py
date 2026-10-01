@@ -1,5 +1,6 @@
 """Real paid-ledger/owner-history operator reads; no admission writes."""
 
+import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
@@ -272,6 +273,40 @@ async def test_feedback_cutoff_and_expiry_never_infers_infrastructure(
     response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
     assert response.status_code == 200, response.text
     assert response.json()["classification"] == expected
+
+
+async def test_packaging_change_after_infrastructure_failure_is_not_a_retry(
+    client, observations, session_maker
+):
+    archives = {
+        "prior": archive({"main.py": source("memory"), "Dockerfile": b"FROM a"}),
+        "current": archive({"main.py": source("memory"), "Dockerfile": b"FROM b"}),
+    }
+    async with session_maker() as session, session.begin():
+        for key, data in archives.items():
+            agent = await session.get(Agent, observations[key])
+            agent.sha256 = hashlib.sha256(data).hexdigest()
+            agent.size_bytes = len(data)
+            observations["objects"][f"{agent.agent_id}/agent.tar.gz"] = data
+        session.add(
+            ScreeningAttempt(
+                attempt_id=uuid4(),
+                agent_id=observations["prior"],
+                screener_hotkey="worker",
+                policy_version=13,
+                status="failed",
+                started_at=NOW - timedelta(minutes=30),
+                deadline=NOW + timedelta(minutes=30),
+                finished_at=NOW - timedelta(minutes=1),
+                reason_code="docker-build-infrastructure",
+            )
+        )
+    response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["classification"] == "packaging_only_repair"
+    assert body["feedback_status"] == "infrastructure"
+    assert body["feedback_reason"] == "docker-build-infrastructure"
 
 
 @pytest.mark.parametrize(

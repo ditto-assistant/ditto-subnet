@@ -31,15 +31,19 @@ def test_same_runtime_survives_rename_and_repacking():
 
 
 @pytest.mark.parametrize(
-    "infra,expected",
+    "dockerfile,infra,expected",
     [
-        (False, "packaging_only_repair"),
-        (True, "infrastructure_retry"),
+        (b"FROM b", False, "packaging_only_repair"),
+        # A changed artifact is never labelled an unchanged infrastructure
+        # retry; the infrastructure feedback stays visible on its own field.
+        (b"FROM b", True, "packaging_only_repair"),
+        (b"FROM a", True, "infrastructure_retry"),
+        (b"FROM a", False, "small_source_delta"),
     ],
 )
-def test_runtime_preserving_repair_and_infrastructure(infra, expected):
+def test_runtime_preserving_repair_and_infrastructure(dockerfile, infra, expected):
     prior = archive({"main.py": source("memory"), "Dockerfile": b"FROM a"})
-    current = archive({"main.py": source("memory"), "Dockerfile": b"FROM b"})
+    current = archive({"main.py": source("memory"), "Dockerfile": dockerfile})
     assert compare(current, prior, infra) == expected
 
 
