@@ -1081,6 +1081,7 @@ export async function previewSubmissionSettings(rawInput: unknown) {
     expected_revision: String(input.expectedRevision),
     cooldown_seconds: String(input.cooldownSeconds),
     fee_amount_rao: String(input.feeAmountRao),
+    fee_denomination: input.feeDenomination,
   })
   const payload = await platformAdminRequest(`${SUBMISSION_SETTINGS_PATH}/preview?${query}`)
   return submissionSettingsPreviewSchema.parse(payload)

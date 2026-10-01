@@ -27685,6 +27685,7 @@ export interface components {
             history: components["schemas"]["PublicSubmissionFeeRevision"][];
             /**
              * History Truncated
+             * @description True when history may be incomplete: more fee changes than limit, the bounded revision scan reached its cap, or a historical revision in a denomination this build cannot price was omitted rather than published.
              * @default false
              */
             history_truncated: boolean;
@@ -42808,6 +42809,8 @@ export interface operations {
                 expected_revision: number;
                 cooldown_seconds: number;
                 fee_amount_rao: number;
+                /** @description Same field as the apply request; only fixed_tao is accepted, so preview and apply validate identical inputs. */
+                fee_denomination?: "fixed_tao";
             };
             header?: {
                 authorization?: string | null;

@@ -1379,17 +1379,12 @@ export const submissionFeeBoundsSchema = z.object({
   max_cooldown_seconds: z.number().int().positive(),
 } satisfies PlatformResponseShape<GeneratedSubmissionFeeBounds>)
 
-const DEFAULT_SUBMISSION_FEE_BOUNDS = {
-  min_fee_amount_rao: SUBMISSION_FEE_MIN_RAO,
-  max_fee_amount_rao: SUBMISSION_FEE_MAX_RAO,
-  min_cooldown_seconds: SUBMISSION_COOLDOWN_MIN_SECONDS,
-  max_cooldown_seconds: SUBMISSION_COOLDOWN_MAX_SECONDS,
-}
-
 export const submissionSettingsControlSchema = z.object({
   current: submissionSettingsRevisionSchema,
   history: z.array(submissionSettingsRevisionSchema).max(100),
-  bounds: submissionFeeBoundsSchema.default(DEFAULT_SUBMISSION_FEE_BOUNDS),
+  // Required: the panel validates operator input against these, so a response
+  // without server bounds must fail rather than fall back to local constants.
+  bounds: submissionFeeBoundsSchema,
   quote_lifetime_seconds: z.number().int().positive().nullable().optional(),
 } satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsResponse>)
 
@@ -1414,6 +1409,7 @@ export const previewSubmissionSettingsInputSchema = z.object({
     .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
     .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
   feeAmountRao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  feeDenomination: z.literal('fixed_tao').default('fixed_tao'),
 })
 
 export const submissionSettingsPreviewSchema = z.object({

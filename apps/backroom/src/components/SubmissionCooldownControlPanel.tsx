@@ -305,7 +305,8 @@ export function SubmissionCooldownControlPanel({
               />
               {invalidMinutes ? (
                 <span className="mt-1 block text-[11px] text-[var(--red)]">
-                  Enter a whole number from {minCooldownMinutes} through {maxCooldownMinutes}.
+                  Enter a whole number from {minCooldownMinutes} through {maxCooldownMinutes}{' '}
+                  minutes.
                 </span>
               ) : null}
             </label>

@@ -185,7 +185,7 @@ describe('SubmissionCooldownControlPanel', () => {
     expect(minutes.min).toBe('2')
     expect(minutes.max).toBe('120')
     fireEvent.change(minutes, { target: { value: '121' } })
-    expect(screen.getByText('Enter a whole number from 2 through 120.')).toBeTruthy()
+    expect(screen.getByText('Enter a whole number from 2 through 120 minutes.')).toBeTruthy()
     expect(screen.queryByText(/1 through 1440/)).toBeNull()
     fireEvent.change(minutes, { target: { value: '1' } })
     expect(minutes.getAttribute('aria-invalid')).toBe('true')
@@ -263,13 +263,15 @@ describe('exact TAO conversion', () => {
   it('defaults a missing denomination to fixed_tao and rejects any other', () => {
     const { fee_denomination: _omitted, ...legacy } = initial.current
     expect(
-      submissionSettingsControlSchema.parse({ current: legacy, history: [] }).current
+      submissionSettingsControlSchema.parse({ current: legacy, history: [], bounds: initial.bounds })
+        .current
         .fee_denomination,
     ).toBe('fixed_tao')
     expect(() =>
       submissionSettingsControlSchema.parse({
         current: { ...initial.current, fee_denomination: 'usd_indexed' },
         history: [],
+        bounds: initial.bounds,
       }),
     ).toThrow()
   })

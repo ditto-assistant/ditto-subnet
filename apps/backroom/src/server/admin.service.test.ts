@@ -1825,7 +1825,23 @@ describe('submission cooldown administration', () => {
       created_at: '2026-07-24T12:00:00Z',
     },
     history: [],
+    bounds: {
+      min_fee_amount_rao: 1_000_000,
+      max_fee_amount_rao: 10_000_000_000,
+      min_cooldown_seconds: 60,
+      max_cooldown_seconds: 86_400,
+    },
   }
+
+  it('rejects a control response that omits the server bounds', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const { bounds: _omitted, ...withoutBounds } = control
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json(withoutBounds)))
+
+    // The panel validates operator input against these bounds; it must never
+    // fall back to locally invented limits.
+    await expect(fetchSubmissionSettingsControl()).rejects.toThrow()
+  })
 
   it('reads and updates the platform-owned cooldown contract', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
@@ -1835,23 +1851,17 @@ describe('submission cooldown administration', () => {
       .mockResolvedValueOnce(Response.json({ ...control.current, cooldown_seconds: 1800 }))
       .mockResolvedValueOnce(
         Response.json({
+          ...control,
           current: { ...control.current, revision: 2, parent_revision: 1, cooldown_seconds: 1800 },
-          history: [],
         }),
       )
     vi.stubGlobal('fetch', fetchMock)
 
-    // An older Platform without the explicit fields reads as fixed TAO with the
-    // default safe bounds.
+    // A revision without the explicit denomination field reads as fixed TAO
+    // (the only denomination ever priced); the bounds come from the server.
     await expect(fetchSubmissionSettingsControl()).resolves.toEqual({
       ...control,
       current: { ...control.current, fee_denomination: 'fixed_tao' },
-      bounds: {
-        min_fee_amount_rao: 1_000_000,
-        max_fee_amount_rao: 10_000_000_000,
-        min_cooldown_seconds: 60,
-        max_cooldown_seconds: 86_400,
-      },
     })
     await updateSubmissionSettings('operator@omniaura.ai', {
       expectedRevision: 1,
@@ -1937,7 +1947,7 @@ describe('submission fee preview', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe(
-      'https://platform-api.heyditto.ai/api/v1/admin/submission-settings/preview?expected_revision=4&cooldown_seconds=3600&fee_amount_rao=37271710',
+      'https://platform-api.heyditto.ai/api/v1/admin/submission-settings/preview?expected_revision=4&cooldown_seconds=3600&fee_amount_rao=37271710&fee_denomination=fixed_tao',
     )
     expect(init.method ?? 'GET').toBe('GET')
   })
