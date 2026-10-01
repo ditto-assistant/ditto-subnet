@@ -1,4 +1,16 @@
 import '@tanstack/react-start/server-only'
+import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema } from '../lib/treasury-receipts.schemas'
+
+export async function recordTreasuryReceipt(rawInput: unknown, actor: string) {
+  const { confirmation: _confirmation, ...body } = treasuryReceiptInputSchema.parse(rawInput)
+  return treasuryReceiptSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts', {
+    method: 'POST', actor, body,
+  }))
+}
+
+export async function fetchTreasuryReceipts() {
+  return treasuryReceiptPageSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts?limit=100'))
+}
 import { treasuryLedgerReadinessSchema } from '../lib/treasury-ledger.schemas'
 import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
 

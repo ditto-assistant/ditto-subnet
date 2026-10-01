@@ -12,6 +12,8 @@ import { fetchConversationAssessments, setConversationSettings, authorizeConvers
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
+import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
+import { fetchTreasuryReceipts, recordTreasuryReceipt } from './admin.service'
 import { fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
@@ -389,6 +391,7 @@ export type BackroomEnv = {
 export const WRITE_TOOL_NAMES = new Set([
   'advance_scored_policy_rescreen',
   'record_treasury_settings',
+  'record_treasury_receipt',
   'record_v13_benign_approval',
   'record_v13_replay_private_group',
   'register_v13_replay_private_package',
@@ -657,6 +660,18 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
+  get_copy_review_source_diff:
+    'Per-file held/reference source diff with rename and normalized identity. Artifact scope; bodies via file reader.',
+  apply_copy_court_settings:
+    'Write complete copy-court posture with expected revision and exact confirmation. Inert or complete signal semantics; see tool help.',
+  expand_benchmark_rollout_cohort:
+    'Append the exact next ranked suffix to an open rollout with fresh ledger guards. No restart or supersession; see tool help.',
+  get_ath_review:
+    'Read exact agent ATH hold, operator rationale and review context; not an automatic policy verdict.',
+  open_ath_review:
+    'Open or reopen one exact scored/live ATH review with audited reason. Not a quarantine or automatic reject; see tool help.',
+  preview_screening_quarantine_batch:
+    'Validate up to 50 exact release/rescreen/reject selections. Dry-run only; no state or scoring writes.',
   get_ledger_epoch_snapshots:
     'Read the epoch-pinned validator ledger history: per chain epoch, the frozen fold input digest, champion, incumbent, recipients, and whether the crown changed.',
   create_ath_rulings_upload:
@@ -888,6 +903,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_treasury_settings: 'Read shadow treasury buckets and history. No weights or funds move.',
   get_treasury_ledger_readiness: 'Read shadow proposal, stored epoch identity and funding blockers. No activation.',
   record_treasury_settings: 'Record a shadow treasury revision with CAS and confirmation. No weights or funds move.',
+  get_treasury_receipts: 'Read verified private treasury receipt history and publication state.',
+  record_treasury_receipt: 'Verify and ingest one historical finalized treasury receipt. No signing or provider credit.',
   quote_treasury_topup: 'Quote finalized GM funding routes and price impact. No execution.',
   preview_treasury_topup: 'Dry-run a GM route against shadow limits. Execution disabled.',
   get_agent_emission_eligibility:
@@ -3412,6 +3429,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchTreasurySettings()),
+  )
+
+  registerTool(
+    'get_treasury_receipts',
+    { title: 'Read verified treasury receipts', description: 'Read up to 100 independently finalized receipt records, including publication-off observations, historical policy digest, source selector and provider-credit not_proven state. No spending authority. Requires backroom:read.', annotations: toolAnnotations('read') },
+    async () => result(await fetchTreasuryReceipts()),
+  )
+  registerTool(
+    'record_treasury_receipt',
+    { title: 'Ingest independently verified treasury receipt', description: 'Ingest a selection from the read-only collector export or finalized holding-wallet payment observer. Platform independently verifies exact historical epoch, offline policy, destination, finalized runtime and actual chain effect. Replays are idempotent; conflicts refuse. Publication uses historical bucket policy. A journal selection or vendor payment is not provider credit proof. No signatures, transfers or activation. Requires backroom:write and INGEST VERIFIED TREASURY RECEIPT confirmation.', inputSchema: treasuryReceiptInputSchema, annotations: toolAnnotations('write', true) },
+    async (input) => write(() => recordTreasuryReceipt(input, props.session.email)),
   )
 
   registerTool(

@@ -40,6 +40,9 @@ async def list_treasury_activity(
             {
                 "id": row.id,
                 "payment_id": row.payment_id,
+                "bucket_id": row.bucket_id,
+                "policy_digest": row.policy_digest,
+                "epoch_index": row.epoch_index,
                 "event_kind": row.event_kind,
                 "state": row.state,
                 "finalized_event_id": row.finalized_event_id,

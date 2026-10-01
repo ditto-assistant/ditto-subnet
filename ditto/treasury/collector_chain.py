@@ -21,14 +21,19 @@ from ditto.treasury.collector import (
     Observation,
     Settlement,
     SignedOperation,
-    canonical,
 )
 from ditto.treasury.service_allocation import ServiceDestination
+from ditto_screening_protocol.collector_receipts import (
+    AUDITED_COLLECTOR_CODE_HASH,
+    FINNEY_GENESIS,
+    collector_gross_incentive,
+    collector_transfer_effect,
+    liquid_collector_credit,
+)
 
-FINNEY_GENESIS = "0x2f0555cc76fc2840a25a6ea3b9637146806f1f44b090c175ffde2a7e5ab36c03"
 # Official compressed v470 WASM bytes independently matched to finalized :code.
 # See docs/service-collector-automation.md for artifact/source fingerprints.
-AUDITED_CODE_HASH = "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47"
+AUDITED_CODE_HASH = AUDITED_COLLECTOR_CODE_HASH
 
 
 class NoCredentialRedirect(HTTPRedirectHandler):
@@ -288,26 +293,8 @@ class PublicCollectorChain:
             ):
                 raise ValueError("emission intersects collector identity transition")
             return None
-        emissions = []
-        for event in s.get_events(block_hash):
-            if (
-                event.get("module_id") != "SubtensorModule"
-                or event.get("event_id") != "IncentiveAlphaEmittedToMiners"
-            ):
-                continue
-            attrs = event.get("event", {}).get("attributes")
-            if not isinstance(attrs, dict) or set(attrs) != {"netuid", "emissions"}:
-                raise ValueError("unsupported emission event schema")
-            if uint(attrs["netuid"]) == 118:
-                if event.get("phase") != "Initialization":
-                    raise ValueError("ambiguous emission phase")
-                amounts = attrs["emissions"]
-                if not isinstance(amounts, list) or uid >= len(amounts):
-                    raise ValueError("missing collector emission UID")
-                emissions.append(uint(amounts[uid]))
-        if len(emissions) > 1:
-            raise ValueError("ambiguous emission attribution")
-        if not emissions:
+        gross = collector_gross_incentive(s.get_events(block_hash), uid)
+        if gross is None:
             return None
         # Gross SERVER_EMISSION precedes collateral capture and routing. Only
         # this exact liquid initialization credit authorizes distribution.
@@ -322,47 +309,16 @@ class PublicCollectorChain:
                 != policy.collector_hotkey
             ):
                 raise ValueError("liquid emission route is not pinned to collector")
-        credits = []
-        for event in s.get_events(block_hash):
-            if (
-                event.get("module_id") != "SubtensorModule"
-                or event.get("event_id") != "AutoStakeAdded"
-            ):
-                continue
-            attrs = event.get("event", {}).get("attributes")
-            if not isinstance(attrs, dict) or set(attrs) != {
-                "netuid",
-                "destination",
-                "hotkey",
-                "owner",
-                "incentive",
-            }:
-                raise ValueError("unsupported liquid credit schema")
-            if (attrs["netuid"], attrs["hotkey"], attrs["owner"]) != (
-                118,
-                policy.collector_hotkey,
-                policy.collector_coldkey,
-            ):
-                continue
-            if (
-                attrs["destination"] != policy.collector_hotkey
-                or event.get("phase") != "Initialization"
-            ):
-                raise ValueError("liquid credit redirected or ambiguous")
-            credits.append(attrs)
-        if len(credits) > 1:
-            raise ValueError("ambiguous liquid emission credits")
-        if not credits:
-            return None
-        amount = uint(credits[0]["incentive"])
-        if amount > emissions[0]:
-            raise ValueError("liquid credit exceeds gross collector incentive")
-        if not amount:
-            return None
-        return FinalizedEarnings(
-            amount,
-            block_hash,
-            hashlib.sha256(canonical(credits[0]).encode()).hexdigest(),
+        credit = liquid_collector_credit(
+            s.get_events(block_hash),
+            collector_hotkey=policy.collector_hotkey,
+            collector_coldkey=policy.collector_coldkey,
+            gross_incentive_rao=gross,
+        )
+        return (
+            FinalizedEarnings(credit.amount_rao, block_hash, credit.event_digest)
+            if credit is not None
+            else None
         )
 
     def assert_no_sponsor(self, policy, delegate, block_hash):
@@ -612,45 +568,28 @@ class PublicCollectorChain:
                     raise ValueError("missing exact registration effect event")
                 return Settlement("finalized", block, block_hash, uid)
             destination = operation["destination"]
-            # Exact phase-matched alpha events prove the movement. The stake
-            # API is a rounded share-pool quote; its delta is not an effect.
-            removed = [
-                e
-                for e in events
-                if e.get("module_id") == "SubtensorModule"
-                and e.get("event_id") == "StakeRemoved"
-            ]
-            added = [
-                e
-                for e in events
-                if e.get("module_id") == "SubtensorModule"
-                and e.get("event_id") == "StakeAdded"
-            ]
-            if len(removed) != 1 or len(added) != 1:
-                raise ValueError("missing or ambiguous alpha transfer effect")
-            # Schema is pinned to the independently audited v470 runtime.
-            for event, coldkey in (
-                (removed[0], policy.collector_coldkey),
-                (added[0], destination),
-            ):
-                attrs = event.get("event", {}).get("attributes")
-                if (
-                    not isinstance(attrs, (list, tuple))
-                    or len(attrs) != 6
-                    or attrs[0] != coldkey
-                    or attrs[1] != policy.collector_hotkey
-                    or uint(attrs[2]) < 0
-                    or uint(attrs[3]) != operation["amount"]
-                    or attrs[4] != 118
-                    or uint(attrs[5]) != 0
-                ):
-                    raise ValueError(
-                        "alpha transfer event differs from reserved intent"
-                    )
+            # The same audited decoder is used by the independent ingestion
+            # reader. This function still verifies runtime, fee, identity and
+            # signed extrinsic binding before accepting its decoded effects.
+            collector_transfer_effect(
+                events,
+                extrinsic_index=matches[0],
+                collector_coldkey=policy.collector_coldkey,
+                collector_hotkey=policy.collector_hotkey,
+                recipient_coldkey=destination,
+                amount_rao=operation["amount"],
+            )
             if uid is None:
                 raise ValueError("finalized UID binding unavailable")
             self.alpha(policy, destination, block_hash)
-            return Settlement("finalized", block, block_hash, uid)
+            return Settlement(
+                "finalized",
+                block,
+                block_hash,
+                uid,
+                extrinsic_index=matches[0],
+                extrinsic_hash=signed["extrinsic_hash"],
+            )
         status = (
             "expired"
             if observation.block > signed["expires_block"]

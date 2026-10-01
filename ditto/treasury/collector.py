@@ -145,6 +145,8 @@ class Settlement:
     block_hash: str | None = None
     uid: int | None = None
     scanned_through: int | None = None
+    extrinsic_index: int | None = None
+    extrinsic_hash: str | None = None
 
 
 class CollectorChain(Protocol):

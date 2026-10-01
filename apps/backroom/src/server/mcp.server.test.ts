@@ -62,6 +62,55 @@ afterEach(() => {
 })
 
 describe('Backroom MCP tools', () => {
+  it('records a verified receipt with signed actor and refuses read-only, imprecise or unconfirmed writes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const selection = {
+      stage: 'vendor_payment', epoch_index: 9, bucket_id: 'gamma', source_block: null,
+      block: 130, block_hash: '0x' + 'ab'.repeat(32), extrinsic_index: 0,
+      extrinsic_hash: '0x' + 'cd'.repeat(32), amount_atomic: 25,
+      payee_rule_id: 'vendor', parent_receipt_id: null,
+      reason: 'Observe finalized configured vendor payment',
+      confirmation: 'INGEST VERIFIED TREASURY RECEIPT',
+    }
+    const receipt = {
+      ...selection, receipt_id: 'a'.repeat(64), policy_digest: 'b'.repeat(64),
+      amount_atomic: '25', status: 'chain_finalized', provider_credit_status: 'not_proven',
+      public_event_id: null, published: false, replayed: true,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(receipt))
+    vi.stubGlobal('fetch', fetchMock)
+    const readonly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const result = await readonly.client.callTool({ name: 'record_treasury_receipt', arguments: selection })
+      expect(result.isError).toBe(true)
+      expect(readTextResult(result)).toContain('read-only')
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally { await readonly.client.close(); await readonly.server.close() }
+    const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      for (const invalid of [
+        { ...selection, confirmation: 'WRONG' },
+        { ...selection, amount_atomic: Number.MAX_SAFE_INTEGER + 1 },
+      ]) {
+        const result = await writer.client.callTool({ name: 'record_treasury_receipt', arguments: invalid })
+        expect(result.isError).toBe(true)
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+      const result = await writer.client.callTool({ name: 'record_treasury_receipt', arguments: {
+        ...selection, actor: 'FORGED', credited_usd_nano: 'FAKE', finalized: true,
+      } })
+      expect(result.isError).not.toBe(true)
+      expect(readJsonResult(result)).toMatchObject({ published: false, replayed: true, provider_credit_status: 'not_proven' })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/admin/treasury-receipts')
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer platform-admin-token', 'X-Admin-Actor': session.email })
+      const { confirmation: _confirmation, ...known } = selection
+      expect(JSON.parse(String(init.body))).toEqual(known)
+      expect(readTextResult(result)).not.toContain('FORGED')
+      expect(readTextResult(result)).not.toContain('confirmation')
+    } finally { await writer.client.close(); await writer.server.close() }
+  })
+
   it('keeps benchmark canary mutations write-scoped', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -296,6 +345,7 @@ describe('Backroom MCP tools', () => {
         'get_owner_attestations',
         'get_submission_cooldown',
         'get_treasury_settings',
+        'get_treasury_receipts',
         'get_treasury_ledger_readiness',
         'quote_treasury_topup',
         'preview_treasury_topup',
@@ -339,6 +389,7 @@ describe('Backroom MCP tools', () => {
         'read_screening_source_file',
         'record_v13_benign_approval',
         'record_treasury_settings',
+        'record_treasury_receipt',
         'record_v13_replay_private_group',
         'search_screening_source',
         'rebuild_screened_image',
@@ -399,7 +450,13 @@ describe('Backroom MCP tools', () => {
           properties?: Record<string, { maxLength?: number }>
         }
       ).properties?.reason
-      expect(reason?.maxLength, `${tool.name} must preserve detailed reasons`).toBeUndefined()
+      if (tool.name === 'record_treasury_receipt') {
+        // Machine observation metadata is bounded by the Platform wire model;
+        // it is not a case review or a substitute for independent proof.
+        expect(reason?.maxLength).toBe(240)
+      } else {
+        expect(reason?.maxLength, `${tool.name} must preserve detailed reasons`).toBeUndefined()
+      }
     }
     // The catalog is loaded before any call. Keep both the complete JSON and
     // its descriptions bounded so a new operational tutorial cannot silently
@@ -1218,6 +1275,37 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  it('retains actual detailed help and permission annotations for compacted receipt-era discovery', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const catalog = await client.listTools()
+      const serialized = JSON.stringify(catalog.tools)
+      console.info('receipt-era MCP catalog', {
+        chars: serialized.length,
+        utf8Bytes: Buffer.byteLength(serialized, 'utf8'),
+      })
+      for (const [name, fragment, scope, readOnly] of [
+        ['get_copy_review_source_diff', 'per-file diff manifest', BACKROOM_ARTIFACT_SCOPE, true],
+        ['apply_copy_court_settings', 'complete', BACKROOM_WRITE_SCOPE, false],
+        ['expand_benchmark_rollout_cohort', 'exact next ranked suffix', BACKROOM_WRITE_SCOPE, false],
+        ['get_ath_review', 'ath_pending_review', undefined, true],
+        ['open_ath_review', 'manual investigation', BACKROOM_WRITE_SCOPE, false],
+        ['preview_screening_quarantine_batch', 'exact agent and artifact', undefined, true],
+      ] as const) {
+        const response = await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool: name } })
+        expect(response.isError).not.toBe(true)
+        const help = readJsonResult(response) as { tool: string; guidance: string; summary: string }
+        expect(help.tool).toBe(name)
+        expect(help.guidance).toContain(fragment)
+        expect(help.guidance.length).toBeGreaterThan(help.summary.length)
+        const tool = catalog.tools.find(tool => tool.name === name)
+        expect(tool?.description).toBe(help.summary)
+        expect(tool?.annotations?.readOnlyHint).toBe(readOnly)
+        expect(TOOL_SCOPE_REQUIREMENTS.get(name)).toBe(scope)
+      }
+    } finally { await client.close(); await server.close() }
   })
 
   it('omits settings history by default and pages it newest-first on demand', async () => {

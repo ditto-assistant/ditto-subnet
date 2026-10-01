@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
+from ditto.treasury.activity_export import export_finalized_distributions
 from ditto.treasury.collector import CollectorJournal, tick
 from ditto.treasury.collector_chain import PublicCollectorChain, load_policy
 
@@ -18,8 +19,39 @@ def main() -> None:
     parser.add_argument("--journal", type=Path)
     parser.add_argument("--watch-only", action="store_true")
     parser.add_argument("--initialize-journal", action="store_true")
+    parser.add_argument("--export-activity", action="store_true")
     args = parser.parse_args()
     policy = load_policy(args.policy, args.policy_sha256)
+    if args.export_activity:
+        if (
+            args.role != "transfer"
+            or not args.journal
+            or args.initialize_journal
+            or args.watch_only
+        ):
+            parser.error("activity export requires existing transfer journal only")
+        import bittensor as bt
+
+        with bt.Subtensor(network="finney") as subtensor:
+            chain = PublicCollectorChain(subtensor.substrate, role="transfer")
+
+            def epoch_at(block):
+                at = subtensor.substrate.get_block_hash(block)
+                chain.guard_runtime(policy, at)
+                return chain.query("SubtensorModule", "SubnetEpochIndex", [118], at)
+
+            print(
+                json.dumps(
+                    {
+                        "selections": export_finalized_distributions(
+                            args.journal, policy, epoch_at
+                        ),
+                        "authority": "none",
+                        "submit_with": "record_treasury_receipt",
+                    }
+                )
+            )
+        return
     if args.initialize_journal:
         if not args.journal or args.watch_only:
             parser.error("initialization requires journal and no watcher")

@@ -143,6 +143,9 @@ from ditto.api_server.endpoints.admin_transcript_mirror_settings import (
 from ditto.api_server.endpoints.admin_treasury_quote import (
     router as admin_treasury_quote_router,
 )
+from ditto.api_server.endpoints.admin_treasury_receipts import (
+    router as admin_treasury_receipts_router,
+)
 from ditto.api_server.endpoints.admin_treasury_settings import (
     router as admin_treasury_settings_router,
 )
@@ -234,6 +237,7 @@ __all__ = [
     "admin_burn_settings_router",
     "admin_emission_eligibility_router",
     "admin_treasury_settings_router",
+    "admin_treasury_receipts_router",
     "admin_treasury_quote_router",
     "admin_inference_admission_router",
     "admin_inference_concurrency_settings_router",
