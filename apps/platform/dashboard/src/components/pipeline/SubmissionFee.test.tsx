@@ -111,6 +111,26 @@ describe("SubmissionFee edge payloads", () => {
     );
     expect(revisions).toEqual(["3"]);
     expect(document.querySelector(".submission-fee-count")?.textContent).toBe("1+");
+    expect(document.querySelector(".submission-fee-incomplete")?.textContent).toBe(
+      "Some fee changes are not shown.",
+    );
+  });
+
+  it("says in words when Platform truncated the history", async () => {
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    serve({ ...fixture, history_truncated: true });
+    render(() => <SubmissionFee />);
+    await screen.findByText("0.1 TAO");
+    expect(document.querySelectorAll(".submission-fee-history li")).toHaveLength(2);
+    expect(screen.getByText("Some fee changes are not shown.")).toBeTruthy();
+  });
+
+  it("adds no truncation note to a complete history", async () => {
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    serve({ ...fixture, history_truncated: false });
+    render(() => <SubmissionFee />);
+    await screen.findByText("0.1 TAO");
+    expect(document.querySelector(".submission-fee-incomplete")).toBeNull();
   });
 
   it("omits the effective date when the API has none, and handles empty history", async () => {

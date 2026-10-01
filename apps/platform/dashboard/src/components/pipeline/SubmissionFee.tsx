@@ -74,6 +74,9 @@ export function SubmissionFee(): JSX.Element {
                     {incomplete() ? "+" : ""}
                   </span>
                 </summary>
+                <Show when={incomplete()}>
+                  <p class="submission-fee-incomplete">Some fee changes are not shown.</p>
+                </Show>
                 <ol aria-label="Submission fee changes, newest first">
                   <For each={history()}>
                     {(change, index) => (

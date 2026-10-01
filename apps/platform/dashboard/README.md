@@ -34,8 +34,8 @@ API and links out to wandb for the per-epoch deep dive. This is Surface 3 in
   of KOTH rank. A download requests a five-minute, no-store tarball link.
 - **Submission fee** — the Submissions page leads with the current
   operator-set fee (fixed TAO, exact rao rendered without floating point), the
-  revision and date it took effect, and a collapsed history of every fee
-  change from `/public/submission-fee`. Operator identity and reasons are not
+  revision and date it took effect, and a collapsed history of recent fee
+  changes from `/public/submission-fee` (with a note when some are not shown). Operator identity and reasons are not
   public. An unavailable or unreviewed-denomination response renders as
   unavailable rather than a guessed amount.
 - **Submission pipeline** — screening and validator-ticket history, including a
