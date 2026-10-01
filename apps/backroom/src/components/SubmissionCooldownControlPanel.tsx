@@ -2,8 +2,6 @@ import { useState } from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, History, RefreshCw, Timer } from 'lucide-react'
 import {
-  SUBMISSION_COOLDOWN_MAX_SECONDS,
-  SUBMISSION_COOLDOWN_MIN_SECONDS,
   formatRaoAsTao,
   parseTaoToRao,
   type SubmissionSettingsControl,
@@ -65,6 +63,10 @@ export function SubmissionCooldownControlPanel({
   const [success, setSuccess] = useState('')
 
   const bounds = state.bounds
+  // Server-provided bounds are authoritative; every hint and input limit is
+  // derived from them so a Platform change cannot leave stale UI copy.
+  const minCooldownMinutes = Math.ceil(bounds.min_cooldown_seconds / 60)
+  const maxCooldownMinutes = Math.floor(bounds.max_cooldown_seconds / 60)
   const parsedMinutes = Number(minutes)
   const selectedSeconds =
     Number.isInteger(parsedMinutes) &&
@@ -285,12 +287,12 @@ export function SubmissionCooldownControlPanel({
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <label className="text-xs font-medium text-[var(--muted-strong)]">
-              Cooldown in minutes (1–1440)
+              Cooldown in minutes ({minCooldownMinutes}–{maxCooldownMinutes})
               <input
                 type="number"
                 inputMode="numeric"
-                min={SUBMISSION_COOLDOWN_MIN_SECONDS / 60}
-                max={SUBMISSION_COOLDOWN_MAX_SECONDS / 60}
+                min={minCooldownMinutes}
+                max={maxCooldownMinutes}
                 step={1}
                 value={minutes}
                 disabled={readOnly || loading}
@@ -303,7 +305,7 @@ export function SubmissionCooldownControlPanel({
               />
               {invalidMinutes ? (
                 <span className="mt-1 block text-[11px] text-[var(--red)]">
-                  Enter a whole number from 1 through 1440.
+                  Enter a whole number from {minCooldownMinutes} through {maxCooldownMinutes}.
                 </span>
               ) : null}
             </label>

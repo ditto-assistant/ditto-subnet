@@ -2329,7 +2329,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Preview miner submission settings',
       description:
-        'Dry-run one revision of the platform-owned miner submission fee and cooldown before set_submission_cooldown. Supply expectedRevision (from get_submission_cooldown), cooldownSeconds, and feeAmountRao (integer rao; 1 TAO = 1,000,000,000 rao; safe bounds 0.001 to 10 TAO). Returns the current revision, the proposed values with an exact nine-decimal TAO rendering, whether expectedRevision is stale (an apply would return 409), fee_change_ratio, applicable, the exact required_confirmation string, and the unexpired reserved quotes still in flight: each keeps the fee it was issued at until it is consumed or expires (quote_lifetime_seconds), after which only the new fee can be paid. The denomination is fixed_tao: the fee is an exact TAO amount, never a USD target. Requires backroom:read and changes nothing.',
+        'Dry-run one revision of the platform-owned miner submission fee and cooldown before set_submission_cooldown. Supply expectedRevision (from get_submission_cooldown), cooldownSeconds, and feeAmountRao (integer rao; 1 TAO = 1,000,000,000 rao; within the safe bounds get_submission_cooldown reports). Returns the current revision, the proposed values with an exact nine-decimal TAO rendering, whether expectedRevision is stale (an apply would return 409), fee_change_ratio, applicable, the exact required_confirmation string, and the unexpired reserved quotes still in flight: each keeps the fee it was issued at until it is consumed or expires (quote_lifetime_seconds), after which only the new fee can be paid. The denomination is fixed_tao: the fee is an exact TAO amount, never a USD target. Requires backroom:read and changes nothing.',
       inputSchema: previewSubmissionSettingsInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -3531,7 +3531,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set miner submission settings',
       description:
-        'Apply one append-only revision of the platform-owned miner submission cooldown and fixed-TAO fee, effective immediately without a deploy. Run preview_submission_settings first. Supply expectedRevision, cooldownSeconds, feeAmountRao (integer rao within the 0.001 to 10 TAO safe bounds), an operator reason, and the exact required_confirmation from the preview ("SET SUBMISSION COOLDOWN <seconds> SECONDS FEE <rao> RAO"). A stale expectedRevision or a concurrent write returns 409 and changes nothing. Already-reserved quotes keep their issued fee until they expire. Rollback is a new revision re-applying the older value. Requires backroom:write.',
+        'Apply one append-only revision of the platform-owned miner submission cooldown and fixed-TAO fee, effective immediately without a deploy. Run preview_submission_settings first. Supply expectedRevision, cooldownSeconds, feeAmountRao (integer rao within the safe bounds get_submission_cooldown reports), an operator reason, and the exact required_confirmation from the preview ("SET SUBMISSION COOLDOWN <seconds> SECONDS FEE <rao> RAO"). A stale expectedRevision or a concurrent write returns 409 and changes nothing. Already-reserved quotes keep their issued fee until they expire. Rollback is a new revision re-applying the older value. Requires backroom:write.',
       inputSchema: updateSubmissionSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },

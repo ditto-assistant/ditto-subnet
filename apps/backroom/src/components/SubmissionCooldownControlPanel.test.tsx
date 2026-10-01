@@ -169,6 +169,40 @@ describe('SubmissionCooldownControlPanel', () => {
     }
   })
 
+  it('derives every hint and input limit from the server bounds', () => {
+    const narrow = submissionSettingsControlSchema.parse({
+      ...initial,
+      bounds: {
+        min_fee_amount_rao: 20_000_000,
+        max_fee_amount_rao: 500_000_000,
+        min_cooldown_seconds: 90,
+        max_cooldown_seconds: 7_230,
+      },
+    })
+    render(<SubmissionCooldownControlPanel initialState={narrow} readOnly={false} />)
+
+    const minutes = screen.getByLabelText(/Cooldown in minutes \(2–120\)/) as HTMLInputElement
+    expect(minutes.min).toBe('2')
+    expect(minutes.max).toBe('120')
+    fireEvent.change(minutes, { target: { value: '121' } })
+    expect(screen.getByText('Enter a whole number from 2 through 120.')).toBeTruthy()
+    expect(screen.queryByText(/1 through 1440/)).toBeNull()
+    fireEvent.change(minutes, { target: { value: '1' } })
+    expect(minutes.getAttribute('aria-invalid')).toBe('true')
+    fireEvent.change(minutes, { target: { value: '120' } })
+    expect(minutes.getAttribute('aria-invalid')).toBe('false')
+
+    const fee = screen.getByLabelText('Submission fee in TAO')
+    fireEvent.change(fee, { target: { value: '0.01' } })
+    expect(
+      screen.getByText('Enter 0.02 to 0.5 TAO with at most nine decimals.'),
+    ).toBeTruthy()
+    fireEvent.change(fee, { target: { value: '0.6' } })
+    expect(fee.getAttribute('aria-invalid')).toBe('true')
+    fireEvent.change(fee, { target: { value: '0.5' } })
+    expect(fee.getAttribute('aria-invalid')).toBe('false')
+  })
+
   it('does not enable apply for a stale preview', async () => {
     previewSubmissionSettingsChange.mockImplementation(async (input) => ({
       ...previewFor(input),
