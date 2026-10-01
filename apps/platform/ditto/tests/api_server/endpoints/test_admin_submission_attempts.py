@@ -386,9 +386,35 @@ async def test_no_prior_submission_and_timestamp_ties(
         tie = paid_submission(session, b"unused", coldkey="owner", created_at=NOW)
         await session.flush()
         tie_id = tie.agent_id
+    # The default reference is strictly earlier, so a tie is skipped rather
+    # than selected and then refused.
     response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
-    assert response.json()["classification"] == "inconclusive"
-    assert response.json()["reference_agent_id"] == str(tie_id)
+    assert response.status_code == 200, response.text
+    assert response.json()["classification"] == "small_source_delta"
+    assert response.json()["reference_agent_id"] == str(observations["prior"])
+    # An explicitly supplied tie is still refused by the endpoint guard.
+    explicit = await client.get(
+        f"{BASE}/{observations['current']}?reference_agent_id={tie_id}",
+        headers=HEADERS,
+    )
+    assert explicit.json()["classification"] == "inconclusive"
+    assert "earlier submission" in explicit.json()["reason"]
+    # Equally old earlier predecessors resolve by agent id, not by scan order.
+    data = observations["objects"][f"{observations['prior']}/agent.tar.gz"]
+    async with session_maker() as session, session.begin():
+        earlier = [
+            paid_submission(
+                session, data, coldkey="owner", created_at=NOW - timedelta(minutes=30)
+            )
+            for _ in range(3)
+        ]
+        await session.flush()
+        latest_id = max(agent.agent_id for agent in earlier)
+    for agent in earlier:
+        observations["objects"][f"{agent.agent_id}/agent.tar.gz"] = data
+    response = await client.get(f"{BASE}/{observations['current']}", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    assert response.json()["reference_agent_id"] == str(latest_id)
 
 
 @pytest.mark.parametrize(

@@ -89,12 +89,14 @@ async def owner_scope(
 async def latest_paid_predecessor(
     session: AsyncSession, *, owners: set[str], as_of: datetime, candidate_id: UUID
 ) -> UUID | None:
+    # Strictly earlier, matching the endpoint's guard: a same-timestamp row is
+    # not a predecessor, so it is skipped rather than selected and refused.
     return await session.scalar(
         select(Agent.agent_id)
         .join(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
         .where(
             EvaluationPayment.miner_coldkey.in_(owners),
-            Agent.created_at <= as_of,
+            Agent.created_at < as_of,
             Agent.agent_id != candidate_id,
         )
         .order_by(Agent.created_at.desc(), Agent.agent_id.desc())
