@@ -214,12 +214,25 @@ describe("submission fee helpers", () => {
     expect(feeDirection(40_000_000, 40_000_000)).toBe("");
     expect(feeDirection(100_000_000, 37_271_710)).toBe("down 63%");
     expect(feeDirection(1_000_000_000, 1_000_000_001)).toBe("up <1%");
+    // The <1% boundary is exact, before rounding.
+    expect(feeDirection(100_000_000, 100_500_000)).toBe("up <1%"); // +0.5%
+    expect(feeDirection(100_000_000, 100_990_000)).toBe("up <1%"); // +0.99%
+    expect(feeDirection(100_000_000, 101_000_000)).toBe("up 1%"); // +1%
+    expect(feeDirection(100_000_000, 99_500_000)).toBe("down <1%"); // -0.5%
+    expect(feeDirection(100_000_000, 99_000_000)).toBe("down 1%"); // -1%
+    expect(feeDirection(100_000_000, 101_500_000)).toBe("up 2%"); // +1.5% rounds half up
+    expect(feeDirection(100_000_000, 1_000_000)).toBe("down 99%");
+    expect(feeDirection(40_000_000, 200_000_000)).toBe("up 400%");
+    expect(feeDirection(1_000_000_000_000, 1)).toBe("down >99%");
     expect(isFixedTao("fixed_tao")).toBe(true);
     expect(isFixedTao("usd_indexed")).toBe(false);
     expect(quoteLifetimeText(86_400)).toBe("24 hours");
     expect(quoteLifetimeText(3_600)).toBe("1 hour");
     expect(quoteLifetimeText(5_400)).toBe("90 minutes");
     expect(quoteLifetimeText(0)).toBe("the quote lifetime");
+    expect(quoteLifetimeText(59)).toBe("59 seconds");
+    expect(quoteLifetimeText(5_430)).toBe("5430 seconds");
+    expect(quoteLifetimeText(60)).toBe("1 minute");
     expect(changeLabel(null, 40_000_000, true)).toBe("initial");
     expect(changeLabel(null, 40_000_000, false)).toBe("previous fee not shown");
     expect(changeLabel(40_000_000, 40_000_000, false)).toBe("same amount");

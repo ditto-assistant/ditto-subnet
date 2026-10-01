@@ -27,12 +27,23 @@ export function feeChangeText(previousRao: number | null, rao: number): string {
     : `${raoToTao(previousRao)} → ${raoToTao(rao)} TAO`;
 }
 
-/** "up 25%" / "down 7%" relative to the previous fee; "" for the first. */
+/** "up 25%" / "down 7%" relative to the previous fee; "" when unchanged.
+ * The <1% boundary is decided exactly in integers before any rounding, so a
+ * 0.99% change never reads as "1%"; a change of at least 1% rounds to the
+ * nearest whole percent (never below 1%). */
 export function feeDirection(previousRao: number | null, rao: number): string {
   if (previousRao === null || previousRao <= 0 || previousRao === rao) return "";
-  const change = Math.round(((rao - previousRao) / previousRao) * 100);
-  if (change === 0) return rao > previousRao ? "up <1%" : "down <1%";
-  return change > 0 ? `up ${change}%` : `down ${Math.abs(change)}%`;
+  if (!Number.isSafeInteger(previousRao) || !Number.isSafeInteger(rao)) return "";
+  const previous = BigInt(previousRao);
+  const delta = BigInt(rao) - previous;
+  const magnitude = delta < 0n ? -delta : delta;
+  const word = delta > 0n ? "up" : "down";
+  if (magnitude * 100n < previous) return `${word} <1%`;
+  // Round half up on exact integers: (magnitude * 200 + previous) / (2 * previous).
+  const percent = (magnitude * 200n + previous) / (2n * previous);
+  // A fee is never zero, so a decrease never reads as a full 100%.
+  if (delta < 0n && percent >= 100n) return "down >99%";
+  return `${word} ${percent}%`;
 }
 
 export function feeDate(value: string | null | undefined): string {
@@ -42,15 +53,14 @@ export function feeDate(value: string | null | undefined): string {
   return date.toLocaleDateString(undefined, { dateStyle: "medium" });
 }
 
-/** "24 hours", "1 hour", "90 minutes"; whole units only, never a rounded "0 hours". */
+/** "24 hours", "1 hour", "90 minutes", "59 seconds": the largest whole unit
+ * that states the lifetime exactly, never rounded up past what is allowed. */
 export function quoteLifetimeText(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds <= 0) return "the quote lifetime";
-  if (seconds % 3600 === 0) {
-    const hours = seconds / 3600;
-    return `${hours} hour${hours === 1 ? "" : "s"}`;
-  }
-  const minutes = Math.ceil(seconds / 60);
-  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) return "the quote lifetime";
+  const unit = (value: number, name: string): string => `${value} ${name}${value === 1 ? "" : "s"}`;
+  if (seconds % 3600 === 0) return unit(seconds / 3600, "hour");
+  if (seconds % 60 === 0) return unit(seconds / 60, "minute");
+  return unit(seconds, "second");
 }
 
 /** Meta line for the current fee's revision. ``fee_revision`` 0 means the fee
