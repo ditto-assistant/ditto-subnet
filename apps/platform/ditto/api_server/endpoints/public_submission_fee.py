@@ -74,7 +74,15 @@ def _fee_change(
     A parent in an unpublishable denomination is not exposed as the
     ``previous`` amount: its number is not a TAO fee.
     """
-    shown_previous = previous if _publishable(previous) else None
+    # The built-in default behind revision 1 (revision 0) is compared with,
+    # so a revision 1 that kept it is not a change, but it is never published
+    # as a previous fee: it is this build's default, not a record of what was
+    # charged before revision 1.
+    shown_previous = (
+        previous
+        if previous is not None and previous.revision != 0 and _publishable(previous)
+        else None
+    )
     return PublicSubmissionFeeRevision(
         revision=row.revision,
         fee_denomination=require_supported_fee_denomination(row),
@@ -98,7 +106,11 @@ async def public_submission_fee(
     session: Annotated[AsyncSession, Depends(get_session)],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> PublicSubmissionFee:
-    rows = await submission_settings_history(session, limit=_SCAN_LIMIT)
+    # One extra row tells a scan that reached the oldest revision from one that
+    # stopped short: exactly _SCAN_LIMIT revisions is a complete scan.
+    scanned = await submission_settings_history(session, limit=_SCAN_LIMIT + 1)
+    scan_capped = len(scanned) > _SCAN_LIMIT
+    rows = scanned[:_SCAN_LIMIT]
     changes: list[PublicSubmissionFeeRevision] = []
     # A historical revision in a denomination this build cannot price is never
     # published (it must not be shown as a TAO fee) and must not take down the
@@ -129,7 +141,6 @@ async def public_submission_fee(
     latest, _ = rows[0]
     # Never publish a price this build would refuse to quote.
     require_supported_fee_denomination(latest)
-    scan_capped = len(rows) >= _SCAN_LIMIT
     fee_revision: int | None
     fee_effective_at: datetime | None
     # An omitted (unpublishable) revision newer than the newest published

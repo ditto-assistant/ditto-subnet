@@ -369,9 +369,10 @@ async def test_history_audits_old_and_new_values_and_rollback_is_a_new_revision(
         _GENESIS_FEE,
         100_000_000,
     )
-    # The seeded revision 1 replaced the built-in default policy.
-    assert genesis["previous_fee_amount_rao"] == DEFAULT_SUBMISSION_FEE_RAO
-    assert genesis["previous_cooldown_seconds"] == 3600
+    # Revision 1's parent is only the built-in default: never shown as a
+    # previous (charged) value.
+    assert genesis["previous_fee_amount_rao"] is None
+    assert genesis["previous_cooldown_seconds"] is None
     for row in history:
         assert row["fee_denomination"] == "fixed_tao"
         assert row["fee_amount_tao"] == format_rao_as_tao(row["fee_amount_rao"])
@@ -783,6 +784,66 @@ async def test_public_history_reports_a_capped_scan_as_truncated(
 
     assert [row["revision"] for row in body["history"]] == [first["revision"]]
     assert body["history_truncated"] is True
+
+
+async def test_public_scan_of_exactly_its_limit_is_complete(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    first = await _apply(client, expected=1, fee_amount_rao=50_000_000)
+    await _apply(
+        client,
+        expected=first["revision"],
+        fee_amount_rao=50_000_000,
+        cooldown_seconds=1800,
+    )
+    # Three revisions in all: a scan limit of 3 reaches the oldest one.
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.public_submission_fee._SCAN_LIMIT", 3
+    )
+
+    body = (await client.get(_PUBLIC)).json()
+
+    assert [row["revision"] for row in body["history"]] == [first["revision"]]
+    assert body["fee_revision"] == first["revision"]
+    assert body["history_truncated"] is False
+
+
+async def test_revision_one_never_publishes_the_built_in_as_a_previous_fee(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A revision 1 that differs from this build's built-in default is a
+    published fee change (the comparison still uses the built-in), but the
+    built-in is never shown as the fee it replaced, on either route."""
+    from ditto.db.queries import submission_settings as queries
+
+    built_in = queries.built_in_submission_settings()
+    built_in.fee_amount_rao = 30_000_000
+    monkeypatch.setattr(queries, "built_in_submission_settings", lambda: built_in)
+    _install(app, session_maker)
+    raised = await _apply(client, expected=1, fee_amount_rao=60_000_000)
+
+    public = (await client.get(_PUBLIC)).json()
+    admin = (await client.get(_SETTINGS, headers=_HEADERS)).json()
+
+    assert [row["revision"] for row in public["history"]] == [raised["revision"], 1]
+    first = public["history"][1]
+    assert first["fee_amount_rao"] == _GENESIS_FEE
+    assert first["previous_fee_amount_rao"] is None
+    assert first["previous_fee_amount_tao"] is None
+    assert public["history"][0]["previous_fee_amount_rao"] == _GENESIS_FEE
+    assert "30000000" not in json.dumps(public)
+    genesis = admin["history"][-1]
+    assert genesis["revision"] == 1
+    assert genesis["previous_fee_amount_rao"] is None
+    assert genesis["previous_cooldown_seconds"] is None
+    assert "30000000" not in json.dumps(admin)
 
 
 async def test_public_fee_omits_an_unsupported_historical_revision(
@@ -1266,12 +1327,21 @@ async def test_dashboard_fee_fixture_matches_platform_shape(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The dashboard fixture must be a payload Platform can actually produce:
     the same keys, and the same fee/previous-fee sequence for the same
-    operator changes (0.2 TAO, then 0.1 TAO, then a cooldown-only revision)."""
+    operator changes (0.2 TAO, then 0.1 TAO, then a cooldown-only revision),
+    on a chain whose revision 1 differs from this build's built-in default,
+    as production's does. Revision 1 is then the first published fee, with no
+    previous fee."""
     from pathlib import Path
 
+    from ditto.db.queries import submission_settings as queries
+
+    built_in = queries.built_in_submission_settings()
+    built_in.fee_amount_rao = 30_000_000
+    monkeypatch.setattr(queries, "built_in_submission_settings", lambda: built_in)
     _install(app, session_maker)
     raised = await _apply(client, expected=1, fee_amount_rao=200_000_000)
     lowered = await _apply(
@@ -1323,10 +1393,12 @@ async def test_admin_history_reports_incomplete_at_its_page_limit(
     assert len(body["history"]) == 2
     assert body["history_incomplete"] is True
 
+    # Exactly the page limit is a complete history, not a truncated one.
     monkeypatch.setattr(
-        "ditto.api_server.endpoints.admin_submission_settings._HISTORY_LIMIT", 100
+        "ditto.api_server.endpoints.admin_submission_settings._HISTORY_LIMIT", 3
     )
     body = (await client.get(_SETTINGS, headers=_HEADERS)).json()
+    assert [row["revision"] for row in body["history"]][-1] == 1
     assert len(body["history"]) == 3
     assert body["history_incomplete"] is False
 

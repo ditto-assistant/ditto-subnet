@@ -91,8 +91,14 @@ def _revision(
     previous: SubmissionSettingsRevision | None = None,
 ) -> RevisionModel:
     # A parent in a denomination this build cannot price is never shown as the
-    # previous fee: its number is not a TAO amount.
-    previous = previous if _publishable(previous) else None
+    # previous fee (its number is not a TAO amount), and neither is the
+    # built-in default behind revision 1 (revision 0): it is this build's
+    # default, not a record of what was charged before revision 1.
+    previous = (
+        previous
+        if previous is not None and previous.revision != 0 and _publishable(previous)
+        else None
+    )
     return RevisionModel(
         revision=row.revision,
         parent_revision=row.parent_revision,
@@ -205,9 +211,11 @@ def _current_view(
 async def get_settings(
     _admin: AdminDep, session: SessionDep
 ) -> AdminSubmissionSettingsResponse:
-    rows = await submission_settings_history(session, limit=_HISTORY_LIMIT)
-    # Reaching the cap means older revisions exist beyond this page.
-    capped = len(rows) >= _HISTORY_LIMIT
+    # One extra row tells a full page from a truncated one: exactly
+    # _HISTORY_LIMIT revisions is a complete history.
+    rows = await submission_settings_history(session, limit=_HISTORY_LIMIT + 1)
+    capped = len(rows) > _HISTORY_LIMIT
+    rows = rows[:_HISTORY_LIMIT]
     current, unsupported_current = _current_view(rows)
     # A revision this build cannot price is omitted from history (and
     # flagged): its fee number is not a TAO amount. An unsupported effective

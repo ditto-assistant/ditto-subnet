@@ -57,10 +57,15 @@ class SubmissionSettingsRevision(BaseModel):
     fee_denomination: SubmissionFeeDenomination = SUBMISSION_FEE_DENOMINATION_FIXED_TAO
     fee_amount_tao: str | None = None
     """Exact nine-decimal rendering of ``fee_amount_rao``."""
-    previous_fee_amount_rao: int | None = None
-    """Fee of ``parent_revision``. ``None`` only for the built-in revision 0
-    or when the parent is in a denomination this build cannot price (its
-    number is not a TAO amount)."""
+    previous_fee_amount_rao: int | None = Field(
+        default=None,
+        description=(
+            "Fee of parent_revision. Null for revision 1 and the built-in "
+            "revision 0 (the built-in default is a reference point, never "
+            "published as a charged fee), and when the parent is in a "
+            "denomination this build cannot price (its number is not TAO)."
+        ),
+    )
     previous_cooldown_seconds: int | None = None
     """Cooldown of ``parent_revision``. ``None`` exactly when
     ``previous_fee_amount_rao`` is."""
@@ -226,8 +231,16 @@ class PublicSubmissionFeeRevision(BaseModel):
     fee_denomination: SubmissionFeeDenomination
     fee_amount_rao: int
     fee_amount_tao: str
-    previous_fee_amount_rao: int | None
-    previous_fee_amount_tao: str | None
+    previous_fee_amount_rao: int | None = Field(
+        description=(
+            "Fee this change replaced; null for the first published fee "
+            "(revision 1, whose parent is only the built-in default) and when "
+            "the replaced revision is in a denomination this build cannot price."
+        )
+    )
+    previous_fee_amount_tao: str | None = Field(
+        description="Exact TAO rendering of previous_fee_amount_rao; null with it."
+    )
     effective_at: datetime | None
 
 
