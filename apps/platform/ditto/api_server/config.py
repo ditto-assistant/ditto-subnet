@@ -338,6 +338,8 @@ class ApiServerConfig:
     treasury_approved_policy_digest: str | None = None
     treasury_approved_collector_policy_digest: str | None = None
     """Optional offline proposal proof and immutable public digest; no funding."""
+    treasury_weight_enforcement: bool = False
+    """Explicit deploy opt-in; signed complete fleet and epoch proof still required."""
 
     private_preparation: PrivatePreparationConfig = field(
         default_factory=PrivatePreparationConfig
@@ -863,6 +865,13 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     treasury_approval, treasury_approved_digest, collector_policy_digest = (
         parse_treasury_shadow_approval(treasury_policy)
     )
+    treasury_mode = os.environ.get("DITTO_TREASURY_WEIGHT_ENFORCEMENT", "false")
+    if treasury_mode not in {"true", "false"}:
+        raise ApiServerConfigError("invalid treasury weight enforcement mode")
+    if treasury_mode == "true" and treasury_approval is None:
+        raise ApiServerConfigError(
+            "treasury weight enforcement requires offline approval"
+        )
     return ApiServerConfig(
         conversation_shadow_enabled=os.environ.get(
             "DITTO_CONVERSATION_SHADOW_ENABLED", "false"
@@ -878,6 +887,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         treasury_shadow_approval=treasury_approval,
         treasury_approved_policy_digest=treasury_approved_digest,
         treasury_approved_collector_policy_digest=collector_policy_digest,
+        treasury_weight_enforcement=treasury_mode == "true",
         host=host,
         port=port,
         log_level=log_level,

@@ -17,7 +17,12 @@ from ditto.chain.errors import (
 )
 from ditto.chain.models import BlockInfo, ChainConfig, ExtrinsicInfo, NeuronInfo
 from ditto_screening_protocol.treasury import TreasuryEmissionPolicy, TreasuryLedgerPin
-from ditto_screening_protocol.treasury_identity import read_finalized_collector_pin
+from ditto_screening_protocol.treasury_enforcement import TreasuryWeightCapability
+from ditto_screening_protocol.treasury_identity import (
+    TreasuryDispatchObservation,
+    read_finalized_collector_pin,
+    read_treasury_dispatch_observation,
+)
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -489,6 +494,30 @@ class ChainClient:
             "PUT", f"/{quote(request_id, safe='')}", body=body
         )
 
+    async def get_treasury_weight_capability(self) -> TreasuryWeightCapability | None:
+        """Read actual identity-scoped Pylon guard support, never an image label."""
+        identity, token = self._config.identity_name, self._config.identity_token
+        if not identity or not token:
+            return None
+        url = (
+            f"{self._config.pylon_url.rstrip('/')}/api/_unstable/identity/"
+            f"{quote(identity, safe='')}/subnet/{self._config.netuid}"
+            "/ditto/treasury-capability"
+        )
+        async with httpx.AsyncClient(timeout=3) as client:
+            response = await client.get(
+                url, headers={"Authorization": f"Bearer {token}"}
+            )
+        if response.status_code in (404, 405, 501):
+            return None
+        if response.status_code != 200:
+            raise ChainConnectionError("treasury guard capability unavailable")
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("invalid treasury guard capability")
+        raw = payload.get("treasury")
+        return TreasuryWeightCapability.model_validate(raw) if raw is not None else None
+
     async def list_weight_receipts(
         self, *, after_task_id: int = 0, limit: int = 20
     ) -> dict[str, Any] | None:
@@ -693,6 +722,29 @@ class ChainClient:
         except Exception as error:
             raise ChainConnectionError(
                 "finalized treasury identity unavailable"
+            ) from error
+
+    async def get_treasury_dispatch_observation(
+        self, policy: TreasuryEmissionPolicy
+    ) -> TreasuryDispatchObservation:
+        """Read fresh finalized identity and epoch from the configured chain."""
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        try:
+            async with (
+                asyncio.timeout(8),
+                AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
+            ):
+                return await read_treasury_dispatch_observation(substrate, policy)
+        except ValueError:
+            raise
+        except TimeoutError as error:
+            raise ChainTimeoutError(
+                "treasury dispatch observation timed out"
+            ) from error
+        except Exception as error:
+            raise ChainConnectionError(
+                "treasury dispatch observation unavailable"
             ) from error
 
     def _substrate_url(self) -> str:

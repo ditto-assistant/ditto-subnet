@@ -22,7 +22,7 @@ from turbobt.subnet import SubnetWeights
 
 
 @asynccontextmanager
-async def legacy_receipt_context(_task_id):
+async def legacy_receipt_context(_task_id, _validator_hotkey=""):
     # These epoch tests mock task persistence; receipt DB semantics are covered
     # separately against real isolated SQLite by test_receipt_image.py.
     yield True

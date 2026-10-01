@@ -128,7 +128,10 @@ from ditto import __version__
 # twice the KOTH margin. A v28 validator ignores the additive marker and folds
 # the historical bands, so Platform must withhold it until every recently-live
 # weight setter reports v29+. Heartbeat signing bytes are unchanged.
-HEARTBEAT_PROTOCOL_VERSION = 29
+# v30 adds signed exact-policy treasury pin/queued-dispatch capability. Only
+# a crypto-approved validator whose actual transport implements both guards
+# advertises it. V1 shadow ledgers retain the historical weight fold.
+HEARTBEAT_PROTOCOL_VERSION = 30
 
 
 @dataclass(frozen=True)

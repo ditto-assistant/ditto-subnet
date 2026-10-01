@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import inspect
+import os
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -89,6 +90,22 @@ class ReceiptImageTests(unittest.IsolatedAsyncioTestCase):
         return await receipt.create_request(
             self.service, 118, str(uuid4()), data or body()
         )
+
+    async def test_corrupt_unsubmitted_body_never_falls_back_to_legacy_dispatch(self):
+        row = await self.create()
+        for malformed in (None, {}, {"schema_version": True}, {"schema_version": 9}):
+            with self.subTest(body=malformed):
+                async with self.factory() as session, session.begin():
+                    await session.execute(
+                        update(receipt.receipts)
+                        .where(receipt.receipts.c.task_id == row["task_id"])
+                        .values(body=malformed)
+                    )
+                with self.assertRaises(tasks.StopRetrying):
+                    async with receipt.record_task(row["task_id"], HOTKEY):
+                        self.fail("corrupt receipt entered dispatch")
+                self.assertEqual(receipt.treasury_task_body(), (None, ""))
+                self.assertIsNone(receipt._receipt_task.get())
 
     async def prepare(self, _row):
         await receipt.prepare_commit(
@@ -301,15 +318,8 @@ class ReceiptImageTests(unittest.IsolatedAsyncioTestCase):
         engine.dispose()
 
     async def test_installed_envelope_matches_shared_receipt_digest(self):
-        import importlib.util
-        import sys
+        from ditto_screening_protocol import weight_receipt as contract
 
-        spec = importlib.util.spec_from_file_location(
-            "weight_receipt_contract", "/tmp/weight_receipt_contract.py"
-        )
-        contract = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = contract
-        spec.loader.exec_module(contract)
         row = await self.create()
         async with receipt.record_task(row["task_id"]):
             await self.prepare(row)
@@ -320,6 +330,72 @@ class ReceiptImageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             receipt.canonical_digest(raw), contract.weight_receipt_digest(claim)
         )
+
+    async def test_v2_empty_competitive_pool_survives_persist_finalize_ack(self):
+        from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
+        from ditto_screening_protocol.weight_receipt import (
+            FinalizedWeightReceipt,
+            weight_receipt_digest,
+        )
+
+        pin = EnforcingTreasuryPin.model_validate_json(
+            Path("/tmp/treasury-v2.json").read_text()
+        )
+        pin = EnforcingTreasuryPin.model_validate(
+            pin.model_copy(
+                update={
+                    "fleet": (
+                        pin.fleet[0].model_copy(update={"validator_hotkey": HOTKEY}),
+                    )
+                }
+            )
+        )
+        proof = Path(self.tmp.name) / "synthetic-public-approval.json"
+        proof.write_text(pin.approval.model_dump_json())
+        data = body()
+        data.update(
+            schema_version=2,
+            treasury_pin=pin.model_dump(mode="json"),
+            weights={pin.policy.collector_hotkey: 0.1, "burn": 0.9},
+        )
+        data["provenance"].update(
+            epoch_index=pin.epoch_index,
+            champion_agent_id=None,
+            champion_artifact_sha256=None,
+            vector_digest=receipt.canonical_digest(data["weights"]),
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "DITTO_TREASURY_WEIGHT_ENFORCEMENT": "true",
+                "DITTO_TREASURY_SHADOW_APPROVAL_FILE": str(proof),
+                "DITTO_TREASURY_APPROVED_POLICY_DIGEST": pin.policy_digest,
+                "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST": (
+                    pin.policy.collector_policy_digest
+                ),
+            },
+        ):
+            row = await receipt.create_request(self.service, 118, str(uuid4()), data)
+            async with receipt.record_task(row["task_id"], HOTKEY):
+                self.assertEqual(receipt.treasury_task_body(), (data, HOTKEY))
+                await self.prepare(row)
+                await self.finish()
+            final = await receipt.get_request(self.service, 118, row["request_id"])
+            raw = receipt.immutable_receipt(final)
+            self.assertEqual(raw["treasury_pin"], data["treasury_pin"])
+            claim = FinalizedWeightReceipt.model_validate(raw)
+            self.assertIsNone(claim.provenance.champion_agent_id)
+            ack = await receipt.acknowledge_request(
+                self.service,
+                118,
+                row["request_id"],
+                {
+                    "request_digest": claim.request_digest,
+                    "attempt_id": str(claim.attempt.attempt_id),
+                    "receipt_digest": weight_receipt_digest(claim),
+                },
+            )
+            self.assertTrue(ack["acknowledged"])
 
     async def test_identity_and_ack_are_scoped(self):
         row = await self.create()

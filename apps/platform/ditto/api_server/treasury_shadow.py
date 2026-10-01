@@ -15,6 +15,7 @@ from ditto_screening_protocol.treasury_approval import (
     verify_policy_approval,
     verify_public_signature,
 )
+from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
 
 
 async def observe_shadow_treasury(
@@ -88,13 +89,12 @@ def shadow_readiness(app_state: Any, ledger_pin: Any | None) -> TreasuryLedgerRe
         if isinstance(raw_status, str)
         else "unavailable"
     )
-    reasons: list[TreasuryBlockReason] = [
-        "shadow_only",
-        "offline_policy_unverified",
-        "weight_adapter_not_active",
-        "fleet_gate_unimplemented",
-        "current_epoch_not_checked",
-    ]
+    enforcing = getattr(app_state.config, "treasury_weight_enforcement", False)
+    reasons: list[TreasuryBlockReason] = ["current_epoch_not_checked"]
+    if not enforcing:
+        reasons.extend(
+            ["shadow_only", "offline_policy_unverified", "weight_adapter_not_active"]
+        )
     if policy is None:
         status = "disabled"
         reasons.append("producer_disabled")
@@ -123,6 +123,10 @@ def shadow_readiness(app_state: Any, ledger_pin: Any | None) -> TreasuryLedgerRe
         observer_status=status,
         latest_stored_epoch_index=ledger_pin.epoch_index if ledger_pin else None,
         latest_stored_ledger_digest=ledger_pin.ledger_digest if ledger_pin else None,
-        stored_shadow_pin=stored,
+        stored_shadow_pin=stored if isinstance(stored, TreasuryLedgerPin) else None,
+        stored_enforcing_pin=stored
+        if isinstance(stored, EnforcingTreasuryPin)
+        else None,
+        enforcement_configured=enforcing,
         blocking_reasons=reasons,
     )

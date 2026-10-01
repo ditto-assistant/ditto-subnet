@@ -367,6 +367,36 @@ class ChainClient:
                 "finalized treasury identity unavailable"
             ) from error
 
+    async def get_treasury_weight_setters(
+        self, policy: TreasuryEmissionPolicy, *, block_hash: str
+    ) -> tuple[str, ...]:
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        from ditto_screening_protocol.treasury_identity import (
+            read_finalized_weight_setters,
+        )
+
+        async with (
+            asyncio.timeout(8),
+            AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
+        ):
+            return await read_finalized_weight_setters(
+                substrate, policy, block_hash=block_hash
+            )
+
+    async def get_treasury_dispatch_observation(self, policy: TreasuryEmissionPolicy):
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        from ditto_screening_protocol.treasury_identity import (
+            read_treasury_dispatch_observation,
+        )
+
+        async with (
+            asyncio.timeout(8),
+            AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
+        ):
+            return await read_treasury_dispatch_observation(substrate, policy)
+
     async def get_finalized_block(self) -> BlockInfo:
         """Return the current finalized chain block from Substrate."""
 

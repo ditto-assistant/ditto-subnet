@@ -14844,3 +14844,63 @@ async def test_shadow_coding_certification_rejects_unbound_legacy_certified_repl
     )
     assert replay.status_code == 409
     assert "durable settlement binding" in replay.text
+
+
+async def test_v30_treasury_capability_is_signed_and_cannot_be_retrofitted(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.tests.api_server.test_treasury_weights import pin
+
+    _install_db(app, session_maker)
+    _install_chain(app)
+    p = pin()
+    treasury = p.fleet[0].model_dump(exclude={"validator_hotkey", "protocol_version"})
+    capabilities = {**_quorum_capabilities(), "treasury_weights": treasury}
+    common: dict[str, Any] = {
+        "protocol_version": 30,
+        "capabilities": capabilities,
+        "stack": _V7_STACK,
+        "stack_health": _V9_STACK_HEALTH,
+        "benchmark_capacity": _IDLE_CAPACITY,
+        "confirmation_progress": [],
+        "updater_status": {
+            "enabled": False,
+            "state": "not_managed",
+            "self_refresh_installed": False,
+            "observed_at": int(datetime.now(UTC).timestamp()),
+        },
+    }
+    accepted = await client.post(
+        "/api/v1/validator/heartbeat",
+        headers=_AUTH_HEADER,
+        json=_heartbeat_payload(**common),
+    )
+    assert accepted.status_code == 200, accepted.text
+    async with session_maker() as session:
+        row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+        assert row is not None
+        assert row.capabilities is not None
+        assert row.capabilities["treasury_weights"] == treasury
+
+    for field in ("approved_policy_digest", "collector_policy_digest"):
+        tampered = json.loads(json.dumps(_heartbeat_payload(**common)))
+        cast(dict[str, Any], tampered["capabilities"])["treasury_weights"][field] = (
+            "f" * 64
+        )
+        refused = await client.post(
+            "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=tampered
+        )
+        assert refused.status_code == 401, refused.text
+    legacy = _heartbeat_payload(**{**common, "protocol_version": 29})
+    refused = await client.post(
+        "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=legacy
+    )
+    assert refused.status_code == 422, refused.text
+    async with session_maker() as session:
+        row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+        assert row is not None
+        assert row.protocol_version == 30
+        assert row.capabilities is not None
+        assert row.capabilities["treasury_weights"] == treasury

@@ -11,8 +11,12 @@ const observation = {
   latest_stored_epoch_index: null,
   latest_stored_ledger_digest: null,
   stored_shadow_pin: null,
+  stored_enforcing_pin: null,
+  enforcement_configured: false,
+  fleet_gate: 'not_checked',
   blocking_reasons: ['producer_disabled', 'no_epoch_pin', 'shadow_only'],
   offline_policy_verified: false,
+  offline_epoch_verified: false,
   weight_effect: 'none',
   can_enforce_weights: false,
 }
@@ -24,6 +28,37 @@ afterEach(() => {
 })
 
 describe('treasury ledger observation boundary', () => {
+  it('preserves verified enforcing diagnostics without turning them into spending authority', async () => {
+    const pin = JSON.parse(readFileSync(new URL(
+      '../../../../packages/ditto-screening-protocol/tests/fixtures/treasury_enforcing_pin_v2.json',
+      import.meta.url,
+    ), 'utf8'))
+    const ready = {
+      ...observation,
+      configured_proposal: pin.policy,
+      proposal_approval_status: 'verified',
+      proposal_approved_policy_digest: pin.policy_digest,
+      stored_enforcing_pin: pin,
+      enforcement_configured: true,
+      fleet_gate: 'ready',
+      offline_epoch_verified: true,
+      can_enforce_weights: true,
+      blocking_reasons: [],
+    }
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-test-token'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(ready)))
+    expect(await fetchTreasuryLedgerReadiness()).toEqual(ready)
+    for (const change of [
+      { enforcement_configured: false }, { stored_enforcing_pin: null },
+      { fleet_gate: 'not_ready' }, { offline_epoch_verified: false },
+      { blocking_reasons: ['enforcing_pin_unverified'] },
+    ]) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ...ready, ...change })))
+      await expect(fetchTreasuryLedgerReadiness()).rejects.toThrow()
+    }
+    expect(ready.offline_policy_verified).toBe(false)
+    expect(ready.weight_effect).toBe('none')
+  })
   it('defaults missing new proposal-proof fields without creating authority', async () => {
     const legacy: Partial<typeof observation> = { ...observation }
     delete legacy.proposal_approval_status

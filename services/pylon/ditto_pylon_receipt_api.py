@@ -15,6 +15,21 @@ from ditto_pylon_receipts import (
 from litestar import get, post, put
 
 
+@get("/ditto/treasury-capability")
+async def treasury_capability(
+    self: Any, unstable_weight_service: Any, netuid: int
+) -> dict[str, Any]:
+    from ditto_pylon_treasury import approved_policy, capability
+
+    try:
+        approval, _, _ = approved_policy()
+        if approval.policy.netuid != netuid:
+            raise ValueError("wrong treasury subnet")
+    except ValueError:
+        return {"treasury": None}
+    return {"treasury": capability()}
+
+
 @put(
     "/ditto/weight-receipts/{request_id:str}",
     status_code=200,

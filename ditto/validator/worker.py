@@ -127,6 +127,11 @@ from ditto.validator.transform_audit import (
     brittleness_signature,
     pool_audit_pairs,
 )
+from ditto.validator.treasury_weights import (
+    TreasuryWeightAuthority,
+    configured_treasury_approval,
+    fold_treasury_weights,
+)
 from ditto.validator.update_control import write_update_state
 from ditto.validator.updater_status import collect_updater_status
 from ditto.validator.weights import (
@@ -149,6 +154,13 @@ from ditto_screening_protocol.bench_v9 import supports_confirmation
 from ditto_screening_protocol.confirmation import CAPABILITY_ORDER
 from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_FAILURE_CLASS_VALUES,
+)
+from ditto_screening_protocol.treasury import TreasuryLedgerPin
+from ditto_screening_protocol.treasury_enforcement import (
+    EnforcingTreasuryPin,
+    TreasuryFleetMember,
+    TreasuryWeightCapability,
+    require_treasury_weight_authority,
 )
 
 if TYPE_CHECKING:
@@ -1531,7 +1543,10 @@ class ValidatorWorker:
                 state = "running_benchmark"
             stack = bind_observed_scorer_identity(stack, scorer_benchmarks)
             capabilities = capabilities.model_copy(
-                update={"scorer_benchmarks": scorer_benchmarks}
+                update={
+                    "scorer_benchmarks": scorer_benchmarks,
+                    "treasury_weights": await self._treasury_weight_capability(),
+                }
             )
             # v9: per-component runtime health. A collector failure (or no
             # collector, as in older wiring and unit-test doubles) degrades to
@@ -2003,6 +2018,31 @@ class ValidatorWorker:
         self._last_progress_bucket = None
         self._slot_state().bench_version = None
 
+    async def _treasury_weight_capability(self) -> TreasuryWeightCapability | None:
+        """Advertise only local crypto approval plus the actual queued backend guard."""
+        try:
+            approval = configured_treasury_approval(self._config)
+            read = getattr(self._weight_setter, "get_treasury_weight_capability", None)
+            if approval is None or not callable(read):
+                return None
+            async with asyncio.timeout(3):
+                raw = await read()
+            if raw is None:
+                return None
+            capability = TreasuryWeightCapability.model_validate(raw)
+            if (
+                capability.approved_policy_digest != approval.policy.digest
+                or capability.collector_policy_digest
+                != approval.policy.collector_policy_digest
+            ):
+                return None
+            return capability
+        except Exception as error:  # noqa: BLE001 - absence never grants authority
+            logger.warning(
+                "treasury guard capability unavailable: %s", type(error).__name__
+            )
+            return None
+
     async def _update_weights(self) -> _WeightOutcome:
         """Recompute weights from the durable ledger and submit them.
 
@@ -2017,6 +2057,58 @@ class ValidatorWorker:
         except PlatformError as e:
             logger.warning("ledger fetch failed; weights unchanged this epoch: %s", e)
             return _WeightOutcome()
+
+        treasury_pin = getattr(ledger, "treasury_pin", None)
+        if treasury_pin is not None:
+            try:
+                if isinstance(treasury_pin, TreasuryLedgerPin):
+                    treasury_pin = TreasuryLedgerPin.model_validate(treasury_pin)
+                else:
+                    treasury_pin = EnforcingTreasuryPin.model_validate(treasury_pin)
+            except (ValueError, TypeError):
+                logger.warning("malformed treasury pin; weights refused")
+                return _WeightOutcome()
+        enforcing = isinstance(treasury_pin, EnforcingTreasuryPin)
+        treasury_authority: TreasuryWeightAuthority | None = None
+        if isinstance(treasury_pin, EnforcingTreasuryPin):
+            try:
+                if getattr(ledger, "stale", False) or (
+                    ledger.epoch_index != treasury_pin.epoch_index
+                    or ledger.pinned_block != treasury_pin.pinned_block
+                ):
+                    raise ValueError(
+                        "enforcing treasury ledger is stale or inconsistent"
+                    )
+                approval = configured_treasury_approval(self._config)
+                capability = await self._treasury_weight_capability()
+                read = getattr(self._chain, "get_treasury_dispatch_observation", None)
+                if approval is None or capability is None or not callable(read):
+                    raise ValueError("treasury consumer or transport proof is missing")
+                async with asyncio.timeout(8):
+                    observed = await read(treasury_pin.policy)
+                member = TreasuryFleetMember(
+                    **capability.model_dump(),
+                    validator_hotkey=self._config.validator_hotkey,
+                    protocol_version=validator_build_info().protocol_version,
+                )
+                treasury_authority = {
+                    "pin": treasury_pin,
+                    "expected_policy_digest": approval.policy.digest,
+                    "expected_collector_policy_digest": (
+                        approval.policy.collector_policy_digest
+                    ),
+                    "local_capability": member,
+                    "current_identity": observed.identity,
+                    "netuid": self._config.netuid,
+                    "current_epoch_index": observed.epoch_index,
+                    "current_first_block": observed.first_block,
+                    "finalized_block": observed.finalized_block,
+                    "finalized_block_hash": observed.finalized_block_hash,
+                }
+                require_treasury_weight_authority(**treasury_authority)
+            except Exception as error:  # noqa: BLE001 - refuse; never legacy fallback
+                logger.warning("treasury weights refused: %s", type(error).__name__)
+                return _WeightOutcome()
 
         # The platform serves a last-known-good ledger (flagged stale) when its own
         # DB read fails; folding it is safe (the pool is durable + slow-moving) but
@@ -2034,7 +2126,19 @@ class ValidatorWorker:
         # registration filters as any payable entry.
         provisional = _ledger_provisional_incumbent(ledger)
         weight_entries = _ledger_weight_entries(ledger)
-        if ledger.entries and not weight_entries:
+        if isinstance(treasury_pin, EnforcingTreasuryPin):
+            weight_entries = [
+                e
+                for e in weight_entries
+                if e.miner_hotkey != treasury_pin.policy.collector_hotkey
+            ]
+        competitive_entries = [
+            e
+            for e in ledger.entries
+            if not isinstance(treasury_pin, EnforcingTreasuryPin)
+            or e.miner_hotkey != treasury_pin.policy.collector_hotkey
+        ]
+        if competitive_entries and not weight_entries:
             # A non-empty ledger containing only score contracts this layer
             # cannot yet fold is not an empty scoring pool. Preserve the last
             # accepted on-chain vector rather than replacing it with full burn.
@@ -2098,7 +2202,12 @@ class ValidatorWorker:
                     provisional.agent_id if provisional is not None else None
                 ),
             ),
-            router_entries=tuple(router_ledger.entries),
+            router_entries=tuple(
+                e
+                for e in router_ledger.entries
+                if not isinstance(treasury_pin, EnforcingTreasuryPin)
+                or e.miner_hotkey != treasury_pin.policy.collector_hotkey
+            ),
             router_rank_shares=self._config.router_rank_shares,
         )
         track_vectors = {
@@ -2155,11 +2264,25 @@ class ValidatorWorker:
                 "eligible tracks with no folded miners; their emission burns: %s",
                 empty_eligible,
             )
-        weights = apply_miner_emission_cap(
-            miner_weights,
-            miner_share=miner_share * allocated * paid_fraction,
-            burn_hotkey=burn_hotkey,
-        )
+        if enforcing:
+            try:
+                assert treasury_authority is not None
+                weights = fold_treasury_weights(
+                    miner_weights,
+                    **treasury_authority,
+                    burn_share=1 - miner_share,
+                    paid_miner_fraction=allocated * paid_fraction,
+                    burn_hotkey=burn_hotkey,
+                )
+            except ValueError as error:
+                logger.warning("treasury fold refused: %s", type(error).__name__)
+                return _WeightOutcome(leaderboard=leaderboard)
+        else:
+            weights = apply_miner_emission_cap(
+                miner_weights,
+                miner_share=miner_share * allocated * paid_fraction,
+                burn_hotkey=burn_hotkey,
+            )
         champion = select_champion(
             registered_entries,
             margin=self._config.koth_margin,
@@ -2186,7 +2309,11 @@ class ValidatorWorker:
         await self._weight_receipt_relay.recover()
         submitted = await self._weight_receipt_relay.submit(weights, ledger, champion)
         if submitted is None:
-            submitted = await self._put_weights_with_retry(weights)
+            if enforcing:
+                logger.warning("treasury receipt transport refused; no legacy fallback")
+                submitted = False
+            else:
+                submitted = await self._put_weights_with_retry(weights)
         # The proof of what was folded: the pin identity the ledger carried, the
         # digest of the exact vector handed to Pylon, and the crown derived.
         # Echoed on every heartbeat until the next accepted fold replaces it, so

@@ -426,6 +426,11 @@ class ValidatorConfig:
     http_timeout_seconds: float
     """Per-request timeout for platform + dittobench HTTP calls."""
 
+    treasury_approval_file: str | None = None
+    treasury_approved_policy_digest: str | None = None
+    treasury_collector_policy_digest: str | None = None
+    """Default-absent public proof and two immutable deployment pins; no signer."""
+
     scorer_require_binary_provenance: bool = False
     """Whether the pinned scorer revision must prove its identity from its binary.
 
@@ -771,6 +776,18 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         else 10.0
     )
     config = ValidatorConfig(
+        treasury_approval_file=os.environ.get(
+            "DITTO_TREASURY_SHADOW_APPROVAL_FILE", ""
+        ).strip()
+        or None,
+        treasury_approved_policy_digest=os.environ.get(
+            "DITTO_TREASURY_APPROVED_POLICY_DIGEST", ""
+        ).strip()
+        or None,
+        treasury_collector_policy_digest=os.environ.get(
+            "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST", ""
+        ).strip()
+        or None,
         platform_api_url=platform_api_url,
         platform_inference_base_url=(
             os.environ.get("VALIDATOR_PLATFORM_INFERENCE_BASE_URL", "").strip()

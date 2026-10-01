@@ -111,7 +111,7 @@ from ditto_screening_protocol.confirmation import (
 from ditto_screening_protocol.confirmation import (
     V9ConfirmationEvidenceRoot,
 )
-from ditto_screening_protocol.treasury import TreasuryLedgerPin
+from ditto_screening_protocol.treasury_enforcement import TreasuryPin
 
 _CODE_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
@@ -630,6 +630,12 @@ class ValidatorHeartbeatRequest(BaseModel):
 
     @model_validator(mode="after")
     def weights_fold_requires_v27(self) -> ValidatorHeartbeatRequest:
+        if (
+            self.capabilities is not None
+            and self.capabilities.treasury_weights is not None
+            and self.protocol_version < 30
+        ):
+            raise ValueError("treasury weight guard requires heartbeat protocol v30")
         if self.weights_fold is not None and self.protocol_version < 27:
             raise ValueError("weights fold requires heartbeat protocol v27")
         return self
@@ -1867,13 +1873,15 @@ class LedgerResponse(BaseModel):
     """
 
     treasury_pin: Annotated[
-        TreasuryLedgerPin | None,
+        TreasuryPin | None,
         Field(
             default=None,
             exclude_if=lambda value: value is None,
             description=(
                 "Immutable epoch-bound treasury policy and collector observations. "
                 "V1 is shadow-only and cannot alter weights or authorize spending. "
+                "V2 requires offline approval and current finalized/fleet proof "
+                "before service-first weight dispatch; it never authorizes spending. "
                 "Absent preserves the legacy ledger wire."
             ),
         ),

@@ -11,6 +11,7 @@ from ditto_screening_protocol.treasury import (
     TreasuryEmissionPolicy,
     TreasuryLedgerPin,
 )
+from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
 
 ObserverStatus = Literal[
     "disabled", "not_observed", "observing", "observed", "unavailable"
@@ -25,6 +26,8 @@ TreasuryBlockReason = Literal[
     "weight_adapter_not_active",
     "fleet_gate_unimplemented",
     "current_epoch_not_checked",
+    "fleet_not_ready",
+    "enforcing_pin_unverified",
 ]
 
 
@@ -41,10 +44,14 @@ class TreasuryLedgerReadiness(BaseModel):
     latest_stored_epoch_index: int | None
     latest_stored_ledger_digest: str | None
     stored_shadow_pin: TreasuryLedgerPin | None
+    stored_enforcing_pin: EnforcingTreasuryPin | None = None
+    enforcement_configured: bool = False
+    fleet_gate: Literal["not_checked", "ready", "not_ready"] = "not_checked"
     blocking_reasons: list[TreasuryBlockReason]
     offline_policy_verified: Literal[False] = False
+    offline_epoch_verified: bool = False
     weight_effect: Literal["none"] = "none"
-    can_enforce_weights: Literal[False] = False
+    can_enforce_weights: bool = False
 
     @model_validator(mode="after")
     def proposal_status_binds_digest(self) -> TreasuryLedgerReadiness:

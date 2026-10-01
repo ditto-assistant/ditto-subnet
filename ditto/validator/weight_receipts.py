@@ -19,6 +19,8 @@ from ditto.api_models.weight_receipt import (
     weight_vector_digest,
 )
 from ditto.validator.errors import WeightReceiptConflictError
+from ditto_screening_protocol.treasury import TreasuryLedgerPin
+from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
 
 logger = logging.getLogger(__name__)
 
@@ -213,25 +215,49 @@ class WeightReceiptRelay:
         legacy submission. A new epoch is a distinct request and may proceed.
         """
         submit = getattr(self.setter, "put_weights_with_receipt", None)
+        treasury_pin = getattr(ledger, "treasury_pin", None)
+        # Unknown/malformed pins never downgrade to ordinary submission. V1
+        # must revalidate as the historical shadow contract before fallback.
+        try:
+            if isinstance(treasury_pin, TreasuryLedgerPin):
+                treasury_pin = TreasuryLedgerPin.model_validate(treasury_pin)
+            elif treasury_pin is not None:
+                treasury_pin = EnforcingTreasuryPin.model_validate(treasury_pin)
+        except (ValueError, TypeError):
+            self._submission_observed("invalid_provenance")
+            return False
+        enforcing = isinstance(treasury_pin, EnforcingTreasuryPin)
+        fallback = False if enforcing else None
         snapshot = getattr(ledger, "ledger_snapshot_id", None)
         epoch = getattr(ledger, "epoch_index", None)
         digest = getattr(ledger, "ledger_digest", None)
         if (
             not callable(submit)
-            or champion is None
+            or (champion is None and not enforcing)
             or snapshot is None
             or epoch is None
             or digest is None
         ):
             self._submission_observed("missing_provenance_or_transport")
-            return None
+            return fallback
         try:
+            if enforcing:
+                treasury_pin = EnforcingTreasuryPin.model_validate(treasury_pin)
+                if (
+                    treasury_pin.epoch_index != epoch
+                    or treasury_pin.policy.netuid != self.netuid
+                ):
+                    raise ValueError("enforcing pin differs from receipt ledger")
             provenance = {
                 "ledger_snapshot_id": str(snapshot),
                 "epoch_index": epoch,
                 "ledger_digest": digest,
-                "champion_agent_id": str(champion.agent_id),
-                "champion_artifact_sha256": champion.sha256,
+                "champion_agent_id": str(champion.agent_id)
+                if champion is not None
+                else None,
+                "champion_artifact_sha256": champion.sha256
+                if champion is not None
+                else None,
                 "bench_version": getattr(ledger, "active_bench_version", None),
                 "vector_digest": weight_vector_digest(weights),
             }
@@ -239,11 +265,15 @@ class WeightReceiptRelay:
                 mode="json"
             )
             body = {
-                "schema_version": 1,
+                "schema_version": 2 if enforcing else 1,
                 "mechanism_id": 0,
                 "weights": {k: float(v) for k, v in weights.items()},
                 "provenance": provenance,
             }
+            if enforcing:
+                body["treasury_pin"] = EnforcingTreasuryPin.model_validate(
+                    treasury_pin
+                ).model_dump(mode="json")
             request_digest = hashlib.sha256(
                 json.dumps(
                     body, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -252,20 +282,20 @@ class WeightReceiptRelay:
             request_id = str(
                 uuid5(
                     NAMESPACE_URL,
-                    f"ditto-weight-receipt:v1:{self.hotkey}:{self.netuid}:{request_digest}",
+                    f"ditto-weight-receipt:v{body['schema_version']}:{self.hotkey}:{self.netuid}:{request_digest}",
                 )
             )
         except (AttributeError, ValueError, TypeError, OverflowError):
             self._submission_observed("invalid_provenance")
             # No request was sent. Old/incomplete ledgers retain ordinary
             # weight liveness but cannot manufacture disclosure provenance.
-            return None
+            return fallback
         self._submission_observed("submitting_pylon")
         try:
             result = await submit(request_id, body)
             if result is None:
                 self._submission_observed("unsupported")
-                return None  # Explicit unsupported/rejected-before-create only.
+                return fallback  # Enforcing requests never fall back to legacy.
             if (
                 not isinstance(result, dict)
                 or result.get("request_id") != request_id

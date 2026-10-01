@@ -18,6 +18,7 @@ from ditto.api_server.ledger_pin import (
     classify_vector_against_pins,
     pin_expected_burn,
     pin_expected_shares,
+    pin_expected_treasury_vector,
 )
 from ditto.chain.models import (
     ChainMinerEarning,
@@ -429,10 +430,24 @@ class SourceEmissionCollector:
         actual: dict[str, int | float] = {
             item.hotkey: item.value for item in consumed.weights
         }
+        if receipt.schema_version == 2:
+            prescribed = pin_expected_treasury_vector(
+                pin, burn_hotkey=payout.owner_hotkey
+            )
+            for weights in (receipt.weights, actual):
+                total = sum(weights.values())
+                if total <= 0 or any(
+                    abs(weights.get(hotkey, 0) / total - prescribed.get(hotkey, 0))
+                    > 0.002
+                    for hotkey in set(weights) | set(prescribed)
+                ):
+                    return None
         burn = pin.context.get("served", {}).get("burn_share")
-        if not isinstance(burn, (int, float)) or not 0 <= burn < 1:
+        if receipt.schema_version == 1 and (
+            not isinstance(burn, (int, float)) or not 0 <= burn < 1
+        ):
             return None
-        for weights in (receipt.weights, actual):
+        for weights in () if receipt.schema_version == 2 else (receipt.weights, actual):
             if (
                 classify_vector_against_pins(
                     weights,

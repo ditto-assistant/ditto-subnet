@@ -144,7 +144,6 @@ def test_readiness_stored_observation_never_attests_funding_or_freshness():
         "shadow_only",
         "offline_policy_unverified",
         "weight_adapter_not_active",
-        "fleet_gate_unimplemented",
         "current_epoch_not_checked",
     }
     app.chain.get_treasury_collector_pin.assert_not_called()

@@ -54,7 +54,80 @@ async def get_treasury_ledger_readiness(
 ) -> TreasuryLedgerReadiness:
     state = request.app.state
     row = await latest_pin(session, netuid=state.config.chain.netuid)
-    return shadow_readiness(state, row)
+    readiness = shadow_readiness(state, row)
+    if readiness.configured_proposal is None:
+        return readiness
+    from datetime import UTC, datetime
+
+    from ditto.api_server.treasury_weights import read_treasury_fleet
+
+    try:
+        fleet = await read_treasury_fleet(
+            session,
+            now=datetime.now(UTC),
+            policy_digest=readiness.configured_proposal.digest,
+            collector_digest=readiness.configured_proposal.collector_policy_digest,
+        )
+    except ValueError:
+        return readiness.model_copy(
+            update={
+                "fleet_gate": "not_ready",
+                "blocking_reasons": [*readiness.blocking_reasons, "fleet_not_ready"],
+            }
+        )
+    pin = readiness.stored_enforcing_pin
+    if not readiness.enforcement_configured or pin is None:
+        # Fresh reports alone cannot prove the complete chain-active roster.
+        return readiness
+    from ditto_screening_protocol.treasury_enforcement import (
+        require_treasury_weight_authority,
+    )
+
+    try:
+        if fleet != pin.fleet or readiness.proposal_approval_status != "verified":
+            raise ValueError("enforcing pin differs from approved live fleet")
+        observed = await state.chain.get_treasury_dispatch_observation(pin.policy)
+        chain_keys = await state.chain.get_treasury_weight_setters(
+            pin.policy, block_hash=observed.finalized_block_hash
+        )
+        if not chain_keys or not set(chain_keys).issubset(
+            {member.validator_hotkey for member in fleet}
+        ):
+            raise ValueError("chain weight-setter roster differs from live fleet")
+        require_treasury_weight_authority(
+            pin,
+            expected_policy_digest=state.config.treasury_approved_policy_digest,
+            expected_collector_policy_digest=state.config.treasury_approved_collector_policy_digest,
+            local_capability=fleet[0],
+            current_identity=observed.identity,
+            netuid=state.config.chain.netuid,
+            current_epoch_index=observed.epoch_index,
+            current_first_block=observed.first_block,
+            finalized_block=observed.finalized_block,
+            finalized_block_hash=observed.finalized_block_hash,
+        )
+    except Exception:
+        return readiness.model_copy(
+            update={
+                "fleet_gate": "not_ready",
+                "blocking_reasons": [
+                    *readiness.blocking_reasons,
+                    "enforcing_pin_unverified",
+                ],
+            }
+        )
+    return readiness.model_copy(
+        update={
+            "fleet_gate": "ready",
+            "offline_epoch_verified": True,
+            "can_enforce_weights": True,
+            "blocking_reasons": [
+                reason
+                for reason in readiness.blocking_reasons
+                if reason != "current_epoch_not_checked"
+            ],
+        }
+    )
 
 
 @router.get("", response_model=TreasurySettingsControl)

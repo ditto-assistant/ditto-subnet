@@ -46,6 +46,10 @@ from ditto.db.queries.ledger_epochs import (
 )
 from ditto.metrics import LEDGER_PIN_LOOP_RUNS, LEDGER_PIN_MATERIALIZATIONS
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
+from ditto_screening_protocol.treasury_enforcement import (
+    EnforcingTreasuryPin,
+    TreasuryPin,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -188,7 +192,48 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
     )
 
 
-def treasury_pin_from_context(pin: LedgerPin) -> TreasuryLedgerPin | None:
+def _validated_treasury_pin(
+    raw: Any,
+    *,
+    netuid: int,
+    epoch_index: int,
+    first_block: int,
+    pinned_block: int,
+    pinned_block_hash: str,
+) -> TreasuryPin:
+    if isinstance(raw, dict) and raw.get("version") == 2:
+        treasury = EnforcingTreasuryPin.model_validate(raw)
+        if (
+            treasury.policy.netuid != netuid
+            or treasury.epoch_index != epoch_index
+            or treasury.first_block != first_block
+            or treasury.pinned_block != pinned_block
+            or treasury.pinned_block_hash != pinned_block_hash
+        ):
+            raise ValueError("enforcing treasury differs from immutable epoch")
+        return treasury
+    if isinstance(raw, EnforcingTreasuryPin):
+        return _validated_treasury_pin(
+            raw.model_dump(mode="json"),
+            netuid=netuid,
+            epoch_index=epoch_index,
+            first_block=first_block,
+            pinned_block=pinned_block,
+            pinned_block_hash=pinned_block_hash,
+        )
+    treasury = TreasuryLedgerPin.model_validate(raw)
+    treasury.require_epoch(
+        netuid=netuid, first_block=first_block, pinned_block=pinned_block
+    )
+    if (
+        treasury.identity.finalized_block == pinned_block
+        and treasury.identity.finalized_block_hash != pinned_block_hash
+    ):
+        raise ValueError("treasury identity block hash differs from ledger pin")
+    return treasury
+
+
+def treasury_pin_from_context(pin: LedgerPin) -> TreasuryPin | None:
     """Replay stored known fields only; malformed treasury evidence is never dropped."""
     if not isinstance(pin.context, dict):
         raise ValueError("stored ledger context must be an object")
@@ -198,17 +243,14 @@ def treasury_pin_from_context(pin: LedgerPin) -> TreasuryLedgerPin | None:
     if "treasury_pin" not in served:
         return None
     raw = served["treasury_pin"]
-    treasury = TreasuryLedgerPin.model_validate(raw)
-    treasury.require_epoch(
+    treasury = _validated_treasury_pin(
+        raw,
         netuid=pin.netuid,
+        epoch_index=pin.epoch_index,
         first_block=pin.last_epoch_block,
         pinned_block=pin.pinned_block,
+        pinned_block_hash=pin.pinned_block_hash,
     )
-    if (
-        treasury.identity.finalized_block == pin.pinned_block
-        and treasury.identity.finalized_block_hash != pin.pinned_block_hash
-    ):
-        raise ValueError("treasury identity block hash differs from ledger pin")
     if ledger_digest(canonical_entries(pin.entries), served) != pin.ledger_digest:
         raise ValueError("treasury ledger digest mismatch")
     return treasury
@@ -220,6 +262,41 @@ PIN_SHARE_TOLERANCE = 0.002
 
 
 def pin_expected_shares(pin: Any) -> dict[str, float] | None:
+    shares = _pin_competitive_shares(pin)
+    if "treasury_pin" not in (pin.context or {}).get("served", {}):
+        return shares
+    treasury = treasury_pin_from_context(
+        LedgerPin.from_row(pin) if not isinstance(pin, LedgerPin) else pin
+    )
+    if not isinstance(treasury, EnforcingTreasuryPin):
+        return shares
+    vector = pin_expected_treasury_vector(pin, burn_hotkey="__burn_projection__")
+    paid = {key: value for key, value in vector.items() if key != "__burn_projection__"}
+    total = sum(paid.values())
+    return {key: value / total for key, value in paid.items()} if total else None
+
+
+def pin_expected_treasury_vector(pin: Any, *, burn_hotkey: str) -> dict[str, float]:
+    """Exact V2 service-first projection, including empty or fully burned pools."""
+    from ditto_screening_protocol.treasury_weight_math import service_first_weights
+
+    projection = pin if isinstance(pin, LedgerPin) else LedgerPin.from_row(pin)
+    treasury = treasury_pin_from_context(projection)
+    if not isinstance(treasury, EnforcingTreasuryPin):
+        raise ValueError("service vector requires enforcing treasury pin")
+    shares = _pin_competitive_shares(pin)
+    return service_first_weights(
+        shares or {},
+        service_bps=treasury.policy.service_bps,
+        burn_share=pin.context["served"]["burn_share"],
+        paid_miner_fraction=sum(shares.values()) if shares else 0,
+        collector_hotkey=treasury.policy.collector_hotkey,
+        collector_verified=True,
+        burn_hotkey=burn_hotkey,
+    )
+
+
+def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
     """The miner shares the pin's fold prescribes, keyed by hotkey.
 
     Re-runs the Platform fold over the pin's stored entries under the pin's
@@ -475,11 +552,35 @@ class LedgerPinMaterializer:
                 now=now,
                 requesting_validator_hotkey=None,
             )
-        treasury = await observe_shadow_treasury(app_state, schedule)
+        treasury: TreasuryPin | None = await observe_shadow_treasury(
+            app_state, schedule
+        )
+        if getattr(app_state.config, "treasury_weight_enforcement", False):
+            from ditto.api_server.treasury_weights import enforcing_pin_from_observation
+
+            if treasury is None:
+                raise ValueError("enforcing treasury requires finalized observation")
+            async with session_maker() as session:
+                treasury = await enforcing_pin_from_observation(
+                    app_state, session, treasury, schedule, now=now
+                )
         if treasury is not None:
             # Preserve the shared snapshot cache; this observation belongs only
             # to the epoch being materialized and is replayed from its stored pin.
             snapshot = replace(snapshot, treasury_pin=treasury)
+            if isinstance(treasury, EnforcingTreasuryPin):
+                collector = treasury.policy.collector_hotkey
+                snapshot = replace(
+                    snapshot,
+                    entries=[
+                        e for e in snapshot.entries if e.miner_hotkey != collector
+                    ],
+                    withheld_entries=[
+                        e
+                        for e in (snapshot.withheld_entries or [])
+                        if e.miner_hotkey != collector
+                    ],
+                )
         draft = build_pin_draft(
             schedule,
             snapshot=snapshot,
@@ -538,17 +639,14 @@ def build_pin_draft(
     }
     raw_treasury = getattr(snapshot, "treasury_pin", None)
     if raw_treasury is not None:
-        treasury = TreasuryLedgerPin.model_validate(raw_treasury)
-        treasury.require_epoch(
+        treasury = _validated_treasury_pin(
+            raw_treasury,
             netuid=schedule.netuid,
+            epoch_index=schedule.subnet_epoch_index,
             first_block=schedule.last_epoch_block,
             pinned_block=schedule.block,
+            pinned_block_hash=schedule.block_hash,
         )
-        if (
-            treasury.identity.finalized_block == schedule.block
-            and treasury.identity.finalized_block_hash != schedule.block_hash
-        ):
-            raise ValueError("treasury identity block hash differs from ledger pin")
         served["treasury_pin"] = treasury.model_dump(mode="json")
     if getattr(snapshot, "statistical_band_mode", None) == "capped":
         served["statistical_band_mode"] = "capped"

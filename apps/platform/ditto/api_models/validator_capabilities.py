@@ -8,6 +8,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from ditto_screening_protocol.treasury_enforcement import TreasuryWeightCapability
+
 _DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _REVISION_PATTERN = r"^[0-9a-f]{40}$"
 _VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$"
@@ -310,6 +312,9 @@ class ValidatorCapabilities(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
+    treasury_weights: TreasuryWeightCapability | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     screened_images: bool
     require_screened_image: bool
     source_build_fallback: bool

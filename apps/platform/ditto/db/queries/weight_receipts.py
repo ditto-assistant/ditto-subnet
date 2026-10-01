@@ -21,6 +21,11 @@ from ditto.db.models import (
     ValidatorWeightReceipt,
     ValidatorWeightRequest,
 )
+from ditto_screening_protocol.treasury_approval import (
+    verify_policy_approval,
+    verify_public_signature,
+)
+from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
 
 WeightReceiptConflictCode = Literal[
     "unknown_ledger_snapshot",
@@ -73,6 +78,31 @@ async def _validate_provenance(
             "ledger_pin_mismatch", "receipt does not match its immutable champion pin"
         )
     served = pin.context.get("served", {})
+    raw_treasury = served.get("treasury_pin")
+    if receipt.schema_version == 2:
+        try:
+            treasury = EnforcingTreasuryPin.model_validate(raw_treasury)
+            if treasury != receipt.treasury_pin or (
+                treasury.epoch_index != pin.epoch_index
+                or treasury.first_block != pin.last_epoch_block
+                or treasury.pinned_block != pin.pinned_block
+                or treasury.pinned_block_hash != pin.pinned_block_hash
+            ):
+                raise ValueError("treasury receipt is not the frozen epoch contract")
+            verify_policy_approval(
+                treasury.approval,
+                expected_policy_digest=treasury.policy_digest,
+                expected_collector_policy_digest=treasury.policy.collector_policy_digest,
+                verify_signature=verify_public_signature,
+            )
+        except (ValueError, TypeError):
+            raise WeightReceiptConflict(
+                "ledger_pin_mismatch", "invalid treasury epoch provenance"
+            ) from None
+    elif isinstance(raw_treasury, dict) and raw_treasury.get("version") == 2:
+        raise WeightReceiptConflict(
+            "ledger_pin_mismatch", "enforcing epoch requires V2 receipt"
+        )
     # A provisional incumbent (protocol 28) holds the pin's crown from its served
     # markers rather than from the payable entries; it is folded, never paid.
     provisional = (
@@ -86,7 +116,9 @@ async def _validate_provenance(
         for entry in (*pin.entries, *provisional)
         if str(entry.get("agent_id")) == str(provenance.champion_agent_id)
     ]
-    if (
+    if provenance.champion_agent_id is None and receipt.schema_version == 2:
+        entries = []
+    elif (
         len(entries) != 1
         or entries[0].get("sha256") != provenance.champion_artifact_sha256
     ):

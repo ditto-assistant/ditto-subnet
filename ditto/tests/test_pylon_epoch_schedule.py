@@ -242,7 +242,9 @@ def test_dependency_adaptation_refuses_an_unreviewed_manifest():
         patcher.patch_dependencies("[project]\ndependencies=[]\n")
 
 
-@pytest.mark.parametrize("name", ["tasks", "turbobt", "extrinsic", "api"])
+@pytest.mark.parametrize(
+    "name", ["tasks", "turbobt", "extrinsic", "api", "contact", "router"]
+)
 def test_receipt_patcher_refuses_unreviewed_source(name):
     receipt_patcher = load("patch_receipts")
     with pytest.raises(ValueError, match="unreviewed"):

@@ -109,7 +109,10 @@ from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
 )
-from ditto_screening_protocol.treasury import TreasuryLedgerPin
+from ditto_screening_protocol.treasury_enforcement import (
+    EnforcingTreasuryPin,
+    TreasuryPin,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +217,7 @@ class _LedgerSnapshot:
     epoch pin for public and operator reads; absent while the gate is off."""
     reward_eligibility_enforcement: str | None = None
     fleet_readiness: dict[str, bool] | None = None
-    treasury_pin: TreasuryLedgerPin | None = None
+    treasury_pin: TreasuryPin | None = None
     """Default-off; populated only by a future reviewed finalized producer."""
     confirmation_seed_anchors: tuple[ConfirmationSeedAnchorPin, ...] = ()
     """Pinned finalized-block anchors of the active version's seed families.
@@ -1056,10 +1059,18 @@ async def _serve_epoch_pin(
     the pin, or the same stale predecessor. Live and pinned are never mixed.
     """
     if context.policy.continual_retest.ledger_pin_mode != "epoch":
+        if getattr(request.app.state.config, "treasury_weight_enforcement", False):
+            raise HTTPException(
+                status_code=503, detail="treasury requires epoch pinning"
+            )
         return None
     materializer = getattr(request.app.state, "ledger_pin_materializer", None)
     session_maker = getattr(request.app.state, "session_maker", None)
     if materializer is None or session_maker is None:
+        if getattr(request.app.state.config, "treasury_weight_enforcement", False):
+            raise HTTPException(
+                status_code=503, detail="treasury epoch pin unavailable"
+            )
         return None
     # Imported here: ledger_pin imports this module's materializer.
     from ditto.api_server.ledger_pin import response_from_pin
@@ -1067,6 +1078,16 @@ async def _serve_epoch_pin(
     if session.in_transaction():
         await session.rollback()
     pin = await materializer.ensure(request.app.state, session_maker, now=now)
+    if getattr(request.app.state.config, "treasury_weight_enforcement", False) and (
+        pin is None
+        or not isinstance(
+            response_from_pin(pin, stale=False, now=now).treasury_pin,
+            EnforcingTreasuryPin,
+        )
+    ):
+        raise HTTPException(
+            status_code=503, detail="enforcing treasury epoch unavailable"
+        )
     if pin is not None:
         logger.info(
             "validator=%s read pinned scoring ledger: epoch %d, %d miner(s)",
@@ -1094,8 +1115,28 @@ async def _require_statistical_cap_requester(
     ledger: LedgerResponse,
     *,
     now: datetime,
+    app_state: Any = None,
 ) -> LedgerResponse:
     """Refuse a v28 rejoiner while a pinned v29 fold remains active."""
+    if isinstance(ledger.treasury_pin, EnforcingTreasuryPin):
+        from ditto.api_server.treasury_weights import require_enforcing_requester
+
+        if ledger.stale:
+            raise HTTPException(
+                status_code=503, detail="enforcing treasury ledger is stale"
+            )
+        try:
+            await require_enforcing_requester(
+                session,
+                ledger.treasury_pin,
+                validator_hotkey,
+                now=now,
+                app_state=app_state,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=428, detail="treasury weight-setting fleet not ready"
+            ) from error
     if ledger.statistical_band_mode != "capped":
         return ledger
     heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
@@ -1204,7 +1245,11 @@ async def scores(
     )
     if pinned is not None:
         return await _require_statistical_cap_requester(
-            session, x_validator_hotkey, pinned, now=auth_now
+            session,
+            x_validator_hotkey,
+            pinned,
+            now=auth_now,
+            app_state=request.app.state,
         )
     joined_snapshot, materialization = await _join_ledger_materialization(
         request, x_validator_hotkey, context=ledger_context
@@ -1220,6 +1265,7 @@ async def scores(
             x_validator_hotkey,
             _fresh_response_from_snapshot(joined_snapshot),
             now=auth_now,
+            app_state=request.app.state,
         )
     assert materialization is not None
     try:
@@ -1245,7 +1291,11 @@ async def scores(
     ledger_response = _fresh_response_from_snapshot(snapshot)
     _finish_ledger_materialization(request, materialization)
     return await _require_statistical_cap_requester(
-        session, x_validator_hotkey, ledger_response, now=auth_now
+        session,
+        x_validator_hotkey,
+        ledger_response,
+        now=auth_now,
+        app_state=request.app.state,
     )
 
 
@@ -1410,6 +1460,12 @@ def _serve_last_known(
 ) -> LedgerResponse:
     """Serve the cached ledger on a DB failure, or 503 if there is none / too old."""
     snapshot = _cached_snapshot(request)
+    if getattr(request.app.state.config, "treasury_weight_enforcement", False) or (
+        snapshot is not None and isinstance(snapshot.treasury_pin, EnforcingTreasuryPin)
+    ):
+        raise HTTPException(
+            status_code=503, detail="treasury ledger verification unavailable"
+        ) from error
     if (
         snapshot is not None
         and getattr(snapshot, "statistical_band_mode", None) == "capped"
