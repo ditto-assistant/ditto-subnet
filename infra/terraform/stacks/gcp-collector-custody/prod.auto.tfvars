@@ -2,14 +2,14 @@
 project = "ditto-app-dev"
 region  = "us-central1"
 zone    = "us-central1-a"
-# Live armed isolation independently reviewed after protected apply36951872934.
-# Separate locked checkpoint removes own-secret writer bindings before any reader
-# grant. Public one-time receipts/first-version metadata are preserved; no key
-# payload, runtime or on-chain authorization enters Terraform.
+# Live locked checkpoint verified after protected apply36953813832: writer and
+# payload permissions absent on both attached identities; original receipts and
+# first versions preserved. A separate sealed plan grants own numeric version1
+# access only. No runtime, on-chain or financial activation is included.
 enable_collector_custody = true
 collector_custody_phases = {
-  registration = "locked"
-  transfer     = "locked"
+  registration = "sealed"
+  transfer     = "sealed"
 }
 collector_custody_revision = "e1b86b2a673add3572febc35f7159b02e0f8ce37"
 collector_custody_operator = "peyton@omniaura.ai"
