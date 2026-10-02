@@ -1487,6 +1487,10 @@
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+.submission-fee-stale {
+  color: var(--warn);
+  font-size: 11.5px;
+}
 .submission-fee-incomplete {
   margin: 8px 0 0;
   color: var(--text-faint);

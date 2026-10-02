@@ -27,11 +27,27 @@ export function SubmissionFee(): JSX.Element {
   // "Loading" belongs to the first fetch only. Once any response or error has
   // settled, a background poll keeps the rendered fee or status in place.
   const [settled, setSettled] = createSignal(false);
+  // The last successfully loaded payload survives a failed poll; the fee it
+  // shows is then marked stale until a later poll succeeds.
+  const [lastLoaded, setLastLoaded] = createSignal<SubmissionFeePayload | undefined>();
+  const [stale, setStale] = createSignal(false);
   createEffect(() => {
-    if (!fee.loading()) setSettled(true);
+    if (fee.loading()) return;
+    setSettled(true);
+    if (fee.error()) {
+      setStale(true);
+      return;
+    }
+    const value = fee.data();
+    if (value !== undefined) {
+      setLastLoaded(value);
+      setStale(false);
+    }
   });
+  // Unavailable when nothing has loaded yet, or when the last loaded fee is in
+  // a denomination this build has not reviewed as TAO.
   const payload = (): SubmissionFeePayload | undefined => {
-    const value = fee.error() ? undefined : fee.data();
+    const value = lastLoaded();
     return value && isFixedTao(value.fee_denomination) ? value : undefined;
   };
   // Never render a row in a denomination this build has not reviewed as TAO;
@@ -47,7 +63,7 @@ export function SubmissionFee(): JSX.Element {
         when={payload()}
         fallback={
           <p class="submission-fee-status" role="status">
-            {!settled() && fee.loading() && !fee.error()
+            {!settled() && fee.loading()
               ? "Loading submission fee…"
               : "Submission fee is unavailable."}
           </p>
@@ -66,6 +82,11 @@ export function SubmissionFee(): JSX.Element {
                   {(at) => <> · since {feeDate(at())}</>}
                 </Show>
               </span>
+              <Show when={stale()}>
+                <span class="submission-fee-stale" role="status">
+                  (couldn't refresh; showing the last loaded fee)
+                </span>
+              </Show>
               <span class="submission-fee-note">
                 A payment made within {quoteLifetimeText(current().quote_lifetime_seconds)} of
                 reserving keeps the reserved fee.

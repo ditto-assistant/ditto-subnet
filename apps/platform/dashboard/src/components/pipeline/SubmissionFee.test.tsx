@@ -169,6 +169,93 @@ describe("SubmissionFee background polling", () => {
   });
 });
 
+describe("SubmissionFee after a failed poll", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  type Reply = { status: number; body: unknown };
+  const STALE = "(couldn't refresh; showing the last loaded fee)";
+  const failure: Reply = { status: 503, body: { detail: "down" } };
+
+  // Serve one scripted reply per request, repeating the last one.
+  function script(replies: Reply[]): () => number {
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (() => {
+      const reply = replies[Math.min(calls, replies.length - 1)] ?? failure;
+      calls += 1;
+      return Promise.resolve(
+        new Response(JSON.stringify(reply.body), {
+          status: reply.status,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }) as typeof fetch;
+    restoreFetch = () => {
+      globalThis.fetch = original;
+    };
+    return () => calls;
+  }
+
+  it("keeps the last loaded fee with a note, and clears it on the next success", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    const lowered = { ...fixture, fee_amount_rao: 50_000_000, fee_amount_tao: "0.050000000" };
+    const calls = script([{ status: 200, body: fixture }, failure, { status: 200, body: lowered }]);
+
+    render(() => <SubmissionFee />);
+    await screen.findByText("0.1 TAO");
+    const details = document.querySelector("details.submission-fee-history") as HTMLDetailsElement;
+    details.open = true;
+    expect(screen.queryByText(STALE)).toBeNull();
+
+    vi.advanceTimersByTime(60_000);
+    await waitFor(() => expect(calls()).toBe(2));
+    await screen.findByText(STALE);
+    expect(screen.getByText("0.1 TAO")).toBeTruthy();
+    expect(document.querySelectorAll(".submission-fee-history li")).toHaveLength(3);
+    // The failure does not collapse an expanded history.
+    expect(
+      (document.querySelector("details.submission-fee-history") as HTMLDetailsElement).open,
+    ).toBe(true);
+    expect(document.body.textContent).not.toContain("Submission fee is unavailable.");
+
+    vi.advanceTimersByTime(60_000);
+    await screen.findByText("0.05 TAO");
+    expect(screen.queryByText(STALE)).toBeNull();
+  });
+
+  it("is unavailable when the first fetch fails", async () => {
+    script([failure]);
+    render(() => <SubmissionFee />);
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe("Submission fee is unavailable."),
+    );
+    expect(screen.queryByText(STALE)).toBeNull();
+  });
+
+  it("stays unavailable when an unsupported fee is followed by a failure", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
+    const calls = script([
+      { status: 200, body: { ...fixture, fee_denomination: "usd_indexed" } },
+      failure,
+    ]);
+    render(() => <SubmissionFee />);
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe("Submission fee is unavailable."),
+    );
+
+    vi.advanceTimersByTime(60_000);
+    await waitFor(() => expect(calls()).toBe(2));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe("Submission fee is unavailable."),
+    );
+    expect(document.body.textContent).not.toContain("TAO");
+  });
+});
+
 describe("SubmissionFee edge payloads", () => {
   it("never renders an unreviewed-denomination history row as TAO and marks history incomplete", async () => {
     const fixture = loadFixture<SubmissionFeePayload>("submission-fee");
