@@ -6,9 +6,13 @@ on:
       - 'scripts/collector_delegate_key.py'
       - 'scripts/test-collector-custody.sh'
       - 'ditto/tests/test_collector_delegate_ceremony.py'
-      - 'infra/terraform/stacks/gcp-platform/collector-custody.tf'
-      - 'infra/terraform/stacks/gcp-platform/files/collector-custody-startup.sh.tpl'
+      - 'infra/terraform/stacks/gcp-collector-custody/**'
+      - 'scripts/check-collector-custody-plan.py'
+      - 'ditto/tests/test_collector_custody_scope.py'
+      - '.github/workflows/infra-plan-apply.yml'
       - 'infra/terraform/tests/collector-custody/**'
+      - 'infra/terraform/tests/collector-backend/**'
+      - 'infra/terraform/stacks/gcp-preview/**'
       - '.github/workflows/collector-custody.yml'
 permissions:
   contents: read
@@ -25,6 +29,8 @@ jobs:
           terraform_version: 1.13.5
       - name: No-key ceremony controls
         run: python3 -m unittest discover -s ditto/tests -p test_collector_delegate_ceremony.py -v
+      - name: Isolated custody state and plan scope controls
+        run: python3 -m unittest discover -s ditto/tests -p test_collector_custody_scope.py -v
       - name: Credentials-free concrete resource and IAM plans
         run: bash scripts/test-collector-custody.sh
   bootstrap:

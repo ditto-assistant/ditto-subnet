@@ -12,7 +12,7 @@ on:
         description: Terraform state root
         required: true
         type: choice
-        options: [gcp-platform, gcp-preview, cloudflare-dittobench]
+        options: [gcp-platform, gcp-preview, cloudflare-dittobench, gcp-collector-custody]
       plan_sha:
         description: Exact main commit used by the plan (required for apply)
         required: false
@@ -82,11 +82,23 @@ jobs:
 
       - name: Select exact root
         id: root
+        env:
+          TF_TARGETS: ${{ inputs.targets }}
+          HOTKEY_ADMIN_PHASE: ${{ inputs.validator_hotkey_admin_phase }}
+          HOTKEY_ADMIN_REVISION: ${{ inputs.validator_hotkey_admin_revision }}
+          SCREENER_DEV_HOST_ENABLED: ${{ inputs.screener_fleet_dev_host_enabled }}
         run: |
           case '${{ inputs.root }}' in
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
             gcp-preview) root=infra/terraform/stacks/gcp-preview ;;
             cloudflare-dittobench) root=infra/terraform/stacks/cloudflare-dittobench ;;
+            gcp-collector-custody)
+              test -z "$TF_TARGETS"
+              test "$HOTKEY_ADMIN_PHASE" = absent
+              test -z "$HOTKEY_ADMIN_REVISION"
+              test "$SCREENER_DEV_HOST_ENABLED" = false
+              root=infra/terraform/stacks/gcp-collector-custody
+              ;;
             *) exit 2 ;;
           esac
           echo "path=$root" >> "$GITHUB_OUTPUT"
@@ -148,6 +160,7 @@ jobs:
           echo "TF_VAR_validator_hotkey_admin_revision=$revision" >> "$GITHUB_ENV"
 
       - name: Create exact private plan
+        if: inputs.root != 'gcp-collector-custody'
         env:
           TF_VAR_db_password: ${{ secrets.PLATFORM_DB_PASSWORD }}
           TF_VAR_pylon_open_access_token: ${{ secrets.PLATFORM_PYLON_OPEN_ACCESS_TOKEN_JSON }}
@@ -178,6 +191,30 @@ jobs:
           # absent value is the safe default outside this protected ceremony.
           terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan \
             "${extra[@]}"
+
+      # Deliberately separate step: no Platform/Cloudflare secret variables,
+      # fleet release pin, hotkey lifecycle or dev-host override reaches custody.
+      - name: Create full isolated custody plan
+        if: inputs.root == 'gcp-collector-custody'
+        run: terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan
+
+      - name: Verify isolated custody plan scope
+        if: inputs.root == 'gcp-collector-custody'
+        run: |
+          plan_json="$(mktemp)"
+          chmod 600 "$plan_json"
+          trap 'rm -f "$plan_json"' EXIT
+          terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan > "$plan_json"
+          python3 scripts/check-collector-custody-plan.py "$plan_json"
+
+      - name: Fence additive custody backend bootstrap
+        if: inputs.root == 'gcp-preview'
+        run: |
+          plan_json="$(mktemp)"
+          chmod 600 "$plan_json"
+          trap 'rm -f "$plan_json"' EXIT
+          terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan > "$plan_json"
+          python3 scripts/check-collector-custody-plan.py --backend-bootstrap "$plan_json"
 
       - name: Reject replacement of an armed hotkey admin
         if: inputs.root == 'gcp-platform' && inputs.validator_hotkey_admin_phase == 'armed'
@@ -249,11 +286,23 @@ jobs:
 
       - name: Select exact root
         id: root
+        env:
+          TF_TARGETS: ${{ inputs.targets }}
+          HOTKEY_ADMIN_PHASE: ${{ inputs.validator_hotkey_admin_phase }}
+          HOTKEY_ADMIN_REVISION: ${{ inputs.validator_hotkey_admin_revision }}
+          SCREENER_DEV_HOST_ENABLED: ${{ inputs.screener_fleet_dev_host_enabled }}
         run: |
           case '${{ inputs.root }}' in
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
             gcp-preview) root=infra/terraform/stacks/gcp-preview ;;
             cloudflare-dittobench) root=infra/terraform/stacks/cloudflare-dittobench ;;
+            gcp-collector-custody)
+              test -z "$TF_TARGETS"
+              test "$HOTKEY_ADMIN_PHASE" = absent
+              test -z "$HOTKEY_ADMIN_REVISION"
+              test "$SCREENER_DEV_HOST_ENABLED" = false
+              root=infra/terraform/stacks/gcp-collector-custody
+              ;;
             *) exit 2 ;;
           esac
           echo "path=$root" >> "$GITHUB_OUTPUT"
@@ -269,9 +318,32 @@ jobs:
           cd "${{ steps.root.outputs.path }}"
           sha256sum -c tfplan.sha256
 
+      - name: Fence additive custody backend bootstrap apply
+        if: inputs.root == 'gcp-preview'
+        run: |
+          plan_json="$(mktemp)"
+          chmod 600 "$plan_json"
+          trap 'rm -f "$plan_json"' EXIT
+          terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan > "$plan_json"
+          python3 scripts/check-collector-custody-plan.py --backend-bootstrap "$plan_json"
+
       - name: Apply the reviewed binary plan
+        if: inputs.root != 'gcp-collector-custody'
         env:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: terraform -chdir=${{ steps.root.outputs.path }} apply tfplan
+
+      - name: Verify isolated custody apply scope
+        if: inputs.root == 'gcp-collector-custody'
+        run: |
+          plan_json="$(mktemp)"
+          chmod 600 "$plan_json"
+          trap 'rm -f "$plan_json"' EXIT
+          terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan > "$plan_json"
+          python3 scripts/check-collector-custody-plan.py "$plan_json"
+
+      - name: Apply the reviewed isolated custody binary plan
+        if: inputs.root == 'gcp-collector-custody'
         run: terraform -chdir=${{ steps.root.outputs.path }} apply tfplan
 
       - name: Remove consumed private plan

@@ -7,7 +7,7 @@ Primary collector and holding keys remain offline with Peyton.
 
 ## Concrete resource plan
 
-`infra/terraform/stacks/gcp-platform/collector-custody.tf` creates nothing unless
+`infra/terraform/stacks/gcp-collector-custody/collector-custody.tf` creates nothing unless
 `enable_collector_custody=true` is explicitly reviewed. The proposed resource set:
 
 - Dedicated `sn118-collector-custody` VPC/subnet, private Google API access,
@@ -33,7 +33,7 @@ Primary collector and holding keys remain offline with Peyton.
   No `latest` alias, other role secret or new version is accepted.
 
 Proposed VMs are `e2-standard-2`, 30GB pd-balanced boot disks, exact image
-`projects/debian-cloud/global/images/debian-13-trixie-v20260817`; these are
+`projects/debian-cloud/global/images/debian-13-trixie-v20260921`; these are
 reviewable choices, not an assertion of applied resources. Inspect project/org
 inherited IAM, public API access policy, OS Login administrators and effective
 firewall rules as well as these new resource bindings. A project owner can read
@@ -43,12 +43,33 @@ compromised signer root. Native Cloud KMS is not claimed to perform sr25519.
 ## Protected plans and phases
 
 Use the existing protected `Infrastructure plan or apply` workflow for the
-`gcp-platform` root, exact main plan SHA/run/checksum and independent review.
+`gcp-collector-custody` root, exact main plan SHA/run/checksum and independent review.
 Do not run local apply, target individual grants, change generated plan bytes,
 or enable dormant legacy treasury resources. Each phase needs a fresh full plan
 and the separately reviewed public production intent; never let an omitted CLI
-flag reset a live role's phase. This patch deliberately does not commit enabled
-production intent, public wallet addresses, a source SHA or any secret version.
+flag reset a live role's phase. The dedicated root's `prod.auto.tfvars` retains
+the reviewed public bootstrap intent, five addresses and exact source pin.
+No secret version is supplied or managed by Terraform.
+
+The first `gcp-platform` plan (36942490042, source c904afec) was rejected:
+its 23 custody creations were mixed with 30 unrelated changed resources.
+Custody had no managed state or actual hosts/secrets, so its definitions and
+template were moved to one dedicated owner without migrating/forgetting state.
+The dedicated GCS state prefix is `gcp-collector-custody`; its provider lock
+pins Google 6.50.0. The workflow does not inject Platform/Cloudflare secrets,
+screener release pins, hotkey phases or dev-host variables into custody plans.
+Both plan sealing and checksum-verified apply refuse unrelated resources.
+
+Before the first custody plan, the existing `gcp-preview` root must bootstrap
+two additive conditional grants for the existing Terraform plan identity:
+Object Admin on only `gcp-collector-custody/default.tflock`, and Object Creator
+on only `gcp-collector-custody/default.tfstate`. Existing Object Viewer remains
+unchanged. The observed preview state serial 4 had sixteen managed resources
+and no staged bake identity/compute/WIF, so `enable_preview_bake=false` preserves
+that absence. The protected full preview plan must show only these two grant
+creations with all sixteen existing resources unchanged. A scope fence rejects
+other changes when bootstrap grants are added. Review the exact binary before
+applying it; no direct grant, target bypass or state mutation shortcut.
 
 Required public inputs are project, operator, five offline public addresses,
 exact reviewed main source SHA and independent role phases. The root defaults

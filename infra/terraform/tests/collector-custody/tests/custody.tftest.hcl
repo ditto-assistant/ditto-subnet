@@ -8,8 +8,8 @@ override_resource {
   target          = google_service_account.collector_delegate["registration"]
   override_during = plan
   values = {
-    name  = "projects/test-project/serviceAccounts/sn118-collector-registration@test-project.iam.gserviceaccount.com"
-    email = "sn118-collector-registration@test-project.iam.gserviceaccount.com"
+    name  = "projects/ditto-app-dev/serviceAccounts/sn118-collector-registration@ditto-app-dev.iam.gserviceaccount.com"
+    email = "sn118-collector-registration@ditto-app-dev.iam.gserviceaccount.com"
   }
 }
 
@@ -17,12 +17,15 @@ override_resource {
   target          = google_service_account.collector_delegate["transfer"]
   override_during = plan
   values = {
-    name  = "projects/test-project/serviceAccounts/sn118-collector-transfer@test-project.iam.gserviceaccount.com"
-    email = "sn118-collector-transfer@test-project.iam.gserviceaccount.com"
+    name  = "projects/ditto-app-dev/serviceAccounts/sn118-collector-transfer@ditto-app-dev.iam.gserviceaccount.com"
+    email = "sn118-collector-transfer@ditto-app-dev.iam.gserviceaccount.com"
   }
 }
 
 variables {
+  project                    = "ditto-app-dev"
+  region                     = "us-central1"
+  zone                       = "us-central1-a"
   collector_custody_revision = "0123456789012345678901234567890123456789"
   collector_custody_operator = "operator@example.com"
   collector_custody_offline_addresses = [
@@ -141,4 +144,38 @@ run "duplicate_offline_addresses_refused" {
     ]
   }
   expect_failures = [var.collector_custody_offline_addresses]
+}
+
+run "wrong_project_refused" {
+  command = plan
+  variables { project = "other-project" }
+  expect_failures = [var.project]
+}
+run "wrong_region_refused" {
+  command = plan
+  variables { region = "europe-west1" }
+  expect_failures = [var.region]
+}
+run "wrong_zone_refused" {
+  command = plan
+  variables { zone = "us-central1-b" }
+  expect_failures = [var.zone]
+}
+run "legacy_treasury_refused" {
+  command = plan
+  variables { enable_treasury_host = true }
+  expect_failures = [var.enable_treasury_host]
+}
+run "malformed_source_refused" {
+  command = plan
+  variables { collector_custody_revision = "main" }
+  expect_failures = [var.collector_custody_revision]
+}
+run "rendered_source_and_all_public_bindings_match" {
+  command = plan
+  variables { enable_collector_custody = true }
+  assert {
+    condition     = alltrue([for role, host in google_compute_instance.collector_delegate : strcontains(host.metadata["startup-script"], var.collector_custody_revision) && alltrue([for address in var.collector_custody_offline_addresses : strcontains(host.metadata["startup-script"], address)])])
+    error_message = "Both roles must render the exact selected source and all five public identities."
+  }
 }

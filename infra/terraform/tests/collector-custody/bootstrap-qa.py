@@ -86,7 +86,7 @@ def main():
         "/fixture/repo.git",
     )
     template = Path(
-        "/fixture/source/infra/terraform/stacks/gcp-platform/files/collector-custody-startup.sh.tpl"
+        "/fixture/source/infra/terraform/stacks/gcp-collector-custody/files/collector-custody-startup.sh.tpl"
     ).read_text()
     replacements = {
         "role": ROLE,
