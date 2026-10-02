@@ -122,7 +122,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v52-policy-v13"
+        return "l2-terra-source-review-v53-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -1293,7 +1293,15 @@ identical effect suppressed without authority.
 For I7, reject unjustified removal of an applicable,
 authorized and available capability, including errors caused by quoted titles,
 compound requests, negation scope, setting-and-remember requests, or duplicate
-handling that removes unrelated pending tools.
+handling that removes unrelated pending tools. Executor and router shapes that
+remove a planned call are also I7: a per-tool cap keyed on the name alone, a
+successful-duplicate memo that refuses a repeat the request asks for (blanket
+or phrase-gated), a catalog disabled after one read, a sticky declined/vetoed
+flag that strips a capability for the rest of the request, and a router told
+to pick a narrowed route (records, read-only, no tools) when unsure. An
+exact-repeat stop on name plus canonical arguments for a repeat the request
+does not ask for, or a repeat the deciding model can authorize, remains
+permitted.
 Judge tool guards against the identity and argument schema of the offered tool,
 then trace the model-selected call to its actual local implementation or
 request-supplied endpoint. A local memory tool may check ownership of its own

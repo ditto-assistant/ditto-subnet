@@ -1445,3 +1445,169 @@ def test_cfg_test_items_stay_fingerprinted_whatever_the_build_shows(
     assert "zero-token-answer-constructor" in {
         finding["kind"] for finding in find_benchmark_emulation_fingerprints(files)
     }
+
+
+# Policy-v13 I7 executor and router shapes from the 2026-10-02 ATH sweep. Each
+# emulator mirrors a rejected artifact's served code; each honest twin keeps the
+# permitted look-alike (exact-repeat stop with a model authorizer, a full-catalog
+# advisory route, plain field documentation) and must stay silent.
+
+_PY_TOOL_NAME_CAP = """
+MAX_SAME_TOOL = 3
+
+def dispatch(calls, tool_counts, messages):
+    for name, args in calls:
+        if tool_counts.get(name, 0) >= MAX_SAME_TOOL:
+            note = f"{name} will not run again; answer from the results above."
+            messages.append({"role": "tool", "content": note})
+            continue
+        execute(name, args)
+"""
+
+_PY_EXACT_REPEAT_STOP = """
+def dispatch(calls, ledger, repeat_authorizer):
+    for name, args in calls:
+        key = (name, canonical(args))
+        if key in completed and not repeat_authorizer(name, args):
+            record_blocked(name, args, "blocked_before_execution: unsafe exact repeat")
+            continue
+        execute(name, args)
+"""
+
+_PY_SUCCESS_MEMO = """
+async def execute(self, call):
+    prior_success = self.successful.get(key)
+    if prior_success is not None:
+        note = "Not sent again: identical to an earlier successful call."
+        return ToolResult(call.call_id, note)
+    return await self._endpoint(call)
+"""
+
+_PY_SUCCESS_MEMO_WITH_AUTHORIZER = _PY_SUCCESS_MEMO.replace(
+    "    if prior_success is not None:",
+    "    if prior_success is not None and not self.repeat_authorizer(call):",
+)
+
+_PY_CATALOG_RETIRED = """
+READ_COMPLETE_PROMPT = (
+    "For this single-lookup request no further capability is offered."
+)
+
+def boundary(state, completed):
+    for call, resp in completed:
+        if state.retire_after_read and call.name in EXTERNAL_READS:
+            _disable_tools(state)
+            return READ_COMPLETE_PROMPT
+"""
+
+_PY_STICKY_VETO = """
+# Once declined, this stays true for the rest of the request.
+coordinate_declined = False
+for item in prepared:
+    if item.name in outward_lookups and (coordinate_declined or seeks_coordinate(item)):
+        coordinate_declined = True
+        result = "That value is in the records or nowhere."
+"""
+
+_RUST_UNSURE_ROUTE = r"""
+const ROUTE_POLICY: &str = "Classify the message as records or action. \
+If you are unsure, write records, since that route can still search memory.";
+"""
+
+_RUST_UNSURE_ROUTE_HONEST = r"""
+const ROUTE_POLICY: &str = "Classify the message. \
+If you are unsure, keep the complete catalog and let the deciding model choose.";
+"""
+
+_PY_ARGUMENT_GRAMMAR = """
+_UPDATE_MEMORY_CONTENT_DESCRIPTION = (
+    "This wire grammar is mandatory: never omit the copula. "
+    "SCALAR OUTPUT SHAPE: <changed subject> is/are <new value>."
+)
+"""
+
+_PY_FIELD_DOCS = """
+_UPDATE_MEMORY_CONTENT_DESCRIPTION = (
+    "The replacement text for the selected record; "
+    "the record id chooses the destination."
+)
+"""
+
+_PY_REVIEW_TEMPLATE = """
+WRITE_REVIEW_PROMPT = (
+    "Reduce the assertion to '<the thing> is <value>.' and compare word for word."
+)
+REVIEW_TURNS = {"update_memory": WRITE_REVIEW_PROMPT}
+"""
+
+_PY_FITTING_COMMENT = """
+# Advisory router wording (probe-selected; see experiments/declarative_ack_20260918).
+ROUTER_GUIDANCE = "Answer from the records."
+"""
+
+
+@pytest.mark.parametrize(
+    ("kind", "path", "emulator", "honest"),
+    [
+        (
+            "tool-name-execution-cap",
+            "agent.py",
+            _PY_TOOL_NAME_CAP,
+            _PY_EXACT_REPEAT_STOP,
+        ),
+        (
+            "successful-duplicate-suppression",
+            "app/executor.py",
+            _PY_SUCCESS_MEMO,
+            _PY_SUCCESS_MEMO_WITH_AUTHORIZER,
+        ),
+        (
+            "catalog-retired-after-step",
+            "loop.py",
+            _PY_CATALOG_RETIRED,
+            _PY_EXACT_REPEAT_STOP,
+        ),
+        (
+            "sticky-capability-veto",
+            "app/service.py",
+            _PY_STICKY_VETO,
+            _PY_EXACT_REPEAT_STOP,
+        ),
+        (
+            "uncertainty-narrows-route",
+            "src/agent/tool_policy.rs",
+            _RUST_UNSURE_ROUTE,
+            _RUST_UNSURE_ROUTE_HONEST,
+        ),
+        (
+            "tool-argument-grammar-sheet",
+            "catalog_compat.py",
+            _PY_ARGUMENT_GRAMMAR,
+            _PY_FIELD_DOCS,
+        ),
+        (
+            "review-turn-argument-template",
+            "agent2.py",
+            _PY_REVIEW_TEMPLATE,
+            _PY_FIELD_DOCS,
+        ),
+        (
+            "self-reported-benchmark-fitting",
+            "agent2.py",
+            _PY_FITTING_COMMENT,
+            _PY_FIELD_DOCS,
+        ),
+    ],
+)
+def test_policy_v13_executor_and_router_shapes_are_leads(
+    kind: str, path: str, emulator: str, honest: str
+) -> None:
+    assert kind in _kinds(find_benchmark_emulation_fingerprints([(path, emulator)]))
+    assert kind not in _kinds(find_benchmark_emulation_fingerprints([(path, honest)]))
+
+
+def test_executor_shape_leads_carry_locations_not_source_text() -> None:
+    findings = find_benchmark_emulation_fingerprints([("agent.py", _PY_TOOL_NAME_CAP)])
+    cap = [f for f in findings if f["kind"] == "tool-name-execution-cap"]
+    assert cap and cap[0]["severity"] == "high"
+    assert "will not run" not in json.dumps(cap)

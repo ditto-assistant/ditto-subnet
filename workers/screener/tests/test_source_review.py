@@ -4045,7 +4045,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v31-policy-v13"
+    assert _prompt_revision(13) == "source-review-v32-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -4293,6 +4293,14 @@ def test_written_policy_makes_policy_v10_invariants_implementable() -> None:
         "planned_deck",
         "declarative-preference-turn-directive",
         "keep-continuity-capability-rekey",
+        "tool-name-execution-cap",
+        "successful-duplicate-suppression",
+        "catalog-retired-after-step",
+        "sticky-capability-veto",
+        "uncertainty-narrows-route",
+        "tool-argument-grammar-sheet",
+        "review-turn-argument-template",
+        "self-reported-benchmark-fitting",
     }
 
     assert all(fragment in policy for fragment in required)

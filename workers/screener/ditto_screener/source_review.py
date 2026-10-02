@@ -88,7 +88,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v31-policy-v13"
+        return "source-review-v32-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 

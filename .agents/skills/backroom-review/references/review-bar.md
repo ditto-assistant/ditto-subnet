@@ -229,8 +229,11 @@ re-adjudicated by the scheduled v11 rescreen with every other cohort member.
   apply I8 and W16 instead; a complete source-proven I8 breach needs no
   companion invariant.
 - **Single-success duplicate suppression — production behavior.** Suppressing
-  a repeat call after a genuine first successful side effect (read-only tools
-  exempt) is not trajectory manipulation.
+  an exact repeat (same name and canonical arguments) after a genuine first
+  successful side effect (read-only tools exempt) is not trajectory
+  manipulation, provided the request does not ask for that effect again or the
+  deciding model can authorize the repeat. A name-only cap or a memo that
+  refuses a requested repeat is I7/W11 under v13 (`precedents/artemis-v8.md`).
 - **Answer normalization — scorer gap only when request-independent and
   character-level.** Unicode folding, slot-length caps, whitespace/quote
   trimming, and `ANSWER:` prefix stripping of the model's own output are
