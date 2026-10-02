@@ -110,6 +110,65 @@ async def test_restart_retry_uses_same_id_but_identical_vector_new_artifact_does
     assert calls[1][0] != calls[2][0]
 
 
+async def test_stale_pin_uses_a_distinct_request_id_per_chain_epoch():
+    calls = []
+
+    async def accept(request_id, body):
+        calls.append((request_id, body))
+        return {
+            "request_id": request_id,
+            "request_digest": hashlib.sha256(
+                json.dumps(
+                    body, sort_keys=True, separators=(",", ":"), allow_nan=False
+                ).encode()
+            ).hexdigest(),
+        }
+
+    setter = SimpleNamespace(put_weights_with_receipt=accept)
+    ledger, champion = context()
+    relay = WeightReceiptRelay(setter, None, "validator", 118)
+    assert await relay.submit({"miner": 1.0}, ledger, champion) is True
+    assert (
+        await relay.submit(
+            {"miner": 1.0}, ledger, champion, chain_epoch_block=9_000_000
+        )
+        is True
+    )
+    assert (
+        await relay.submit(
+            {"miner": 1.0}, ledger, champion, chain_epoch_block=9_000_000
+        )
+        is True
+    )
+    assert (
+        await relay.submit(
+            {"miner": 1.0}, ledger, champion, chain_epoch_block=9_000_360
+        )
+        is True
+    )
+    unpinned, same_epoch, same_epoch_retry, next_epoch = calls
+    assert unpinned[0] != same_epoch[0]
+    assert same_epoch[0] == same_epoch_retry[0]
+    assert same_epoch[0] != next_epoch[0]
+    assert unpinned[1] == same_epoch[1] == next_epoch[1]
+    assert "chain-epoch" not in json.dumps(same_epoch[1])
+
+
+async def test_chain_epoch_block_must_be_a_non_negative_int():
+    ledger, champion = context()
+    relay = WeightReceiptRelay(
+        SimpleNamespace(put_weights_with_receipt=AsyncMock()),
+        None,
+        "validator",
+        118,
+    )
+    assert (
+        await relay.submit({"miner": 1.0}, ledger, champion, chain_epoch_block=True)
+        is False
+    )
+    relay.setter.put_weights_with_receipt.assert_not_awaited()
+
+
 async def test_timeout_is_uncertain_never_legacy_fallback():
     ledger, champion = context()
     setter = SimpleNamespace(

@@ -4480,6 +4480,121 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 1.0})
         assert any("STALE" in r.message for r in caplog.records)
 
+    async def test_stale_ledger_past_the_age_bound_is_not_submitted(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ledger = [_entry("5Champion" + "x" * 39, 0.85)]
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
+        platform.get_ledger = AsyncMock(
+            return_value=LedgerResponse(
+                entries=ledger,
+                count=len(ledger),
+                stale=True,
+                age_seconds=worker_mod.MAX_STALE_LEDGER_AGE_SECONDS + 1,
+            )
+        )
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        with caplog.at_level("WARNING"):
+            await worker.run_once()
+        chain.put_weights.assert_not_awaited()
+        assert any("past the" in r.message for r in caplog.records)
+
+    async def test_stale_receipt_pin_changes_request_id_with_the_chain_epoch(
+        self,
+    ) -> None:
+        entry = _entry("5Champion" + "x" * 39, 0.85)
+        calls: list[str] = []
+
+        async def accept(request_id: str, body: dict[str, Any]) -> dict[str, str]:
+            calls.append(request_id)
+            digest = hashlib.sha256(
+                json.dumps(
+                    body, sort_keys=True, separators=(",", ":"), allow_nan=False
+                ).encode()
+            ).hexdigest()
+            return {"request_id": request_id, "request_digest": digest}
+
+        def platform_for() -> MagicMock:
+            platform = _platform_with_ledger(jobs=[], ledger=[entry])
+            platform.get_ledger = AsyncMock(
+                return_value=LedgerResponse(
+                    entries=[entry],
+                    count=1,
+                    stale=True,
+                    age_seconds=120,
+                    active_bench_version=13,
+                    ledger_snapshot_id=UUID("550e8400-e29b-41d4-a716-446655440000"),
+                    epoch_index=12,
+                    ledger_digest="ab" * 32,
+                )
+            )
+            return platform
+
+        async def submit_at(epoch_block: int) -> None:
+            chain = MagicMock()
+            chain.put_weights = AsyncMock()
+            chain.put_weights_with_receipt = accept
+            chain.get_last_epoch_block = AsyncMock(return_value=epoch_block)
+            worker = ValidatorWorker(
+                config=_config(),
+                platform=platform_for(),
+                dittobench=MagicMock(),
+                chain=chain,
+                keypair=MagicMock(),
+            )
+            outcome = await worker._update_weights()
+            assert outcome.submitted is True
+            chain.put_weights.assert_not_awaited()
+
+        await submit_at(9_000_000)
+        await submit_at(9_000_000)
+        await submit_at(9_000_360)
+        assert calls[0] == calls[1]
+        assert calls[0] != calls[2]
+
+    async def test_stale_receipt_pin_is_not_submitted_without_a_chain_epoch(
+        self,
+    ) -> None:
+        entry = _entry("5Champion" + "x" * 39, 0.85)
+        platform = _platform_with_ledger(jobs=[], ledger=[entry])
+        platform.get_ledger = AsyncMock(
+            return_value=LedgerResponse(
+                entries=[entry],
+                count=1,
+                stale=True,
+                age_seconds=120,
+                ledger_snapshot_id=UUID("550e8400-e29b-41d4-a716-446655440000"),
+                epoch_index=12,
+                ledger_digest="ab" * 32,
+            )
+        )
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+        chain.put_weights_with_receipt = AsyncMock()
+        chain.get_last_epoch_block = AsyncMock(return_value=None)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        outcome = await worker._update_weights()
+
+        assert outcome.submitted is False
+        chain.put_weights.assert_not_awaited()
+        chain.put_weights_with_receipt.assert_not_awaited()
+
     async def test_no_permit_skips_weight_submission(self) -> None:
         # A validator hotkey without a permit must not burn an epoch submitting
         # weights the chain will reject; skip loudly instead.

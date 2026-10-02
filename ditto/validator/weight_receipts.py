@@ -206,15 +206,30 @@ class WeightReceiptRelay:
             logger.warning("weight receipt recovery deferred: %s", type(exc).__name__)
 
     async def submit(
-        self, weights: dict[str, float], ledger: Any, champion: Any
+        self,
+        weights: dict[str, float],
+        ledger: Any,
+        champion: Any,
+        chain_epoch_block: int | None = None,
     ) -> bool | None:
         """None permits legacy submission only before any receipt acceptance.
 
         Timeout, malformed acknowledgement, and other uncertain outcomes return
         False: retry the deterministic request next time, never duplicate it via
         legacy submission. A new epoch is a distinct request and may proceed.
+
+        ``chain_epoch_block`` is the chain's ``LastEpochBlock``. A stale pin
+        repeats the previous epoch's provenance, so without this the request id
+        is reused and Pylon acknowledges the duplicate without committing.
+        It is part of the request id only, not the receipt body: the body stays
+        the pin that was folded.
         """
         submit = getattr(self.setter, "put_weights_with_receipt", None)
+        if chain_epoch_block is not None and (
+            type(chain_epoch_block) is not int or chain_epoch_block < 0
+        ):
+            self._submission_observed("invalid_provenance")
+            return False
         treasury_pin = getattr(ledger, "treasury_pin", None)
         # Unknown/malformed pins never downgrade to ordinary submission. V1
         # must revalidate as the historical shadow contract before fallback.
@@ -279,12 +294,13 @@ class WeightReceiptRelay:
                     body, sort_keys=True, separators=(",", ":"), allow_nan=False
                 ).encode()
             ).hexdigest()
-            request_id = str(
-                uuid5(
-                    NAMESPACE_URL,
-                    f"ditto-weight-receipt:v{body['schema_version']}:{self.hotkey}:{self.netuid}:{request_digest}",
-                )
+            identity = (
+                f"ditto-weight-receipt:v{body['schema_version']}:"
+                f"{self.hotkey}:{self.netuid}:{request_digest}"
             )
+            if chain_epoch_block is not None:
+                identity = f"{identity}:chain-epoch:{chain_epoch_block}"
+            request_id = str(uuid5(NAMESPACE_URL, identity))
         except (AttributeError, ValueError, TypeError, OverflowError):
             self._submission_observed("invalid_provenance")
             # No request was sent. Old/incomplete ledgers retain ordinary

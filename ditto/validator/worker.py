@@ -249,6 +249,21 @@ def _ledger_provisional_incumbent(ledger: LedgerResponse) -> LedgerEntry | None:
     return provisional
 
 
+def _receipt_provenance_ready(ledger: Any) -> bool:
+    """True when the ledger can take the Pylon receipt path.
+
+    ``submit`` falls back to ordinary ``put_weights`` when any of these is
+    missing, and that path is not deduplicated by request id.
+    """
+    digest = getattr(ledger, "ledger_digest", None)
+    return (
+        getattr(ledger, "ledger_snapshot_id", None) is not None
+        and getattr(ledger, "epoch_index", None) is not None
+        and isinstance(digest, str)
+        and len(digest) == 64
+    )
+
+
 def _ledger_weight_entries(ledger: LedgerResponse) -> list[LedgerEntry]:
     """The pool the KOTH fold reads: payable entries plus any provisional
     incumbent, through the same confirmation filter."""
@@ -313,6 +328,12 @@ _BOUNDARY_INCLUSION_MARGIN_BLOCKS = 6
 # 100-block rate-limit window for inclusion. Any host-specific value would
 # reintroduce exactly the ledger-read skew this exists to remove.
 _WEIGHT_COMMIT_OFFSET_BLOCKS = 270
+# How long a platform-served last-known-good pin may still be committed.
+# Inside the bound, each chain epoch gets its own weight request so LastUpdate
+# keeps moving through a multi-hour outage. Past it, the snapshot is too old
+# to keep paying from, and weights are left unchanged. ActivityCutoff on SN118
+# is about 16.7h, so this stays inside one activity window.
+MAX_STALE_LEDGER_AGE_SECONDS = 6 * 60 * 60
 
 # Substrings that identify a chain rate-limit rejection across the surfaces we
 # submit through (subtensor's ``SettingWeightsTooFast`` error, SDK / Pylon
@@ -2112,12 +2133,25 @@ class ValidatorWorker:
 
         # The platform serves a last-known-good ledger (flagged stale) when its own
         # DB read fails; folding it is safe (the pool is durable + slow-moving) but
-        # worth a loud line so an operator sees the platform is degraded.
+        # worth a loud line so an operator sees the platform is degraded. A pin
+        # older than the bound is not folded: recommitting it would keep paying
+        # from scores that are no longer current.
         if getattr(ledger, "stale", False):
+            age = getattr(ledger, "age_seconds", 0)
+            if type(age) is not int or age < 0:
+                age = 0
+            if age > MAX_STALE_LEDGER_AGE_SECONDS:
+                logger.warning(
+                    "scoring ledger is STALE and %ss old, past the %ss bound; "
+                    "weights unchanged this epoch",
+                    age,
+                    MAX_STALE_LEDGER_AGE_SECONDS,
+                )
+                return _WeightOutcome()
             logger.warning(
                 "scoring ledger is STALE (platform served a %ss-old snapshot); "
                 "folding it but the platform DB read is failing",
-                getattr(ledger, "age_seconds", "?"),
+                age,
             )
 
         leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
@@ -2307,7 +2341,27 @@ class ValidatorWorker:
             )
         await self._log_commit_reveal_mode()
         await self._weight_receipt_relay.recover()
-        submitted = await self._weight_receipt_relay.submit(weights, ledger, champion)
+        # A stale pin repeats the previous epoch's provenance, so the receipt
+        # request id would too, and Pylon would acknowledge the duplicate
+        # without a new commit. Bind LastEpochBlock into that id. Without a
+        # readable chain epoch the acknowledgement cannot be told from a
+        # duplicate, so leave the last vector in place.
+        chain_epoch_block = None
+        if getattr(ledger, "stale", False) and _receipt_provenance_ready(ledger):
+            chain_epoch_block = await self._read_chain_blocks("get_last_epoch_block")
+            if chain_epoch_block is None:
+                logger.warning(
+                    "stale scoring ledger has no readable chain epoch; "
+                    "weights unchanged this epoch"
+                )
+                return _WeightOutcome(
+                    leaderboard=leaderboard,
+                    weights=weights,
+                    king_fingerprint=king_fingerprint,
+                )
+        submitted = await self._weight_receipt_relay.submit(
+            weights, ledger, champion, chain_epoch_block=chain_epoch_block
+        )
         if submitted is None:
             if enforcing:
                 logger.warning("treasury receipt transport refused; no legacy fallback")
