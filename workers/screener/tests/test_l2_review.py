@@ -7826,7 +7826,7 @@ async def test_relayed_provider_outage_is_named_a_provider_fault(
     """OpenRouter relays an upstream outage as a failed 200 body, not a bad answer."""
     archive, artifact_sha = _tar(tmp_path, "fn main() {}")
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -7855,7 +7855,7 @@ async def test_malformed_body_without_a_provider_error_stays_a_contract_fault(
 ) -> None:
     archive, artifact_sha = _tar(tmp_path, "fn main() {}")
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"status": "completed", "output": "nope"})
 
     result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
