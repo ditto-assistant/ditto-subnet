@@ -51,6 +51,7 @@ from ditto_screener.source_review import (
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    STRICT_TWO_OUTCOME_POLICY_VERSION,
     ScoredRuntimeEvidenceLease,
     ScreenReviewAudit,
     SourceReviewAuthorityTransition,
@@ -121,35 +122,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v51-policy-v13"
+        return "l2-terra-source-review-v52-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-adversarial-critic-v24-policy-v13"
+        return "l3-sol-adversarial-critic-v25-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-violation-cause-v29-policy-v13"
+        return "l3-sol-violation-cause-v30-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-cause-disagreement-v9-policy-v13"
+        return "l3-sol-cause-disagreement-v10-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-safety-adjudicator-v27-policy-v13"
+        return "l3-sol-safety-adjudicator-v28-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -1264,7 +1265,8 @@ causal_evidence schema_version 3 with i5_proof naming the concrete evaluation-
 dependent assumption, an evidence index for that assumption, and a distinct
 ordinary-product exclusion. Do not fill either field with a generic claim that
 prescriptive prose is benchmark-shaped. If the source does not support these
-proof obligations, mark I5 inconclusive; the finding remains held. For I6,
+proof obligations, mark I5 inconclusive; an inconclusive invariant cannot
+reject. For I6,
 trace the condition
 guarding each alleged fabricated tool result. A fallback that returns a
 local stub only when the request omits
@@ -1384,6 +1386,21 @@ _INCONCLUSIVE_ANALYST_CRITIC_TASK = (
     "with a grounded causal path, and inconclusive only when the shipped "
     "source itself cannot settle an invariant. "
 )
+_V13_VIOLATION_FINALITY_TASK = """\
+Your confirmation is final under policy v13. A violation you confirm is a
+terminal reject of this exact artifact: no behavioral test, operator review, or
+later court runs after you. First decide independently whether the provisional
+violation is real at all. Refute it by submitting risk_level low with the safe
+resolution basis that fits when the cited mechanism is unreachable on a valid
+scored request, does not change the scorer-visible answer or trajectory,
+matches a published safe harbor, or rests on a location you could not confirm
+in source. Confirm only a breach you would defend from the cited source alone.
+Submit within your step and time budget: running out without a submission
+confirms nothing and leaves the artifact unresolved.
+
+"""
+
+
 _VIOLATION_CAUSE_TASK = """\
 Adjudicate the primary causal mechanism of the provisional violation. The
 violation disposition is not authority to infer its cause. Re-read the smallest
@@ -3528,7 +3545,9 @@ class TerraSolSourceReviewAgent:
             if on_l3_start is not None:
                 on_l3_start()
             if not (analyst.observation.ok and analyst.observation.risk_level == "low"):
-                if _needs_violation_adjudication(analyst, l1_observation):
+                if _needs_violation_adjudication(
+                    analyst, l1_observation, policy_version=policy_version
+                ):
                     provisional_violation = {
                         "finding_digest": analyst.observation.finding_digest,
                         "finding": _compressed_l1_finding(analyst.observation),
@@ -4521,9 +4540,15 @@ class TerraSolSourceReviewAgent:
                 "submit violation for a causal challenge; otherwise inconclusive."
             )
         elif role == "violation_adjudicator":
-            task = _VIOLATION_CAUSE_TASK
+            task = (
+                _V13_VIOLATION_FINALITY_TASK if policy_version >= 13 else ""
+            ) + _VIOLATION_CAUSE_TASK
         elif role == "violation_tiebreaker":
-            task = _VIOLATION_CAUSE_DISAGREEMENT_TASK + _VIOLATION_CAUSE_TASK
+            task = (
+                (_V13_VIOLATION_FINALITY_TASK if policy_version >= 13 else "")
+                + _VIOLATION_CAUSE_DISAGREEMENT_TASK
+                + _VIOLATION_CAUSE_TASK
+            )
         else:
             raw_l1 = dossier.get("l1")
             raw_categories = (
@@ -6315,8 +6340,19 @@ def _enforce_causal_authority(
         return observation
     verification = verify_causal_finding(finding)
     if verification.role_complete:
+        if clearance_path in _L3_CONFIRMED_VIOLATION_PATHS:
+            return replace(observation, violation_certified=True)
         return observation
     return _failure(f"l2-{verification.reason_code}", "inconclusive")
+
+
+# Only an independent L3 violation adjudicator that saw the L2 finding and
+# could have refuted it (a low-risk verdict is an L3 disagreement) certifies a
+# violation. ``l2_violation`` skipped L3, and every L3 timeout, disagreement,
+# or missing verdict leaves a different path, so none of them certify.
+_L3_CONFIRMED_VIOLATION_PATHS = frozenset(
+    {"l3_adjudicated_violation_cause", "l3_adjudicated_violation_cause_tiebreak"}
+)
 
 
 def _l1_concerns_resolved(notes: tuple[Mapping[str, object], ...]) -> bool:
@@ -6622,9 +6658,17 @@ def _routes_inconclusive_to_l3(analyst: L2RunResult, policy_version: int) -> boo
 
 
 def _needs_violation_adjudication(
-    analyst: L2RunResult, l1_observation: SourceReviewObservation
+    analyst: L2RunResult,
+    l1_observation: SourceReviewObservation,
+    *,
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> bool:
-    """Escalate causal ambiguity, including a mechanism narrowed away from L1."""
+    """Escalate causal ambiguity, including a mechanism narrowed away from L1.
+
+    At policy v13 an L3-confirmed breach is a terminal reject, so every L2
+    violation goes to the independent L3 adjudicator that can refute it;
+    an L2-only finding would otherwise stay a held lead forever.
+    """
     if not analyst.observation.ok or analyst.observation.risk_level not in {
         "medium",
         "high",
@@ -6634,6 +6678,8 @@ def _needs_violation_adjudication(
         return True
     if analyst.resolution_basis not in _VIOLATION_RESOLUTION_BASES:
         return False
+    if policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION:
+        return True
     categories = set(analyst.observation.categories)
     benchmark_family = bool(
         categories & {"benchmark_emulation", "embedded_evaluator_logic"}

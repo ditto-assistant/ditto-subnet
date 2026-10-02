@@ -256,6 +256,7 @@ from ditto_screening_protocol.reason_codes import (
     DOCKER_BUILD_INFRASTRUCTURE,
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
+    SOURCE_REVIEW_CONFIRMED_VIOLATION,
     V2_COMPLETE_STATIC_REVIEWS,
     VERIFICATION_INCOMPLETE_UNREVIEWABLE,
     WORKER_CLAIM_NOT_STARTED,
@@ -426,6 +427,62 @@ V2_UNREVIEWABLE_PUBLIC_REASON = (
     "decision path. No violation was found. A simpler, more traceable version "
     "may be resubmitted."
 )
+
+
+_INVARIANT_LABELS = {
+    "i1_model_invocation": "I1 model invocation",
+    "i2_evidence_retention": "I2 evidence retention",
+    "i3_model_dissent": "I3 model dissent",
+    "i4_derived_value_authority": "I4 derived-value authority",
+    "i5_production_engine": "I5 production engine",
+    "i6_tool_execution_fidelity": "I6 tool execution fidelity",
+    "i7_model_tool_planning": "I7 model tool planning",
+    "i8_evaluation_independence": "I8 evaluation independence",
+}
+
+
+def _confirmed_violation_reason(
+    payload: ScreenResultRequest, *, artifact_sha256: str
+) -> str | None:
+    """Miner-visible reject reason for an L3-confirmed v13 breach, else None.
+
+    The finding is digest-bound to the signed verdict at parse time; this also
+    binds it to the exact artifact and requires a named invariant breach, so a
+    copied or breach-free finding can never reject.
+    """
+    finding = payload.finding
+    if (
+        payload.outcome != ScreenResultOutcome.QUARANTINE
+        or payload.policy_version < 13
+        or payload.reason_code != SOURCE_REVIEW_CONFIRMED_VIOLATION
+        or finding is None
+        or finding.artifact_sha256 != artifact_sha256
+        or finding.invariant_assessment is None
+    ):
+        return None
+    breaches = [
+        decision
+        for decision in finding.invariant_assessment.decisions
+        if decision.disposition.value == "breach"
+    ]
+    if not breaches:
+        return None
+    parts = []
+    for decision in breaches[:2]:
+        locations = sorted(
+            {
+                f"{finding.evidence[index].path}:{finding.evidence[index].line}"
+                for index in decision.evidence_indices
+                if index < len(finding.evidence)
+            }
+        )[:3]
+        label = _INVARIANT_LABELS.get(decision.invariant.value, decision.invariant)
+        cited = f" ({', '.join(locations)})" if locations else ""
+        parts.append(f"{label}: {decision.summary.rstrip('.')}{cited}.")
+    return (
+        "Rejected under screening policy v13: independent L2 and L3 source "
+        "review confirmed an invariant breach. " + " ".join(parts)
+    )
 
 
 def _completes_static_review(payload: ScreenResultRequest) -> bool:
@@ -4517,6 +4574,11 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
             "This is operator-owned and is retried automatically with backoff for "
             "a limited time, then held for an operator retry."
         )
+    if reason_code == SOURCE_REVIEW_CONFIRMED_VIOLATION:
+        return (
+            "Rejected under screening policy v13: independent L2 and L3 source "
+            "review confirmed an invariant breach in the submitted source."
+        )
     if reason_code == "docker-build" or normalized.startswith("build failed"):
         if (
             "couldn't read" in normalized or "could not read" in normalized
@@ -5534,6 +5596,21 @@ async def submit_result(
             public_reason = V2_UNREVIEWABLE_PUBLIC_REASON
             attempt_status = "rejected"
             stored_reason_code = VERIFICATION_INCOMPLETE_UNREVIEWABLE
+        confirmed_reason = _confirmed_violation_reason(
+            payload, artifact_sha256=agent.sha256
+        )
+        if (
+            confirmed_reason is not None
+            and not deferred_attempt_lifecycle
+            and (agent.status in _SCREENABLE_STATUSES or attempt.status == "rejected")
+        ):
+            # Policy v13: a breach the independent L3 adjudicator confirmed,
+            # with complete causal proof, is the screener's to reject. The
+            # worker transports it as a hold; Platform owns the terminal write.
+            # A scored or live agent keeps its hold for the ATH court.
+            target = AgentStatus.REJECTED
+            public_reason = confirmed_reason
+            attempt_status = "rejected"
         if attempt.reason_code == "exact-cross-miner-duplicate" and (
             payload.reason_code != attempt.reason_code
         ):
@@ -5843,6 +5920,10 @@ async def submit_result(
                 v2_unreviewable = (
                     stored_reason_code == VERIFICATION_INCOMPLETE_UNREVIEWABLE
                 )
+                confirmed_violation = (
+                    target == AgentStatus.REJECTED
+                    and stored_reason_code == SOURCE_REVIEW_CONFIRMED_VIOLATION
+                )
                 resolved_at = datetime.now(UTC) if evidence_deferred else None
                 session.add(
                     ScreeningQuarantine(
@@ -5883,13 +5964,15 @@ async def submit_result(
                         resolved_by=(
                             "platform:v13-v2-unreviewable"
                             if v2_unreviewable
+                            else "platform:v13-confirmed-violation"
+                            if confirmed_violation
                             else "platform:deferred-source-review"
                             if evidence_deferred
                             else None
                         ),
                         resolution=(
                             "reject"
-                            if v2_unreviewable
+                            if v2_unreviewable or confirmed_violation
                             else "rescreen"
                             if evidence_deferred
                             else None
@@ -5897,6 +5980,8 @@ async def submit_result(
                         resolution_reason=(
                             V2_UNREVIEWABLE_PUBLIC_REASON
                             if v2_unreviewable
+                            else public_reason
+                            if confirmed_violation
                             else payload.adjudication.reason
                             if payload.adjudication is not None
                             else (

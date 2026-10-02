@@ -33,8 +33,13 @@ from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     STRICT_TWO_OUTCOME_POLICY_VERSION,
 )
+from ditto_screening_protocol.models import (
+    SourceReviewFinding,
+    SourceReviewInvariantDisposition,
+)
 from ditto_screening_protocol.reason_codes import (
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
+    SOURCE_REVIEW_CONFIRMED_VIOLATION,
 )
 
 logger = logging.getLogger(__name__)
@@ -275,6 +280,11 @@ class SourceReviewObservation:
     finding: Mapping[str, object] | None = None
     failure_disposition: str = "retryable_infra"
     clearance_certified: bool = False
+    violation_certified: bool = False
+    """An elevated finding whose causal proof is complete and which an
+    independent L3 violation adjudicator confirmed (it could have refuted it).
+    L2 alone, an L3 disagreement, timeout, or missing L3 verdict never set it.
+    At policy v13 a certified breach is a terminal reject, not a held lead."""
     review_audit: Mapping[str, object] | None = None
     # Structured model submission exposed only by the non-authoritative L2
     # canary report. It contains no source text or model-authored prose.
@@ -853,7 +863,9 @@ class AgenticSourceReviewModule(_BaseModule):
                 ),
                 review_notes=review_notes,
             )
-        code, summary = _source_review_reason(observation.categories)
+        code, summary = _source_review_reason_for(
+            observation, policy_version=context.policy_version
+        )
         return ModuleResult(
             ModuleDisposition.TRIPWIRE,
             (
@@ -1632,7 +1644,9 @@ class PolicyEngine:
             )
         if observation.risk_level not in {"medium", "high"}:
             raise ValueError("pre-execution source decision requires elevated risk")
-        code, summary = _source_review_reason(observation.categories)
+        code, summary = _source_review_reason_for(
+            observation, policy_version=policy_version
+        )
         return self._decision(
             ScreeningOutcome.QUARANTINE,
             (
@@ -1775,6 +1789,37 @@ def _module_terminal(disposition: ModuleDisposition) -> ScreeningOutcome | None:
     }.get(disposition)
 
 
+CONFIRMED_VIOLATION_CODE = SOURCE_REVIEW_CONFIRMED_VIOLATION
+
+
+def _source_review_reason_for(
+    observation: SourceReviewObservation, *, policy_version: int
+) -> tuple[str, str]:
+    """Name a confirmed v13 breach for Platform's reject, else the held lead."""
+    if (
+        policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+        and observation.violation_certified
+        and _names_invariant_breach(observation.finding)
+    ):
+        return (
+            CONFIRMED_VIOLATION_CODE,
+            "independent L2 and L3 source review confirmed an invariant breach",
+        )
+    return _source_review_reason(observation.categories)
+
+
+def _names_invariant_breach(finding: Mapping[str, object] | None) -> bool:
+    try:
+        parsed = SourceReviewFinding.model_validate(finding)
+    except (TypeError, ValueError):
+        return False
+    assessment = parsed.invariant_assessment
+    return assessment is not None and any(
+        decision.disposition == SourceReviewInvariantDisposition.BREACH
+        for decision in assessment.decisions
+    )
+
+
 def _source_review_reason(categories: Sequence[str]) -> tuple[str, str]:
     category_set = set(categories)
     if category_set & _MALICIOUS_SOURCE_CATEGORIES:
@@ -1800,7 +1845,7 @@ def _source_review_reason(categories: Sequence[str]) -> tuple[str, str]:
         )
     return (
         "source-safety-behavioral-risk",
-        "private source analysis selected a bounded behavioral audit",
+        "private source analysis found a behavioral-integrity risk",
     )
 
 

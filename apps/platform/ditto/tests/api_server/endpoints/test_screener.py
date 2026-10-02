@@ -140,6 +140,10 @@ from ditto_screening_protocol import (
     ScreenResultOutcome,
     ScreenReviewAudit,
     SourceReviewAdjudication,
+    SourceReviewInvariant,
+    SourceReviewInvariantAssessment,
+    SourceReviewInvariantDecision,
+    SourceReviewInvariantDisposition,
     SourceReviewNote,
     completion_receipt_signing_message,
     source_review_notes_digest,
@@ -12724,6 +12728,93 @@ class TestSubmitResult:
         assert response.status_code == 200, response.text
         assert response.json()["status"] == AgentStatus.SCREENING_FAILED
 
+    @pytest.mark.parametrize(
+        ("variant", "expected_status"),
+        [
+            ("confirmed", AgentStatus.REJECTED),
+            # Only the L3-confirmed reason code can reject; any other hold stays.
+            ("other_code", AgentStatus.QUARANTINED),
+            ("no_breach", AgentStatus.QUARANTINED),
+            ("policy_12", AgentStatus.QUARANTINED),
+            ("other_artifact", AgentStatus.QUARANTINED),
+        ],
+    )
+    async def test_v13_l3_confirmed_violation_is_a_screener_reject(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        variant: str,
+        expected_status: AgentStatus,
+    ) -> None:
+        # Policy v13: a breach the independent L3 adjudicator confirmed is the
+        # screener's to reject; every weaker hold still waits for review.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        policy_version = 12 if variant == "policy_12" else 13
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=policy_version
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        finding = _confirmed_violation_finding(
+            artifact_sha256="cd" * 32 if variant == "other_artifact" else _SHA256,
+            breach=variant != "no_breach",
+        )
+        digest = finding.canonical_digest()
+        payload = _result_payload(
+            agent_id,
+            passed=False,
+            policy_version=policy_version,
+            attempt_id=attempt_id,
+            outcome="quarantine",
+            manifest_digest="56" * 32,
+            finding_digest=digest,
+            reason_code=(
+                "source-safety-behavioral-risk"
+                if variant == "other_code"
+                else "source-review-confirmed-violation"
+            ),
+            evidence=_review_evidence(digest),
+            finding=finding.model_dump(mode="json"),
+        )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == expected_status
+        replay = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["status"] == expected_status
+
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            assert agent is not None and attempt is not None
+            assert quarantine is not None
+            if expected_status == AgentStatus.REJECTED:
+                assert attempt.status == "rejected"
+                assert quarantine.status == "resolved"
+                assert quarantine.resolution == "reject"
+                assert quarantine.resolved_by == "platform:v13-confirmed-violation"
+                assert agent.screening_reason is not None
+                assert agent.screening_reason.startswith(
+                    "Rejected under screening policy v13"
+                )
+                assert "I5 production engine" in agent.screening_reason
+                assert "src/main.rs:2" in agent.screening_reason
+                assert quarantine.resolution_reason == agent.screening_reason
+            else:
+                assert quarantine.status == "active"
+                assert quarantine.resolution is None
+
     async def test_result_integrity_error_returns_409_and_logs(
         self,
         app: FastAPI,
@@ -13241,6 +13332,34 @@ def _review_finding(artifact_sha256: str = _SHA256) -> SourceReviewFinding:
             )
         ],
         summary="Deterministic shortcut bypasses the general provider path.",
+    )
+
+
+def _confirmed_violation_finding(
+    *, artifact_sha256: str = _SHA256, breach: bool = True
+) -> SourceReviewFinding:
+    """A v13 finding whose I5 decision is the breach L3 confirmed."""
+    decisions = [
+        SourceReviewInvariantDecision(
+            invariant=invariant,
+            disposition=(
+                SourceReviewInvariantDisposition.BREACH
+                if breach and invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+                else SourceReviewInvariantDisposition.INCONCLUSIVE
+            ),
+            summary="Request-keyed table answers before any model call.",
+            evidence_indices=(
+                [0]
+                if breach and invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+                else []
+            ),
+        )
+        for invariant in SourceReviewInvariant
+    ]
+    return _review_finding(artifact_sha256).model_copy(
+        update={
+            "invariant_assessment": SourceReviewInvariantAssessment(decisions=decisions)
+        }
     )
 
 

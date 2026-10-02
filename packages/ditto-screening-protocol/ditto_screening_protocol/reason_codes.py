@@ -109,6 +109,10 @@ WORKER_LEASE_ORPHANED: Final = "worker-lease-orphaned"
 SCREENING_LEASE_EXPIRED: Final = "screening-lease-expired"
 SOURCE_REVIEW_INCONCLUSIVE: Final = "source-review-inconclusive"
 REPEATEDLY_INCONCLUSIVE: Final = "repeatedly-inconclusive"
+SOURCE_REVIEW_CONFIRMED_VIOLATION: Final = "source-review-confirmed-violation"
+"""A policy v13 invariant breach whose causal proof is complete and which the
+independent L3 violation adjudicator confirmed after it could have refuted it.
+The worker transports it as a hold; Platform records the terminal reject."""
 VERIFICATION_INCOMPLETE_UNREVIEWABLE: Final = "verification-incomplete-unreviewable"
 """Policy v13 ``V2.platform_verification_failed``: Platform's terminal reject
 after ``V2_COMPLETE_STATIC_REVIEWS`` complete source reviews of the exact
@@ -191,6 +195,8 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     # The Rust-only harness contract was replaced by the container contract.
     ScreeningReasonCode("rust-harness-contract", _A, _RETIRED),
     ScreeningReasonCode("exact-cross-miner-duplicate", _A, _WORKER),
+    # An L3-confirmed policy v13 invariant breach (Platform rejects it).
+    ScreeningReasonCode(SOURCE_REVIEW_CONFIRMED_VIOLATION, _A, _WORKER),
     # Seeding-probe rejections: the image could not serve POST /seed.
     ScreeningReasonCode("seed-readonly-write", _A, _WORKER),
     ScreeningReasonCode("seed-memory-cap", _A, _WORKER),

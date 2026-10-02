@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
 
@@ -22,7 +23,11 @@ from ditto_screener.l2_review import (
     _enforce_causal_authority,
     _parse_l2_review,
 )
-from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.policy import (
+    CONFIRMED_VIOLATION_CODE,
+    SourceReviewObservation,
+    _source_review_reason_for,
+)
 from ditto_screener.source_review import TarSourceRepository
 from ditto_screening_protocol import (
     SourceReviewAuthorityTransition,
@@ -31,6 +36,10 @@ from ditto_screening_protocol import (
     SourceReviewEvidenceItem,
     SourceReviewEvidenceRole,
     SourceReviewFinding,
+    SourceReviewInvariant,
+    SourceReviewInvariantAssessment,
+    SourceReviewInvariantDecision,
+    SourceReviewInvariantDisposition,
     SourceReviewScorerVisibleEffect,
 )
 
@@ -859,3 +868,85 @@ def test_sanitized_corpus_runs_through_production_parser_and_authority_boundary(
     assert verification.reason_code == "causal-evidence-verified"
     assert verification.authority_transition == case["authority_transition"]
     assert verification.scorer_visible_effect == case["scorer_visible_effect"]
+
+
+def _confirmed_breach_finding() -> SourceReviewFinding:
+    finding = _finding(category="provider_bypass", transition=None)
+    return finding.model_copy(
+        update={
+            "invariant_assessment": SourceReviewInvariantAssessment(
+                decisions=[
+                    SourceReviewInvariantDecision(
+                        invariant=invariant,
+                        disposition=(
+                            SourceReviewInvariantDisposition.BREACH
+                            if invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+                            else SourceReviewInvariantDisposition.INCONCLUSIVE
+                        ),
+                        summary="Bounded decision.",
+                        evidence_indices=(
+                            [0]
+                            if invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+                            else []
+                        ),
+                    )
+                    for invariant in SourceReviewInvariant
+                ]
+            )
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("clearance_path", "certified"),
+    [
+        ("l3_adjudicated_violation_cause", True),
+        ("l3_adjudicated_violation_cause_tiebreak", True),
+        # L2 alone never had an L3 adjudicator that could refute it.
+        ("l2_violation", False),
+        (None, False),
+    ],
+)
+def test_only_an_l3_confirmed_violation_is_certified(
+    clearance_path: str | None, certified: bool
+) -> None:
+    finding = _confirmed_breach_finding()
+    assert verify_causal_finding(finding).role_complete
+
+    observation = _enforce_causal_authority(
+        _observation(finding), clearance_path=clearance_path
+    )
+
+    assert observation.ok
+    assert observation.violation_certified is certified
+
+
+def test_a_certified_v13_breach_names_the_confirmed_violation_code() -> None:
+    finding = _confirmed_breach_finding()
+    certified = _enforce_causal_authority(
+        _observation(finding), clearance_path="l3_adjudicated_violation_cause"
+    )
+
+    assert _source_review_reason_for(certified, policy_version=13) == (
+        CONFIRMED_VIOLATION_CODE,
+        "independent L2 and L3 source review confirmed an invariant breach",
+    )
+    # Before policy v13 a court reject, not this certificate, owns rejection.
+    assert _source_review_reason_for(certified, policy_version=12)[0] != (
+        CONFIRMED_VIOLATION_CODE
+    )
+    # Without an invariant breach there is nothing to reject on.
+    no_breach = replace(
+        certified,
+        finding=_finding(category="provider_bypass", transition=None).model_dump(
+            mode="json"
+        ),
+    )
+    assert _source_review_reason_for(no_breach, policy_version=13)[0] != (
+        CONFIRMED_VIOLATION_CODE
+    )
+    # An uncertified (L2-only) finding stays a held lead.
+    uncertified = replace(certified, violation_certified=False)
+    assert _source_review_reason_for(uncertified, policy_version=13)[0] != (
+        CONFIRMED_VIOLATION_CODE
+    )
