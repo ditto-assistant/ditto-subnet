@@ -270,6 +270,62 @@ def _composite_stderr(details: dict | None) -> float | None:
     return None
 
 
+def _payout_stamp(value: datetime) -> str:
+    """Same microsecond UTC token the score signature uses for ``first_seen``."""
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return aware.astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def _payout_binding(details: dict) -> dict[str, Any]:
+    """Receipt fields for a payout:v1 signature, or nothing if the blob is legacy."""
+    payout = details.get("payout_v1")
+    if not isinstance(payout, dict):
+        return {}
+    raw_seen = payout.get("first_seen")
+    hotkey = payout.get("miner_hotkey")
+    n = payout.get("n")
+    netuid = payout.get("netuid")
+    if not isinstance(raw_seen, str) or not isinstance(hotkey, str) or not hotkey:
+        return {}
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        return {}
+    if isinstance(netuid, bool) or not isinstance(netuid, int) or netuid < 0:
+        return {}
+    try:
+        first_seen = datetime.fromisoformat(raw_seen)
+    except ValueError:
+        return {}
+    return {
+        "miner_hotkey": hotkey,
+        "first_seen": first_seen,
+        "n": n,
+        "netuid": netuid,
+    }
+
+
+def _served_first_seen(
+    fold_first_seen: datetime, proofs: list[LedgerScoreProof]
+) -> datetime:
+    """Serve the signed upload stamp once the whole quorum has bound it.
+
+    Until then the row keeps the lineage anchor. A later rewrite of that
+    anchor cannot move a quorum that already signed one stamp, because the
+    validator requires the served value to be the one in the receipts.
+    """
+    if not proofs or any(proof.first_seen is None for proof in proofs):
+        return fold_first_seen
+    stamp = proofs[0].first_seen
+    if stamp is None:
+        return fold_first_seen
+    token = _payout_stamp(stamp)
+    if any(
+        proof.first_seen is None or _payout_stamp(proof.first_seen) != token
+        for proof in proofs
+    ):
+        return fold_first_seen
+    return stamp
+
+
 def _score_proof(score: Score | LedgerScoreProofRow) -> LedgerScoreProof:
     details = score.details
     details = details if isinstance(details, dict) else {}
@@ -284,6 +340,7 @@ def _score_proof(score: Score | LedgerScoreProofRow) -> LedgerScoreProof:
     base_evidence = details.get("base_evidence_sha256")
     base_evidence_root = details.get("v9_base")
     return LedgerScoreProof(
+        **_payout_binding(details),
         validator_hotkey=score.validator_hotkey,
         run_id=score.run_id,
         composite=score.composite,
@@ -756,16 +813,24 @@ async def _ledger_entries(
         scores=ranking_scores,
         secondary_scores=efficiency_tiebreaks,
     )
+    proofs_by_agent = {
+        row.agent_id: [
+            _score_proof(score) for score in proof_rows.get(row.agent_id, [])
+        ]
+        for row in rows
+    }
     entries = [
         LedgerEntry(
             miner_hotkey=r.miner_hotkey,
             agent_id=r.agent_id,
             composite=r.composite,
             n=r.n,
-            # The fold anchor, not this tarball's upload time: the wire field is
-            # read by exactly one thing, the validator's champion fold, and that
-            # fold must anchor on the lineage. See LedgerRow.crown_first_seen.
-            first_seen=r.fold_first_seen,
+            # The fold anchor, not this tarball's upload time, until every
+            # receipt in the quorum has signed one payout stamp. Then that
+            # stamp is what the fold reads, so the platform cannot backdate it.
+            first_seen=_served_first_seen(
+                r.fold_first_seen, proofs_by_agent[r.agent_id]
+            ),
             sha256=r.sha256,
             size_bytes=r.size_bytes,
             run_id=r.run_id,
@@ -773,7 +838,7 @@ async def _ledger_entries(
             validator_hotkey=r.validator_hotkey,
             bench_version=r.bench_version,
             signature=r.signature,
-            score_proofs=[_score_proof(s) for s in proof_rows.get(r.agent_id, [])],
+            score_proofs=proofs_by_agent[r.agent_id],
             composite_stderr=(
                 r.v9_confirmation["full_stderr_micros"] / 1_000_000
                 if r.v9_confirmation is not None

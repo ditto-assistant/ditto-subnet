@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 from typing import TYPE_CHECKING, Any, Literal
@@ -107,6 +107,48 @@ MIN_RECEIPT_BENCH_VERSION = 7
 """First benchmark contract whose ledger rows must carry signed quorum receipts."""
 
 
+def payout_first_seen_token(value: datetime) -> str:
+    """UTC timestamp token shared with the platform's lease formatter."""
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return aware.astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def _append_payout_envelope(
+    message: str,
+    *,
+    miner_hotkey: str | None,
+    first_seen: datetime | None,
+    n: int | None,
+    netuid: int | None,
+) -> str:
+    """Append the versioned payout tail, or leave a legacy message unchanged.
+
+    The tag is ``payout:v1`` so an older verifier, which stops before this
+    suffix, still rebuilds the bytes it signed. A receipt that carries any of
+    the four fields has to carry all of them: a partial tail is not a receipt.
+    """
+    if miner_hotkey is None and first_seen is None and n is None and netuid is None:
+        return message
+    if (
+        miner_hotkey is None
+        or first_seen is None
+        or n is None
+        or netuid is None
+        or isinstance(n, bool)
+        or isinstance(netuid, bool)
+        or n < 0
+        or netuid < 0
+        or not miner_hotkey
+    ):
+        raise ValueError(
+            "score payout binding requires miner_hotkey, first_seen, n, and netuid"
+        )
+    return (
+        f"{message}:payout:v1:{miner_hotkey}:"
+        f"{payout_first_seen_token(first_seen)}:{n}:{netuid}"
+    )
+
+
 def load_validator_keypair(config: ValidatorConfig) -> Any:
     """Load the signing keypair and assert it matches ``config.validator_hotkey``.
 
@@ -142,6 +184,10 @@ def score_signing_message(
     bench_version: int | None = None,
     transcript_sha256: str | None = None,
     base_evidence_sha256: str | None = None,
+    miner_hotkey: str | None = None,
+    first_seen: datetime | None = None,
+    n: int | None = None,
+    netuid: int | None = None,
 ) -> bytes:
     """Build the canonical bytes a score signature is computed over.
 
@@ -152,11 +198,15 @@ def score_signing_message(
     digest and then appends ``:{base_evidence_sha256}``, so
     the published transcript artifact cannot be swapped without breaking the
     signature. The platform derives presence from the same report field, so a
-    report without a transcript keeps the previous format. The exact ticket
+    report without a transcript keeps the previous format. A payout binding,
+    when present, is a final ``:payout:v1:{miner_hotkey}:{first_seen}:{n}:``
+    ``{netuid}`` tail; leaving those fields unset keeps the previous bytes so
+    an older receipt still verifies. The exact ticket
     deadline is the lease identity; platform reconstructs this exact string
     from the request to verify, so both sides MUST format it identically — in
     particular ``composite`` uses Python's shortest round-trip float repr,
-    which the JSON transport preserves.
+    which the JSON transport preserves, and ``first_seen`` uses the same
+    microsecond UTC token as the lease.
     """
     lease = (
         ticket_deadline.astimezone(UTC).isoformat(timespec="microseconds")
@@ -183,6 +233,13 @@ def score_signing_message(
         message += f":{transcript_sha256}"
     if base_evidence_sha256:
         message += f":{base_evidence_sha256}"
+    message = _append_payout_envelope(
+        message,
+        miner_hotkey=miner_hotkey,
+        first_seen=first_seen,
+        n=n,
+        netuid=netuid,
+    )
     return message.encode()
 
 
@@ -198,6 +255,10 @@ def sign_score(
     bench_version: int | None = None,
     transcript_sha256: str | None = None,
     base_evidence_sha256: str | None = None,
+    miner_hotkey: str | None = None,
+    first_seen: datetime | None = None,
+    n: int | None = None,
+    netuid: int | None = None,
 ) -> str:
     """Return the hex sr25519 signature over the canonical score payload."""
     message = score_signing_message(
@@ -210,6 +271,10 @@ def sign_score(
         bench_version=bench_version,
         transcript_sha256=transcript_sha256,
         base_evidence_sha256=base_evidence_sha256,
+        miner_hotkey=miner_hotkey,
+        first_seen=first_seen,
+        n=n,
+        netuid=netuid,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()
@@ -621,6 +686,10 @@ def verify_score_proof(*, agent_id: UUID, proof: LedgerScoreProof) -> bool:
             bench_version=proof.bench_version,
             transcript_sha256=proof.transcript_sha256,
             base_evidence_sha256=proof.base_evidence_sha256,
+            miner_hotkey=proof.miner_hotkey,
+            first_seen=proof.first_seen,
+            n=proof.n,
+            netuid=proof.netuid,
         )
         return bool(verifier.verify(message, signature))
     except (TypeError, ValueError):
@@ -872,7 +941,93 @@ def verify_v9_confirmation_receipt(entry: LedgerEntry) -> bool:
         return False
 
 
-def verify_ledger_entry(entry: LedgerEntry, *, quorum: int = 3) -> bool:
+def payout_quorum_first_seen(
+    proofs: Sequence[LedgerScoreProof],
+) -> datetime | None:
+    """The upload stamp every receipt in the quorum signed, if they all did.
+
+    A mixed quorum (some receipts still on the legacy message) returns None.
+    The fold keeps the platform's lineage anchor until the whole quorum has
+    signed one stamp; serving a stamp only some of them signed would make the
+    others fail and the ledger reader would reject every row.
+    """
+    if not proofs or any(proof.first_seen is None for proof in proofs):
+        return None
+    stamp = proofs[0].first_seen
+    if stamp is None:
+        return None
+    token = payout_first_seen_token(stamp)
+    if any(
+        proof.first_seen is None or payout_first_seen_token(proof.first_seen) != token
+        for proof in proofs
+    ):
+        return None
+    return stamp
+
+
+def _payout_binding_holds(
+    entry: LedgerEntry,
+    proofs: Sequence[LedgerScoreProof],
+    *,
+    netuid: int | None,
+) -> bool:
+    """A bound receipt must name this row, and a full quorum must share its stamp."""
+    bound = [
+        proof
+        for proof in proofs
+        if not (
+            proof.miner_hotkey is None
+            and proof.first_seen is None
+            and proof.n is None
+            and proof.netuid is None
+        )
+    ]
+    if any(
+        proof.miner_hotkey is None
+        or proof.first_seen is None
+        or proof.n is None
+        or proof.netuid is None
+        for proof in bound
+    ):
+        return False
+    for proof in bound:
+        if proof.miner_hotkey != entry.miner_hotkey or proof.n != entry.n:
+            return False
+        if netuid is not None and proof.netuid != netuid:
+            return False
+    if len(bound) != len(proofs):
+        return True
+    agreed = payout_quorum_first_seen(proofs)
+    if agreed is None:
+        return False
+    return payout_first_seen_token(agreed) == payout_first_seen_token(entry.first_seen)
+
+
+def entries_with_permitted_signers(
+    entries: Sequence[LedgerEntry],
+    permitted_validators: set[str],
+) -> list[LedgerEntry]:
+    """Drop rows whose score quorum is not entirely a permitted validator set.
+
+    Receipt-less rows are kept. The ledger reader already rejects an
+    unreceipted v7+ row, and the weight loop's unit fixtures predate receipts.
+    A row that does carry receipts must be signed by hotkeys that hold
+    ``validator_permit`` on the subnet being weighted. The permit is not part
+    of the signature: it is read from the metagraph at weight time, so a key
+    that later loses permit stops being able to carry a row.
+    """
+    kept: list[LedgerEntry] = []
+    for entry in entries:
+        signers = [proof.validator_hotkey for proof in entry.score_proofs]
+        if signers and any(signer not in permitted_validators for signer in signers):
+            continue
+        kept.append(entry)
+    return kept
+
+
+def verify_ledger_entry(
+    entry: LedgerEntry, *, quorum: int = 3, netuid: int | None = None
+) -> bool:
     """Verify the quorum receipts and platform-selected lower median.
 
     The platform is a transport/indexer here, not a score authority: every
@@ -895,6 +1050,8 @@ def verify_ledger_entry(entry: LedgerEntry, *, quorum: int = 3) -> bool:
     if any(proof.bench_version != entry.bench_version for proof in proofs):
         return False
     if any(not verify_score_proof(agent_id=entry.agent_id, proof=p) for p in proofs):
+        return False
+    if not _payout_binding_holds(entry, proofs, netuid=netuid):
         return False
 
     ordered = sorted(proofs, key=lambda p: (p.composite, p.validator_hotkey))

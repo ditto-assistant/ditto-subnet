@@ -424,6 +424,16 @@ class JobResponse(BaseModel):
             "(ditto/validator/onchain_seed.py).",
         ),
     ] = None
+    payout_first_seen: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description=(
+                "Agent upload time (UTC) to bind into a payout:v1 score "
+                "signature. Absent when the platform still accepts a legacy receipt."
+            ),
+        ),
+    ] = None
 
 
 class FailJobRequest(BaseModel):
@@ -1486,6 +1496,52 @@ class SubmitScoreRequest(BaseModel):
         ),
     ]
     report: Annotated[ScoreReport, Field(description="The DittoBench score report.")]
+    payout_miner_hotkey: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Miner hotkey covered by a payout:v1 signature.",
+        ),
+    ] = None
+    payout_first_seen: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description="Upload time covered by a payout:v1 signature.",
+        ),
+    ] = None
+    payout_n: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description="Case count covered by a payout:v1 signature.",
+        ),
+    ] = None
+    payout_netuid: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description="Subnet covered by a payout:v1 signature.",
+        ),
+    ] = None
+
+    @model_validator(mode="after")
+    def _validate_payout_binding(self) -> SubmitScoreRequest:
+        fields = (
+            self.payout_miner_hotkey,
+            self.payout_first_seen,
+            self.payout_n,
+            self.payout_netuid,
+        )
+        if any(field is not None for field in fields) and any(
+            field is None for field in fields
+        ):
+            raise ValueError(
+                "score payout binding requires miner_hotkey, first_seen, n, and netuid"
+            )
+        return self
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -1570,10 +1626,55 @@ class LedgerScoreProof(BaseModel):
             description="Typed v9 base root whose digest is signature-bound.",
         ),
     ] = None
+    miner_hotkey: Annotated[
+        str | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description="Payout hotkey bound by a payout:v1 receipt.",
+        ),
+    ] = None
+    first_seen: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description="Upload timestamp bound by a payout:v1 receipt.",
+        ),
+    ] = None
+    n: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            exclude_if=lambda value: value is None,
+            description="Case count bound by a payout:v1 receipt.",
+        ),
+    ] = None
+    netuid: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            exclude_if=lambda value: value is None,
+            description="Subnet the payout:v1 receipt was signed for.",
+        ),
+    ] = None
     signature: Annotated[
         str | None,
         Field(default=None, description="Hex sr25519 signature for this receipt."),
     ] = None
+
+    @model_validator(mode="after")
+    def _validate_payout_binding(self) -> LedgerScoreProof:
+        fields = (self.miner_hotkey, self.first_seen, self.n, self.netuid)
+        if any(field is not None for field in fields) and any(
+            field is None for field in fields
+        ):
+            raise ValueError(
+                "score payout binding requires miner_hotkey, first_seen, n, and netuid"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_v9_evidence_identity(self) -> LedgerScoreProof:

@@ -252,7 +252,7 @@ class LedgerScoreProofRow:
     """Narrow score projection used to build validator ledger receipts.
 
     A full :class:`Score` carries the per-case audit blob in ``details``.  The
-    validator ledger needs only four small evidence keys from that blob, so
+    validator ledger needs only the small evidence keys from that blob, so
     selecting whole ORM rows for every quorum shipped the entire score corpus
     to the API process on every validator poll.
     """
@@ -2702,6 +2702,7 @@ async def quorum_ledger_proof_rows(
         "transcript_sha256",
         "base_evidence_sha256",
         "v9_base",
+        "payout_v1",
     )
     pairs: list[ColumnElement[Any]] = []
     for key in details_keys:

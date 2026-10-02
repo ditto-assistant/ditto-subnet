@@ -73,6 +73,63 @@ def test_v9_appends_base_evidence_after_transcript() -> None:
     )
 
 
+def test_payout_v1_tail_matches_the_validator_envelope() -> None:
+    """The payout tail is last, and absent fields keep the legacy bytes."""
+    deadline = datetime.fromisoformat("2026-07-09T12:30:00+00:00")
+    report = _report(bench_version=7, transcript=SHA)
+    legacy = _score_signing_message(HOTKEY, AGENT, deadline, report)
+    bound = _score_signing_message(
+        HOTKEY,
+        AGENT,
+        deadline,
+        report,
+        payout_miner_hotkey="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        payout_first_seen=deadline,
+        payout_n=114,
+        payout_netuid=118,
+    )
+    assert (
+        bound
+        == legacy
+        + (
+            b":payout:v1:5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY:"
+            b"2026-07-09T12:30:00.000000+00:00:114:118"
+        )
+    )
+
+
+def test_payout_v1_details_round_trip_onto_the_receipt() -> None:
+    proof = _score_proof(
+        cast(
+            Score,
+            SimpleNamespace(
+                validator_hotkey=HOTKEY,
+                run_id="run-1",
+                composite=0.5,
+                seed=7,
+                bench_version=7,
+                signature="ab" * 64,
+                details={
+                    "payout_v1": {
+                        "miner_hotkey": (
+                            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+                        ),
+                        "first_seen": "2026-07-09T12:30:00.000000+00:00",
+                        "n": 114,
+                        "netuid": 118,
+                    }
+                },
+            ),
+        )
+    )
+    assert proof.miner_hotkey == "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+    assert proof.n == 114
+    assert proof.netuid == 118
+    assert proof.first_seen == datetime.fromisoformat(
+        "2026-07-09T12:30:00.000000+00:00"
+    )
+
+
 def test_v8_full_payload_remains_exact_when_v9_field_is_absent() -> None:
     assert _msg(bench_version=8, transcript=SHA).endswith(f":7:8:{SHA}")
 

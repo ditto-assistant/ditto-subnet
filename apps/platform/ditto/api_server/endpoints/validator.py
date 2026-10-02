@@ -2292,6 +2292,29 @@ def _score_details(
     return details
 
 
+def _stamp_payout_details(
+    details: dict[str, Any], payload: SubmitScoreRequest
+) -> dict[str, Any]:
+    """Record the signed payout tuple next to the score it belongs to.
+
+    The validator ledger reads this back onto the receipt. It is not part of
+    the scorer report, so a retry must stamp the same request fields or the
+    stored blob will not match.
+    """
+    if payload.payout_miner_hotkey is None:
+        return details
+    assert payload.payout_first_seen is not None
+    assert payload.payout_n is not None
+    assert payload.payout_netuid is not None
+    details["payout_v1"] = {
+        "miner_hotkey": payload.payout_miner_hotkey,
+        "first_seen": _lease_token(payload.payout_first_seen),
+        "n": payload.payout_n,
+        "netuid": payload.payout_netuid,
+    }
+    return details
+
+
 def _retry_details_match(
     stored: dict[str, Any] | None, reported: dict[str, Any]
 ) -> bool:
@@ -2316,6 +2339,11 @@ def _score_signing_message(
     agent_id: UUID,
     ticket_deadline: datetime | None,
     report: ScoreReport,
+    *,
+    payout_miner_hotkey: str | None = None,
+    payout_first_seen: datetime | None = None,
+    payout_n: int | None = None,
+    payout_netuid: int | None = None,
 ) -> bytes:
     """Canonical bytes a score signature is verified against.
 
@@ -2336,6 +2364,7 @@ def _score_signing_message(
     # left to whichever merged first:
     #
     #   base : bench_version? : transcript_sha256? : base_evidence_sha256(v9)?
+    #        : payout:v1:{miner_hotkey}:{first_seen}:{n}:{netuid}?
     #
     # bench_version sits next to seed because it QUALIFIES the seed -- the same
     # seed is a different dataset under a different contract -- so the "what was
@@ -2353,6 +2382,33 @@ def _score_signing_message(
         msg += f":{transcript}"
     if report.base_evidence_sha256:
         msg += f":{report.base_evidence_sha256}"
+    # Same tail as ditto/validator/signing.py ``_append_payout_envelope``.
+    # Absent fields keep the legacy bytes so an older validator still verifies.
+    payout_fields = (
+        payout_miner_hotkey,
+        payout_first_seen,
+        payout_n,
+        payout_netuid,
+    )
+    if any(field is not None for field in payout_fields):
+        if (
+            payout_miner_hotkey is None
+            or payout_first_seen is None
+            or payout_n is None
+            or payout_netuid is None
+            or isinstance(payout_n, bool)
+            or isinstance(payout_netuid, bool)
+            or payout_n < 0
+            or payout_netuid < 0
+            or not payout_miner_hotkey
+        ):
+            raise ValueError(
+                "score payout binding requires miner_hotkey, first_seen, n, and netuid"
+            )
+        msg += (
+            f":payout:v1:{payout_miner_hotkey}:{_lease_token(payout_first_seen)}:"
+            f"{payout_n}:{payout_netuid}"
+        )
     return msg.encode()
 
 
@@ -3700,6 +3756,7 @@ async def request_job(
             return JobResponse(
                 agent_id=canary.agent_id,
                 miner_hotkey=agent.miner_hotkey,
+                payout_first_seen=agent.created_at,
                 slot_id=canary.slot_id,
                 sha256=canary.artifact_sha256,
                 deadline=canary.deadline,
@@ -4187,6 +4244,7 @@ async def request_job(
                 ),
                 slot_id=ticket.slot_id,
                 miner_hotkey=agent.miner_hotkey,
+                payout_first_seen=agent.created_at,
                 sha256=agent.sha256,
                 deadline=ticket.deadline,
                 seed=(
@@ -5916,6 +5974,7 @@ async def request_top5_confirmation_job(
             agent_id=agent.agent_id,
             slot_id=ticket.slot_id,
             miner_hotkey=agent.miner_hotkey,
+            payout_first_seen=agent.created_at,
             sha256=agent.sha256,
             deadline=ticket.deadline,
             seed=dataset.seed if dataset is not None else agent.dataset_seed,
@@ -6700,7 +6759,14 @@ async def submit_score(
     # 1. Signature proves the reporting validator owns the hotkey and binds the
     #    agent + score contents (anti-replay / anti-tamper). CPU-only, no I/O.
     signed = _score_signing_message(
-        payload.validator_hotkey, agent_id, payload.ticket_deadline, report
+        payload.validator_hotkey,
+        agent_id,
+        payload.ticket_deadline,
+        report,
+        payout_miner_hotkey=payload.payout_miner_hotkey,
+        payout_first_seen=payload.payout_first_seen,
+        payout_n=payload.payout_n,
+        payout_netuid=payload.payout_netuid,
     )
     if not _verify_signature(payload.validator_hotkey, signed, payload.signature):
         raise ValidatorAuthError(
@@ -6748,6 +6814,32 @@ async def submit_score(
         )
         if agent is None:
             raise AgentNotFoundError(f"no agent with id={agent_id}")
+        if payload.payout_miner_hotkey is not None:
+            assert payload.payout_first_seen is not None
+            assert payload.payout_n is not None
+            assert payload.payout_netuid is not None
+            if payload.payout_miner_hotkey != agent.miner_hotkey:
+                raise HTTPException(
+                    status_code=409,
+                    detail="payout miner hotkey does not match the agent",
+                )
+            if payload.payout_n != report.n:
+                raise HTTPException(
+                    status_code=409,
+                    detail="payout case count does not match the report",
+                )
+            if payload.payout_netuid != netuid:
+                raise HTTPException(
+                    status_code=409,
+                    detail="payout netuid does not match this subnet",
+                )
+            if _lease_token(payload.payout_first_seen) != _lease_token(
+                agent.created_at
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="payout first_seen does not match the agent upload time",
+                )
         if v9_base is not None and v9_base.artifact_sha256 != agent.sha256:
             raise HTTPException(
                 status_code=409,
@@ -6801,10 +6893,13 @@ async def submit_score(
             prior_score = await session.get(
                 Score, (agent_id, report_version, payload.validator_hotkey)
             )
-            retry_details = _score_details(
-                report,
-                ticket_deadline=payload.ticket_deadline,
-                bench_version=report_version,
+            retry_details = _stamp_payout_details(
+                _score_details(
+                    report,
+                    ticket_deadline=payload.ticket_deadline,
+                    bench_version=report_version,
+                ),
+                payload,
             )
             exact_retry = (
                 _lease_token(prior_ticket.deadline)
@@ -6955,10 +7050,13 @@ async def submit_score(
         # the per-case breakdown, all under scores.details. The public leaderboard
         # surfaces a safe subset of this; the full blob (incl. per_case answer-key
         # fields) is only ever read back through validator-gated endpoints.
-        score_details = _score_details(
-            report,
-            ticket_deadline=payload.ticket_deadline,
-            bench_version=ticket.bench_version,
+        score_details = _stamp_payout_details(
+            _score_details(
+                report,
+                ticket_deadline=payload.ticket_deadline,
+                bench_version=ticket.bench_version,
+            ),
+            payload,
         )
         audit_now = datetime.now(UTC)
         if replacement_event is not None and agent.status in {

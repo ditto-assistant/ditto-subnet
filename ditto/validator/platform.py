@@ -2023,7 +2023,11 @@ class PlatformClient:
             raise PlatformError(
                 "ledger carried v9 confirmation receipts without enforce marker"
             )
-        invalid = [entry.agent_id for entry in served if not verify_ledger_entry(entry)]
+        invalid = [
+            entry.agent_id
+            for entry in served
+            if not verify_ledger_entry(entry, netuid=self._config.netuid)
+        ]
         if invalid:
             sample = ", ".join(str(agent_id) for agent_id in invalid[:3])
             raise PlatformError(
@@ -2147,6 +2151,10 @@ class PlatformClient:
         signature: str,
         report: ScoreReport,
         ticket_deadline: datetime | None = None,
+        payout_miner_hotkey: str | None = None,
+        payout_first_seen: datetime | None = None,
+        payout_n: int | None = None,
+        payout_netuid: int | None = None,
     ) -> SubmitScoreResponse:
         """Report a signed score for ``agent_id``.
 
@@ -2159,6 +2167,10 @@ class PlatformClient:
             ticket_deadline=ticket_deadline,
             signature=signature,
             report=report,
+            payout_miner_hotkey=payout_miner_hotkey,
+            payout_first_seen=payout_first_seen,
+            payout_n=payout_n,
+            payout_netuid=payout_netuid,
         )
         try:
             resp = await self._client.post(

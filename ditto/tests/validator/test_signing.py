@@ -45,6 +45,7 @@ from ditto.api_models.validator_updater import ValidatorUpdaterStatus
 from ditto.validator import signing
 from ditto.validator.signing import (
     artifact_signing_message,
+    entries_with_permitted_signers,
     heartbeat_signing_message,
     job_fail_signing_message,
     job_signing_message,
@@ -1611,6 +1612,133 @@ def test_ledger_entry_rejects_unsigned_row_below_the_receipt_contract(
 
 def test_ledger_entry_rejects_signed_quorum_below_the_receipt_contract() -> None:
     assert not verify_ledger_entry(_signed_ledger_entry(bench_version=6))
+
+
+def _payout_bound_entry(
+    *,
+    miner_hotkey: str = _HOTKEY,
+    first_seen: datetime = _DEADLINE,
+    n: int = 114,
+    netuid: int = 118,
+) -> LedgerEntry:
+    keypairs = [bittensor.Keypair.create_from_uri(f"//Payout{i}") for i in range(3)]
+    composites = [0.4, 0.6, 0.8]
+    proofs: list[LedgerScoreProof] = []
+    for i, (keypair, composite) in enumerate(zip(keypairs, composites, strict=True)):
+        run_id = f"run_{i}"
+        signature = sign_score(
+            keypair,
+            validator_hotkey=keypair.ss58_address,
+            agent_id=_AGENT,
+            ticket_deadline=_DEADLINE,
+            run_id=run_id,
+            composite=composite,
+            seed=i,
+            bench_version=7,
+            transcript_sha256="cd" * 32,
+            miner_hotkey=miner_hotkey,
+            first_seen=first_seen,
+            n=n,
+            netuid=netuid,
+        )
+        proofs.append(
+            LedgerScoreProof(
+                validator_hotkey=keypair.ss58_address,
+                run_id=run_id,
+                composite=composite,
+                seed=i,
+                bench_version=7,
+                ticket_deadline=_DEADLINE,
+                transcript_sha256="cd" * 32,
+                miner_hotkey=miner_hotkey,
+                first_seen=first_seen,
+                n=n,
+                netuid=netuid,
+                signature=signature,
+            )
+        )
+    median = proofs[1]
+    return LedgerEntry(
+        miner_hotkey=miner_hotkey,
+        agent_id=_AGENT,
+        composite=median.composite,
+        n=n,
+        first_seen=first_seen,
+        sha256="ab" * 32,
+        size_bytes=1024,
+        run_id=median.run_id,
+        seed=median.seed,
+        validator_hotkey=median.validator_hotkey,
+        bench_version=7,
+        signature=median.signature,
+        score_proofs=proofs,
+        status=AgentStatus.SCORED,
+    )
+
+
+def test_payout_bound_receipt_verifies_and_legacy_message_stays_put() -> None:
+    entry = _payout_bound_entry()
+    assert verify_ledger_entry(entry, netuid=118)
+    legacy = score_signing_message(
+        validator_hotkey=entry.validator_hotkey,
+        agent_id=entry.agent_id,
+        ticket_deadline=_DEADLINE,
+        run_id=entry.run_id,
+        composite=entry.composite,
+        seed=entry.seed,
+        bench_version=7,
+        transcript_sha256="cd" * 32,
+    )
+    bound = score_signing_message(
+        validator_hotkey=entry.validator_hotkey,
+        agent_id=entry.agent_id,
+        ticket_deadline=_DEADLINE,
+        run_id=entry.run_id,
+        composite=entry.composite,
+        seed=entry.seed,
+        bench_version=7,
+        transcript_sha256="cd" * 32,
+        miner_hotkey=entry.miner_hotkey,
+        first_seen=entry.first_seen,
+        n=entry.n,
+        netuid=118,
+    )
+    assert (
+        bound
+        == legacy
+        + (
+            f":payout:v1:{entry.miner_hotkey}:2026-07-09T12:30:00.000000+00:00:114:118"
+        ).encode()
+    )
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"miner_hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"},
+        {"first_seen": datetime(2020, 1, 1, tzinfo=UTC)},
+        {"n": 1},
+    ],
+)
+def test_payout_bound_receipt_rejects_a_rebound_row(update: dict) -> None:
+    entry = _payout_bound_entry()
+    rebound = entry.model_copy(update=update)
+    assert not verify_ledger_entry(rebound, netuid=118)
+
+
+def test_payout_bound_receipt_rejects_a_different_subnet() -> None:
+    assert not verify_ledger_entry(_payout_bound_entry(), netuid=3)
+
+
+def test_unpermitted_signers_are_dropped_and_receiptless_rows_stay() -> None:
+    bound = _payout_bound_entry()
+    receiptless = _signed_ledger_entry().model_copy(update={"score_proofs": []})
+    permitted = {proof.validator_hotkey for proof in bound.score_proofs}
+    assert entries_with_permitted_signers([bound, receiptless], permitted) == [
+        bound,
+        receiptless,
+    ]
+    assert entries_with_permitted_signers([bound], set()) == []
 
 
 def test_v9_ledger_entry_verifies_ordinary_signed_quorum() -> None:
