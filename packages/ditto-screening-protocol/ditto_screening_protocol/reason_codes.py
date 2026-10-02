@@ -168,9 +168,7 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     # billing, never the artifact, so it must never count toward a park cap;
     # the worker stops claiming until a probe succeeds, and the operator
     # retries the parked attempts once the account is funded.
-    ScreeningReasonCode(
-        SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED, _O, _WORKER, "source_review"
-    ),
+    ScreeningReasonCode(SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED, _O, _WORKER),
     ScreeningReasonCode("static-preflight-audit-failed", _O, _WORKER),
     ScreeningReasonCode("executor-isolation-unavailable", _O, _WORKER),
     ScreeningReasonCode("replay-image-identity-mismatch", _O, _WORKER),
