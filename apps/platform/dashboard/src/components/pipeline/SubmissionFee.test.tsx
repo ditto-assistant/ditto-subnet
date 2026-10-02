@@ -417,5 +417,15 @@ describe("submission fee helpers", () => {
     expect(changeLabel(null, 40_000_000, true)).toBe("first published fee");
     expect(changeLabel(null, 40_000_000, false)).toBe("previous fee not shown");
     expect(changeLabel(40_000_000, 40_000_000, false)).toBe("same amount");
+    // Unequal amounts never read as "same amount", even without a percentage.
+    expect(changeLabel(0, 40_000_000, false)).toBe("new fee");
+    expect(changeLabel(-5, 40_000_000, false)).toBe("new fee");
+    expect(changeLabel(Number.NaN, 40_000_000, false)).toBe("changed");
+    expect(changeLabel(40_000_000, Number.NaN, false)).toBe("changed");
+    expect(changeLabel(Number.NaN, Number.NaN, false)).toBe("changed");
+    expect(changeLabel(1.5, 40_000_000, false)).toBe("up");
+    expect(changeLabel(2 ** 60, 2 ** 61, false)).toBe("up");
+    expect(changeLabel(2 ** 61, 2 ** 60, false)).toBe("down");
+    expect(feeDirection(0, 40_000_000)).toBe("");
   });
 });

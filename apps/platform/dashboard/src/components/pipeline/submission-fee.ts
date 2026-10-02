@@ -81,5 +81,13 @@ export function changeLabel(previousRao: number | null, rao: number, isGenesis: 
   // built-in default, never a charged fee) or for an unpublishable parent.
   // Only the oldest row of a complete history is the first published fee.
   if (previousRao === null) return isGenesis ? "first published fee" : "previous fee not shown";
-  return feeDirection(previousRao, rao) || "same amount";
+  // "same amount" only for equal amounts. Platform never stores a fee below
+  // 1 rao, but an unequal pair that has no percentage (a zero, negative or
+  // non-integer previous fee, or an unsafe amount) must still read as a change.
+  if (previousRao === rao) return "same amount";
+  const direction = feeDirection(previousRao, rao);
+  if (direction) return direction;
+  if (!Number.isFinite(previousRao) || !Number.isFinite(rao)) return "changed";
+  if (previousRao <= 0) return "new fee";
+  return rao > previousRao ? "up" : "down";
 }
