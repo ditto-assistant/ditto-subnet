@@ -499,23 +499,11 @@ type v8IsolationReporter interface {
 	V8IsolationReady(context.Context) error
 }
 
-// executesUntrustedImages reports whether this deployment can be asked to launch
-// a miner container at all. Only two paths start one: a screener-built image,
-// accepted solely under the narrow DITTOBENCH_ALLOW_SCREENED_IMAGES opt-in that
-// marks a validator-owned sandbox, and a validator-side source build, which the
-// v8 contract retires. A deployment with neither — the hosted practice endpoint
-// — serves v8 only over harness_url, driving and scoring a harness the miner
-// already runs themselves, so it has no isolation boundary to make ready.
-//
-// The source-build half is derived from validateBenchmarkImageContract rather
-// than restated, so a future version that re-enables source builds re-arms the
-// isolation gate here instead of silently leaving it exempt.
+// executesUntrustedImages reports whether this deployment can launch a miner
+// image. Canonical scoring only loads a screener-built image under the narrow
+// validator-owned opt-in. Hosted practice drives the miner's own harness_url.
 func (s *server) executesUntrustedImages() bool {
-	if s.allowScreenedImages {
-		return true
-	}
-	sourceBuild := submitRequest{BenchVersion: protocol.BenchVersionV8, TarballURL: "https://example.invalid/source.tgz"}
-	return validateBenchmarkImageContract(sourceBuild) == ""
+	return s.allowScreenedImages
 }
 
 // runtimeSupportedBenchVersions intersects the immutable scorer contract with
@@ -906,7 +894,7 @@ func validateScreenedImageAccess(req submitRequest, allowScreenedImages bool) st
 }
 
 func validateBenchmarkImageContract(req submitRequest) string {
-	if req.BenchVersion >= protocol.BenchVersionV8 && req.ScreenedImageURL == "" {
+	if req.ScreenedImageURL == "" {
 		return fmt.Sprintf(
 			"benchmark version %d requires a screener-built image; source builds are disabled",
 			req.BenchVersion,
@@ -1075,13 +1063,12 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Screened-image metadata is an integrity pin, not caller authentication.
-	// Only validator-owned/private deployments may bypass the source build; the
-	// public unauthenticated practice API must always build submitted source.
+	// Only validator-owned/private deployments may load a screened image.
 	if msg := validateScreenedImageAccess(req, s.allowScreenedImages); msg != "" {
 		writeError(w, http.StatusForbidden, msg)
 		return
 	}
-	// The screened-image contract bans validator-side SOURCE BUILDS (git_url /
+	// The screened-image contract bans sandbox SOURCE BUILDS (git_url /
 	// tarball_url). A direct harness_url run never builds anything — the miner runs
 	// their own already-built harness and the API only drives + scores it — so the
 	// contract is inapplicable there. The exemption is keyed on the SOURCE KIND,

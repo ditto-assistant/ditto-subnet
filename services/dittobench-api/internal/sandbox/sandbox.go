@@ -210,6 +210,10 @@ type LocalDocker struct {
 	// AllowPrivate relaxes the SSRF guard on TarballURL fetches (local dev only,
 	// e.g. a minio/localhost presigned URL). Mirrors the submit-handler flag.
 	AllowPrivate bool
+	// AllowSourceBuild is reserved for explicitly constructed local development
+	// sandboxes. NewLocalDocker leaves it disabled, and the production scorer
+	// never enables it: validator jobs must run a screener-built image.
+	AllowSourceBuild bool
 	// PidsLimit caps the container process/thread count (docker --pids-limit) —
 	// a fork-bomb bound. Always applied; defaults to 512.
 	PidsLimit int
@@ -390,9 +394,9 @@ func (d *LocalDocker) V8IsolationReady(ctx context.Context) error {
 	return nil
 }
 
-// Build materializes the submission in a temp dir, then either loads the
-// screener-built image or, for local/legacy practice only, builds the source
-// with BuildKit. V7/V8 validator tickets require the exact screener-built image.
+// Build materializes the submission in a temp dir, then loads the screener-built
+// image. Explicit local development sandboxes may opt into building source with
+// BuildKit. Validator tickets always require the exact screener-built image.
 // A private source repository may use host-side askpass authentication, but no
 // credential enters the build context, image, Dockerfile, or command line.
 func (d *LocalDocker) Build(ctx context.Context, src Source) (string, string, *protocol.CodeFingerprint, error) {
@@ -401,6 +405,9 @@ func (d *LocalDocker) Build(ctx context.Context, src Source) (string, string, *p
 	}
 	if src.GitURL != "" && !ValidGitCommitSHA(src.GitRef) {
 		return "", "", nil, errors.New("git_ref must be a full 40-character lowercase commit SHA")
+	}
+	if src.ScreenedImageURL == "" && !d.AllowSourceBuild {
+		return "", "", nil, errors.New("sandbox: screened image is required; source builds are disabled")
 	}
 	ctx, cancel := context.WithTimeout(ctx, d.BuildTimeout)
 	defer cancel()
