@@ -2,13 +2,15 @@
 project = "ditto-app-dev"
 region  = "us-central1"
 zone    = "us-central1-a"
-# Reviewed custody bootstrap intent. A protected full-root plan and separate
-# apply review precede resources; bootstrap grants no secret read/add authority.
+# Both live bootstrap guests verified after protected apply36949009276:
+# exact source/SDK/root ownership, empty secrets and no secret permissions.
+# A separate reviewed full plan removes installation egress before own add/list
+# grants. Actual effective isolation must pass before one-time key generation.
 # This preserves each phase in source; no runtime, key or financial activation.
 enable_collector_custody = true
 collector_custody_phases = {
-  registration = "bootstrap"
-  transfer     = "bootstrap"
+  registration = "armed"
+  transfer     = "armed"
 }
 collector_custody_revision = "e1b86b2a673add3572febc35f7159b02e0f8ce37"
 collector_custody_operator = "peyton@omniaura.ai"
