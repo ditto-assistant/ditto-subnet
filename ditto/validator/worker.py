@@ -3315,7 +3315,9 @@ class ValidatorWorker:
                 e.miner_hotkey,
                 bench_version=current_version,
                 seeds=sweep_seeds,
-                payout_first_seen=payout_quorum_first_seen(e.score_proofs),
+                payout_first_seen=payout_quorum_first_seen(
+                    getattr(e, "score_proofs", ())
+                ),
             )
             if submitted is not None:
                 rescored += 1
@@ -3440,7 +3442,9 @@ class ValidatorWorker:
                 e.miner_hotkey,
                 bench_version=current_version,
                 seeds=seeds,
-                payout_first_seen=payout_quorum_first_seen(e.score_proofs),
+                payout_first_seen=payout_quorum_first_seen(
+                    getattr(e, "score_proofs", ())
+                ),
             )
             if submitted is None:
                 logger.warning(
