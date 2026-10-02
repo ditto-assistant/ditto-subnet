@@ -4504,8 +4504,11 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
         with caplog.at_level("WARNING"):
-            await worker.run_once()
+            outcome = await worker._update_weights()
         chain.put_weights.assert_not_awaited()
+        assert outcome.submitted is False
+        assert outcome.weights == {}
+        assert outcome.leaderboard == [("5Champion" + "x" * 39, 0.85)]
         assert any("past the" in r.message for r in caplog.records)
 
     async def test_stale_receipt_pin_changes_request_id_with_the_chain_epoch(

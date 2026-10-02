@@ -2147,7 +2147,9 @@ class ValidatorWorker:
                     age,
                     MAX_STALE_LEDGER_AGE_SECONDS,
                 )
-                return _WeightOutcome()
+                return _WeightOutcome(
+                    leaderboard=[(e.miner_hotkey, e.composite) for e in ledger.entries]
+                )
             logger.warning(
                 "scoring ledger is STALE (platform served a %ss-old snapshot); "
                 "folding it but the platform DB read is failing",
