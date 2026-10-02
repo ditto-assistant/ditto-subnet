@@ -430,7 +430,7 @@ export function pipelineAgentVersionLabel(version: number | string | null | unde
   return version == null ? "Legacy" : "v" + version;
 }
 
-// ── Deferred source review branch (weekend drift: #623/#635) ───────────────
+// ── Under-review branch (weekend drift: #623/#635) ──────────────────────────
 
 export interface IntegrityReviewView {
   /** Authoritative status_counts.under_review, falling back to the rows the
@@ -445,7 +445,7 @@ export interface IntegrityReviewView {
 /** Reason line for a held submission; the fallback names the branch's two
  * admission criteria rather than pretending to know which one fired. */
 export function integrityReviewReason(entry: PipelineEntryExt): string {
-  return entry.review_reason || entry.screening_reason || "Qualification or anomaly review";
+  return entry.review_reason || entry.screening_reason || "Held for review";
 }
 
 export function integrityReviewView(

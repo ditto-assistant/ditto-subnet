@@ -136,24 +136,20 @@ describe("weekend drift: board reshape and refresh resilience", () => {
     );
   });
 
-  it("shows the conditional integrity-review branch with the authoritative count", async () => {
+  it("shows the under-review branch with the authoritative count", async () => {
     const { container } = render(() => <PipelinePage />);
     await waitFor(() => {
       expect(container.querySelector("#pipeline-review-count")?.textContent).toBe("53");
     });
     const aside = container.querySelector(".pipeline-review-branch");
-    expect(aside?.querySelector(".pipeline-review-eyebrow")?.textContent).toBe(
-      "Conditional after scoring",
-    );
-    expect(aside?.querySelector("#pipeline-review-title")?.textContent).toBe(
-      "Deferred source review",
-    );
-    // Only qualifiers and anomaly holds enter — the copy says so, and the
-    // fixture window carries none, so the branch states that rather than
-    // implying review of everything.
-    expect(aside?.textContent).toContain("Only leaderboard qualifiers and robust anomaly holds");
+    expect(aside?.querySelector(".pipeline-review-eyebrow")?.textContent).toBe("Held submissions");
+    expect(aside?.querySelector("#pipeline-review-title")?.textContent).toBe("Under review");
+    // Source review runs before scoring, so the branch no longer claims only
+    // score qualifiers enter it. The fixture window carries no held rows.
+    expect(aside?.textContent).toContain("Source review runs in full before scoring.");
+    expect(aside?.textContent).not.toContain("Only leaderboard qualifiers");
     expect(container.querySelector("#pipeline-review-items")?.textContent).toContain(
-      "No submissions are held for deferred source review.",
+      "No submissions are held for review.",
     );
   });
 
