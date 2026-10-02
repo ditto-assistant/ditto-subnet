@@ -4,6 +4,17 @@ mock_provider "google" {
   }
 }
 
+# Computed SA fields are unknown in a plan until explicitly overridden. This
+# fixture is a public fake identity; it does not create or impersonate a role.
+override_resource {
+  target          = google_service_account.bake[0]
+  override_during = plan
+  values = {
+    name  = "projects/ditto-app-dev/serviceAccounts/sn118-preview-bake@ditto-app-dev.iam.gserviceaccount.com"
+    email = "sn118-preview-bake@ditto-app-dev.iam.gserviceaccount.com"
+  }
+}
+
 run "default_preserves_absent_bake_and_no_new_backend_grants" {
   command = plan
   assert {
