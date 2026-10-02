@@ -998,7 +998,7 @@ def _payout_binding_holds(
     if len(bound) != len(proofs):
         return True
     agreed = payout_quorum_first_seen(proofs)
-    if agreed is None:
+    if agreed is None or entry.first_seen is None:
         return False
     return payout_first_seen_token(agreed) == payout_first_seen_token(entry.first_seen)
 

@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from typing import cast
 from uuid import UUID, uuid4
 
+import pytest
+
 from ditto.api_models.validator import ScoreReport, V9BaseEvidence
 from ditto.api_server.endpoints.scoring import _score_proof
 from ditto.api_server.endpoints.validator import _score_signing_message
@@ -73,6 +75,32 @@ def test_v9_appends_base_evidence_after_transcript() -> None:
     )
 
 
+def test_empty_payout_hotkey_is_a_validation_error() -> None:
+    from pydantic import ValidationError
+
+    from ditto.api_models.validator import SubmitScoreRequest
+
+    with pytest.raises(ValidationError, match="non-empty miner hotkey"):
+        SubmitScoreRequest(
+            validator_hotkey=HOTKEY,
+            signature="ab" * 64,
+            report=ScoreReport(
+                run_id="run-1",
+                seed=7,
+                composite=0.5,
+                tool_mean=0.5,
+                memory_mean=0.5,
+                median_ms=1,
+                n=114,
+                generated_at=datetime.fromisoformat("2026-07-09T12:30:00+00:00"),
+            ),
+            payout_miner_hotkey="",
+            payout_first_seen=datetime.fromisoformat("2026-07-09T12:30:00+00:00"),
+            payout_n=114,
+            payout_netuid=118,
+        )
+
+
 def test_payout_v1_tail_matches_the_validator_envelope() -> None:
     """The payout tail is last, and absent fields keep the legacy bytes."""
     deadline = datetime.fromisoformat("2026-07-09T12:30:00+00:00")
@@ -88,13 +116,9 @@ def test_payout_v1_tail_matches_the_validator_envelope() -> None:
         payout_n=114,
         payout_netuid=118,
     )
-    assert (
-        bound
-        == legacy
-        + (
-            b":payout:v1:5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY:"
-            b"2026-07-09T12:30:00.000000+00:00:114:118"
-        )
+    assert bound == legacy + (
+        b":payout:v1:5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY:"
+        b"2026-07-09T12:30:00.000000+00:00:114:118"
     )
 
 

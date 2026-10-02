@@ -1630,6 +1630,8 @@ class SubmitScoreRequest(BaseModel):
             raise ValueError(
                 "score payout binding requires miner_hotkey, first_seen, n, and netuid"
             )
+        if self.payout_miner_hotkey == "":
+            raise ValueError("score payout binding requires a non-empty miner hotkey")
         return self
 
     model_config = ConfigDict(

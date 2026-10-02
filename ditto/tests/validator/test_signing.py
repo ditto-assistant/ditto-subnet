@@ -1730,6 +1730,11 @@ def test_payout_bound_receipt_rejects_a_different_subnet() -> None:
     assert not verify_ledger_entry(_payout_bound_entry(), netuid=3)
 
 
+def test_bound_quorum_without_a_row_timestamp_is_rejected() -> None:
+    entry = _payout_bound_entry().model_copy(update={"first_seen": None})
+    assert verify_ledger_entry(entry, netuid=118) is False
+
+
 def test_unpermitted_signers_are_dropped_and_receiptless_rows_stay() -> None:
     bound = _payout_bound_entry()
     receiptless = _signed_ledger_entry().model_copy(update={"score_proofs": []})
