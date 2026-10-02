@@ -47,6 +47,7 @@ import {
   updateArtifactReleaseSettings,
   fetchSubmissionSettingsControl,
   previewSubmissionSettings,
+  settleSubmissionSettings,
   updateSubmissionSettings,
   fetchHotkeyBan,
   fetchHotkeyBans,
@@ -2023,6 +2024,28 @@ describe('submission fee preview', () => {
       'https://platform-api.heyditto.ai/api/v1/admin/submission-settings/preview?expected_revision=4&cooldown_seconds=3600&fee_amount_rao=37271710&fee_denomination=fixed_tao',
     )
     expect(init.method ?? 'GET').toBe('GET')
+  })
+
+  it('reports a failed preview or apply with its Platform status instead of throwing', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({ detail: 'submission settings changed; refresh' }, { status: 409 }),
+      )
+      .mockResolvedValueOnce(Response.json(preview))
+    vi.stubGlobal('fetch', fetchMock)
+    const input = { expectedRevision: 4, cooldownSeconds: 3600, feeAmountRao: 37_271_710 }
+
+    const stale = await settleSubmissionSettings(() => previewSubmissionSettings(input))
+    expect(stale).toMatchObject({ ok: false, status: 409 })
+    expect(stale.ok ? '' : stale.message).toMatch(/changed/)
+    await expect(
+      settleSubmissionSettings(() => previewSubmissionSettings(input)),
+    ).resolves.toEqual({ ok: true, value: preview })
+    await expect(
+      settleSubmissionSettings(() => Promise.reject(new TypeError('Failed to fetch'))),
+    ).resolves.toEqual({ ok: false, status: null, message: 'Failed to fetch' })
   })
 
   it('omits the fee from a fee-less preview and apply rather than sending undefined', async () => {

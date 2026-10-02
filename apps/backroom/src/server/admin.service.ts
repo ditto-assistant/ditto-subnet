@@ -369,6 +369,7 @@ import {
   artifactReleaseControlSchema,
   submissionSettingsControlSchema,
   submissionSettingsPreviewSchema,
+  type SubmissionSettingsOutcome,
   previewSubmissionSettingsInputSchema,
   hotkeyBanControlSchema,
   hotkeyBanListSchema,
@@ -1089,6 +1090,23 @@ export async function previewSubmissionSettings(rawInput: unknown) {
   ])
   const payload = await platformAdminRequest(`${SUBMISSION_SETTINGS_PATH}/preview?${query}`)
   return submissionSettingsPreviewSchema.parse(payload)
+}
+
+/** Run a preview or apply for the panel, reporting a failure with its HTTP
+ * status (null for a timeout, network or parse failure) instead of throwing. */
+export async function settleSubmissionSettings<T>(
+  work: () => Promise<T>,
+): Promise<SubmissionSettingsOutcome<T>> {
+  try {
+    return { ok: true, value: await work() }
+  } catch (error) {
+    return {
+      ok: false,
+      status: error instanceof PlatformAdminError ? error.status : null,
+      message:
+        error instanceof Error ? error.message : 'Unable to reach the platform API.',
+    }
+  }
 }
 
 export async function updateSubmissionSettings(actor: string, rawInput: unknown) {

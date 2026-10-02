@@ -1500,6 +1500,21 @@ export function submissionSettingsConfirmation(seconds: number, feeAmountRao: nu
 export type SubmissionSettingsControl = z.infer<typeof submissionSettingsControlSchema>
 export type SubmissionSettingsPreview = z.infer<typeof submissionSettingsPreviewSchema>
 
+/**
+ * A preview or apply that failed without throwing across the server-function
+ * boundary, so the panel can tell a transient failure (keep the preview and
+ * confirmation, let the operator retry) from one that outdates them.
+ */
+export type SubmissionSettingsOutcome<T> =
+  | { ok: true; value: T }
+  | { ok: false; status: number | null; message: string }
+
+/** 409 (stale revision or no-op) or 422 (no longer validates): the preview
+ * and its confirmation may no longer describe what an apply would do. */
+export function submissionSettingsFailureOutdatesPreview(status: number | null) {
+  return status === 409 || status === 422
+}
+
 /** The effective policy as the panel uses it; fee is null when unsupported. */
 export type EffectiveSubmissionPolicy = {
   revision: number

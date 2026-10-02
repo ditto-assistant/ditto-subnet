@@ -5,6 +5,7 @@ import {
   effectiveSubmissionPolicy,
   formatRaoAsTao,
   parseTaoToRaoExact,
+  submissionSettingsFailureOutdatesPreview,
   type SubmissionSettingsControl,
   type SubmissionSettingsPreview,
 } from '../lib/admin.schemas'
@@ -213,11 +214,21 @@ export function SubmissionCooldownControlPanel({
     setBusy('preview')
     setError('')
     setSuccess('')
-    setConfirmation('')
     try {
-      setPreview(await previewSettings({ data: proposal }))
+      const outcome = await previewSettings({ data: proposal })
+      if (outcome.ok) {
+        setPreview(outcome.value)
+        setConfirmation('')
+        return
+      }
+      // Only a 409 or 422 outdates what the panel already shows; a timeout,
+      // network or 5xx failure keeps any prior preview and confirmation.
+      if (submissionSettingsFailureOutdatesPreview(outcome.status)) {
+        setPreview(null)
+        setConfirmation('')
+      }
+      setError(outcome.message)
     } catch (cause) {
-      setPreview(null)
       setError(cause instanceof Error ? cause.message : 'Unable to preview submission settings')
     } finally {
       setBusy(null)
@@ -230,7 +241,7 @@ export function SubmissionCooldownControlPanel({
     setError('')
     setSuccess('')
     try {
-      const next = await applySettings({
+      const outcome = await applySettings({
         data: {
           expectedRevision: proposal.expectedRevision,
           cooldownSeconds: proposal.cooldownSeconds,
@@ -239,17 +250,27 @@ export function SubmissionCooldownControlPanel({
           confirmation,
         },
       })
+      if (!outcome.ok) {
+        // A 409 (stale revision or no-op) or 422 means the preview and its
+        // confirmation may no longer match the policy: they must be redone.
+        // A timeout, network or 5xx failure keeps them so the operator can
+        // retry. The draft values and reason are always kept.
+        if (submissionSettingsFailureOutdatesPreview(outcome.status)) {
+          setPreview(null)
+          setConfirmation('')
+        }
+        setError(outcome.message)
+        return
+      }
+      const next = outcome.value
       setState(next)
       clearForm(effectiveSubmissionPolicy(next))
       setSuccess(
         `Submission settings updated: ${formatDuration(proposal.cooldownSeconds)} cooldown, ${formatRaoAsTao(proposal.feeAmountRao)} TAO fee.`,
       )
     } catch (cause) {
-      // The policy may have changed under a failed apply (409): its preview and
-      // confirmation can no longer be trusted, so they must be redone. The
-      // draft values and reason are kept.
-      setPreview(null)
-      setConfirmation('')
+      // The request never reached a Platform answer (for example the Worker
+      // was unreachable): transient, so the preview and confirmation stay.
       setError(cause instanceof Error ? cause.message : 'Unable to update submission settings')
     } finally {
       setBusy(null)

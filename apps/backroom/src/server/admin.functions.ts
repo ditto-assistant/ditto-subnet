@@ -131,6 +131,7 @@ import {
   fetchSubmissionSettingsControl,
   updateSubmissionSettings as updateSubmissionSettingsService,
   previewSubmissionSettings as previewSubmissionSettingsService,
+  settleSubmissionSettings,
   updateSubmissionDepositAddress as updateSubmissionDepositAddressService,
   fetchBurnSettings,
   setBurnSettings as setBurnSettingsService,
@@ -492,7 +493,7 @@ export const previewSubmissionSettingsChange = createServerFn({ method: 'GET' })
   .handler(({ data }) => {
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
-    return previewSubmissionSettingsService(data)
+    return settleSubmissionSettings(() => previewSubmissionSettingsService(data))
   })
 
 export const setSubmissionSettings = createServerFn({ method: 'POST' })
@@ -501,7 +502,9 @@ export const setSubmissionSettings = createServerFn({ method: 'POST' })
   .handler(({ context, data }) => {
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
-    return updateSubmissionSettingsService(context.session.email, data)
+    return settleSubmissionSettings(() =>
+      updateSubmissionSettingsService(context.session.email, data),
+    )
   })
 
 export const getBurnSettings = createServerFn({ method: 'GET' })

@@ -17,10 +17,31 @@ const previewSubmissionSettingsChange = vi.fn()
 const setSubmissionSettings = vi.fn()
 
 vi.mock('@tanstack/react-start', () => ({ useServerFn: (value: unknown) => value }))
+// Mirrors settleSubmissionSettings: the preview and apply server functions
+// report a failure with its HTTP status instead of throwing.
+class PlatformFailure extends Error {
+  constructor(
+    message: string,
+    readonly status: number | null,
+  ) {
+    super(message)
+  }
+}
+function settled(promise: Promise<unknown>) {
+  return Promise.resolve(promise).then(
+    (value) => ({ ok: true, value }),
+    (error: unknown) => ({
+      ok: false,
+      status: error instanceof PlatformFailure ? error.status : null,
+      message: error instanceof Error ? error.message : 'failed',
+    }),
+  )
+}
 vi.mock('../server/admin.functions', () => ({
   getSubmissionSettingsControl: () => getSubmissionSettingsControl(),
-  previewSubmissionSettingsChange: (input: unknown) => previewSubmissionSettingsChange(input),
-  setSubmissionSettings: (input: unknown) => setSubmissionSettings(input),
+  previewSubmissionSettingsChange: (input: unknown) =>
+    settled(previewSubmissionSettingsChange(input)),
+  setSubmissionSettings: (input: unknown) => settled(setSubmissionSettings(input)),
 }))
 
 const initial: SubmissionSettingsControl = submissionSettingsControlSchema.parse({
@@ -552,8 +573,10 @@ describe('SubmissionCooldownControlPanel messages on reset', () => {
     expect((screen.getByLabelText(/Cooldown in minutes/) as HTMLInputElement).value).toBe('60')
   })
 
-  it('drops the preview after a failed apply and clears the error on Cancel', async () => {
-    setSubmissionSettings.mockRejectedValue(new Error('submission settings changed; refresh'))
+  it('drops the preview after a 409 apply and clears the error on Cancel', async () => {
+    setSubmissionSettings.mockRejectedValue(
+      new PlatformFailure('submission settings changed; refresh', 409),
+    )
     render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
     await previewThirtyMinutes()
     await applyPreview()
@@ -565,6 +588,71 @@ describe('SubmissionCooldownControlPanel messages on reset', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByText('submission settings changed; refresh')).toBeNull()
+  })
+
+  it('drops the preview after a 422 apply', async () => {
+    setSubmissionSettings.mockRejectedValue(new PlatformFailure('send fee_amount_rao', 422))
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    await previewThirtyMinutes()
+    await applyPreview()
+
+    await screen.findByText('send fee_amount_rao')
+    expect(screen.queryByLabelText('Change preview')).toBeNull()
+    expect((screen.getByLabelText(/Cooldown in minutes/) as HTMLInputElement).value).toBe('30')
+  })
+
+  it.each([
+    ['a 503', new PlatformFailure('platform API failed (503)', 503)],
+    ['a timeout', new PlatformFailure('platform API did not answer', null)],
+    ['a network error', new TypeError('Failed to fetch')],
+  ])('keeps the preview and confirmation after %s, and a retry applies', async (_, failure) => {
+    setSubmissionSettings.mockRejectedValueOnce(failure).mockResolvedValueOnce({
+      ...initial,
+      current: { ...applied, revision: 2, parent_revision: 1, cooldown_seconds: 1800 },
+    })
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    await previewThirtyMinutes()
+    await applyPreview()
+
+    await screen.findByText(failure.message)
+    expect(screen.getByLabelText('Change preview')).toBeTruthy()
+    const expected = submissionSettingsConfirmation(1800, 40_000_000)
+    expect((screen.getByLabelText(new RegExp(expected)) as HTMLInputElement).value).toBe(expected)
+    expect((screen.getByLabelText('Operator reason') as HTMLInputElement).value).toBe(
+      'reduce cadence for the current capacity window',
+    )
+    expect((screen.getByLabelText(/Cooldown in minutes/) as HTMLInputElement).value).toBe('30')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply settings' }))
+    await screen.findByText(/Submission settings updated: 30 minutes cooldown/)
+    expect(setSubmissionSettings).toHaveBeenCalledTimes(2)
+    expect(setSubmissionSettings.mock.calls[1]).toEqual(setSubmissionSettings.mock.calls[0])
+  })
+
+  it('keeps a prior preview after a transient preview failure, and drops it after a 409', async () => {
+    render(<SubmissionCooldownControlPanel initialState={initial} readOnly={false} />)
+    await previewThirtyMinutes()
+    const expected = submissionSettingsConfirmation(1800, 40_000_000)
+    fireEvent.change(screen.getByLabelText(new RegExp(expected)), {
+      target: { value: expected },
+    })
+    // Preview the same proposal again; the refresh fails transiently.
+    previewSubmissionSettingsChange.mockRejectedValueOnce(
+      new PlatformFailure('platform API failed (503)', 503),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Preview change' }))
+    await screen.findByText('platform API failed (503)')
+    expect(screen.getByLabelText('Change preview')).toBeTruthy()
+    expect((screen.getByLabelText(new RegExp(expected)) as HTMLInputElement).value).toBe(expected)
+    expect((screen.getByLabelText(/Cooldown in minutes/) as HTMLInputElement).value).toBe('30')
+
+    previewSubmissionSettingsChange.mockRejectedValueOnce(
+      new PlatformFailure('submission settings changed; refresh', 409),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Preview change' }))
+    await screen.findByText('submission settings changed; refresh')
+    expect(screen.queryByLabelText('Change preview')).toBeNull()
+    expect((screen.getByLabelText(/Cooldown in minutes/) as HTMLInputElement).value).toBe('30')
   })
 
   it('keeps the success message after a successful apply, until Cancel or a new draft', async () => {
