@@ -263,7 +263,7 @@ class ProtectedWorkflow(unittest.TestCase):
 class BackendGrantScope(unittest.TestCase):
     @staticmethod
     def plan() -> dict:
-        result = {"complete": True, "resource_changes": []}
+        result: dict = {"complete": True, "resource_changes": []}
         for address, (role, suffix) in scope.BACKEND_GRANTS.items():
             result["resource_changes"].append(
                 {
