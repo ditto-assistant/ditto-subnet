@@ -84,15 +84,17 @@ def test_empty_payout_hotkey_is_a_validation_error() -> None:
         SubmitScoreRequest(
             validator_hotkey=HOTKEY,
             signature="ab" * 64,
-            report=ScoreReport(
-                run_id="run-1",
-                seed=7,
-                composite=0.5,
-                tool_mean=0.5,
-                memory_mean=0.5,
-                median_ms=1,
-                n=114,
-                generated_at=datetime.fromisoformat("2026-07-09T12:30:00+00:00"),
+            report=ScoreReport.model_validate(
+                {
+                    "run_id": "run-1",
+                    "seed": 7,
+                    "composite": 0.5,
+                    "tool_mean": 0.5,
+                    "memory_mean": 0.5,
+                    "median_ms": 1,
+                    "n": 114,
+                    "generated_at": "2026-07-09T12:30:00+00:00",
+                }
             ),
             payout_miner_hotkey="",
             payout_first_seen=datetime.fromisoformat("2026-07-09T12:30:00+00:00"),

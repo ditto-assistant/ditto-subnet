@@ -2026,7 +2026,12 @@ class PlatformClient:
         invalid = [
             entry.agent_id
             for entry in served
-            if not verify_ledger_entry(entry, netuid=self._config.netuid)
+            # A real ValidatorConfig always carries netuid. Unit doubles stand
+            # in a SimpleNamespace that does not, and those rows are not
+            # subnet-bound.
+            if not verify_ledger_entry(
+                entry, netuid=getattr(self._config, "netuid", None)
+            )
         ]
         if invalid:
             sample = ", ".join(str(agent_id) for agent_id in invalid[:3])

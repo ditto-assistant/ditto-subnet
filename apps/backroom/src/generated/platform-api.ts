@@ -21604,6 +21604,11 @@ export interface components {
             miner_hotkey: string;
             /** Minimum Screening Policy Version */
             minimum_screening_policy_version?: number | null;
+            /**
+             * Payout First Seen
+             * @description Agent upload time (UTC) to bind into a payout:v1 score signature. Absent when the platform still accepts a legacy receipt.
+             */
+            payout_first_seen?: string | null;
             /** Private Dataset Mode */
             private_dataset_mode?: "platform-private-v1" | null;
             /** Requires Screened Image */
@@ -22315,6 +22320,26 @@ export interface components {
             bench_version?: number | null;
             /** Composite */
             composite: number;
+            /**
+             * First Seen
+             * @description Upload timestamp bound by a payout:v1 receipt.
+             */
+            first_seen?: string | null;
+            /**
+             * Miner Hotkey
+             * @description Payout hotkey bound by a payout:v1 receipt.
+             */
+            miner_hotkey?: string | null;
+            /**
+             * N
+             * @description Case count bound by a payout:v1 receipt.
+             */
+            n?: number | null;
+            /**
+             * Netuid
+             * @description Subnet the payout:v1 receipt was signed for.
+             */
+            netuid?: number | null;
             /**
              * Run Id
              * @description Signature-bound scoring run id.
@@ -32753,6 +32778,26 @@ export interface components {
          *     }
          */
         SubmitScoreRequest: {
+            /**
+             * Payout First Seen
+             * @description Upload time covered by a payout:v1 signature.
+             */
+            payout_first_seen?: string | null;
+            /**
+             * Payout Miner Hotkey
+             * @description Miner hotkey covered by a payout:v1 signature.
+             */
+            payout_miner_hotkey?: string | null;
+            /**
+             * Payout N
+             * @description Case count covered by a payout:v1 signature.
+             */
+            payout_n?: number | null;
+            /**
+             * Payout Netuid
+             * @description Subnet covered by a payout:v1 signature.
+             */
+            payout_netuid?: number | null;
             /** @description The DittoBench score report. */
             report: components["schemas"]["ScoreReport"];
             /**

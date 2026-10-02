@@ -177,7 +177,7 @@ class TestQuorumLedgerProofRows:
             bench_versions={agent.agent_id: _BENCH_VERSION},
         )
 
-        assert rows[agent.agent_id][0].details == evidence
+        assert rows[agent.agent_id][0].details == {**evidence, "payout_v1": None}
 
     async def test_empty_agent_set_skips_query(self, session: AsyncSession) -> None:
         assert await quorum_ledger_proof_rows(session, [], bench_versions={}) == {}
