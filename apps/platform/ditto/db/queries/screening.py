@@ -121,6 +121,10 @@ EXHAUSTED_REASON_CODE = reason_codes.REPEATEDLY_INCONCLUSIVE
 (:mod:`ditto.api_server.emission_eligibility`) classifies this code as
 inconclusive, and must not carry its own copy of the string."""
 _EXHAUSTED_REASON_CODE = EXHAUSTED_REASON_CODE
+# The worker's code for a complete review the model could not settle from
+# source. Deliberately unregistered in the shared registry (an operator retry);
+# policy v13 V2 counts it (:func:`complete_static_inconclusive_count`).
+L2_MODEL_INCONCLUSIVE_REASON_CODE = "l2-model-inconclusive"
 _EXHAUSTED_PUBLIC_REASON = (
     "Screening was inconclusive repeatedly; held for operator review"
 )
@@ -1068,6 +1072,31 @@ async def _inconclusive_attempt_count(session: AsyncSession, *, agent_id: UUID) 
     return int(count or 0)
 
 
+async def complete_static_inconclusive_count(
+    session: AsyncSession, *, agent_id: UUID, policy_version: int
+) -> int:
+    """Count finished source reviews of this agent that ended statically unsettled.
+
+    Policy v13's V2 rule counts complete reviews of the exact artifact, so
+    neither an operator retry nor a quarantine release resets the tally the way
+    they reset ``_inconclusive_attempt_count``. Only the worker's model-chosen
+    ``l2-model-inconclusive`` verdict counts: budget, time, provider and
+    infrastructure stops carry other codes. An agent's artifact is immutable,
+    so the agent id binds the exact artifact.
+    """
+    count = await session.scalar(
+        select(func.count())
+        .select_from(ScreeningAttempt)
+        .where(
+            ScreeningAttempt.agent_id == agent_id,
+            ScreeningAttempt.policy_version == policy_version,
+            ScreeningAttempt.status == "expired",
+            ScreeningAttempt.reason_code == L2_MODEL_INCONCLUSIVE_REASON_CODE,
+        )
+    )
+    return int(count or 0)
+
+
 async def _park_repeatedly_inconclusive(
     session: AsyncSession,
     agent: Agent,
@@ -1519,6 +1548,8 @@ async def claim_screening_attempts(
         # into grounds for condemning a later identical submission. Once an
         # operator reviews that park and resolves it "reject", the rejection
         # branch below picks it up -- that IS a human judgement for cause.
+        # A policy v13 V2 reject is likewise no finding: verification did not
+        # complete, so it records violation_proven false.
         refused_for_cause = or_(
             owner.status == AgentStatus.BANNED,
             exists(
@@ -1527,7 +1558,11 @@ async def claim_screening_attempts(
                     or_(
                         (ScreeningQuarantine.status == "active")
                         & (ScreeningQuarantine.reason_code != _EXHAUSTED_REASON_CODE),
-                        ScreeningQuarantine.resolution == "reject",
+                        (ScreeningQuarantine.resolution == "reject")
+                        & (
+                            ScreeningQuarantine.reason_code
+                            != reason_codes.VERIFICATION_INCOMPLETE_UNREVIEWABLE
+                        ),
                     ),
                 )
             ),

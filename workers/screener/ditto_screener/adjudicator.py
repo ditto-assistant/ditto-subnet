@@ -271,7 +271,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
     if policy_version == 13:
-        return "adjudicator-v11-policy-v13"
+        return "adjudicator-v12-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 
 
@@ -583,9 +583,8 @@ I8 is evaluation independence. Reject a complete source-proven branch where
 case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
 markers, or `bench_version` alter substantive retrieval, capability ordering,
 authority, execution, or output beyond the published compatibility contract.
-Behavioral degradation alone cannot reject until the published
-post-commit controlled and replicated procedure attributes it to evaluation
-dependence.
+Behavioral degradation alone cannot reject; screening runs no separate
+behavioral test that could attribute it to evaluation dependence.
 
 Opaque-file presence and feature-gated dead code are leads only. Establish the
 loaded role and effective lifecycle reachability. Build/security findings may

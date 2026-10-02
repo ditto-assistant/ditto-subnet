@@ -60,6 +60,7 @@ from ditto.api_server.dependencies import (
 from ditto.api_server.endpoints import screener as screener_endpoint
 from ditto.api_server.endpoints.public import screening_dispute_signing_message
 from ditto.api_server.endpoints.screener import (
+    V2_UNREVIEWABLE_PUBLIC_REASON,
     _fanout_response_model_matches,
     _heartbeat_signing_message,
     _public_screening_reason,
@@ -12563,6 +12564,165 @@ class TestSubmitResult:
             assert quarantine.reason_code == reason_code
             assert quarantine.review_audit_digest == audit.canonical_digest()
             assert quarantine.review_audit == audit.model_dump(mode="json")
+
+    @pytest.mark.parametrize(
+        ("prior_reason_code", "budget_stop_reason", "expected_status"),
+        [
+            ("l2-model-inconclusive", "none", AgentStatus.REJECTED),
+            ("l2-model-inconclusive", None, AgentStatus.REJECTED),
+            # A stopped review never finished, so it is not V2 evidence.
+            ("l2-model-inconclusive", "time", AgentStatus.SCREENING_FAILED),
+            # Only a prior complete static review counts toward the cap.
+            ("l3-adjudicator-http-403", "none", AgentStatus.SCREENING_FAILED),
+            (None, "none", AgentStatus.SCREENING_FAILED),
+        ],
+    )
+    async def test_v13_repeated_static_inconclusive_is_a_v2_reject(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        prior_reason_code: str | None,
+        budget_stop_reason: str | None,
+        expected_status: AgentStatus,
+    ) -> None:
+        # Policy v13 has no indefinite INCONCLUSIVE outcome. The second complete
+        # source review that ends insufficient_static_evidence finalizes as
+        # V2.platform_verification_failed: a reject that proves no violation.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        if prior_reason_code is not None:
+            prior_id = await _seed_running_attempt(
+                session_maker,
+                agent_id=agent_id,
+                policy_version=13,
+                started_at=datetime.now(UTC) - timedelta(hours=2),
+                status="expired",
+            )
+            async with session_maker() as session, session.begin():
+                prior = await session.get(ScreeningAttempt, prior_id)
+                assert prior is not None
+                prior.reason_code = prior_reason_code
+                prior.finished_at = datetime.now(UTC) - timedelta(hours=1)
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=13
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-model-inconclusive",
+            prompt_revision="l2-terra-source-review-v51-policy-v13",
+            max_steps=256,
+            steps_used=24,
+            model_disposition="inconclusive",
+            resolution_basis="insufficient_static_evidence",
+            dossier_complete=True,
+            model_inconclusive_invariants=["i2_evidence_retention"],
+            budget_stop_reason=budget_stop_reason,
+            final_stage="critic",
+        )
+        payload = _result_payload(
+            agent_id,
+            passed=False,
+            policy_version=13,
+            attempt_id=attempt_id,
+            outcome="inconclusive",
+            manifest_digest="12" * 32,
+            reason_code="l2-model-inconclusive",
+            review_audit_digest=audit.canonical_digest(),
+            review_audit=audit.model_dump(mode="json"),
+        )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == expected_status
+        # A worker that retries the same signed report gets the same answer.
+        replay = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["status"] == expected_status
+
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            assert agent is not None and attempt is not None
+            assert quarantine is not None
+            # The worker's signed inconclusive audit is retained either way.
+            assert quarantine.review_audit == audit.model_dump(mode="json")
+            assert quarantine.status == "resolved"
+            if expected_status == AgentStatus.REJECTED:
+                assert agent.status == AgentStatus.REJECTED
+                assert agent.screening_reason_code == (
+                    "verification-incomplete-unreviewable"
+                )
+                assert agent.screening_reason == V2_UNREVIEWABLE_PUBLIC_REASON
+                assert "No violation was found" in agent.screening_reason
+                assert attempt.status == "rejected"
+                assert attempt.reason_code == "verification-incomplete-unreviewable"
+                assert quarantine.reason_code == "verification-incomplete-unreviewable"
+                assert quarantine.resolution == "reject"
+                assert quarantine.resolved_by == "platform:v13-v2-unreviewable"
+            else:
+                assert agent.status == AgentStatus.SCREENING_FAILED
+                assert attempt.status == "expired"
+                assert attempt.reason_code == "l2-model-inconclusive"
+
+    async def test_v13_v2_reject_needs_policy_v13(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # V2 is a policy v13 outcome; an older policy's inconclusive stays parked.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        for _ in range(3):
+            prior_id = await _seed_running_attempt(
+                session_maker, agent_id=agent_id, policy_version=12, status="expired"
+            )
+            async with session_maker() as session, session.begin():
+                prior = await session.get(ScreeningAttempt, prior_id)
+                assert prior is not None
+                prior.reason_code = "l2-model-inconclusive"
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=13
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-model-inconclusive",
+            prompt_revision="l2-terra-source-review-v51-policy-v13",
+            max_steps=256,
+            steps_used=24,
+            model_disposition="inconclusive",
+            resolution_basis="insufficient_static_evidence",
+            budget_stop_reason="none",
+        )
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                policy_version=13,
+                attempt_id=attempt_id,
+                outcome="inconclusive",
+                manifest_digest="12" * 32,
+                reason_code="l2-model-inconclusive",
+                review_audit_digest=audit.canonical_digest(),
+                review_audit=audit.model_dump(mode="json"),
+            ),
+        )
+        # Prior policy-v12 reviews do not count toward the v13 tally.
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == AgentStatus.SCREENING_FAILED
 
     async def test_result_integrity_error_returns_409_and_logs(
         self,

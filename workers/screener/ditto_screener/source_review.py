@@ -88,7 +88,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v30-policy-v13"
+        return "source-review-v31-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -2001,8 +2001,8 @@ case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
 markers, or `bench_version` from changing substantive retrieval, capability
 ordering, authority, execution, or output beyond the published compatibility
 contract. Complete source proof is enforceable. Behavioral
-degradation alone is a lead until a versioned post-commit, controlled,
-predeclared and replicated test attributes it to evaluation dependence. Use
+degradation alone is a lead, never a breach; screening runs no separate
+behavioral test that could attribute it later. Use
 evaluation_independent_runtime or no_evaluation_identity_branch only after
 tracing the served path; unreachable_nonruntime_code remains available when the
 effective build excludes the path.
@@ -2057,8 +2057,8 @@ source-side allowlist for the validator-supplied field.
 
 Opaque files are not violations by presence. Establish each loaded component's
 actual role and apply the published role-specific verification requirement.
-Private behavioral testing is mandatory only when that role requires it or
-source causality remains unresolved. Tests, diagnostics, and helpers require
+Screening runs no private behavioral test, so settle each role from traced
+source causality. Tests, diagnostics, and helpers require
 effective build/startup/runtime reachability; refuting one dormant lead does
 not clear the rest of the artifact.
 Before labeling an optional environment-gated branch reachable, inspect its

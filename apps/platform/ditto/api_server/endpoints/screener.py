@@ -220,8 +220,10 @@ from ditto.db.queries.screener_provider_settings import (
     resolve_screener_provider_settings,
 )
 from ditto.db.queries.screening import (
+    L2_MODEL_INCONCLUSIVE_REASON_CODE,
     POLICY_ONLY_RESCREEN_REASON,
     claim_screening_attempts,
+    complete_static_inconclusive_count,
     get_screening_attempt,
     infra_retry_agent_admitted,
     prerequisite_screening_predicates,
@@ -254,6 +256,8 @@ from ditto_screening_protocol.reason_codes import (
     DOCKER_BUILD_INFRASTRUCTURE,
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
+    V2_COMPLETE_STATIC_REVIEWS,
+    VERIFICATION_INCOMPLETE_UNREVIEWABLE,
     WORKER_CLAIM_NOT_STARTED,
 )
 
@@ -414,6 +418,32 @@ def _screened_image_key(agent_id: UUID, image_upload_id: UUID) -> str:
 # Agents a verdict may act on. ``screening`` is included for forward-compat with
 # a future claim step; the terminal targets are handled separately (idempotency).
 _SCREENABLE_STATUSES = (AgentStatus.UPLOADED, AgentStatus.SCREENING)
+# Miner-visible text for policy v13 V2.platform_verification_failed. It must
+# say no violation was found: V2 records ``violation_proven: false``.
+V2_UNREVIEWABLE_PUBLIC_REASON = (
+    "Rejected as unreviewable (policy v13 V2, platform verification not "
+    "completed): repeated complete source reviews could not settle the served "
+    "decision path. No violation was found. A simpler, more traceable version "
+    "may be resubmitted."
+)
+
+
+def _completes_static_review(payload: ScreenResultRequest) -> bool:
+    """Whether a verdict is a finished review that stayed statically unsettled.
+
+    Budget, time, provider and infrastructure stops carry other reason codes or
+    a ``budget_stop_reason``; only a model-chosen inconclusive over a complete
+    review counts toward V2.
+    """
+    audit = payload.review_audit
+    return (
+        payload.outcome == ScreenResultOutcome.INCONCLUSIVE
+        and payload.reason_code == L2_MODEL_INCONCLUSIVE_REASON_CODE
+        and payload.adjudication is None
+        and audit is not None
+        and audit.resolution_basis == "insufficient_static_evidence"
+        and audit.budget_stop_reason in (None, "none")
+    )
 
 
 def _fresh_dataset_seed() -> int:
@@ -5477,6 +5507,33 @@ async def submit_result(
             target = AgentStatus.REJECTED
             public_reason = payload.adjudication.reason
             attempt_status = "rejected"
+        if (
+            payload.policy_version >= 13
+            and not deferred_attempt_lifecycle
+            and _completes_static_review(payload)
+            and (
+                attempt.reason_code == VERIFICATION_INCOMPLETE_UNREVIEWABLE
+                or (
+                    agent.status in _SCREENABLE_STATUSES
+                    and await complete_static_inconclusive_count(
+                        session,
+                        agent_id=agent_id,
+                        policy_version=payload.policy_version,
+                    )
+                    + 1
+                    >= V2_COMPLETE_STATIC_REVIEWS
+                )
+            )
+        ):
+            # Policy v13 has no indefinite INCONCLUSIVE outcome: a mandatory
+            # verification still incomplete after the published retries is
+            # V2, a terminal REJECT with violation_proven false. The worker's
+            # signed inconclusive evidence is kept below; only the outcome
+            # and its code change.
+            target = AgentStatus.REJECTED
+            public_reason = V2_UNREVIEWABLE_PUBLIC_REASON
+            attempt_status = "rejected"
+            stored_reason_code = VERIFICATION_INCOMPLETE_UNREVIEWABLE
         if attempt.reason_code == "exact-cross-miner-duplicate" and (
             payload.reason_code != attempt.reason_code
         ):
@@ -5783,6 +5840,9 @@ async def submit_result(
                 evidence_deferred = target != AgentStatus.QUARANTINED or (
                     deferred_attempt_lifecycle
                 )
+                v2_unreviewable = (
+                    stored_reason_code == VERIFICATION_INCOMPLETE_UNREVIEWABLE
+                )
                 resolved_at = datetime.now(UTC) if evidence_deferred else None
                 session.add(
                     ScreeningQuarantine(
@@ -5821,13 +5881,23 @@ async def submit_result(
                         status="resolved" if evidence_deferred else "active",
                         resolved_at=resolved_at,
                         resolved_by=(
-                            "platform:deferred-source-review"
+                            "platform:v13-v2-unreviewable"
+                            if v2_unreviewable
+                            else "platform:deferred-source-review"
                             if evidence_deferred
                             else None
                         ),
-                        resolution="rescreen" if evidence_deferred else None,
+                        resolution=(
+                            "reject"
+                            if v2_unreviewable
+                            else "rescreen"
+                            if evidence_deferred
+                            else None
+                        ),
                         resolution_reason=(
-                            payload.adjudication.reason
+                            V2_UNREVIEWABLE_PUBLIC_REASON
+                            if v2_unreviewable
+                            else payload.adjudication.reason
                             if payload.adjudication is not None
                             else (
                                 "Late deep-review evidence retained after operator "

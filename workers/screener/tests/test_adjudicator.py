@@ -2039,8 +2039,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v4-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v4-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v4-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v11-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v11-policy-v13"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v12-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v12-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:

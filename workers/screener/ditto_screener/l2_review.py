@@ -121,35 +121,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v50-policy-v13"
+        return "l2-terra-source-review-v51-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-adversarial-critic-v23-policy-v13"
+        return "l3-sol-adversarial-critic-v24-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-violation-cause-v28-policy-v13"
+        return "l3-sol-violation-cause-v29-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-cause-disagreement-v8-policy-v13"
+        return "l3-sol-cause-disagreement-v9-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-safety-adjudicator-v26-policy-v13"
+        return "l3-sol-safety-adjudicator-v27-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -1238,8 +1238,9 @@ substantive retrieval, authority, capabilities, execution, or output. This
 includes `bench_version` activating learned routing, capability ordering, or
 other substantive behavior beyond the published compatibility contract; use
 evaluation_identity_authoritative only for a reachable source-proven branch.
-Behavioral degradation alone is inconclusive until controlled, post-commit,
-predeclared and replicated evidence attributes it to evaluation dependence.
+Behavioral degradation alone is a lead, never an I8 breach. Screening runs no
+separate behavioral test that could attribute it later, so decide I8 from the
+traced served path.
 
 For I2, identify the exact applicable evidence and its discard point; generic
 top-k selection or an ordinary retrieval miss is insufficient. For I3, separate
