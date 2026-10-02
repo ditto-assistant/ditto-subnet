@@ -448,7 +448,8 @@ def _confirmed_violation_reason(
 
     The finding is digest-bound to the signed verdict at parse time; this also
     binds it to the exact artifact and requires a named invariant breach, so a
-    copied or breach-free finding can never reject.
+    copied or breach-free finding can never reject. Every confirmed breach is
+    named so the miner sees the whole finding.
     """
     finding = payload.finding
     if (
@@ -456,8 +457,13 @@ def _confirmed_violation_reason(
         or payload.policy_version < 13
         or payload.reason_code != SOURCE_REVIEW_CONFIRMED_VIOLATION
         or finding is None
-        or finding.artifact_sha256 != artifact_sha256
+        or finding.artifact_sha256 != artifact_sha256.lower()
         or finding.invariant_assessment is None
+        # An opposing court clear wins; a confirmed breach never overrides it.
+        or (
+            payload.adjudication is not None
+            and payload.adjudication.decision != "reject"
+        )
     ):
         return None
     breaches = [
@@ -468,7 +474,7 @@ def _confirmed_violation_reason(
     if not breaches:
         return None
     parts = []
-    for decision in breaches[:2]:
+    for decision in breaches:
         locations = sorted(
             {
                 f"{finding.evidence[index].path}:{finding.evidence[index].line}"

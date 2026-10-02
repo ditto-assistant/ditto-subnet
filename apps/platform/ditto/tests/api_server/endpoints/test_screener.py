@@ -12815,6 +12815,56 @@ class TestSubmitResult:
                 assert quarantine.status == "active"
                 assert quarantine.resolution is None
 
+    @pytest.mark.parametrize("decision", [None, "reject", "clear", "escalate"])
+    def test_confirmed_violation_reason_binds_artifact_and_court(
+        self, decision: str | None
+    ) -> None:
+        finding = _confirmed_violation_finding()
+        second = finding.invariant_assessment.decisions  # type: ignore[union-attr]
+        decisions = [
+            item.model_copy(
+                update={
+                    "disposition": SourceReviewInvariantDisposition.BREACH,
+                    "evidence_indices": [0],
+                }
+            )
+            if item.invariant
+            in {
+                SourceReviewInvariant.MODEL_INVOCATION,
+                SourceReviewInvariant.DERIVED_VALUE_AUTHORITY,
+            }
+            else item
+            for item in second
+        ]
+        finding = finding.model_copy(
+            update={
+                "invariant_assessment": SourceReviewInvariantAssessment(
+                    decisions=decisions
+                )
+            }
+        )
+        payload = SimpleNamespace(
+            outcome=ScreenResultOutcome.QUARANTINE,
+            policy_version=13,
+            reason_code="source-review-confirmed-violation",
+            finding=finding,
+            adjudication=(
+                None if decision is None else SimpleNamespace(decision=decision)
+            ),
+        )
+        reason = screener_endpoint._confirmed_violation_reason(
+            payload,  # type: ignore[arg-type]
+            artifact_sha256=_SHA256.upper(),
+        )
+        if decision in {None, "reject"}:
+            assert reason is not None
+            # Every confirmed breach is named, not just the first two.
+            for label in ("I1 model invocation", "I4 ", "I5 production engine"):
+                assert label in reason
+        else:
+            # An opposing court decision always wins over the confirmed code.
+            assert reason is None
+
     async def test_result_integrity_error_returns_409_and_logs(
         self,
         app: FastAPI,
