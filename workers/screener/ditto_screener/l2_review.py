@@ -4812,7 +4812,11 @@ class TerraSolSourceReviewAgent:
                             ),
                         }
                     )
-                raise failure("model-response-contract") from error
+                raise failure(
+                    "model-provider-fault"
+                    if _relayed_provider_fault(payload)
+                    else "model-response-contract"
+                ) from error
             usage = _add_usage(usage, turn_usage)
             if self._terminal_verdict_required:
                 self._audit.record(
@@ -7250,6 +7254,19 @@ def _valid_location(repository: TarSourceRepository, path: str, line: int) -> bo
         return False
     total = repository.line_count(path)
     return total is None or line <= max(total, 1)
+
+
+def _relayed_provider_fault(payload: object) -> bool:
+    """Whether a 200 body relays the provider's own failure, not a bad answer.
+
+    OpenRouter returns an upstream outage (``server_error``,
+    ``provider_unavailable``, a rate limit) as ``status: failed`` with an error
+    in an ordinary 200 response. That is the provider's fault; naming it a
+    response-contract failure sent operators hunting for a reviewer bug.
+    """
+    return isinstance(payload, dict) and bool(
+        payload.get("error") or payload.get("error_type")
+    )
 
 
 def _response_contract_detail(payload: object) -> str:

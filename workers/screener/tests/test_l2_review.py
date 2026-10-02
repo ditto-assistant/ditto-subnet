@@ -7784,7 +7784,7 @@ async def test_relayed_rate_limit_parks_after_one_post(tmp_path: Path) -> None:
         deadline=None,
     )
 
-    assert result.observation.error_code == "l2-model-response-contract"
+    assert result.observation.error_code == "l2-model-provider-fault"
     assert result.observation.failure_disposition == "retryable_infra"
     assert len(requests) == 1
 
@@ -7815,8 +7815,58 @@ async def test_persistent_relayed_rate_limit_still_posts_once(tmp_path: Path) ->
 
     assert not result.observation.ok
     assert result.observation.failure_disposition == "retryable_infra"
-    assert result.observation.error_code == "l2-model-response-contract"
+    assert result.observation.error_code == "l2-model-provider-fault"
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize("error_type", ["server_error", "provider_unavailable"])
+async def test_relayed_provider_outage_is_named_a_provider_fault(
+    tmp_path: Path, error_type: str
+) -> None:
+    """OpenRouter relays an upstream outage as a failed 200 body, not a bad answer."""
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error_type": error_type,
+                "error": "server_error",
+                "output": [],
+                "usage": {},
+            },
+        )
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.error_code == "l2-model-provider-fault"
+    assert result.observation.failure_disposition == "retryable_infra"
+
+
+async def test_malformed_body_without_a_provider_error_stays_a_contract_fault(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "completed", "output": "nope"})
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.error_code == "l2-model-response-contract"
 
 
 async def test_exhausted_l2_does_not_claim_coverage_it_lacks() -> None:
