@@ -69,7 +69,10 @@ from ditto_screening_protocol.models import (
     source_review_invariants_for_policy,
     source_review_pass_clauses_for_policy,
 )
-from ditto_screening_protocol.reason_codes import SOURCE_REVIEW_MODEL_TIMEOUT
+from ditto_screening_protocol.reason_codes import (
+    SOURCE_REVIEW_MODEL_TIMEOUT,
+    SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED,
+)
 from ditto_screening_protocol.review_ledger import (
     MULTI_LOCATION_CATEGORIES,
     concern_threshold_reached,
@@ -4287,6 +4290,8 @@ def _source_review_failure_code(error: BaseException) -> str:
     instead of losing the failure.
     """
     if isinstance(error, httpx.HTTPStatusError):
+        if error.response.status_code == 402:
+            return SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED
         return f"source-review-http-{error.response.status_code}"
     if isinstance(error, (TimeoutError, httpx.TimeoutException)):
         # A model turn timed out while the lease still had time; lease expiry

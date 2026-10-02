@@ -71,7 +71,10 @@ from ditto_screening_protocol.models import (
     source_review_invariants_for_policy,
     source_review_pass_clauses_for_policy,
 )
-from ditto_screening_protocol.reason_codes import L2_RUNTIME_EVIDENCE_UNAVAILABLE
+from ditto_screening_protocol.reason_codes import (
+    L2_RUNTIME_EVIDENCE_UNAVAILABLE,
+    SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -7924,6 +7927,10 @@ def _classified_suffix(error: BaseException) -> str | None:
 def _error_code(prefix: str, error: BaseException) -> str:
     if isinstance(error, httpx.HTTPStatusError):
         response = error.response
+        if response.status_code == 402:
+            # One code for every layer: an unfunded review account is a fleet
+            # billing stop, not an L2/L3 reviewer failure.
+            return SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED
         code = f"{prefix}-http-{response.status_code}{_http_failure_hint(response)}"
         return code[:64]
     classified = _classified_suffix(error)

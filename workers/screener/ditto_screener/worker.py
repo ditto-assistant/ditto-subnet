@@ -86,7 +86,10 @@ from ditto_screening_protocol.private_failure import (
     PRIVATE_FAILURE_LOG_TAIL_LIMIT,
     private_failure_text,
 )
-from ditto_screening_protocol.reason_codes import WORKER_CLAIM_NOT_STARTED
+from ditto_screening_protocol.reason_codes import (
+    SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED,
+    WORKER_CLAIM_NOT_STARTED,
+)
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -113,6 +116,13 @@ _SEED_ENVELOPE_OBSERVATION = "seed-envelope-usage"
 _PRIVATE_BUILD_FAILURE_CODES = frozenset(
     {"docker-build", "docker-build-infrastructure", "docker-build-timeout"}
 )
+
+
+# After a review gateway 402 the worker stops claiming, then lets one claim
+# through as a probe; each further 402 doubles the pause up to the cap. A
+# funded account therefore costs at most one attempt per worker per window.
+CREDITS_PAUSE_INITIAL_SECONDS = 300.0
+CREDITS_PAUSE_MAX_SECONDS = 1800.0
 
 
 def _verdict_reason_code(
@@ -307,6 +317,8 @@ class ScreenerWorker:
         self._active_attempt_id: Any = None
         self._active_progress_at: int | None = None
         self._job_started_at: int | None = None
+        self._credits_pause_until = float("-inf")
+        self._credits_pause_seconds = 0.0
         self._last_heartbeat_timestamp = 0
         self._last_heartbeat_monotonic = float("-inf")
         self._last_heartbeat_state: ScreenerRuntimeState | None = None
@@ -603,6 +615,8 @@ class ScreenerWorker:
         # returns the lease is durable, so a stopping worker must not claim.
         if stop.is_set():
             return 0
+        if self._credits_paused():
+            return 0
         try:
             queue = await self._platform.claim_next(
                 policy_version=screen_version,
@@ -723,6 +737,34 @@ class ScreenerWorker:
             )
             done += 1
         return done
+
+    def _credits_paused(self) -> bool:
+        remaining = self._credits_pause_until - time.monotonic()
+        if remaining <= 0:
+            return False
+        logger.warning(
+            "review gateway credits exhausted (HTTP 402); not claiming for "
+            "another %ds so the queue keeps its attempts. Fund the review "
+            "account or switch the endpoint's billing.",
+            int(remaining),
+        )
+        return True
+
+    def _observe_credits(self, reason_code: str | None) -> None:
+        """Pause claiming after a 402; any other outcome means the account works."""
+        if reason_code != SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED:
+            self._credits_pause_seconds = 0.0
+            self._credits_pause_until = float("-inf")
+            return
+        self._credits_pause_seconds = min(
+            CREDITS_PAUSE_MAX_SECONDS,
+            max(CREDITS_PAUSE_INITIAL_SECONDS, self._credits_pause_seconds * 2),
+        )
+        self._credits_pause_until = time.monotonic() + self._credits_pause_seconds
+        logger.error(
+            "review gateway credits exhausted (HTTP 402): pausing claims for %ds",
+            int(self._credits_pause_seconds),
+        )
 
     async def _screen_one(
         self,
@@ -1216,6 +1258,7 @@ class ScreenerWorker:
                 policy_only=item.policy_only,
             )
             result_applied = True
+            self._observe_credits(reason_code)
             logger.info(
                 "screened agent_id=%s miner=%s outcome=%s passed=%s "
                 "elapsed_s=%d -> %s%s",

@@ -6693,6 +6693,25 @@ async def test_http_429_logs_the_provider_limit_without_publishing_it(
         assert limit not in line
 
 
+async def test_http_402_names_exhausted_review_credits(tmp_path: Path) -> None:
+    """An unfunded review account is reported as such, not as a bare status."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(402, request=request, json={"error": "balance"})
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert not observation.ok
+    assert observation.error_code == "source-review-provider-credits-exhausted"
+    assert observation.failure_disposition == "retryable_infra"
+
+
 async def test_http_429_parks_after_three_bounded_posts(tmp_path: Path) -> None:
     """A persistent HTTP 429 parks after the fixed same-turn retry grant."""
     key = tmp_path / "key"

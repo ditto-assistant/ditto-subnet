@@ -18,6 +18,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from ditto_screener import worker as worker_module
 from ditto_screener.adjudicator import SourceReviewAdjudicator
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.errors import (
@@ -63,6 +64,9 @@ from ditto_screening_protocol import (
     SourceReviewFinding,
     SourceReviewNote,
     source_review_notes_digest,
+)
+from ditto_screening_protocol.reason_codes import (
+    SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED,
 )
 
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
@@ -2057,6 +2061,44 @@ async def test_no_claim_when_stopped_before_claim(
     assert platform.claim_calls == 0
     assert platform.verdicts == []
     assert gate.calls == []
+
+
+async def test_credits_exhausted_pauses_claims_then_probes(
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 402 stops claiming so a funding gap cannot fail the whole queue."""
+    clock = [1000.0]
+    monkeypatch.setattr(worker_module.time, "monotonic", lambda: clock[0])
+    platform = _FakePlatform([[_item(uuid4())], [_item(uuid4())]])
+    worker = _worker(
+        make_config(), platform, _FakeGate(_decision(ScreeningOutcome.PASS))
+    )
+    stop = asyncio.Event()
+
+    worker._observe_credits(SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED)
+    assert await worker._sweep(stop) == 0
+    assert platform.claim_calls == 0
+
+    clock[0] += worker_module.CREDITS_PAUSE_INITIAL_SECONDS + 1
+    assert await worker._sweep(stop) == 1
+    assert platform.claim_calls == 1
+
+
+def test_credits_pause_doubles_to_cap_and_clears_on_any_other_outcome(
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(worker_module.time, "monotonic", lambda: 0.0)
+    worker = _worker(
+        make_config(), _FakePlatform([]), _FakeGate(_decision(ScreeningOutcome.PASS))
+    )
+    for expected in (300.0, 600.0, 1200.0, 1800.0, 1800.0):
+        worker._observe_credits(SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED)
+        assert worker._credits_pause_seconds == expected
+    worker._observe_credits("source-review-http-401")
+    assert worker._credits_pause_seconds == 0.0
+    assert not worker._credits_paused()
 
 
 async def test_stop_set_during_claim_still_screens_claimed_item(

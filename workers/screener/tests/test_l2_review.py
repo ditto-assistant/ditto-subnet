@@ -8971,6 +8971,17 @@ async def test_l2_auth_wait_never_sleeps_past_the_lease_deadline(
     assert time.monotonic() - started < 5
 
 
+def test_l2_http_402_shares_the_credits_exhausted_code() -> None:
+    request = httpx.Request("POST", "https://openrouter.test/api/v1/responses")
+    response = httpx.Response(402, request=request, json={"error": "balance"})
+    error = httpx.HTTPStatusError("402", request=request, response=response)
+    for prefix in ("l2", "l3-critic", "l3-adjudicator"):
+        assert (
+            l2_review._error_code(prefix, error)
+            == "source-review-provider-credits-exhausted"
+        )
+
+
 async def test_non_auth_http_errors_are_not_waited_out(tmp_path: Path) -> None:
     requests = 0
 

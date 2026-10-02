@@ -101,6 +101,9 @@ TARGON_SOURCE_REVIEW_UNAVAILABLE: Final = "targon-source-review-unavailable"
 CLOUDRUN_BUILD_UNAVAILABLE: Final = "cloudrun-build-unavailable"
 CLOUDRUN_RUNTIME_UNAVAILABLE: Final = "cloudrun-runtime-unavailable"
 SOURCE_REVIEW_MODEL_TIMEOUT: Final = "source-review-model-timeout"
+SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED: Final = (
+    "source-review-provider-credits-exhausted"
+)
 SOURCE_REVIEW_RETRYABLE_INFRA: Final = "source-review-retryable-infra"
 WORKER_LEASE_ORPHANED: Final = "worker-lease-orphaned"
 SCREENING_LEASE_EXPIRED: Final = "screening-lease-expired"
@@ -160,6 +163,14 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     ScreeningReasonCode("source-review-unavailable", _O, _WORKER),
     ScreeningReasonCode("l2-cache-lock-timeout", _O, _WORKER),
     ScreeningReasonCode("l2-late-result", _O, _WORKER),
+    # The review gateway answered HTTP 402: the account paying for review
+    # inference is out of credits or its spend is not authorized. Fleet
+    # billing, never the artifact, so it must never count toward a park cap;
+    # the worker stops claiming until a probe succeeds, and the operator
+    # retries the parked attempts once the account is funded.
+    ScreeningReasonCode(
+        SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED, _O, _WORKER, "source_review"
+    ),
     ScreeningReasonCode("static-preflight-audit-failed", _O, _WORKER),
     ScreeningReasonCode("executor-isolation-unavailable", _O, _WORKER),
     ScreeningReasonCode("replay-image-identity-mismatch", _O, _WORKER),
