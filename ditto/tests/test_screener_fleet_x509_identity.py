@@ -234,18 +234,17 @@ def test_second_screener_has_distinct_default_off_x509_identity() -> None:
     ) in terraform
 
 
-def test_hetzner_fleet_defaults_match_the_live_ditto_router_flip() -> None:
-    """subnet-screener-1 was moved to Ditto Inference by a host edit on 2026-09-10;
-    the checked-in defaults must render the same values or the next converge
-    silently reverts the node to OpenRouter with a key that no longer matches."""
+def test_hetzner_fleet_defaults_match_the_live_review_gateway() -> None:
+    """subnet-screener-1 reviews through OpenRouter again since 2026-10-02 (host
+    edit); the checked-in defaults must render the same values or the next
+    converge silently flips the node to a gateway whose key does not match."""
     import yaml
 
     role = ROOT / "infra/ansible/roles/hetzner_screener_fleet"
     defaults = yaml.safe_load((role / "defaults/main.yml").read_text())
-    assert defaults["screener_fleet_review_inference_provider"] == "ditto"
-    assert (
-        defaults["screener_fleet_source_review_secret_id"]
-        == "screener-review-ditto-inference-key"
+    assert defaults["screener_fleet_review_inference_provider"] == "openrouter"
+    assert defaults["screener_fleet_source_review_secret_id"] == (
+        "validator-openrouter-key"
     )
     example = yaml.safe_load(
         (ROOT / "infra/ansible/inventory/hetzner-screener.example.yml").read_text()
@@ -253,9 +252,9 @@ def test_hetzner_fleet_defaults_match_the_live_ditto_router_flip() -> None:
     host = example["all"]["children"]["role_hetzner_screener"]["hosts"][
         "subnet-screener-1"
     ]
-    assert host["screener_fleet_review_inference_provider"] == "ditto"
+    assert host["screener_fleet_review_inference_provider"] == "openrouter"
     assert host["screener_fleet_source_review_secret_id"] == (
-        "screener-review-ditto-inference-key"
+        "validator-openrouter-key"
     )
     # The fleet env template must still carry the provider to the worker.
     env = (role / "templates/fleet.env.j2").read_text()
