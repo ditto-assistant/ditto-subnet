@@ -12,6 +12,105 @@ from ditto.treasury.collector import Observation, SignedOperation
 from ditto.treasury.collector_chain import NoCredentialRedirect, PublicCollectorChain
 
 
+def identity_adapter(*, role="registration", owner="cold", uid=None, raw_owner=None):
+    chain = PublicCollectorChain.__new__(PublicCollectorChain)
+    chain.role = role
+    values = {"Owner": owner, "SubnetOwner": "subnet-owner", "Uids": uid, "Keys": "hot"}
+    calls = []
+    chain.query = lambda _module, name, _params, _hash: values[name]
+    chain.substrate = SimpleNamespace(
+        create_storage_key=lambda *_args, **_kwargs: SimpleNamespace(
+            to_hex=lambda: "0xowner"
+        ),
+        rpc_request=lambda method, params: calls.append((method, params))
+        or {"result": raw_owner},
+    )
+    return (
+        chain,
+        SimpleNamespace(collector_coldkey="cold", collector_hotkey="hot"),
+        values,
+        calls,
+    )
+
+
+def test_first_registration_accepts_proven_absent_owner_only():
+    c, p, values, calls = identity_adapter(owner="default-zero")
+    assert c.identity(p, "finalized", allow_unowned=True) is None
+    assert calls == [("state_getStorageAt", ["0xowner", "finalized"])]
+    values["Owner"] = "cold"
+    values["Uids"] = 14
+    assert c.identity(p, "after-registration") == 14
+
+
+@pytest.mark.parametrize("role", ["registration", "transfer"])
+def test_unowned_collector_is_not_a_default_identity(role):
+    c, p, _, _ = identity_adapter(role=role, owner="default-zero")
+    with pytest.raises(ValueError, match="ownership"):
+        c.identity(p, "finalized")
+
+
+@pytest.mark.parametrize(
+    "role,uid,raw_owner,response",
+    [
+        ("transfer", None, None, None),
+        ("registration", 14, None, None),
+        ("registration", None, "0x00", None),
+        ("registration", None, None, {"error": "unavailable"}),
+        ("registration", None, None, {}),
+    ],
+)
+def test_unowned_bootstrap_refuses_existing_binding_and_uncertainty(
+    role, uid, raw_owner, response
+):
+    c, p, _, _ = identity_adapter(
+        role=role, owner="other-owner", uid=uid, raw_owner=raw_owner
+    )
+    if response is not None:
+        c.substrate.rpc_request = lambda *_: response
+    with pytest.raises(ValueError, match="ownership"):
+        c.identity(p, "finalized", allow_unowned=True)
+
+
+def test_unowned_bootstrap_cannot_use_subnet_owner_coldkey():
+    c, p, values, _ = identity_adapter(owner="default-zero")
+    values["SubnetOwner"] = p.collector_coldkey
+    with pytest.raises(ValueError, match="subnet-owner"):
+        c.identity(p, "finalized", allow_unowned=True)
+
+
+def test_first_registration_observation_reaches_bounded_register_path():
+    p = policy()
+    c, _, _, _ = identity_adapter(owner="default-zero")
+    c.guard_runtime = lambda *_: None
+    c.assert_no_sponsor = lambda *_: None
+    c.alpha = lambda *_: 0
+    c.substrate.get_chain_finalised_head = lambda: "finalized"
+    c.substrate.get_block_number = lambda _: 100
+    values = {
+        "Owner": "default-zero",
+        "SubnetOwner": "subnet-owner",
+        "Uids": None,
+        "Burn": 1,
+        "Account": {"data": {"free": 100}},
+        "Proxies": (
+            [
+                {
+                    "delegate": p.registration_delegate,
+                    "proxy_type": "Registration",
+                    "delay": 0,
+                },
+                {"delegate": p.transfer_delegate, "proxy_type": "Transfer", "delay": 0},
+            ],
+            0,
+        ),
+    }
+    c.query = lambda _module, name, _params, _hash: values[name]
+    observed = c.observe(p, "registration")
+    assert observed.uid is None
+    assert observed.burn_rao == 1
+    assert observed.collector_free_rao == 100
+
+
 def event(module, name, attrs, index=0, phase="ApplyExtrinsic"):
     return {
         "module_id": module,
@@ -27,7 +126,7 @@ def adapter(substrate):
     chain.substrate = substrate
     chain.role = "transfer"
     chain.guard_runtime = lambda *_: None
-    chain.identity = lambda _, h: None if h == "b100" else 14
+    chain.identity = lambda _, h, **_kwargs: None if h == "b100" else 14
     chain.alpha = lambda *_: 100
     return chain
 
@@ -133,6 +232,40 @@ def test_registration_requires_exact_finalized_uid_event():
     assert c.reconcile(p, op, observed).uid == 14
     events[-1]["event"]["attributes"][2] = "wrong-hotkey"
     with pytest.raises(ValueError, match="registration effect"):
+        c.reconcile(p, op, observed)
+
+
+def test_first_registration_receipt_proves_new_owner_and_finalized_uid():
+    p, c, op, observed, events = receipt_fixture()
+    c.role = "registration"
+    c.identity = PublicCollectorChain.identity.__get__(c)
+    c.query = lambda _module, name, _params, block_hash: {
+        "Owner": p.collector_coldkey if block_hash == "b101" else "default-zero",
+        "SubnetOwner": "subnet-owner",
+        "Uids": 14 if block_hash == "b101" else None,
+        "Keys": p.collector_hotkey,
+    }[name]
+    original_rpc = c.substrate.rpc_request
+    c.substrate.rpc_request = lambda method, params: (
+        {"result": None}
+        if method == "state_getStorageAt"
+        else original_rpc(method, params)
+    )
+    c.substrate.create_storage_key = lambda *_args, **_kwargs: SimpleNamespace(
+        to_hex=lambda: "0xowner"
+    )
+    op["role"] = "registration"
+    events[2]["event"]["attributes"]["who"] = p.registration_delegate
+    events[-2:] = [
+        event("SubtensorModule", "NeuronRegistered", [118, 14, p.collector_hotkey])
+    ]
+    assert c.reconcile(p, op, observed).uid == 14
+    c.substrate.rpc_request = lambda method, params: (
+        {"result": "0xexisting-owner"}
+        if method == "state_getStorageAt"
+        else original_rpc(method, params)
+    )
+    with pytest.raises(ValueError, match="ownership"):
         c.reconcile(p, op, observed)
 
 

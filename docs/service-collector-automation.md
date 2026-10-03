@@ -47,7 +47,13 @@ describe these proxies as hardware-constrained service wallets.
 Every tick verifies genesis, audited runtime bytes and public filter API;
 finalized `Owner`, `Uids` and `Keys`; non-owner collector association; narrow
 grants; and raw absence of fee-sponsorship consent. A numeric UID alone never
-authorizes a recipient. An absent hotkey must retain the configured Owner.
+authorizes a recipient. Re-registration retains the configured Owner. First
+registration also permits a previously unowned hotkey, only in the registration
+role with no SN118 UID and independently proven raw `Owner` storage absence at
+the same finalized block. A decoded default address is insufficient. Existing
+ownership, uncertain storage, subnet-owner association and transfer bootstrap
+refuse. Finalized registration must establish the exact Owner and reciprocal
+UID/Keys binding; its parent must prove absence of the SN118 UID.
 
 Only `register_limit(118, collector_hotkey, limit_price)` is signed. Runtime
 v470 enforces the execution-time TAO price limit before payment. No fallback

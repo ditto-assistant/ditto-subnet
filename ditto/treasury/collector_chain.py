@@ -163,18 +163,41 @@ class PublicCollectorChain:
             } != allowed or len(calls) != len(allowed):
                 raise ValueError("proxy scope differs from audited allowlist")
 
-    def identity(self, policy, block_hash):
+    def identity(self, policy, block_hash, *, allow_unowned=False):
         owner = self.query(
             "SubtensorModule", "Owner", [policy.collector_hotkey], block_hash
         )
         subnet_owner = self.query("SubtensorModule", "SubnetOwner", [118], block_hash)
-        if owner != policy.collector_coldkey or subnet_owner == owner:
+        if subnet_owner == policy.collector_coldkey:
             raise ValueError(
                 "collector ownership changed or is subnet-owner associated"
             )
         uid = self.query(
             "SubtensorModule", "Uids", [118, policy.collector_hotkey], block_hash
         )
+        if owner != policy.collector_coldkey:
+            # The first register_limit creates Owner. Its ValueQuery default is
+            # an account address, not None; only raw storage absence proves this
+            # hotkey is new. This exception is registration-only and cannot
+            # authorize earnings or a transfer, or accept an existing owner/UID.
+            if not allow_unowned or self.role != "registration" or uid is not None:
+                raise ValueError("collector ownership changed")
+            key = self.substrate.create_storage_key(
+                "SubtensorModule",
+                "Owner",
+                [policy.collector_hotkey],
+                block_hash=block_hash,
+            )
+            result = self.substrate.rpc_request(
+                "state_getStorageAt", [key.to_hex(), block_hash]
+            )
+            if (
+                result.get("error")
+                or "result" not in result
+                or result["result"] is not None
+            ):
+                raise ValueError("collector ownership present or unavailable")
+            return None
         if uid is not None:
             uid = uint(uid)
             if (
@@ -234,7 +257,7 @@ class PublicCollectorChain:
         block_hash = s.get_chain_finalised_head()
         block = s.get_block_number(block_hash)
         self.guard_runtime(policy, block_hash)
-        uid = self.identity(policy, block_hash)
+        uid = self.identity(policy, block_hash, allow_unowned=role == "registration")
         delegate = (
             policy.registration_delegate
             if role == "registration"
@@ -553,7 +576,10 @@ class PublicCollectorChain:
             if operation["role"] == "registration":
                 if (
                     uid is None
-                    or self.identity(policy, s.get_block_hash(block - 1)) is not None
+                    or self.identity(
+                        policy, s.get_block_hash(block - 1), allow_unowned=True
+                    )
+                    is not None
                 ):
                     raise ValueError("registration effect/binding unproved")
                 registrations = [
