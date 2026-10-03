@@ -28,6 +28,7 @@ from ditto.api_server.scoring_gate import (
     _DEFAULT_STRUCTURAL_CONTAINMENT_TOL,
     _DEFAULT_STRUCTURAL_JACCARD_TOL,
     _PROMPT_ADVISORY_TOL,
+    _copy_residual_is_padded,
     _fingerprint_versions_incompatible,
     _line_strength,
     _utc,
@@ -219,6 +220,21 @@ def compare_anti_copy_pair(
         containment_threshold=_DEFAULT_CONTAINMENT_TOL,
         decision_role="trigger",
     )
+    # Containment only triggers in the padding direction, exactly as the gate
+    # reads it; a small candidate inside a large reference is not a trigger.
+    lexical = replace(
+        lexical,
+        above_threshold=lexical.applicable
+        and (
+            (lexical.jaccard or 0.0) >= _DEFAULT_JACCARD_TOL
+            or (
+                (lexical.containment or 0.0) >= _DEFAULT_CONTAINMENT_TOL
+                and _copy_residual_is_padded(
+                    candidate.content_fingerprint, reference.content_fingerprint
+                )
+            )
+        ),
+    )
     # The line sub-sketch triggers the copy rule beside the window channel, so
     # a module-split copy reads as "line above threshold", not as a lexical
     # miss that somehow held.
@@ -229,8 +245,6 @@ def compare_anti_copy_pair(
         containment_threshold=_DEFAULT_LINE_CONTAINMENT_TOL,
         decision_role="trigger",
     )
-    # Containment only triggers in the padding direction, exactly as the gate
-    # reads it; a small candidate inside a large reference is not a trigger.
     line = replace(
         line,
         above_threshold=line.applicable

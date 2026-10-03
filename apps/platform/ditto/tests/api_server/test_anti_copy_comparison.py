@@ -231,6 +231,33 @@ def test_reverse_direction_line_containment_is_not_a_trigger() -> None:
     assert padded.current_decision == "hold"
 
 
+def test_reverse_direction_lexical_containment_is_not_a_trigger() -> None:
+    small = {f"{i:016x}" for i in range(20)}
+    large = small | {f"x{i:015x}" for i in range(60)}
+
+    result = compare_anti_copy_pair(
+        candidate=_row(
+            agent_id=2,
+            miner="candidate-miner",
+            first_seen=_NOW + timedelta(seconds=1),
+            sha256="b" * 64,
+            content=_fp(small),
+            size=500_001,
+        ),
+        reference=_row(
+            agent_id=1,
+            miner="reference-miner",
+            first_seen=_NOW,
+            sha256="a" * 64,
+            content=_fp(large),
+        ),
+    )
+
+    assert result.lexical.containment == 1.0
+    assert result.lexical.above_threshold is False
+    assert result.current_decision == "clear"
+
+
 def test_later_reference_is_not_chronology_eligible() -> None:
     values = {f"{i:016x}" for i in range(12)}
     candidate = _row(
