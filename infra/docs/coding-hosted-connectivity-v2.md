@@ -112,9 +112,15 @@ the completion authority.
 
 ## Qualification still required
 
-This role does not supply the missing private PostgreSQL VPC route, rootless
-restricted network/proxy, installed custody services, production credentials,
-private release registration, native images or canary approval. Do not expose
+This role does not supply the missing private PostgreSQL VPC route, qualified
+rootless candidate network and proxy enforcement, installed custody services,
+production credentials, private release registration, native images or canary
+approval.
+The fixed router and proxy endpoints for `candidate_tcp` come from the separate
+[host prerequisites role](coding-hosted-prerequisites-v2.md), which installs
+configuration and a refusing proxy unit only: it proves neither packet denial
+from the rootless per-run bridge nor the proxy's refusal as seen from a
+candidate container on the real host. Do not expose
 PostgreSQL publicly, add a metadata exception or allow daemon image-registry
 egress to bypass those gaps. Import approved digest-verified images through the
 trusted host path before their use.
