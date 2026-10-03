@@ -11162,6 +11162,22 @@ class TestScreenedImageUpload:
                 ScreenedImageUpload, UUID(upload["image_upload_id"])
             )
             assert row is not None and row.status == "verified"
+        # A gateway can drop the response of a completion that landed; the
+        # worker's replay is answered as verified without touching storage.
+        replay = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/screened-image-upload/"
+            f"{upload['image_upload_id']}/complete",
+            headers=_AUTH_HEADER,
+            json={
+                **metadata,
+                "storage_upload_id": upload["storage_upload_id"],
+                "parts": [{"part_number": 1, "etag": '"etag-1"'}],
+            },
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json() == {"verified": True}
+        storage.complete_multipart_upload.assert_awaited_once()
+        storage.verify_object_sha256.assert_awaited_once()
         reuse = await client.post(
             f"/api/v1/screener/agent/{agent_id}/screened-image-upload/"
             f"{upload['image_upload_id']}/part",
@@ -11334,6 +11350,62 @@ class TestScreenedImageUpload:
         assert response.status_code == 409
         storage.delete_object.assert_awaited_once()
 
+    async def test_completion_replay_after_consumed_session_verifies_object(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        storage = _install_storage(app)
+        attempt_id = (await client.post(_CLAIM_URL)).json()["items"][0]["attempt_id"]
+        metadata = {
+            "attempt_id": attempt_id,
+            "sha256": "12" * 32,
+            "size_bytes": 123,
+            "image_id": "sha256:" + "34" * 32,
+            "image_ref": f"ditto-screen/{agent_id}:latest",
+        }
+        upload = (
+            await client.post(
+                f"/api/v1/screener/agent/{agent_id}/screened-image-upload",
+                json=metadata,
+            )
+        ).json()
+        # The first request completed the object, then died before marking the
+        # row verified: storage no longer knows the multipart session.
+        storage.complete_multipart_upload.side_effect = ObjectNotFoundError("gone")
+        storage.head_object.side_effect = None
+        storage.head_object.return_value = ObjectMetadata(
+            size_bytes=123,
+            metadata={
+                "sha256": "12" * 32,
+                "image-id": "sha256:" + "34" * 32,
+                "image-ref": f"ditto-screen/{agent_id}:latest",
+                "attempt-id": attempt_id,
+                "image-upload-id": upload["image_upload_id"],
+            },
+        )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/screened-image-upload/"
+            f"{upload['image_upload_id']}/complete",
+            json={
+                **metadata,
+                "storage_upload_id": upload["storage_upload_id"],
+                "parts": [{"part_number": 1, "etag": '"etag"'}],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        storage.verify_object_sha256.assert_awaited_once()
+        async with session_maker() as session:
+            row = await session.get(
+                ScreenedImageUpload, UUID(upload["image_upload_id"])
+            )
+            assert row is not None and row.status == "verified"
+
     async def test_missing_multipart_upload_is_typed_conflict(
         self,
         app: FastAPI,
@@ -11358,6 +11430,7 @@ class TestScreenedImageUpload:
             )
         ).json()
         storage.complete_multipart_upload.side_effect = ObjectNotFoundError("missing")
+        storage.head_object.side_effect = ObjectNotFoundError("missing")
 
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/screened-image-upload/"
@@ -11371,6 +11444,7 @@ class TestScreenedImageUpload:
 
         assert response.status_code == 409
         assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
+        storage.delete_object.assert_not_awaited()
 
     async def test_signed_pass_verifies_and_persists_uploaded_image(
         self,

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -4134,18 +4135,20 @@ async def _load_active_image_upload(
     storage_upload_id: str,
     screener_hotkey: str,
     for_update: bool = False,
+    allow_verified: bool = False,
 ) -> ScreenedImageUpload:
     """Load and authenticate one unexpired, attempt-bound multipart session."""
     upload = await session.get(
         ScreenedImageUpload, image_upload_id, with_for_update=for_update
     )
+    allowed_statuses = {"initiated", "verified"} if allow_verified else {"initiated"}
     if (
         upload is None
         or upload.agent_id != agent_id
         or upload.attempt_id != attempt_id
         or upload.screener_hotkey != screener_hotkey
         or upload.storage_upload_id != storage_upload_id
-        or upload.status != "initiated"
+        or upload.status not in allowed_statuses
     ):
         raise AgentNotScreenableError(
             "screened image multipart session is not active or does not match owner"
@@ -4258,6 +4261,7 @@ async def screened_image_upload_complete(
             attempt_id=payload.attempt_id,
             storage_upload_id=payload.storage_upload_id,
             screener_hotkey=screener_hotkey,
+            allow_verified=True,
         )
         if (
             upload.sha256 != payload.sha256
@@ -4268,16 +4272,25 @@ async def screened_image_upload_complete(
             raise AgentNotScreenableError(
                 "multipart completion metadata does not match initiation"
             )
+        # Completion is idempotent: a gateway can drop the response of a long
+        # verification that still landed, and the worker replays it.
+        if upload.status == "verified":
+            return ScreenedImageCompleteResponse(verified=True)
     key = _screened_image_key(agent_id, image_upload_id)
     try:
-        await storage.complete_multipart_upload(
-            key=key,
-            upload_id=payload.storage_upload_id,
-            parts=[
-                {"PartNumber": part.part_number, "ETag": part.etag}
-                for part in payload.parts
-            ],
-        )
+        # A replay whose first request completed the object (consuming the
+        # multipart session) but never marked the row verified. The object is
+        # still checked byte-for-byte below; a truly missing object fails
+        # head_object.
+        with contextlib.suppress(ObjectNotFoundError):
+            await storage.complete_multipart_upload(
+                key=key,
+                upload_id=payload.storage_upload_id,
+                parts=[
+                    {"PartNumber": part.part_number, "ETag": part.etag}
+                    for part in payload.parts
+                ],
+            )
         stored = await storage.head_object(key=key)
         expected_metadata = {
             "sha256": payload.sha256,
@@ -4317,10 +4330,14 @@ async def screened_image_upload_complete(
         stored_upload = await session.get(
             ScreenedImageUpload, image_upload_id, with_for_update=True
         )
-        if stored_upload is None or stored_upload.status != "initiated":
+        if stored_upload is None or stored_upload.status not in {
+            "initiated",
+            "verified",
+        }:
             raise AgentNotScreenableError("multipart session is no longer active")
-        stored_upload.status = "verified"
-        stored_upload.verified_at = datetime.now(UTC)
+        if stored_upload.status == "initiated":
+            stored_upload.status = "verified"
+            stored_upload.verified_at = datetime.now(UTC)
     return ScreenedImageCompleteResponse(verified=True)
 
 
