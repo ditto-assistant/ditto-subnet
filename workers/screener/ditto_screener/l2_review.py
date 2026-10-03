@@ -99,6 +99,12 @@ _COMPLETION_REQUEST_FLOOR_SECONDS = 45.0
 _COMPLETION_REQUEST_CEILING_SECONDS = 600.0
 _COMPLETION_REQUEST_MIN_TOKENS_PER_SECOND = 60.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
+# A provider fault relayed in a 200 body (OpenRouter ``server_error``) arrives in
+# bursts: an immediate replay of the exact turn usually lands in the same burst
+# and parks the miner on a manual retry. Back off within the lease instead.
+PROVIDER_BODY_FAULT_RETRY_DELAYS_SECONDS = (15.0, 45.0, 90.0)
+# Never sleep into a lease that could not fit a useful turn afterwards.
+_PROVIDER_BODY_FAULT_MIN_TURN_SECONDS = 30.0
 
 
 def default_completion_request_seconds(max_completion_tokens: int) -> float:
@@ -2867,6 +2873,9 @@ class TerraSolSourceReviewAgent:
         terminal_verdict_required: bool = False,
         retry_provider_body_fault_once: bool = False,
         auth_retry_delays: Sequence[float] = ROUTER_AUTH_RETRY_DELAYS_SECONDS,
+        provider_fault_retry_delays: Sequence[float] = (
+            PROVIDER_BODY_FAULT_RETRY_DELAYS_SECONDS
+        ),
         analyst_provider: str | None = None,
         compact_review_packet: bool = False,
         analyst_reasoning_effort: str = "model_default",
@@ -2917,6 +2926,11 @@ class TerraSolSourceReviewAgent:
         self._retry_provider_body_fault_once = retry_provider_body_fault_once
         self._auth_retry_delays = tuple(
             max(0.0, float(delay)) for delay in auth_retry_delays
+        )
+        # The flag keeps its historical name because it is part of the review
+        # config digest; it now enables the bounded backoff below.
+        self._provider_fault_retry_delays = tuple(
+            max(0.0, float(delay)) for delay in provider_fault_retry_delays
         )
         self._analyst_provider = analyst_provider
         if compact_review_packet and not terminal_verdict_required:
@@ -5326,7 +5340,10 @@ class TerraSolSourceReviewAgent:
         # HTTPX's read timeout is an inactivity timeout, not a wall-clock cap.
         # A provider can keep a broken response alive with occasional bytes, so
         # bound each turn and allow one fresh connection before escalating.
-        for attempt in range(_MAX_COMPLETION_REQUEST_ATTEMPTS):
+        timeout_attempts = 0
+        fault_retries = 0
+        while True:
+            attempt = timeout_attempts + fault_retries
             timeout = min(
                 self._turn_timeout(deadline),
                 self._max_completion_request_seconds,
@@ -5420,16 +5437,25 @@ class TerraSolSourceReviewAgent:
                 if (
                     self._retry_provider_body_fault_once
                     and model_error is not None
-                    and attempt + 1 < _MAX_COMPLETION_REQUEST_ATTEMPTS
-                    and (
-                        deadline is None or asyncio.get_running_loop().time() < deadline
-                    )
+                    and fault_retries < len(self._provider_fault_retry_delays)
                 ):
-                    logger.warning(
-                        "L2/L3 provider body fault %s; retrying exact turn once",
-                        model_error,
-                    )
-                    continue
+                    delay = self._provider_fault_retry_delays[fault_retries]
+                    if (
+                        deadline is None
+                        or deadline - asyncio.get_running_loop().time()
+                        > delay + _PROVIDER_BODY_FAULT_MIN_TURN_SECONDS
+                    ):
+                        fault_retries += 1
+                        logger.warning(
+                            "L2/L3 provider body fault %s; retrying exact turn "
+                            "retry=%d/%d delay_s=%.1f",
+                            model_error,
+                            fault_retries,
+                            len(self._provider_fault_retry_delays),
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
                 if model_error is not None:
                     logger.warning(
                         "L2/L3 model body reported a provider fault; parking "
@@ -5439,7 +5465,8 @@ class TerraSolSourceReviewAgent:
                     )
                 return response
             except (TimeoutError, httpx.TimeoutException):
-                if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
+                timeout_attempts += 1
+                if timeout_attempts >= _MAX_COMPLETION_REQUEST_ATTEMPTS:
                     raise
                 if (
                     deadline is not None
@@ -5448,10 +5475,9 @@ class TerraSolSourceReviewAgent:
                     raise
                 logger.warning(
                     "L2/L3 model turn timed out; retrying attempt %d/%d",
-                    attempt + 1,
+                    timeout_attempts,
                     _MAX_COMPLETION_REQUEST_ATTEMPTS,
                 )
-        raise RuntimeError("L2/L3 model turn retry loop exhausted")
 
     def _turn_timeout(self, deadline: float | None) -> float:
         if deadline is None:

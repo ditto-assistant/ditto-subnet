@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -7122,7 +7123,7 @@ async def test_report_only_rejected_violation_cannot_become_safe(
     assert "report_only_unresolved_violation" in audit_path.read_text()
 
 
-async def test_report_only_provider_body_fault_retries_exact_turn_once(
+async def test_report_only_provider_body_fault_retries_exact_turn(
     tmp_path: Path,
 ) -> None:
     requests: list[bytes] = []
@@ -7164,6 +7165,7 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
         l3_enabled=False,
         terminal_verdict_required=True,
         retry_provider_body_fault_once=True,
+        provider_fault_retry_delays=(0.0,),
         transport=httpx.MockTransport(handler),
     )
     async with httpx.AsyncClient(transport=agent._transport) as client:
@@ -7176,7 +7178,7 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
             model="openai/gpt-6-sol",
             fallback_models=(),
             provider=None,
-            deadline=asyncio.get_running_loop().time() + 1,
+            deadline=asyncio.get_running_loop().time() + 60,
         )
     assert response.json()["status"] == "completed"
     assert len(requests) == 2
@@ -7190,6 +7192,133 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
         "x-ratelimit-remaining": "0",
     }
     assert requests[0] == requests[1]
+
+
+def _server_error_body() -> dict[str, object]:
+    return {
+        "id": "gen-fault",
+        "object": "response",
+        "model": "openai/gpt-6-sol",
+        "output": [],
+        "usage": {},
+        "error": {"code": "server_error", "message": "Internal Server Error"},
+    }
+
+
+def _provider_fault_agent(
+    tmp_path: Path,
+    handler: Callable[[httpx.Request], httpx.Response],
+    delays: tuple[float, ...],
+) -> SolL2SourceReviewAgent:
+    return SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(None, retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        retry_provider_body_fault_once=True,
+        provider_fault_retry_delays=delays,
+        transport=httpx.MockTransport(handler),
+    )
+
+
+async def test_provider_body_fault_burst_backs_off_until_the_turn_lands(
+    tmp_path: Path,
+) -> None:
+    requests: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.content)
+        if len(requests) <= 3:
+            return httpx.Response(200, json=_server_error_body())
+        return httpx.Response(200, json={"status": "completed", "output": []})
+
+    agent = _provider_fault_agent(tmp_path, handler, (0.0, 0.0, 0.0))
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        response = await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=(),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 600,
+        )
+    assert response.json()["status"] == "completed"
+    assert len(requests) == 4
+    assert len(set(requests)) == 1
+
+
+async def test_provider_body_fault_parks_after_bounded_backoff(
+    tmp_path: Path,
+) -> None:
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200, json=_server_error_body())
+
+    agent = _provider_fault_agent(tmp_path, handler, (0.0, 0.0, 0.0))
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        response = await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=(),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 600,
+        )
+    assert response.json()["error"]["code"] == "server_error"
+    assert requests == 4
+
+
+async def test_provider_body_fault_never_sleeps_past_the_lease(
+    tmp_path: Path,
+) -> None:
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200, json=_server_error_body())
+
+    # 60s of lease cannot fit a 45s wait plus a 30s turn: retry once, then park.
+    agent = _provider_fault_agent(tmp_path, handler, (15.0, 45.0, 90.0))
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(l2_review.asyncio, "sleep", fake_sleep)
+        async with httpx.AsyncClient(transport=agent._transport) as client:
+            response = await agent._post(
+                client,
+                "test-key",
+                [],
+                artifact_sha256="d" * 64,
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider=None,
+                deadline=asyncio.get_running_loop().time() + 60,
+            )
+    assert response.json()["error"]["code"] == "server_error"
+    assert sleeps == [15.0]
+    assert requests == 2
 
 
 async def test_model_turn_has_an_aggregate_wall_clock_deadline(
