@@ -154,13 +154,13 @@ run "runtime_rpc_refuses_unsealed_role" {
     collector_custody_phases     = { registration = "sealed", transfer = "armed" }
     collector_runtime_rpc_egress = true
   }
-  expect_failures = [check.collector_runtime_rpc_sealed]
+  expect_failures = [var.collector_runtime_rpc_egress]
 }
 
 run "runtime_rpc_refuses_disabled_custody" {
   command = plan
   variables { collector_runtime_rpc_egress = true }
-  expect_failures = [check.collector_runtime_rpc_sealed]
+  expect_failures = [var.collector_runtime_rpc_egress]
 }
 
 run "active_missing_revision_refused" {

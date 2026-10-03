@@ -71,6 +71,7 @@ class PrivatePlanScope(unittest.TestCase):
                 "values": {
                     "project": "ditto-app-dev",
                     "name": "sn118-collector-finney-rpc",
+                    "network": "projects/ditto-app-dev/global/networks/sn118-collector-custody",
                     "direction": "EGRESS",
                     "priority": 750,
                     "target_tags": [
@@ -119,6 +120,9 @@ class PrivatePlanScope(unittest.TestCase):
             ("priority", 500),
             ("disabled", True),
             ("project", "other"),
+            ("network", "projects/ditto-app-dev/global/networks/other"),
+            ("network", "projects/other/global/networks/sn118-collector-custody"),
+            ("network", ""),
         ):
             with self.subTest(name=name):
                 plan = self.rpc_fixture()

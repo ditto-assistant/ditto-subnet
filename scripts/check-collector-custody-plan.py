@@ -122,6 +122,10 @@ def validate(plan: dict) -> int:
         if (
             value.get("project") != "ditto-app-dev"
             or value.get("name") != "sn118-collector-finney-rpc"
+            or not re.fullmatch(
+                r"(?:https://www\.googleapis\.com/compute/v1/)?projects/ditto-app-dev/global/networks/sn118-collector-custody",
+                value.get("network", ""),
+            )
             or value.get("direction") != "EGRESS"
             or value.get("priority") != 750
             or set(value.get("destination_ranges", [])) != {"65.109.251.221/32"}

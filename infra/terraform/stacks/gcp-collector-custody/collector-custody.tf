@@ -61,19 +61,16 @@ variable "collector_runtime_rpc_egress" {
   type        = bool
   default     = false
   description = "Explicit sealed-host rollout: allow TLS to the reviewed Finney IPv4 only, with private Cloud NAT. Does not install or activate collector timers."
+  validation {
+    condition     = !var.collector_runtime_rpc_egress || (var.enable_collector_custody && alltrue([for phase in values(var.collector_custody_phases) : phase == "sealed"]))
+    error_message = "Finney RPC egress requires both separately sealed delegate hosts."
+  }
 }
 
 locals {
   collector_roles     = var.enable_collector_custody ? var.collector_custody_phases : {}
   collector_bootstrap = anytrue([for phase in values(local.collector_roles) : phase == "bootstrap"])
   collector_needs_nat = var.enable_collector_custody && (local.collector_bootstrap || var.collector_runtime_rpc_egress)
-}
-
-check "collector_runtime_rpc_sealed" {
-  assert {
-    condition     = !var.collector_runtime_rpc_egress || (var.enable_collector_custody && alltrue([for phase in values(var.collector_custody_phases) : phase == "sealed"]))
-    error_message = "Finney RPC egress requires both separately sealed delegate hosts."
-  }
 }
 
 check "collector_custody_explicit_inputs" {
@@ -189,6 +186,12 @@ resource "google_compute_firewall" "collector_runtime_rpc" {
   allow {
     protocol = "tcp"
     ports    = ["443"]
+  }
+  lifecycle {
+    precondition {
+      condition     = alltrue([for phase in values(var.collector_custody_phases) : phase == "sealed"])
+      error_message = "Finney RPC egress requires both separately sealed delegate hosts."
+    }
   }
 }
 
