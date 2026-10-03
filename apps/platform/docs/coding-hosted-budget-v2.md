@@ -88,6 +88,9 @@ it cannot undo a charge. If the required bounds cannot be established for the
 deployment, do not activate this algorithm. Adding provider-enforced price
 controls requires a separately reviewed native request contract change.
 
+Issue a bound policy/profile pair for review with
+[`ditto.coding_hosted_policy_issue`](coding-hosted-policy-issue-v2.md).
+
 ## Verification and next step
 
 Tests pin canonical identity and integer rounding, reject profile/policy drift,
