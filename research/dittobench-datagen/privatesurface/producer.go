@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-datagen/gen"
+	"github.com/ditto-assistant/dittobench-datagen/internal/protectedtext"
 )
 
 const endpoint = "https://openrouter.ai/api/v1/chat/completions"
@@ -47,6 +48,7 @@ const validatePrompt = `Independently compare the before and after synthetic ben
 // Profile is explicitly selected; there is no default model or fallback route.
 // Versioned prompt bytes and privacy requirements participate in its digest.
 type Profile struct {
+	RewriteMode        string `json:"rewrite_mode,omitempty"`
 	RewriteModel       string `json:"rewrite_model"`
 	RewriteProvider    string `json:"rewrite_provider"`
 	ValidatorModel     string `json:"validator_model"`
@@ -56,6 +58,9 @@ type Profile struct {
 }
 
 func (p Profile) Digest() (string, error) {
+	if p.RewriteMode != "" && p.RewriteMode != "literal-text-v1" {
+		return "", errors.New("private producer: invalid rewrite mode")
+	}
 	for _, field := range []string{p.RewriteModel, p.RewriteProvider, p.ValidatorModel, p.ValidatorProvider} {
 		if strings.TrimSpace(field) != field || field == "" || len(field) > 256 || strings.ContainsAny(field, "\r\n") {
 			return "", errors.New("private producer: invalid profile")
@@ -70,6 +75,9 @@ func (p Profile) Digest() (string, error) {
 		}
 	}
 	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v2-word-boundaries", "per-candidate-global-protection-v2-word-boundaries", "five-total-candidates-including-transient-and-truncation-retries-backoff-1s", "exact-byte-identity-validation-v1", "schema-bound-final-preservation-v1", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
+	if p.RewriteMode == "literal-text-v1" {
+		raw, _ = json.Marshal([]any{json.RawMessage(raw), literalCountPrompt})
+	}
 	return digest(raw), nil
 }
 
@@ -272,12 +280,63 @@ func (c *Client) ProbeChecked(ctx context.Context, req gen.PrivateSurfaceRequest
 	return c.probeOne(ctx, req, 0, check)
 }
 
-func (c *Client) probeOne(ctx context.Context, req gen.PrivateSurfaceRequest, attempt int, check func(string, string) error) (string, SurfaceReceipt, error) {
+const literalCountPrompt = ` protected_counts gives the required exact occurrence count of literals already visible in the source. Keep those counts, including ordinary words. retry_count_mismatches, when present, describes only visible literals changed by your previous proposal; correct them while rephrasing. No hidden grading values are supplied. Do not infer or add hidden answers.`
+
+type literalCount struct {
+	Literal  string `json:"literal"`
+	Required int    `json:"required"`
+	Observed *int   `json:"observed,omitempty"`
+}
+
+func visibleLiteralCounts(req gen.PrivateSurfaceRequest, previous string) ([]literalCount, []literalCount) {
+	var counts, mismatches []literalCount
+	seen := map[string]bool{}
+	for _, v := range req.Protected {
+		n := protectedtext.Count(req.Text, v)
+		if v == "" || seen[v] || n == 0 {
+			continue
+		}
+		seen[v] = true
+		counts = append(counts, literalCount{Literal: v, Required: n})
+		if previous != "" {
+			actual := protectedtext.Count(previous, v)
+			if actual != n {
+				mismatches = append(mismatches, literalCount{Literal: v, Required: n, Observed: &actual})
+			}
+		}
+	}
+	return counts, mismatches
+}
+
+func (c *Client) probeOne(ctx context.Context, req gen.PrivateSurfaceRequest, attempt int, check func(string, string) error, previous ...string) (string, SurfaceReceipt, error) {
 	masked, markers, restore, err := maskProtected(req.Text, req.Protected)
 	if err != nil {
 		return "", SurfaceReceipt{}, err
 	}
 	prompt := rewritePrompt + contextPrompt
+	if c.profile.RewriteMode == "literal-text-v1" {
+		// Keep language natural for the writer while applying the same exact
+		// literal counts afterward. This mode has a distinct profile identity.
+		masked, prompt, markers = req.Text, rewritePrompt, nil
+		seen := map[string]bool{}
+		for _, v := range req.Protected {
+			if v != "" && !seen[v] && protectedtext.Count(req.Text, v) > 0 {
+				markers = append(markers, v)
+				seen[v] = true
+			}
+		}
+		restore = func(candidate string) (string, error) {
+			for _, v := range markers {
+				if protectedtext.Count(req.Text, v) != protectedtext.Count(candidate, v) {
+					return "", errProtected
+				}
+			}
+			if strings.Contains(candidate, "⟦v13_"+digest([]byte(req.Text))[:16]+"_") {
+				return "", errProtected
+			}
+			return candidate, nil
+		}
+	}
 	rewriteKind := "string"
 	if attempt > 0 {
 		prompt += retryPrompt
@@ -286,7 +345,20 @@ func (c *Client) probeOne(ctx context.Context, req gen.PrivateSurfaceRequest, at
 		prompt += preservationPrompt
 		rewriteKind = "null"
 	}
-	content, rewrite, err := c.complete(ctx, c.profile.RewriteModel, c.profile.RewriteProvider, prompt, map[string]any{"text": masked, "reference_text": req.Text, "protected": markers}, "text", rewriteKind, 0.7)
+	input := map[string]any{"text": masked, "reference_text": req.Text, "protected": markers}
+	if c.profile.RewriteMode == "literal-text-v1" {
+		prior := ""
+		if len(previous) > 0 {
+			prior = previous[0]
+		}
+		counts, mismatches := visibleLiteralCounts(req, prior)
+		input["protected_counts"] = counts
+		if len(mismatches) > 0 {
+			input["retry_count_mismatches"] = mismatches
+		}
+		prompt += literalCountPrompt
+	}
+	content, rewrite, err := c.complete(ctx, c.profile.RewriteModel, c.profile.RewriteProvider, prompt, input, "text", rewriteKind, 0.7)
 	if err != nil {
 		return "", SurfaceReceipt{}, err
 	}
@@ -406,8 +478,13 @@ func (c *Client) ProduceWithDiagnostics(ctx context.Context, base gen.DatasetArt
 				var err error
 				var rejected []SurfaceReceipt
 				var reasons []string
+				previous := ""
 				for attempt := 0; attempt < maxSurfaceAttempts; attempt++ {
-					after, receipt, err = c.probeOne(ctx, req, attempt, check)
+					after, receipt, err = c.probeOne(ctx, req, attempt, check, previous)
+					previous = ""
+					if errors.Is(err, errProtected) {
+						previous = after
+					}
 					if !errors.Is(err, errSemantic) && !errors.Is(err, errProtected) && !errors.Is(err, errTransient) && !errors.Is(err, errTruncated) {
 						break
 					}
