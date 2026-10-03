@@ -103,9 +103,10 @@ _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 # bursts: an immediate replay of the exact turn usually lands in the same burst
 # and parks the miner on a manual retry. Back off within the lease instead.
 PROVIDER_BODY_FAULT_RETRY_DELAYS_SECONDS = (15.0, 45.0, 90.0)
-# Never sleep into a lease that could not fit the shortest allowed turn cap
-# afterwards. Reserving the full configured cap (up to 600s) would disable the
-# backoff late in a lease, where a parked review costs the most.
+# Never sleep into a lease that could not fit a short turn afterwards: this
+# floor, or the node's own turn cap when that is shorter. Reserving the full
+# cap (up to 600s) would disable the backoff late in a lease, where a parked
+# review costs the most.
 _PROVIDER_BODY_FAULT_MIN_TURN_SECONDS = 45.0
 
 
@@ -5445,7 +5446,11 @@ class TerraSolSourceReviewAgent:
                     if (
                         deadline is None
                         or deadline - asyncio.get_running_loop().time()
-                        > delay + _PROVIDER_BODY_FAULT_MIN_TURN_SECONDS
+                        > delay
+                        + min(
+                            _PROVIDER_BODY_FAULT_MIN_TURN_SECONDS,
+                            self._max_completion_request_seconds,
+                        )
                     ):
                         fault_retries += 1
                         logger.warning(
