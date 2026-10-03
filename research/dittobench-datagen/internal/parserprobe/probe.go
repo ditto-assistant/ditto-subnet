@@ -21,6 +21,7 @@ type Options struct {
 	// RouterFirstSeed (disjoint from the probe seeds). 0 disables the router.
 	RouterSeeds     int
 	RouterFirstSeed int64
+	RouterWorkers   int // bounded generation parallelism; fitting remains ordered
 	// Artifacts, when set, are probed instead of generating seeds (the
 	// surface-passed artifact path).
 	Artifacts []gen.DatasetArtifact
@@ -143,6 +144,7 @@ type Report struct {
 	Source          string       `json:"source"`
 	RouterSeeds     int          `json:"router_seeds"`
 	RouterFirstSeed int64        `json:"router_first_seed,omitempty"`
+	RouterWorkers   int          `json:"router_workers,omitempty"`
 	Seeds           []SeedReport `json:"seeds"`
 	GIH             *Variant     `json:"gih_aggregate"`
 	Router          *Variant     `json:"router_aggregate,omitempty"`
@@ -162,11 +164,12 @@ func Run(opts Options) (Report, error) {
 	report := Report{BenchVersion: opts.BenchVersion, RunSize: opts.RunSize, Source: "generated", GIH: newVariant(), RouterSeeds: opts.RouterSeeds, RouterFirstSeed: opts.RouterFirstSeed}
 	var rt *router
 	if opts.RouterSeeds > 0 {
-		rt, err = trainRouter(opts.BenchVersion, opts.RunSize, opts.RouterFirstSeed, opts.RouterSeeds)
+		rt, err = trainRouter(opts.BenchVersion, opts.RunSize, opts.RouterFirstSeed, opts.RouterSeeds, opts.RouterWorkers)
 		if err != nil {
 			return Report{}, fmt.Errorf("train router: %w", err)
 		}
 		report.Router = newVariant()
+		report.RouterWorkers = opts.RouterWorkers
 	}
 	artifacts := opts.Artifacts
 	if len(artifacts) == 0 {
