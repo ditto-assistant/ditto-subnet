@@ -135,6 +135,14 @@ func TestLoadConfigBindsProfilesAndFixedSandboxPolicy(t *testing.T) {
 	if !config.docker.RequireRootless || !config.docker.RequireIsolatedDaemon || !config.docker.Harden || config.docker.AllowPrivate || config.docker.GitHubTokenFile != "" || config.docker.OpenRouterShimCABundleHostPath != "" || config.docker.CPULimit != "2.000" || config.publicBase != "http://host.docker.internal:19010" {
 		t.Fatal("sandbox confinement drift")
 	}
+	// Hosted-v2 alone disables swap (swap limit == memory limit) and never pulls,
+	// and the runtime it builds accepts exactly that policy.
+	if config.docker.MemoryLimit == "" || config.docker.MemorySwapLimit != config.docker.MemoryLimit || !config.docker.PullNever {
+		t.Fatalf("hosted harness must run without swap and with --pull never: memory=%q swap=%q pull_never=%v", config.docker.MemoryLimit, config.docker.MemorySwapLimit, config.docker.PullNever)
+	}
+	if _, err := codingharness.NewHostedSandboxRuntime(config.docker); err != nil {
+		t.Fatalf("hosted runtime refused the loaded policy: %v", err)
+	}
 	for _, value := range []any{wire, config} {
 		if _, err := json.Marshal(value); err == nil {
 			t.Fatal("private configuration serialized")

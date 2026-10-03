@@ -16,7 +16,13 @@ and a self-computed sidecar are not independent approval. Required commitments:
 - Exact installed runtime revision/archive SHA and controller source-file SHA.
 - Exact host machine-ID SHA and boot UUID.
 - The independently approved v3 connectivity profile's canonical JSON SHA and
-  a worker-owned protected copy of that profile.
+  a worker-owned protected copy of that profile. Its `candidate_tcp` must list
+  every attempt's `egress_proxy`. With `router_namespace: host` it must also list
+  each `router_listen`. With `rootless-netns` it must not list `router_listen`,
+  because that router lives inside RootlessKit's namespace and a host grant for
+  it would authorize a destination with no router behind it. Each config's
+  `router_expires_at_unix` must then equal the profile's `expires_at_unix`. All
+  attempts share one router namespace.
 - Independently accepted host, native-matrix, canary, custody, recovery and
   rollback evidence digests. The earlier evidence verifier's pending-acceptance
   list is not itself approval; this controller never manufactures acceptance.

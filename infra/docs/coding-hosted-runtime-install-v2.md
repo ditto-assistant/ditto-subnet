@@ -25,7 +25,16 @@ monorepo revision. Wheel files are copied, not hard-linked to builder caches.
 The environment is built at its final
 `/opt/ditto-coding-hosted/<revision>/apps/platform` prefix, preserving editable
 source references. The archive contains Platform source, its environment and
-lock, the shared protocol source, and a static linux/amd64 Go worker. Python
+lock, the shared protocol source, a static linux/amd64 Go worker and its
+one-shot rootless-netns router listener helper (`bin/dittobench-coding-router-listener`,
+started only by the worker through nsenter). New archives use manifest schema
+`dittobench-coding-hosted-runtime-bundle-v3`, which requires the helper as an
+executable ELF file and pins its SHA-256 as `router_listener_sha256` in the
+installation receipt. Previously approved `...-bundle-v2` archives, which have no
+helper, still inspect, install and verify unchanged, so earlier approvals and
+rollbacks keep working. A v2 manifest may not contain the helper. Only a v3
+installation can run `router_namespace: rootless-netns`; Platform refuses that
+mode for any other installed worker. Python
 points to `/usr/bin/python3.13`; the manifest pins that interpreter hash and
 the Debian Python/glibc package versions. The target must be Debian 13 amd64
 with that baseline already installed. The installer will not update it for you.

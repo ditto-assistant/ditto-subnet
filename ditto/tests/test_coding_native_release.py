@@ -42,6 +42,9 @@ def runtime(directory, revision=REVISION):
         "bin/dittobench-coding-hosted-worker": b"\x7fELF\x02\x01"
         + bytes(12)
         + b"\x3e\x00",
+        "bin/dittobench-coding-router-listener": b"\x7fELF\x02\x01"
+        + bytes(12)
+        + b"\x3e\x00helper",
         "apps/platform/ditto/coding_hosted_worker.py": b"# public synthetic fixture\n",
         "apps/platform/uv.lock": b"synthetic lock",
         "apps/platform/.venv/bin/python": b"not an interpreter",
