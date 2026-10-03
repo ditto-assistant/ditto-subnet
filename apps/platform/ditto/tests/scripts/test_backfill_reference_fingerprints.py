@@ -70,6 +70,7 @@ async def test_run_uses_bounded_batches_and_is_idempotent(monkeypatch) -> None:
         def __init__(self):
             self.calls = 0
             self.commits = 0
+            self.expunged = 0
 
         async def __aenter__(self):
             return self
@@ -86,6 +87,9 @@ async def test_run_uses_bounded_batches_and_is_idempotent(monkeypatch) -> None:
 
         async def commit(self):
             self.commits += 1
+
+        def expunge_all(self):
+            self.expunged += 1
 
     class Storage:
         async def __aenter__(self):
@@ -127,6 +131,7 @@ async def test_run_uses_bounded_batches_and_is_idempotent(monkeypatch) -> None:
     assert await backfill._run(apply=True, limit=None, batch_size=2) == 0
     assert session.calls == 3
     assert session.commits == 2
+    assert session.expunged == 2
     assert backfill._is_current(stale_a)
     assert backfill._is_current(stale_b)
     assert current.normalized_source_hash == "legacy"

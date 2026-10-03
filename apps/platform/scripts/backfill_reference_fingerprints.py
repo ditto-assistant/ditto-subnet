@@ -133,9 +133,22 @@ async def _run(*, apply: bool, limit: int | None, batch_size: int) -> int:
                             prompt=prompt,
                         )
                     updated += 1
-                if apply:
-                    await session.commit()
                 last_agent_id = agents[-1].agent_id
+                if apply:
+                    # Committed rows are current, so a rerun after a timeout
+                    # resumes from here.
+                    await session.commit()
+                # One long pass over every artifact: keep the identity map bounded.
+                session.expunge_all()
+                logger.info(
+                    "fingerprint backfill progress apply=%s inspected=%d stale=%d "
+                    "processed=%d failed=%d",
+                    apply,
+                    inspected,
+                    stale,
+                    updated,
+                    failed,
+                )
     finally:
         await engine.dispose()
     logger.info(
