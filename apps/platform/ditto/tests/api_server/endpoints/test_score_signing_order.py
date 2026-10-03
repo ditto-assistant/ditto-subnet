@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from typing import cast
 from uuid import UUID, uuid4
 
+import pytest
+
 from ditto.api_models.validator import ScoreReport, V9BaseEvidence
 from ditto.api_server.endpoints.scoring import _score_proof
 from ditto.api_server.endpoints.validator import _score_signing_message
@@ -70,6 +72,87 @@ def test_v9_appends_base_evidence_after_transcript() -> None:
     base_evidence = "c" * 64
     assert _msg(bench_version=9, transcript=SHA, base_evidence=base_evidence).endswith(
         f":7:9:{SHA}:{base_evidence}"
+    )
+
+
+def test_empty_payout_hotkey_is_a_validation_error() -> None:
+    from pydantic import ValidationError
+
+    from ditto.api_models.validator import SubmitScoreRequest
+
+    with pytest.raises(ValidationError, match="non-empty miner hotkey"):
+        SubmitScoreRequest(
+            validator_hotkey=HOTKEY,
+            signature="ab" * 64,
+            report=ScoreReport.model_validate(
+                {
+                    "run_id": "run-1",
+                    "seed": 7,
+                    "composite": 0.5,
+                    "tool_mean": 0.5,
+                    "memory_mean": 0.5,
+                    "median_ms": 1,
+                    "n": 114,
+                    "generated_at": "2026-07-09T12:30:00+00:00",
+                }
+            ),
+            payout_miner_hotkey="",
+            payout_first_seen=datetime.fromisoformat("2026-07-09T12:30:00+00:00"),
+            payout_n=114,
+            payout_netuid=118,
+        )
+
+
+def test_payout_v1_tail_matches_the_validator_envelope() -> None:
+    """The payout tail is last, and absent fields keep the legacy bytes."""
+    deadline = datetime.fromisoformat("2026-07-09T12:30:00+00:00")
+    report = _report(bench_version=7, transcript=SHA)
+    legacy = _score_signing_message(HOTKEY, AGENT, deadline, report)
+    bound = _score_signing_message(
+        HOTKEY,
+        AGENT,
+        deadline,
+        report,
+        payout_miner_hotkey="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        payout_first_seen=deadline,
+        payout_n=114,
+        payout_netuid=118,
+    )
+    assert bound == legacy + (
+        b":payout:v1:5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY:"
+        b"2026-07-09T12:30:00.000000+00:00:114:118"
+    )
+
+
+def test_payout_v1_details_round_trip_onto_the_receipt() -> None:
+    proof = _score_proof(
+        cast(
+            Score,
+            SimpleNamespace(
+                validator_hotkey=HOTKEY,
+                run_id="run-1",
+                composite=0.5,
+                seed=7,
+                bench_version=7,
+                signature="ab" * 64,
+                details={
+                    "payout_v1": {
+                        "miner_hotkey": (
+                            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+                        ),
+                        "first_seen": "2026-07-09T12:30:00.000000+00:00",
+                        "n": 114,
+                        "netuid": 118,
+                    }
+                },
+            ),
+        )
+    )
+    assert proof.miner_hotkey == "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+    assert proof.n == 114
+    assert proof.netuid == 118
+    assert proof.first_seen == datetime.fromisoformat(
+        "2026-07-09T12:30:00.000000+00:00"
     )
 
 

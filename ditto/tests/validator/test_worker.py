@@ -36,6 +36,7 @@ from ditto.api_models.validator import (
     JobResponse,
     LedgerEntry,
     LedgerResponse,
+    LedgerScoreProof,
     ScoreReport,
     SubmitScoreRequest,
     SubmitScoreResponse,
@@ -4233,6 +4234,57 @@ class TestRunOnce:
 
         await worker.run_once()
         chain.put_weights.assert_awaited_once_with({registered: 1.0})
+
+    async def test_unpermitted_score_signer_is_excluded_from_the_fold(self) -> None:
+        permitted_hotkey = "5PermittedValidator" + "x" * 29
+        throwaway = "5ThrowawayValidator" + "x" * 28
+        paid = "5Registered" + "x" * 36
+        forged = "5ForgedMiner" + "x" * 35
+        honest = _entry(paid, 0.80).model_copy(
+            update={
+                "score_proofs": [
+                    LedgerScoreProof(
+                        validator_hotkey=permitted_hotkey,
+                        run_id="run_1",
+                        composite=0.80,
+                        seed=1,
+                    )
+                ]
+            }
+        )
+        attack = _entry(forged, 0.99).model_copy(
+            update={
+                "score_proofs": [
+                    LedgerScoreProof(
+                        validator_hotkey=throwaway,
+                        run_id="run_1",
+                        composite=0.99,
+                        seed=1,
+                    )
+                ]
+            }
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[attack, honest])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            return_value=[
+                SimpleNamespace(hotkey=paid, validator_permit=False),
+                SimpleNamespace(hotkey=forged, validator_permit=False),
+                SimpleNamespace(hotkey=permitted_hotkey, validator_permit=True),
+                SimpleNamespace(hotkey=throwaway, validator_permit=False),
+            ]
+        )
+        chain.put_weights = AsyncMock()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+        chain.put_weights.assert_awaited_once_with({paid: 1.0})
 
     @pytest.mark.parametrize("burn_share", [0.4, 1.0])
     async def test_registered_owner_replaces_rotated_burn_hotkey(

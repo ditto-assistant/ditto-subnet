@@ -94,6 +94,8 @@ from ditto.validator.resource_gate import (
     ResourceCeilings,
 )
 from ditto.validator.signing import (
+    entries_with_permitted_signers,
+    payout_quorum_first_seen,
     rebuild_v9_confirmation_evidence_root,
     sign_heartbeat,
     sign_score,
@@ -2200,6 +2202,30 @@ class ValidatorWorker:
             return _WeightOutcome(
                 leaderboard=[(e.miner_hotkey, e.composite) for e in ledger.entries]
             )
+        if self._registered_neurons is not None:
+            permitted = {
+                neuron.hotkey
+                for neuron in self._registered_neurons
+                if getattr(neuron, "validator_permit", False)
+            }
+            permitted_entries = entries_with_permitted_signers(
+                registered_entries, permitted
+            )
+            dropped = len(registered_entries) - len(permitted_entries)
+            if dropped:
+                logger.warning(
+                    "excluding %d ledger row(s) whose score signers lack a "
+                    "validator permit on netuid %s",
+                    dropped,
+                    self._config.netuid,
+                )
+            if registered_entries and not permitted_entries:
+                logger.warning(
+                    "no ledger row is signed by a permitted validator; "
+                    "weights unchanged this epoch"
+                )
+                return _WeightOutcome(leaderboard=leaderboard)
+            registered_entries = permitted_entries
         burn_hotkey = await self._resolve_burn_hotkey()
         if burn_hotkey is None:
             return _WeightOutcome(leaderboard=leaderboard)
@@ -2235,7 +2261,13 @@ class ValidatorWorker:
                 statistical_band_cap=_ledger_statistical_band_cap(ledger),
                 incumbent_agent_id=_ledger_crown_incumbent(ledger),
                 unpaid_agent_id=(
-                    provisional.agent_id if provisional is not None else None
+                    provisional.agent_id
+                    if provisional is not None
+                    and any(
+                        entry.agent_id == provisional.agent_id
+                        for entry in registered_entries
+                    )
+                    else None
                 ),
             ),
             router_entries=tuple(
@@ -3339,6 +3371,9 @@ class ValidatorWorker:
                 e.miner_hotkey,
                 bench_version=current_version,
                 seeds=sweep_seeds,
+                payout_first_seen=payout_quorum_first_seen(
+                    getattr(e, "score_proofs", ())
+                ),
             )
             if submitted is not None:
                 rescored += 1
@@ -3463,6 +3498,9 @@ class ValidatorWorker:
                 e.miner_hotkey,
                 bench_version=current_version,
                 seeds=seeds,
+                payout_first_seen=payout_quorum_first_seen(
+                    getattr(e, "score_proofs", ())
+                ),
             )
             if submitted is None:
                 logger.warning(
@@ -3992,6 +4030,7 @@ class ValidatorWorker:
                 job.agent_id,
                 job.sha256,
                 job.miner_hotkey,
+                payout_first_seen=job.payout_first_seen,
                 seed=job.seed,
                 dataset_sha256=job.dataset_sha256,
                 private_dataset_mode=job.private_dataset_mode,
@@ -4154,10 +4193,13 @@ class ValidatorWorker:
         report: ScoreReport,
         *,
         ticket_deadline: datetime | None = None,
+        payout_first_seen: datetime | None = None,
     ) -> ScoreReport:
         """Sign and submit an already-scored :class:`ScoreReport`. The signature
         binds ``(validator_hotkey, agent_id, ticket_deadline, run_id, composite,
-        seed)`` of this exact run. The ticket deadline is the lease identity, so
+        seed)`` of this exact run. When the job carried an upload stamp, it also
+        binds that miner's hotkey, the stamp, the case count, and this subnet.
+        The ticket deadline is the lease identity, so
         a late result cannot be replayed after reissue. Advisory
         ``confirmation_composites`` rides unsigned (like ``composite_stderr``)."""
         if (
@@ -4191,12 +4233,22 @@ class ValidatorWorker:
             bench_version=report.bench_version,
             transcript_sha256=transcript_sha256,
             base_evidence_sha256=base_evidence_sha256,
+            miner_hotkey=miner_hotkey if payout_first_seen is not None else None,
+            first_seen=payout_first_seen,
+            n=report.n if payout_first_seen is not None else None,
+            netuid=self._config.netuid if payout_first_seen is not None else None,
         )
         await self._platform.submit_score(
             agent_id,
             signature=signature,
             report=report,
             ticket_deadline=ticket_deadline,
+            payout_miner_hotkey=miner_hotkey if payout_first_seen is not None else None,
+            payout_first_seen=payout_first_seen,
+            payout_n=report.n if payout_first_seen is not None else None,
+            payout_netuid=(
+                self._config.netuid if payout_first_seen is not None else None
+            ),
         )
         if ticket_deadline is not None:
             self._resolve_ticket_deadline(agent_id, ticket_deadline)
@@ -4274,6 +4326,7 @@ class ValidatorWorker:
         inference_grant_id: UUID | None = None,
         inference_slot_id: str | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        payout_first_seen: datetime | None = None,
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. The single-seed
         path used by the ticket sweep (:meth:`_score_job`)."""
@@ -4287,7 +4340,12 @@ class ValidatorWorker:
                 run_size=run_size,
                 bench_version=bench_version,
             )
-            return await self._submit_report(agent_id, miner_hotkey, report)
+            return await self._submit_report(
+                agent_id,
+                miner_hotkey,
+                report,
+                payout_first_seen=payout_first_seen,
+            )
 
         await self._begin_active_ticket(
             agent_id, ticket_deadline, bench_version or DEFAULT_BENCH_VERSION
@@ -4327,6 +4385,7 @@ class ValidatorWorker:
                 miner_hotkey,
                 report,
                 ticket_deadline=ticket_deadline,
+                payout_first_seen=payout_first_seen,
             )
         except Exception:
             previous = self._benchmark_progress
@@ -4356,6 +4415,7 @@ class ValidatorWorker:
         *,
         bench_version: int,
         seeds: Sequence[int],
+        payout_first_seen: datetime | None = None,
     ) -> ScoreReport | None:
         """P4 re-score of one stale agent over ``seeds`` (K common CRN seeds).
 
@@ -4419,7 +4479,12 @@ class ValidatorWorker:
                 }
             )
         representative = _attach_transform_audit(representative, reports)
-        return await self._submit_report(agent_id, miner_hotkey, representative)
+        return await self._submit_report(
+            agent_id,
+            miner_hotkey,
+            representative,
+            payout_first_seen=payout_first_seen,
+        )
 
     async def run_forever(
         self,
