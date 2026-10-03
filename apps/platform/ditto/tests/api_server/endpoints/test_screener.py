@@ -11178,6 +11178,25 @@ class TestScreenedImageUpload:
         assert replay.json() == {"verified": True}
         storage.complete_multipart_upload.assert_awaited_once()
         storage.verify_object_sha256.assert_awaited_once()
+        # The replay can land after the multipart session expired.
+        async with session_maker() as session, session.begin():
+            row = await session.get(
+                ScreenedImageUpload, UUID(upload["image_upload_id"])
+            )
+            assert row is not None
+            row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        late = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/screened-image-upload/"
+            f"{upload['image_upload_id']}/complete",
+            headers=_AUTH_HEADER,
+            json={
+                **metadata,
+                "storage_upload_id": upload["storage_upload_id"],
+                "parts": [{"part_number": 1, "etag": '"etag-1"'}],
+            },
+        )
+        assert late.status_code == 200, late.text
+        assert late.json() == {"verified": True}
         reuse = await client.post(
             f"/api/v1/screener/agent/{agent_id}/screened-image-upload/"
             f"{upload['image_upload_id']}/part",

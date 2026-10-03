@@ -4156,7 +4156,8 @@ async def _load_active_image_upload(
     expires_at = upload.expires_at
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=UTC)
-    if datetime.now(UTC) > expires_at:
+    # A verified session's work is done; only an unfinished upload expires.
+    if upload.status != "verified" and datetime.now(UTC) > expires_at:
         raise AgentNotScreenableError("screened image multipart session has expired")
     attempt = await get_screening_attempt(
         session, attempt_id=attempt_id, for_update=for_update
