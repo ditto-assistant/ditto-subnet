@@ -22,8 +22,9 @@ def identity_adapter(*, role="registration", owner="cold", uid=None, raw_owner=N
         create_storage_key=lambda *_args, **_kwargs: SimpleNamespace(
             to_hex=lambda: "0xowner"
         ),
-        rpc_request=lambda method, params: calls.append((method, params))
-        or {"result": raw_owner},
+        rpc_request=lambda method, params: (
+            calls.append((method, params)) or {"result": raw_owner}
+        ),
     )
     return (
         chain,
