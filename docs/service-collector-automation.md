@@ -125,6 +125,18 @@ monitor fees, and budget this separately from custody and revocation.
 
 ## Initial setup and recovery boundary
 
+Sealed custody defaults to Google-only egress. Before a runner can observe Finney,
+a separately reviewed custody plan may set `collector_runtime_rpc_egress=true`.
+This requires both roles sealed and restores private Cloud NAT plus TCP 443 to
+`65.109.251.221/32`, the `entrypoint-finney.opentensor.ai` IPv4 independently
+resolved on 2026-10-03. It preserves own-version-only secret access, private
+hosts and the private/other-traffic deny rules. DNS changes require a reviewed
+source/plan update; do not broaden the firewall to recover connectivity. TLS
+hostname, genesis, runtime and proxy-filter checks remain required. This is an
+IP/port boundary, not a proof of confinement of every request to that server.
+Network provisioning does not install a runner, approve a policy or enable a
+timer. The binary-plan checker refuses a broadened RPC rule or unsealed roles.
+
 The root-owned systemd templates are deployment preparation only. The enabled
 policy must be approved and signed offline before initial journals are created.
 As each dedicated signer user, initialize once using

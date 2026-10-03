@@ -20,6 +20,7 @@ SINGLE = {
     "google_compute_firewall.collector_iap",
     "google_compute_firewall.collector_deny_private",
     "google_compute_firewall.collector_googleapis",
+    "google_compute_firewall.collector_runtime_rpc",
     "google_compute_firewall.collector_deny_other",
     "google_project_iam_custom_role.collector_generator",
 }
@@ -99,6 +100,38 @@ def validate(plan: dict) -> int:
         for resource in resources(tree):
             if resource["address"] not in ALLOWED | {ALLOWED_DATA}:
                 raise ValueError("unrelated state")
+    rpc_enabled = variables.get("collector_runtime_rpc_egress", False)
+    if type(rpc_enabled) is not bool:
+        raise ValueError("unknown RPC intent")
+    if rpc_enabled and (
+        variables.get("enable_collector_custody") is not True
+        or variables.get("collector_custody_phases")
+        != {"registration": "sealed", "transfer": "sealed"}
+    ):
+        raise ValueError("RPC requires sealed roles")
+    rpc_address = "google_compute_firewall.collector_runtime_rpc[0]"
+    rpc_resources = [
+        item
+        for item in resources(plan["planned_values"]["root_module"])
+        if item["address"] == rpc_address
+    ]
+    if len(rpc_resources) != int(rpc_enabled):
+        raise ValueError("RPC intent and plan differ")
+    if rpc_resources:
+        value = rpc_resources[0]["values"]
+        if (
+            value.get("project") != "ditto-app-dev"
+            or value.get("name") != "sn118-collector-finney-rpc"
+            or value.get("direction") != "EGRESS"
+            or value.get("priority") != 750
+            or set(value.get("destination_ranges", [])) != {"65.109.251.221/32"}
+            or set(value.get("target_tags", []))
+            != {"collector-registration-sealed", "collector-transfer-sealed"}
+            or value.get("allow") != [{"protocol": "tcp", "ports": ["443"]}]
+            or value.get("deny")
+            or value.get("disabled") is not False
+        ):
+            raise ValueError("RPC rule differs from reviewed endpoint")
     return sum(r["mode"] == "managed" for r in plan.get("resource_changes", []))
 
 
