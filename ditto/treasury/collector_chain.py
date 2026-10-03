@@ -306,23 +306,67 @@ class PublicCollectorChain:
             self.alpha(policy, policy.collector_coldkey, block_hash),
         )
 
+    def _earnings_identity(self, policy, block_hash):
+        """Historical absence may prove no earnings; it never authorizes spending."""
+        uid = self.query(
+            "SubtensorModule", "Uids", [118, policy.collector_hotkey], block_hash
+        )
+        owner = self.query(
+            "SubtensorModule", "Owner", [policy.collector_hotkey], block_hash
+        )
+        if uid is not None or owner == policy.collector_coldkey:
+            return self.identity(policy, block_hash)
+        if (
+            self.query("SubtensorModule", "SubnetOwner", [118], block_hash)
+            == policy.collector_coldkey
+        ):
+            raise ValueError("collector is subnet-owner associated")
+        key = self.substrate.create_storage_key(
+            "SubtensorModule",
+            "Owner",
+            [policy.collector_hotkey],
+            block_hash=block_hash,
+        )
+        result = self.substrate.rpc_request(
+            "state_getStorageAt", [key.to_hex(), block_hash]
+        )
+        if (
+            result.get("error")
+            or "result" not in result
+            or result["result"] is not None
+        ):
+            raise ValueError("historical collector ownership present or unavailable")
+        return None
+
     def earnings(self, policy, block):
         s = self.substrate
         if block > s.get_block_number(s.get_chain_finalised_head()):
             raise ValueError("emission block is not finalized")
         block_hash = s.get_block_hash(block)
         self.guard_runtime(policy, block_hash)
-        uid = self.identity(policy, block_hash)
-        parent_uid = self.identity(policy, s.get_block_hash(block - 1))
+        uid = self._earnings_identity(policy, block_hash)
+        parent_uid = self._earnings_identity(policy, s.get_block_hash(block - 1))
+        events = s.get_events(block_hash)
+        if uid is None and parent_uid is None:
+            # The signed start can predate first registration. An unrelated
+            # miner's tempo is not this collector's earnings. A self-credit
+            # without either UID binding contradicts absence and must halt.
+            liquid_collector_credit(
+                events,
+                collector_hotkey=policy.collector_hotkey,
+                collector_coldkey=policy.collector_coldkey,
+                gross_incentive_rao=0,
+            )
+            return None
         if uid is None or uid != parent_uid:
             # Registration/rebind within payout block makes attribution ambiguous.
             if any(
                 e.get("event_id") == "IncentiveAlphaEmittedToMiners"
-                for e in s.get_events(block_hash)
+                for e in events
             ):
                 raise ValueError("emission intersects collector identity transition")
             return None
-        gross = collector_gross_incentive(s.get_events(block_hash), uid)
+        gross = collector_gross_incentive(events, uid)
         if gross is None:
             return None
         # Gross SERVER_EMISSION precedes collateral capture and routing. Only
@@ -339,7 +383,7 @@ class PublicCollectorChain:
             ):
                 raise ValueError("liquid emission route is not pinned to collector")
         credit = liquid_collector_credit(
-            s.get_events(block_hash),
+            events,
             collector_hotkey=policy.collector_hotkey,
             collector_coldkey=policy.collector_coldkey,
             gross_incentive_rao=gross,

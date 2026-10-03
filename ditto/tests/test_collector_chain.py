@@ -325,6 +325,83 @@ def test_liquid_credit_only_never_gross_or_prior_principal():
     assert c.earnings(p, 101).amount_rao == 20  # gross100, capture80
 
 
+def inactive_income_fixture():
+    p, c, events = income_fixture()
+    c.identity = PublicCollectorChain.identity.__get__(c)
+    c.query = lambda _module, name, _params, _hash: {
+        "Uids": None,
+        "Owner": "default-zero",
+        "SubnetOwner": "other-subnet-owner",
+        "Keys": p.collector_hotkey,
+    }[name]
+    c.substrate.create_storage_key = lambda *_args, **_kwargs: SimpleNamespace(
+        to_hex=lambda: "0xowner"
+    )
+    c.substrate.rpc_request = lambda *_: {"result": None}
+    events.pop()  # Other miners' tempo, no credit to this inactive collector.
+    return p, c, events
+
+
+def test_historical_unregistered_tempo_has_no_earnings_and_no_spend_authority():
+    p, c, _ = inactive_income_fixture()
+    assert c.earnings(p, 101) is None
+    with pytest.raises(ValueError, match="ownership"):
+        c.identity(p, "b101")  # Current transfer identity remains strict.
+    with pytest.raises(ValueError, match="ownership"):
+        c.identity(p, "b101", allow_unowned=True)
+
+
+@pytest.mark.parametrize("response", [{}, {"error": "unavailable"}, {"result": "0xab"}])
+def test_historical_absence_requires_explicit_raw_owner_absence(response):
+    p, c, _ = inactive_income_fixture()
+    c.substrate.rpc_request = lambda *_: response
+    with pytest.raises(ValueError, match="ownership"):
+        c.earnings(p, 101)
+
+
+def test_historical_absence_with_collector_credit_halts():
+    p, c, events = inactive_income_fixture()
+    _, _, credited = income_fixture()
+    events.append(credited[1])
+    with pytest.raises(ValueError, match="exceeds gross"):
+        c.earnings(p, 101)
+
+
+def test_first_registration_tempo_remains_ambiguous():
+    p, c, _ = inactive_income_fixture()
+    absent_query = c.query
+    c.query = lambda module, name, params, at: (
+        {"Uids": 14, "Owner": p.collector_coldkey, "Keys": p.collector_hotkey}[name]
+        if at == "b101" and name in {"Uids", "Owner", "Keys"}
+        else absent_query(module, name, params, at)
+    )
+    with pytest.raises(ValueError, match="identity transition"):
+        c.earnings(p, 101)
+
+
+def test_signed_start_before_registration_advances_only_empty_history(tmp_path):
+    from ditto.treasury.collector import CollectorJournal, tick
+
+    p, c, events = inactive_income_fixture()
+    events.clear()
+    absent_query = c.query
+    c.query = lambda module, name, params, at: (
+        {"Uids": 14, "Owner": p.collector_coldkey, "Keys": p.collector_hotkey}[name]
+        if int(at[1:]) >= 12 and name in {"Uids", "Owner", "Keys"}
+        else absent_query(module, name, params, at)
+    )
+    c.observe = lambda *_: Observation(20, "b20", 14, 1, 100, 100, 0)
+    c.prepare = lambda *_: pytest.fail("Empty history must never acquire a signer")
+    journal = CollectorJournal(tmp_path / "transfer.db", p, "transfer", initialize=True)
+    try:
+        assert tick(journal, p, c, "transfer") == "observing"
+        assert journal.db.execute("SELECT block FROM cursor").fetchone()[0] == 20
+        assert journal.db.execute("SELECT COUNT(*) FROM earnings").fetchone()[0] == 0
+        assert journal.db.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 0
+    finally:
+        journal.close()
+
+
 def test_fully_captured_gross_creates_no_distributable_income():
     p, c, events = income_fixture()
     events.pop()
