@@ -71,7 +71,9 @@ class PrivatePlanScope(unittest.TestCase):
                 "values": {
                     "project": "ditto-app-dev",
                     "name": "sn118-collector-finney-rpc",
-                    "network": "projects/ditto-app-dev/global/networks/sn118-collector-custody",
+                    "network": (
+                        "projects/ditto-app-dev/global/networks/sn118-collector-custody"
+                    ),
                     "direction": "EGRESS",
                     "priority": 750,
                     "target_tags": [
