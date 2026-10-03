@@ -107,10 +107,10 @@ baseline bundle is review-only and safe to refresh whenever the kit moves.
   the refactor the 4-line windows miss. On 2026-10-03, ira-1 `4d44841b` was
   lets_638 `8d3208ad` split from one file into ~30 modules. The windows
   measured 0.55 / 0.73, so it was never held, but its exact line Jaccard was
-  0.902. The cross-miner copy rule fires on either channel. The line channel
+  0.908. The cross-miner copy rule fires on either channel. The line channel
   uses the same `0.75` / `0.95` bars and padding direction as the windows. The
   closest independent-owner pair on the 27-agent calibration board measured
-  0.652. Ranking, withdrawal, and earliest-source attribution take the stronger
+  0.661. Ranking, withdrawal, and earliest-source attribution take the stronger
   of the two channels. The same-owner resubmission rule never reads `lines`.
 - Lexical similarity carries no score-proximity precondition. A matching
   fingerprint holds on its own, in either score direction and at any distance.

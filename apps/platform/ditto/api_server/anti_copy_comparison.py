@@ -9,7 +9,7 @@ database or storage dependency.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from ditto.api_server.fingerprint import (
@@ -29,6 +29,7 @@ from ditto.api_server.scoring_gate import (
     _DEFAULT_STRUCTURAL_JACCARD_TOL,
     _PROMPT_ADVISORY_TOL,
     _fingerprint_versions_incompatible,
+    _line_strength,
     _utc,
     evaluate_duplicate_signals,
 )
@@ -227,6 +228,14 @@ def compare_anti_copy_pair(
         jaccard_threshold=_DEFAULT_LINE_JACCARD_TOL,
         containment_threshold=_DEFAULT_LINE_CONTAINMENT_TOL,
         decision_role="trigger",
+    )
+    # Containment only triggers in the padding direction, exactly as the gate
+    # reads it; a small candidate inside a large reference is not a trigger.
+    line = replace(
+        line,
+        above_threshold=line.applicable
+        and _line_strength(candidate.content_fingerprint, reference.content_fingerprint)
+        >= 1.0,
     )
     structural = _similarity(
         candidate.structural_fingerprint,

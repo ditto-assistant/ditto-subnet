@@ -1,7 +1,7 @@
 {
   "bundles": {
     "reference_lexical_v2.bin": 111705,
-    "reference_line_v2.bin": 22839,
+    "reference_line_v2.bin": 22889,
     "reference_normalized_v2.bin": 104326,
     "reference_prompt_v2.bin": 220809
   },

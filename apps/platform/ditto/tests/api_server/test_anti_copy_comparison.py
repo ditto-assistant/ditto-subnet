@@ -192,6 +192,45 @@ def test_module_split_copy_reports_the_line_channel_that_held_it() -> None:
     assert '"m"' not in json.dumps(result.to_wire())
 
 
+def test_reverse_direction_line_containment_is_not_a_trigger() -> None:
+    """A small candidate inside a large reference is not padding; no trigger."""
+    small = _fp({f"{i:016x}" for i in range(20)}, version="l1")
+    large = _fp({f"{i:016x}" for i in range(80)}, version="l1")
+
+    def compare(candidate_lines: dict, reference_lines: dict):
+        return compare_anti_copy_pair(
+            candidate=_row(
+                agent_id=2,
+                miner="candidate-miner",
+                first_seen=_NOW + timedelta(seconds=1),
+                sha256="b" * 64,
+                content={
+                    **_fp({f"b{i:015x}" for i in range(12)}),
+                    "lines": candidate_lines,
+                },
+                size=500_001,
+            ),
+            reference=_row(
+                agent_id=1,
+                miner="reference-miner",
+                first_seen=_NOW,
+                sha256="a" * 64,
+                content={
+                    **_fp({f"a{i:015x}" for i in range(12)}),
+                    "lines": reference_lines,
+                },
+            ),
+        )
+
+    subset = compare(small, large)
+    assert subset.line.containment == 1.0
+    assert subset.line.above_threshold is False
+    assert subset.current_decision == "clear"
+    padded = compare(large, small)
+    assert padded.line.above_threshold is True
+    assert padded.current_decision == "hold"
+
+
 def test_later_reference_is_not_chronology_eligible() -> None:
     values = {f"{i:016x}" for i in range(12)}
     candidate = _row(

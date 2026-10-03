@@ -953,7 +953,7 @@ class TestLineSubSketchCopyRule:
         )
 
     def test_module_split_copy_is_held_on_lines(self) -> None:
-        """ira-1 ``4d44841b`` vs lets_638 ``8d3208ad``: window 0.55, line 0.902."""
+        """ira-1 ``4d44841b`` vs lets_638 ``8d3208ad``: window 0.55, line 0.908."""
         shared = {f"{i:016x}" for i in range(90)}
         original = _lsk(shared | {f"o{i:015x}" for i in range(5)})
         split = _lsk(shared | {f"s{i:015x}" for i in range(5)})
@@ -963,7 +963,7 @@ class TestLineSubSketchCopyRule:
         assert "line jaccard 0.900" in (decision.reason or "")
 
     def test_independent_overlap_under_the_line_bar_is_not_held(self) -> None:
-        """taowolf v16 / agiorin v12 measured line Jaccard 0.652 across owners."""
+        """taowolf v16 / agiorin v12 measured line Jaccard 0.661 across owners."""
         shared = {f"{i:016x}" for i in range(65)}
         a = _lsk(shared | {f"a{i:015x}" for i in range(18)})
         b = _lsk(shared | {f"b{i:015x}" for i in range(17)})

@@ -279,7 +279,7 @@ class TestLineSubSketch:
     Production 2026-10-03: ira-1 ``4d44841b`` was lets_638 ``8d3208ad`` split
     from one file into ~30 modules with every call rewritten as
     ``_mod.name(``. The window channel measured 0.55 / 0.73; exact line
-    Jaccard was 0.902.
+    Jaccard was 0.908.
     """
 
     @staticmethod
@@ -330,6 +330,34 @@ class TestLineSubSketch:
             b"result = compute_the_answer_from(payload, context)\n"
         )
         assert len(_line_shingles(raw)) == 1
+
+    def test_code_starting_with_a_comment_token_is_kept(self) -> None:
+        code = [
+            b"#define MAX_BUFFER_LENGTH_FOR_REQUESTS (1024 * 64)",
+            b"#[derive(Debug, Clone, Serialize, Deserialize)]",
+            b"*pointer_to_buffer = compute_the_answer_from(ctx);",
+            b"*leading_args, final_value = split_the_payload(data)",
+            b"--remaining_budget_for_this_request_counter;",
+        ]
+        comments = [
+            b"# a long python comment line that clears the length floor",
+            b"* a long block-comment continuation that clears the floor",
+            b"-- a long sql comment line that clears the length floor ok",
+            b"/* a long block comment opening that clears the floor */",
+        ]
+        for line in code:
+            assert len(_line_shingles(line + b"\n")) == 1, line
+        for line in comments:
+            assert _line_shingles(line + b"\n") == [], line
+
+    def test_line_cap_keeps_the_window_sketch(self, monkeypatch) -> None:
+        # 60 distinct lines make 57 four-line windows: only the line set overflows.
+        monkeypatch.setattr(fingerprint_module, "_MAX_SHINGLES", 58)
+        many_lines = b"\n".join(b"x" * 40 + str(i).encode() for i in range(60))
+        fp = compute_content_fingerprint(_tar_gz({"a.py": many_lines}))
+        assert fp is not None
+        assert fp["card"] > 0
+        assert fp["lines"]["m"] == [] and fp["lines"]["card"] == 0
 
     def test_qualifier_collapse_keeps_attribute_access_on_values(self) -> None:
         qualified = b"result = _module.compute_the_answer_from(payload, ctx)\n"

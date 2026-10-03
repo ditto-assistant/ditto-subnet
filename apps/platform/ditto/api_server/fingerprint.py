@@ -165,9 +165,16 @@ _MIN_LINE_SHINGLES = 8
 # modules or onto ``self`` does not change its lines. The look-behind anchors at
 # the chain's start, so a chain is removed whole and ``1.5`` is untouched.
 _QUALIFIER_RE = re.compile(r"(?<![\w.:])(?:[A-Za-z_]\w*(?:\.|::))+(?=[A-Za-z_]\w*)")
-# A whitespace-free line that is only a comment. Copiers rewrite or delete
-# comments freely, so they would only dilute the measure.
-_COMMENT_LINE_RE = re.compile(r"(?:#|//|/\*|\*|--)")
+# A stripped line that is only a comment. Copiers rewrite or delete comments
+# freely, so they would only dilute the measure. Each marker is bounded so code
+# that merely starts with the same token survives: ``#include`` / ``#[derive]``
+# (directives and attributes), ``*ptr = x`` / ``*args, = x`` (a ``*`` comment
+# continuation is followed by space, ``/`` or nothing), and ``--count;``.
+_COMMENT_LINE_RE = re.compile(
+    r"(?://|/\*"
+    r"|#(?!\[|\s*(?:include|define|undef|ifn?def|if|elif|else|endif|pragma|import)\b)"
+    r"|\*(?:\s|/|$)|--(?:\s|$))"
+)
 # Digests of every published starter-kit file we know about, across every kit
 # revision reachable from the monorepo kit path, the upstream mainline lineage
 # already packaged for operator review, and any curated additions. Built by
@@ -405,6 +412,7 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
     """
     shingles: set[str] = set()
     lines: set[str] = set()
+    lines_overflowed = False
     excluded_any = False
     total = 0
     members = 0
@@ -438,10 +446,14 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
                     if len(shingles) > _MAX_SHINGLES:
                         logger.warning("fingerprint: >%d shingles", _MAX_SHINGLES)
                         return None
-                lines.update(_line_shingles(raw))
-                if len(lines) > _MAX_SHINGLES:
-                    logger.warning("fingerprint: >%d line shingles", _MAX_SHINGLES)
-                    return None
+                if not lines_overflowed:
+                    lines.update(_line_shingles(raw))
+                    if len(lines) > _MAX_SHINGLES:
+                        # Only the line sub-sketch becomes incomparable; the
+                        # window channel keeps its own signal.
+                        logger.warning("fingerprint: >%d line shingles", _MAX_SHINGLES)
+                        lines_overflowed = True
+                        lines.clear()
     except (tarfile.TarError, gzip.BadGzipFile, EOFError, OSError) as e:
         logger.info("fingerprint: unreadable tarball (%s)", type(e).__name__)
         return None

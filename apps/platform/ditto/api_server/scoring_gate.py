@@ -112,7 +112,7 @@ _DEFAULT_COPY_PADDING_RATIO = 1.15
 # call rewrites that break every 4-line window. It keeps the window channel's
 # bars and padding direction. Measured 2026-10-03 on 27 fingerprintable board
 # agents (351 pairs), exact sets: ira-1 ``4d44841b`` vs lets_638 ``8d3208ad``
-# scored line Jaccard 0.902 (window channel 0.55 / 0.73, unheld); the closest
+# scored line Jaccard 0.908 (window channel 0.55 / 0.73, unheld); the closest
 # independent-owner pair, taowolf v16 / agiorin v12, scored 0.653 (window 0.68),
 # and every other pair stayed under 0.41.
 _DEFAULT_LINE_JACCARD_TOL = 0.75
