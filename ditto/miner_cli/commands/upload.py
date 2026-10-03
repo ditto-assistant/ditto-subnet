@@ -761,7 +761,7 @@ def _resolve_netuid() -> int:
     """
     from ditto.miner_cli.commands.attest import DEFAULT_NETUID
 
-    return int(os.environ.get("NETUID", str(DEFAULT_NETUID)))
+    return int(os.environ.get("NETUID") or DEFAULT_NETUID)
 
 
 def _authoritative_netuid(
@@ -1015,7 +1015,7 @@ def _offer_owner_link(
         other_hotkey_name=old_hotkey_name,
         key_kind="hotkey",
         other_key_kind="hotkey",
-        netuid=int(os.environ.get("NETUID", str(DEFAULT_NETUID))),
+        netuid=int(os.environ.get("NETUID") or DEFAULT_NETUID),
         yes=True,
         print_only=False,
     )
