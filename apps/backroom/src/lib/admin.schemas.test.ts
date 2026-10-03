@@ -3,8 +3,16 @@ import { resolve } from 'node:path'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
+import { conversationObservationsSchema } from './conversation.schemas'
 import {
   SCREENING_SUBMISSION_AGENT_STATUSES,
+  previewSubmissionSettingsInputSchema,
+  submissionFeeBoundsSchema,
+  submissionSettingsControlSchema,
+  submissionSettingsPreviewSchema,
+  submissionSettingsRevisionSchema,
+  unsupportedSubmissionSettingsRevisionSchema,
+  updateSubmissionSettingsInputSchema,
   scoringLeaseConfirmation,
   scoringLeaseSettingsControlSchema,
   setScoringLeaseSettingsInputSchema,
@@ -5148,5 +5156,130 @@ describe('scoring lease settings (#1156)', () => {
         confirmation: scoringLeaseConfirmation(180),
       }),
     ).toThrow(/APPLY SCORING TICKET TTL 150 MINUTES/)
+  })
+})
+
+// Required vs optional vs nullable, key by key: a response schema must accept
+// exactly what the generated Platform contract allows, never more or less.
+type ContractKeyShape<T> = {
+  [K in keyof T]-?: [
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+    {} extends Pick<T, K> ? 'optional' : 'required',
+    null extends T[K] ? 'nullable' : 'non-null',
+  ]
+}
+type SubmissionPreviewInput = ZodInput<typeof submissionSettingsPreviewSchema>
+
+describe('submission settings schemas match the generated contract exactly', () => {
+  it('keeps every key as required, optional, or nullable as Platform declares it', () => {
+    expectTypeOf<
+      ContractKeyShape<ZodInput<typeof submissionSettingsRevisionSchema>>
+    >().toEqualTypeOf<
+      ContractKeyShape<PlatformComponents['schemas']['SubmissionSettingsRevision']>
+    >()
+    expectTypeOf<
+      ContractKeyShape<ZodInput<typeof unsupportedSubmissionSettingsRevisionSchema>>
+    >().toEqualTypeOf<
+      ContractKeyShape<PlatformComponents['schemas']['UnsupportedSubmissionSettingsRevision']>
+    >()
+    expectTypeOf<ContractKeyShape<ZodInput<typeof submissionFeeBoundsSchema>>>().toEqualTypeOf<
+      ContractKeyShape<PlatformComponents['schemas']['SubmissionFeeBounds']>
+    >()
+    expectTypeOf<
+      ContractKeyShape<ZodInput<typeof submissionSettingsControlSchema>>
+    >().toEqualTypeOf<
+      ContractKeyShape<PlatformComponents['schemas']['AdminSubmissionSettingsResponse']>
+    >()
+    expectTypeOf<ContractKeyShape<SubmissionPreviewInput>>().toEqualTypeOf<
+      ContractKeyShape<PlatformComponents['schemas']['AdminSubmissionSettingsPreview']>
+    >()
+    expectTypeOf<
+      ContractKeyShape<NonNullable<SubmissionPreviewInput['proposed']>>
+    >().toEqualTypeOf<
+      ContractKeyShape<PlatformComponents['schemas']['SubmissionSettingsProposal']>
+    >()
+    expectTypeOf<
+      ContractKeyShape<ZodInput<typeof conversationObservationsSchema>>['current_submission_fee_rao']
+    >().toEqualTypeOf<
+      ContractKeyShape<
+        PlatformComponents['schemas']['ConversationObservations']
+      >['current_submission_fee_rao']
+    >()
+  })
+
+  it('accepts the fields the contract lets Platform omit', () => {
+    const revision = {
+      revision: 3,
+      parent_revision: 2,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 40_000_000,
+      fee_denomination: 'fixed_tao',
+      reason: 'measured platform cost',
+      actor: 'operator@example.com',
+      created_at: '2026-09-24T12:00:00Z',
+    }
+    expect(submissionSettingsRevisionSchema.parse(revision)).toEqual(revision)
+    const bounds = {
+      min_fee_amount_rao: 1_000_000,
+      max_fee_amount_rao: 10_000_000_000,
+      min_cooldown_seconds: 60,
+      max_cooldown_seconds: 86_400,
+    }
+    const control = submissionSettingsControlSchema.parse({
+      current: revision,
+      history: [revision],
+      history_incomplete: false,
+      bounds,
+    })
+    expect(control.unsupported_current).toBeNull()
+    expect(control.quote_lifetime_seconds).toBeUndefined()
+    const preview = submissionSettingsPreviewSchema.parse({
+      current: revision,
+      proposed: {
+        cooldown_seconds: 1800,
+        fee_amount_rao: 40_000_000,
+        fee_amount_tao: '0.040000000',
+        fee_denomination: 'fixed_tao',
+      },
+      expected_revision: 3,
+      stale: false,
+      fee_changed: false,
+      cooldown_changed: true,
+      fee_change_ratio: null,
+      applicable: true,
+      required_confirmation: 'SET SUBMISSION COOLDOWN 1800 SECONDS FEE 40000000 RAO',
+      bounds,
+      quote_lifetime_seconds: 86_400,
+      in_flight_quotes: 0,
+      in_flight_quotes_at_other_fees: 0,
+      in_flight_quotes_expire_by: null,
+      recoverable_expired_quotes: 0,
+      recoverable_expired_quotes_at_other_fees: 0,
+    })
+    expect(preview.recoverable_expired_quotes_until).toBeUndefined()
+    // A key the contract requires stays required.
+    const { bounds: _bounds, ...withoutBounds } = control
+    expect(() => submissionSettingsControlSchema.parse(withoutBounds)).toThrow()
+  })
+
+  it('lets preview and apply omit the fee, as Platform does', () => {
+    expect(
+      previewSubmissionSettingsInputSchema.parse({ expectedRevision: 3, cooldownSeconds: 1800 }),
+    ).toEqual({ expectedRevision: 3, cooldownSeconds: 1800, feeDenomination: 'fixed_tao' })
+    expect(
+      updateSubmissionSettingsInputSchema.parse({
+        expectedRevision: 3,
+        cooldownSeconds: 1800,
+        reason: 'reduce cadence for the current capacity window',
+        confirmation: 'SET SUBMISSION COOLDOWN 1800 SECONDS FEE 40000000 RAO',
+      }).feeAmountRao,
+    ).toBeUndefined()
+    expect(() =>
+      previewSubmissionSettingsInputSchema.parse({
+        expectedRevision: 3,
+        cooldownSeconds: 1800,
+        feeAmountRao: 1,
+      }),
+    ).toThrow()
   })
 })

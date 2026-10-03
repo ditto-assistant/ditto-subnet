@@ -367,6 +367,82 @@ class TestAmount:
             )
 
 
+class TestReservedQuoteAnchoredOnPaymentTime:
+    """A reserved quote binds payments by their on-chain time, not upload time."""
+
+    _BLOCK = datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    _CURRENT_RAO = 90_000_000
+
+    async def _verify(self, *, value: int, expires_at: datetime, **kwargs: Any):
+        verifier = _make_verifier(extrinsic_info=_make_extrinsic_info(value=value))
+        return await verifier.verify_payment(
+            _make_proof(),
+            expected_hotkey="5Hotkey",
+            expected_amount_rao=QUOTE_RAO,
+            reserved_terms_expire_at=expires_at,
+            fallback_amount_rao=kwargs.pop("fallback", self._CURRENT_RAO),
+            fallback_send_address=kwargs.pop("fallback_address", "5SendAddress"),
+            **kwargs,
+        )
+
+    async def test_payment_before_expiry_pays_the_reserved_fee(self):
+        result = await self._verify(
+            value=QUOTE_RAO, expires_at=self._BLOCK + timedelta(hours=1)
+        )
+        assert result.amount_rao == QUOTE_RAO
+
+    async def test_payment_before_expiry_cannot_pay_the_current_fee(self):
+        with pytest.raises(PaymentAmountMismatch):
+            await self._verify(
+                value=self._CURRENT_RAO, expires_at=self._BLOCK + timedelta(hours=1)
+            )
+
+    @pytest.mark.parametrize("after", [timedelta(0), timedelta(minutes=30)])
+    async def test_payment_at_or_after_expiry_must_pay_the_current_fee(
+        self, after: timedelta
+    ):
+        expires_at = self._BLOCK - after
+        result = await self._verify(value=self._CURRENT_RAO, expires_at=expires_at)
+        assert result.amount_rao == self._CURRENT_RAO
+        with pytest.raises(PaymentAmountMismatch):
+            await self._verify(value=QUOTE_RAO, expires_at=expires_at)
+
+    async def test_payment_after_expiry_goes_to_the_current_address(self):
+        with pytest.raises(PaymentDestinationMismatch):
+            await self._verify(
+                value=self._CURRENT_RAO,
+                expires_at=self._BLOCK - timedelta(minutes=1),
+                fallback_address="5RotatedAddress",
+            )
+
+    async def test_payment_after_expiry_fails_closed_without_a_current_fee(self):
+        from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
+
+        with pytest.raises(UnsupportedFeeDenominationError):
+            await self._verify(
+                value=QUOTE_RAO,
+                expires_at=self._BLOCK - timedelta(minutes=1),
+                fallback=None,
+            )
+
+    async def test_amnesty_rides_the_reservation_only_while_it_bound_the_payment(
+        self,
+    ):
+        cutoff = self._BLOCK + timedelta(seconds=1)
+        in_time = await self._verify(
+            value=17_500_000,
+            expires_at=self._BLOCK + timedelta(hours=1),
+            legacy_amount_cutoff_at=cutoff,
+        )
+        assert in_time.accepted_under_legacy_fee_amnesty is True
+        with pytest.raises(PaymentAmountMismatch):
+            await self._verify(
+                value=17_500_000,
+                expires_at=self._BLOCK - timedelta(minutes=1),
+                legacy_amount_cutoff_at=cutoff,
+            )
+
+
 class TestSignerOwnership:
     async def test_signer_not_owner_rejected(self):
         ext = _make_extrinsic_info(signer="5Different")

@@ -35,22 +35,28 @@ func (q *Queries) GetLatestSubmissionDepositAddress(ctx context.Context) (string
 }
 
 const getLatestSubmissionSettings = `-- name: GetLatestSubmissionSettings :one
-SELECT revision, cooldown_seconds, fee_amount_rao
+SELECT revision, cooldown_seconds, fee_amount_rao, fee_denomination
 FROM submission_settings_revisions
 ORDER BY revision DESC
 LIMIT 1
 `
 
 type GetLatestSubmissionSettingsRow struct {
-	Revision        int32 `json:"revision"`
-	CooldownSeconds int32 `json:"cooldownSeconds"`
-	FeeAmountRao    int64 `json:"feeAmountRao"`
+	Revision        int32  `json:"revision"`
+	CooldownSeconds int32  `json:"cooldownSeconds"`
+	FeeAmountRao    int64  `json:"feeAmountRao"`
+	FeeDenomination string `json:"feeDenomination"`
 }
 
 func (q *Queries) GetLatestSubmissionSettings(ctx context.Context) (GetLatestSubmissionSettingsRow, error) {
 	row := q.db.QueryRow(ctx, getLatestSubmissionSettings)
 	var i GetLatestSubmissionSettingsRow
-	err := row.Scan(&i.Revision, &i.CooldownSeconds, &i.FeeAmountRao)
+	err := row.Scan(
+		&i.Revision,
+		&i.CooldownSeconds,
+		&i.FeeAmountRao,
+		&i.FeeDenomination,
+	)
 	return i, err
 }
 

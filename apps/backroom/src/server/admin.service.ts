@@ -368,6 +368,9 @@ import {
   validatorFleetObservabilitySchema,
   artifactReleaseControlSchema,
   submissionSettingsControlSchema,
+  submissionSettingsPreviewSchema,
+  type SubmissionSettingsOutcome,
+  previewSubmissionSettingsInputSchema,
   hotkeyBanControlSchema,
   hotkeyBanListSchema,
   hotkeyBanLookupInputSchema,
@@ -1073,6 +1076,39 @@ export async function fetchSubmissionSettingsControl() {
   return submissionSettingsControlSchema.parse(payload)
 }
 
+export async function previewSubmissionSettings(rawInput: unknown) {
+  const input = previewSubmissionSettingsInputSchema.parse(rawInput)
+  // An omitted fee is left out of the query, never sent as "undefined": a
+  // fee-less preview keeps the current fee under Platform's rule.
+  const query = new URLSearchParams([
+    ['expected_revision', String(input.expectedRevision)],
+    ['cooldown_seconds', String(input.cooldownSeconds)],
+    ...(input.feeAmountRao === undefined
+      ? []
+      : [['fee_amount_rao', String(input.feeAmountRao)]]),
+    ['fee_denomination', input.feeDenomination],
+  ])
+  const payload = await platformAdminRequest(`${SUBMISSION_SETTINGS_PATH}/preview?${query}`)
+  return submissionSettingsPreviewSchema.parse(payload)
+}
+
+/** Run a preview or apply for the panel, reporting a failure with its HTTP
+ * status (null for a timeout, network or parse failure) instead of throwing. */
+export async function settleSubmissionSettings<T>(
+  work: () => Promise<T>,
+): Promise<SubmissionSettingsOutcome<T>> {
+  try {
+    return { ok: true, value: await work() }
+  } catch (error) {
+    return {
+      ok: false,
+      status: error instanceof PlatformAdminError ? error.status : null,
+      message:
+        error instanceof Error ? error.message : 'Unable to reach the platform API.',
+    }
+  }
+}
+
 export async function updateSubmissionSettings(actor: string, rawInput: unknown) {
   const input = updateSubmissionSettingsInputSchema.parse(rawInput)
   await platformAdminRequest(SUBMISSION_SETTINGS_PATH, {
@@ -1081,7 +1117,8 @@ export async function updateSubmissionSettings(actor: string, rawInput: unknown)
     body: {
       expected_revision: input.expectedRevision,
       cooldown_seconds: input.cooldownSeconds,
-      fee_amount_rao: input.feeAmountRao,
+      ...(input.feeAmountRao === undefined ? {} : { fee_amount_rao: input.feeAmountRao }),
+      fee_denomination: input.feeDenomination,
       reason: input.reason,
       actor,
       confirmation: input.confirmation,

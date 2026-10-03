@@ -90,12 +90,13 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
         AsyncMock(return_value=None),
     )
 
-    async def _settings(_session, *, default_payment_address: str):  # type: ignore[no-untyped-def]
+    async def _settings(_session, *, default_payment_address: str, **_kwargs):  # type: ignore[no-untyped-def]
         return SimpleNamespace(
             revision=0,
             cooldown_seconds=3600,
             fee_amount_rao=40_000_000,
             payment_address=default_payment_address,
+            quotable=True,
         )
 
     monkeypatch.setattr(
@@ -286,6 +287,7 @@ class TestUploadCheck:
                 return_value=SimpleNamespace(
                     agent_id=None,
                     miner_hotkey=_make_keypair().ss58_address,
+                    miner_coldkey="5Coldkey",
                     timestamp=datetime.now(UTC),
                 )
             ),
@@ -318,6 +320,7 @@ class TestUploadCheck:
         verifier = _override_payment_verifier(app)
         agent_id = uuid4()
         token = uuid4()
+        paid_at = datetime.now(UTC) - timedelta(minutes=50)
         duplicate_lookup = AsyncMock(return_value=None)
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
@@ -329,6 +332,7 @@ class TestUploadCheck:
                 return_value=SimpleNamespace(
                     agent_id=agent_id,
                     miner_hotkey=_make_keypair().ss58_address,
+                    timestamp=paid_at,
                 )
             ),
         )
@@ -342,17 +346,17 @@ class TestUploadCheck:
                 )
             ),
         )
+        reserve = AsyncMock(
+            return_value=SimpleNamespace(
+                token=token,
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                cooldown_seconds=3600,
+                fee_amount_rao=40_000_000,
+                payment_send_address=_make_keypair().ss58_address,
+            )
+        )
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.reserve_upload_admission",
-            AsyncMock(
-                return_value=SimpleNamespace(
-                    token=token,
-                    expires_at=datetime.now(UTC) + timedelta(hours=1),
-                    cooldown_seconds=3600,
-                    fee_amount_rao=40_000_000,
-                    payment_send_address=_make_keypair().ss58_address,
-                )
-            ),
+            "ditto.api_server.endpoints.upload.reserve_upload_admission", reserve
         )
 
         response = await client.post(
@@ -372,6 +376,11 @@ class TestUploadCheck:
         assert response.json()["admission_token"] == str(token)
         duplicate_lookup.assert_not_awaited()
         verifier.verify_payment.assert_not_awaited()
+        # A consumed proof reserves like a fresh request: no rotation and no
+        # reserved-fee recovery (its block time keeps nothing alive).
+        assert reserve.await_args is not None
+        assert reserve.await_args.kwargs["replace_existing"] is False
+        assert reserve.await_args.kwargs["paid_at"] is None
 
     async def test_payment_older_than_recovery_window_is_rejected(
         self,
@@ -420,6 +429,7 @@ class TestUploadCheck:
         cutoff = datetime.now(UTC)
 
         class Reservation:
+            miner_hotkey = _make_keypair().ss58_address
             expires_at = datetime.now(UTC) + timedelta(hours=1)
             fee_amount_rao = 40_000_000
             payment_send_address = _make_keypair().ss58_address
@@ -1015,6 +1025,7 @@ class TestUploadAgentHappyPath:
             sha256 = _GOOD_TAR_SHA
             fee_amount_rao = 40_000_000
             payment_send_address = _make_keypair().ss58_address
+            expires_at = datetime.now(UTC) + timedelta(hours=1)
 
             @property
             def legacy_payment_cutoff_at(self) -> datetime:
@@ -1048,6 +1059,249 @@ class TestUploadAgentHappyPath:
             verifier.verify_payment.await_args.kwargs["legacy_amount_cutoff_at"]
             == cutoff
         )
+
+    @pytest.mark.parametrize(
+        "expires_in", [timedelta(hours=1), timedelta(seconds=-3600)]
+    )
+    async def test_reserved_quote_terms_are_anchored_on_payment_time(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        expires_in: timedelta,
+    ) -> None:
+        """The reservation's fee is handed to the verifier with its expiry and
+        the current fee, whether or not the reservation has expired by the time
+        the upload arrives: the payment's block time picks the terms."""
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        verifier = _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        expires_at = datetime.now(UTC) + expires_in
+        reserved_address = _make_keypair().ss58_address
+
+        class Reservation:
+            miner_hotkey = kp.ss58_address
+            sha256 = _GOOD_TAR_SHA
+            fee_amount_rao = 40_000_000
+            payment_send_address = reserved_address
+            legacy_payment_cutoff_at = None
+
+        Reservation.expires_at = expires_at  # type: ignore[attr-defined]
+
+        async def _changed_policy(  # type: ignore[no-untyped-def]
+            _session, *, default_payment_address: str, **_kwargs
+        ):
+            return SimpleNamespace(
+                revision=7,
+                cooldown_seconds=3600,
+                fee_amount_rao=90_000_000,
+                payment_address=default_payment_address,
+                quotable=True,
+            )
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.effective_submission_settings",
+            AsyncMock(side_effect=_changed_policy),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission",
+            AsyncMock(return_value=Reservation()),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        consume = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.consume_or_enforce_upload_admission",
+            consume,
+        )
+        data, files = _upload_agent_form(keypair=kp)
+        data["admission_token"] = str(uuid4())
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        assert verifier.verify_payment.await_args is not None
+        kwargs = verifier.verify_payment.await_args.kwargs
+        assert kwargs["expected_amount_rao"] == 40_000_000
+        assert kwargs["expected_send_address"] == reserved_address
+        assert kwargs["reserved_terms_expire_at"] == expires_at
+        assert kwargs["fallback_amount_rao"] == 90_000_000
+        # Consumption is judged against the payment's block time too.
+        assert consume.await_args is not None
+        assert consume.await_args.kwargs["paid_at"] is not None
+
+    @pytest.mark.parametrize(
+        ("paid_hours_after_quote", "paid_rao", "accepted"),
+        [
+            # Quote at T0, pay the quoted fee at T0+23h, upload at T0+25h after
+            # an operator fee change: the payment predates the quote's expiry,
+            # so the reserved fee still binds.
+            (23, 40_000_000, True),
+            # Paid after the quote expired: the current fee is required...
+            (24.5, 90_000_000, True),
+            # ...and the old reserved fee is refused.
+            (24.5, 40_000_000, False),
+            # A payment made in time cannot pay the new fee instead.
+            (23, 90_000_000, False),
+        ],
+    )
+    async def test_late_upload_of_in_time_payment_keeps_reserved_fee(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        paid_hours_after_quote: float,
+        paid_rao: int,
+        accepted: bool,
+    ) -> None:
+        from ditto.api_server.dependencies import get_payment_verifier
+        from ditto.api_server.payment_verifier import PaymentVerifier
+
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        address = app.state.config.upload_payment_address
+        upload_at = datetime.now(UTC)
+        quoted_at = upload_at - timedelta(hours=25)
+        paid_at = quoted_at + timedelta(hours=paid_hours_after_quote)
+
+        chain = MagicMock()
+        chain.get_block_hash = AsyncMock(return_value=_GOOD_BLOCK_HASH)
+        extrinsic = MagicMock()
+        extrinsic.call_module = "Balances"
+        extrinsic.call_function = "transfer_keep_alive"
+        extrinsic.call_args = {"dest": address, "value": paid_rao}
+        extrinsic.signer_address = "5Coldkey"
+        chain.get_extrinsic = AsyncMock(return_value=extrinsic)
+        chain.check_extrinsic_success = AsyncMock(return_value=True)
+        chain.get_block_timestamp = AsyncMock(return_value=int(paid_at.timestamp()))
+        chain.get_coldkey_for_hotkey = AsyncMock(return_value="5Coldkey")
+        oracle = MagicMock()
+        oracle.get_tao_usd = AsyncMock(return_value=Decimal("400"))
+        real_verifier = PaymentVerifier(
+            chain=chain, oracle=oracle, send_address=address
+        )
+
+        async def _verifier() -> PaymentVerifier:
+            return real_verifier
+
+        app.dependency_overrides[get_payment_verifier] = _verifier
+
+        class Reservation:
+            miner_hotkey = kp.ss58_address
+            sha256 = _GOOD_TAR_SHA
+            fee_amount_rao = 40_000_000
+            payment_send_address = address
+            legacy_payment_cutoff_at = None
+            expires_at = quoted_at + timedelta(hours=24)
+
+        async def _changed_policy(  # type: ignore[no-untyped-def]
+            _session, *, default_payment_address: str, **_kwargs
+        ):
+            return SimpleNamespace(
+                revision=7,
+                cooldown_seconds=3600,
+                fee_amount_rao=90_000_000,
+                payment_address=default_payment_address,
+                quotable=True,
+            )
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.effective_submission_settings",
+            AsyncMock(side_effect=_changed_policy),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission",
+            AsyncMock(return_value=Reservation()),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        data, files = _upload_agent_form(keypair=kp)
+        data["admission_token"] = str(uuid4())
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        if accepted:
+            assert response.status_code == 200, response.text
+        else:
+            assert response.status_code == 402, response.text
+            assert response.json()["error_code"] == ERROR_CODE_PAYMENT_AMOUNT_MISMATCH
+
+    @pytest.mark.parametrize("with_quote", [True, False])
+    async def test_unquotable_policy_never_refuses_an_issued_quote(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        with_quote: bool,
+    ) -> None:
+        """An unreviewed-denomination revision refuses new quotes (503) but an
+        upload paying a still-bound quote is verified and stored."""
+        from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
+
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        verifier = _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        reads: list[bool] = []
+
+        async def _unquotable(  # type: ignore[no-untyped-def]
+            _session, *, default_payment_address: str, require_quotable: bool = True
+        ):
+            reads.append(require_quotable)
+            if require_quotable:
+                raise UnsupportedFeeDenominationError("usd_indexed")
+            return SimpleNamespace(
+                revision=9,
+                cooldown_seconds=3600,
+                fee_amount_rao=5,
+                payment_address=default_payment_address,
+                quotable=False,
+            )
+
+        class Reservation:
+            miner_hotkey = kp.ss58_address
+            sha256 = _GOOD_TAR_SHA
+            fee_amount_rao = 40_000_000
+            payment_send_address = _make_keypair().ss58_address
+            legacy_payment_cutoff_at = None
+            expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.effective_submission_settings",
+            AsyncMock(side_effect=_unquotable),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission",
+            AsyncMock(return_value=Reservation() if with_quote else None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        data, files = _upload_agent_form(keypair=kp)
+        if with_quote:
+            data["admission_token"] = str(uuid4())
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        if with_quote:
+            assert response.status_code == 200, response.text
+            assert reads == [False, False]
+            kwargs = verifier.verify_payment.await_args.kwargs
+            assert kwargs["expected_amount_rao"] == 40_000_000
+            # Without a quotable current fee a post-expiry payment fails closed.
+            assert kwargs["fallback_amount_rao"] is None
+        else:
+            assert response.status_code == 503, response.text
+            assert response.json()["error_code"] == 3100
+            verifier.verify_payment.assert_not_awaited()
 
     async def test_identical_paid_upload_returns_reusable_credit(
         self,
@@ -1833,3 +2087,1106 @@ class TestUploadReleasesSessionDuringSlowWork:
 
         assert response.status_code == 200, response.text
         assert seen["in_transaction"] is False
+
+
+def _real_verifier_paid_at(
+    app: FastAPI, *, paid_at: datetime, paid_rao: int, address: str
+) -> None:
+    """Install the real PaymentVerifier over a fake chain paying ``paid_rao``."""
+    from ditto.api_server.dependencies import get_payment_verifier
+    from ditto.api_server.payment_verifier import PaymentVerifier
+
+    chain = MagicMock()
+    chain.get_block_hash = AsyncMock(return_value=_GOOD_BLOCK_HASH)
+    extrinsic = MagicMock()
+    extrinsic.call_module = "Balances"
+    extrinsic.call_function = "transfer_keep_alive"
+    extrinsic.call_args = {"dest": address, "value": paid_rao}
+    extrinsic.signer_address = "5Coldkey"
+    chain.get_extrinsic = AsyncMock(return_value=extrinsic)
+    chain.check_extrinsic_success = AsyncMock(return_value=True)
+    chain.get_block_timestamp = AsyncMock(return_value=int(paid_at.timestamp()))
+    chain.get_coldkey_for_hotkey = AsyncMock(return_value="5Coldkey")
+    oracle = MagicMock()
+    oracle.get_tao_usd = AsyncMock(return_value=Decimal("400"))
+    verifier = PaymentVerifier(chain=chain, oracle=oracle, send_address=address)
+
+    async def _verifier() -> PaymentVerifier:
+        return verifier
+
+    app.dependency_overrides[get_payment_verifier] = _verifier
+
+
+def _unquotable_policy(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Current revision is in an unreviewed denomination; record read modes."""
+    from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
+
+    reads: list[bool] = []
+
+    async def _settings(  # type: ignore[no-untyped-def]
+        _session, *, default_payment_address: str, require_quotable: bool = True
+    ):
+        reads.append(require_quotable)
+        if require_quotable:
+            raise UnsupportedFeeDenominationError("usd_indexed")
+        return SimpleNamespace(
+            revision=9,
+            cooldown_seconds=3600,
+            fee_amount_rao=5,
+            payment_address=default_payment_address,
+            quotable=False,
+        )
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.effective_submission_settings",
+        AsyncMock(side_effect=_settings),
+    )
+    return reads
+
+
+class TestReservedQuoteUnderUnquotablePricing:
+    """/upload/check recovery and /upload/agent honour an issued quote while the
+    current revision cannot be quoted, and stay fail-closed outside it."""
+
+    @pytest.mark.parametrize(
+        ("with_reservation", "paid_hours_after_quote", "expected_status"),
+        [
+            # Paid inside the reservation: the reserved fee binds -> recovered.
+            (True, 23, 200),
+            # Paid after the reservation expired: no current fee can be quoted.
+            (True, 24.5, 503),
+            # No reservation at all: nothing can be quoted.
+            (False, 23, 503),
+        ],
+    )
+    async def test_check_recovery(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        with_reservation: bool,
+        paid_hours_after_quote: float,
+        expected_status: int,
+    ) -> None:
+        override_get_session(app)
+        override_get_chain_client(app)
+        address = app.state.config.upload_payment_address
+        quoted_at = datetime.now(UTC) - timedelta(hours=25)
+        _real_verifier_paid_at(
+            app,
+            paid_at=quoted_at + timedelta(hours=paid_hours_after_quote),
+            paid_rao=40_000_000,
+            address=address,
+        )
+        reads = _unquotable_policy(monkeypatch)
+
+        class Reservation:
+            miner_hotkey = _make_keypair().ss58_address
+            fee_amount_rao = 40_000_000
+            payment_send_address = address
+            legacy_payment_cutoff_at = None
+            expires_at = quoted_at + timedelta(hours=24)
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission_for_coldkey",
+            AsyncMock(return_value=Reservation() if with_reservation else None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(),
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == expected_status, response.text
+        if expected_status == 200:
+            assert response.json()["payment_required"] is False
+            assert reads[0] is False
+        else:
+            assert response.json()["error_code"] == 3100
+
+    @pytest.mark.parametrize(
+        ("paid_hours_after_quote", "expected_status"), [(23, 200), (24.5, 503)]
+    )
+    async def test_agent_upload(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        paid_hours_after_quote: float,
+        expected_status: int,
+    ) -> None:
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        address = app.state.config.upload_payment_address
+        quoted_at = datetime.now(UTC) - timedelta(hours=25)
+        _real_verifier_paid_at(
+            app,
+            paid_at=quoted_at + timedelta(hours=paid_hours_after_quote),
+            paid_rao=40_000_000,
+            address=address,
+        )
+        _unquotable_policy(monkeypatch)
+
+        class Reservation:
+            miner_hotkey = kp.ss58_address
+            sha256 = _GOOD_TAR_SHA
+            fee_amount_rao = 40_000_000
+            payment_send_address = address
+            legacy_payment_cutoff_at = None
+            expires_at = quoted_at + timedelta(hours=24)
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission",
+            AsyncMock(return_value=Reservation()),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        data, files = _upload_agent_form(keypair=kp)
+        data["admission_token"] = str(uuid4())
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == expected_status, response.text
+        if expected_status == 503:
+            assert response.json()["error_code"] == 3100
+
+
+class TestKeptReservationUnderUnquotablePricing:
+    """Recovery with ``reserve_submission_slot`` keeps an expired reservation
+    that was live when its payment finalized, under an unquotable revision."""
+
+    @pytest.mark.parametrize("same_archive", [True, False])
+    async def test_recovery_reserve_keeps_reserved_fee_and_expiry(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        session_maker: async_sessionmaker[AsyncSession],
+        same_archive: bool,
+    ) -> None:
+        from ditto.api_server.dependencies import get_session
+        from ditto.db.models import UploadAdmissionReservation
+        from ditto.db.queries import submission_settings as queries
+
+        async def _session():  # type: ignore[no-untyped-def]
+            async with session_maker() as session:
+                yield session
+
+        app.dependency_overrides[get_session] = _session
+        override_get_chain_client(app)
+        address = app.state.config.upload_payment_address
+        hotkey = _make_keypair().ss58_address
+        quoted_at = datetime.now(UTC) - timedelta(hours=25)
+        async with session_maker() as session, session.begin():
+            issued = await queries.reserve_upload_admission(
+                session,
+                miner_coldkey="5Coldkey",
+                miner_hotkey=hotkey,
+                sha256=_GOOD_SHA256 if same_archive else "f" * 64,
+                settings=queries.EffectiveSubmissionSettings(
+                    revision=1,
+                    cooldown_seconds=3600,
+                    payment_address=address,
+                    fee_amount_rao=40_000_000,
+                ),
+                now=quoted_at,
+            )
+        _real_verifier_paid_at(
+            app,
+            paid_at=quoted_at + timedelta(hours=23),
+            paid_rao=40_000_000,
+            address=address,
+        )
+        _unquotable_policy(monkeypatch)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission_for_coldkey",
+            queries.get_upload_admission_for_coldkey,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(),
+                "reserve_submission_slot": True,
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["ok"] is True
+        assert body["payment_required"] is False
+        async with session_maker() as session:
+            kept = await session.get(UploadAdmissionReservation, "5Coldkey")
+        assert kept is not None
+        assert kept.fee_amount_rao == 40_000_000
+        assert kept.expires_at == issued.expires_at
+        assert kept.sha256 == _GOOD_SHA256
+        assert body["admission_token"] == str(kept.token)
+        assert (kept.token == issued.token) is same_archive
+
+    async def test_recorded_credit_recovery_keeps_reserved_fee_and_expiry(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Recovering a recorded, unused credit forwards its recorded block
+        time, like a chain-verified payment does."""
+        from ditto.api_server.dependencies import get_session
+        from ditto.db.models import UploadAdmissionReservation
+        from ditto.db.queries import submission_settings as queries
+
+        async def _session():  # type: ignore[no-untyped-def]
+            async with session_maker() as session:
+                yield session
+
+        app.dependency_overrides[get_session] = _session
+        override_get_chain_client(app)
+        verifier = _override_payment_verifier(app)
+        address = app.state.config.upload_payment_address
+        hotkey = _make_keypair().ss58_address
+        quoted_at = datetime.now(UTC) - timedelta(hours=25)
+        async with session_maker() as session, session.begin():
+            issued = await queries.reserve_upload_admission(
+                session,
+                miner_coldkey="5Coldkey",
+                miner_hotkey=hotkey,
+                sha256=_GOOD_SHA256,
+                settings=queries.EffectiveSubmissionSettings(
+                    revision=1,
+                    cooldown_seconds=3600,
+                    payment_address=address,
+                    fee_amount_rao=40_000_000,
+                ),
+                now=quoted_at,
+            )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=None,
+                    miner_hotkey=hotkey,
+                    miner_coldkey="5Coldkey",
+                    timestamp=quoted_at + timedelta(hours=23),
+                )
+            ),
+        )
+        _unquotable_policy(monkeypatch)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission_for_coldkey",
+            queries.get_upload_admission_for_coldkey,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(),
+                "reserve_submission_slot": True,
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["ok"] is True
+        assert body["payment_required"] is False
+        verifier.verify_payment.assert_not_awaited()
+        async with session_maker() as session:
+            kept = await session.get(UploadAdmissionReservation, "5Coldkey")
+        assert kept is not None
+        assert kept.token == issued.token
+        assert kept.fee_amount_rao == 40_000_000
+        assert kept.expires_at == issued.expires_at
+        assert body["admission_token"] == str(kept.token)
+
+
+class TestReservationSendAddressIsSingleSourced:
+    async def test_legacy_null_address_verifies_against_the_advertised_one(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A legacy reservation without a stored destination is verified against
+        the current effective deposit address, the same one reservations
+        advertise, not the static config default."""
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        verifier = _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        effective = "5RotatedEffectiveDepositAddress"
+        assert effective != app.state.config.upload_payment_address
+
+        async def _rotated(_session, **_kwargs):  # type: ignore[no-untyped-def]
+            return SimpleNamespace(
+                revision=1,
+                cooldown_seconds=3600,
+                fee_amount_rao=40_000_000,
+                payment_address=effective,
+                quotable=True,
+            )
+
+        class Reservation:
+            miner_hotkey = kp.ss58_address
+            sha256 = _GOOD_TAR_SHA
+            fee_amount_rao = 40_000_000
+            payment_send_address = None
+            legacy_payment_cutoff_at = None
+            expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.effective_submission_settings",
+            AsyncMock(side_effect=_rotated),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission",
+            AsyncMock(return_value=Reservation()),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        data, files = _upload_agent_form(keypair=kp)
+        data["admission_token"] = str(uuid4())
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        assert verifier.verify_payment.await_args is not None
+        assert (
+            verifier.verify_payment.await_args.kwargs["expected_send_address"]
+            == effective
+        )
+
+    async def test_check_advertises_the_effective_address_for_a_null_row(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """/upload/check never returns a legacy NULL destination: the quote it
+        advertises comes from the same helper the verifier uses."""
+        from ditto.api_server.dependencies import get_session
+        from ditto.db.models import UploadAdmissionReservation
+        from ditto.db.queries import submission_settings as queries
+
+        async def _session():  # type: ignore[no-untyped-def]
+            async with session_maker() as session:
+                yield session
+
+        app.dependency_overrides[get_session] = _session
+        override_get_chain_client(app)
+        _override_payment_verifier(app)
+        hotkey = _make_keypair().ss58_address
+        effective = bittensor.Keypair.create_from_uri("//Dave").ss58_address
+        assert effective != app.state.config.upload_payment_address
+        async with session_maker() as session, session.begin():
+            issued = await queries.reserve_upload_admission(
+                session,
+                miner_coldkey="5Coldkey",
+                miner_hotkey=hotkey,
+                sha256=_GOOD_SHA256,
+                settings=queries.EffectiveSubmissionSettings(
+                    revision=1,
+                    cooldown_seconds=3600,
+                    payment_address=effective,
+                    fee_amount_rao=40_000_000,
+                ),
+            )
+            legacy = await session.get(UploadAdmissionReservation, "5Coldkey")
+            assert legacy is not None
+            legacy.payment_send_address = None
+
+        async def _rotated(_session, **_kwargs):  # type: ignore[no-untyped-def]
+            return queries.EffectiveSubmissionSettings(
+                revision=1,
+                cooldown_seconds=3600,
+                payment_address=effective,
+                fee_amount_rao=40_000_000,
+            )
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.effective_submission_settings",
+            AsyncMock(side_effect=_rotated),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission_for_coldkey",
+            queries.get_upload_admission_for_coldkey,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={**_signed_request_body(), "reserve_submission_slot": True},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["payment_required"] is True
+        assert body["admission_token"] == str(issued.token)
+        assert body["payment_send_address"] == effective
+
+
+class TestCheckRecoveryUsesOnlyTheCallersReservation:
+    """A coldkey's reservation for one hotkey never prices another hotkey's
+    payment on /upload/check, matching /upload/agent."""
+
+    @pytest.mark.parametrize(
+        ("reservation_hotkey_is_caller", "paid_rao", "expected_status"),
+        [
+            # Same hotkey (archive may differ): the reserved 0.04 TAO binds.
+            (True, 40_000_000, 200),
+            # Another hotkey's reservation at 0.04 TAO: the current 0.09 TAO
+            # applies, so the old amount is refused here, not later at upload.
+            (False, 40_000_000, 402),
+            (False, 90_000_000, 200),
+        ],
+    )
+    async def test_two_hotkeys_on_one_coldkey(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        reservation_hotkey_is_caller: bool,
+        paid_rao: int,
+        expected_status: int,
+    ) -> None:
+        override_get_session(app)
+        override_get_chain_client(app)
+        address = app.state.config.upload_payment_address
+        _real_verifier_paid_at(
+            app,
+            paid_at=datetime.now(UTC) - timedelta(hours=1),
+            paid_rao=paid_rao,
+            address=address,
+        )
+
+        async def _changed_policy(  # type: ignore[no-untyped-def]
+            _session, *, default_payment_address: str, **_kwargs
+        ):
+            return SimpleNamespace(
+                revision=7,
+                cooldown_seconds=3600,
+                fee_amount_rao=90_000_000,
+                payment_address=default_payment_address,
+                quotable=True,
+            )
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.effective_submission_settings",
+            AsyncMock(side_effect=_changed_policy),
+        )
+
+        class Reservation:
+            miner_hotkey = (
+                _make_keypair().ss58_address
+                if reservation_hotkey_is_caller
+                else bittensor.Keypair.create_from_uri("//Bob").ss58_address
+            )
+            sha256 = "f" * 64
+            fee_amount_rao = 40_000_000
+            payment_send_address = address
+            legacy_payment_cutoff_at = None
+            expires_at = datetime.now(UTC) + timedelta(hours=2)
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_admission_for_coldkey",
+            AsyncMock(return_value=Reservation()),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(),
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == expected_status, response.text
+        if expected_status == 402:
+            assert response.json()["error_code"] == ERROR_CODE_PAYMENT_AMOUNT_MISMATCH
+
+
+class TestCheckValidatesBeforePricingRefusal:
+    """Mirrors the Go relay: an unquotable revision refuses a new quote, but
+    never hides a validation failure behind a pricing 503."""
+
+    async def test_bad_signature_is_reported_not_503(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_session(app)
+        override_get_chain_client(app)
+        _override_payment_verifier(app)
+        _unquotable_policy(monkeypatch)
+        body = _signed_request_body()
+        body["signature"] = _BAD_SIG
+
+        response = await client.post("/api/v1/upload/check", json=body)
+
+        assert response.status_code == 200, response.text
+        assert ERROR_CODE_BAD_SIGNATURE in response.json()["error_codes"]
+
+    async def test_new_reservation_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
+
+        override_get_session(app)
+        override_get_chain_client(app)
+        _override_payment_verifier(app)
+        _unquotable_policy(monkeypatch)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.reserve_upload_admission",
+            AsyncMock(side_effect=UnsupportedFeeDenominationError("usd_indexed")),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={**_signed_request_body(), "reserve_submission_slot": True},
+        )
+
+        assert response.status_code == 503, response.text
+        assert response.json()["error_code"] == 3100
+
+
+class TestNoFeeBranchesUnderUnquotablePricing:
+    """Only charging the current fee is gated by quotability: credit
+    redemption and archive validation are not, a fresh payment still is."""
+
+    async def test_recorded_credit_is_redeemed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        deps = _wire_full_stack(app)
+        _unquotable_policy(monkeypatch)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        credit = SimpleNamespace(
+            agent_id=None,
+            credit_for_agent_id=uuid4(),
+            miner_hotkey=kp.ss58_address,
+            miner_coldkey="5Coldkey",
+            timestamp=datetime.now(UTC),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(side_effect=[credit, credit]),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        data, files = _upload_agent_form(keypair=kp, sha256=_GOOD_TAR_SHA)
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["payment_disposition"] == "credit_consumed"
+        deps["verifier"].verify_payment.assert_not_awaited()
+
+    async def test_fresh_payment_without_reservation_fails_closed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        deps = _wire_full_stack(app)
+        _unquotable_policy(monkeypatch)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        data, files = _upload_agent_form(keypair=kp, sha256=_GOOD_TAR_SHA)
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 503, response.text
+        assert response.json()["error_code"] == 3100
+        deps["verifier"].verify_payment.assert_not_awaited()
+        deps["storage"].put_object.assert_not_awaited()
+
+    async def test_already_recorded_payment_on_check_is_reported(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_session(app)
+        override_get_chain_client(app)
+        verifier = _override_payment_verifier(app)
+        _unquotable_policy(monkeypatch)
+        credit = SimpleNamespace(
+            agent_id=None,
+            credit_for_agent_id=uuid4(),
+            miner_hotkey=_make_keypair().ss58_address,
+            miner_coldkey="5Coldkey",
+            timestamp=datetime.now(UTC),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=credit),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(),
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["payment_required"] is False
+        verifier.verify_payment.assert_not_awaited()
+
+
+def _real_db(app: FastAPI, session_maker: async_sessionmaker[AsyncSession]) -> None:
+    from ditto.api_server.dependencies import get_session
+
+    async def _session():  # type: ignore[no-untyped-def]
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _session
+
+
+async def _issue_reservation(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    sha256: str,
+    now: datetime,
+    address: str,
+    fee_amount_rao: int = 40_000_000,
+) -> Any:
+    from ditto.db.queries import submission_settings as queries
+
+    async with session_maker() as session, session.begin():
+        return await queries.reserve_upload_admission(
+            session,
+            miner_coldkey="5Coldkey",
+            miner_hotkey=_make_keypair().ss58_address,
+            sha256=sha256,
+            settings=queries.EffectiveSubmissionSettings(
+                revision=1,
+                cooldown_seconds=3600,
+                payment_address=address,
+                fee_amount_rao=fee_amount_rao,
+            ),
+            now=now,
+        )
+
+
+async def _reservation_row(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> Any:
+    from ditto.db.models import UploadAdmissionReservation
+
+    async with session_maker() as session:
+        return await session.get(UploadAdmissionReservation, "5Coldkey")
+
+
+def _raised_policy(monkeypatch: pytest.MonkeyPatch, *, fee_amount_rao: int) -> None:
+    from ditto.db.queries import submission_settings as queries
+
+    async def _settings(  # type: ignore[no-untyped-def]
+        _session, *, default_payment_address: str, **_kwargs
+    ):
+        return queries.EffectiveSubmissionSettings(
+            revision=2,
+            cooldown_seconds=3600,
+            payment_address=default_payment_address,
+            fee_amount_rao=fee_amount_rao,
+        )
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.effective_submission_settings",
+        AsyncMock(side_effect=_settings),
+    )
+
+
+def _recovery_check_body(**overrides: Any) -> dict[str, Any]:
+    return {
+        **_signed_request_body(**overrides),
+        "reserve_submission_slot": True,
+        "payment_block_hash": _GOOD_BLOCK_HASH,
+        "payment_block_number": 13579,
+        "payment_extrinsic_index": 7,
+    }
+
+
+class TestRotationNeverExtendsAReservation:
+    async def test_rotated_quote_cannot_be_chained_past_its_expiry(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Recovering a credit onto another archive rotates the token but keeps
+        the original expiry, so a fresh payment made after it pays the
+        current fee instead of the old reserved one."""
+        _real_db(app, session_maker)
+        override_get_chain_client(app)
+        override_get_storage_client(app)
+        address = app.state.config.upload_payment_address
+        t0 = datetime.now(UTC) - timedelta(hours=23, minutes=30)
+        issued = await _issue_reservation(
+            session_maker, sha256="f" * 64, now=t0, address=address
+        )
+        _raised_policy(monkeypatch, fee_amount_rao=90_000_000)
+        payment_lookup = AsyncMock(
+            return_value=SimpleNamespace(
+                agent_id=None,
+                miner_hotkey=_make_keypair().ss58_address,
+                miner_coldkey="5Coldkey",
+                timestamp=t0 + timedelta(hours=1),
+            )
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            payment_lookup,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        _override_payment_verifier(app)
+
+        # T0+23.5h: recover the credit onto archive B (live reservation).
+        check = await client.post(
+            "/api/v1/upload/check",
+            json=_recovery_check_body(sha256=_GOOD_TAR_SHA),
+        )
+
+        assert check.status_code == 200, check.text
+        assert check.json()["payment_required"] is False
+        rotated = await _reservation_row(session_maker)
+        assert rotated is not None
+        assert rotated.token != issued.token
+        assert rotated.sha256 == _GOOD_TAR_SHA
+        assert rotated.expires_at == issued.expires_at
+        assert rotated.created_at == t0
+
+        # A fresh payment at the old fee, finalized after the original expiry
+        # (T0+24.5h), is held to the current fee even with the rotated token.
+        payment_lookup.return_value = None
+        _real_verifier_paid_at(
+            app,
+            paid_at=t0 + timedelta(hours=24, minutes=30),
+            paid_rao=40_000_000,
+            address=address,
+        )
+        data, files = _upload_agent_form(
+            keypair=_make_keypair(),
+            payment_block_hash="0x" + "c" * 64,
+            payment_extrinsic_index=3,
+        )
+        data["admission_token"] = check.json()["admission_token"]
+
+        upload = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert upload.status_code == 402, upload.text
+
+    async def test_rotation_keeps_created_and_expiry_in_the_query(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from ditto.db.queries import submission_settings as queries
+
+        t0 = datetime.now(UTC) - timedelta(hours=2)
+        issued = await _issue_reservation(
+            session_maker, sha256="f" * 64, now=t0, address="5Address"
+        )
+        async with session_maker() as session, session.begin():
+            rotated = await queries.reserve_upload_admission(
+                session,
+                miner_coldkey="5Coldkey",
+                miner_hotkey=_make_keypair().ss58_address,
+                sha256="e" * 64,
+                settings=queries.EffectiveSubmissionSettings(
+                    revision=2,
+                    cooldown_seconds=3600,
+                    payment_address="5Address",
+                    fee_amount_rao=90_000_000,
+                ),
+                replace_existing=True,
+                paid_at=t0 + timedelta(minutes=5),
+            )
+
+        assert rotated.token != issued.token
+        assert rotated.expires_at == issued.expires_at
+        assert rotated.fee_amount_rao == 40_000_000
+        row = await _reservation_row(session_maker)
+        assert row.created_at == t0
+
+
+class TestConsumedProofRecovery:
+    """/upload/check with a proof that already funded this exact upload."""
+
+    def _already_used(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        agent_id = uuid4()
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=agent_id,
+                    miner_hotkey=_make_keypair().ss58_address,
+                    miner_coldkey="5Coldkey",
+                    timestamp=datetime.now(UTC) - timedelta(minutes=10),
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_agent_for_payment_proof",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=agent_id,
+                    miner_hotkey=_make_keypair().ss58_address,
+                    sha256=_GOOD_TAR_SHA,
+                    name="alpha-agent",
+                    version=1,
+                    status="uploaded",
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+
+    async def test_cooldown_still_applies(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _real_db(app, session_maker)
+        override_get_chain_client(app)
+        verifier = _override_payment_verifier(app)
+        self._already_used(monkeypatch)
+        retry_at = datetime.now(UTC) + timedelta(minutes=50)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_submission_retry_at",
+            AsyncMock(return_value=retry_at),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check", json=_recovery_check_body(sha256=_GOOD_TAR_SHA)
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["ok"] is False
+        assert body["admission_token"] is None
+        reported = datetime.fromisoformat(body["retry_at"].replace("Z", "+00:00"))
+        assert reported == retry_at
+        verifier.verify_payment.assert_not_awaited()
+        assert await _reservation_row(session_maker) is None
+
+    async def test_never_takes_over_another_live_reservation(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _real_db(app, session_maker)
+        override_get_chain_client(app)
+        _override_payment_verifier(app)
+        self._already_used(monkeypatch)
+        other = await _issue_reservation(
+            session_maker,
+            sha256="b" * 64,
+            now=datetime.now(UTC) - timedelta(minutes=1),
+            address=app.state.config.upload_payment_address,
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check", json=_recovery_check_body(sha256=_GOOD_TAR_SHA)
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["ok"] is False
+        assert response.json()["admission_token"] is None
+        kept = await _reservation_row(session_maker)
+        assert kept is not None
+        assert kept.token == other.token
+        assert kept.sha256 == "b" * 64
+        assert kept.expires_at == other.expires_at
+
+    async def test_exact_retry_releases_the_slot_it_reserved(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _real_db(app, session_maker)
+        override_get_chain_client(app)
+        override_get_storage_client(app)
+        verifier = _override_payment_verifier(app)
+        self._already_used(monkeypatch)
+
+        check = await client.post(
+            "/api/v1/upload/check", json=_recovery_check_body(sha256=_GOOD_TAR_SHA)
+        )
+
+        assert check.status_code == 200, check.text
+        assert check.json()["ok"] is True
+        assert check.json()["payment_required"] is False
+        assert check.json()["payment_amount_rao"] is None
+        reserved = await _reservation_row(session_maker)
+        assert reserved is not None
+        assert str(reserved.token) == check.json()["admission_token"]
+
+        data, files = _upload_agent_form(keypair=_make_keypair())
+        data["admission_token"] = check.json()["admission_token"]
+        upload = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert upload.status_code == 200, upload.text
+        assert upload.json()["version"] == 1
+        verifier.verify_payment.assert_not_awaited()
+        assert await _reservation_row(session_maker) is None
+
+
+class TestCheckCreditOwnership:
+    async def test_credit_from_another_coldkey_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_session(app)
+        override_get_chain_client(app)
+        _override_payment_verifier(app)
+        reserve = AsyncMock()
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.reserve_upload_admission", reserve
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=None,
+                    miner_hotkey=_make_keypair().ss58_address,
+                    miner_coldkey="5SomeoneElsesColdkey",
+                    timestamp=datetime.now(UTC) - timedelta(minutes=5),
+                )
+            ),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check", json=_recovery_check_body()
+        )
+
+        assert response.status_code == 402, response.text
+        reserve.assert_not_awaited()
+
+
+class TestSettledCreditUnderUnquotablePricing:
+    async def test_refusal_rolls_back_and_keeps_the_reservation(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A credit paid after its reservation expired cannot be given a new
+        quote from an unquotable revision. The refusal is fail-closed (503)
+        and transactional: the old reservation is not deleted and the credit
+        is untouched, so recovery succeeds once pricing is quotable again."""
+        _real_db(app, session_maker)
+        override_get_chain_client(app)
+        _override_payment_verifier(app)
+        quoted_at = datetime.now(UTC) - timedelta(hours=25)
+        issued = await _issue_reservation(
+            session_maker,
+            sha256=_GOOD_SHA256,
+            now=quoted_at,
+            address=app.state.config.upload_payment_address,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=None,
+                    miner_hotkey=_make_keypair().ss58_address,
+                    miner_coldkey="5Coldkey",
+                    timestamp=quoted_at + timedelta(hours=24, minutes=30),
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        _unquotable_policy(monkeypatch)
+
+        response = await client.post(
+            "/api/v1/upload/check", json=_recovery_check_body()
+        )
+
+        assert response.status_code == 503, response.text
+        assert response.json()["error_code"] == 3100
+        kept = await _reservation_row(session_maker)
+        assert kept is not None
+        assert kept.token == issued.token
+        assert kept.expires_at == issued.expires_at

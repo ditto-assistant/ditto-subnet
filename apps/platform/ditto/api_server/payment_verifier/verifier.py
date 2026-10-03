@@ -18,6 +18,7 @@ from ditto.api_server.payment_verifier.models import (
     PaymentProof,
     VerifiedPayment,
 )
+from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
 from ditto.chain.errors import ExtrinsicNotFoundError
 
 if TYPE_CHECKING:
@@ -86,8 +87,23 @@ class PaymentVerifier:
         expected_amount_rao: int,
         legacy_amount_cutoff_at: datetime | None = None,
         expected_send_address: str | None = None,
+        reserved_terms_expire_at: datetime | None = None,
+        fallback_amount_rao: int | None = None,
+        fallback_send_address: str | None = None,
     ) -> VerifiedPayment:
-        """Verify a payment proof end-to-end. See class docstring for flow."""
+        """Verify a payment proof end-to-end. See class docstring for flow.
+
+        When ``reserved_terms_expire_at`` is set, ``expected_amount_rao``,
+        ``expected_send_address`` and ``legacy_amount_cutoff_at`` are the terms
+        of a reserved quote, and they bind only a payment whose on-chain block
+        timestamp is strictly before that expiry. The instant that counts is the
+        payment, not the upload: a payment finalized inside the quote lifetime
+        keeps its reserved fee however late the upload arrives (the separate
+        24-hour recovery window still applies). A payment finalized at or after
+        the expiry must match the current policy instead
+        (``fallback_amount_rao`` / ``fallback_send_address``, with no amnesty);
+        if no current fee can be quoted the verification fails closed.
+        """
         # 1. Bind the miner-supplied number/hash pair before combining Pylon's
         # number-keyed extrinsic data with hash-keyed Substrate events/storage.
         canonical_block_hash = (
@@ -130,6 +146,25 @@ class PaymentVerifier:
                 f"index={proof.extrinsic_index} emitted ExtrinsicFailed"
             )
 
+        # Payment time decides which terms apply (reserved quote vs current).
+        block_ts_seconds = await self._chain.get_block_timestamp(canonical_block_hash)
+        block_ts = datetime.fromtimestamp(block_ts_seconds, tz=UTC)
+        reserved_expiry = (
+            reserved_terms_expire_at.replace(tzinfo=UTC)
+            if reserved_terms_expire_at is not None
+            and reserved_terms_expire_at.tzinfo is None
+            else reserved_terms_expire_at
+        )
+        if reserved_expiry is not None and block_ts >= reserved_expiry:
+            if fallback_amount_rao is None:
+                raise UnsupportedFeeDenominationError(
+                    "payment was made after its reserved quote expired and the "
+                    "current submission fee cannot be quoted"
+                )
+            expected_amount_rao = fallback_amount_rao
+            expected_send_address = fallback_send_address
+            legacy_amount_cutoff_at = None
+
         # 5. Destination address.
         dest = _to_ss58(ext.call_args.get("dest"))
         send_address = expected_send_address or self._send_address
@@ -147,8 +182,6 @@ class PaymentVerifier:
             raise PaymentCallTypeMismatch(
                 f"extrinsic call_args missing or non-integer value: {ext.call_args!r}"
             ) from e
-        block_ts_seconds = await self._chain.get_block_timestamp(canonical_block_hash)
-        block_ts = datetime.fromtimestamp(block_ts_seconds, tz=UTC)
         legacy_cutoff = (
             legacy_amount_cutoff_at.replace(tzinfo=UTC)
             if legacy_amount_cutoff_at is not None

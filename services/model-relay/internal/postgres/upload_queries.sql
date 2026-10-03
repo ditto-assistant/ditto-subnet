@@ -1,5 +1,5 @@
 -- name: GetLatestSubmissionSettings :one
-SELECT revision, cooldown_seconds, fee_amount_rao
+SELECT revision, cooldown_seconds, fee_amount_rao, fee_denomination
 FROM submission_settings_revisions
 ORDER BY revision DESC
 LIMIT 1;
