@@ -68,8 +68,8 @@ func TestValidateBenchmarkImageContract(t *testing.T) {
 			t.Fatalf("benchmark v%d screened image rejected: %s", benchVersion, msg)
 		}
 	}
-	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: protocol.BenchVersionV7, TarballURL: "https://example.com/source.tgz"}); msg != "" {
-		t.Fatalf("benchmark v7 source-build compatibility rejected: %s", msg)
+	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: protocol.BenchVersionV7, TarballURL: "https://example.com/source.tgz"}); msg == "" {
+		t.Fatal("legacy benchmark source build bypassed the image contract")
 	}
 }
 
