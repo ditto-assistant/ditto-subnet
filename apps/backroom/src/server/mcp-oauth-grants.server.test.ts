@@ -1,4 +1,4 @@
-import OAuthProvider, {
+import {
   getOAuthApi,
   type OAuthHelpers,
   type OAuthProviderOptions,
@@ -19,8 +19,6 @@ import { sealToken } from './crypto.server'
 import { BackroomMcpHandler } from './mcp-handler.server'
 import { BACKROOM_TREASURY_OBSERVE_SCOPE as OBSERVE } from './treasury-observer-access.server'
 import {
-  beginMcpAuthorization,
-  completeMcpAuthorization,
   getMcpConsentDetails,
   listMcpGrants,
   mcpTokenExchange,
@@ -107,16 +105,15 @@ function harness() {
     authorizeEndpoint: '/authorize',
     tokenEndpoint: '/token',
     clientRegistrationEndpoint: '/register',
-    scopesSupported: [...FULL, OBSERVE],
+    scopesSupported: FULL,
     allowImplicitFlow: false,
     allowPlainPKCE: false,
     refreshTokenTTL: 7 * 24 * 60 * 60,
     tokenExchangeCallback: (callback) => mcpTokenExchange(callback, Date.now(), env),
   }
-  const provider = new OAuthProvider(options)
   const oauth = getOAuthApi(options, env) as OAuthHelpers
   const ctx = { waitUntil() {}, passThroughOnException() {}, props: {} } as unknown as ExecutionContext
-  return { kv, env, provider, oauth, ctx }
+  return { kv, env, oauth, ctx }
 }
 
 async function pkcePair() {
@@ -154,11 +151,15 @@ async function authorize(
     code_challenge_method: 'S256',
     resource: `${origin}/mcp`,
   }).toString()
-  const begin = await beginMcpAuthorization(new Request(authorize), h.oauth, secret)
+  const begin = await worker.fetch(new Request(authorize), h.env, h.ctx)
+  if (begin.status !== 302) {
+    const error = await begin.json() as { error_description: string }
+    throw new Error(`Authorization refused HTTP ${begin.status}: ${error.error_description}`)
+  }
   const requestToken =
     new URL(begin.headers.get('location') ?? '').searchParams.get('request') ?? ''
   const details = await getMcpConsentDetails(requestToken, origin, secret)
-  const complete = await completeMcpAuthorization(
+  const complete = await worker.fetch(
     new Request(`${origin}/oauth/authorize/complete`, {
       method: 'POST',
       headers: {
@@ -168,16 +169,18 @@ async function authorize(
       },
       body: JSON.stringify({ requestToken, csrf: details.csrf, decision: 'allow', accessLevel }),
     }),
-    { ...h.env, OAUTH_PROVIDER: h.oauth },
+    h.env,
+    h.ctx,
   )
   if (complete.status !== 200) throw new Error(`Authorization refused HTTP ${complete.status}`)
   const { redirectTo } = (await complete.json()) as { redirectTo: string }
+  expect(new URL(redirectTo).searchParams.get('state')).toBe('client-state')
   const code = new URL(redirectTo).searchParams.get('code') ?? ''
   return { details, code, verifier }
 }
 
 async function exchangeCode(h: Harness, clientId: string, code: string, verifier: string) {
-  return h.provider.fetch(
+  return worker.fetch(
     new Request(`${origin}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -220,7 +223,7 @@ async function connect(
 }
 
 async function refresh(h: Harness, clientId: string, refreshToken: string, scope?: string) {
-  return h.provider.fetch(
+  return worker.fetch(
     new Request(`${origin}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -285,32 +288,9 @@ describe('Backroom MCP OAuth grants (issue #2080)', () => {
 
     // General clients can request the whole discovery list. Drive the actual
     // Worker through consent and PKCE exchange, without relaxing exclusivity.
-    const { verifier, challenge } = await pkcePair()
-    const request = new URL(`${origin}/authorize`)
-    request.search = new URLSearchParams({ response_type: 'code', client_id: clientId,
-      redirect_uri: redirectUri, scope: scopes.join(' '), state: 'client-state',
-      code_challenge: challenge, code_challenge_method: 'S256', resource: `${origin}/mcp` }).toString()
-    const begin = await worker.fetch(new Request(request), h.env, h.ctx)
-    expect(begin.status).toBe(302)
-    const requestToken = new URL(begin.headers.get('location') ?? '').searchParams.get('request') ?? ''
-    const details = await getMcpConsentDetails(requestToken, origin, secret)
-    expect(details).toMatchObject({ requestedScopes: FULL, canRequestArtifact: true, canRequestWrite: true })
-    expect(details.observerOnly).toBeUndefined()
-    const complete = await worker.fetch(new Request(`${origin}/oauth/authorize/complete`, {
-      method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', Cookie: await sessionCookie() },
-      body: JSON.stringify({ requestToken, csrf: details.csrf, decision: 'allow', accessLevel: 'full' }),
-    }), h.env, h.ctx)
-    expect(complete.status).toBe(200)
-    const { redirectTo } = await complete.json() as { redirectTo: string }
-    const redirect = new URL(redirectTo)
-    expect(redirect.searchParams.get('state')).toBe('client-state')
-    const token = await worker.fetch(new Request(`${origin}/token`, {
-      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'authorization_code', code: redirect.searchParams.get('code') ?? '',
-        redirect_uri: redirectUri, client_id: clientId, code_verifier: verifier }),
-    }), h.env, h.ctx)
-    expect(token.status).toBe(200)
-    const connection = await token.json() as { access_token: string; scope: string }
+    const connection = await connect(h, clientId, scopes.join(' '), 'full')
+    expect(connection.details).toMatchObject({ requestedScopes: FULL, canRequestArtifact: true, canRequestWrite: true })
+    expect(connection.details.observerOnly).toBeUndefined()
     expect(connection.scope.split(' ')).toEqual(FULL)
     expect((await tokenProps(h, connection.access_token)).grant.props.scopes).toEqual(FULL)
   })
