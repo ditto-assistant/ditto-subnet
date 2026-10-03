@@ -50,6 +50,7 @@ jobs:
             ditto/anticopy/reference_lexical_v2.bin
             ditto/anticopy/reference_normalized_v2.bin
             ditto/anticopy/reference_prompt_v2.bin
+            ditto/anticopy/reference_line_v2.bin
             ditto/anticopy/reference_manifest_v2.json
             ditto/anticopy/kit_file_digests_v1.json
           )
