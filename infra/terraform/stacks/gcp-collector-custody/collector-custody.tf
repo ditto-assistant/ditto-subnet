@@ -181,6 +181,7 @@ resource "google_compute_firewall" "collector_runtime_rpc" {
   network            = google_compute_network.collector_custody[0].id
   direction          = "EGRESS"
   priority           = 750
+  disabled           = false
   target_tags        = ["collector-registration-sealed", "collector-transfer-sealed"]
   destination_ranges = ["65.109.251.221/32"]
   allow {
