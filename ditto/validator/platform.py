@@ -2189,9 +2189,14 @@ class PlatformClient:
             if attempt + 1 >= attempts:
                 raise failure
             delay = _SCORE_SUBMIT_RETRY_DELAYS[attempt]
-            if ticket_deadline is not None and (
-                datetime.now(UTC) + timedelta(seconds=delay)
-                >= ticket_deadline - _SCORE_SUBMIT_DEADLINE_MARGIN
+            # Like the worker's lease guard, only an aware deadline is comparable.
+            if (
+                ticket_deadline is not None
+                and ticket_deadline.tzinfo is not None
+                and (
+                    datetime.now(UTC) + timedelta(seconds=delay)
+                    >= ticket_deadline - _SCORE_SUBMIT_DEADLINE_MARGIN
+                )
             ):
                 raise failure
             logger.warning(

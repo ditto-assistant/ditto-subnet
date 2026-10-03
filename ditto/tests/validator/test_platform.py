@@ -2729,6 +2729,39 @@ async def test_submit_score_stops_retrying_before_the_lease_deadline(
     assert attempts == 3
 
 
+async def test_submit_score_retries_through_a_naive_ticket_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    attempts = 0
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(502, text="")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="\\(502\\)"):
+            await PlatformClient(cast(Any, config), http, keypair).submit_score(
+                agent_id,
+                signature="ab" * 64,
+                report=_score_report(),
+                ticket_deadline=datetime(2099, 1, 1),
+            )
+
+    assert attempts == 6
+
+
 async def test_submit_score_4xx_stays_a_scoring_error() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
