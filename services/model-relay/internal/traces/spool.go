@@ -292,6 +292,8 @@ func (s *Spooler) write(rec *Record) {
 	if _, err := sf.w.Write(line); err != nil {
 		s.opts.Logger.Error("trace spool write failed", slog.String("error", err.Error()))
 		s.drop("write_failed")
+		// A bufio error is sticky: ship what reached disk and count the rest.
+		s.rotateLocked(key, sf, "write_failed")
 		return
 	}
 	n := int64(len(line))
@@ -335,6 +337,7 @@ func (s *Spooler) flushAndRotateStale() {
 		}
 		if err := sf.w.Flush(); err != nil {
 			s.opts.Logger.Error("trace spool flush failed", slog.String("error", err.Error()))
+			s.rotateLocked(key, sf, "flush_failed")
 			continue
 		}
 		_ = sf.f.Sync()
@@ -355,16 +358,41 @@ func (s *Spooler) rotateAll(reason string) {
 // without parsing its contents).
 func (s *Spooler) rotateLocked(key string, sf *streamFile, reason string) {
 	delete(s.files, key)
-	if err := sf.w.Flush(); err != nil {
-		s.opts.Logger.Error("trace spool flush failed", slog.String("error", err.Error()))
-	}
+	flushErr := sf.w.Flush()
 	_ = sf.f.Sync()
 	_ = sf.f.Close()
+	first, last := sf.firstAt, sf.lastAt
+	if flushErr != nil {
+		s.opts.Logger.Error("trace spool flush failed", slog.String("error", flushErr.Error()))
+		// Records still in the buffer never reached disk. Keep only the
+		// complete lines that did, and count the rest as dropped so callers
+		// that gate on Dropped (the backfill's --delete) see the loss.
+		_, diskFirst, diskLast, onDisk, err := truncateToCompleteLines(sf.path)
+		if err != nil {
+			onDisk = 0
+		}
+		for lost := sf.records - onDisk; lost > 0; lost-- {
+			s.drop("flush_failed")
+		}
+		if err != nil || onDisk == 0 {
+			// Nothing intact to ship: an empty ready/ file could never upload.
+			_ = os.Remove(sf.path)
+			s.releaseBytes(sf.bytes)
+			return
+		}
+		// The budget counted every buffered byte; release the ones that
+		// never landed so later records are not refused for phantom bytes.
+		if info, statErr := os.Stat(sf.path); statErr == nil && info.Size() < sf.bytes {
+			s.releaseBytes(sf.bytes - info.Size())
+			sf.bytes = info.Size()
+		}
+		sf.records, first, last = onDisk, diskFirst, diskLast
+	}
 	if sf.records == 0 {
 		_ = os.Remove(sf.path)
 		return
 	}
-	target := filepath.Join(s.opts.Dir, readyDirName, readyName(key, sf.instance, sf.firstAt, sf.lastAt))
+	target := filepath.Join(s.opts.Dir, readyDirName, readyName(key, sf.instance, first, last))
 	if err := os.Rename(sf.path, target); err != nil {
 		s.opts.Logger.Error("trace spool rotate failed", slog.String("error", err.Error()))
 		return
