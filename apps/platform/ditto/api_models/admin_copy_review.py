@@ -110,6 +110,7 @@ class AdminCopyReviewCurrentComparison(BaseModel):
     bulk_eligible: bool
     algorithm_version: str
     lexical_fingerprint_version: int
+    line_fingerprint_version: str | None = None
     normalized_source_fingerprint_version: str
     prompt_fingerprint_version: str
     canonical_reference_revision: str
@@ -122,6 +123,8 @@ class AdminCopyReviewCurrentComparison(BaseModel):
     exact_byte_match: bool
     normalized_source_match: bool
     lexical: AdminCopySimilarityEvidence
+    line: AdminCopySimilarityEvidence | None = None
+    """Line sub-sketch of the lexical fingerprint; triggers beside ``lexical``."""
     structural: AdminCopySimilarityEvidence
     prompt: AdminCopySimilarityEvidence
     triggered: bool

@@ -14,6 +14,7 @@ from typing import Any
 
 from ditto.api_server.fingerprint import (
     _FP_VERSION,
+    _LINE_VERSION,
     _NSH_VERSION,
     _PROMPT_VERSION,
     content_similarity,
@@ -22,6 +23,8 @@ from ditto.api_server.fingerprint import (
 from ditto.api_server.scoring_gate import (
     _DEFAULT_CONTAINMENT_TOL,
     _DEFAULT_JACCARD_TOL,
+    _DEFAULT_LINE_CONTAINMENT_TOL,
+    _DEFAULT_LINE_JACCARD_TOL,
     _DEFAULT_STRUCTURAL_CONTAINMENT_TOL,
     _DEFAULT_STRUCTURAL_JACCARD_TOL,
     _PROMPT_ADVISORY_TOL,
@@ -58,6 +61,7 @@ class AntiCopyComparison:
     bulk_eligible: bool
     algorithm_version: str
     lexical_fingerprint_version: int
+    line_fingerprint_version: str
     normalized_source_fingerprint_version: str
     prompt_fingerprint_version: str
     canonical_reference_revision: str
@@ -70,6 +74,7 @@ class AntiCopyComparison:
     exact_byte_match: bool
     normalized_source_match: bool
     lexical: SimilarityEvidence
+    line: SimilarityEvidence
     structural: SimilarityEvidence
     prompt: SimilarityEvidence
     triggered: bool
@@ -213,6 +218,16 @@ def compare_anti_copy_pair(
         containment_threshold=_DEFAULT_CONTAINMENT_TOL,
         decision_role="trigger",
     )
+    # The line sub-sketch triggers the copy rule beside the window channel, so
+    # a module-split copy reads as "line above threshold", not as a lexical
+    # miss that somehow held.
+    line = _similarity(
+        (candidate.content_fingerprint or {}).get("lines"),
+        (reference.content_fingerprint or {}).get("lines"),
+        jaccard_threshold=_DEFAULT_LINE_JACCARD_TOL,
+        containment_threshold=_DEFAULT_LINE_CONTAINMENT_TOL,
+        decision_role="trigger",
+    )
     structural = _similarity(
         candidate.structural_fingerprint,
         reference.structural_fingerprint,
@@ -250,6 +265,7 @@ def compare_anti_copy_pair(
         ),
         algorithm_version=ANTI_COPY_ALGORITHM_VERSION,
         lexical_fingerprint_version=_FP_VERSION,
+        line_fingerprint_version=_LINE_VERSION,
         normalized_source_fingerprint_version=f"nsh{_NSH_VERSION}",
         prompt_fingerprint_version=_PROMPT_VERSION,
         canonical_reference_revision=provenance["revision"],
@@ -267,6 +283,7 @@ def compare_anti_copy_pair(
             and candidate.normalized_source_hash == reference.normalized_source_hash
         ),
         lexical=lexical,
+        line=line,
         structural=structural,
         prompt=prompt,
         triggered=decision.held,

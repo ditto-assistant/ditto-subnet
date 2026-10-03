@@ -26,6 +26,7 @@ from sqlalchemy.orm import undefer_group
 from ditto.api_server.endpoints.upload import DEFAULT_MAX_TARBALL_SIZE_BYTES
 from ditto.api_server.fingerprint import (
     _FP_VERSION,
+    _LINE_VERSION,
     compute_content_fingerprint,
     compute_normalized_source_hash,
     compute_prompt_fingerprint,
@@ -51,10 +52,14 @@ class _FingerprintMetadata(Protocol):
 
 def _is_current(agent: _FingerprintMetadata) -> bool:
     fingerprint = agent.content_fingerprint
+    corpus = reference_corpus_provenance()["corpus_id"]
+    lines = (fingerprint or {}).get("lines") or {}
     return bool(
         fingerprint
         and fingerprint.get("v") == _FP_VERSION
-        and fingerprint.get("corpus") == reference_corpus_provenance()["corpus_id"]
+        and fingerprint.get("corpus") == corpus
+        and lines.get("v") == _LINE_VERSION
+        and lines.get("corpus") == corpus
     )
 
 

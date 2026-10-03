@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import itertools
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.fingerprint import (
     _FP_VERSION,
+    _LINE_VERSION,
     _MINHASH_K,
     _PROMPT_VERSION,
     content_similarity,
@@ -41,6 +43,29 @@ def _sk(shingles: set[str], *, k: int = _MINHASH_K) -> dict:
         "k": k,
         "card": len(shingles),
         "m": sorted(shingles)[:k],
+    }
+
+
+_LSK_TAGS = itertools.count()
+
+
+def _lsk(shingles: set[str], *, k: int = _MINHASH_K) -> dict:
+    """A fingerprint whose window channel is unique and ``lines`` carries ``shingles``.
+
+    Models a module-split refactor: every 4-line window differs, every line
+    survives. The window sketch uses a per-call prefix so two calls never
+    overlap there.
+    """
+    tag = next(_LSK_TAGS)
+    window = _sk({f"w{tag:07x}{i:08x}" for i in range(40)})
+    return {
+        **window,
+        "lines": {
+            "v": _LINE_VERSION,
+            "k": k,
+            "card": len(shingles),
+            "m": sorted(shingles)[:k],
+        },
     }
 
 
@@ -903,6 +928,61 @@ class TestEvaluateAntidup:
         )
         assert d1.held is False
         assert d1 == d2
+
+
+class TestLineSubSketchCopyRule:
+    """Rule 2 also fires on the line channel, on the window channel's bars."""
+
+    @staticmethod
+    def _decide(candidate: dict, matched: dict | None):
+        incumbent = _entry(
+            composite=0.80,
+            miner="5Lets",
+            sha256="aa" * 32,
+            size_bytes=500000,
+            content_fingerprint=matched,
+        )
+        return evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Ira",
+            sha256="bb" * 32,
+            composite=0.81,
+            size_bytes=520000,
+            content_fingerprint=candidate,
+            eligible=[incumbent],
+        )
+
+    def test_module_split_copy_is_held_on_lines(self) -> None:
+        """ira-1 ``4d44841b`` vs lets_638 ``8d3208ad``: window 0.55, line 0.902."""
+        shared = {f"{i:016x}" for i in range(90)}
+        original = _lsk(shared | {f"o{i:015x}" for i in range(5)})
+        split = _lsk(shared | {f"s{i:015x}" for i in range(5)})
+        assert content_similarity(split, original)[0] < 0.75
+        decision = self._decide(split, original)
+        assert decision.held is True
+        assert "line jaccard 0.900" in (decision.reason or "")
+
+    def test_independent_overlap_under_the_line_bar_is_not_held(self) -> None:
+        """taowolf v16 / agiorin v12 measured line Jaccard 0.652 across owners."""
+        shared = {f"{i:016x}" for i in range(65)}
+        a = _lsk(shared | {f"a{i:015x}" for i in range(18)})
+        b = _lsk(shared | {f"b{i:015x}" for i in range(17)})
+        assert self._decide(a, b).held is False
+
+    def test_padded_line_copy_is_held_by_containment(self) -> None:
+        shared = {f"{i:016x}" for i in range(40)}
+        original = _lsk(shared)
+        padded = _lsk(shared | {f"p{i:015x}" for i in range(40)})
+        decision = self._decide(padded, original)
+        assert decision.held is True
+        assert "line jaccard 0.500, containment 1.000" in (decision.reason or "")
+
+    def test_pre_line_fingerprint_is_silent_on_the_line_channel(self) -> None:
+        """A legacy fingerprint has no ``lines``; the window channel still decides."""
+        shared = {f"{i:016x}" for i in range(90)}
+        candidate = _lsk(shared)
+        legacy = {k: v for k, v in _lsk(shared).items() if k != "lines"}
+        assert self._decide(candidate, legacy).held is False
 
 
 class TestPromptShadowSignal:

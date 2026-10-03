@@ -9559,6 +9559,9 @@ export interface components {
             lexical: components["schemas"]["AdminCopySimilarityEvidence"];
             /** Lexical Fingerprint Version */
             lexical_fingerprint_version: number;
+            line?: components["schemas"]["AdminCopySimilarityEvidence"] | null;
+            /** Line Fingerprint Version */
+            line_fingerprint_version?: string | null;
             /** Miner Exclusion Mode */
             miner_exclusion_mode: string;
             /** Normalized Source Fingerprint Version */

@@ -5,7 +5,7 @@ Usage::
     uv run python scripts/build_reference_fingerprints.py /path/to/starter-kit
 
 The clone must contain the complete official history.  Output is deterministic:
-three sorted big-endian uint64 streams plus a manifest that pins every included
+four sorted big-endian uint64 streams plus a manifest that pins every included
 commit.  Generated bundles are committed with the fingerprint algorithm so upload
 processing never needs network access.
 """
@@ -48,6 +48,7 @@ _fingerprint = _load_fingerprint_module()
 _file_shingles = _fingerprint._file_shingles
 _normalized_source_shingles = _fingerprint._normalized_source_shingles
 _prompt_shingles = _fingerprint._prompt_shingles
+_line_shingles = _fingerprint._line_shingles
 
 
 def _git(repo: Path, *args: str) -> bytes:
@@ -77,16 +78,19 @@ def build_reference(
     lexical: set[str] = set()
     normalized: set[str] = set()
     prompt: set[str] = set()
+    lines: set[str] = set()
     for oid in sorted(blobs):
         raw = _git(starter_repo, "cat-file", "blob", oid)
         lexical.update(_file_shingles(raw))
         normalized.update(_normalized_source_shingles(raw))
         prompt.update(_prompt_shingles(raw))
+        lines.update(_line_shingles(raw))
 
     bundles = {
         "reference_lexical_v2.bin": lexical,
         "reference_normalized_v2.bin": normalized,
         "reference_prompt_v2.bin": prompt,
+        "reference_line_v2.bin": lines,
     }
     for name, shingles in bundles.items():
         _write_bundle(output, name, shingles)
