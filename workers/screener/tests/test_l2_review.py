@@ -7295,7 +7295,7 @@ async def test_provider_body_fault_never_sleeps_past_the_lease(
         requests += 1
         return httpx.Response(200, json=_server_error_body())
 
-    # 60s of lease cannot fit a 45s wait plus a 30s turn: retry once, then park.
+    # 75s of lease fits a 15s wait plus a 45s turn but not a 45s wait: retry once.
     agent = _provider_fault_agent(tmp_path, handler, (15.0, 45.0, 90.0))
     sleeps: list[float] = []
 
@@ -7314,7 +7314,7 @@ async def test_provider_body_fault_never_sleeps_past_the_lease(
                 model="openai/gpt-6-sol",
                 fallback_models=(),
                 provider=None,
-                deadline=asyncio.get_running_loop().time() + 60,
+                deadline=asyncio.get_running_loop().time() + 75,
             )
     assert response.json()["error"]["code"] == "server_error"
     assert sleeps == [15.0]
