@@ -8,10 +8,11 @@ signature. It never touches the platform DB directly.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
@@ -164,6 +165,11 @@ logger = logging.getLogger(__name__)
 _PREFIX = "/api/v1/validator"
 # The scoring ledger lives under a sibling prefix, not /validator.
 _SCORING_PREFIX = "/api/v1/scoring"
+# A finished run's signed score is replayed verbatim: Platform accepts an exact
+# retry of an already-consumed ticket and still refuses anything after the lease
+# deadline. Back off long enough to ride out a Platform rollout's 502 window.
+_SCORE_SUBMIT_RETRY_DELAYS = (2.0, 8.0, 20.0, 45.0, 90.0)
+_SCORE_SUBMIT_DEADLINE_MARGIN = timedelta(seconds=30)
 # Exchange is idempotent for one signed nonce. Keep fast recovery for ordinary
 # blips, but survive a full relay handover window without throwing away a
 # benchmark ticket. This does not spend inference budget: no model request can
@@ -2151,7 +2157,10 @@ class PlatformClient:
         """Report a signed score for ``agent_id``.
 
         A 5xx or transport failure after a finished run is Platform
-        infrastructure. It still parks the attempt; only Backroom may retry.
+        infrastructure. Resending the identical signed report is free and
+        idempotent (Platform accepts an exact retry of a consumed ticket), so
+        it is replayed with backoff while the lease has room. Only a failure
+        that outlasts the retries parks the attempt for Backroom.
         """
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/score"
         payload = SubmitScoreRequest(
@@ -2160,20 +2169,42 @@ class PlatformClient:
             signature=signature,
             report=report,
         )
-        try:
-            resp = await self._client.post(
-                url, json=payload.model_dump(mode="json"), headers=self._headers
+        body = payload.model_dump(mode="json")
+        attempts = len(_SCORE_SUBMIT_RETRY_DELAYS) + 1
+        for attempt in range(attempts):
+            try:
+                resp = await self._client.post(url, json=body, headers=self._headers)
+            except httpx.HTTPError as error:
+                failure: PlatformInfrastructureError = PlatformInfrastructureError(
+                    f"score submit failed: {error}"
+                )
+                failure.__cause__ = error
+            else:
+                if resp.status_code == 200:
+                    return SubmitScoreResponse.model_validate(resp.json())
+                message = f"score rejected ({resp.status_code}): {resp.text[:200]}"
+                if resp.status_code not in {408, 429} and resp.status_code < 500:
+                    raise PlatformError(message)
+                failure = PlatformInfrastructureError(message)
+            if attempt + 1 >= attempts:
+                raise failure
+            delay = _SCORE_SUBMIT_RETRY_DELAYS[attempt]
+            if ticket_deadline is not None and (
+                datetime.now(UTC) + timedelta(seconds=delay)
+                >= ticket_deadline - _SCORE_SUBMIT_DEADLINE_MARGIN
+            ):
+                raise failure
+            logger.warning(
+                "score submit for %s hit Platform infrastructure (%s); "
+                "replaying in %.0fs (attempt %d/%d)",
+                agent_id,
+                failure,
+                delay,
+                attempt + 2,
+                attempts,
             )
-        except httpx.HTTPError as error:
-            raise PlatformInfrastructureError(
-                f"score submit failed: {error}"
-            ) from error
-        if resp.status_code == 200:
-            return SubmitScoreResponse.model_validate(resp.json())
-        message = f"score rejected ({resp.status_code}): {resp.text[:200]}"
-        if resp.status_code in {408, 429} or resp.status_code >= 500:
-            raise PlatformInfrastructureError(message)
-        raise PlatformError(message)
+            await asyncio.sleep(delay)
+        raise AssertionError("score submit retry loop did not return")
 
     async def issue_coding_certification_lease(
         self,
