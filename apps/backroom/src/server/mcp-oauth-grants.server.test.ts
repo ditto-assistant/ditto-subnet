@@ -270,6 +270,51 @@ async function registerClient(h: Harness) {
 }
 
 describe('Backroom MCP OAuth grants (issue #2080)', () => {
+  it.each([
+    '/.well-known/oauth-protected-resource',
+    '/.well-known/oauth-protected-resource/mcp',
+    '/.well-known/oauth-authorization-server',
+    '/.well-known/oauth-authorization-server/mcp',
+  ])('authorizes every scope advertised at %s as an ordinary grant', async (path) => {
+    const h = harness()
+    const clientId = await registerClient(h)
+    const metadata = await worker.fetch(new Request(`${origin}${path}`), h.env, h.ctx)
+    expect(metadata.status).toBe(200)
+    const { scopes_supported: scopes } = await metadata.json() as { scopes_supported: string[] }
+    expect(scopes).toEqual(FULL)
+
+    // General clients can request the whole discovery list. Drive the actual
+    // Worker through consent and PKCE exchange, without relaxing exclusivity.
+    const { verifier, challenge } = await pkcePair()
+    const request = new URL(`${origin}/authorize`)
+    request.search = new URLSearchParams({ response_type: 'code', client_id: clientId,
+      redirect_uri: redirectUri, scope: scopes.join(' '), state: 'client-state',
+      code_challenge: challenge, code_challenge_method: 'S256', resource: `${origin}/mcp` }).toString()
+    const begin = await worker.fetch(new Request(request), h.env, h.ctx)
+    expect(begin.status).toBe(302)
+    const requestToken = new URL(begin.headers.get('location') ?? '').searchParams.get('request') ?? ''
+    const details = await getMcpConsentDetails(requestToken, origin, secret)
+    expect(details).toMatchObject({ requestedScopes: FULL, canRequestArtifact: true, canRequestWrite: true })
+    expect(details.observerOnly).toBeUndefined()
+    const complete = await worker.fetch(new Request(`${origin}/oauth/authorize/complete`, {
+      method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', Cookie: await sessionCookie() },
+      body: JSON.stringify({ requestToken, csrf: details.csrf, decision: 'allow', accessLevel: 'full' }),
+    }), h.env, h.ctx)
+    expect(complete.status).toBe(200)
+    const { redirectTo } = await complete.json() as { redirectTo: string }
+    const redirect = new URL(redirectTo)
+    expect(redirect.searchParams.get('state')).toBe('client-state')
+    const token = await worker.fetch(new Request(`${origin}/token`, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code: redirect.searchParams.get('code') ?? '',
+        redirect_uri: redirectUri, client_id: clientId, code_verifier: verifier }),
+    }), h.env, h.ctx)
+    expect(token.status).toBe(200)
+    const connection = await token.json() as { access_token: string; scope: string }
+    expect(connection.scope.split(' ')).toEqual(FULL)
+    expect((await tokenProps(h, connection.access_token)).grant.props.scopes).toEqual(FULL)
+  })
+
   it('issues and refreshes a receipt-only grant without inheriting general read or write', async () => {
     const h = harness()
     const clientId = await registerClient(h)
@@ -299,6 +344,7 @@ describe('Backroom MCP OAuth grants (issue #2080)', () => {
     const h = harness()
     const clientId = await registerClient(h)
     await expect(authorize(h, clientId, `${OBSERVE} ${BACKROOM_READ_SCOPE}`, 'observe')).rejects.toThrow('cannot be mixed')
+    await expect(authorize(h, clientId, [...FULL, OBSERVE].join(' '), 'full')).rejects.toThrow('cannot be mixed')
     for (const choice of ['read', 'artifact', 'write', 'full'] as const) {
       await expect(authorize(h, clientId, OBSERVE, choice)).rejects.toThrow('HTTP 403')
     }
@@ -353,8 +399,6 @@ describe('Backroom MCP OAuth grants (issue #2080)', () => {
     const allowed = await worker.fetch(refreshRequest(), h.env, h.ctx)
     expect(allowed.status).toBe(200)
     expect(await allowed.json()).toMatchObject({ scope: OBSERVE })
-    const metadata = await worker.fetch(new Request(`${origin}/.well-known/oauth-authorization-server/mcp`), h.env, h.ctx)
-    expect(await metadata.json()).toMatchObject({ scopes_supported: expect.arrayContaining([OBSERVE]) })
   })
 
   it('revokes dedicated access/refresh and replaces prior full grants for the same client', async () => {
