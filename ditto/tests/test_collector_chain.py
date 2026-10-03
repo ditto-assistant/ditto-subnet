@@ -1,4 +1,4 @@
-"""Live v470 decode shapes and adversarial receipt/attribution controls."""
+"""Audited decode shapes and adversarial receipt/attribution controls."""
 
 import hashlib
 import json
@@ -9,7 +9,12 @@ import pytest
 
 from ditto.tests.test_collector_automation import policy
 from ditto.treasury.collector import Observation, SignedOperation
-from ditto.treasury.collector_chain import NoCredentialRedirect, PublicCollectorChain
+from ditto.treasury.collector_chain import (
+    AUDITED_CODE_HASH,
+    FINNEY_GENESIS,
+    NoCredentialRedirect,
+    PublicCollectorChain,
+)
 
 
 def identity_adapter(*, role="registration", owner="cold", uid=None, raw_owner=None):
@@ -372,6 +377,65 @@ def test_real_collateral_and_aggregate_lock_bound_available_amount():
     c.substrate = s
     c.query = lambda *_: {"locked": 70}
     assert c.alpha(p, p.collector_coldkey, "b101") == 20
+
+
+@pytest.mark.parametrize("locked", [None, {"locked": 0}])
+def test_new_zero_position_does_not_require_omitted_availability(locked):
+    p = policy()
+
+    def call(_api, method, *_args, **_kwargs):
+        if method == "get_stake_info_for_hotkey_coldkey_netuid":
+            return {
+                "hotkey": p.collector_hotkey,
+                "coldkey": p.collector_coldkey,
+                "netuid": 118,
+                "stake": 0,
+            }
+        assert method == "get_stake_availability_for_coldkeys"
+        return {p.collector_coldkey: {}}
+
+    c = PublicCollectorChain.__new__(PublicCollectorChain)
+    c.substrate = SimpleNamespace(runtime_call=call)
+    c.query = lambda *_: locked
+    assert c.alpha(p, p.collector_coldkey, "finalized") == 0
+
+
+def test_zero_position_cannot_hide_positive_collateral_lock():
+    p = policy()
+    c = PublicCollectorChain.__new__(PublicCollectorChain)
+    c.substrate = SimpleNamespace(
+        runtime_call=lambda *_args, **_kwargs: {
+            "hotkey": p.collector_hotkey,
+            "coldkey": p.collector_coldkey,
+            "netuid": 118,
+            "stake": 0,
+        }
+    )
+    c.query = lambda *_: {"locked": 1}
+    with pytest.raises(ValueError, match="collateral"):
+        c.alpha(p, p.collector_coldkey, "finalized")
+
+
+@pytest.mark.parametrize(
+    "policy_hash,live_hash",
+    [
+        (
+            "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47",
+            "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47",
+        ),
+        ("0x" + "a" * 64, "0x" + "a" * 64),
+        (AUDITED_CODE_HASH, "0x" + "a" * 64),
+    ],
+)
+def test_old_or_unaudited_runtime_remains_refused(policy_hash, live_hash):
+    c = PublicCollectorChain.__new__(PublicCollectorChain)
+    c.substrate = SimpleNamespace(
+        get_block_hash=lambda _: FINNEY_GENESIS,
+        rpc_request=lambda *_: {"result": live_hash},
+        runtime_call=lambda *_args, **_kwargs: pytest.fail("must stop before APIs"),
+    )
+    with pytest.raises(ValueError, match="runtime"):
+        c.guard_runtime(policy(runtime_code_hash=policy_hash), "finalized")
 
 
 @pytest.mark.parametrize(

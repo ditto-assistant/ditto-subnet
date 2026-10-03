@@ -56,7 +56,7 @@ refuse. Finalized registration must establish the exact Owner and reciprocal
 UID/Keys binding; its parent must prove absence of the SN118 UID.
 
 Only `register_limit(118, collector_hotkey, limit_price)` is signed. Runtime
-v470 enforces the execution-time TAO price limit before payment. No fallback
+The audited runtime enforces the execution-time TAO price limit before payment. No fallback
 to unbounded registration, no Utility batch and no nested proxy operation.
 Each attempted dispatch conservatively consumes **max burn + max fee** of the
 immutable lifetime budget, including proved failed/expired attempts. Cooldown
@@ -148,6 +148,18 @@ ingestion and historical-policy observer; bounded production canary and receipts
 None of those live actions is performed by this PR.
 
 ## Verified contract sources
+
+The active collector fingerprint is now the independently source-audited v472
+`0x43bc67be9df30636d7e948e7bdb1ed065f2fb92029458cc939abf89d76d8ada3`.
+See [the reconstruction audit](audits/collector-finney-v472/README.md) for exact
+source/tree/patch, bounded srtool build and the isolated build-time hash-seed
+constant difference. The unmodified rebuild is **not** byte-identical; every
+other function body and section is identical. Collector contract sources below
+were confirmed unchanged. A zero stake position still means zero available
+alpha when the runtime omits its empty aggregate-map entry. All positive stake
+and collateral checks remain required.
+
+Historical v470 evidence:
 
 Pinned SDK10.5.0 source:
 `opentensor/bittensor@b9af04ad3452dde398460d464598837313226101`.

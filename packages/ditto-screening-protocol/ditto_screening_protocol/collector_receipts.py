@@ -1,4 +1,4 @@
-"""Canonical audited v470 effect decoders, with no finality or money authority.
+"""Canonical audited v472 effect decoders, with no finality or money authority.
 
 Both the signer journal and Platform's receipt reader must independently bind
 the block, runtime fingerprint and historical identities before using these
@@ -14,9 +14,9 @@ from dataclasses import dataclass
 from typing import Any
 
 FINNEY_GENESIS = "0x2f0555cc76fc2840a25a6ea3b9637146806f1f44b090c175ffde2a7e5ab36c03"
-# Exact compressed v470 WASM audited for liquid credits and transfer effects.
+# Exact finalized v472 :code hash; see docs/audits/collector-finney-v472/README.md.
 AUDITED_COLLECTOR_CODE_HASH = (
-    "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47"
+    "0x43bc67be9df30636d7e948e7bdb1ed065f2fb92029458cc939abf89d76d8ada3"
 )
 
 
@@ -51,7 +51,7 @@ class CollectorTransferEffect:
 def collector_gross_incentive(
     events: Sequence[Mapping[str, Any]], uid: int
 ) -> int | None:
-    """Reviewed v470 initialization event; gross is not liquid spending proof."""
+    """Reviewed initialization event; gross is not liquid spending proof."""
     uid = chain_uint(uid)
     amounts = []
     for event in events:

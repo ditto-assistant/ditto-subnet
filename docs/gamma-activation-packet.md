@@ -38,7 +38,7 @@ No addresses, split, UID, fees or delegate identities are chosen by this packet.
 The pending inputs remain the existing question; do not repeat or invent them.
 
 - Finney genesis/netuid118, fresh finalized block/hash and current audited runtime
-  code hash/SDK identity. Runtime drift from reviewed v470 refuses.
+  code hash/SDK identity. Runtime drift from reviewed v472 refuses.
 - Collector hotkey and **non-subnet-owner** owning coldkey; finalized reciprocal
   `Keys`/`Uids` and `Owner`. A new hotkey under the owner coldkey is insufficient.
 - Distinct Registration-only and Transfer-only delegates, immediate grants,

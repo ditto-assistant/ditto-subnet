@@ -31,7 +31,8 @@ from ditto_screening_protocol.collector_receipts import (
     liquid_collector_credit,
 )
 
-# Official compressed v470 WASM bytes independently matched to finalized :code.
+# Exact live v472 bytes bound to reconstructed source, with only the documented
+# compile-time hash-seed constants differing in the independent srtool rebuild.
 # See docs/service-collector-automation.md for artifact/source fingerprints.
 AUDITED_CODE_HASH = AUDITED_COLLECTOR_CODE_HASH
 
@@ -125,7 +126,7 @@ class PublicCollectorChain:
         ).get("result")
         if code_hash != policy.runtime_code_hash:
             raise ValueError("runtime changed; stop for independent contract audit")
-        # SDK 10.5.0's singular helper does not match the live v470 API.
+        # SDK 10.5.0's singular helper does not match the audited plural API.
         filters = unwrap(
             s.runtime_call(
                 "ProxyFilterRuntimeApi",
@@ -234,6 +235,11 @@ class PublicCollectorChain:
         locked = uint(collateral["locked"]) if collateral is not None else 0
         if locked > stake:
             raise ValueError("invalid collateral position")
+        # The audited runtime omits zero-stake/zero-lock entries from aggregate
+        # availability. A brand-new collector has no position to spend; do not
+        # require a nonexistent map entry before its first registration.
+        if not stake:
+            return 0
         availability = unwrap(
             self.substrate.runtime_call(
                 "StakeInfoRuntimeApi",
