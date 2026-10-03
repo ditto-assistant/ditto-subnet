@@ -361,8 +361,7 @@ class PublicCollectorChain:
         if uid is None or uid != parent_uid:
             # Registration/rebind within payout block makes attribution ambiguous.
             if any(
-                e.get("event_id") == "IncentiveAlphaEmittedToMiners"
-                for e in events
+                e.get("event_id") == "IncentiveAlphaEmittedToMiners" for e in events
             ):
                 raise ValueError("emission intersects collector identity transition")
             return None
