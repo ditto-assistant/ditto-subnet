@@ -29,15 +29,25 @@ authorization does not authorize IAM changes, a merge, or production convergence
 3. Separately prepare a protected full plan for backup secret containers,
    restore-drill identity, reader IAM and snapshot metadata IAM. This phase adds
    more than two resources and requires its own review/approval. Verify the live
-   DB VM service account matches `pg_backup_vm_sa`, and the app uses the dedicated
-   Platform API identity. Do not change the attached VM identity (that could
-   restart PostgreSQL). Do not create IAM or secrets out of band to bypass this
+   app uses the dedicated Platform API identity. The DB VM has no attached
+   service account (read-only inspection, 2026-10-04). The role fetches its three
+   secrets on the authorized Ansible controller and copies root-owned files;
+   the VM needs no cloud identity. Do not attach an identity to the DB VM (that
+   could restart PostgreSQL). Do not create IAM or secrets out of band to bypass this
    reviewed Terraform phase.
 4. Before storing the age identity, inspect **effective** Secret Manager IAM,
    including project/folder/org grants. The DB VM must have no path to the
    identity; neither Platform nor deploy/probe/worker identities may read it.
    Remove conflicting inherited grants only with separately approved exact IAM
    changes, or stop. Terraform creates containers only, never secret versions.
+   A project-level audit on 2026-10-04 found unconditional
+   `roles/secretmanager.secretAccessor` grants to the default compute,
+   Cloud Build, backend, GitHub Action and staging backend service accounts.
+   **Private-key installation is blocked** until an approved IAM/custody plan
+   removes those principals' effective access to this identity. Adding a narrow
+   per-secret grant does not negate inherited grants. Folder/org checks and
+   indirect impersonation must also be reviewed; this audit is not a complete
+   effective-access proof. Keep the private-key secret empty meanwhile.
 5. In Chrome Hippius Console, verify `ditto-platform-pg-backups` stays private.
    Create distinct single-bucket writer and reader sub-tokens, using the
    owner-approved lifetime (initially 30 days). No all-bucket grant and no reuse
@@ -75,7 +85,12 @@ authorization does not authorize IAM changes, a merge, or production convergence
 8. With separate host-convergence authorization, run the DB playbook with
    `postgres_backup_enabled=true`. Persist that explicit intent in the reviewed
    host/group configuration after qualification. Do not rely on a one-time flag
-   as a permanent source of truth. The role installs exact Debian 13 amd64 pins:
+   as a permanent source of truth.
+   Run from an authorized controller whose `gcloud` identity may read only the
+   needed writer pair and public recipient for this convergence. Secret fetches
+   use `delegate_to: localhost`, `become: false` and `no_log: true`; do not use
+   `--diff`, verbose secret debugging, fact caching or a delegated master token.
+   The role installs exact Debian 13 amd64 pins:
    [age 1.2.1-1+b5](https://packages.debian.org/trixie/age),
    [awscli 2.23.6-1](https://packages.debian.org/trixie/awscli), and
    [python3-boto3 1.37.9-1](https://packages.debian.org/trixie/python3-boto3).

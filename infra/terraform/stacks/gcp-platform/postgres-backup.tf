@@ -15,7 +15,6 @@ locals {
     "platform-pg-backup-reader-access-key-id",
     "platform-pg-backup-reader-secret-access-key",
   ]) : toset([])
-  pg_backup_vm_sa    = var.vm_service_account_email != "" ? var.vm_service_account_email : "${data.google_project.this.number}-compute@developer.gserviceaccount.com"
   pg_restore_subject = "repo:ditto-assistant/ditto-subnet:environment:prod"
 }
 
@@ -29,17 +28,9 @@ resource "google_secret_manager_secret" "pg_backup" {
   lifecycle { prevent_destroy = true }
 }
 
-resource "google_secret_manager_secret_iam_member" "pg_backup_vm" {
-  for_each = var.enable_platform_postgres_backup_identity ? toset([
-    "platform-pg-backup-hippius-access-key-id",
-    "platform-pg-backup-hippius-secret-access-key",
-    "platform-pg-backup-age-recipient",
-  ]) : toset([])
-  project   = var.project
-  secret_id = google_secret_manager_secret.pg_backup[each.value].secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${local.pg_backup_vm_sa}"
-}
+# DB secrets are fetched by the authorized Ansible controller and copied as
+# protected files. The DB VM has no attached service account; granting the
+# shared default compute identity would not authorize it and would broaden IAM.
 
 resource "google_secret_manager_secret_iam_member" "pg_backup_platform_reader" {
   for_each = var.enable_platform_postgres_backup_identity ? toset([

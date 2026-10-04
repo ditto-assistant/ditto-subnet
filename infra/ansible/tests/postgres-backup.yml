@@ -36,6 +36,8 @@
           - role_tasks[0].block[4]['ansible.builtin.copy'].owner == 'root'
           - role_tasks[0].block[4].no_log is true
           - role_tasks[0].block[3].no_log is true
+          - role_tasks[0].block[3].delegate_to == 'localhost'
+          - role_tasks[0].block[3].become is false
 
     - name: Activation enables the rendered timer
       ansible.builtin.assert:

@@ -31,6 +31,11 @@
         - /var/lib/ditto-pg-backup
 
     - name: Fetch only writer credentials and the public age recipient
+      # The production DB has no attached GCE service account. Consume secrets
+      # on the authorized Ansible controller, without changing its VM identity
+      # or interrupting PostgreSQL. Only the three protected files go to the VM.
+      delegate_to: localhost
+      become: false
       ansible.builtin.command:
         argv: [gcloud, secrets, versions, access, latest, "--project={{ gcp_project }}", "--secret={{ item.value }}"]
       loop: "{{ postgres_backup_secret_ids | dict2items }}"

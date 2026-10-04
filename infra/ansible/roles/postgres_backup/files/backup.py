@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Online encrypted PostgreSQL backups. Never print provider errors or secrets."""
+
 from __future__ import annotations
 
 import hashlib
@@ -10,7 +11,7 @@ import signal
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 BUCKET = "ditto-platform-pg-backups"
@@ -24,7 +25,7 @@ KEY_RE = re.compile(
 
 
 def utcnow():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def sha256(file):
@@ -40,11 +41,15 @@ def parse_key(key):
     if not match:
         return None
     prefix, year, month, day, kind, stamp, extension = match.groups()
-    expected = {"ditto_platform_prod": "dump.age", "globals": "sql.age", "manifest": "json"}
+    expected = {
+        "ditto_platform_prod": "dump.age",
+        "globals": "sql.age",
+        "manifest": "json",
+    }
     if expected[kind] != extension:
         return None
     try:
-        instant = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        instant = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
     except ValueError:
         return None
     if instant.strftime("%Y/%m/%d") != f"{year}/{month}/{day}":
@@ -69,8 +74,12 @@ def retention_keys(keys):
     victims = []
     for prefix, keep in (("daily", 30), ("monthly", 12)):
         complete = sorted(
-            (instant for (group_prefix, instant), objects in groups.items()
-             if group_prefix == prefix and set(objects) == {"ditto_platform_prod", "globals", "manifest"}),
+            (
+                instant
+                for (group_prefix, instant), objects in groups.items()
+                if group_prefix == prefix
+                and set(objects) == {"ditto_platform_prod", "globals", "manifest"}
+            ),
             reverse=True,
         )
         if prefix == "monthly":
@@ -85,7 +94,9 @@ def retention_keys(keys):
                 continue
             objects = groups[(prefix, instant)]
             # Remove the commit marker first so no drill selects a partial set.
-            victims.extend(objects[kind] for kind in ("manifest", "globals", "ditto_platform_prod"))
+            victims.extend(
+                objects[kind] for kind in ("manifest", "globals", "ditto_platform_prod")
+            )
     return victims
 
 
@@ -111,27 +122,41 @@ def protected_file(directory, name):
 
 class S3:
     """Presign every operation; never emit the URL, response body, or credentials."""
+
     def __init__(self, directory):
         import boto3
         import requests
         from botocore.config import Config
 
         self.client = boto3.client(
-            "s3", endpoint_url=ENDPOINT, region_name="decentralized",
-            aws_access_key_id=protected_file(directory, "access-key-id").read_text().strip(),
-            aws_secret_access_key=protected_file(directory, "secret-access-key").read_text().strip(),
-            config=Config(signature_version="s3v4", s3={"addressing_style": "path"},
-                          request_checksum_calculation="when_required",
-                          response_checksum_validation="when_required"),
+            "s3",
+            endpoint_url=ENDPOINT,
+            region_name="decentralized",
+            aws_access_key_id=protected_file(directory, "access-key-id")
+            .read_text()
+            .strip(),
+            aws_secret_access_key=protected_file(directory, "secret-access-key")
+            .read_text()
+            .strip(),
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "path"},
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
+            ),
         )
         self.http = requests.Session()
         self.http.trust_env = False
 
     def request(self, op, method, params, **kwargs):
         url = self.client.generate_presigned_url(
-            op, Params={"Bucket": BUCKET, **params}, ExpiresIn=300,
+            op,
+            Params={"Bucket": BUCKET, **params},
+            ExpiresIn=300,
         )
-        response = self.http.request(method, url, timeout=(30, 300), allow_redirects=False, **kwargs)
+        response = self.http.request(
+            method, url, timeout=(30, 300), allow_redirects=False, **kwargs
+        )
         if response.status_code >= 300:
             response.close()
             raise RuntimeError("Hippius operation failed")
@@ -149,8 +174,13 @@ class S3:
             for child in root:
                 if child.tag.rsplit("}", 1)[-1] == "Contents":
                     item = {field.tag.rsplit("}", 1)[-1]: field.text for field in child}
-                    objects.append({"key": item["Key"], "size": int(item["Size"]),
-                                    "last_modified": item["LastModified"]})
+                    objects.append(
+                        {
+                            "key": item["Key"],
+                            "size": int(item["Size"]),
+                            "last_modified": item["LastModified"],
+                        }
+                    )
             if fields.get("IsTruncated") != "true":
                 return objects
             token = fields.get("NextContinuationToken")
@@ -169,18 +199,31 @@ class S3:
                     raise RuntimeError("refusing non-age backup")
         upload_id = None
         try:
-            with self.request("create_multipart_upload", "POST", {"Key": key}) as response:
+            with self.request(
+                "create_multipart_upload", "POST", {"Key": key}
+            ) as response:
                 root = ET.fromstring(response.content)
-            upload_id = next(child.text for child in root if child.tag.rsplit("}", 1)[-1] == "UploadId")
+            upload_id = next(
+                child.text
+                for child in root
+                if child.tag.rsplit("}", 1)[-1] == "UploadId"
+            )
             parts = []
             with file.open("rb") as stream:
                 for number in range(1, 10001):
                     chunk = stream.read(64 * 1024**2)
                     if not chunk:
                         break
-                    with self.request("upload_part", "PUT", {
-                        "Key": key, "UploadId": upload_id, "PartNumber": number,
-                    }, data=chunk) as response:
+                    with self.request(
+                        "upload_part",
+                        "PUT",
+                        {
+                            "Key": key,
+                            "UploadId": upload_id,
+                            "PartNumber": number,
+                        },
+                        data=chunk,
+                    ) as response:
                         parts.append((number, response.headers["ETag"]))
                 else:
                     raise RuntimeError("backup exceeds multipart limit")
@@ -189,8 +232,13 @@ class S3:
                 part = ET.SubElement(document, "Part")
                 ET.SubElement(part, "PartNumber").text = str(number)
                 ET.SubElement(part, "ETag").text = etag
-            with self.request("complete_multipart_upload", "POST", {"Key": key, "UploadId": upload_id},
-                              data=ET.tostring(document), headers={"Content-Type": "application/xml"}) as response:
+            with self.request(
+                "complete_multipart_upload",
+                "POST",
+                {"Key": key, "UploadId": upload_id},
+                data=ET.tostring(document),
+                headers={"Content-Type": "application/xml"},
+            ) as response:
                 if ET.fromstring(response.content).tag.rsplit("}", 1)[-1] == "Error":
                     raise RuntimeError("multipart completion failed")
             upload_id = None
@@ -199,18 +247,24 @@ class S3:
                     raise RuntimeError("remote backup size mismatch")
         finally:
             if upload_id:
-                with self.request("abort_multipart_upload", "DELETE", {"Key": key, "UploadId": upload_id}):
+                with self.request(
+                    "abort_multipart_upload",
+                    "DELETE",
+                    {"Key": key, "UploadId": upload_id},
+                ):
                     pass
 
     def download(self, key, destination, max_bytes=None):
-        with self.request("get_object", "GET", {"Key": key}, stream=True) as response:
-            with destination.open("wb") as output:
-                written = 0
-                for chunk in response.iter_content(1024 * 1024):
-                    written += len(chunk)
-                    if max_bytes is not None and written > max_bytes:
-                        raise RuntimeError("backup metadata exceeds bound")
-                    output.write(chunk)
+        with (
+            self.request("get_object", "GET", {"Key": key}, stream=True) as response,
+            destination.open("wb") as output,
+        ):
+            written = 0
+            for chunk in response.iter_content(1024 * 1024):
+                written += len(chunk)
+                if max_bytes is not None and written > max_bytes:
+                    raise RuntimeError("backup metadata exceeds bound")
+                output.write(chunk)
 
     def delete(self, key):
         if not parse_key(key):
@@ -222,10 +276,16 @@ class S3:
 def encrypted_dump(command, recipient_file, destination):
     # The public recipient is read from a protected file by age, never argv.
     with destination.open("wb") as output:
-        dump = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        dump = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        )
         try:
-            encrypt = subprocess.Popen(["age", "-R", str(recipient_file)],
-                                       stdin=dump.stdout, stdout=output, stderr=subprocess.DEVNULL)
+            encrypt = subprocess.Popen(
+                ["age", "-R", str(recipient_file)],
+                stdin=dump.stdout,
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+            )
             dump.stdout.close()
             encrypt_result = encrypt.wait()
             dump_result = dump.wait()
@@ -237,16 +297,32 @@ def encrypted_dump(command, recipient_file, destination):
                 dump.wait()
 
 
-def backup(directory=Path("/etc/ditto-pg-backup"), staging_base=Path("/var/tmp"),
-           state=Path("/var/lib/ditto-pg-backup")):
+def backup(
+    directory=Path("/etc/ditto-pg-backup"),
+    staging_base=Path("/var/tmp"),
+    state=Path("/var/lib/ditto-pg-backup"),
+):
     os.umask(0o077)
     recipient = protected_file(directory, "age-recipient")
     # tempfile is explicitly on the disk, never the VM's RAM-backed /tmp.
     started = utcnow()
     stamp = started.strftime("%Y%m%dT%H%M%SZ")
     transaction = subprocess.Popen(
-        ["sudo", "-u", "postgres", "psql", "-XAtq", "-v", "ON_ERROR_STOP=1", "-d", DATABASE],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        [
+            "sudo",
+            "-u",
+            "postgres",
+            "psql",
+            "-XAtq",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-d",
+            DATABASE,
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
     )
     try:
         query = (
@@ -259,7 +335,9 @@ def backup(directory=Path("/etc/ditto-pg-backup"), staging_base=Path("/var/tmp")
             "'database_bytes', pg_database_size(current_database()), "
             "'alembic_version', (SELECT version_num FROM alembic_version), "
             "'row_counts', json_build_object("
-            + ", ".join(f"'{table}', (SELECT count(*) FROM {table})" for table in TABLES)
+            + ", ".join(
+                f"'{table}', (SELECT count(*) FROM {table})" for table in TABLES
+            )
             + "));\n"
         )
         transaction.stdin.write(query)
@@ -267,26 +345,53 @@ def backup(directory=Path("/etc/ditto-pg-backup"), staging_base=Path("/var/tmp")
         metadata = json.loads(transaction.stdout.readline())
         guard_space(metadata["database_bytes"], staging_base)
         s3 = S3(directory)
-        with tempfile.TemporaryDirectory(prefix="ditto-pg-backup-", dir=staging_base) as scratch:
+        with tempfile.TemporaryDirectory(
+            prefix="ditto-pg-backup-", dir=staging_base
+        ) as scratch:
             staging = Path(scratch)
             dump = staging / f"ditto_platform_prod-{stamp}.dump.age"
             globals_file = staging / f"globals-{stamp}.sql.age"
             encrypted_dump(
-                ["sudo", "-u", "postgres", "pg_dump", "-Fc", "--no-owner", "--no-privileges",
-                 f"--snapshot={metadata.pop('snapshot')}", DATABASE], recipient, dump,
+                [
+                    "sudo",
+                    "-u",
+                    "postgres",
+                    "pg_dump",
+                    "-Fc",
+                    "--no-owner",
+                    "--no-privileges",
+                    f"--snapshot={metadata.pop('snapshot')}",
+                    DATABASE,
+                ],
+                recipient,
+                dump,
             )
             transaction.stdin.write("COMMIT;\n")
             transaction.stdin.close()
             if transaction.wait() != 0:
                 raise RuntimeError("backup snapshot transaction failed")
-            encrypted_dump(["sudo", "-u", "postgres", "pg_dumpall", "--globals-only"], recipient, globals_file)
+            encrypted_dump(
+                ["sudo", "-u", "postgres", "pg_dumpall", "--globals-only"],
+                recipient,
+                globals_file,
+            )
             manifest = {
-                "format_version": 1, "database": DATABASE, **metadata,
+                "format_version": 1,
+                "database": DATABASE,
+                **metadata,
                 "pg_dump_version": subprocess.check_output(
-                    ["sudo", "-u", "postgres", "pg_dump", "--version"], text=True).strip(),
-                "started_at": started.isoformat(), "completed_at": utcnow().isoformat(),
-                "objects": [{"name": file.name, "sha256": sha256(file), "size": file.stat().st_size}
-                            for file in (dump, globals_file)],
+                    ["sudo", "-u", "postgres", "pg_dump", "--version"], text=True
+                ).strip(),
+                "started_at": started.isoformat(),
+                "completed_at": utcnow().isoformat(),
+                "objects": [
+                    {
+                        "name": file.name,
+                        "sha256": sha256(file),
+                        "size": file.stat().st_size,
+                    }
+                    for file in (dump, globals_file)
+                ],
             }
             manifest_file = staging / f"manifest-{stamp}.json"
             manifest_file.write_text(json.dumps(manifest, sort_keys=True) + "\n")
@@ -310,12 +415,14 @@ def backup(directory=Path("/etc/ditto-pg-backup"), staging_base=Path("/var/tmp")
 
 
 if __name__ == "__main__":
+
     def interrupted(_signum, _frame):
         raise RuntimeError("backup interrupted")
+
     signal.signal(signal.SIGTERM, interrupted)
     try:
         backup()
     except Exception:
         # Provider exceptions can carry presigned URLs or globals password hashes.
         print("ditto-pg-backup: FAILED", file=__import__("sys").stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None
