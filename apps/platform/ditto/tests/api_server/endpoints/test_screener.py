@@ -14323,6 +14323,7 @@ class TestQuarantineReviewContext:
         _install_db(app, session_maker)
         _install_chain(app)
         reasons: list[str | None] = []
+        codes: list[str | None] = []
         for _ in range(3):
             claimed = await client.post(_CLAIM_URL)
             assert claimed.status_code == 200
@@ -14346,6 +14347,7 @@ class TestQuarantineReviewContext:
                 agent = await session.get(Agent, agent_id)
                 assert agent is not None
                 reasons.append(agent.screening_reason)
+                codes.append(agent.screening_reason_code)
             if len(reasons) == 3:
                 break
         assert reasons == [
@@ -14362,10 +14364,70 @@ class TestQuarantineReviewContext:
                 )
             )
         assert [row.actor for row in overrides] == ["platform:auto-review-retry"] * 2
+        assert codes == [None, None, "l3-adjudicator-model-provider-fault"]
         # The cap is spent: the third park waits for an operator again.
         parked = await client.post(_CLAIM_URL)
         assert parked.status_code == 200
         assert parked.json()["items"] == []
+
+    async def test_automatic_retry_cap_is_shared_by_one_artifact(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # A resubmitted copy of the same bytes does not get a fresh allowance.
+        earlier = await _seed_agent(
+            session_maker, status=AgentStatus.REJECTED, name="earlier-copy"
+        )
+        async with session_maker() as session, session.begin():
+            for _ in range(2):
+                attempt = ScreeningAttempt(
+                    attempt_id=uuid4(),
+                    agent_id=earlier,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=13,
+                    started_at=datetime.now(UTC) - timedelta(hours=3),
+                    deadline=datetime.now(UTC) - timedelta(hours=2),
+                    status="expired",
+                )
+                session.add(attempt)
+                await session.flush()
+                session.add(
+                    ScreeningRetryOverride(
+                        override_id=uuid4(),
+                        agent_id=earlier,
+                        attempt_id=attempt.attempt_id,
+                        artifact_sha256=_SHA256,
+                        expected_score_count=0,
+                        reason="Automatic retry",
+                        actor="platform:auto-review-retry",
+                        created_at=datetime.now(UTC) - timedelta(hours=2),
+                    )
+                )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="retryable_infra",
+                reason_code="l3-critic-model-provider-fault",
+                detail="L3 critic provider fault",
+            ),
+        )
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            grant = await session.scalar(
+                select(ScreeningRetryOverride).where(
+                    ScreeningRetryOverride.agent_id == agent_id
+                )
+            )
+            assert grant is None
 
     async def test_first_complete_inconclusive_retries_once_then_v2_rejects(
         self,

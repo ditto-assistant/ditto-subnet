@@ -6197,7 +6197,10 @@ async def submit_result(
             )
             is not None
         ):
+            # Same pairing as the operator retry: the failed attempt keeps its
+            # code; the agent no longer advertises it.
             agent.screening_reason = AUTO_REVIEW_RETRY_PUBLIC_REASON
+            agent.screening_reason_code = None
         result_status = agent.status
 
     try:

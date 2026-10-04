@@ -25,15 +25,21 @@ if TYPE_CHECKING:
 # Platform now grants the retry itself, a bounded number of times per artifact:
 # * ``l2-model-inconclusive``: policy v13 V2 already makes the second complete
 #   inconclusive review a terminal reject, so one retry settles it either way.
-# * ``l3-adjudicator-model-provider-fault``: the L3 provider failed after the
-#   worker's own backoff; a fresh review usually completes.
+# * ``l3-*-model-provider-fault``: an L3 stage's provider failed after the
+#   worker's own backoff; a fresh review usually completes. The worker prefixes
+#   the code with the stage (``l2_review.py``: critic, adjudicator, violation
+#   adjudicator, cause disagreement).
 # * ``l2-causal-role-incomplete``: the review could not finish its causal proof.
-# The per-artifact cap keeps a hostile archive from looping the fleet: after it,
+# The per-artifact cap (counted by SHA-256, so a resubmitted copy shares it)
+# keeps a hostile archive from looping the fleet: after it,
 # the submission parks for an operator exactly as before.
 AUTO_REVIEW_RETRY_REASON_CODES: frozenset[str] = frozenset(
     {
         "l2-model-inconclusive",
         "l3-adjudicator-model-provider-fault",
+        "l3-critic-model-provider-fault",
+        "l3-violation-adjudicator-model-provider-fault",
+        "l3-cause-disagreement-model-provider-fault",
         "l2-causal-role-incomplete",
     }
 )
@@ -94,7 +100,7 @@ async def authorize_automatic_review_retry(
             select(func.count())
             .select_from(ScreeningRetryOverride)
             .where(
-                ScreeningRetryOverride.agent_id == agent.agent_id,
+                ScreeningRetryOverride.artifact_sha256 == agent.sha256,
                 ScreeningRetryOverride.actor == AUTO_REVIEW_RETRY_ACTOR,
             )
         )
