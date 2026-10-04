@@ -60,6 +60,7 @@ from ditto.api_server.dependencies import (
 from ditto.api_server.endpoints import screener as screener_endpoint
 from ditto.api_server.endpoints.public import screening_dispute_signing_message
 from ditto.api_server.endpoints.screener import (
+    AUTO_REVIEW_RETRY_PUBLIC_REASON,
     V2_UNREVIEWABLE_PUBLIC_REASON,
     _fanout_response_model_matches,
     _heartbeat_signing_message,
@@ -14308,6 +14309,159 @@ class TestQuarantineReviewContext:
         parked = await client.post(_CLAIM_URL)
         assert parked.status_code == 200
         assert parked.json()["items"] == []
+
+    async def test_review_nonverdict_retries_automatically_then_parks(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # A provider fault ends the review with no verdict on the artifact.
+        # Platform grants the retry itself, a bounded number of times, and the
+        # submission returns to the queue instead of waiting on an operator.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        reasons: list[str | None] = []
+        for _ in range(3):
+            claimed = await client.post(_CLAIM_URL)
+            assert claimed.status_code == 200
+            items = claimed.json()["items"]
+            assert [item["agent_id"] for item in items] == [str(agent_id)]
+            attempt_id = UUID(items[0]["attempt_id"])
+            response = await client.post(
+                f"/api/v1/screener/agent/{agent_id}/result",
+                json=_result_payload(
+                    agent_id,
+                    passed=False,
+                    attempt_id=attempt_id,
+                    outcome="retryable_infra",
+                    reason_code="l3-adjudicator-model-provider-fault",
+                    detail="L3 adjudicator provider fault",
+                ),
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["status"] == AgentStatus.SCREENING_FAILED
+            async with session_maker() as session:
+                agent = await session.get(Agent, agent_id)
+                assert agent is not None
+                reasons.append(agent.screening_reason)
+            if len(reasons) == 3:
+                break
+        assert reasons == [
+            AUTO_REVIEW_RETRY_PUBLIC_REASON,
+            AUTO_REVIEW_RETRY_PUBLIC_REASON,
+            "Screening was interrupted; manual retry required",
+        ]
+        async with session_maker() as session:
+            overrides = list(
+                await session.scalars(
+                    select(ScreeningRetryOverride).where(
+                        ScreeningRetryOverride.agent_id == agent_id
+                    )
+                )
+            )
+        assert [row.actor for row in overrides] == ["platform:auto-review-retry"] * 2
+        # The cap is spent: the third park waits for an operator again.
+        parked = await client.post(_CLAIM_URL)
+        assert parked.status_code == 200
+        assert parked.json()["items"] == []
+
+    async def test_first_complete_inconclusive_retries_once_then_v2_rejects(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # Policy v13: the automatic retry of the first complete inconclusive
+        # review is the published V2 retry; the second one is terminal.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-model-inconclusive",
+            prompt_revision="l2-terra-source-review-v51-policy-v13",
+            max_steps=256,
+            steps_used=24,
+            model_disposition="inconclusive",
+            resolution_basis="insufficient_static_evidence",
+            dossier_complete=True,
+            model_inconclusive_invariants=["i2_evidence_retention"],
+            budget_stop_reason="none",
+            final_stage="critic",
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        statuses: list[str] = []
+        for minutes_ago in (2, 0):
+            attempt_id = await _seed_running_attempt(
+                session_maker,
+                agent_id=agent_id,
+                policy_version=13,
+                started_at=datetime.now(UTC) - timedelta(minutes=minutes_ago),
+            )
+            response = await client.post(
+                f"/api/v1/screener/agent/{agent_id}/result",
+                json=_result_payload(
+                    agent_id,
+                    passed=False,
+                    policy_version=13,
+                    attempt_id=attempt_id,
+                    outcome="inconclusive",
+                    manifest_digest="12" * 32,
+                    reason_code="l2-model-inconclusive",
+                    review_audit_digest=audit.canonical_digest(),
+                    review_audit=audit.model_dump(mode="json"),
+                ),
+            )
+            assert response.status_code == 200, response.text
+            statuses.append(response.json()["status"])
+            if minutes_ago:
+                async with session_maker() as session:
+                    agent = await session.get(Agent, agent_id)
+                    assert agent is not None
+                    assert agent.screening_reason == AUTO_REVIEW_RETRY_PUBLIC_REASON
+                    grant = await session.scalar(
+                        select(ScreeningRetryOverride).where(
+                            ScreeningRetryOverride.attempt_id == attempt_id
+                        )
+                    )
+                    assert grant is not None
+                    assert grant.actor == "platform:auto-review-retry"
+                async with session_maker() as session, session.begin():
+                    agent = await session.get(Agent, agent_id)
+                    assert agent is not None
+                    agent.status = AgentStatus.SCREENING
+        assert statuses == [AgentStatus.SCREENING_FAILED, AgentStatus.REJECTED]
+
+    async def test_ineligible_inconclusive_code_still_parks_for_operator(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="retryable_infra",
+                reason_code="source-review-unavailable",
+                detail="source reviewer never started",
+            ),
+        )
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            grant = await session.scalar(
+                select(ScreeningRetryOverride).where(
+                    ScreeningRetryOverride.agent_id == agent_id
+                )
+            )
+            assert grant is None
 
     async def test_missing_context_is_404(
         self,

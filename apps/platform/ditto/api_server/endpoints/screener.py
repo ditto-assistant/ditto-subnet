@@ -233,6 +233,9 @@ from ditto.db.queries.screening import (
     try_acquire_screening_claim_lock,
 )
 from ditto.db.queries.screening_infra_retry import INFRA_AUTO_RETRY_REASON_CODES
+from ditto.db.queries.screening_retry import (
+    authorize_automatic_review_retry,
+)
 from ditto.db.queries.screening_review_events import append_automated_review_event
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
@@ -266,6 +269,9 @@ from ditto_screening_protocol.reason_codes import (
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
 
+AUTO_REVIEW_RETRY_PUBLIC_REASON = (
+    "Screening ended without a verdict; retrying automatically"
+)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/screener", tags=["screener"])
@@ -6177,6 +6183,21 @@ async def submit_result(
                 reason_code=stored_reason_code,
                 reason=public_reason,
             )
+        if (
+            not late_deferred_result
+            and not deferred_attempt_lifecycle
+            and agent.status == AgentStatus.SCREENING_FAILED
+            and attempt.status in {"expired", "failed"}
+            and await authorize_automatic_review_retry(
+                session,
+                agent=agent,
+                attempt=attempt,
+                reason_code=attempt.reason_code,
+                now=datetime.now(UTC),
+            )
+            is not None
+        ):
+            agent.screening_reason = AUTO_REVIEW_RETRY_PUBLIC_REASON
         result_status = agent.status
 
     try:
