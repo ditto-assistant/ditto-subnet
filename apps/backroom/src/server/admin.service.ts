@@ -935,6 +935,38 @@ export async function fetchScreenerCapacity() {
   return screenerCapacityViewSchema.parse(payload)
 }
 
+const databaseBackupObjectSchema = z.object({
+  key: z.string(), size: z.number().int().nonnegative(), last_modified: z.string(),
+})
+export const databaseBackupStatusSchema = z.object({
+  observed_at: z.string(),
+  bucket: z.literal('ditto-platform-pg-backups'),
+  backup_status: z.enum(['disabled', 'unavailable', 'missing', 'stale', 'fresh']),
+  daily: z.array(databaseBackupObjectSchema),
+  monthly: z.array(databaseBackupObjectSchema),
+  hours_since_last_success: z.number().nonnegative().nullable(),
+  manifest: z.object({
+    format_version: z.literal(1), database: z.literal('ditto_platform_prod'),
+    server_version: z.string(), server_version_num: z.number().int(),
+    pg_dump_version: z.string(), database_bytes: z.number().nonnegative(),
+    alembic_version: z.string(), row_counts: z.record(z.string(), z.number().int()),
+    started_at: z.string(), completed_at: z.string(),
+    objects: z.array(z.object({
+      name: z.string(), sha256: z.string(), size: z.number().int().nonnegative(),
+    })),
+  }).nullable(),
+  snapshot_status: z.enum(['unavailable', 'missing', 'present']),
+  newest_snapshot: z.object({
+    name: z.string(), created_at: z.string(), status: z.string(), disk_size_gb: z.number(),
+  }).nullable(),
+})
+
+export async function fetchDatabaseBackupStatus() {
+  return databaseBackupStatusSchema.parse(
+    await platformAdminRequest('/api/v1/admin/database-backup-status'),
+  )
+}
+
 export async function fetchScreeningInfraRetries() {
   const payload = await platformAdminRequest('/api/v1/admin/screening-infra-retries')
   return screeningInfraRetryViewSchema.parse(payload)

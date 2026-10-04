@@ -324,6 +324,28 @@
   no_log: true
   when: secret_screener_controller_api_token | length > 0
 
+- name: Read the separate backup metadata reader access key
+  ansible.builtin.command:
+    argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_access_key_id }}", "--project={{ gcp_project }}"]
+  register: platform_backup_reader_access
+  changed_when: false
+  no_log: true
+  when: platform_database_backup_reader_enabled | bool
+
+- name: Read the separate backup metadata reader secret
+  ansible.builtin.command:
+    argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_secret_access_key }}", "--project={{ gcp_project }}"]
+  register: platform_backup_reader_secret
+  changed_when: false
+  no_log: true
+  when: platform_database_backup_reader_enabled | bool
+
+- name: Fold only the read-only backup pair into Platform config
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'database_backup_reader_access': platform_backup_reader_access.stdout, 'database_backup_reader_secret': platform_backup_reader_secret.stdout}) }}"
+  no_log: true
+  when: platform_database_backup_reader_enabled | bool
+
 - name: Read Hippius access key id when miner avatars are configured
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_hippius_access_key_id }} --project={{ gcp_project }}"
   register: platform_hippius_access_key_read

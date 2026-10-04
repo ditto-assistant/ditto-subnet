@@ -8,6 +8,7 @@ on:
       - workers/screener/scripts/bootstrap-screener.sh
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
+      - .github/workflows/platform-pg-restore-drill.yml
   push:
     branches: [main]
     paths:
@@ -16,6 +17,7 @@ on:
       - workers/screener/scripts/bootstrap-screener.sh
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
+      - .github/workflows/platform-pg-restore-drill.yml
 
 permissions:
   contents: read
@@ -83,6 +85,12 @@ jobs:
           terraform -chdir=infra/terraform/modules/coding-hosted-host init -backend=false -input=false -lockfile=readonly
           terraform -chdir=infra/terraform/modules/coding-hosted-host test
 
+      - name: Test optional compute snapshot attachments with mocked provider
+        if: matrix.root == 'infra/terraform/stacks/gcp-platform'
+        run: |
+          terraform -chdir=infra/tests/compute-snapshot init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/tests/compute-snapshot test
+
   ansible:
     runs-on: ubuntu-latest
     defaults:
@@ -122,6 +130,14 @@ jobs:
 
       - name: Prove every Docker apt key fetch is integrity-pinned
         run: python3 tests/test_docker_apt_key_pin.py
+
+      - name: Prove online backups fail closed and preserve credential custody
+        run: |
+          python3 tests/test_postgres_backup.py
+          uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/postgres-backup.yml
+
+      - name: Check backup restore workflow
+        run: python3 ../scripts/test-platform-pg-backup-workflow.py
 
       - name: Check native PostgreSQL admission rendering without host mutations
         run: >-

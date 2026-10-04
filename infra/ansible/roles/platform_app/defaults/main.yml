@@ -129,6 +129,9 @@ platform_storage_region: auto
 # Host vars pin the live bucket name and the regional cache closest to the
 # Platform VMs. Access keys must start with hip_.
 platform_hippius_endpoint: "https://s3.hippius.com"
+platform_database_backup_reader_enabled: false
+secret_database_backup_reader_access_key_id: platform-pg-backup-reader-access-key-id
+secret_database_backup_reader_secret_access_key: platform-pg-backup-reader-secret-access-key
 platform_hippius_region: decentralized
 platform_hippius_bucket: ""
 secret_hippius_access_key_id: platform-hippius-access-key-id

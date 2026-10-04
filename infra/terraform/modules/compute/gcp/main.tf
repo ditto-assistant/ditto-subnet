@@ -90,3 +90,20 @@ resource "google_compute_instance" "this" {
     ]
   }
 }
+
+# Separate attachments never change the instance or recreate either disk.
+resource "google_compute_disk_resource_policy_attachment" "boot_snapshot" {
+  count   = var.boot_disk_snapshot_policy != "" ? 1 : 0
+  project = var.project == "" ? null : var.project
+  zone    = var.location
+  disk    = google_compute_instance.this.name
+  name    = var.boot_disk_snapshot_policy
+}
+
+resource "google_compute_disk_resource_policy_attachment" "data_snapshot" {
+  count   = var.data_disk_snapshot_policy != "" ? 1 : 0
+  project = var.project == "" ? null : var.project
+  zone    = var.location
+  disk    = google_compute_disk.data[0].name
+  name    = var.data_disk_snapshot_policy
+}

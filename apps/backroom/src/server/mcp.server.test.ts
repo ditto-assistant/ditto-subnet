@@ -373,6 +373,7 @@ describe('Backroom MCP tools', () => {
         'download_runtime_profile',
         'get_queue_policy_settings',
         'get_screener_capacity',
+        'get_database_backup_status',
         'get_screening_infra_retries',
         'set_screener_provider_settings',
         'set_screener_node_channel_settings',
@@ -2691,6 +2692,31 @@ describe('Backroom MCP tools', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/conversation-assessments/${assessmentId}/report`,
+      expect.any(Object),
+    )
+    await client.close()
+    await server.close()
+  })
+
+  it('reads database recovery metadata without exposing contents or secrets', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const payload = {
+      observed_at: '2026-10-04T12:00:00Z', bucket: 'ditto-platform-pg-backups',
+      backup_status: 'missing', daily: [], monthly: [],
+      hours_since_last_success: null, manifest: null,
+      snapshot_status: 'unavailable', newest_snapshot: null,
+      secret_access_key: 'must-be-stripped',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({ name: 'get_database_backup_status', arguments: {} })
+    expect(response.isError).not.toBe(true)
+    const result = readJsonResult(response)
+    expect(result).toMatchObject({ backup_status: 'missing', snapshot_status: 'unavailable' })
+    expect(JSON.stringify(result)).not.toContain('must-be-stripped')
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/database-backup-status',
       expect.any(Object),
     )
     await client.close()

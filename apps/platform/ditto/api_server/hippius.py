@@ -268,9 +268,23 @@ class HippiusClient:
             )
         return _parse_list_objects(response.content)
 
-    async def get_object(self, *, key: str) -> bytes:
+    async def get_object(self, *, key: str, max_bytes: int | None = None) -> bytes:
         key = normalize_object_key(key)
         url = await self._presign("get_object", key)
+        if max_bytes is not None:
+            # Metadata reads must remain bounded even if an object is replaced
+            # after its inventory size was checked. Never return a provider URL.
+            async with self._http.stream("GET", url) as response:
+                if response.status_code >= 300:
+                    raise ObjectDownloadFailedError("bounded Hippius read failed")
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        raise ObjectDownloadFailedError(
+                            "Hippius metadata exceeded bound"
+                        )
+                return bytes(body)
         response = await self._request_with_retry(
             "GET",
             url,

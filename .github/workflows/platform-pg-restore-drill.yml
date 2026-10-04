@@ -1,0 +1,68 @@
+name: Platform PostgreSQL restore drill
+
+on:
+  schedule:
+    - cron: "17 8 * * 0"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: platform-pg-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    if: github.repository == 'ditto-assistant/ditto-subnet' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: prod
+    env:
+      PG_RESTORE_DIRECTORY: ${{ runner.temp }}/platform-pg-restore
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_PG_RESTORE_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_PG_RESTORE_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Install encryption client
+        run: sudo apt-get update && sudo apt-get install -y age
+
+      - name: Consume only restore reader credentials and age identity
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -m 700 "$PG_RESTORE_DIRECTORY"
+          gcloud secrets versions access latest --project=ditto-app-dev \
+            --secret=platform-pg-backup-reader-access-key-id > "$PG_RESTORE_DIRECTORY/access-key-id"
+          gcloud secrets versions access latest --project=ditto-app-dev \
+            --secret=platform-pg-backup-reader-secret-access-key > "$PG_RESTORE_DIRECTORY/secret-access-key"
+          gcloud secrets versions access latest --project=ditto-app-dev \
+            --secret=platform-pg-backup-age-identity > "$PG_RESTORE_DIRECTORY/age-identity"
+
+      - name: Restore verified encrypted daily backup in an isolated database
+        run: uv run --locked --project apps/platform python infra/scripts/platform-pg-restore-drill.py
+
+      - name: Remove runner copies
+        if: always()
+        run: |
+          set -euo pipefail
+          case "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" in
+            *[!0-9-]*) exit 2 ;;
+          esac
+          # Remove only this run's container, never a process/container name sweep.
+          docker rm -f "ditto-pg-drill-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >/dev/null 2>&1 || true
+          if [ -d "$PG_RESTORE_DIRECTORY" ]; then
+            sudo find "$PG_RESTORE_DIRECTORY" -type f -exec shred -u -- {} +
+            sudo rm -rf -- "$PG_RESTORE_DIRECTORY"
+          fi

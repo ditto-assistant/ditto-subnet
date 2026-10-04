@@ -286,6 +286,7 @@ import {
   restoreScoredScreeningSnapshot,
   createScreenerBootstrapGrant,
   fetchScreenerCapacity,
+  fetchDatabaseBackupStatus,
   fetchScreeningInfraRetries,
   updateScreenerProviderSettings,
   updateScreenerNodeChannelSettings,
@@ -694,6 +695,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Artifact-bound coding certifications; weight_eligible is always false. Requires backroom:read.',
   get_screener_capacity:
     'Read screener capacity, routing and recent jobs before retry.',
+  get_database_backup_status:
+    'Read encrypted database backup freshness, object metadata, manifest and newest GCE snapshot. No contents or secrets.',
   get_screening_infra_retries:
     'Read infra retry policy, parked agents, per-state counts and signature breakers. Derived at read time.',
   set_screener_provider_settings:
@@ -2360,6 +2363,16 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => setContinualRetestSettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_database_backup_status',
+    {
+      title: 'Get database backup status',
+      description: 'Read private encrypted Platform PostgreSQL backup metadata, manifest, freshness and the newest GCE boot-disk snapshot. Requires backroom:read; changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchDatabaseBackupStatus()),
   )
 
   registerTool(

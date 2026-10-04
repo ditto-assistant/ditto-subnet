@@ -1,0 +1,12 @@
+---
+# Explicit host-convergence gate, separate from Terraform identity provisioning.
+postgres_backup_enabled: false
+postgres_backup_packages:
+  # Debian 13 amd64 pins, verified against packages.debian.org/trixie.
+  - age=1.2.1-1+b5
+  - awscli=2.23.6-1
+  - python3-boto3=1.37.9-1
+postgres_backup_secret_ids:
+  access-key-id: platform-pg-backup-hippius-access-key-id
+  secret-access-key: platform-pg-backup-hippius-secret-access-key
+  age-recipient: platform-pg-backup-age-recipient

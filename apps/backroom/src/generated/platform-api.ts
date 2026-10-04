@@ -1221,6 +1221,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/database-backup-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Database Backup Status */
+        get: operations["get_database_backup_status_api_v1_admin_database_backup_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/efficiency-bonus-settings": {
         parameters: {
             query?: never;
@@ -19379,6 +19396,109 @@ export interface components {
         /** CreateScreeningDisputeResponse */
         CreateScreeningDisputeResponse: {
             dispute: components["schemas"]["PublicScreeningDispute"];
+        };
+        /** DatabaseBackupManifest */
+        DatabaseBackupManifest: {
+            /** Alembic Version */
+            alembic_version: string;
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+            /**
+             * Database
+             * @constant
+             */
+            database: "ditto_platform_prod";
+            /** Database Bytes */
+            database_bytes: number;
+            /**
+             * Format Version
+             * @constant
+             */
+            format_version: 1;
+            /** Objects */
+            objects: components["schemas"]["DatabaseBackupManifestObject"][];
+            /** Pg Dump Version */
+            pg_dump_version: string;
+            /** Row Counts */
+            row_counts: {
+                [key: string]: number;
+            };
+            /** Server Version */
+            server_version: string;
+            /** Server Version Num */
+            server_version_num: number;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+        };
+        /** DatabaseBackupManifestObject */
+        DatabaseBackupManifestObject: {
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+        };
+        /** DatabaseBackupObject */
+        DatabaseBackupObject: {
+            /** Key */
+            key: string;
+            /** Last Modified */
+            last_modified: string;
+            /** Size */
+            size: number;
+        };
+        /** DatabaseBackupStatus */
+        DatabaseBackupStatus: {
+            /**
+             * Backup Status
+             * @enum {string}
+             */
+            backup_status: "disabled" | "unavailable" | "missing" | "stale" | "fresh";
+            /**
+             * Bucket
+             * @default ditto-platform-pg-backups
+             * @constant
+             */
+            bucket: "ditto-platform-pg-backups";
+            /** Daily */
+            daily?: components["schemas"]["DatabaseBackupObject"][];
+            /** Hours Since Last Success */
+            hours_since_last_success?: number | null;
+            manifest?: components["schemas"]["DatabaseBackupManifest"] | null;
+            /** Monthly */
+            monthly?: components["schemas"]["DatabaseBackupObject"][];
+            newest_snapshot?: components["schemas"]["DatabaseSnapshot"] | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Snapshot Status
+             * @enum {string}
+             */
+            snapshot_status: "unavailable" | "missing" | "present";
+        };
+        /** DatabaseSnapshot */
+        DatabaseSnapshot: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Disk Size Gb */
+            disk_size_gb: number;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
         };
         /**
          * DeferredSourceReviewSettings
@@ -38964,6 +39084,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminCoreQualificationPolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_database_backup_status_api_v1_admin_database_backup_status_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatabaseBackupStatus"];
                 };
             };
             /** @description Validation Error */

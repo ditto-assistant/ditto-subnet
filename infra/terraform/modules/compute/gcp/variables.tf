@@ -96,6 +96,22 @@ variable "data_disk_type" {
   default     = "pd-balanced"
 }
 
+variable "boot_disk_snapshot_policy" {
+  description = "Optional regional snapshot policy self-link for the boot disk."
+  type        = string
+  default     = ""
+}
+
+variable "data_disk_snapshot_policy" {
+  description = "Optional regional snapshot policy self-link for the separate data disk."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.data_disk_snapshot_policy == "" || var.data_disk_gb > 0
+    error_message = "A data disk snapshot policy requires a data disk."
+  }
+}
+
 variable "service_account_email" {
   description = "Email of the runtime service account for the VM. Empty omits the block (uses the default compute SA)."
   type        = string
