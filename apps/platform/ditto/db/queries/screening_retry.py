@@ -95,6 +95,16 @@ async def authorize_automatic_review_retry(
     )
     if existing is not None:
         return None
+    if session.get_bind().dialect.name == "postgresql":
+        # Copies of one artifact can finish concurrently; serialize the
+        # count-and-grant so they cannot both spend the last retry.
+        await session.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtextextended(f"auto-review-retry:{agent.sha256}", 0)
+                )
+            )
+        )
     used = int(
         await session.scalar(
             select(func.count())
