@@ -88,13 +88,6 @@ async def authorize_automatic_review_retry(
     """
     if reason_code not in AUTO_REVIEW_RETRY_REASON_CODES:
         return None
-    existing = await session.scalar(
-        select(ScreeningRetryOverride.override_id).where(
-            ScreeningRetryOverride.attempt_id == attempt.attempt_id
-        )
-    )
-    if existing is not None:
-        return None
     if session.get_bind().dialect.name == "postgresql":
         # Copies of one artifact can finish concurrently; serialize the
         # count-and-grant so they cannot both spend the last retry.
@@ -105,6 +98,13 @@ async def authorize_automatic_review_retry(
                 )
             )
         )
+    existing = await session.scalar(
+        select(ScreeningRetryOverride.override_id).where(
+            ScreeningRetryOverride.attempt_id == attempt.attempt_id
+        )
+    )
+    if existing is not None:
+        return None
     used = int(
         await session.scalar(
             select(func.count())
