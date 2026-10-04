@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -289,7 +291,8 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert "gcloud compute scp preview/cloud/export-snapshot.sh" in snapshot
     assert 'gcloud compute scp "ditto-pg-platform:${remote_dump}"' in snapshot
     assert "trap cleanup_remote EXIT" in snapshot
-    assert "rm -f '$remote_dump' '$remote_script'" in snapshot
+    assert "sudo rm -f '$remote_dump' '$remote_script'" in snapshot
+    assert 'remote_dump="/var/tmp/sn118-preview-' in snapshot
     assert "head -c 5" in snapshot
     assert 'pg_dump -Fc --no-owner --no-privileges ditto_platform_prod"' not in snapshot
     assert '/proc/1/comm)" = postgres' in sanitizer
@@ -531,3 +534,100 @@ def test_reconcile_enforces_a_capped_two_tier_preview_lifetime() -> None:
     # Fail closed: an unreadable or missing PR earns no grace.
     assert "state=missing" in script
     assert "'.closed_at // empty'" in script
+
+
+def _export_snapshot_env(
+    tmp_path: Path, *, free_kib: int, dump_fails: bool
+) -> dict[str, str]:
+    """Environment that runs export-snapshot.sh against stub sudo/psql/pg_dump/df."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stubs = {
+        # Drop "-u USER" so the stubbed tools run as the test user.
+        "sudo": '[ "$1" = -u ] && shift 2\nexec "$@"\n',
+        "psql": "echo 1073741824\n",
+        "pg_dump": (
+            'for arg; do case "$arg" in --file=*) out="${arg#--file=}";; esac; done\n'
+            'printf PGDMP-partial > "$out"\n' + ("exit 1\n" if dump_fails else "")
+        ),
+        "df": (
+            "echo 'Filesystem 1024-blocks Used Available Capacity Mounted'\n"
+            f"echo 'disk 104857600 0 {free_kib} 0% /'\n"
+        ),
+    }
+    for name, body in stubs.items():
+        stub = bin_dir / name
+        stub.write_text("#!/bin/sh\n" + body)
+        stub.chmod(0o755)
+    (tmp_path / "staging").mkdir()
+    (tmp_path / "legacy").mkdir()
+    return {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "SN118_PREVIEW_STAGING_DIR": str(tmp_path / "staging"),
+        "SN118_PREVIEW_LEGACY_DIR": str(tmp_path / "legacy"),
+    }
+
+
+def _run_export(env: dict[str, str], output: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sh", str(ROOT / "preview/cloud/export-snapshot.sh"), str(output)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_export_snapshot_reclaims_stale_archives_and_keeps_its_own(
+    tmp_path: Path,
+) -> None:
+    env = _export_snapshot_env(tmp_path, free_kib=50 * 1024 * 1024, dump_fails=False)
+    stale_legacy = tmp_path / "legacy/sn118-preview-1-1.dump"
+    stale_staged = tmp_path / "staging/sn118-preview-2-1.dump"
+    unrelated = tmp_path / "legacy/other.dump"
+    for path in (stale_legacy, stale_staged, unrelated):
+        path.write_text("old")
+    output = tmp_path / "staging/sn118-preview-3-1.dump"
+
+    result = _run_export(env, output)
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == "PGDMP-partial"
+    assert oct(output.stat().st_mode & 0o777) == "0o600"
+    assert not stale_legacy.exists()
+    assert not stale_staged.exists()
+    assert unrelated.exists()
+
+
+def test_export_snapshot_removes_its_partial_archive_on_failure(
+    tmp_path: Path,
+) -> None:
+    env = _export_snapshot_env(tmp_path, free_kib=50 * 1024 * 1024, dump_fails=True)
+    output = tmp_path / "staging/sn118-preview-3-1.dump"
+
+    result = _run_export(env, output)
+
+    assert result.returncode != 0
+    assert not output.exists()
+
+
+def test_export_snapshot_refuses_to_crowd_the_database_disk(tmp_path: Path) -> None:
+    # 100 GiB disk: the 20 GiB reserve plus the 1 GiB database exceeds 15 GiB free.
+    env = _export_snapshot_env(tmp_path, free_kib=15 * 1024 * 1024, dump_fails=False)
+    output = tmp_path / "staging/sn118-preview-3-1.dump"
+
+    result = _run_export(env, output)
+
+    assert result.returncode == 1
+    assert "refusing export" in result.stderr
+    assert not output.exists()
+
+
+def test_export_snapshot_refuses_paths_outside_staging(tmp_path: Path) -> None:
+    env = _export_snapshot_env(tmp_path, free_kib=50 * 1024 * 1024, dump_fails=False)
+
+    result = _run_export(env, tmp_path / "legacy/sn118-preview-3-1.dump")
+
+    assert result.returncode == 2
+    assert "refusing unsafe preview snapshot path" in result.stderr

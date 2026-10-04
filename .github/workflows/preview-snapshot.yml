@@ -38,14 +38,17 @@ jobs:
           case "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in
             *[!0-9-]*) echo "invalid workflow run identity" >&2; exit 2 ;;
           esac
-          remote_dump="/tmp/sn118-preview-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.dump"
+          # On disk, not /tmp (a RAM-backed tmpfs on the Debian 13 database VM).
+          remote_dump="/var/tmp/sn118-preview-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.dump"
           remote_script="/tmp/sn118-preview-export-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          # sudo: a failed pg_dump leaves a postgres-owned archive that the
+          # login user cannot unlink from a sticky directory.
           cleanup_remote() {
             gcloud compute ssh ditto-pg-platform \
               --zone "${{ vars.GCP_PLATFORM_ZONE }}" \
               --tunnel-through-iap \
               --quiet \
-              --command "rm -f '$remote_dump' '$remote_script'" \
+              --command "sudo rm -f '$remote_dump' '$remote_script'" \
               >/dev/null 2>&1 || true
           }
           trap cleanup_remote EXIT
