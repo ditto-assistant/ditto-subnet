@@ -97,13 +97,13 @@ variable "data_disk_type" {
 }
 
 variable "boot_disk_snapshot_policy" {
-  description = "Optional regional snapshot policy self-link for the boot disk."
+  description = "Optional regional snapshot policy name or self-link for the boot disk."
   type        = string
   default     = ""
 }
 
 variable "data_disk_snapshot_policy" {
-  description = "Optional regional snapshot policy self-link for the separate data disk."
+  description = "Optional regional snapshot policy name or self-link for the separate data disk."
   type        = string
   default     = ""
   validation {
