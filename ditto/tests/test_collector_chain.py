@@ -855,6 +855,7 @@ def test_reconciliation_checks_runtime_direction_before_settlement(reverse):
 def test_activity_and_epoch_readers_use_historical_guards_only(parent, post, allowed):
     import runpy
     from pathlib import Path
+
     from ditto_screening_protocol.collector_receipts import (
         HISTORICAL_COLLECTOR_CODE_HASH,
     )
