@@ -256,10 +256,13 @@ func Run(ctx context.Context, o Options) (*Summary, error) {
 	if err := spool.Close(closeCtx); err != nil && runErr == nil {
 		runErr = err
 	}
-	// Close flushes the last buffered batch; a loss there must also block the
+	// Close flushes the last buffered batch; a loss there must be counted
+	// even when an earlier error already exists, and it must block the
 	// delete pass, since the short file it leaves still uploads cleanly.
-	if spool.Dropped() > summary.Dropped && runErr == nil {
-		runErr = fmt.Errorf("backfill: %d records dropped by the spool; deletion skipped", spool.Dropped()-summary.Dropped)
+	if lost := spool.Dropped() - summary.Dropped; lost > 0 {
+		if runErr == nil {
+			runErr = fmt.Errorf("backfill: %d records dropped by the spool; deletion skipped", lost)
+		}
 		summary.Dropped = spool.Dropped()
 	}
 	cancelUp()
