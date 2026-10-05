@@ -696,15 +696,15 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_screener_capacity:
     'Read screener capacity, routing and recent jobs before retry.',
   get_database_backup_status:
-    'Read encrypted database backup freshness, object metadata, manifest and newest GCE snapshot. No contents or secrets.',
+    'Read encrypted PG backup freshness, manifest, object metadata and GCE snapshot. No contents or secrets.',
   get_screening_infra_retries:
     'Read infra retry policy, parked agents, per-state counts and signature breakers. Derived at read time.',
   set_screener_provider_settings:
     'Apply complete revisioned screener routing and bounded GCE overflow settings after reading get_screener_capacity.',
   set_screener_node_channel_settings:
-    'Apply complete revisioned concurrency limits, including the report-only L2 canary cap, for one enrolled screener node after reading get_screener_capacity.',
+    'Set complete revisioned limits and report-only L2 canary cap for one enrolled node. Read get_screener_capacity first.',
   set_screener_node_replay_capacity:
-    'Set report-only replay capacity to zero or one on the independently enrolled second screener, with exact hotkey, status, capacity, confirmation and audit guards. Read get_screener_capacity first.',
+    'Set independent node-2 report-only replay cap 0|1 with hotkey/status/capacity/confirmation/audit guards. Read get_screener_capacity first.',
   get_screener_replay_process_readiness:
     'Read node-2 key, signed heartbeat, release gate and missing checks. No secrets.',
   register_screener_replay_process_key:
@@ -734,7 +734,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   retire_coding_catalog_release:
     'Irreversibly retire a shadow catalog commitment after review.',
   get_agent_coding_shadow_evaluations:
-    'Read future-height assignments, finalized issuances, and separate weight-zero coding runs, leases, and repair outcomes.',
+    'Read future-height assignments, finalized issuances and weight-zero Coding runs/leases/repairs.',
   create_screener_bootstrap_grant:
     'Mint one short-lived, single-use, controller-fenced node enrollment grant. Returns the only token copy.',
   get_core_qualification_policy:
@@ -754,7 +754,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   authorize_conversation_retry:
     'Authorize one audited retry; preserves identity, history and budget caps.',
   get_screener_fanout_shadow:
-    'Read bounded baseline/fan-out shadow comparisons, coverage, disagreements, latency, and spend.',
+    'Read bounded baseline/fan-out shadow coverage, disagreements, latency and spend.',
   get_l2_report_canary:
     'Read one exact-attempt non-authoritative L2 canary report and lease outcome.',
   get_l2_report_canary_preflight:
@@ -768,9 +768,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_v13_report_only_current_packet:
     'Read unanimous live V13 packet; no authority change.',
   activate_v13_scorer_cohort:
-    'Pin three exact managed V13 validators after nonmembers are paused and live tickets drain. One-way activation.',
+    'One-way pin of three exact managed V13 validators after nonmembers pause and live tickets drain.',
   rotate_v13_scorer_cohort:
-    'Rotate the exact pinned V13 cohort to a unanimously signed packet after all V13 tickets drain; preserves pin history.',
+    'Rotate pinned V13 cohort to unanimous signed packet after all V13 tickets drain; keeps pin history.',
   schedule_l2_report_canary:
     'Queue one isolated exact-artifact non-authoritative report. reviewSettingsRevision pins only canary scopes, never node scopes. See tool help.',
 
@@ -888,11 +888,11 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   set_efficiency_bonus_settings:
     'Set complete subnet scoring policy with CAS and matching mode confirmation; epoch snapshots immutable. Ditto app flags not served by this server. See tool help.',
   batch_retry_validator_evaluation:
-    'Manually restore exhausted slots for up to 100 verified infrastructure failures using fresh snapshots; returns per-item outcomes.',
+    'Restore exhausted slots for <=100 verified infra failures with fresh snapshots; per-item outcomes.',
   retry_trusted_image_build:
-    'Manually retry one terminal trusted-image build with fresh ID/status/attempt guards; preserves history and audits the action.',
+    'Retry one terminal trusted-image build with fresh ID/status/attempt guards; keeps history and audit.',
   retry_failed_screening_now:
-    'Manually retry the latest terminal screening attempt with fresh artifact/score-count/attempt guards; preserves history.',
+    'Retry latest terminal screening with fresh artifact/score-count/attempt guards; keeps history.',
   get_screening_baseline_diff:
     'Starter diff. Incomplete custom lines are lower bounds; omitted paths are unexamined. Bodies via file reader. Artifact scope.',
   list_screening_source_files:
@@ -940,9 +940,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   start_benchmark_rollout:
     'Start a forward-only rollout. Confirmation: START BENCHMARK V{n}.',
   list_benchmark_canaries: 'Page isolated benchmark canaries. No score or rollout authority.',
-  get_benchmark_canary: 'Read one diagnostic lease and its non-authoritative result summary.',
-  issue_benchmark_canary: 'Issue one bounded diagnostic lease for an explicit bench version, agent and validator. Never activates.',
-  cancel_benchmark_canary: 'Cancel one exact canary and revoke its inference. Does not affect canonical scores.',
+  get_benchmark_canary: 'Read one diagnostic lease/non-authoritative result.',
+  issue_benchmark_canary: 'Issue bounded diagnostic lease for explicit bench version/agent/validator. Never activates.',
+  cancel_benchmark_canary: 'Cancel exact canary and its inference; canonical scores unchanged.',
   authorize_confirmation_bundle_retest:
     'Authorize one manual retest for a completed or failed bundle. Requires current generation, request UUID, reason, and exact phrase. Automatic retries stay disabled.',
   remove_failed_submission_from_queue:
