@@ -644,9 +644,20 @@ class PublicCollectorChain:
                     if e.get("module_id") == "SubtensorModule"
                     and e.get("event_id") == "NeuronRegistered"
                 ]
-                if len(registrations) != 1 or registrations[0].get("event", {}).get(
-                    "attributes"
-                ) != [118, uid, policy.collector_hotkey]:
+                if len(registrations) != 1:
+                    raise ValueError("missing exact registration effect event")
+                attrs = registrations[0].get("event", {}).get("attributes")
+                # The pinned Linux decoder returns tuple fields; JSON readers
+                # return lists. Bind both to the same exact typed UID effect.
+                if (
+                    not isinstance(attrs, (tuple, list))
+                    or len(attrs) != 3
+                    or type(attrs[0]) is not int
+                    or attrs[0] != 118
+                    or type(attrs[1]) is not int
+                    or attrs[1] != uid
+                    or attrs[2] != policy.collector_hotkey
+                ):
                     raise ValueError("missing exact registration effect event")
                 return Settlement("finalized", block, block_hash, uid)
             destination = operation["destination"]

@@ -664,3 +664,58 @@ def test_proxy_nonunit_result_cannot_release_durable_claim(result):
     events[0]["event"]["attributes"]["result"] = result
     with pytest.raises(ValueError):
         c.reconcile(p, op, observed)
+
+
+@pytest.mark.parametrize("sequence", [list, tuple])
+def test_registration_event_sequence_is_decoder_independent(sequence):
+    p, c, op, observed, events = receipt_fixture()
+    c.role = op["role"] = "registration"
+    events[0]["event"]["attributes"] = {"result": {"Ok": ()}}
+    events[2]["event"]["attributes"]["who"] = p.registration_delegate
+    events[-2:] = [
+        event(
+            "SubtensorModule",
+            "NeuronRegistered",
+            sequence([118, 14, p.collector_hotkey]),
+        )
+    ]
+    assert c.reconcile(p, op, observed).uid == 14
+
+
+@pytest.mark.parametrize(
+    "attrs",
+    [
+        (118, True, "hotkey"),
+        (True, 14, "hotkey"),
+        (118, "14", "hotkey"),
+        (118, 15, "hotkey"),
+        (119, 14, "hotkey"),
+        (118, 14, "wrong"),
+        (118, 14),
+        (118, 14, "hotkey", 0),
+        {"netuid": 118, "uid": 14, "hotkey": "hotkey"},
+    ],
+)
+def test_registration_tuple_does_not_relax_exact_typed_effect(attrs):
+    p, c, op, observed, events = receipt_fixture()
+    c.role = op["role"] = "registration"
+    events[2]["event"]["attributes"]["who"] = p.registration_delegate
+    if isinstance(attrs, (list, tuple)):
+        attrs = tuple(
+            p.collector_hotkey if value == "hotkey" else value for value in attrs
+        )
+    events[-2:] = [event("SubtensorModule", "NeuronRegistered", attrs)]
+    with pytest.raises(ValueError, match="registration effect"):
+        c.reconcile(p, op, observed)
+
+
+def test_registration_boolean_uid_cannot_equal_integer_one():
+    p, c, op, observed, events = receipt_fixture()
+    c.role = op["role"] = "registration"
+    c.identity = lambda _p, at, **_kwargs: None if at == "b100" else 1
+    events[2]["event"]["attributes"]["who"] = p.registration_delegate
+    events[-2:] = [
+        event("SubtensorModule", "NeuronRegistered", (118, True, p.collector_hotkey))
+    ]
+    with pytest.raises(ValueError, match="registration effect"):
+        c.reconcile(p, op, observed)
