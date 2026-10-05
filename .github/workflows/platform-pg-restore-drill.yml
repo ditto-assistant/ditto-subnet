@@ -19,9 +19,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     environment: prod
-    env:
-      PG_RESTORE_DIRECTORY: ${{ runner.temp }}/platform-pg-restore
     steps:
+      - name: Set the private runner staging directory
+        run: echo "PG_RESTORE_DIRECTORY=$RUNNER_TEMP/platform-pg-restore" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

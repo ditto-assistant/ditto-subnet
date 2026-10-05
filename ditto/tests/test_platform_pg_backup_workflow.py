@@ -15,6 +15,8 @@ def test_restore_workflow_uses_main_prod_and_only_reader_credentials():
     assert triggers["schedule"] == [{"cron": "17 8 * * 0"}]
     job = workflow["jobs"]["restore"]
     assert job["environment"] == "prod"
+    assert "runner.temp" not in str(job.get("env", {}))
+    assert "$RUNNER_TEMP/platform-pg-restore" in job["steps"][0]["run"]
     assert "github.ref == 'refs/heads/main'" in job["if"]
     assert "GCP_PG_RESTORE_SERVICE_ACCOUNT" in text
     assert "platform-pg-backup-age-identity" in text
