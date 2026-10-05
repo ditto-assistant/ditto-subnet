@@ -906,16 +906,16 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read burn, miner remainder, revision and fleet fold. Optional history, default 0.',
   get_emission_eligibility_policy:
     'Read emission gates, fleet fold, revision, windows and shadow withheld count; optional history.',
-  get_treasury_settings: 'Read shadow treasury buckets/history or one exact revision. No weights or funds move.',
-  get_treasury_activation_preflight: 'Read signed Gamma policy, finalized collector and full setter readiness. No activation.',
-  get_treasury_runtime: 'Read durable Gamma producer control. Configuration is not dispatch or transfer proof.',
-  record_treasury_runtime: 'Control Gamma observation, next-epoch enforcement or pause with CAS and exact signed policy. Full setter guard required. Does not transfer funds. See tool help.',
-  get_treasury_ledger_readiness: 'Read shadow proposal, stored epoch identity and funding blockers. No activation.',
-  record_treasury_settings: 'Record a shadow treasury revision with CAS and confirmation. No weights or funds move.',
-  get_treasury_receipts: 'Read verified private treasury receipt history and publication state.',
-  record_treasury_receipt: 'Verify and ingest one historical finalized treasury receipt. No signing or provider credit.',
-  quote_treasury_topup: 'Quote finalized GM funding routes and price impact. No execution.',
-  preview_treasury_topup: 'Dry-run a GM route against shadow limits. Execution disabled.',
+  get_treasury_settings: 'Read shadow buckets/history; no weights or funds.',
+  get_treasury_activation_preflight: 'Read managed Gamma readiness; no activation. See tool help.',
+  get_treasury_runtime: 'Read durable Gamma control; not dispatch proof.',
+  record_treasury_runtime: 'Control Gamma with CAS, policy and managed roster; no transfers. See tool help.',
+  get_treasury_ledger_readiness: 'Read epoch/policy readiness; no activation.',
+  record_treasury_settings: 'Record shadow buckets with CAS/confirmation; no weights or funds.',
+  get_treasury_receipts: 'Read treasury receipt history/publication.',
+  record_treasury_receipt: 'Ingest finalized receipt; no signing/provider credit.',
+  quote_treasury_topup: 'Quote GM routes/impact; no execution.',
+  preview_treasury_topup: 'Preview GM against shadow limits; no execution.',
   get_agent_emission_eligibility:
     'Read exact earning/withheld reason, clear time and fleet visibility.',
   get_submission_cooldown:
@@ -3464,7 +3464,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_treasury_activation_preflight',
     {
       title: 'Preflight exact Gamma policy and full validator roster',
-      description: 'Read-only proposed-policy check before configuration. Provide approvalJson containing only the public emission policy and coldkey signature, plus both exact expected digests. Never provide private keys or seeds. Platform verifies the public signature before reading finalized collector Owner/Uids/Keys and every chain-permitted validator at the same hash. Reports missing, stale, unsupported or mismatched signed heartbeat guards, including fresh extra reporters used by the enforcing gate. All rows are bounded; truncation refuses fleet readiness. This is prospective capability evidence, not verified copy-weight behavior, current epoch authorization, an activation command or transfer approval. Configured policy matching is separate from proposed-policy verification. No settings, epoch, observer, weights, funds or timer are changed. Requires backroom:read.',
+      description: 'Read-only proposed-policy check before configuration. Provide approvalJson containing only the public emission policy and coldkey signature, plus both exact expected digests. Never provide private keys or seeds. Platform verifies the public signature before reading finalized collector Owner/Uids/Keys and current chain permissions at the same hash. Pass explicit managedValidatorHotkeys or use the durable operator roster. Reports missing, stale, unsupported or mismatched signed heartbeat guards for each selected managed member; independent validators do not block activation. An absent managed roster refuses readiness. All rows are bounded; truncation refuses fleet readiness. This is prospective capability evidence, not verified copy-weight behavior, current epoch authorization, an activation command or transfer approval. Configured policy matching is separate from proposed-policy verification. No settings, epoch, observer, weights, funds or timer are changed. Requires backroom:read.',
       inputSchema: treasuryActivationPreflightInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -3478,7 +3478,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   }, async () => result(await fetchTreasuryRuntime()))
   registerTool('record_treasury_runtime', {
     title: 'Control guarded Gamma producer',
-    description: 'Append a durable public-proof control with expectedRevision and exact GAMMA <OBSERVE|ENFORCE|PAUSE> <policy digest> confirmation. Provide only public approvalJson, immutable emission/collector digests and reason. Observe configures finalized ledger observation without weights. Enforce requires an existing matching approval, matching public bucket allocation, immutable epoch mode and fresh exact-policy queued V2 guard for every finalized chain-permitted setter and every fresh extra reporter; activationEpoch must be the next independently observed epoch. Copy-weight history is not proof. Pause retains the approval and refuses V2 ledger dispatch; it does not disarm transport fences, cancel already queued tasks, undo finalized weights or restore legacy dispatch. Old epoch pins remain immutable; missing producer/fleet proof refuses without legacy fallback. Neither action starts custody timers, signs or transfers funds. Requires backroom:write.',
+    description: 'Append a durable public-proof control with expectedRevision and exact GAMMA <OBSERVE|ENFORCE|PAUSE> <policy digest> confirmation. Provide only public approvalJson, immutable emission/collector digests and reason. Observe configures finalized ledger observation without weights. Enforce requires an existing matching approval, matching public bucket allocation, immutable epoch mode and fresh exact-policy queued V2 guard for every explicitly configured managedValidatorHotkeys member, with current chain permission; independent validators do not block activation; activationEpoch must be the next independently observed epoch. Copy-weight history is not proof. Pause retains the approval and refuses V2 ledger dispatch; it does not disarm transport fences, cancel already queued tasks, undo finalized weights or restore legacy dispatch. Old epoch pins remain immutable; missing producer/fleet proof refuses without legacy fallback. Neither action starts custody timers, signs or transfers funds. Requires backroom:write.',
     inputSchema: recordTreasuryRuntimeInputSchema,
     annotations: toolAnnotations('write', true),
   }, async (input) => write(() => recordTreasuryRuntime(input, props.session.email)))

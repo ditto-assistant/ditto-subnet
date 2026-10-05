@@ -33159,7 +33159,7 @@ export interface components {
         /** TreasuryActivationPreflight */
         TreasuryActivationPreflight: {
             /** Blocking Reasons */
-            blocking_reasons: ("chain_unavailable" | "inventory_truncated" | "setter_proof_missing")[];
+            blocking_reasons: ("chain_unavailable" | "inventory_truncated" | "setter_proof_missing" | "managed_roster_missing" | "managed_setter_not_permitted")[];
             /**
              * Can Enforce Weights
              * @default false
@@ -33170,6 +33170,8 @@ export interface components {
             chain_failure_kind?: ("timeout" | "connection" | "invalid_evidence" | "reader_unavailable" | "unavailable") | null;
             /** Chain Failure Stage */
             chain_failure_stage?: ("identity" | "setter_roster") | null;
+            /** Chain Permitted Setter Count */
+            chain_permitted_setter_count?: number | null;
             /**
              * Chain Status
              * @enum {string}
@@ -33192,6 +33194,17 @@ export interface components {
             copy_behavior_verified: false;
             /** Fleet Ready For Proposed Policy */
             fleet_ready_for_proposed_policy: boolean;
+            /**
+             * Gate Scope
+             * @default managed_validators
+             * @constant
+             */
+            gate_scope: "managed_validators";
+            /**
+             * Managed Validator Hotkeys
+             * @default []
+             */
+            managed_validator_hotkeys: string[];
             observation: components["schemas"]["TreasuryDispatchObservation"] | null;
             /**
              * Proposal Signature Verified
@@ -33223,6 +33236,11 @@ export interface components {
             expected_collector_policy_digest: string;
             /** Expected Policy Digest */
             expected_policy_digest: string;
+            /**
+             * Managed Validator Hotkeys
+             * @default []
+             */
+            managed_validator_hotkeys: string[];
         };
         /**
          * TreasuryCollectorIdentity
@@ -33588,6 +33606,8 @@ export interface components {
             approved_policy_digest: string;
             /** Collector Policy Digest */
             collector_policy_digest: string;
+            /** Managed Validator Hotkeys */
+            managed_validator_hotkeys: string[];
             /**
              * Mode
              * @enum {string}

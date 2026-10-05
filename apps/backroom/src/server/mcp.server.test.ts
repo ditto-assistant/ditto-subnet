@@ -68,13 +68,13 @@ describe('Backroom MCP tools', () => {
       '../../../../packages/ditto-screening-protocol/tests/fixtures/treasury_enforcing_pin_v2.json', import.meta.url,
     ), 'utf8'))
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
-    const input = { mode: 'observe', expectedRevision: 0, activationEpoch: null,
+    const input = { mode: 'observe', expectedRevision: 0, activationEpoch: null, managedValidatorHotkeys: pin.fleet.map((member: { validator_hotkey: string }) => member.validator_hotkey),
       approvalJson: JSON.stringify({ ...pin.approval, actor: 'FORGED' }),
       expectedPolicyDigest: pin.policy_digest, expectedCollectorPolicyDigest: pin.policy.collector_policy_digest,
       reason: 'Configure public proof only', confirmation: `GAMMA OBSERVE ${pin.policy_digest}` }
     const settings = { version: 1, mode: 'observe', approval: pin.approval,
       approved_policy_digest: pin.policy_digest, collector_policy_digest: pin.policy.collector_policy_digest,
-      activation_epoch: null }
+      managed_validator_hotkeys: input.managedValidatorHotkeys, activation_epoch: null }
     const row = { revision: 1, parent_revision: 0, settings, checksum: 'a'.repeat(64),
       actor: 'platform_admin_token', reason: input.reason, created_at: '2026-10-05T18:00:00Z' }
     const fetchMock = vi.fn().mockResolvedValue(Response.json(row))
@@ -167,6 +167,7 @@ describe('Backroom MCP tools', () => {
       proposal_signature_verified: true, configured_policy_matches: false,
       configured_collector_matches: false, chain_status: 'unavailable', observation: null,
       chain_failure_stage: null, chain_failure_kind: null,
+      gate_scope: 'managed_validators', managed_validator_hotkeys: [], chain_permitted_setter_count: null,
       required_setter_count: null, setters: [], truncated: false,
       fleet_ready_for_proposed_policy: false, blocking_reasons: ['chain_unavailable'],
       weight_effect: 'none', can_enforce_weights: false, copy_behavior_verified: false,
@@ -185,11 +186,15 @@ describe('Backroom MCP tools', () => {
       expect(url).toContain('/api/v1/admin/treasury-settings/activation-preflight')
       expect(init.method).toBe('POST')
       expect(JSON.parse(String(init.body))).toEqual({ approval: pin.approval,
-        expected_policy_digest: pin.policy_digest, expected_collector_policy_digest: pin.policy.collector_policy_digest })
+        expected_policy_digest: pin.policy_digest, expected_collector_policy_digest: pin.policy.collector_policy_digest,
+        managed_validator_hotkeys: [] })
       expect(new Headers(init.headers).has('X-Admin-Actor')).toBe(false)
+      const managed = pin.fleet.map((m: { validator_hotkey: string }) => m.validator_hotkey)
+      const wrongRoster = await client.callTool({ name: 'get_treasury_activation_preflight', arguments: { ...args, managedValidatorHotkeys: managed } })
+      expect(wrongRoster.isError).toBe(true)
       const invalid = await client.callTool({ name: 'get_treasury_activation_preflight', arguments: { ...args, approvalJson: 'x'.repeat(8193) } })
       expect(invalid.isError).toBe(true)
-      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
       fetchMock.mockResolvedValue(Response.json({ ...report, can_enforce_weights: true }))
       expect((await client.callTool({ name: 'get_treasury_activation_preflight', arguments: args })).isError).toBe(true)
       fetchMock.mockResolvedValue(Response.json({ ...report, proposed_policy_digest: 'f'.repeat(64) }))

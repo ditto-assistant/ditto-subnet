@@ -20,7 +20,7 @@ was performed during these checks.
 
 | Runtime | Implemented | Remaining gate |
 | --- | --- | --- |
-| Platform/Pylon/validator | Offline approval, immutable V2 epoch policy/identity/fleet, service-before-burn weights, queued-dispatch fence | Deployment mounts/bindings, complete finalized setter roster, drain/adoption, financial activation |
+| Platform/Pylon/validator | Offline approval, immutable V2 epoch policy/identity/fleet, service-before-burn weights, queued-dispatch fence | Deployment mounts/bindings, audited managed setter roster with current finalized permission, drain/adoption, financial activation |
 | Registration signer | Bounded `register_limit`, separate delegate, durable budget/finality claims | Identity/custody/IAM/reserves, exact installed runtime/policy and action-time authorization |
 | Transfer signer | Attributed liquid earnings and same-hotkey SN118 bucket transfers with durable claims | Self auto-stake route, limits/reserves, durable journals and separate activation |
 | Receipt ingress | Independent historical policy/ledger/finalized chain/effect verification and atomic publication | Exact deployed ingress and bounded accepted receipt |
@@ -54,7 +54,7 @@ The pending inputs remain the existing question; do not repeat or invent them.
 - Separate GCE signer hosts/service accounts and fixed numerical delegate
   secret versions; exact collector policy/digest/offline approval and historical
   Platform revision/checksum/emission approval/digest.
-- Complete finalized permitted setter roster, every validator/Pylon runtime,
+- Explicit operator-selected managed setter roster, each managed validator/Pylon runtime,
   immutable descriptor/image pins, drain owner and rollback epoch boundary.
 
 ### Reserves and custody
@@ -93,7 +93,7 @@ No users/hosts/keys/secrets/grants/timers are created by preparing this package.
 | Registration | `/opt/sn118-collector`, role policy/digest, `sn118-collector@registration.service`/timer | Own journal and own fixed Secret Manager delegate version |
 | Transfer | Same exact runtime, transfer policy/digest, `sn118-collector@transfer.service`/timer | Own journal and own delegate version |
 | Observer | `/opt/sn118-treasury-observer`, `/etc/sn118-treasury-observer/config.json`, root-owned activation.env with `CONFIG_SHA256`, proposed unit | Private queue; separately approved exclusive OAuth credential via `LoadCredential` |
-| Platform/every validator/Pylon | Read-only public approval file and independently pinned digests | Existing identity only; no collector/holding keys |
+| Platform/each managed validator/Pylon | Read-only public approval file and independently pinned digests | Existing identity only; no collector/holding keys |
 
 The observer unit takes only the mounted credential **path** in `--token-file`.
 No token goes in arguments, environment file, unit, packet, screenshot or log.

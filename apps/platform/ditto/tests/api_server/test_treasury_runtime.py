@@ -185,6 +185,7 @@ def payload(mode="observe", revision=0):
             "approval": p.approval.model_dump(mode="json"),
             "approved_policy_digest": p.policy_digest,
             "collector_policy_digest": p.policy.collector_policy_digest,
+            "managed_validator_hotkeys": [m.validator_hotkey for m in p.fleet],
             "activation_epoch": p.epoch_index + 1 if mode == "enforce" else None,
         },
         "reason": "Activate only the exact public approval under full fleet proof",
@@ -277,7 +278,7 @@ async def test_observe_persists_across_processes_without_config_mutation(
     "fault",
     [
         "missing",
-        "extra",
+        "roster_drift",
         "epoch",
         "shadow",
         "ledger",
@@ -302,9 +303,9 @@ async def test_activation_refuses_missing_or_changed_proof(
             await add_runtime(s, datetime.now(UTC))
             await s.commit()
     data = payload("enforce", revision)
-    if fault == "extra":
-        app.state.chain.get_treasury_weight_setters.return_value += (
-            pin().policy.collector_hotkey,
+    if fault == "roster_drift":
+        data["settings"]["managed_validator_hotkeys"].append(
+            pin().policy.collector_hotkey
         )
     elif fault == "epoch":
         data["settings"]["activation_epoch"] -= 1
@@ -379,6 +380,11 @@ async def test_enforce_then_pause_retains_approval_and_refuses_pinned_dispatch(
         assert (
             await client.post(URL, headers=_HEADERS, json=payload(mode, active_rev))
         ).status_code == 409
+    changed = payload("pause", active_rev)
+    changed["settings"]["managed_validator_hotkeys"].append(
+        pin().policy.collector_hotkey
+    )
+    assert (await client.post(URL, headers=_HEADERS, json=changed)).status_code == 409
     paused = await client.post(URL, headers=_HEADERS, json=payload("pause", active_rev))
     assert paused.status_code == 200, paused.text
     assert paused.json()["settings"]["approval"] == r.json()["settings"]["approval"]

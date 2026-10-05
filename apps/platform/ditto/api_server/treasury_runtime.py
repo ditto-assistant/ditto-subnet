@@ -30,6 +30,7 @@ class TreasuryRuntime:
     treasury_approved_collector_policy_digest: str | None
     treasury_weight_enforcement: bool
     activation_epoch: int | None = None
+    treasury_managed_validator_hotkeys: tuple[str, ...] = ()
 
 
 def canonical_settings(settings: dict) -> str:
@@ -86,6 +87,9 @@ async def treasury_runtime(session: AsyncSession, config: Any) -> TreasuryRuntim
             treasury_weight_enforcement=getattr(
                 config, "treasury_weight_enforcement", False
             ),
+            treasury_managed_validator_hotkeys=tuple(
+                getattr(config, "treasury_managed_validator_hotkeys", ())
+            ),
         )
     s = runtime_revision(row).settings
     return TreasuryRuntime(
@@ -96,4 +100,5 @@ async def treasury_runtime(session: AsyncSession, config: Any) -> TreasuryRuntim
         treasury_approved_collector_policy_digest=s.collector_policy_digest,
         treasury_weight_enforcement=s.mode == "enforce",
         activation_epoch=s.activation_epoch,
+        treasury_managed_validator_hotkeys=s.managed_validator_hotkeys,
     )

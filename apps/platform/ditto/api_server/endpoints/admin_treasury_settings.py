@@ -104,6 +104,7 @@ async def get_treasury_ledger_readiness(
             now=datetime.now(UTC),
             policy_digest=readiness.configured_proposal.digest,
             collector_digest=readiness.configured_proposal.collector_policy_digest,
+            required_hotkeys=config.treasury_managed_validator_hotkeys,
         )
     except ValueError:
         return readiness.model_copy(
@@ -114,14 +115,19 @@ async def get_treasury_ledger_readiness(
         )
     pin = readiness.stored_enforcing_pin
     if not readiness.enforcement_configured or pin is None:
-        # Fresh reports alone cannot prove the complete chain-active roster.
+        # Fresh reports alone cannot prove an active epoch for the managed roster.
         return readiness
     from ditto_screening_protocol.treasury_enforcement import (
         require_treasury_weight_authority,
     )
 
     try:
-        if fleet != pin.fleet or readiness.proposal_approval_status != "verified":
+        if (
+            fleet != pin.fleet
+            or readiness.proposal_approval_status != "verified"
+            or set(config.treasury_managed_validator_hotkeys)
+            != {m.validator_hotkey for m in pin.fleet}
+        ):
             raise ValueError("enforcing pin differs from approved live fleet")
         if (
             config.activation_epoch is not None
@@ -132,9 +138,9 @@ async def get_treasury_ledger_readiness(
         chain_keys = await state.chain.get_treasury_weight_setters(
             pin.policy, block_hash=observed.finalized_block_hash
         )
-        if not chain_keys or not set(chain_keys).issubset(
-            {member.validator_hotkey for member in fleet}
-        ):
+        if not chain_keys or not set(
+            config.treasury_managed_validator_hotkeys
+        ).issubset(chain_keys):
             raise ValueError("chain weight-setter roster differs from live fleet")
         require_treasury_weight_authority(
             pin,

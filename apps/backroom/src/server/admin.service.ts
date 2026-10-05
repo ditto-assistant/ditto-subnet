@@ -85,6 +85,7 @@ export async function recordTreasuryRuntime(rawInput: unknown, actor: string) {
   const settings = { version: 1 as const, mode: input.mode, approval,
     approved_policy_digest: input.expectedPolicyDigest,
     collector_policy_digest: input.expectedCollectorPolicyDigest,
+    managed_validator_hotkeys: input.managedValidatorHotkeys,
     activation_epoch: input.activationEpoch }
   const result = treasuryRuntimeRevisionSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-runtime', {
     method: 'POST', actor, timeoutMs: 120_000,
@@ -104,11 +105,14 @@ export async function fetchTreasuryActivationPreflight(rawInput: unknown) {
       approval,
       expected_policy_digest: input.expectedPolicyDigest,
       expected_collector_policy_digest: input.expectedCollectorPolicyDigest,
+      managed_validator_hotkeys: input.managedValidatorHotkeys ?? [],
     },
   })
   const result = treasuryActivationPreflightSchema.parse(payload)
   if (result.proposed_policy_digest !== input.expectedPolicyDigest
-    || result.proposed_collector_policy_digest !== input.expectedCollectorPolicyDigest) {
+    || result.proposed_collector_policy_digest !== input.expectedCollectorPolicyDigest
+    || (input.managedValidatorHotkeys !== undefined
+      && JSON.stringify([...result.managed_validator_hotkeys].sort()) !== JSON.stringify([...input.managedValidatorHotkeys].sort()))) {
     throw new Error('Treasury preflight response differs from requested policy')
   }
   return result

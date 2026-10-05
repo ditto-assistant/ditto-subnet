@@ -159,6 +159,9 @@ def app_state(p):
     )
     return SimpleNamespace(
         config=SimpleNamespace(
+            treasury_managed_validator_hotkeys=tuple(
+                m.validator_hotkey for m in p.fleet
+            ),
             treasury_shadow_approval=p.approval,
             treasury_approved_policy_digest=p.policy_digest,
             treasury_approved_collector_policy_digest=p.policy.collector_policy_digest,
@@ -213,8 +216,14 @@ async def test_producer_binds_real_approval_complete_roster_and_epoch(session):
     state.chain.get_treasury_weight_setters.assert_awaited_once_with(
         p.policy, block_hash=p.identity.finalized_block_hash
     )
-    # A chain-active setter without a signed fresh runtime must halt pinning.
+    # Independent permitted setters do not block our managed activation.
     state.chain.get_treasury_weight_setters.return_value += (p.policy.collector_hotkey,)
+    assert (
+        await enforcing_pin_from_observation(state, session, shadow, schedule, now=now)
+        == p
+    )
+    # A missing managed member still blocks; membership never shrinks on staleness.
+    state.config.treasury_managed_validator_hotkeys += (p.policy.collector_hotkey,)
     with pytest.raises(ValueError, match="no fresh proof"):
         await enforcing_pin_from_observation(state, session, shadow, schedule, now=now)
 
@@ -228,6 +237,8 @@ async def test_producer_binds_real_approval_complete_roster_and_epoch(session):
         "unlisted_requester",
         "new_setter",
         "missing_roster",
+        "managed_permit_lost",
+        "managed_roster_drift",
         "epoch_rollover",
         "owner_drift",
         "uid_reuse",
@@ -256,6 +267,12 @@ async def test_requester_revalidates_current_chain_and_every_pinned_member(
         )
     elif fault == "missing_roster":
         state.chain.get_treasury_weight_setters.return_value = ()
+    elif fault == "managed_permit_lost":
+        state.chain.get_treasury_weight_setters.return_value = (
+            p.policy.collector_hotkey,
+        )
+    elif fault == "managed_roster_drift":
+        state.config.treasury_managed_validator_hotkeys += (p.policy.collector_hotkey,)
     elif fault == "epoch_rollover":
         state.chain.get_treasury_dispatch_observation.return_value = (
             observation.model_copy(update={"epoch_index": observation.epoch_index + 1})
@@ -276,7 +293,7 @@ async def test_requester_revalidates_current_chain_and_every_pinned_member(
     elif fault == "rpc_failure":
         state.chain.get_treasury_dispatch_observation.side_effect = TimeoutError()
     await session.flush()
-    if fault == "none":
+    if fault in {"none", "new_setter"}:
         await require_enforcing_requester(session, p, hotkey, now=now, app_state=state)
         state.chain.get_treasury_weight_setters.assert_awaited_once_with(
             p.policy, block_hash=observation.finalized_block_hash

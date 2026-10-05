@@ -103,10 +103,12 @@ export const treasuryLedgerReadinessSchema = z.object({
 }) satisfies z.ZodType<components['schemas']['TreasuryLedgerReadiness']>
 
 
+const managedRoster = z.array(address).min(1).max(128).refine(keys => new Set(keys).size === keys.length, 'Managed roster must be distinct')
 export const treasuryActivationPreflightInputSchema = z.object({
   approvalJson: z.string().min(1).max(8192),
   expectedPolicyDigest: digest,
   expectedCollectorPolicyDigest: digest,
+  managedValidatorHotkeys: managedRoster.optional(),
 })
 
 export const publicTreasuryApprovalSchema = z.object({
@@ -117,7 +119,7 @@ export const publicTreasuryApprovalSchema = z.object({
 export const treasuryRuntimeSettingsSchema = z.object({
   version: z.literal(1), mode: z.enum(['observe', 'enforce', 'pause']),
   approval: publicTreasuryApprovalSchema, approved_policy_digest: digest,
-  collector_policy_digest: digest, activation_epoch: z.number().int().nonnegative().nullable().default(null),
+  collector_policy_digest: digest, managed_validator_hotkeys: managedRoster, activation_epoch: z.number().int().nonnegative().nullable().default(null),
 })
 export const treasuryRuntimeRevisionSchema = z.object({
   revision: z.number().int().positive(), parent_revision: z.number().int().nonnegative(),
@@ -133,6 +135,7 @@ export const recordTreasuryRuntimeInputSchema = {
   mode: z.enum(['observe', 'enforce', 'pause']),
   approvalJson: z.string().min(1).max(8192),
   expectedPolicyDigest: digest, expectedCollectorPolicyDigest: digest,
+  managedValidatorHotkeys: managedRoster,
   activationEpoch: z.number().int().nonnegative().nullable(),
   reason: z.string().trim().min(8), confirmation: z.string().min(1).max(100),
 }
@@ -155,6 +158,9 @@ export const treasuryActivationPreflightSchema = z.object({
     finalized_block_hash: hash,
   }).nullable(),
   required_setter_count: z.number().int().min(1).max(4096).nullable(),
+  gate_scope: z.literal('managed_validators').default('managed_validators'),
+  managed_validator_hotkeys: z.array(address).max(128).default([]),
+  chain_permitted_setter_count: z.number().int().min(1).max(4096).nullable().default(null),
   setters: z.array(z.object({
     validator_hotkey: address,
     required_by_chain: z.boolean(),
@@ -166,13 +172,18 @@ export const treasuryActivationPreflightSchema = z.object({
   })).max(512),
   truncated: z.boolean(),
   fleet_ready_for_proposed_policy: z.boolean(),
-  blocking_reasons: z.array(z.enum(['chain_unavailable', 'inventory_truncated', 'setter_proof_missing'])).max(3),
+  blocking_reasons: z.array(z.enum(['chain_unavailable', 'inventory_truncated', 'setter_proof_missing', 'managed_roster_missing', 'managed_setter_not_permitted'])).max(5),
   weight_effect: z.literal('none'),
   can_enforce_weights: z.literal(false),
   copy_behavior_verified: z.literal(false),
 }).superRefine((value, context) => {
   if (value.fleet_ready_for_proposed_policy && (value.chain_status !== 'verified'
     || value.observation === null || value.required_setter_count === null
+    || value.managed_validator_hotkeys.length !== value.required_setter_count
+    || new Set(value.managed_validator_hotkeys).size !== value.managed_validator_hotkeys.length
+    || value.setters.length !== value.managed_validator_hotkeys.length
+    || value.setters.some(row => !value.managed_validator_hotkeys.includes(row.validator_hotkey))
+    || new Set(value.setters.map(row => row.validator_hotkey)).size !== value.setters.length
     || value.truncated || value.blocking_reasons.length !== 0
     || value.setters.some(row => row.status !== 'ready')
     || value.setters.filter(row => row.required_by_chain).length !== value.required_setter_count)) {

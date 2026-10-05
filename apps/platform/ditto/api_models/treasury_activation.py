@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ditto_screening_protocol.treasury import Address, Digest
 from ditto_screening_protocol.treasury_approval import TreasuryPolicyApproval
@@ -25,6 +25,8 @@ TreasuryPreflightBlockReason = Literal[
     "chain_unavailable",
     "inventory_truncated",
     "setter_proof_missing",
+    "managed_roster_missing",
+    "managed_setter_not_permitted",
 ]
 
 
@@ -34,6 +36,16 @@ class TreasuryActivationPreflightRequest(BaseModel):
     approval: TreasuryPolicyApproval
     expected_policy_digest: Digest
     expected_collector_policy_digest: Digest
+    managed_validator_hotkeys: Annotated[
+        tuple[Address, ...], Field(max_length=128)
+    ] = ()
+
+    @field_validator("managed_validator_hotkeys")
+    @classmethod
+    def distinct_managed_keys(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError("managed validator roster must be distinct")
+        return value
 
 
 class TreasurySetterPreflight(BaseModel):
@@ -70,6 +82,9 @@ class TreasuryActivationPreflight(BaseModel):
     ) = None
     observation: TreasuryDispatchObservation | None
     required_setter_count: Annotated[int, Field(ge=1, le=4096)] | None
+    gate_scope: Literal["managed_validators"] = "managed_validators"
+    managed_validator_hotkeys: tuple[Address, ...] = ()
+    chain_permitted_setter_count: Annotated[int, Field(ge=1, le=4096)] | None = None
     setters: Annotated[
         list[TreasurySetterPreflight], Field(max_length=PREFLIGHT_ROW_LIMIT)
     ]

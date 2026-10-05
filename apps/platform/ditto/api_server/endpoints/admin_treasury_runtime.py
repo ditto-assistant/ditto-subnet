@@ -99,7 +99,12 @@ async def record_treasury_runtime(
     if previous is not None and previous.mode == "enforce" and settings.mode != "pause":
         raise HTTPException(409, "Pause Gamma before changing or rearming its policy")
     if settings.mode == "pause":
-        if previous is None or settings.approval != previous.approval:
+        if (
+            previous is None
+            or settings.approval != previous.approval
+            or set(settings.managed_validator_hotkeys)
+            != set(previous.managed_validator_hotkeys)
+        ):
             raise HTTPException(409, "Pause must retain the configured public approval")
     else:
         preflight = await activation_preflight(
@@ -109,6 +114,7 @@ async def record_treasury_runtime(
                 approval=settings.approval,
                 expected_policy_digest=settings.approved_policy_digest,
                 expected_collector_policy_digest=settings.collector_policy_digest,
+                managed_validator_hotkeys=settings.managed_validator_hotkeys,
             ),
             now=datetime.now(UTC),
         )
@@ -117,15 +123,21 @@ async def record_treasury_runtime(
                 409, "Finalized Gamma collector identity is unavailable"
             )
         if settings.mode == "enforce":
-            if previous is None or previous.approval != settings.approval:
+            if (
+                previous is None
+                or previous.approval != settings.approval
+                or set(previous.managed_validator_hotkeys)
+                != set(settings.managed_validator_hotkeys)
+            ):
                 raise HTTPException(
-                    409, "Observe the exact approved policy before activation"
+                    409,
+                    "Observe the exact approved policy and managed roster "
+                    "before activation",
                 )
             if not preflight.fleet_ready_for_proposed_policy:
                 raise HTTPException(
                     409,
-                    "Every permitted setter and fresh reporter must prove "
-                    "the exact Gamma guard",
+                    "Every configured managed setter must prove the exact Gamma guard",
                 )
             if settings.activation_epoch != preflight.observation.epoch_index + 1:
                 raise HTTPException(

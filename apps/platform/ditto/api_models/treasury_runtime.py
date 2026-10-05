@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ditto_screening_protocol.treasury import Digest
+from ditto_screening_protocol.treasury import Address, Digest
 from ditto_screening_protocol.treasury_approval import TreasuryPolicyApproval
 
 
@@ -17,10 +17,17 @@ class TreasuryRuntimeSettings(BaseModel):
     approval: TreasuryPolicyApproval
     approved_policy_digest: Digest
     collector_policy_digest: Digest
+    managed_validator_hotkeys: Annotated[
+        tuple[Address, ...], Field(min_length=1, max_length=128)
+    ]
     activation_epoch: Annotated[int, Field(strict=True, ge=0)] | None = None
 
     @model_validator(mode="after")
     def binds_policy(self):
+        if len(set(self.managed_validator_hotkeys)) != len(
+            self.managed_validator_hotkeys
+        ):
+            raise ValueError("managed validator roster must be distinct")
         if self.approval.policy.digest != self.approved_policy_digest or (
             self.approval.policy.collector_policy_digest != self.collector_policy_digest
         ):
