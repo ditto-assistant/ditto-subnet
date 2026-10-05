@@ -12,6 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.treasury_activation import (
+    TreasuryActivationPreflight,
+    TreasuryActivationPreflightRequest,
+)
 from ditto.api_models.treasury_readiness import TreasuryLedgerReadiness
 from ditto.api_models.treasury_settings import (
     AdminTreasurySettingsRequest,
@@ -48,6 +52,31 @@ async def _latest(session: AsyncSession) -> RevisionRow | None:
     return await session.scalar(
         select(RevisionRow).order_by(RevisionRow.revision.desc()).limit(1)
     )
+
+
+@router.post("/activation-preflight", response_model=TreasuryActivationPreflight)
+async def get_treasury_activation_preflight(
+    payload: TreasuryActivationPreflightRequest,
+    request: Request,
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> TreasuryActivationPreflight:
+    from datetime import UTC, datetime
+
+    from ditto.api_server.treasury_activation import activation_preflight
+
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return await activation_preflight(
+            request.app.state, session, payload, now=datetime.now(UTC)
+        )
+    except ValueError:
+        raise HTTPException(
+            400,
+            "Invalid public treasury approval or preflight evidence",
+            headers={"Cache-Control": "no-store"},
+        ) from None
 
 
 @router.get("/ledger-readiness", response_model=TreasuryLedgerReadiness)

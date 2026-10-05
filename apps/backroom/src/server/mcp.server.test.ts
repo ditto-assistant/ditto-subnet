@@ -111,6 +111,46 @@ describe('Backroom MCP tools', () => {
     } finally { await writer.client.close(); await writer.server.close() }
   })
 
+  it('preflights a proposed public Gamma policy with read scope and no actor/write side effects', async () => {
+    const { readFileSync } = await import('node:fs')
+    const pin = JSON.parse(readFileSync(new URL(
+      '../../../../packages/ditto-screening-protocol/tests/fixtures/treasury_enforcing_pin_v2.json', import.meta.url,
+    ), 'utf8'))
+    const report = {
+      checked_at: '2026-10-05T16:00:00Z', proposed_policy_digest: pin.policy_digest,
+      proposed_collector_policy_digest: pin.policy.collector_policy_digest,
+      proposal_signature_verified: true, configured_policy_matches: false,
+      configured_collector_matches: false, chain_status: 'unavailable', observation: null,
+      required_setter_count: null, setters: [], truncated: false,
+      fleet_ready_for_proposed_policy: false, blocking_reasons: ['chain_unavailable'],
+      weight_effect: 'none', can_enforce_weights: false, copy_behavior_verified: false,
+    }
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(report))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const args = { approvalJson: JSON.stringify({ ...pin.approval, future: true }),
+      expectedPolicyDigest: pin.policy_digest, expectedCollectorPolicyDigest: pin.policy.collector_policy_digest }
+    try {
+      const result = await client.callTool({ name: 'get_treasury_activation_preflight', arguments: args })
+      expect(result.isError).not.toBe(true)
+      expect(readJsonResult(result)).toEqual(report)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/admin/treasury-settings/activation-preflight')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({ approval: pin.approval,
+        expected_policy_digest: pin.policy_digest, expected_collector_policy_digest: pin.policy.collector_policy_digest })
+      expect(new Headers(init.headers).has('X-Admin-Actor')).toBe(false)
+      const invalid = await client.callTool({ name: 'get_treasury_activation_preflight', arguments: { ...args, approvalJson: 'x'.repeat(8193) } })
+      expect(invalid.isError).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      fetchMock.mockResolvedValue(Response.json({ ...report, can_enforce_weights: true }))
+      expect((await client.callTool({ name: 'get_treasury_activation_preflight', arguments: args })).isError).toBe(true)
+      fetchMock.mockResolvedValue(Response.json({ ...report, proposed_policy_digest: 'f'.repeat(64) }))
+      expect((await client.callTool({ name: 'get_treasury_activation_preflight', arguments: args })).isError).toBe(true)
+    } finally { await client.close(); await server.close() }
+  })
+
   it('keeps benchmark canary mutations write-scoped', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -346,6 +386,7 @@ describe('Backroom MCP tools', () => {
         'get_submission_cooldown',
         'get_treasury_settings',
         'get_treasury_receipts',
+        'get_treasury_activation_preflight',
         'get_treasury_ledger_readiness',
         'quote_treasury_topup',
         'preview_treasury_topup',

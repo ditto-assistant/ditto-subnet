@@ -101,3 +101,56 @@ export const treasuryLedgerReadinessSchema = z.object({
     context.addIssue({ code: 'custom', message: 'Weight readiness requires a verified enforcing epoch and complete fleet' })
   }
 }) satisfies z.ZodType<components['schemas']['TreasuryLedgerReadiness']>
+
+
+export const treasuryActivationPreflightInputSchema = z.object({
+  approvalJson: z.string().min(1).max(8192),
+  expectedPolicyDigest: digest,
+  expectedCollectorPolicyDigest: digest,
+})
+
+export const publicTreasuryApprovalSchema = z.object({
+  policy,
+  signature: z.string().regex(/^0x[0-9a-f]{128}$/),
+})
+
+export const treasuryActivationPreflightSchema = z.object({
+  checked_at: z.string().datetime({ offset: true }),
+  proposed_policy_digest: digest,
+  proposed_collector_policy_digest: digest,
+  proposal_signature_verified: z.literal(true),
+  configured_policy_matches: z.boolean(),
+  configured_collector_matches: z.boolean(),
+  chain_status: z.enum(['verified', 'unavailable']),
+  observation: z.object({
+    identity,
+    epoch_index: z.number().int().nonnegative(),
+    first_block: z.number().int().nonnegative(),
+    finalized_block: z.number().int().nonnegative(),
+    finalized_block_hash: hash,
+  }).nullable(),
+  required_setter_count: z.number().int().min(1).max(4096).nullable(),
+  setters: z.array(z.object({
+    validator_hotkey: address,
+    required_by_chain: z.boolean(),
+    seen_at: z.string().datetime({ offset: true }).nullable(),
+    protocol_version: z.number().int().nullable(),
+    capability: fleetMember.omit({ validator_hotkey: true, protocol_version: true }).nullable(),
+    status: z.enum(['ready', 'missing_heartbeat', 'inventory_not_checked', 'heartbeat_outside_window',
+      'invalid_heartbeat', 'missing_guard', 'unsupported_protocol', 'policy_mismatch']),
+  })).max(512),
+  truncated: z.boolean(),
+  fleet_ready_for_proposed_policy: z.boolean(),
+  blocking_reasons: z.array(z.enum(['chain_unavailable', 'inventory_truncated', 'setter_proof_missing'])).max(3),
+  weight_effect: z.literal('none'),
+  can_enforce_weights: z.literal(false),
+  copy_behavior_verified: z.literal(false),
+}).superRefine((value, context) => {
+  if (value.fleet_ready_for_proposed_policy && (value.chain_status !== 'verified'
+    || value.observation === null || value.required_setter_count === null
+    || value.truncated || value.blocking_reasons.length !== 0
+    || value.setters.some(row => row.status !== 'ready')
+    || value.setters.filter(row => row.required_by_chain).length !== value.required_setter_count)) {
+    context.addIssue({ code: 'custom', message: 'Preflight fleet readiness requires complete exact-policy read evidence' })
+  }
+}) satisfies z.ZodType<components['schemas']['TreasuryActivationPreflight']>

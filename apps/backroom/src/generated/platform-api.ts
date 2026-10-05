@@ -3425,6 +3425,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/treasury-settings/activation-preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Get Treasury Activation Preflight */
+        post: operations["get_treasury_activation_preflight_api_v1_admin_treasury_settings_activation_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/treasury-settings/ledger-readiness": {
         parameters: {
             query?: never;
@@ -33111,6 +33128,70 @@ export interface components {
             /** Revision */
             revision: number;
         };
+        /** TreasuryActivationPreflight */
+        TreasuryActivationPreflight: {
+            /** Blocking Reasons */
+            blocking_reasons: ("chain_unavailable" | "inventory_truncated" | "setter_proof_missing")[];
+            /**
+             * Can Enforce Weights
+             * @default false
+             * @constant
+             */
+            can_enforce_weights: false;
+            /**
+             * Chain Status
+             * @enum {string}
+             */
+            chain_status: "verified" | "unavailable";
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Configured Collector Matches */
+            configured_collector_matches: boolean;
+            /** Configured Policy Matches */
+            configured_policy_matches: boolean;
+            /**
+             * Copy Behavior Verified
+             * @default false
+             * @constant
+             */
+            copy_behavior_verified: false;
+            /** Fleet Ready For Proposed Policy */
+            fleet_ready_for_proposed_policy: boolean;
+            observation: components["schemas"]["TreasuryDispatchObservation"] | null;
+            /**
+             * Proposal Signature Verified
+             * @default true
+             * @constant
+             */
+            proposal_signature_verified: true;
+            /** Proposed Collector Policy Digest */
+            proposed_collector_policy_digest: string;
+            /** Proposed Policy Digest */
+            proposed_policy_digest: string;
+            /** Required Setter Count */
+            required_setter_count: number | null;
+            /** Setters */
+            setters: components["schemas"]["TreasurySetterPreflight"][];
+            /** Truncated */
+            truncated: boolean;
+            /**
+             * Weight Effect
+             * @default none
+             * @constant
+             */
+            weight_effect: "none";
+        };
+        /** TreasuryActivationPreflightRequest */
+        TreasuryActivationPreflightRequest: {
+            approval: components["schemas"]["TreasuryPolicyApproval"];
+            /** Expected Collector Policy Digest */
+            expected_collector_policy_digest: string;
+            /** Expected Policy Digest */
+            expected_policy_digest: string;
+        };
         /**
          * TreasuryCollectorIdentity
          * @description Finalized read values, not a caller's unbound verified=True assertion.
@@ -33138,6 +33219,21 @@ export interface components {
             uid: number;
             /** Uid Hotkey */
             uid_hotkey: string;
+        };
+        /**
+         * TreasuryDispatchObservation
+         * @description Public storage observations at exactly one currently finalized hash.
+         */
+        TreasuryDispatchObservation: {
+            /** Epoch Index */
+            epoch_index: number;
+            /** Finalized Block */
+            finalized_block: number;
+            /** Finalized Block Hash */
+            finalized_block_hash: string;
+            /** First Block */
+            first_block: number;
+            identity: components["schemas"]["TreasuryCollectorIdentity"];
         };
         /** TreasuryEmissionBucket */
         TreasuryEmissionBucket: {
@@ -33436,6 +33532,23 @@ export interface components {
             purpose: string;
             /** Service Account Ref */
             service_account_ref?: string | null;
+        };
+        /** TreasurySetterPreflight */
+        TreasurySetterPreflight: {
+            capability: components["schemas"]["TreasuryWeightCapability"] | null;
+            /** Protocol Version */
+            protocol_version: number | null;
+            /** Required By Chain */
+            required_by_chain: boolean;
+            /** Seen At */
+            seen_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "missing_heartbeat" | "inventory_not_checked" | "heartbeat_outside_window" | "invalid_heartbeat" | "missing_guard" | "unsupported_protocol" | "policy_mismatch";
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /** TreasurySettings */
         TreasurySettings: {
@@ -42952,6 +43065,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TreasurySettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_treasury_activation_preflight_api_v1_admin_treasury_settings_activation_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TreasuryActivationPreflightRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasuryActivationPreflight"];
                 };
             };
             /** @description Validation Error */

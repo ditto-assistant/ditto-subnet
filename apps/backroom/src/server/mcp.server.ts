@@ -1,3 +1,4 @@
+import { treasuryActivationPreflightInputSchema } from '../lib/treasury-ledger.schemas'
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import {
@@ -16,7 +17,7 @@ import { createTreasuryObserverServer } from './treasury-observer-mcp.server'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
 import { fetchTreasuryReceipts, recordTreasuryReceipt } from './admin.service'
-import { fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
+import { fetchTreasuryActivationPreflight, fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
   cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema } from '../lib/benchmark-canary.schemas'
@@ -675,7 +676,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   preview_screening_quarantine_batch:
     'Validate up to 50 exact release/rescreen/reject selections. Dry-run only; no state or scoring writes.',
   get_ledger_epoch_snapshots:
-    'Read the epoch-pinned validator ledger history: per chain epoch, the frozen fold input digest, champion, incumbent, recipients, and whether the crown changed.',
+    'Read frozen epoch ledger, fold digest, crown and recipients.',
   create_ath_rulings_upload:
     'Presigned five-minute PUT (<= 1 MiB JSON) for one ATH rulings document under this operator\'s prefix. Requires backroom:write.',
   preview_ath_rulings_batch:
@@ -683,15 +684,15 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   execute_ath_rulings_batch:
     'Apply the previewed rulings under "APPLY ATH RULINGS BATCH"; re-reads the board, audits per item, refuses rows whose guards or crown outcome moved. Requires backroom:write.',
   get_validator_weight_diagnostics:
-    'Read block-bound vTrust, revealed weights, pending timelock rounds, and each commit\'s implied reveal block; never submits weights.',
+    'Read finalized vTrust, revealed weights and pending timelock/reveal blocks. No submission.',
   agent_scoring_readiness:
     'Read one submission\'s scoring blockers: dataset, screened image, policy version, status, and lease eligibility.',
   get_agent_coding_certifications:
     'Artifact-bound coding certifications; weight_eligible is always false. Requires backroom:read.',
   get_screener_capacity:
-    'Read screener capacity, provider priorities, and recent build, runtime, and source-review jobs before manual retry.',
+    'Read screener capacity, routing and recent jobs before retry.',
   get_screening_infra_retries:
-    'Read infra-failure retry state: policy, per-state counts, parked agents (next retry, failure count), per-signature breakers. Derived at read time.',
+    'Read infra retry policy, parked agents, per-state counts and signature breakers. Derived at read time.',
   set_screener_provider_settings:
     'Apply complete revisioned screener routing and bounded GCE overflow settings after reading get_screener_capacity.',
   set_screener_node_channel_settings:
@@ -887,22 +888,23 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   retry_failed_screening_now:
     'Manually retry the latest terminal screening attempt with fresh artifact/score-count/attempt guards; preserves history.',
   get_screening_baseline_diff:
-    'Starter/residual diff. custom_added_lines_complete=false means a lower bound; omitted_paths are unexamined. File reader gives bodies. Artifact scope.',
+    'Starter diff. Incomplete custom lines are lower bounds; omitted paths are unexamined. Bodies via file reader. Artifact scope.',
   list_screening_source_files:
-    'Readable archive manifest; default returns the full platform-capped listing. has_more means paging remains; truncated means dropped paths cannot be recovered by offset. If either is set, the inventory is incomplete. Requires artifact scope.',
+    'Readable archive manifest. has_more or truncated means incomplete inventory; truncated paths cannot be paged back. Artifact scope.',
   get_efficiency_bonus_settings:
-    'Read subnet efficiency policy, fold state, defaults and optional history (default 0). Ditto app entitlement flags are not served by this server.',
+    'Read subnet efficiency policy, fold and optional history (default 0).',
   get_leaderboard:
-    'Authoritative leaderboard for a benchmark version (default current): rank, score state, emission eligibility and registration.',
+    'Read leaderboard rank, score, emission eligibility and registration; default current benchmark.',
   get_source_release_policy:
     'Source gate/counts and up to 25 receipts. Public needs completed winner emissions; releases continue. Optional history, default 0.',
   set_burn_settings:
     'Apply a burn revision with expectedRevision, reason and "APPLY BURN SETTINGS". MOVES TAO; scales miner weights without reranking. Fleet effect takes an epoch. See tool help.',
   get_burn_settings:
-    'Read effective burn, miner remainder, revision and live validator fold coverage. Optional newest-first history, default 0.',
+    'Read burn, miner remainder, revision and fleet fold. Optional history, default 0.',
   get_emission_eligibility_policy:
-    'Read emission gate posture, fleet fold, stored/default revision, windows and shadow withheld count. Optional history.',
+    'Read emission gates, fleet fold, revision, windows and shadow withheld count; optional history.',
   get_treasury_settings: 'Read shadow treasury buckets/history or one exact revision. No weights or funds move.',
+  get_treasury_activation_preflight: 'Read signed Gamma policy, finalized collector and full setter readiness. No activation.',
   get_treasury_ledger_readiness: 'Read shadow proposal, stored epoch identity and funding blockers. No activation.',
   record_treasury_settings: 'Record a shadow treasury revision with CAS and confirmation. No weights or funds move.',
   get_treasury_receipts: 'Read verified private treasury receipt history and publication state.',
@@ -3451,6 +3453,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'record_treasury_receipt',
     { title: 'Ingest independently verified treasury receipt', description: 'Ingest a selection from the read-only collector export or finalized holding-wallet payment observer. Platform independently verifies exact historical epoch, offline policy, destination, finalized runtime and actual chain effect. Replays are idempotent; conflicts refuse. Publication uses historical bucket policy. A journal selection or vendor payment is not provider credit proof. No signatures, transfers or activation. Requires backroom:write and INGEST VERIFIED TREASURY RECEIPT confirmation.', inputSchema: treasuryReceiptInputSchema, annotations: toolAnnotations('write', true) },
     async (input) => write(() => recordTreasuryReceipt(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_treasury_activation_preflight',
+    {
+      title: 'Preflight exact Gamma policy and full validator roster',
+      description: 'Read-only proposed-policy check before configuration. Provide approvalJson containing only the public emission policy and coldkey signature, plus both exact expected digests. Never provide private keys or seeds. Platform verifies the public signature before reading finalized collector Owner/Uids/Keys and every chain-permitted validator at the same hash. Reports missing, stale, unsupported or mismatched signed heartbeat guards, including fresh extra reporters used by the enforcing gate. All rows are bounded; truncation refuses fleet readiness. This is prospective capability evidence, not verified copy-weight behavior, current epoch authorization, an activation command or transfer approval. Configured policy matching is separate from proposed-policy verification. No settings, epoch, observer, weights, funds or timer are changed. Requires backroom:read.',
+      inputSchema: treasuryActivationPreflightInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchTreasuryActivationPreflight(input)),
   )
 
   registerTool(
