@@ -142,6 +142,7 @@ import {
   setValidatorSlotSettingsInputSchema,
   setValidatorIssuancePauseInputSchema,
   updateSubmissionSettingsInputSchema,
+  previewSubmissionSettingsInputSchema,
   unbanHotkeyInputSchema,
   updateArtifactReleaseSettingsInputSchema,
   retryFailedScreeningNowInputSchema,
@@ -326,6 +327,7 @@ import {
   fetchArtifactReleaseControl,
   updateArtifactReleaseSettings,
   updateSubmissionSettings,
+  previewSubmissionSettings,
   fetchHotkeyBans,
   unbanHotkey,
   fetchConfirmationBundleSettings,
@@ -914,7 +916,11 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_agent_emission_eligibility:
     'Exact agent eligibility: earning/withheld reason, clear activation time and validator fold visibility.',
   get_submission_cooldown:
-    'Current miner fee and owner-coldkey cooldown; optional newest-first history, historyLimit=0 default.',
+    'Fixed-TAO miner fee, safe bounds, quote lifetime, and owner-coldkey cooldown; optional newest-first history (old/new fee), historyLimit=0 default.',
+  set_submission_cooldown:
+    'Apply a fixed-TAO fee/cooldown revision after preview_submission_settings, with expectedRevision, reason, and its exact confirmation; stale, concurrent or no-op writes return 409. Requires backroom:write.',
+  preview_submission_settings:
+    'Dry-run a fee/cooldown revision: diff, fee ratio, stale flag, exact confirmation, and in-flight quotes that keep their issued fee. Never mutates.',
   list_hotkey_bans: 'Hotkey bans.',
   unban_hotkey: 'Unban.',
   get_confirmation_bundle_settings:
@@ -2303,7 +2309,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get miner submission settings',
       description:
-        'Read the platform-owned TAO fee and cooldown enforced between accepted uploads from the same owner coldkey. Revision history is newest-first and opt-in with historyLimit (default 0). Compatible clients reserve these terms before payment. Requires backroom:read and changes nothing.',
+        'Read the platform-owned TAO fee and cooldown enforced between accepted uploads from the same owner coldkey. Revision history is newest-first and opt-in with historyLimit (default 0). history_incomplete is true when Platform could not return the whole history: it reached its 100-revision page limit, or it omitted a revision in a denomination this build cannot price. If the effective revision itself is unsupported, current is null and unsupported_current gives it raw (fee_amount_raw is not TAO): new quotes are refused until an explicit fixed-TAO fee is applied. Compatible clients reserve these terms before payment. Requires backroom:read and changes nothing.',
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
     },
@@ -2318,6 +2324,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           REVISION_LISTS,
         ),
       ),
+  )
+
+  registerTool(
+    'preview_submission_settings',
+    {
+      title: 'Preview miner submission settings',
+      description:
+        'Dry-run one revision of the platform-owned miner submission fee and cooldown before set_submission_cooldown. Supply expectedRevision (current.revision from get_submission_cooldown, or unsupported_current.revision when current is null), cooldownSeconds, and feeAmountRao (integer rao; 1 TAO = 1,000,000,000 rao; within the safe bounds get_submission_cooldown reports; omit it for a cooldown-only change, which keeps the current fee only if it is fixed TAO within bounds, else 422). Returns the current revision (or unsupported_current, see get_submission_cooldown), the proposed values with an exact nine-decimal TAO rendering, whether expectedRevision is stale (an apply would return 409), fee_change_ratio, applicable, the exact required_confirmation string, the unexpired reserved quotes still in flight, and recoverable_expired_quotes: a reservation binds its issued fee for any payment that finalizes before it expires (quote_lifetime_seconds after issue), and that payment stays recoverable for quote_lifetime_seconds after its block time, so recently expired reservations are an upper bound on quotes that may still be honoured; a payment made after expiry must match the new fee. The denomination is fixed_tao: the fee is an exact TAO amount, never a USD target. Requires backroom:read and changes nothing.',
+      inputSchema: previewSubmissionSettingsInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await previewSubmissionSettings(input)),
   )
 
   registerTool(
@@ -3526,7 +3544,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set miner submission settings',
       description:
-        'Apply one append-only revision of the platform-owned miner submission cooldown and TAO-denominated fee. Supply expectedRevision, cooldownSeconds, feeAmountRao, an operator reason, and the exact confirmation string returned by the schema helper. Requires backroom:write.',
+        'Apply one append-only revision of the platform-owned miner submission cooldown and fixed-TAO fee, effective immediately without a deploy. Run preview_submission_settings first. Supply expectedRevision (current.revision, or unsupported_current.revision when current is null), cooldownSeconds, feeAmountRao (integer rao within the safe bounds get_submission_cooldown reports; may be omitted under the same rule as the preview), an operator reason, and the exact required_confirmation from the preview ("SET SUBMISSION COOLDOWN <seconds> SECONDS FEE <rao> RAO"). A stale expectedRevision, a concurrent write, or a no-op (values equal to the current revision) returns 409 and changes nothing. A payment made before its reservation expires keeps the reserved fee even if uploaded later. Rollback is a new revision re-applying the older value. Requires backroom:write.',
       inputSchema: updateSubmissionSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },

@@ -145,8 +145,12 @@ async def observations(
 ) -> ConversationObservations:
     now = datetime.now(UTC)
     settings = await _settings(session)
+    # A read, not a quote: it must not fail when the effective revision is in
+    # a denomination this build cannot price. Its amount is then not shown.
     fee = await effective_submission_settings(
-        session, default_payment_address=request.app.state.config.upload_payment_address
+        session,
+        default_payment_address=request.app.state.config.upload_payment_address,
+        require_quotable=False,
     )
     rows = list(
         await session.scalars(
@@ -195,7 +199,7 @@ async def observations(
         daily_budget_microusd=DAILY_BUDGET_MICROUSD,
         reserved_last_day_microusd=reserved,
         next_budget_slot_at=next_slot,
-        current_submission_fee_rao=fee.fee_amount_rao,
+        current_submission_fee_rao=fee.fee_amount_rao if fee.quotable else None,
         fee_change_request=AdminSubmissionSettingsRequest(
             expected_revision=fee.revision,
             cooldown_seconds=fee.cooldown_seconds,

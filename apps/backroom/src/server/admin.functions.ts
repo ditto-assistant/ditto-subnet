@@ -42,6 +42,7 @@ import {
   applyScreenerReviewSettingsInputSchema,
   updateArtifactReleaseSettingsInputSchema,
   updateSubmissionSettingsInputSchema,
+  previewSubmissionSettingsInputSchema,
   setBurnSettingsInputSchema,
   setContinualRetestSettingsInputSchema,
   setQueuePolicySettingsInputSchema,
@@ -129,6 +130,8 @@ import {
   updateArtifactReleaseSettings as updateArtifactReleaseSettingsService,
   fetchSubmissionSettingsControl,
   updateSubmissionSettings as updateSubmissionSettingsService,
+  previewSubmissionSettings as previewSubmissionSettingsService,
+  settleSubmissionSettings,
   updateSubmissionDepositAddress as updateSubmissionDepositAddressService,
   fetchBurnSettings,
   setBurnSettings as setBurnSettingsService,
@@ -484,13 +487,24 @@ export const getSubmissionSettingsControl = createServerFn({ method: 'GET' })
     return fetchSubmissionSettingsControl()
   })
 
+export const previewSubmissionSettingsChange = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .validator(previewSubmissionSettingsInputSchema)
+  .handler(({ data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return settleSubmissionSettings(() => previewSubmissionSettingsService(data))
+  })
+
 export const setSubmissionSettings = createServerFn({ method: 'POST' })
   .middleware([writeAuthMiddleware, sameOriginMiddleware])
   .validator(updateSubmissionSettingsInputSchema)
   .handler(({ context, data }) => {
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
-    return updateSubmissionSettingsService(context.session.email, data)
+    return settleSubmissionSettings(() =>
+      updateSubmissionSettingsService(context.session.email, data),
+    )
   })
 
 export const getBurnSettings = createServerFn({ method: 'GET' })

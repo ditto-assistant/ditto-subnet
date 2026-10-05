@@ -17,7 +17,9 @@ export const conversationObservationsSchema = z.object({
   next_budget_slot_at: z.string().nullable().optional(),
   reserved_last_day_microusd: z.number().int().nonnegative(),
   proposed_submission_fee_rao: z.literal(200000000),
-  current_submission_fee_rao: z.number().int(),
+  // Null when the effective fee revision is in a denomination Platform cannot
+  // price; its number is then not a rao amount.
+  current_submission_fee_rao: z.number().int().nullable(),
   fee_change_request: z.object({
     expected_revision: z.number().int(),
     cooldown_seconds: z.number().int(),

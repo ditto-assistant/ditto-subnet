@@ -328,8 +328,8 @@ func TestReusedReservationReturnsCurrentCooldownAndBoundPayment(t *testing.T) {
 	var firstRevision int32
 	if err := pool.QueryRow(t.Context(), `
 		INSERT INTO submission_settings_revisions
-		(parent_revision, cooldown_seconds, fee_amount_rao, reason, actor)
-		VALUES (0, 1800, 40000000, 'initial upload parity settings', 'go-test')
+		(parent_revision, cooldown_seconds, fee_amount_rao, fee_denomination, reason, actor)
+		VALUES (0, 1800, 40000000, 'fixed_tao', 'initial upload parity settings', 'go-test')
 		RETURNING revision`).Scan(&firstRevision); err != nil {
 		t.Fatal(err)
 	}
@@ -339,8 +339,8 @@ func TestReusedReservationReturnsCurrentCooldownAndBoundPayment(t *testing.T) {
 	}
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO submission_settings_revisions
-		(parent_revision, cooldown_seconds, fee_amount_rao, reason, actor)
-		VALUES ($1, 3600, 50000000, 'updated upload parity settings', 'go-test')`, firstRevision); err != nil {
+		(parent_revision, cooldown_seconds, fee_amount_rao, fee_denomination, reason, actor)
+		VALUES ($1, 3600, 50000000, 'fixed_tao', 'updated upload parity settings', 'go-test')`, firstRevision); err != nil {
 		t.Fatal(err)
 	}
 	got := serveCheck(t, d, signedCheckJSON(t, secret, hotkey, sha, map[string]any{"reserve_submission_slot": true}))
@@ -362,8 +362,8 @@ func TestReservationIsAtomicReusableAndBlocksCompetingArchive(t *testing.T) {
 	d := &Deps{Pool: pool, Queries: q, Cfg: &config.Config{Upload: config.UploadConfig{PaymentAddress: fixtureAddress}}}
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO submission_settings_revisions
-		(parent_revision, cooldown_seconds, fee_amount_rao, reason, actor)
-		VALUES (0, 1800, 40000000, 'upload admission test', 'go-test')`); err != nil {
+		(parent_revision, cooldown_seconds, fee_amount_rao, fee_denomination, reason, actor)
+		VALUES (0, 1800, 40000000, 'fixed_tao', 'upload admission test', 'go-test')`); err != nil {
 		t.Fatal(err)
 	}
 	first, _, err := d.reserve(t.Context(), "5Coldkey", fixtureAddress, strings.Repeat("a", 64), now)
@@ -433,4 +433,144 @@ func TestConcurrentReservationsSerializeFirstSubmission(t *testing.T) {
 	if succeeded != 1 || blocked != 1 {
 		t.Fatalf("succeeded=%d blocked=%d", succeeded, blocked)
 	}
+}
+
+// A revision in a denomination this relay has not been reviewed to price must
+// never be served as a fixed TAO fee: eval-pricing and a slot reservation both
+// fail closed with Python's pricing envelope, and no reservation is written.
+func TestUnsupportedFeeDenominationFailsClosed(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	secret, hotkey := newSignedHotkey(t)
+	coldkey := "5UnsupportedDenominationColdkey"
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	d := uploadDeps(pool, coldkey, now)
+	// The production CHECK admits only fixed_tao; drop it in this scratch
+	// database to model a newer writer the relay does not understand.
+	if _, err := pool.Exec(t.Context(), `
+		DO $$
+		DECLARE name text;
+		BEGIN
+			FOR name IN SELECT conname FROM pg_constraint
+				WHERE conrelid = 'submission_settings_revisions'::regclass
+				  AND pg_get_constraintdef(oid) LIKE '%fee_denomination%'
+			LOOP
+				EXECUTE format('ALTER TABLE submission_settings_revisions DROP CONSTRAINT %I', name);
+			END LOOP;
+		END $$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO submission_settings_revisions
+		(parent_revision, cooldown_seconds, fee_amount_rao, fee_denomination, reason, actor)
+		VALUES (0, 1800, 5000000000, 'usd_indexed', 'a five dollar target, not rao', 'go-test')`); err != nil {
+		t.Fatal(err)
+	}
+
+	assertPricingRefused := func(w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+		}
+		var envelope struct {
+			ErrorCode int `json:"error_code"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil || envelope.ErrorCode != errorPricing {
+			t.Fatalf("envelope=%s err=%v", w.Body.String(), err)
+		}
+	}
+
+	pricing := httptest.NewRecorder()
+	d.handleEvalPricing(pricing, httptest.NewRequest(http.MethodGet, "/api/v1/upload/eval-pricing", nil))
+	assertPricingRefused(pricing)
+
+	body := signedCheckJSON(t, secret, hotkey, strings.Repeat("d", 64), map[string]any{"reserve_submission_slot": true})
+	check := httptest.NewRecorder()
+	d.handleCheck(check, httptest.NewRequest(http.MethodPost, "/api/v1/upload/check", strings.NewReader(string(body))))
+	assertPricingRefused(check)
+
+	var reservations int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM upload_admission_reservations`).Scan(&reservations); err != nil {
+		t.Fatal(err)
+	}
+	if reservations != 0 {
+		t.Fatalf("reservations=%d; an unsupported denomination must not issue a quote", reservations)
+	}
+}
+
+// dropDenominationCheck removes the fixed_tao CHECK in this scratch database so
+// a test can model a newer writer's revision the relay cannot price.
+func dropDenominationCheck(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `
+		DO $$
+		DECLARE name text;
+		BEGIN
+			FOR name IN SELECT conname FROM pg_constraint
+				WHERE conrelid = 'submission_settings_revisions'::regclass
+				  AND pg_get_constraintdef(oid) LIKE '%fee_denomination%'
+			LOOP
+				EXECUTE format('ALTER TABLE submission_settings_revisions DROP CONSTRAINT %I', name);
+			END LOOP;
+		END $$`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Mirrors Python's TestReservedQuoteUnderUnquotablePricing: an issued,
+// same-hotkey same-archive reservation is honoured while the current revision
+// cannot be quoted, and validation failures are reported, not turned into 503.
+func TestIssuedReservationHonouredUnderUnquotablePricing(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	secret, hotkey := newSignedHotkey(t)
+	coldkey := "5IssuedQuoteColdkey"
+	sha := strings.Repeat("e", 64)
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	d := uploadDeps(pool, coldkey, now)
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO submission_settings_revisions
+		(parent_revision, cooldown_seconds, fee_amount_rao, fee_denomination, reason, actor)
+		VALUES (0, 1800, 40000000, 'fixed_tao', 'quoted fixed TAO fee', 'go-test')`); err != nil {
+		t.Fatal(err)
+	}
+	issued, _, err := d.reserve(t.Context(), coldkey, hotkey, sha, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropDenominationCheck(t, pool)
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO submission_settings_revisions
+		(parent_revision, cooldown_seconds, fee_amount_rao, fee_denomination, reason, actor)
+		SELECT max(revision), 1800, 5000000000, 'usd_indexed', 'a five dollar target, not rao', 'go-test'
+		FROM submission_settings_revisions`); err != nil {
+		t.Fatal(err)
+	}
+
+	got := serveCheck(t, d, signedCheckJSON(t, secret, hotkey, sha, map[string]any{"reserve_submission_slot": true}))
+	if !got.OK || got.AdmissionToken == nil || *got.AdmissionToken != issued.token {
+		t.Fatalf("issued reservation was not honoured: %+v", got)
+	}
+	if got.PaymentAmountRao == nil || *got.PaymentAmountRao != 40_000_000 {
+		t.Fatalf("issued fee changed: %+v", got)
+	}
+
+	// A validation failure is still reported as such, not as a pricing 503.
+	_, otherHotkey := newSignedHotkey(t)
+	bad := validCheckJSONFor(otherHotkey)
+	w := httptest.NewRecorder()
+	d.handleCheck(w, httptest.NewRequest(http.MethodPost, "/api/v1/upload/check", strings.NewReader(bad)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var rejected checkResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &rejected); err != nil {
+		t.Fatal(err)
+	}
+	if rejected.OK || len(rejected.ErrorCodes) == 0 || rejected.ErrorCodes[0] != errorBadSignature {
+		t.Fatalf("expected a bad-signature rejection: %+v", rejected)
+	}
+}
+
+func validCheckJSONFor(hotkey string) string {
+	return `{"hotkey":"` + hotkey + `","sha256":"` + strings.Repeat("a", 64) +
+		`","file_size_bytes":1,"signature":"` + strings.Repeat("ab", 64) + `"}`
 }

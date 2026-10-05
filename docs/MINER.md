@@ -833,6 +833,25 @@ TAO and was **0.1 TAO (100,000,000 rao)** as of 2026-09-14. Operators can change
 it in Backroom, so treat that as an example. The CLI fetches and shows
 the authoritative TAO amount before confirmation. TAO/USD pricing is used only
 for internal revenue reporting and cannot change whether a payment is accepted.
+The current fee, the policy revision and time it took effect, and recent fee
+changes are public at `GET /api/v1/public/submission-fee` and on the
+dashboard's Submissions page. A fee change does not invalidate a quote you have
+already reserved. What counts is when your transfer finalizes on chain: a
+payment whose block timestamp is before the reservation's 24-hour expiry is
+held to the reserved fee, even if the upload itself arrives later (within the
+payment's own 24-hour recovery window). A payment finalized at or after the
+expiry must match the current fee when it is verified. Three exceptions:
+
+- The reserved fee applies only to the hotkey that reserved it. Upload or
+  recover with that same hotkey; a payment from another hotkey on the same
+  coldkey must match the current fee.
+
+- After your reservation expires, starting a submission for a *different*
+  archive from the same coldkey replaces that reservation. A paid but not yet
+  uploaded payment then loses its reserved fee, so finish or recover a pending
+  payment (rerun the same `ditto upload`) before starting another one.
+- An upload or recovery more than 24 hours after the payment's block time is
+  refused, whatever the fee.
 
 **How long does scoring take?** Screening and a full benchmark both involve
 container work. Expect minutes to hours depending on queue and build time.

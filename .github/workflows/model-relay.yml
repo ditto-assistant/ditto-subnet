@@ -11,6 +11,9 @@ on:
       - apps/platform/alembic/**
       # schema_test.go asserts the request-field fates against this table.
       - docs/inference-request-fields.json
+      # defaults_parity_test.go pins the relay's built-in submission fee and
+      # cooldown to Platform's.
+      - apps/platform/ditto/db/queries/submission_settings.py
 
 concurrency:
   group: model-relay-${{ github.ref }}

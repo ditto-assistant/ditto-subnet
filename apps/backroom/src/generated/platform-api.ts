@@ -3280,6 +3280,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/submission-settings/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Settings Revision
+         * @description Dry-run one revision: the diff, the exact confirmation, and quotes in flight.
+         *
+         *     Read-only (a GET, so it is not an audited mutation). Out-of-bounds values
+         *     are rejected with 422 exactly as the apply endpoint would reject them, and
+         *     a fee-less (cooldown-only) request resolves the fee by the same rule as
+         *     apply, so the returned confirmation is one apply accepts.
+         */
+        get: operations["preview_settings_revision_api_v1_admin_submission_settings_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/traces": {
         parameters: {
             query?: never;
@@ -5449,6 +5474,23 @@ export interface paths {
          * @description Authenticated screener fleet reports with a strict public allowlist.
          */
         get: operations["screeners_api_v1_public_screeners_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/submission-fee": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Submission Fee */
+        get: operations["public_submission_fee_api_v1_public_submission_fee_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -12879,6 +12921,62 @@ export interface components {
             /** Superseded By Version */
             superseded_by_version: number;
         };
+        /**
+         * AdminSubmissionSettingsPreview
+         * @description Read-only dry run of one proposed revision. Previewing changes nothing.
+         */
+        AdminSubmissionSettingsPreview: {
+            /** Applicable */
+            applicable: boolean;
+            bounds: components["schemas"]["SubmissionFeeBounds"];
+            /** Cooldown Changed */
+            cooldown_changed: boolean;
+            /** @description The effective fixed-TAO revision; null when it is in a denomination this build cannot price (see unsupported_current). */
+            current: components["schemas"]["SubmissionSettingsRevision"] | null;
+            /** Expected Revision */
+            expected_revision: number;
+            /**
+             * Fee Change Ratio
+             * @description Proposed ÷ current fee, rounded away from 1 to four decimals (four significant digits when below 0.0001); null if unchanged or the current fee is not a TAO amount.
+             */
+            fee_change_ratio: string | null;
+            /**
+             * Fee Changed
+             * @description The proposed fee amount or denomination differs from the current one (the same comparison apply uses to reject a no-op).
+             */
+            fee_changed: boolean;
+            /** In Flight Quotes */
+            in_flight_quotes: number;
+            /** In Flight Quotes At Other Fees */
+            in_flight_quotes_at_other_fees: number;
+            /** In Flight Quotes Expire By */
+            in_flight_quotes_expire_by: string | null;
+            proposed: components["schemas"]["SubmissionSettingsProposal"];
+            /** Quote Lifetime Seconds */
+            quote_lifetime_seconds: number;
+            /**
+             * Recoverable Expired Quotes
+             * @description Reservations that expired less than quote_lifetime_seconds ago. Each still binds its issued fee only for a payment that finalized before it expired (that payment stays recoverable for quote_lifetime_seconds after its block time), so this is an upper bound on expired quotes that may still be honoured.
+             * @default 0
+             */
+            recoverable_expired_quotes: number;
+            /**
+             * Recoverable Expired Quotes At Other Fees
+             * @description Of recoverable_expired_quotes, how many differ from the proposed fee.
+             * @default 0
+             */
+            recoverable_expired_quotes_at_other_fees: number;
+            /**
+             * Recoverable Expired Quotes Until
+             * @description Latest time an in-time payment against one of those reservations can still be recovered.
+             */
+            recoverable_expired_quotes_until?: string | null;
+            /** Required Confirmation */
+            required_confirmation: string;
+            /** Stale */
+            stale: boolean;
+            unsupported_current?: components["schemas"]["UnsupportedSubmissionSettingsRevision"] | null;
+        };
         /** AdminSubmissionSettingsRequest */
         AdminSubmissionSettingsRequest: {
             /**
@@ -12894,14 +12992,39 @@ export interface components {
             expected_revision: number;
             /** Fee Amount Rao */
             fee_amount_rao?: number | null;
+            /**
+             * Fee Denomination
+             * @default fixed_tao
+             * @constant
+             */
+            fee_denomination: "fixed_tao";
             /** Reason */
             reason: string;
         };
         /** AdminSubmissionSettingsResponse */
         AdminSubmissionSettingsResponse: {
-            current: components["schemas"]["SubmissionSettingsRevision"];
+            /**
+             * @default {
+             *       "max_cooldown_seconds": 86400,
+             *       "max_fee_amount_rao": 10000000000,
+             *       "min_cooldown_seconds": 60,
+             *       "min_fee_amount_rao": 1000000
+             *     }
+             */
+            bounds: components["schemas"]["SubmissionFeeBounds"];
+            /** @description The effective fixed-TAO revision; null only when the effective revision is in a denomination this build cannot price, which is then reported in unsupported_current. */
+            current: components["schemas"]["SubmissionSettingsRevision"] | null;
             /** History */
             history: components["schemas"]["SubmissionSettingsRevision"][];
+            /**
+             * History Incomplete
+             * @description True when history may be incomplete: it reached its page limit (older revisions exist), or a revision in a denomination this build cannot price was omitted (an unsupported effective revision is reported in unsupported_current instead).
+             * @default false
+             */
+            history_incomplete: boolean;
+            /** Quote Lifetime Seconds */
+            quote_lifetime_seconds?: number | null;
+            unsupported_current?: components["schemas"]["UnsupportedSubmissionSettingsRevision"] | null;
         };
         /**
          * AdminSupersedeCodingCatalogRequest
@@ -18935,8 +19058,11 @@ export interface components {
         };
         /** ConversationObservations */
         ConversationObservations: {
-            /** Current Submission Fee Rao */
-            current_submission_fee_rao: number;
+            /**
+             * Current Submission Fee Rao
+             * @description Current fixed-TAO submission fee in rao; null when the effective revision is in a denomination this build cannot price (its number is not a rao amount).
+             */
+            current_submission_fee_rao: number | null;
             /** Daily Budget Microusd */
             daily_budget_microusd: number;
             fee_change_request: components["schemas"]["AdminSubmissionSettingsRequest"];
@@ -27598,6 +27724,66 @@ export interface components {
              */
             submitted_at: string;
         };
+        /** PublicSubmissionFee */
+        PublicSubmissionFee: {
+            /** Fee Amount Rao */
+            fee_amount_rao: number;
+            /** Fee Amount Tao */
+            fee_amount_tao: string;
+            /**
+             * Fee Denomination
+             * @constant
+             */
+            fee_denomination: "fixed_tao";
+            /** Fee Effective At */
+            fee_effective_at: string | null;
+            /**
+             * Fee Revision
+             * @description Revision in which the current fee took effect: 0 while it is still the built-in default, null when it cannot be determined (the bounded history scan could not reach the change that set it, or an omitted revision in an unsupported denomination may have been effective since).
+             */
+            fee_revision: number | null;
+            /** History */
+            history: components["schemas"]["PublicSubmissionFeeRevision"][];
+            /**
+             * History Truncated
+             * @description True when history may be incomplete: more fee changes than limit, the bounded revision scan reached its cap, or a historical revision in a denomination this build cannot price was omitted rather than published.
+             * @default false
+             */
+            history_truncated: boolean;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Quote Lifetime Seconds */
+            quote_lifetime_seconds: number;
+        };
+        /**
+         * PublicSubmissionFeeRevision
+         * @description One source-safe fee revision. Operator identity and reasons stay private.
+         */
+        PublicSubmissionFeeRevision: {
+            /** Effective At */
+            effective_at: string | null;
+            /** Fee Amount Rao */
+            fee_amount_rao: number;
+            /** Fee Amount Tao */
+            fee_amount_tao: string;
+            /**
+             * Fee Denomination
+             * @constant
+             */
+            fee_denomination: "fixed_tao";
+            /**
+             * Previous Fee Amount Rao
+             * @description Fee this change replaced; null for the first published fee (revision 1, whose parent is only the built-in default) and when the replaced revision is in a denomination this build cannot price.
+             */
+            previous_fee_amount_rao: number | null;
+            /**
+             * Previous Fee Amount Tao
+             * @description Exact TAO rendering of previous_fee_amount_rao; null with it.
+             */
+            previous_fee_amount_tao: string | null;
+            /** Revision */
+            revision: number;
+        };
         /**
          * PublicSubmissionImageBuild
          * @description Public-safe provenance for one attempt-bound miner image build.
@@ -32372,6 +32558,29 @@ export interface components {
             /** Revision */
             revision: number;
         };
+        /** SubmissionFeeBounds */
+        SubmissionFeeBounds: {
+            /**
+             * Max Cooldown Seconds
+             * @default 86400
+             */
+            max_cooldown_seconds: number;
+            /**
+             * Max Fee Amount Rao
+             * @default 10000000000
+             */
+            max_fee_amount_rao: number;
+            /**
+             * Min Cooldown Seconds
+             * @default 60
+             */
+            min_cooldown_seconds: number;
+            /**
+             * Min Fee Amount Rao
+             * @default 1000000
+             */
+            min_fee_amount_rao: number;
+        };
         /** SubmissionImageBuildClaimResponse */
         SubmissionImageBuildClaimResponse: {
             build: components["schemas"]["SubmissionImageBuildClaimView"] | null;
@@ -32447,6 +32656,20 @@ export interface components {
             /** Output Size Bytes */
             output_size_bytes: number;
         };
+        /** SubmissionSettingsProposal */
+        SubmissionSettingsProposal: {
+            /** Cooldown Seconds */
+            cooldown_seconds: number;
+            /** Fee Amount Rao */
+            fee_amount_rao: number;
+            /** Fee Amount Tao */
+            fee_amount_tao: string;
+            /**
+             * Fee Denomination
+             * @constant
+             */
+            fee_denomination: "fixed_tao";
+        };
         /** SubmissionSettingsRevision */
         SubmissionSettingsRevision: {
             /** Actor */
@@ -32457,8 +32680,23 @@ export interface components {
             created_at: string | null;
             /** Fee Amount Rao */
             fee_amount_rao: number;
+            /** Fee Amount Tao */
+            fee_amount_tao?: string | null;
+            /**
+             * Fee Denomination
+             * @default fixed_tao
+             * @constant
+             */
+            fee_denomination: "fixed_tao";
             /** Parent Revision */
             parent_revision: number;
+            /** Previous Cooldown Seconds */
+            previous_cooldown_seconds?: number | null;
+            /**
+             * Previous Fee Amount Rao
+             * @description Fee of parent_revision. Null for revision 1 and the built-in revision 0 (the built-in default is a reference point, never published as a charged fee), and when the parent is in a denomination this build cannot price (its number is not TAO).
+             */
+            previous_fee_amount_rao?: number | null;
             /** Reason */
             reason: string;
             /** Revision */
@@ -33822,6 +34060,33 @@ export interface components {
              * @default 0
              */
             twin_groups_concordant: number;
+        };
+        /**
+         * UnsupportedSubmissionSettingsRevision
+         * @description The effective revision when this build cannot price its denomination.
+         *
+         *     Operator-only. New quotes are refused while it is effective (issued quotes
+         *     are still honoured); applying a revision with an explicit fixed-TAO fee
+         *     recovers. ``fee_amount_raw`` is the stored number in ``fee_denomination``'s
+         *     own unit and is never a TAO amount.
+         */
+        UnsupportedSubmissionSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Cooldown Seconds */
+            cooldown_seconds: number;
+            /** Created At */
+            created_at: string | null;
+            /** Fee Amount Raw */
+            fee_amount_raw: number;
+            /** Fee Denomination */
+            fee_denomination: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
         };
         /**
          * UploadAgentResponse
@@ -42731,6 +42996,44 @@ export interface operations {
             };
         };
     };
+    preview_settings_revision_api_v1_admin_submission_settings_preview_get: {
+        parameters: {
+            query: {
+                expected_revision: number;
+                cooldown_seconds: number;
+                /** @description Omit for a cooldown-only change; the current fee is kept under the same rule as the apply endpoint. */
+                fee_amount_rao?: number | null;
+                /** @description Same field as the apply request; only fixed_tao is accepted, so preview and apply validate identical inputs. */
+                fee_denomination?: "fixed_tao";
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSubmissionSettingsPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_trace_objects_api_v1_admin_traces_get: {
         parameters: {
             query?: {
@@ -46362,6 +46665,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicScreenerHeartbeatsResponse"];
+                };
+            };
+        };
+    };
+    public_submission_fee_api_v1_public_submission_fee_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicSubmissionFee"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

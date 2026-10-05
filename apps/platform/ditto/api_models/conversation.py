@@ -66,7 +66,13 @@ class ConversationObservations(WireModel):
     daily_budget_microusd: int
     reserved_last_day_microusd: int
     proposed_submission_fee_rao: Literal[200_000_000] = 200_000_000
-    current_submission_fee_rao: int
+    current_submission_fee_rao: int | None = Field(
+        description=(
+            "Current fixed-TAO submission fee in rao; null when the effective "
+            "revision is in a denomination this build cannot price (its "
+            "number is not a rao amount)."
+        )
+    )
     fee_change_request: AdminSubmissionSettingsRequest
     items: Annotated[list[ConversationObservation], Field(max_length=100)]
     settings_revision: int = 0

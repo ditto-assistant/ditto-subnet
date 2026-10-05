@@ -1297,28 +1297,135 @@ export type ArtifactReleaseControl = z.infer<typeof artifactReleaseControlSchema
 
 export const SUBMISSION_COOLDOWN_MIN_SECONDS = 60
 export const SUBMISSION_COOLDOWN_MAX_SECONDS = 86_400
-export const SUBMISSION_FEE_MIN_RAO = 1
-export const SUBMISSION_FEE_MAX_RAO = 1_000_000_000_000
+// Operator-safe bounds for a NEW fee (Platform MIN/MAX_SUBMISSION_FEE_RAO).
+// Stored history keeps the wider database range so older revisions still parse.
+export const SUBMISSION_FEE_MIN_RAO = 1_000_000
+export const SUBMISSION_FEE_MAX_RAO = 10_000_000_000
+const SUBMISSION_FEE_HISTORICAL_MIN_RAO = 1
+const SUBMISSION_FEE_HISTORICAL_MAX_RAO = 1_000_000_000_000
 export const RAO_PER_TAO = 1_000_000_000
+const RAO_PER_TAO_BIGINT = 1_000_000_000n
+// "0.04", "1", "0." and ".5" are all exact decimals; at least one digit is
+// required and never more than nine fractional digits (rao precision). The
+// integer part is unbounded here: magnitude is a bounds question, never a
+// format one.
+const TAO_DECIMAL_PATTERN = /^(?=\.?\d)(\d*)(?:\.(\d{0,9}))?$/
+
+/**
+ * Parse an operator-typed TAO amount into exact integer rao (BigInt).
+ * Returns null only for malformed text: more than nine decimals, a sign, an
+ * exponent, or non-numeric input is refused rather than rounded. Any
+ * well-formed amount parses, however large, so range errors are reported by
+ * the bounds check, not as a format error.
+ */
+export function parseTaoToRaoExact(value: string): bigint | null {
+  const match = TAO_DECIMAL_PATTERN.exec(value.trim())
+  if (!match) return null
+  const whole = BigInt(match[1] || '0')
+  const fraction = BigInt((match[2] ?? '').padEnd(9, '0'))
+  return whole * RAO_PER_TAO_BIGINT + fraction
+}
+
+
+/** Exact TAO rendering of integer rao with trailing zeros trimmed (0.04, 1). */
+export function formatRaoAsTao(rao: number): string {
+  if (!Number.isSafeInteger(rao)) return `${rao} rao`
+  const value = BigInt(rao)
+  const sign = value < 0n ? '-' : ''
+  const magnitude = value < 0n ? -value : value
+  const whole = magnitude / RAO_PER_TAO_BIGINT
+  const fraction = (magnitude % RAO_PER_TAO_BIGINT).toString().padStart(9, '0').replace(/0+$/, '')
+  return `${sign}${whole}${fraction ? `.${fraction}` : ''}`
+}
+
+type GeneratedSubmissionSettingsRevision =
+  PlatformComponents['schemas']['SubmissionSettingsRevision']
+type GeneratedAdminSubmissionSettingsResponse =
+  PlatformComponents['schemas']['AdminSubmissionSettingsResponse']
+type GeneratedSubmissionFeeBounds = PlatformComponents['schemas']['SubmissionFeeBounds']
+type GeneratedSubmissionSettingsProposal =
+  PlatformComponents['schemas']['SubmissionSettingsProposal']
+type GeneratedAdminSubmissionSettingsPreview =
+  PlatformComponents['schemas']['AdminSubmissionSettingsPreview']
+type GeneratedUnsupportedSubmissionSettingsRevision =
+  PlatformComponents['schemas']['UnsupportedSubmissionSettingsRevision']
+
+const submissionFeeRaoSchema = z
+  .number()
+  .int()
+  .min(SUBMISSION_FEE_HISTORICAL_MIN_RAO)
+  .max(SUBMISSION_FEE_HISTORICAL_MAX_RAO)
+const submissionCooldownSecondsSchema = z
+  .number()
+  .int()
+  .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
+  .max(SUBMISSION_COOLDOWN_MAX_SECONDS)
+// Responses must state the denomination: fixed_tao is the only reviewed one,
+// and a missing or different value fails the parse rather than being
+// assumed. Inputs (below) default to fixed_tao.
+const submissionFeeDenominationSchema = z.literal('fixed_tao')
+const exactTaoSchema = z.string().regex(/^\d+\.\d{9}$/)
 
 export const submissionSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
   parent_revision: z.number().int().nonnegative(),
-  cooldown_seconds: z
-    .number()
-    .int()
-    .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
-    .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
-  fee_amount_rao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  cooldown_seconds: submissionCooldownSecondsSchema,
+  fee_amount_rao: submissionFeeRaoSchema,
+  // Optional in the generated contract (a defaulted field may be omitted):
+  // accept exactly what Platform's OpenAPI allows, no stricter.
+  fee_amount_tao: exactTaoSchema.nullish(),
+  fee_denomination: submissionFeeDenominationSchema,
+  previous_fee_amount_rao: submissionFeeRaoSchema.nullish(),
+  previous_cooldown_seconds: submissionCooldownSecondsSchema.nullish(),
   reason: z.string(),
   actor: z.string(),
   created_at: z.string().nullable(),
-})
+} satisfies PlatformResponseShape<GeneratedSubmissionSettingsRevision>)
 
-export const submissionSettingsControlSchema = z.object({
-  current: submissionSettingsRevisionSchema,
-  history: z.array(submissionSettingsRevisionSchema).max(100),
-})
+// The effective revision when Platform cannot price its denomination. Its
+// amount is a raw number in that denomination's unit, never a TAO amount.
+export const unsupportedSubmissionSettingsRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  cooldown_seconds: submissionCooldownSecondsSchema,
+  fee_denomination: z.string().min(1),
+  fee_amount_raw: z.number().int(),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string().nullable(),
+} satisfies PlatformResponseShape<GeneratedUnsupportedSubmissionSettingsRevision>)
+
+// Exactly one of current and unsupported_current describes the effective
+// revision.
+function oneEffectiveRevision(value: {
+  current: unknown
+  unsupported_current?: unknown
+}) {
+  return (value.current === null) !== (value.unsupported_current == null)
+}
+const oneEffectiveRevisionMessage = {
+  message: 'exactly one of current and unsupported_current must be set',
+}
+
+export const submissionFeeBoundsSchema = z.object({
+  min_fee_amount_rao: z.number().int().positive(),
+  max_fee_amount_rao: z.number().int().positive(),
+  min_cooldown_seconds: z.number().int().positive(),
+  max_cooldown_seconds: z.number().int().positive(),
+} satisfies PlatformResponseShape<GeneratedSubmissionFeeBounds>)
+
+export const submissionSettingsControlSchema = z
+  .object({
+    current: submissionSettingsRevisionSchema.nullable(),
+    unsupported_current: unsupportedSubmissionSettingsRevisionSchema.nullable().default(null),
+    history: z.array(submissionSettingsRevisionSchema).max(100),
+    // Required: the panel validates operator input against these, so a response
+    // without server bounds must fail rather than fall back to local constants.
+    bounds: submissionFeeBoundsSchema,
+    history_incomplete: z.boolean(),
+    quote_lifetime_seconds: z.number().int().positive().nullish(),
+  } satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsResponse>)
+  .refine(oneEffectiveRevision, oneEffectiveRevisionMessage)
 
 export const updateSubmissionSettingsInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
@@ -1327,16 +1434,121 @@ export const updateSubmissionSettingsInputSchema = z.object({
     .int()
     .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
     .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
-  feeAmountRao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  // Optional, as on Platform: omitted means a cooldown-only change that keeps
+  // the current fee when it is fixed TAO within bounds (otherwise 422).
+  feeAmountRao: z
+    .number()
+    .int()
+    .min(SUBMISSION_FEE_MIN_RAO)
+    .max(SUBMISSION_FEE_MAX_RAO)
+    .optional(),
+  feeDenomination: z.literal('fixed_tao').default('fixed_tao'),
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
+
+export const previewSubmissionSettingsInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  cooldownSeconds: z
+    .number()
+    .int()
+    .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
+    .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
+  // Optional, as on Platform: omitted means a cooldown-only change that keeps
+  // the current fee when it is fixed TAO within bounds (otherwise 422).
+  feeAmountRao: z
+    .number()
+    .int()
+    .min(SUBMISSION_FEE_MIN_RAO)
+    .max(SUBMISSION_FEE_MAX_RAO)
+    .optional(),
+  feeDenomination: z.literal('fixed_tao').default('fixed_tao'),
+})
+
+export const submissionSettingsPreviewSchema = z
+  .object({
+  current: submissionSettingsRevisionSchema.nullable(),
+  unsupported_current: unsupportedSubmissionSettingsRevisionSchema.nullable().default(null),
+  proposed: z.object({
+    cooldown_seconds: submissionCooldownSecondsSchema,
+    fee_amount_rao: submissionFeeRaoSchema,
+    fee_amount_tao: exactTaoSchema,
+    fee_denomination: submissionFeeDenominationSchema,
+  } satisfies PlatformResponseShape<GeneratedSubmissionSettingsProposal>),
+  expected_revision: z.number().int().nonnegative(),
+  stale: z.boolean(),
+  fee_changed: z.boolean(),
+  cooldown_changed: z.boolean(),
+  fee_change_ratio: z.string().nullable(),
+  applicable: z.boolean(),
+  required_confirmation: z.string(),
+  bounds: submissionFeeBoundsSchema,
+  quote_lifetime_seconds: z.number().int().positive(),
+  in_flight_quotes: z.number().int().nonnegative(),
+  in_flight_quotes_at_other_fees: z.number().int().nonnegative(),
+  in_flight_quotes_expire_by: z.string().nullable(),
+  recoverable_expired_quotes: z.number().int().nonnegative(),
+  recoverable_expired_quotes_at_other_fees: z.number().int().nonnegative(),
+  recoverable_expired_quotes_until: z.string().nullish(),
+} satisfies PlatformResponseShape<GeneratedAdminSubmissionSettingsPreview>)
+  .refine(oneEffectiveRevision, oneEffectiveRevisionMessage)
 
 export function submissionSettingsConfirmation(seconds: number, feeAmountRao: number) {
   return `SET SUBMISSION COOLDOWN ${seconds} SECONDS FEE ${feeAmountRao} RAO`
 }
 
 export type SubmissionSettingsControl = z.infer<typeof submissionSettingsControlSchema>
+export type SubmissionSettingsPreview = z.infer<typeof submissionSettingsPreviewSchema>
+
+/**
+ * A preview or apply that failed without throwing across the server-function
+ * boundary, so the panel can tell a transient failure (keep the preview and
+ * confirmation, let the operator retry) from one that outdates them.
+ */
+export type SubmissionSettingsOutcome<T> =
+  | { ok: true; value: T }
+  | { ok: false; status: number | null; message: string }
+
+/** 409 (stale revision or no-op) or 422 (no longer validates): the preview
+ * and its confirmation may no longer describe what an apply would do. */
+export function submissionSettingsFailureOutdatesPreview(status: number | null) {
+  return status === 409 || status === 422
+}
+
+/** The effective policy as the panel uses it; fee is null when unsupported. */
+export type EffectiveSubmissionPolicy = {
+  revision: number
+  cooldownSeconds: number
+  feeAmountRao: number | null
+  createdAt: string | null
+  unsupported: { denomination: string; amountRaw: number } | null
+}
+
+export function effectiveSubmissionPolicy(
+  value: Pick<SubmissionSettingsControl, 'current' | 'unsupported_current'>,
+): EffectiveSubmissionPolicy {
+  if (value.current !== null) {
+    return {
+      revision: value.current.revision,
+      cooldownSeconds: value.current.cooldown_seconds,
+      feeAmountRao: value.current.fee_amount_rao,
+      createdAt: value.current.created_at,
+      unsupported: null,
+    }
+  }
+  const unsupported = value.unsupported_current
+  if (unsupported == null) throw new Error('submission settings have no effective revision')
+  return {
+    revision: unsupported.revision,
+    cooldownSeconds: unsupported.cooldown_seconds,
+    feeAmountRao: null,
+    createdAt: unsupported.created_at,
+    unsupported: {
+      denomination: unsupported.fee_denomination,
+      amountRaw: unsupported.fee_amount_raw,
+    },
+  }
+}
 
 export const activeHotkeyBanSchema = z.object({
   hotkey: z.string().min(1),
