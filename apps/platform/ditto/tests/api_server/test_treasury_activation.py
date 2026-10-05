@@ -83,6 +83,10 @@ def test_status_matches_authoritative_gate(fault, expected):
         "extra_legacy",
         "stale_required",
         "chain",
+        "identity_timeout",
+        "roster_timeout",
+        "roster_connection",
+        "reader_missing",
         "identity",
         "empty",
         "duplicate",
@@ -147,6 +151,22 @@ async def test_public_preflight_is_bounded_read_only_and_exact(
         state.chain.get_treasury_dispatch_observation.side_effect = RuntimeError(
             "PRIVATE PROVIDER ERROR"
         )
+    elif fault == "identity_timeout":
+        state.chain.get_treasury_dispatch_observation.side_effect = TimeoutError(
+            "PRIVATE PROVIDER ERROR"
+        )
+    elif fault == "roster_timeout":
+        state.chain.get_treasury_weight_setters.side_effect = TimeoutError(
+            "PRIVATE PROVIDER ERROR"
+        )
+    elif fault == "roster_connection":
+        state.chain.get_treasury_weight_setters.side_effect = ConnectionError(
+            "PRIVATE PROVIDER ERROR"
+        )
+    elif fault == "reader_missing":
+        state.chain.get_treasury_dispatch_observation.side_effect = AttributeError(
+            "PRIVATE PROVIDER ERROR"
+        )
     elif fault == "identity":
         bad = p.identity.model_copy(
             update={"owner_coldkey": p.policy.buckets[0].holding_coldkey}
@@ -187,10 +207,24 @@ async def test_public_preflight_is_bounded_read_only_and_exact(
         assert result["configured_policy_matches"] is False
         assert result["weight_effect"] == "none"
         assert "PRIVATE PROVIDER ERROR" not in response.text
-        if fault not in {"chain", "identity"}:
+        if fault not in {"chain", "identity", "identity_timeout", "reader_missing"}:
             state.chain.get_treasury_weight_setters.assert_awaited_once_with(
                 p.policy, block_hash=p.identity.finalized_block_hash
             )
+        failures = {
+            "chain": ("identity", "unavailable"),
+            "identity_timeout": ("identity", "timeout"),
+            "roster_timeout": ("setter_roster", "timeout"),
+            "roster_connection": ("setter_roster", "connection"),
+            "reader_missing": ("identity", "reader_unavailable"),
+            "identity": ("identity", "invalid_evidence"),
+            "empty": ("setter_roster", "invalid_evidence"),
+            "duplicate": ("setter_roster", "invalid_evidence"),
+        }
+        assert (
+            result["chain_failure_stage"],
+            result["chain_failure_kind"],
+        ) == failures.get(fault, (None, None))
         if fault == "missing_setter":
             assert result["required_setter_count"] == 2
             assert {s["status"] for s in result["setters"]} == {

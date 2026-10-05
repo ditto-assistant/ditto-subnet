@@ -21,6 +21,7 @@ from ditto.api_server.treasury_weights import (
     TREASURY_FLEET_FRESHNESS,
     treasury_fleet_members,
 )
+from ditto.chain.errors import ChainConnectionError, ChainTimeoutError
 from ditto.db.models import ValidatorHeartbeat
 from ditto_screening_protocol.treasury import Address, TreasuryLedgerPin
 from ditto_screening_protocol.treasury_approval import (
@@ -108,6 +109,11 @@ async def activation_preflight(
     required: tuple[str, ...] = ()
     chain_status: Literal["verified", "unavailable"] = "unavailable"
     reasons: list[TreasuryPreflightBlockReason] = []
+    failure_stage: Literal["identity", "setter_roster"] | None = None
+    failure_kind: Literal[
+        "timeout", "connection", "invalid_evidence", "reader_unavailable", "unavailable"
+    ] | None = None
+    stage: Literal["identity", "setter_roster"] = "identity"
     try:
         observed = TreasuryDispatchObservation.model_validate(
             await state.chain.get_treasury_dispatch_observation(policy)
@@ -115,6 +121,7 @@ async def activation_preflight(
         TreasuryLedgerPin(
             policy=policy, policy_digest=policy.digest, identity=observed.identity
         )
+        stage = "setter_roster"
         keys = await state.chain.get_treasury_weight_setters(
             policy, block_hash=observed.finalized_block_hash
         )
@@ -123,7 +130,20 @@ async def activation_preflight(
             raise ValueError("invalid authorization roster")
         observation = observed
         chain_status = "verified"
-    except Exception:
+    except Exception as error:
+        # Fixed labels identify the failed read without exposing provider URLs,
+        # credentials or raw exception text. All failures remain non-authoritative.
+        failure_stage = stage
+        if isinstance(error, (TimeoutError, ChainTimeoutError)):
+            failure_kind = "timeout"
+        elif isinstance(error, (ConnectionError, ChainConnectionError)):
+            failure_kind = "connection"
+        elif isinstance(error, ValueError):
+            failure_kind = "invalid_evidence"
+        elif isinstance(error, AttributeError):
+            failure_kind = "reader_unavailable"
+        else:
+            failure_kind = "unavailable"
         # Keep fixed, source-free diagnostics, never raw provider error text.
         required = ()
         reasons.append("chain_unavailable")
@@ -176,6 +196,8 @@ async def activation_preflight(
         configured_collector_matches=config.treasury_approved_collector_policy_digest
         == policy.collector_policy_digest,
         chain_status=chain_status,
+        chain_failure_stage=failure_stage,
+        chain_failure_kind=failure_kind,
         observation=observation,
         required_setter_count=len(required) if observation else None,
         setters=setters,

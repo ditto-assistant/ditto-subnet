@@ -159,6 +159,7 @@ describe('Backroom MCP tools', () => {
       proposed_collector_policy_digest: pin.policy.collector_policy_digest,
       proposal_signature_verified: true, configured_policy_matches: false,
       configured_collector_matches: false, chain_status: 'unavailable', observation: null,
+      chain_failure_stage: null, chain_failure_kind: null,
       required_setter_count: null, setters: [], truncated: false,
       fleet_ready_for_proposed_policy: false, blocking_reasons: ['chain_unavailable'],
       weight_effect: 'none', can_enforce_weights: false, copy_behavior_verified: false,

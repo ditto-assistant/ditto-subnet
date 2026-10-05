@@ -57,6 +57,17 @@ class TreasuryActivationPreflight(BaseModel):
     configured_policy_matches: bool
     configured_collector_matches: bool
     chain_status: Literal["verified", "unavailable"]
+    chain_failure_stage: Literal["identity", "setter_roster"] | None = None
+    chain_failure_kind: (
+        Literal[
+            "timeout",
+            "connection",
+            "invalid_evidence",
+            "reader_unavailable",
+            "unavailable",
+        ]
+        | None
+    ) = None
     observation: TreasuryDispatchObservation | None
     required_setter_count: Annotated[int, Field(ge=1, le=4096)] | None
     setters: Annotated[

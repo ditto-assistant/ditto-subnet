@@ -56,3 +56,7 @@ The separate one-transfer journal remains capped at 0.01 SN118 alpha; an origina
 bucket exceeding the ceiling remains held. Recurring transfers are not enabled
 by this control. The public Gamma funding view remains a shadow forecast until
 its independent live-state integration is completed.
+
+Preflight reports fixed chain failure stage/kind labels (identity vs setter
+roster, timeout/connection/invalid evidence/missing reader/unavailable). These
+labels expose neither raw exceptions nor credentials and never weaken refusal.
