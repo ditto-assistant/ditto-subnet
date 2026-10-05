@@ -1,12 +1,9 @@
-name: Platform migration order
+# PR-specific migration owner only; authoritative main sweep stays on GitHub.
+name: Depot Platform migration order
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  merge_group:
-  push:
-    branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,13 +11,13 @@ permissions:
 jobs:
   migration-order:
     name: Platform migration order
-    if: github.event_name != 'push' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+    if: github.event_name != 'push'
     # Per-ref check: a PR, merge-queue entry, or branch dispatch (the anti-copy
     # refresh dispatches this by branch) replaces only its own earlier run.
     concurrency:
       group: platform-migration-order-${{ github.head_ref || github.ref }}
       cancel-in-progress: true
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-4
     permissions:
       contents: read
       statuses: write
@@ -34,7 +31,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_URL: https://depot.dev/orgs/4q2czr6whg/workflows/${{ github.run_id }}
           # GitHub forces GITHUB_TOKEN to read-only on a pull_request run from a
           # fork, whatever this job declares above, so the status POST below is
           # rejected with 403. Detect that case rather than reporting a passing
@@ -91,35 +88,3 @@ jobs:
           fi
           exit "$exit_code"
 
-  recheck-open-prs:
-    name: Re-check open Platform migrations against new main
-    # Only main is authoritative: a dispatch from another branch (the anti-copy
-    # refresh dispatches this workflow per branch for that branch's own check)
-    # would run that branch's older copy of this workflow and script, and could
-    # displace the pending push sweep and then rewrite every open PR's status.
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
-    # Push and manual-on-main sweeps may update migration-order/merge-result on
-    # open PRs, so they share one lane. Queue instead of cancelling: a sweep is
-    # never killed mid-write, and the run that started later (against the newer
-    # origin/main) always finishes last, so an older sweep cannot overwrite it.
-    # GitHub keeps only the newest pending run, so a burst of pushes collapses.
-    concurrency:
-      group: platform-migration-order-main-sweep
-      cancel-in-progress: false
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      pull-requests: read
-      statuses: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Re-check open pull requests
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: apps/platform/scripts/recheck_open_pr_migrations.sh

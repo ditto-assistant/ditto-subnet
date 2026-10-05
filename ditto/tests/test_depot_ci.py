@@ -72,9 +72,24 @@ def test_depot_preview_retains_only_unprivileged_control_validation() -> None:
         expected["runs-on"] = "depot-ubuntu-24.04-4"
         assert job == expected
     assert "dashboard-publish" in github["jobs"]
-    assert "platform-migration-order.yml" not in {
-        path.name for path in (ROOT / ".depot/workflows").glob("*.yml")
-    }
+
+
+def test_depot_migration_owner_preserves_proof_and_excludes_the_main_sweep() -> None:
+    github = load(".github", "platform-migration-order.yml")
+    depot = load(".depot", "platform-migration-order.yml")
+    assert set(depot["on"]) == {"pull_request"}
+    assert set(depot["jobs"]) == {"migration-order"}
+    expected = deepcopy(github["jobs"]["migration-order"])
+    assert FALLBACK in expected["if"]
+    expected["if"] = "github.event_name != 'push'"
+    expected["runs-on"] = "depot-ubuntu-24.04-4"
+    expected["steps"][1]["env"]["RUN_URL"] = (
+        "https://depot.dev/orgs/4q2czr6whg/workflows/${{ github.run_id }}"
+    )
+    assert depot["jobs"]["migration-order"] == expected
+    main = github["jobs"]["recheck-open-prs"]
+    assert "github.ref == 'refs/heads/main'" in main["if"]
+    assert main["concurrency"]["cancel-in-progress"] == "false"
 
 
 def test_depot_validation_has_no_production_authority_and_is_security_scanned() -> None:
@@ -95,5 +110,9 @@ def test_depot_validation_has_no_production_authority_and_is_security_scanned() 
         for job in workflow["jobs"].values():
             assert "environment" not in job, path
             assert "id-token" not in job.get("permissions", {}), path
+            permissions = job.get("permissions", {})
+            if "write" in permissions.values():
+                assert path.name == "platform-migration-order.yml"
+                assert permissions == {"contents": "read", "statuses": "write"}
     security = (ROOT / ".github/scripts/check_workflow_security.py").read_text()
     assert 'Path(".depot/workflows")' in security

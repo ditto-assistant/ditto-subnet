@@ -8,9 +8,11 @@ Linux sandboxes retain the existing sharding, locked dependencies, real
 PostgreSQL services, MinIO integration, immutable actions and test commands.
 
 GitHub retains fork PR validation and manual rollback. Its reusable verifiers
-remain available to the protected release gate. The authoritative migration
-status and protected release/deployment workflows stay on GitHub. No cloud
-identity, production secret or deployment trigger is copied to Depot.
+remain available to the protected release gate. The PR-specific migration check
+uses the same proof script and required status on Depot; the authoritative
+main-branch migration sweep stays exclusively on GitHub, including its queued
+non-cancelling lane. Protected release/deployment workflows stay on GitHub.
+No cloud identity, production secret or deployment trigger is copied to Depot.
 
 The Depot preview workflow runs only plan and cheatcode validation. GitHub's
 existing preview workflow still owns its protected publisher and same-run
@@ -30,5 +32,5 @@ while an applicable Depot validation fails or has not run.
 `test_depot_ci.py` compares the executable jobs with the GitHub verifier copies
 to prevent command, service or security drift. Update both definitions whenever
 the shared validation changes. To roll back validation, remove the Depot-only
-PR conditions from the five GitHub entrypoints and disable the corresponding
+PR conditions from the six GitHub entrypoints and disable the corresponding
 Depot triggers together; releases continue to use GitHub throughout.
