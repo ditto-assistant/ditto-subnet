@@ -1024,11 +1024,13 @@ async def materialize_ledger_snapshot(
         else None
     )
     # A held incumbent keeps the crown unpaid (protocol 28), so the pin needs
-    # each withheld owner's best generation to find it. Kept internal: only
-    # the pin's ``provisional_incumbent`` ever serves one, and only when it is
-    # the incumbent. Built only for a pin (no requesting validator) with
-    # something to find, so a live read and an unfiltered pool materialize
-    # exactly as before.
+    # each withheld owner's best registered generation to find it. The same
+    # registration snapshot as the payable pool, so a deregistered generation
+    # cannot hold that unpaid crown. Kept internal: only the pin's
+    # ``provisional_incumbent`` ever serves one, and only when it is the
+    # incumbent. Built only for a pin (no requesting validator) with something
+    # to find, so a live read and an unfiltered pool materialize exactly as
+    # before.
     withheld_rows: list[LedgerRow] = []
     withheld_entries: list[LedgerEntry] = []
     if (
@@ -1045,6 +1047,7 @@ async def materialize_ledger_snapshot(
             now=now,
             requesting_validator_hotkey=requesting_validator_hotkey,
             emit=lambda row: eligibility.withholds(row.agent_id),
+            registered_hotkeys=registered_hotkeys,
         )
     return _LedgerSnapshot(
         entries=entries,
