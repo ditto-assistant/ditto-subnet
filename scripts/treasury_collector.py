@@ -46,7 +46,7 @@ def main() -> None:
             parser.error("activity export requires existing transfer journal only")
         import bittensor as bt
 
-        with bt.Subtensor(network="finney") as subtensor:
+        with bt.Subtensor(network="archive") as subtensor:
             chain = PublicCollectorChain(subtensor.substrate, role="transfer")
 
             def epoch_at(block):
@@ -89,7 +89,11 @@ def main() -> None:
         return
     import bittensor as bt
 
-    with bt.Subtensor(network="finney") as subtensor:
+    # The signed cursor and pending receipts may outlive a full node retention
+    # window. Keep every historical identity/runtime/effect check; never skip
+    # unavailable history or rebase the journal to the current head. SDK 10.5.0
+    # pins the official Finney archive endpoint for this network name.
+    with bt.Subtensor(network="archive") as subtensor:
         chain = PublicCollectorChain(
             subtensor.substrate,
             role=args.role,
