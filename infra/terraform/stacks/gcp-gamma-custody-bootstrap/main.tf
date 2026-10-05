@@ -68,14 +68,16 @@ resource "google_service_account" "terraform" {
   depends_on   = [google_project_service.api]
 }
 
-# Metadata only. Neither deployment identity receives versions.access or add.
+# Metadata only. Plan also reads IAP policy for existing isolated hosts;
+# roles/iap.viewer does not include this refresh permission. No tunnel access.
+# Neither deployment identity receives versions.access or add.
 # The protected apply identity can manage secret IAM, so it is a custody admin
 # boundary and must never authenticate from an unreviewed branch/workflow.
 resource "google_project_iam_custom_role" "secret_metadata" {
   for_each = toset(["plan", "apply"])
   project  = google_project.custody.project_id
   role_id  = "gammaSecretMetadata${title(each.key)}"
-  title    = "Gamma secret metadata ${each.key}"
+  title    = "Gamma custody metadata ${each.key}"
   permissions = concat([
     "secretmanager.secrets.get", "secretmanager.secrets.list",
     "secretmanager.secrets.getIamPolicy", "secretmanager.versions.get",
@@ -83,7 +85,7 @@ resource "google_project_iam_custom_role" "secret_metadata" {
     ], each.key == "apply" ? [
     "secretmanager.secrets.create", "secretmanager.secrets.update",
     "secretmanager.secrets.delete", "secretmanager.secrets.setIamPolicy",
-  ] : [])
+  ] : ["iap.tunnelInstances.getIamPolicy"])
   depends_on = [google_project_service.api]
 }
 
