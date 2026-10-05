@@ -85,6 +85,9 @@ async def record_treasury_runtime(
         )
     try:
         previous = runtime_revision(latest).settings if latest else None
+    except ValueError:
+        raise HTTPException(409, "Gamma runtime control is invalid") from None
+    try:
         policy = verify_policy_approval(
             settings.approval,
             expected_policy_digest=settings.approved_policy_digest,
@@ -92,9 +95,7 @@ async def record_treasury_runtime(
             verify_signature=verify_public_signature,
         )
     except ValueError:
-        raise HTTPException(
-            400, "Invalid Gamma public approval or stored control"
-        ) from None
+        raise HTTPException(400, "Invalid Gamma public approval") from None
     if previous is not None and previous.mode == "enforce" and settings.mode != "pause":
         raise HTTPException(409, "Pause Gamma before changing or rearming its policy")
     if settings.mode == "pause":

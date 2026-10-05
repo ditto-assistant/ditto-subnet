@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from fastapi import HTTPException
 from pydantic import TypeAdapter
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,9 +111,16 @@ async def activation_preflight(
     chain_status: Literal["verified", "unavailable"] = "unavailable"
     reasons: list[TreasuryPreflightBlockReason] = []
     failure_stage: Literal["identity", "setter_roster"] | None = None
-    failure_kind: Literal[
-        "timeout", "connection", "invalid_evidence", "reader_unavailable", "unavailable"
-    ] | None = None
+    failure_kind: (
+        Literal[
+            "timeout",
+            "connection",
+            "invalid_evidence",
+            "reader_unavailable",
+            "unavailable",
+        ]
+        | None
+    ) = None
     stage: Literal["identity", "setter_roster"] = "identity"
     try:
         observed = TreasuryDispatchObservation.model_validate(
@@ -183,7 +191,10 @@ async def activation_preflight(
         reasons.append("setter_proof_missing")
     from ditto.api_server.treasury_runtime import treasury_runtime
 
-    config = await treasury_runtime(session, state.config)
+    try:
+        config = await treasury_runtime(session, state.config)
+    except ValueError:
+        raise HTTPException(409, "Gamma runtime control is invalid") from None
     return TreasuryActivationPreflight(
         checked_at=now,
         proposed_policy_digest=policy.digest,

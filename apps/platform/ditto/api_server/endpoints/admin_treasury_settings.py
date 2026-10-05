@@ -86,7 +86,10 @@ async def get_treasury_ledger_readiness(
     state = request.app.state
     from ditto.api_server.treasury_runtime import treasury_runtime
 
-    config = await treasury_runtime(session, state.config)
+    try:
+        config = await treasury_runtime(session, state.config)
+    except ValueError:
+        raise HTTPException(409, "Gamma runtime control is invalid") from None
     row = await latest_pin(session, netuid=state.config.chain.netuid)
     readiness = shadow_readiness(state, row, runtime=config)
     if readiness.configured_proposal is None:

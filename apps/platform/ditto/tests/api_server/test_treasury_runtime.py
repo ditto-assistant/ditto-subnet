@@ -5,7 +5,9 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from ditto.db.models import TreasuryRuntimeRevision, TreasurySettingsRevision
 from ditto.tests.api_server.endpoints.test_admin_treasury_settings import (
@@ -15,6 +17,162 @@ from ditto.tests.api_server.endpoints.test_admin_treasury_settings import (
 from ditto.tests.api_server.test_treasury_weights import add_runtime, app_state, pin
 
 URL = "/api/v1/admin/treasury-runtime"
+
+
+@pytest.mark.parametrize(
+    "error", [ValueError("invalid control"), SQLAlchemyError("unavailable")]
+)
+@pytest.mark.parametrize("pin_mode", ["epoch", "time"])
+async def test_scoring_runtime_read_refuses_unverifiable_control(
+    monkeypatch, error, pin_mode
+):
+    from unittest.mock import AsyncMock
+
+    from ditto.api_models import LedgerResponse
+    from ditto.api_server.endpoints.scoring import (
+        _require_statistical_cap_requester,
+        _serve_epoch_pin,
+    )
+
+    monkeypatch.setattr(
+        "ditto.api_server.treasury_runtime.treasury_runtime",
+        AsyncMock(side_effect=error),
+    )
+    state = SimpleNamespace(config=SimpleNamespace())
+    context = SimpleNamespace(
+        policy=SimpleNamespace(
+            continual_retest=SimpleNamespace(ledger_pin_mode=pin_mode)
+        )
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    now = datetime.now(UTC)
+    with pytest.raises(HTTPException) as refused:
+        await _serve_epoch_pin(request, None, "validator", context=context, now=now)
+    assert refused.value.status_code == 503
+    with pytest.raises(HTTPException) as refused:
+        await _require_statistical_cap_requester(
+            None,
+            "validator",
+            LedgerResponse(entries=[], count=0),
+            now=now,
+            app_state=state,
+        )
+    assert refused.value.status_code == 503
+
+
+@pytest.mark.parametrize("initial_enforcement", [False, True])
+async def test_scoring_refreshes_runtime_after_epoch_materialization(
+    monkeypatch, initial_enforcement
+):
+    from unittest.mock import AsyncMock
+
+    from ditto.api_server.endpoints.scoring import _serve_epoch_pin
+
+    read = AsyncMock(
+        side_effect=[
+            SimpleNamespace(treasury_weight_enforcement=initial_enforcement),
+            SimpleNamespace(treasury_weight_enforcement=not initial_enforcement),
+        ]
+    )
+    monkeypatch.setattr("ditto.api_server.treasury_runtime.treasury_runtime", read)
+    materializer = SimpleNamespace(
+        ensure=AsyncMock(return_value=None), latest=AsyncMock(return_value=None)
+    )
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+        ledger_pin_materializer=materializer,
+        session_maker=object(),
+    )
+    context = SimpleNamespace(
+        policy=SimpleNamespace(
+            continual_retest=SimpleNamespace(ledger_pin_mode="epoch")
+        )
+    )
+    session = SimpleNamespace(in_transaction=lambda: False)
+
+    async def serve():
+        return await _serve_epoch_pin(
+            SimpleNamespace(app=SimpleNamespace(state=state)),
+            session,
+            "validator",
+            context=context,
+            now=datetime.now(UTC),
+        )
+
+    if initial_enforcement:
+        assert await serve() is None
+        materializer.latest.assert_awaited_once()
+    else:
+        with pytest.raises(HTTPException) as refused:
+            await serve()
+        assert refused.value.status_code == 503
+        assert refused.value.detail == "enforcing treasury epoch unavailable"
+    assert read.await_count == 2
+    materializer.ensure.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "error", [ValueError("invalid control"), SQLAlchemyError("unavailable")]
+)
+async def test_scoring_runtime_read_failure_after_materialization_refuses(
+    monkeypatch, error
+):
+    from unittest.mock import AsyncMock
+
+    from ditto.api_server.endpoints.scoring import _serve_epoch_pin
+
+    read = AsyncMock(
+        side_effect=[SimpleNamespace(treasury_weight_enforcement=False), error]
+    )
+    monkeypatch.setattr("ditto.api_server.treasury_runtime.treasury_runtime", read)
+    materializer = SimpleNamespace(ensure=AsyncMock(return_value=None))
+    state = SimpleNamespace(
+        config=SimpleNamespace(),
+        ledger_pin_materializer=materializer,
+        session_maker=object(),
+    )
+    context = SimpleNamespace(
+        policy=SimpleNamespace(
+            continual_retest=SimpleNamespace(ledger_pin_mode="epoch")
+        )
+    )
+    with pytest.raises(HTTPException) as refused:
+        await _serve_epoch_pin(
+            SimpleNamespace(app=SimpleNamespace(state=state)),
+            SimpleNamespace(in_transaction=lambda: False),
+            "validator",
+            context=context,
+            now=datetime.now(UTC),
+        )
+    assert refused.value.status_code == 503
+    assert read.await_count == 2
+
+
+@pytest.mark.parametrize("enforcement", [False, True])
+def test_durable_runtime_refuses_cached_fallback_after_non_enforcing_read(
+    enforcement,
+):
+    from ditto.api_server.endpoints.scoring import _serve_last_known
+
+    # An observe/pause read can precede another process's activation. After the
+    # DB fails, that earlier read cannot prove that the latest control is safe.
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            treasury_runtime=SimpleNamespace(
+                revision=1, treasury_weight_enforcement=enforcement
+            )
+        ),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                config=SimpleNamespace(treasury_weight_enforcement=False),
+                ledger_snapshot=SimpleNamespace(treasury_pin=None),
+            )
+        ),
+    )
+    with pytest.raises(HTTPException) as refused:
+        _serve_last_known(request, "validator", SQLAlchemyError("unavailable"))
+    assert refused.value.status_code == 503
+    assert refused.value.detail == "treasury ledger verification unavailable"
 
 
 def payload(mode="observe", revision=0):
@@ -255,6 +413,27 @@ async def test_invalid_durable_history_never_falls_back_to_env(
         )
         await s.commit()
     assert (await client.get(URL, headers=_HEADERS)).status_code == 409
+    assert (
+        await client.post(URL, headers=_HEADERS, json=payload(revision=2))
+    ).status_code == 409
+    assert (
+        await client.get(
+            "/api/v1/admin/treasury-settings/ledger-readiness", headers=_HEADERS
+        )
+    ).status_code == 409
+    request = payload()["settings"]
+    preflight = {
+        "approval": request["approval"],
+        "expected_policy_digest": request["approved_policy_digest"],
+        "expected_collector_policy_digest": request["collector_policy_digest"],
+    }
+    assert (
+        await client.post(
+            "/api/v1/admin/treasury-settings/activation-preflight",
+            headers=_HEADERS,
+            json=preflight,
+        )
+    ).status_code == 409
     async with session_maker() as s:
         with pytest.raises(ValueError, match="checksum"):
             await treasury_runtime(s, app.state.config)
@@ -286,6 +465,7 @@ async def test_append_only_runtime_history_is_enforced_by_postgres(
     setup(app, session_maker, monkeypatch)
     assert (await client.post(URL, headers=_HEADERS, json=payload())).status_code == 200
     for sql in (
+        "TRUNCATE treasury_runtime_revisions",
         "DELETE FROM treasury_runtime_revisions",
         "UPDATE treasury_runtime_revisions SET actor='forged'",
     ):

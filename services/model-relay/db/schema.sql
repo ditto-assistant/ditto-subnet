@@ -10250,6 +10250,13 @@ CREATE TRIGGER treasury_runtime_immutable BEFORE DELETE OR UPDATE ON public.trea
 
 
 --
+-- Name: treasury_runtime_revisions treasury_runtime_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_runtime_no_truncate BEFORE TRUNCATE ON public.treasury_runtime_revisions FOR EACH STATEMENT EXECUTE FUNCTION public.reject_treasury_settings_mutation();
+
+
+--
 -- Name: treasury_settings_revisions treasury_settings_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 

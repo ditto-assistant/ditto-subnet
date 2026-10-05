@@ -117,7 +117,7 @@ export const publicTreasuryApprovalSchema = z.object({
 export const treasuryRuntimeSettingsSchema = z.object({
   version: z.literal(1), mode: z.enum(['observe', 'enforce', 'pause']),
   approval: publicTreasuryApprovalSchema, approved_policy_digest: digest,
-  collector_policy_digest: digest, activation_epoch: z.number().int().nonnegative().nullable(),
+  collector_policy_digest: digest, activation_epoch: z.number().int().nonnegative().nullable().default(null),
 })
 export const treasuryRuntimeRevisionSchema = z.object({
   revision: z.number().int().positive(), parent_revision: z.number().int().nonnegative(),

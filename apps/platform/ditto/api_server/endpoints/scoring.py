@@ -1043,6 +1043,15 @@ async def materialize_ledger_snapshot(
     )
 
 
+async def _gamma_runtime_or_503(session: AsyncSession, app_state: Any):
+    from ditto.api_server.treasury_runtime import treasury_runtime
+
+    try:
+        return await treasury_runtime(session, app_state.config)
+    except (SQLAlchemyError, ValueError):
+        raise HTTPException(503, "Gamma control verification unavailable") from None
+
+
 async def _serve_epoch_pin(
     request: Request,
     session: AsyncSession,
@@ -1059,17 +1068,13 @@ async def _serve_epoch_pin(
     the pin, or the same stale predecessor. Live and pinned are never mixed.
     """
     if context.policy.continual_retest.ledger_pin_mode != "epoch":
-        from ditto.api_server.treasury_runtime import treasury_runtime
-
-        runtime = await treasury_runtime(session, request.app.state.config)
+        runtime = await _gamma_runtime_or_503(session, request.app.state)
         if runtime.treasury_weight_enforcement:
             raise HTTPException(
                 status_code=503, detail="treasury requires epoch pinning"
             )
         return None
-    from ditto.api_server.treasury_runtime import treasury_runtime
-
-    runtime = await treasury_runtime(session, request.app.state.config)
+    runtime = await _gamma_runtime_or_503(session, request.app.state)
     materializer = getattr(request.app.state, "ledger_pin_materializer", None)
     session_maker = getattr(request.app.state, "session_maker", None)
     if materializer is None or session_maker is None:
@@ -1084,6 +1089,7 @@ async def _serve_epoch_pin(
     if session.in_transaction():
         await session.rollback()
     pin = await materializer.ensure(request.app.state, session_maker, now=now)
+    runtime = await _gamma_runtime_or_503(session, request.app.state)
     if runtime.treasury_weight_enforcement and (
         pin is None
         or not isinstance(
@@ -1125,9 +1131,7 @@ async def _require_statistical_cap_requester(
 ) -> LedgerResponse:
     """Refuse a v28 rejoiner while a pinned v29 fold remains active."""
     if app_state is not None:
-        from ditto.api_server.treasury_runtime import treasury_runtime
-
-        runtime = await treasury_runtime(session, app_state.config)
+        runtime = await _gamma_runtime_or_503(session, app_state)
         if runtime.treasury_weight_enforcement and not isinstance(
             ledger.treasury_pin, EnforcingTreasuryPin
         ):
@@ -1250,18 +1254,10 @@ async def scores(
                 status_code=503,
                 detail="scoring ledger authorization temporarily unavailable",
             ) from exc
-    # Cross-process controls must be readable before any cached-ledger fallback.
-    # A DB outage cannot downgrade a newly activated or paused Gamma policy.
-    from ditto.api_server.treasury_runtime import treasury_runtime
-
-    try:
-        request.state.treasury_runtime = await treasury_runtime(
-            session, request.app.state.config
-        )
-    except (SQLAlchemyError, ValueError):
-        raise HTTPException(
-            status_code=503, detail="Gamma control verification unavailable"
-        ) from None
+    # Cross-process control must remain readable before cached-ledger fallback.
+    request.state.treasury_runtime = await _gamma_runtime_or_503(
+        session, request.app.state
+    )
     try:
         ledger_context = await resolve_ledger_context(
             request.app.state, session, now=auth_now

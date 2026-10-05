@@ -44,6 +44,12 @@ def upgrade():
         "EXECUTE FUNCTION reject_treasury_settings_mutation()"
     )
 
+    op.execute(
+        "CREATE TRIGGER treasury_runtime_no_truncate BEFORE TRUNCATE "
+        "ON treasury_runtime_revisions FOR EACH STATEMENT "
+        "EXECUTE FUNCTION reject_treasury_settings_mutation()"
+    )
+
 
 def downgrade():
     op.execute("LOCK TABLE treasury_runtime_revisions IN ACCESS EXCLUSIVE MODE")

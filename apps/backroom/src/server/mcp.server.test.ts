@@ -95,6 +95,13 @@ describe('Backroom MCP tools', () => {
       expect(url).toContain('/api/v1/admin/treasury-runtime')
       expect(new Headers(init.headers).get('X-Admin-Actor')).toBe(session.email)
       expect(JSON.parse(String(init.body))).toEqual({ expected_revision: 0, settings, reason: input.reason, confirmation: input.confirmation })
+      // Zod canonicalizes known object fields before the equality check.
+      const reversed = Object.fromEntries(Object.entries(settings).reverse())
+      fetchMock.mockResolvedValue(Response.json({ ...row, settings: reversed }))
+      expect((await writer.client.callTool({ name: 'record_treasury_runtime', arguments: input })).isError).not.toBe(true)
+      const { activation_epoch: _epoch, ...omittedEpoch } = reversed
+      fetchMock.mockResolvedValue(Response.json({ ...row, settings: omittedEpoch }))
+      expect((await writer.client.callTool({ name: 'record_treasury_runtime', arguments: input })).isError).not.toBe(true)
       fetchMock.mockResolvedValue(Response.json({ ...row, parent_revision: 9 }))
       expect((await writer.client.callTool({ name: 'record_treasury_runtime', arguments: input })).isError).toBe(true)
     } finally { await writer.client.close(); await writer.server.close() }

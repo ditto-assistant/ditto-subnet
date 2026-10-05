@@ -37,9 +37,11 @@ Runtime revisions retain the full public approval, checksum, reason, timestamp
 and authenticated Platform bearer principal. Backroom sends its signed-in email
 in the existing actor header; Platform does not label that caller-controlled
 header as independent human authentication. Unknown fields are ignored at the
-wire boundary and cannot enter signed output. PostgreSQL forbids history updates
-and deletes, enforces one child per parent revision, and refuses a downgrade
+wire boundary and cannot enter signed output. PostgreSQL rejects history updates,
+deletes and truncation, enforces one child per parent revision, and refuses a downgrade
 which would delete retained controls.
+These triggers protect against accidental mutation; database owners can still
+disable triggers or drop tables and must remain trusted.
 
 Each producer and ledger authorization reads durable control independently;
 no mutable process-local config serves as authority. A shared transaction lock
@@ -48,6 +50,10 @@ change. Stored epoch pins remain immutable. Corrupt history or unavailable
 runtime verification cannot fall back to a cached legacy ledger. Dispatch still
 rechecks current finalized collector, epoch and full fleet, and the transport
 retains its own queued-dispatch fence.
+Once any durable control exists, a later database failure refuses cached legacy
+fallback even when an earlier read saw observe or pause: another process could
+have activated Gamma after that read. This intentionally trades availability
+for reliable cross-process control.
 
 Configuration and successful control writes are not evidence of a produced
 enforcing epoch, chain-accepted weights, collector earnings or finalized
