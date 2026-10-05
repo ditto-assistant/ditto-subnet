@@ -364,14 +364,14 @@ class PublicCollectorChain:
         )
         parent_code = (
             previous[3]
-            if reuse_parent
+            if reuse_parent and previous is not None
             else self.guard_runtime(policy, parent_hash, historical=True)
         )
         collector_receipt_runtime(parent_code, code)
         uid = self._earnings_identity(policy, block_hash)
         parent_uid = (
             previous[4]
-            if reuse_parent
+            if reuse_parent and previous is not None
             else self._earnings_identity(policy, parent_hash)
         )
         events = s.get_events(block_hash)
