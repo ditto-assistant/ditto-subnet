@@ -127,8 +127,6 @@ def apply_miner_emission_cap(
     """
     if not 0.0 <= miner_share <= 1.0:
         raise ValueError(f"miner_share must be in [0, 1], got {miner_share}")
-    if not burn_hotkey:
-        raise ValueError("burn_hotkey must be non-empty")
 
     miners = {
         hotkey: weight
@@ -136,6 +134,8 @@ def apply_miner_emission_cap(
         if hotkey != burn_hotkey and weight > 0.0
     }
     total = sum(miners.values())
+    if (total <= 0.0 or miner_share < 1.0) and not burn_hotkey:
+        raise ValueError("burn_hotkey must be non-empty")
     if total <= 0.0:
         return {burn_hotkey: 1.0}
 
@@ -146,6 +146,44 @@ def apply_miner_emission_cap(
     if burn_share > 0.0:
         capped[burn_hotkey] = burn_share
     return capped
+
+
+def owner_burn_destination_required(
+    weights: Mapping[str, float],
+    *,
+    miner_share: float,
+    paid_miner_fraction: float = 1.0,
+    service_bps: int = 0,
+) -> bool:
+    """Whether the submitted vector will contain the subnet-owner burn hotkey.
+
+    ``miner_share`` is the non-burn fraction (``1 - burn_share``).
+    ``paid_miner_fraction`` is how much of that fraction is actually paid:
+    track allocation times the provisional incumbent's paid fraction.
+    ``service_bps`` is zero outside an enforcing treasury fold. A value this
+    function cannot interpret requires the destination, so the caller resolves
+    the owner hotkey instead of submitting a vector that drops a residual.
+    """
+    if (
+        isinstance(miner_share, bool)
+        or isinstance(paid_miner_fraction, bool)
+        or not math.isfinite(miner_share)
+        or not math.isfinite(paid_miner_fraction)
+        or not 0.0 <= miner_share <= 1.0
+        or not 0.0 <= paid_miner_fraction <= 1.0
+        or type(service_bps) is not int
+        or not 0 <= service_bps <= 1000
+    ):
+        return True
+    positive = any(
+        isinstance(weight, (int, float))
+        and not isinstance(weight, bool)
+        and weight > 0.0
+        for weight in weights.values()
+    )
+    service = service_bps / 10_000
+    paid = (1.0 - service) * miner_share * paid_miner_fraction if positive else 0.0
+    return (1.0 - service - paid) > 0.0
 
 
 def resolve_track_shares(

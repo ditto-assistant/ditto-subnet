@@ -74,6 +74,7 @@ from ditto.validator.weights import (
     apply_miner_emission_cap,
     compute_weights,
     filter_weight_confirmed,
+    owner_burn_destination_required,
     resolve_miner_emission_share,
 )
 from ditto.validator.worker import ValidatorWorker
@@ -535,6 +536,31 @@ class TestMinerEmissionCap:
         )
         assert capped == {"champ": pytest.approx(0.9), "tail": pytest.approx(0.1)}
         assert _BURN_HOTKEY not in capped
+
+    def test_full_share_accepts_an_unknown_burn_hotkey(self) -> None:
+        capped = apply_miner_emission_cap(
+            {"champ": 0.9, "tail": 0.1},
+            miner_share=1.0,
+            burn_hotkey="",
+        )
+        assert capped == {"champ": pytest.approx(0.9), "tail": pytest.approx(0.1)}
+
+    def test_a_residual_still_requires_the_burn_hotkey(self) -> None:
+        with pytest.raises(ValueError, match="burn_hotkey must be non-empty"):
+            apply_miner_emission_cap({"champ": 1.0}, miner_share=0.6, burn_hotkey="")
+
+    def test_owner_destination_follows_the_residual(self) -> None:
+        miners = {"champ": 1.0}
+        assert not owner_burn_destination_required(miners, miner_share=1.0)
+        assert owner_burn_destination_required(miners, miner_share=0.6)
+        assert owner_burn_destination_required(
+            miners, miner_share=1.0, paid_miner_fraction=0.5
+        )
+        assert owner_burn_destination_required({}, miner_share=1.0)
+        assert not owner_burn_destination_required(
+            miners, miner_share=1.0, service_bps=1000
+        )
+        assert owner_burn_destination_required({}, miner_share=1.0, service_bps=1000)
 
     def test_full_share_still_burns_an_empty_ledger(self) -> None:
         assert apply_miner_emission_cap(
@@ -4349,6 +4375,58 @@ class TestRunOnce:
         await worker.run_once()
 
         chain.put_weights.assert_awaited_once_with({owner: 1.0})
+
+    async def test_zero_burn_submits_without_reading_the_owner_hotkey(self) -> None:
+        miner = "5Champion" + "x" * 39
+        platform = _platform_with_ledger(jobs=[], ledger=[_entry(miner, 0.90)])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            return_value=[SimpleNamespace(hotkey=miner)]
+        )
+        chain.get_subnet_owner_hotkey = AsyncMock(side_effect=ChainError("finney down"))
+        chain.put_weights = AsyncMock()
+        cfg = _config()
+        cfg.burn_hotkey = None
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        chain.get_subnet_owner_hotkey.assert_not_awaited()
+        chain.put_weights.assert_awaited_once_with({miner: 1.0})
+
+    async def test_positive_burn_still_skips_when_the_owner_read_fails(self) -> None:
+        miner = "5Champion" + "x" * 39
+        platform = _platform_with_ledger(jobs=[], ledger=[_entry(miner, 0.90)])
+        platform.get_ledger.return_value.burn_share = 0.4
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            return_value=[
+                SimpleNamespace(hotkey=miner),
+                SimpleNamespace(hotkey="5CurrentOwner" + "x" * 35),
+            ]
+        )
+        chain.get_subnet_owner_hotkey = AsyncMock(side_effect=ChainError("finney down"))
+        chain.put_weights = AsyncMock()
+        cfg = _config()
+        cfg.burn_hotkey = None
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        chain.get_subnet_owner_hotkey.assert_awaited_once_with(cfg.netuid)
+        chain.put_weights.assert_not_awaited()
 
     async def test_chain_registration_read_failure_leaves_weights_unchanged(
         self, caplog: pytest.LogCaptureFixture
