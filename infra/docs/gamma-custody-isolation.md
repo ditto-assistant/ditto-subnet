@@ -62,3 +62,32 @@ Current keys are software-controlled native proxies. A copied Transfer delegate
 can submit allowed transfers directly, bypassing software destinations/caps.
 Moving existing keys alone does not remove that risk. Offline primary custody
 and one-time delegate replacement are distinct from routine hot-wallet purchases.
+
+## Used-journal transfer
+
+`ditto.treasury.collector_migration.manifest` prepares a public manifest for one
+private standalone SQLite backup. The deployment operator first stops and
+verifies both old timer/service units, reconciles unresolved operations and
+exports each database using SQLite backup in DELETE journal mode. A copied main
+file with WAL sidecars is not a valid snapshot. Retain the original databases and
+private backups; no old database is edited by the migration.
+
+The offline collector coldkey signs
+`ditto-collector-custody-migration-v1:<sha256(canonical(manifest))>` alongside the
+new collector policy. The manifest binds the full history hash, snapshot hash,
+role, old/new policy digests, cursor, row counts and reserved lifetime registration
+spend. The helper permits only revision +1, the isolated project/accounts and
+two fresh delegate replacements; runtime, collector, caps, start block and
+destinations must remain unchanged. Missing or unresolved operations stop the
+transition. Approval is of an exact snapshot, not a general budget reset.
+
+After cold signing and finalized proxy replacement, run
+`scripts/treasury_migrate_collector_journal.py` with both signed policy files,
+their immutable digests, the source snapshot, an exclusive private target and
+the signed manifest envelope. Both policies and the manifest are verified with
+the collector coldkey. The helper preserves every history row and cursor, changes
+only the policy pin and appends the bound migration event. An existing output is
+refused even on retry: inspect the retained output/receipt before proceeding.
+No key, chain, cloud client, fresh initialization or service activation is part
+of this command. Start new services only after verifying new policy, proxy,
+delegate, journal and custody boundaries. Keep old timers stopped throughout.
