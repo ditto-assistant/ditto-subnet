@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ditto.chain.errors import TreasuryReadStep
 from ditto_screening_protocol.treasury import Address, Digest
 from ditto_screening_protocol.treasury_approval import TreasuryPolicyApproval
 from ditto_screening_protocol.treasury_enforcement import TreasuryWeightCapability
@@ -70,6 +71,7 @@ class TreasuryActivationPreflight(BaseModel):
     configured_collector_matches: bool
     chain_status: Literal["verified", "unavailable"]
     chain_failure_stage: Literal["identity", "setter_roster"] | None = None
+    chain_failure_step: TreasuryReadStep | None = None
     chain_failure_kind: (
         Literal[
             "timeout",

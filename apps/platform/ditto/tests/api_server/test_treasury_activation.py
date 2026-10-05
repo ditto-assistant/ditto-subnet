@@ -84,6 +84,7 @@ def test_status_matches_authoritative_gate(fault, expected):
         "stale_required",
         "chain",
         "identity_timeout",
+        "identity_step_timeout",
         "roster_timeout",
         "roster_connection",
         "reader_missing",
@@ -155,6 +156,12 @@ async def test_public_preflight_is_bounded_read_only_and_exact(
         state.chain.get_treasury_dispatch_observation.side_effect = TimeoutError(
             "PRIVATE PROVIDER ERROR"
         )
+    elif fault == "identity_step_timeout":
+        from ditto.chain.errors import ChainTreasuryReadTimeoutError
+
+        state.chain.get_treasury_dispatch_observation.side_effect = (
+            ChainTreasuryReadTimeoutError("epoch_storage")
+        )
     elif fault == "roster_timeout":
         state.chain.get_treasury_weight_setters.side_effect = TimeoutError(
             "PRIVATE PROVIDER ERROR"
@@ -212,13 +219,20 @@ async def test_public_preflight_is_bounded_read_only_and_exact(
         assert result["configured_policy_matches"] is False
         assert result["weight_effect"] == "none"
         assert "PRIVATE PROVIDER ERROR" not in response.text
-        if fault not in {"chain", "identity", "identity_timeout", "reader_missing"}:
+        if fault not in {
+            "chain",
+            "identity",
+            "identity_timeout",
+            "identity_step_timeout",
+            "reader_missing",
+        }:
             state.chain.get_treasury_weight_setters.assert_awaited_once_with(
                 p.policy, block_hash=p.identity.finalized_block_hash
             )
         failures = {
             "chain": ("identity", "unavailable"),
             "identity_timeout": ("identity", "timeout"),
+            "identity_step_timeout": ("identity", "timeout"),
             "roster_timeout": ("setter_roster", "timeout"),
             "roster_connection": ("setter_roster", "connection"),
             "reader_missing": ("identity", "reader_unavailable"),
@@ -230,6 +244,9 @@ async def test_public_preflight_is_bounded_read_only_and_exact(
             result["chain_failure_stage"],
             result["chain_failure_kind"],
         ) == failures.get(fault, (None, None))
+        assert result["chain_failure_step"] == (
+            "epoch_storage" if fault == "identity_step_timeout" else None
+        )
         if fault == "missing_setter":
             assert result["required_setter_count"] == 2
             assert {s["status"] for s in result["setters"]} == {

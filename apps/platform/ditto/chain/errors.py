@@ -2,6 +2,22 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
+TreasuryReadStep = Literal[
+    "connection",
+    "connection_close",
+    "finalized_head",
+    "finalized_height",
+    "canonical_hash",
+    "genesis_hash",
+    "epoch_storage",
+    "collector_storage",
+    "uid_binding",
+    "permit_vector",
+    "setter_binding",
+]
+
 
 class ChainError(Exception):
     """Base exception for chain-related errors."""
@@ -86,6 +102,14 @@ class ChainTimeoutError(ChainError):
     """
 
     pass
+
+
+class ChainTreasuryReadTimeoutError(ChainTimeoutError):
+    """Fixed public checkpoint; no endpoint, params or provider exception text."""
+
+    def __init__(self, step: TreasuryReadStep):
+        super().__init__("bounded treasury read timed out")
+        self.read_step = step
 
 
 class ChainEmissionReceiptUnavailable(ChainError):

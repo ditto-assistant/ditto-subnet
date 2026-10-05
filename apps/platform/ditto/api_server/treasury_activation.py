@@ -23,7 +23,12 @@ from ditto.api_server.treasury_weights import (
     TREASURY_FLEET_FRESHNESS,
     treasury_fleet_members,
 )
-from ditto.chain.errors import ChainConnectionError, ChainTimeoutError
+from ditto.chain.errors import (
+    ChainConnectionError,
+    ChainTimeoutError,
+    ChainTreasuryReadTimeoutError,
+    TreasuryReadStep,
+)
 from ditto.db.models import ValidatorHeartbeat
 from ditto_screening_protocol.treasury import Address, TreasuryLedgerPin
 from ditto_screening_protocol.treasury_approval import (
@@ -128,6 +133,7 @@ async def activation_preflight(
     chain_status: Literal["verified", "unavailable"] = "unavailable"
     reasons: list[TreasuryPreflightBlockReason] = []
     failure_stage: Literal["identity", "setter_roster"] | None = None
+    failure_step: TreasuryReadStep | None = None
     failure_kind: (
         Literal[
             "timeout",
@@ -167,6 +173,8 @@ async def activation_preflight(
         # Fixed labels identify the failed read without exposing provider URLs,
         # credentials or raw exception text. All failures remain non-authoritative.
         failure_stage = stage
+        if isinstance(error, ChainTreasuryReadTimeoutError):
+            failure_step = error.read_step
         if isinstance(error, (TimeoutError, ChainTimeoutError)):
             failure_kind = "timeout"
         elif isinstance(error, (ConnectionError, ChainConnectionError)):
@@ -220,6 +228,7 @@ async def activation_preflight(
         == policy.collector_policy_digest,
         chain_status=chain_status,
         chain_failure_stage=failure_stage,
+        chain_failure_step=failure_step,
         chain_failure_kind=failure_kind,
         observation=observation,
         required_setter_count=len(required) if required else None,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from contextlib import nullcontext
+from contextlib import asynccontextmanager, nullcontext
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlsplit
 
@@ -15,6 +15,7 @@ from ditto.chain.errors import (
     ChainEmissionReceiptUnavailable,
     ChainError,
     ChainTimeoutError,
+    ChainTreasuryReadTimeoutError,
     ExtrinsicNotFoundError,
 )
 from ditto.chain.models import (
@@ -30,6 +31,7 @@ from ditto.chain.models import (
     ExtrinsicInfo,
     NeuronInfo,
 )
+from ditto.chain.treasury_read_trace import TreasuryReadTrace
 from ditto_screening_protocol.treasury import TreasuryEmissionPolicy, TreasuryLedgerPin
 from ditto_screening_protocol.treasury_identity import read_finalized_collector_pin
 
@@ -342,17 +344,28 @@ class ChainClient:
             )
         return str(block_hash).lower()
 
-    async def get_treasury_collector_pin(
-        self, policy: TreasuryEmissionPolicy, *, first_block: int, pinned_block: int
-    ) -> TreasuryLedgerPin:
-        """Read finalized shadow evidence only; never access a wallet or signer."""
+    @asynccontextmanager
+    async def _treasury_reader(self, *, setters: bool = False):
         from async_substrate_interface import AsyncSubstrateInterface
 
+        trace = TreasuryReadTrace(setters=setters)
         try:
             async with (
                 asyncio.timeout(8),
                 AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
             ):
+                trace.client = substrate
+                yield trace
+                trace.step = "connection_close"
+        except TimeoutError as error:
+            raise ChainTreasuryReadTimeoutError(trace.step) from error
+
+    async def get_treasury_collector_pin(
+        self, policy: TreasuryEmissionPolicy, *, first_block: int, pinned_block: int
+    ) -> TreasuryLedgerPin:
+        """Read finalized shadow evidence only; never access a wallet or signer."""
+        try:
+            async with self._treasury_reader() as substrate:
                 return await read_finalized_collector_pin(
                     substrate,
                     policy,
@@ -360,6 +373,8 @@ class ChainClient:
                     pinned_block=pinned_block,
                 )
         except ValueError:
+            raise
+        except ChainTreasuryReadTimeoutError:
             raise
         except TimeoutError as error:
             raise ChainTimeoutError(
@@ -373,31 +388,21 @@ class ChainClient:
     async def get_treasury_weight_setters(
         self, policy: TreasuryEmissionPolicy, *, block_hash: str
     ) -> tuple[str, ...]:
-        from async_substrate_interface import AsyncSubstrateInterface
-
         from ditto_screening_protocol.treasury_identity import (
             read_finalized_weight_setters,
         )
 
-        async with (
-            asyncio.timeout(8),
-            AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
-        ):
+        async with self._treasury_reader(setters=True) as substrate:
             return await read_finalized_weight_setters(
                 substrate, policy, block_hash=block_hash
             )
 
     async def get_treasury_dispatch_observation(self, policy: TreasuryEmissionPolicy):
-        from async_substrate_interface import AsyncSubstrateInterface
-
         from ditto_screening_protocol.treasury_identity import (
             read_treasury_dispatch_observation,
         )
 
-        async with (
-            asyncio.timeout(8),
-            AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
-        ):
+        async with self._treasury_reader() as substrate:
             return await read_treasury_dispatch_observation(substrate, policy)
 
     async def get_treasury_receipt_proof(

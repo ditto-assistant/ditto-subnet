@@ -149,6 +149,9 @@ export const treasuryActivationPreflightSchema = z.object({
   configured_collector_matches: z.boolean(),
   chain_status: z.enum(['verified', 'unavailable']),
   chain_failure_stage: z.enum(['identity', 'setter_roster']).nullable().default(null),
+  chain_failure_step: z.enum(['connection', 'connection_close', 'finalized_head', 'finalized_height', 'canonical_hash',
+    'genesis_hash', 'epoch_storage', 'collector_storage', 'uid_binding', 'permit_vector',
+    'setter_binding']).nullable().default(null),
   chain_failure_kind: z.enum(['timeout', 'connection', 'invalid_evidence', 'reader_unavailable', 'unavailable']).nullable().default(null),
   observation: z.object({
     identity,

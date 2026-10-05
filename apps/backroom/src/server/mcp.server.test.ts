@@ -166,7 +166,7 @@ describe('Backroom MCP tools', () => {
       proposed_collector_policy_digest: pin.policy.collector_policy_digest,
       proposal_signature_verified: true, configured_policy_matches: false,
       configured_collector_matches: false, chain_status: 'unavailable', observation: null,
-      chain_failure_stage: null, chain_failure_kind: null,
+      chain_failure_stage: 'identity', chain_failure_kind: 'timeout', chain_failure_step: 'epoch_storage',
       gate_scope: 'managed_validators', managed_validator_hotkeys: [], chain_permitted_setter_count: null,
       required_setter_count: null, setters: [], truncated: false,
       fleet_ready_for_proposed_policy: false, blocking_reasons: ['chain_unavailable'],

@@ -33295,6 +33295,8 @@ export interface components {
             chain_failure_kind?: ("timeout" | "connection" | "invalid_evidence" | "reader_unavailable" | "unavailable") | null;
             /** Chain Failure Stage */
             chain_failure_stage?: ("identity" | "setter_roster") | null;
+            /** Chain Failure Step */
+            chain_failure_step?: ("connection" | "connection_close" | "finalized_head" | "finalized_height" | "canonical_hash" | "genesis_hash" | "epoch_storage" | "collector_storage" | "uid_binding" | "permit_vector" | "setter_binding") | null;
             /** Chain Permitted Setter Count */
             chain_permitted_setter_count?: number | null;
             /**
