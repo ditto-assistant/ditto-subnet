@@ -1059,15 +1059,21 @@ async def _serve_epoch_pin(
     the pin, or the same stale predecessor. Live and pinned are never mixed.
     """
     if context.policy.continual_retest.ledger_pin_mode != "epoch":
-        if getattr(request.app.state.config, "treasury_weight_enforcement", False):
+        from ditto.api_server.treasury_runtime import treasury_runtime
+
+        runtime = await treasury_runtime(session, request.app.state.config)
+        if runtime.treasury_weight_enforcement:
             raise HTTPException(
                 status_code=503, detail="treasury requires epoch pinning"
             )
         return None
+    from ditto.api_server.treasury_runtime import treasury_runtime
+
+    runtime = await treasury_runtime(session, request.app.state.config)
     materializer = getattr(request.app.state, "ledger_pin_materializer", None)
     session_maker = getattr(request.app.state, "session_maker", None)
     if materializer is None or session_maker is None:
-        if getattr(request.app.state.config, "treasury_weight_enforcement", False):
+        if runtime.treasury_weight_enforcement:
             raise HTTPException(
                 status_code=503, detail="treasury epoch pin unavailable"
             )
@@ -1078,7 +1084,7 @@ async def _serve_epoch_pin(
     if session.in_transaction():
         await session.rollback()
     pin = await materializer.ensure(request.app.state, session_maker, now=now)
-    if getattr(request.app.state.config, "treasury_weight_enforcement", False) and (
+    if runtime.treasury_weight_enforcement and (
         pin is None
         or not isinstance(
             response_from_pin(pin, stale=False, now=now).treasury_pin,
@@ -1118,6 +1124,16 @@ async def _require_statistical_cap_requester(
     app_state: Any = None,
 ) -> LedgerResponse:
     """Refuse a v28 rejoiner while a pinned v29 fold remains active."""
+    if app_state is not None:
+        from ditto.api_server.treasury_runtime import treasury_runtime
+
+        runtime = await treasury_runtime(session, app_state.config)
+        if runtime.treasury_weight_enforcement and not isinstance(
+            ledger.treasury_pin, EnforcingTreasuryPin
+        ):
+            raise HTTPException(
+                status_code=503, detail="Gamma requires a verified enforcing epoch"
+            )
     if isinstance(ledger.treasury_pin, EnforcingTreasuryPin):
         from ditto.api_server.treasury_weights import require_enforcing_requester
 
@@ -1234,6 +1250,18 @@ async def scores(
                 status_code=503,
                 detail="scoring ledger authorization temporarily unavailable",
             ) from exc
+    # Cross-process controls must be readable before any cached-ledger fallback.
+    # A DB outage cannot downgrade a newly activated or paused Gamma policy.
+    from ditto.api_server.treasury_runtime import treasury_runtime
+
+    try:
+        request.state.treasury_runtime = await treasury_runtime(
+            session, request.app.state.config
+        )
+    except (SQLAlchemyError, ValueError):
+        raise HTTPException(
+            status_code=503, detail="Gamma control verification unavailable"
+        ) from None
     try:
         ledger_context = await resolve_ledger_context(
             request.app.state, session, now=auth_now
@@ -1461,8 +1489,14 @@ def _serve_last_known(
     """Serve the cached ledger on a DB failure, or 503 if there is none / too old."""
     snapshot = _cached_snapshot(request)
     config = getattr(request.app.state, "config", None)
-    if getattr(config, "treasury_weight_enforcement", False) or (
-        snapshot is not None and isinstance(snapshot.treasury_pin, EnforcingTreasuryPin)
+    control = getattr(getattr(request, "state", None), "treasury_runtime", None)
+    if (
+        getattr(control, "revision", 0)
+        or getattr(config, "treasury_weight_enforcement", False)
+        or (
+            snapshot is not None
+            and isinstance(snapshot.treasury_pin, EnforcingTreasuryPin)
+        )
     ):
         raise HTTPException(
             status_code=503, detail="treasury ledger verification unavailable"

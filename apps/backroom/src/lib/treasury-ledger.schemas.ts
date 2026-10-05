@@ -114,6 +114,29 @@ export const publicTreasuryApprovalSchema = z.object({
   signature: z.string().regex(/^0x[0-9a-f]{128}$/),
 })
 
+export const treasuryRuntimeSettingsSchema = z.object({
+  version: z.literal(1), mode: z.enum(['observe', 'enforce', 'pause']),
+  approval: publicTreasuryApprovalSchema, approved_policy_digest: digest,
+  collector_policy_digest: digest, activation_epoch: z.number().int().nonnegative().nullable(),
+})
+export const treasuryRuntimeRevisionSchema = z.object({
+  revision: z.number().int().positive(), parent_revision: z.number().int().nonnegative(),
+  settings: treasuryRuntimeSettingsSchema, checksum: digest, actor: z.string(),
+  reason: z.string(), created_at: z.string(),
+})
+export const treasuryRuntimeControlSchema = z.object({
+  revision: z.number().int().nonnegative(), latest: treasuryRuntimeRevisionSchema.nullable(),
+  can_enforce_weights: z.literal(false), transfers_enabled: z.literal(false),
+})
+export const recordTreasuryRuntimeInputSchema = {
+  expectedRevision: z.number().int().nonnegative(),
+  mode: z.enum(['observe', 'enforce', 'pause']),
+  approvalJson: z.string().min(1).max(8192),
+  expectedPolicyDigest: digest, expectedCollectorPolicyDigest: digest,
+  activationEpoch: z.number().int().nonnegative().nullable(),
+  reason: z.string().trim().min(8), confirmation: z.string().min(1).max(100),
+}
+
 export const treasuryActivationPreflightSchema = z.object({
   checked_at: z.string().datetime({ offset: true }),
   proposed_policy_digest: digest,

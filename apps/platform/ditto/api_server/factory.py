@@ -722,6 +722,11 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
     app.include_router(admin_emission_eligibility_router, prefix="/api/v1")
     app.include_router(admin_treasury_settings_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.admin_treasury_runtime import (
+        router as treasury_runtime_router,
+    )
+
+    app.include_router(treasury_runtime_router, prefix="/api/v1")
     app.include_router(admin_treasury_receipts_router, prefix="/api/v1")
     app.include_router(admin_treasury_quote_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")

@@ -161,7 +161,9 @@ async def activation_preflight(
         reasons.append("inventory_truncated")
     if any(s.status != "ready" for s in setters):
         reasons.append("setter_proof_missing")
-    config = state.config
+    from ditto.api_server.treasury_runtime import treasury_runtime
+
+    config = await treasury_runtime(session, state.config)
     return TreasuryActivationPreflight(
         checked_at=now,
         proposed_policy_digest=policy.digest,

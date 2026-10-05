@@ -95,8 +95,15 @@ async def enforcing_pin_from_observation(
     schedule: Any,
     *,
     now: datetime,
+    runtime: Any = None,
 ) -> EnforcingTreasuryPin:
-    config = app_state.config
+    config = runtime if runtime is not None else app_state.config
+    if (
+        runtime is not None
+        and runtime.activation_epoch is not None
+        and schedule.subnet_epoch_index < runtime.activation_epoch
+    ):
+        raise ValueError("Gamma activation epoch has not begun")
     approval = config.treasury_shadow_approval
     policy = verify_policy_approval(
         approval,
@@ -139,6 +146,16 @@ async def require_enforcing_requester(
     now: datetime,
     app_state: Any,
 ) -> None:
+    from ditto.api_server.treasury_runtime import treasury_runtime
+
+    config = await treasury_runtime(session, app_state.config)
+    if config.revision and not config.treasury_weight_enforcement:
+        raise ValueError("Gamma dispatch is paused or observation-only")
+    if (
+        config.activation_epoch is not None
+        and pin.epoch_index < config.activation_epoch
+    ):
+        raise ValueError("enforcing pin predates activated runtime revision")
     fleet = await read_treasury_fleet(
         session,
         now=now,
@@ -158,8 +175,8 @@ async def require_enforcing_requester(
         raise ValueError("current chain weight setter lacks pinned runtime proof")
     require_treasury_weight_authority(
         pin,
-        expected_policy_digest=app_state.config.treasury_approved_policy_digest,
-        expected_collector_policy_digest=app_state.config.treasury_approved_collector_policy_digest,
+        expected_policy_digest=config.treasury_approved_policy_digest,
+        expected_collector_policy_digest=config.treasury_approved_collector_policy_digest,
         local_capability=next(m for m in fleet if m.validator_hotkey == hotkey),
         current_identity=observed.identity,
         netuid=app_state.config.chain.netuid,

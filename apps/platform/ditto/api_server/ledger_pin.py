@@ -519,7 +519,10 @@ class LedgerPinMaterializer:
         now: datetime,
     ) -> LedgerPin | None:
         netuid = schedule.netuid
+        from ditto.api_server.treasury_runtime import lock_runtime, treasury_runtime
+
         async with session_maker() as session:
+            runtime = await treasury_runtime(session, app_state.config)
             existing = await get_pin(
                 session, netuid=netuid, epoch_index=schedule.subnet_epoch_index
             )
@@ -553,16 +556,19 @@ class LedgerPinMaterializer:
                 requesting_validator_hotkey=None,
             )
         treasury: TreasuryPin | None = await observe_shadow_treasury(
-            app_state, schedule
+            app_state, schedule, runtime=runtime
         )
-        if getattr(app_state.config, "treasury_weight_enforcement", False):
+        if runtime.treasury_weight_enforcement and (
+            runtime.activation_epoch is None
+            or schedule.subnet_epoch_index >= runtime.activation_epoch
+        ):
             from ditto.api_server.treasury_weights import enforcing_pin_from_observation
 
             if treasury is None:
                 raise ValueError("enforcing treasury requires finalized observation")
             async with session_maker() as session:
                 treasury = await enforcing_pin_from_observation(
-                    app_state, session, treasury, schedule, now=now
+                    app_state, session, treasury, schedule, now=now, runtime=runtime
                 )
         if treasury is not None:
             # Preserve the shared snapshot cache; this observation belongs only
@@ -591,6 +597,11 @@ class LedgerPinMaterializer:
         async with session_maker() as session:
             try:
                 async with session.begin():
+                    await lock_runtime(session)
+                    if await treasury_runtime(session, app_state.config) != runtime:
+                        raise ValueError(
+                            "Gamma control changed during epoch materialization"
+                        )
                     row = await insert_pin(session, draft)
                 await session.refresh(row)
                 LEDGER_PIN_MATERIALIZATIONS.labels(outcome="pinned").inc()

@@ -8815,6 +8815,33 @@ class ContinualRetestSettingsRevision(Base):
     )
 
 
+class TreasuryRuntimeRevision(Base):
+    """Append-only public approvals and guarded producer mode; never signer custody."""
+
+    __tablename__ = "treasury_runtime_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    __table_args__ = (
+        CheckConstraint("parent_revision >= 0", name="treasury_runtime_parent_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="treasury_runtime_checksum_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="treasury_runtime_reason_check",
+        ),
+        UniqueConstraint("parent_revision", name="treasury_runtime_parent_key"),
+    )
+
+
 class TreasurySettingsRevision(Base):
     """Append-only shadow policy; no validator or signer consumes it."""
 
