@@ -10,6 +10,7 @@ ROOT = Path(__file__).parents[2]
 spec = importlib.util.spec_from_file_location(
     "recovery_plan", ROOT / "infra/scripts/check-subnet-recovery-plan.py"
 )
+assert spec is not None and spec.loader is not None
 guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
 

@@ -89,6 +89,19 @@ workflow, prod environment and only scheduled/manual events.
 
 ## Custody and activation
 
+After merge and with repository-administration authorization, install the exact
+ruleset in `infra/github/platform-pg-backup-ruleset.json` before installing the
+private identity. It requires an independent `admin` team approval for restore
+code, its imported backup module, its dependency lock, the infrastructure
+workflow and recovery custody roots. Read back the rule and its file patterns;
+the saved JSON alone does not enforce it. Organization/repository admins retain
+the same explicit emergency bypass as the existing Hippius probe rule.
+
+The restore runner installs only hash-locked binary wheels in an isolated venv
+and runs copied reviewed files using Python isolated mode. It does not install
+the Platform application, local packages, or their build hooks. The dependency
+install precedes secret capture; no plaintext dump or key artifact is uploaded.
+
 Before adding any secret versions, inspect project and ancestor policies,
 secret policies and service-account impersonation paths. The initial project
 audit is not proof of effective access after provisioning. Restrict private

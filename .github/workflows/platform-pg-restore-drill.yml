@@ -36,6 +36,22 @@ jobs:
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
+      - name: Install only hash-locked restore dependencies
+        run: |
+          set -euo pipefail
+          umask 077
+          uv --no-config venv --python 3.12 "$RUNNER_TEMP/platform-pg-restore-venv"
+          uv --no-config pip install \
+            --python "$RUNNER_TEMP/platform-pg-restore-venv/bin/python" \
+            --only-binary=:all: --require-hashes \
+            -r infra/scripts/pg-restore/requirements.txt
+          mkdir -p "$RUNNER_TEMP/platform-pg-restore-code/scripts" \
+            "$RUNNER_TEMP/platform-pg-restore-code/ansible/roles/postgres_backup/files"
+          cp infra/scripts/platform-pg-restore-drill.py \
+            "$RUNNER_TEMP/platform-pg-restore-code/scripts/"
+          cp infra/ansible/roles/postgres_backup/files/backup.py \
+            "$RUNNER_TEMP/platform-pg-restore-code/ansible/roles/postgres_backup/files/"
+
       - name: Install encryption client
         run: sudo apt-get update && sudo apt-get install -y age
 
@@ -52,7 +68,9 @@ jobs:
             --secret=platform-pg-backup-age-identity > "$PG_RESTORE_DIRECTORY/age-identity"
 
       - name: Restore verified encrypted daily backup in an isolated database
-        run: uv run --locked --project apps/platform python infra/scripts/platform-pg-restore-drill.py
+        run: >-
+          "$RUNNER_TEMP/platform-pg-restore-venv/bin/python" -I
+          "$RUNNER_TEMP/platform-pg-restore-code/scripts/platform-pg-restore-drill.py"
 
       - name: Remove runner copies
         if: always()

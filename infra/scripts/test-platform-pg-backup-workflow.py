@@ -53,13 +53,16 @@ class WorkflowTest(unittest.TestCase):
             "platform-pg-backup-reader-access-key-id",
             "if: always()",
             "shred -u",
-            "--locked",
+            "--require-hashes",
+            "--only-binary=:all:",
+            'bin/python" -I',
             "persist-credentials: false",
         ):
             self.assertIn(marker, workflow)
         self.assertNotIn("platform-pg-backup-hippius-access-key-id", workflow)
         self.assertNotIn("upload-artifact", workflow)
         self.assertNotIn("GCP_PLATFORM_DEPLOY_SERVICE_ACCOUNT", workflow)
+        self.assertNotIn("--project apps/platform", workflow)
 
     def test_db_vm_never_receives_private_age_identity(self):
         role = ROOT / "infra/ansible/roles/postgres_backup"

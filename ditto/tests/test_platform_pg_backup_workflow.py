@@ -1,5 +1,6 @@
 """Keep recovery credential custody out of ordinary application workflows."""
 
+import json
 from pathlib import Path
 
 import yaml
@@ -24,6 +25,23 @@ def test_restore_workflow_uses_main_prod_and_only_reader_credentials():
     assert text.count("--project=ditto-subnet") == 3
     assert "platform-pg-backup-hippius-access-key-id" not in text
     assert "upload-artifact" not in text
+    assert "--project apps/platform" not in text
+    install = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Install only hash-locked restore dependencies"
+    )
+    assert "--require-hashes" in install["run"]
+    assert "--only-binary=:all:" in install["run"]
+    assert "uv --no-config" in install["run"]
+    execute = next(
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Restore verified encrypted daily backup in an isolated database"
+    )
+    assert 'bin/python" -I' in execute["run"]
+    assert "platform-pg-restore-code/scripts/" in execute["run"]
     cleanup = job["steps"][-1]
     assert cleanup["if"] == "always()"
     assert "shred -u" in cleanup["run"]
@@ -86,3 +104,25 @@ def test_recovery_ci_has_no_application_credentials_or_owner_bootstrap_choice():
             )
         )
         assert "inputs.root != 'gcp-subnet-recovery'" in generic["if"]
+
+
+def test_independent_review_covers_every_restore_import_and_dependency():
+    rules = json.loads(
+        (ROOT / "infra/github/platform-pg-backup-ruleset.json").read_text()
+    )
+    assert rules["enforcement"] == "active"
+    assert rules["conditions"]["ref_name"]["include"] == ["refs/heads/main"]
+    reviewer = rules["rules"][0]["parameters"]["required_reviewers"][0]
+    assert reviewer["reviewer"] == {"id": 12645310, "type": "Team"}
+    assert reviewer["minimum_approvals"] == 1
+    assert set(reviewer["file_patterns"]) == {
+        ".github/workflows/platform-pg-restore-drill.yml",
+        ".github/workflows/infra-plan-apply.yml",
+        "infra/scripts/platform-pg-restore-drill.py",
+        "infra/scripts/pg-restore/**",
+        "infra/scripts/check-subnet-recovery-plan.py",
+        "infra/ansible/roles/postgres_backup/**",
+        "infra/terraform/stacks/gcp-subnet-bootstrap/**",
+        "infra/terraform/stacks/gcp-subnet-recovery/**",
+        "infra/github/platform-pg-backup-ruleset.json",
+    }

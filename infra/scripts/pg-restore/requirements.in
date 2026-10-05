@@ -1,0 +1,3 @@
+# Match the existing Platform lock without installing the application/build hooks.
+boto3==1.40.61
+requests==2.34.2

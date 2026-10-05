@@ -88,7 +88,10 @@ authorization does not authorize IAM changes, a merge, or production convergence
    `GCP_PG_RESTORE_WORKLOAD_IDENTITY_PROVIDER`. The isolated WIF provider admits
    only this main workflow, on schedule or dispatch, in prod. It has no SSH,
    production DB, provider writer, state bucket, or project-wide secret access.
-   Protect edits to the restore workflow and scripts with required review.
+   Install and read back `infra/github/platform-pg-backup-ruleset.json` with
+   separately authorized repository-admin access before adding the private
+   identity. It protects the workflow, every imported restore file, dependency
+   lock and custody configuration with independent `admin` team review.
 8. With separate host-convergence authorization, run the DB playbook with
    `postgres_backup_enabled=true`. Persist that explicit intent in the reviewed
    host/group configuration after qualification. Do not rely on a one-time flag
