@@ -18,7 +18,7 @@ from ditto.api_models.treasury_settings import TreasurySettings
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.ledger_pin import ledger_digest
 from ditto.api_server.treasury_ingress import digest
-from ditto.chain.treasury_receipts import read_treasury_chain_proof
+from ditto.chain.treasury_receipts import finalized_block, read_treasury_chain_proof
 from ditto.db.models import (
     LedgerEpochSnapshot,
     TreasuryPublicEvent,
@@ -28,6 +28,7 @@ from ditto.db.models import (
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
     FINNEY_GENESIS,
+    HISTORICAL_COLLECTOR_CODE_HASH,
 )
 from ditto_screening_protocol.treasury import TreasuryEmissionPolicy
 from ditto_screening_protocol.treasury_approval import approval_message
@@ -588,3 +589,38 @@ async def test_linked_alpha_payments_cannot_overspend_distribution(
         409,
         422,
     }
+
+
+@pytest.mark.parametrize(
+    "parent,post,allowed",
+    [
+        (HISTORICAL_COLLECTOR_CODE_HASH, HISTORICAL_COLLECTOR_CODE_HASH, True),
+        (AUDITED_COLLECTOR_CODE_HASH, AUDITED_COLLECTOR_CODE_HASH, True),
+        (HISTORICAL_COLLECTOR_CODE_HASH, AUDITED_COLLECTOR_CODE_HASH, True),
+        (AUDITED_COLLECTOR_CODE_HASH, HISTORICAL_COLLECTOR_CODE_HASH, False),
+        ("0x" + "aa" * 32, AUDITED_COLLECTOR_CODE_HASH, False),
+        (AUDITED_COLLECTOR_CODE_HASH, "0x" + "aa" * 32, False),
+    ],
+)
+async def test_exact_historical_execution_runtime_and_forward_upgrade(
+    parent, post, allowed
+):
+    class HistoricalRPC:
+        async def get_chain_finalised_head(self):
+            return h(200)
+
+        async def get_block_number(self, _):
+            return 200
+
+        async def get_block_hash(self, n):
+            return FINNEY_GENESIS if n == 0 else h(n)
+
+        async def rpc_request(self, _method, params):
+            return {"result": parent if params[-1] == h(119) else post}
+
+    if allowed:
+        at, previous, code = await finalized_block(HistoricalRPC(), 120, FINNEY_GENESIS)
+        assert (at, previous, code) == (h(120), h(119), parent)
+    else:
+        with pytest.raises(ValueError, match="runtime"):
+            await finalized_block(HistoricalRPC(), 120, FINNEY_GENESIS)

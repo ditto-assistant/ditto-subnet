@@ -13,10 +13,11 @@ from typing import Any
 
 from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
 from ditto_screening_protocol.collector_receipts import (
-    AUDITED_COLLECTOR_CODE_HASH,
+    AUDITED_COLLECTOR_RECEIPT_HASHES,
     FINNEY_GENESIS,
     chain_uint,
     collector_gross_incentive,
+    collector_receipt_runtime,
     collector_transfer_effect,
     liquid_collector_credit,
 )
@@ -47,7 +48,7 @@ class TreasuryChainProof:
 async def finalized_block(
     substrate: Any, block: int, genesis: str
 ) -> tuple[str, str, str]:
-    """One fixed canonical hash and same audited parent/post runtime."""
+    """Fixed canonical hashes and audited execution/receipt runtime."""
     head = await substrate.get_chain_finalised_head()
     height = chain_uint(await substrate.get_block_number(head))
     if await substrate.get_block_hash(height) != head or not 0 < block <= height:
@@ -64,12 +65,10 @@ async def finalized_block(
             "state_getStorageHash", ["0x3a636f6465", pinned]
         )
         code = response.get("result") if isinstance(response, dict) else None
-        if code != AUDITED_COLLECTOR_CODE_HASH:
+        if code not in AUDITED_COLLECTOR_RECEIPT_HASHES:
             raise ValueError("receipt runtime is not audited")
         hashes.append(code)
-    if hashes[0] != hashes[1]:
-        raise ValueError("receipt crosses a runtime upgrade")
-    return at, parent, hashes[0]
+    return at, parent, collector_receipt_runtime(*hashes)
 
 
 async def read_treasury_chain_proof(

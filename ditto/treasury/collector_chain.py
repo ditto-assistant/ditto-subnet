@@ -25,15 +25,16 @@ from ditto.treasury.collector import (
 from ditto.treasury.service_allocation import ServiceDestination
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
+    AUDITED_COLLECTOR_RECEIPT_HASHES,
     FINNEY_GENESIS,
     collector_gross_incentive,
+    collector_receipt_runtime,
     collector_transfer_effect,
     liquid_collector_credit,
 )
 
-# Exact live v472 bytes bound to reconstructed source, with only the documented
-# compile-time hash-seed constants differing in the independent srtool rebuild.
-# See docs/service-collector-automation.md for artifact/source fingerprints.
+# Exact v473 official artifact and reviewed source. Historical receipt hashes
+# are accepted only on the observation path, never for preparation/broadcast.
 AUDITED_CODE_HASH = AUDITED_COLLECTOR_CODE_HASH
 
 
@@ -112,7 +113,7 @@ class PublicCollectorChain:
             self.substrate.query(module, name, params=params, block_hash=block_hash)
         )
 
-    def guard_runtime(self, policy, block_hash):
+    def guard_runtime(self, policy, block_hash, *, historical=False):
         s = self.substrate
         if (policy.genesis_hash, policy.runtime_code_hash) != (
             FINNEY_GENESIS,
@@ -124,7 +125,12 @@ class PublicCollectorChain:
         code_hash = s.rpc_request(
             "state_getStorageHash", ["0x3a636f6465", block_hash]
         ).get("result")
-        if code_hash != policy.runtime_code_hash:
+        allowed = (
+            AUDITED_COLLECTOR_RECEIPT_HASHES
+            if historical
+            else {policy.runtime_code_hash}
+        )
+        if code_hash not in allowed:
             raise ValueError("runtime changed; stop for independent contract audit")
         # SDK 10.5.0's singular helper does not match the audited plural API.
         filters = unwrap(
@@ -163,6 +169,7 @@ class PublicCollectorChain:
                 (c.get("pallet_name"), c.get("call_name")) for c in calls
             } != allowed or len(calls) != len(allowed):
                 raise ValueError("proxy scope differs from audited allowlist")
+        return code_hash
 
     def identity(self, policy, block_hash, *, allow_unowned=False):
         owner = self.query(
@@ -343,9 +350,12 @@ class PublicCollectorChain:
         if block > s.get_block_number(s.get_chain_finalised_head()):
             raise ValueError("emission block is not finalized")
         block_hash = s.get_block_hash(block)
-        self.guard_runtime(policy, block_hash)
+        code = self.guard_runtime(policy, block_hash, historical=True)
+        parent_hash = s.get_block_hash(block - 1)
+        parent_code = self.guard_runtime(policy, parent_hash, historical=True)
+        collector_receipt_runtime(parent_code, code)
         uid = self._earnings_identity(policy, block_hash)
-        parent_uid = self._earnings_identity(policy, s.get_block_hash(block - 1))
+        parent_uid = self._earnings_identity(policy, parent_hash)
         events = s.get_events(block_hash)
         if uid is None and parent_uid is None:
             # The signed start can predate first registration. An unrelated
@@ -564,7 +574,7 @@ class PublicCollectorChain:
         end = min(observation.block, signed["expires_block"], start + 32)
         for block in range(start + 1, end + 1):
             block_hash = s.get_block_hash(block)
-            self.guard_runtime(policy, block_hash)
+            self.guard_runtime(policy, block_hash, historical=True)
             raw = s.rpc_request("chain_getBlock", [block_hash])["result"]["block"][
                 "extrinsics"
             ]

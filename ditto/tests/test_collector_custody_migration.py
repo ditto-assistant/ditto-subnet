@@ -109,6 +109,56 @@ class Migration(unittest.TestCase):
                 self.signed(self.approval),
             )
 
+    def test_runtime_reapproval_preserves_already_migrated_custody_and_spend(self):
+        from ditto_screening_protocol.collector_receipts import (
+            AUDITED_COLLECTOR_CODE_HASH,
+            HISTORICAL_COLLECTOR_CODE_HASH,
+        )
+
+        old = replace(self.old, runtime_code_hash=HISTORICAL_COLLECTOR_CODE_HASH)
+        isolated = replace(self.new, runtime_code_hash=HISTORICAL_COLLECTOR_CODE_HASH)
+        # This fixture was pinned before custody migration; bind the revised fixture.
+        db = sqlite3.connect(self.source)
+        db.execute("UPDATE pin SET digest=?", (old.digest,))
+        db.commit()
+        db.close()
+        sha = hashlib.sha256(self.source.read_bytes()).hexdigest()
+        first = m.manifest(self.source, old, isolated, "registration", sha)
+        current = self.root / "policy4.db"
+        m.migrate(self.source, current, old, isolated, first, self.signed(first))
+        new = replace(
+            isolated, revision=5, runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH
+        )
+        current_sha = hashlib.sha256(current.read_bytes()).hexdigest()
+        approval = m.manifest(current, isolated, new, "registration", current_sha)
+        target = self.root / "policy5.db"
+        with self.assertRaises(ValueError):
+            m.migrate(current, target, isolated, new, approval, self.signed(first))
+        self.assertFalse(target.exists())
+        result = m.migrate(
+            current, target, isolated, new, approval, self.signed(approval)
+        )
+        self.assertEqual(result["registration_reserved_rao"], 3)
+        self.assertEqual(result["cursor"], 199)
+        self.assertEqual(hashlib.sha256(current.read_bytes()).hexdigest(), current_sha)
+        j = CollectorJournal(target, new, "registration")
+        self.assertEqual(
+            j.db.execute("SELECT SUM(amount) FROM operations").fetchone()[0], 3
+        )
+        self.assertEqual(j.db.execute("SELECT COUNT(*) FROM events").fetchone()[0], 3)
+        j.close()
+        for changed in (
+            replace(new, registration_budget_rao=11),
+            replace(new, start_block=101),
+            replace(new, transfer_delegate="other"),
+            replace(new, revision=6),
+            replace(new, runtime_code_hash="0x" + "ab" * 32),
+        ):
+            with self.assertRaises(ValueError):
+                m.policy_transition(isolated, changed)
+        with self.assertRaises(ValueError):
+            m.policy_transition(new, replace(isolated, revision=6))
+
     def test_unresolved_unknown_or_settlement_mismatch_refuse(self):
         for state in ("dispatching", "unknown", "expired"):
             db = sqlite3.connect(self.source)

@@ -16,6 +16,10 @@ from dataclasses import asdict
 from pathlib import Path
 
 from ditto.treasury.collector import CollectorPolicy, canonical
+from ditto_screening_protocol.collector_receipts import (
+    AUDITED_COLLECTOR_CODE_HASH,
+    HISTORICAL_COLLECTOR_CODE_HASH,
+)
 
 SCHEMA = {
     "pin": ("digest", "role"),
@@ -50,6 +54,21 @@ def policy_transition(old: CollectorPolicy, new: CollectorPolicy) -> None:
     }
     before, after = asdict(old), asdict(new)
     changed = {key for key in before if before[key] != after[key]}
+    # Same isolated custody, fresh offline approval, exact audited runtime
+    # transition. No wallet, budget, destination, start or interval may change.
+    if (
+        changed == {"revision", "runtime_code_hash"}
+        and old.gcp_project == new.gcp_project == "sn118-gamma-custody"
+        and new.revision == old.revision + 1
+        and old.runtime_code_hash == HISTORICAL_COLLECTOR_CODE_HASH
+        and new.runtime_code_hash == AUDITED_COLLECTOR_CODE_HASH
+        and all(
+            getattr(new, role + "_service_account")
+            == f"sn118-collector-{role}@sn118-gamma-custody.iam.gserviceaccount.com"
+            for role in ("registration", "transfer")
+        )
+    ):
+        return
     if (
         changed != allowed
         or old.gcp_project != "ditto-app-dev"
