@@ -26,6 +26,7 @@ from ditto.api_server.treasury_weights import (
 from ditto.chain.errors import (
     ChainConnectionError,
     ChainTimeoutError,
+    ChainTreasuryActivationReadError,
     ChainTreasuryReadTimeoutError,
     TreasuryReadStep,
 )
@@ -148,16 +149,24 @@ async def activation_preflight(
         reasons.append("managed_roster_missing")
     stage: Literal["identity", "setter_roster"] = "identity"
     try:
-        observed = TreasuryDispatchObservation.model_validate(
-            await state.chain.get_treasury_dispatch_observation(policy)
+        combined_read = getattr(
+            state.chain, "get_treasury_activation_observation", None
         )
+        if callable(combined_read):
+            raw_observed, keys = await combined_read(policy)
+            observed = TreasuryDispatchObservation.model_validate(raw_observed)
+        else:
+            observed = TreasuryDispatchObservation.model_validate(
+                await state.chain.get_treasury_dispatch_observation(policy)
+            )
         TreasuryLedgerPin(
             policy=policy, policy_digest=policy.digest, identity=observed.identity
         )
         stage = "setter_roster"
-        keys = await state.chain.get_treasury_weight_setters(
-            policy, block_hash=observed.finalized_block_hash
-        )
+        if not callable(combined_read):
+            keys = await state.chain.get_treasury_weight_setters(
+                policy, block_hash=observed.finalized_block_hash
+            )
         authorized = TypeAdapter(tuple[Address, ...]).validate_python(keys)
         if (
             not authorized
@@ -172,6 +181,9 @@ async def activation_preflight(
     except Exception as error:
         # Fixed labels identify the failed read without exposing provider URLs,
         # credentials or raw exception text. All failures remain non-authoritative.
+        if isinstance(error, ChainTreasuryActivationReadError):
+            stage = error.read_stage
+            error = error.read_error
         failure_stage = stage
         if isinstance(error, ChainTreasuryReadTimeoutError):
             failure_step = error.read_step

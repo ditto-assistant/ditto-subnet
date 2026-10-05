@@ -112,6 +112,15 @@ class ChainTreasuryReadTimeoutError(ChainTimeoutError):
         self.read_step = step
 
 
+class ChainTreasuryActivationReadError(ChainError):
+    """Fixed phase around a read failure; never serialize the provider error."""
+
+    def __init__(self, stage: Literal["identity", "setter_roster"], error: Exception):
+        super().__init__("bounded treasury activation read failed")
+        self.read_stage = stage
+        self.read_error = error
+
+
 class ChainEmissionReceiptUnavailable(ChainError):
     """Finalized payout has a proven ambiguous transition; retry cannot resolve it.
 

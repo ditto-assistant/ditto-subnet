@@ -502,3 +502,90 @@ async def test_no_operator_roster_never_defaults_to_all_chain_validators(
     assert result["fleet_ready_for_proposed_policy"] is False
     assert result["managed_validator_hotkeys"] == []
     assert "managed_roster_missing" in result["blocking_reasons"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault", ["none", "identity", "roster", "empty", "wrong_owner"]
+)
+async def test_combined_preflight_preserves_refusal_and_never_writes(
+    app, client, session_maker, monkeypatch, fault
+):
+    from unittest.mock import AsyncMock
+
+    from ditto.chain.errors import (
+        ChainTreasuryActivationReadError,
+        ChainTreasuryReadTimeoutError,
+    )
+    from ditto.tests.api_server.endpoints.test_admin_treasury_settings import (
+        _HEADERS,
+        _URL,
+        _install,
+    )
+    from ditto.tests.api_server.test_treasury_weights import add_runtime, app_state
+
+    _install(app, session_maker)
+    p = pin()
+    state = app_state(p)
+    observed = state.chain.get_treasury_dispatch_observation.return_value
+    if fault == "wrong_owner":
+        observed = observed.model_copy(
+            update={
+                "identity": p.identity.model_copy(
+                    update={"owner_coldkey": p.identity.subnet_owner_coldkey}
+                )
+            }
+        )
+    read = AsyncMock(
+        return_value=(
+            observed,
+            () if fault == "empty" else (p.fleet[0].validator_hotkey,),
+        )
+    )
+    if fault in {"identity", "roster"}:
+        read.side_effect = ChainTreasuryActivationReadError(
+            "identity" if fault == "identity" else "setter_roster",
+            ChainTreasuryReadTimeoutError(
+                "epoch_storage" if fault == "identity" else "permit_vector"
+            ),
+        )
+    state.chain.get_treasury_activation_observation = read
+    app.state.chain = state.chain
+    monkeypatch.setattr(
+        "ditto.api_server.treasury_activation.verify_public_signature", lambda *_: True
+    )
+    async with session_maker() as session:
+        await add_runtime(session, datetime.now(UTC))
+        await session.commit()
+    response = await client.post(
+        f"{_URL}/activation-preflight",
+        headers=_HEADERS,
+        json={
+            "approval": p.approval.model_dump(mode="json"),
+            "expected_policy_digest": p.policy_digest,
+            "expected_collector_policy_digest": p.policy.collector_policy_digest,
+            "managed_validator_hotkeys": [p.fleet[0].validator_hotkey],
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["fleet_ready_for_proposed_policy"] is (fault == "none")
+    assert body["weight_effect"] == "none"
+    assert body["can_enforce_weights"] is False
+    assert body["chain_failure_stage"] == {
+        "identity": "identity",
+        "roster": "setter_roster",
+        "empty": "setter_roster",
+        "wrong_owner": "identity",
+    }.get(fault)
+    assert body["chain_failure_kind"] == (
+        None
+        if fault == "none"
+        else "timeout"
+        if fault in {"identity", "roster"}
+        else "invalid_evidence"
+    )
+    state.chain.get_treasury_dispatch_observation.assert_not_awaited()
+    state.chain.get_treasury_weight_setters.assert_not_awaited()
+    settings = (await client.get(_URL, headers=_HEADERS)).json()
+    assert settings["revision"] == 0 and settings["history"] == []
