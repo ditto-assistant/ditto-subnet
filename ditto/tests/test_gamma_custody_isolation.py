@@ -145,7 +145,8 @@ class Isolation(unittest.TestCase):
         self.assertNotIn('"roles/owner"', bootstrap)
         self.assertIn("assertion.actor_id == '6766068'", bootstrap)
         self.assertIn(
-            "assertion.workflow_ref == 'ditto-assistant/ditto-subnet/.github/workflows/infra-plan-apply.yml@refs/heads/main'",
+            "assertion.workflow_ref == 'ditto-assistant/ditto-subnet/"
+            ".github/workflows/infra-plan-apply.yml@refs/heads/main'",
             bootstrap,
         )
         self.assertIn('rules { enforce = "TRUE" }', bootstrap)
