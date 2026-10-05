@@ -18,7 +18,9 @@ def render_case(reader_enabled, avatars_enabled):
     ).read_text()
     env = Environment()
     env.filters.update(bool=bool, quote=str)
-    context = dict.fromkeys(meta.find_undeclared_variables(env.parse(source)), "")
+    context: dict[str, object] = dict.fromkeys(
+        meta.find_undeclared_variables(env.parse(source)), ""
+    )
     context.update(
         platform_database_backup_reader_enabled=reader_enabled,
         platform_hippius_bucket="synthetic-avatars" if avatars_enabled else "",
