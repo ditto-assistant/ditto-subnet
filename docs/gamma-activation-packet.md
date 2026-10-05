@@ -295,7 +295,7 @@ These are prepared actions, each requiring separate action-time approval.
 1. Set exact public identities/buckets/payee rules via normal Backroom CAS.
    Retain returned historical revision/checksum. Obtain separate offline
    collector/emission signatures and independently compare all fields/digests.
-2. Install exact public proof/digests on Platform and **every** validator/Pylon.
+2. Install exact public proof/digests on Platform and each configured managed validator/Pylon.
    Config seams: `DITTO_TREASURY_SHADOW_APPROVAL_FILE`,
    `DITTO_TREASURY_APPROVED_POLICY_DIGEST`,
    `DITTO_TREASURY_COLLECTOR_POLICY_DIGEST`; Platform also resolves
@@ -304,13 +304,15 @@ These are prepared actions, each requiring separate action-time approval.
 3. Drain legacy weight work at the agreed epoch boundary. Arm each Pylon
    `DITTO_TREASURY_WEIGHT_ENFORCEMENT=true` fence; cached/new/queued V1 refuses.
    Verify matching capability and fresh signed protocol-30 heartbeats for the
-   complete finalized permitted roster, including stale/rejoining setters.
+   audited managed roster with current finalized permission. Missing or stale
+   managed members refuse; independent validators do not expand this gate.
 4. Only then authorize Platform enforcing producer/new immutable V2 epoch pin.
    Require signed receipt and normalized vectors bound to that pin. No V1
-   fallback, existing shadow epoch rewrite, burn/admission change or subset gate.
+   fallback, existing shadow epoch rewrite or burn/admission change. The immutable
+   pin binds the selected managed roster; this is not a whole-chain adoption claim.
 5. Rollback stops new work, drains/reconciles tasks/claims and preserves journals.
    Never disarm a Pylon fence while V2 epoch/queued V2 work remains. Review next
-   epoch/complete roster; no silent legacy reinterpretation. Drift halts until
+   epoch/configured managed roster; no silent legacy reinterpretation. Drift halts until
    audited rebind, not operator override.
 
 ## Shortest path to visible finalized earnings/distribution/payment
