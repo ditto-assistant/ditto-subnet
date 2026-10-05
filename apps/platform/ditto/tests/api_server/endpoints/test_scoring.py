@@ -230,6 +230,27 @@ def test_v8_score_proof_omits_v9_base_evidence_field() -> None:
     assert proof.base_evidence_sha256 is None
 
 
+async def test_failed_registration_read_is_not_an_empty_metagraph() -> None:
+    hotkey = "5" + "A" * 47
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+        chain=SimpleNamespace(
+            get_recent_neurons=AsyncMock(side_effect=RuntimeError("rpc down"))
+        ),
+    )
+
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+    assert await scoring_mod._registered_miner_hotkeys(SimpleNamespace()) is None
+
+    state.chain.get_recent_neurons = AsyncMock(
+        return_value=[SimpleNamespace(hotkey=hotkey), SimpleNamespace(hotkey="")]
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) == {hotkey}
+
+    state.chain.get_recent_neurons = AsyncMock(return_value=[])
+    assert await scoring_mod._registered_miner_hotkeys(state) == set()
+
+
 async def _seed_scored(
     maker: async_sessionmaker[AsyncSession],
     *,

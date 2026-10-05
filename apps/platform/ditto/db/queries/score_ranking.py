@@ -34,6 +34,7 @@ formula; this module is only about *who reads it*.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import is_dataclass, replace
 from datetime import UTC, datetime, timedelta
 from math import exp
@@ -138,6 +139,8 @@ def dedupe_owner_rows(
     *,
     scores: Mapping[UUID, float],
     secondary_scores: Mapping[UUID, float] | None = None,
+    registered_hotkeys: AbstractSet[str] | None = None,
+    omit_unregistered_families: bool = False,
 ) -> list[F]:
     """Select one official representative per payment/attestation owner.
 
@@ -147,6 +150,14 @@ def dedupe_owner_rows(
     shown; between owners the lineage clock breaks remaining ties. Rows
     without an internal owner root fall back to a unique agent key, preserving
     fixtures and historical value objects.
+
+    ``registered_hotkeys`` is applied before that choice. A deregistered best
+    row must not represent the family: the weight fold would then drop the
+    hotkey and the registered sibling would never be served. The crown is
+    still resolved over the whole family, so a rotated hotkey keeps the
+    lineage anchor. When every member is deregistered, the score-only winner
+    remains unless ``omit_unregistered_families`` is set. ``None`` means
+    registration is unknown and the score-only winner is used.
     """
     secondary = (
         secondary_scores
@@ -157,17 +168,27 @@ def dedupe_owner_rows(
     for row in rows:
         owner = getattr(row, "emission_owner_root", None) or f"agent:{row.agent_id}"
         by_owner.setdefault(str(owner), []).append(row)
-    winners = [
-        _with_resolved_crown(
-            select_owner_representative(
-                group, scores=scores, secondary_scores=secondary_scores
-            )[0],
-            group=group,
-            scores=scores,
-            secondary_scores=secondary,
+    winners: list[F] = []
+    for group in by_owner.values():
+        candidates: Sequence[F] = group
+        if registered_hotkeys is not None:
+            registered = [
+                row for row in group if row.miner_hotkey in registered_hotkeys
+            ]
+            if registered:
+                candidates = registered
+            elif omit_unregistered_families:
+                continue
+        winners.append(
+            _with_resolved_crown(
+                select_owner_representative(
+                    candidates, scores=scores, secondary_scores=secondary_scores
+                )[0],
+                group=group,
+                scores=scores,
+                secondary_scores=secondary,
+            )
         )
-        for group in by_owner.values()
-    ]
     return rank_submissions(winners, scores=scores, secondary_scores=secondary)
 
 

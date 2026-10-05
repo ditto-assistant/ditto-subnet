@@ -230,6 +230,97 @@ class TestComparator:
         assert winner.agent_id == strong.agent_id
         assert winner.composite == pytest.approx(0.90)
 
+    def test_registered_sibling_represents_a_family_whose_best_row_is_deregistered(
+        self,
+    ) -> None:
+        retired = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.95,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+        registered = _CrownRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=3),
+            composite=0.80,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE + timedelta(days=3),
+        )
+
+        [winner] = dedupe_owner_rows(
+            [retired, registered],
+            scores={retired.agent_id: 0.95, registered.agent_id: 0.80},
+            registered_hotkeys={registered.miner_hotkey},
+        )
+
+        assert winner.agent_id == registered.agent_id
+        # The deregistered row is outside the winner's crown band, so the
+        # registered generation keeps its own arrival time.
+        assert winner.fold_first_seen == registered.first_seen
+
+        close_retired = _CrownRow(
+            agent_id=_uuid("3"),
+            miner_hotkey="5" + "C" * 47,
+            first_seen=_BASE,
+            composite=0.8004,
+            bench_version=5,
+            emission_owner_root="coldkey:owner-b",
+            crown_first_seen=_BASE,
+        )
+        close_registered = _CrownRow(
+            agent_id=_uuid("4"),
+            miner_hotkey="5" + "D" * 47,
+            first_seen=_BASE + timedelta(days=3),
+            composite=0.8000,
+            bench_version=5,
+            emission_owner_root="coldkey:owner-b",
+            crown_first_seen=_BASE + timedelta(days=3),
+        )
+        [heir] = dedupe_owner_rows(
+            [close_retired, close_registered],
+            scores={
+                close_retired.agent_id: 0.8004,
+                close_registered.agent_id: 0.8000,
+            },
+            registered_hotkeys={close_registered.miner_hotkey},
+        )
+        assert heir.agent_id == close_registered.agent_id
+        assert heir.fold_first_seen == close_retired.first_seen
+
+    def test_a_fully_deregistered_family_stays_visible_but_can_be_omitted(
+        self,
+    ) -> None:
+        only = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+
+        [shown] = dedupe_owner_rows(
+            [only],
+            scores={only.agent_id: 0.90},
+            registered_hotkeys=set(),
+        )
+        assert shown.agent_id == only.agent_id
+        assert (
+            dedupe_owner_rows(
+                [only],
+                scores={only.agent_id: 0.90},
+                registered_hotkeys=set(),
+                omit_unregistered_families=True,
+            )
+            == []
+        )
+
     def test_a_tied_resubmission_is_shown_and_keeps_the_crown(self) -> None:
         first = _CrownRow(
             agent_id=_uuid("1"),

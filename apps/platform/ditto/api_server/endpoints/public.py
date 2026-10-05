@@ -3618,12 +3618,19 @@ async def build_public_leaderboard(
     # Every finalized generation, before one is chosen per owner: an enforcing
     # eligibility gate filters these first, exactly as the validator ledger
     # does, so an owner whose best generation is withheld is represented in
-    # the emissions projection by its best payable one.
+    # the emissions projection by its best payable one. Registration is
+    # applied in the same pass: a deregistered best row must not win the
+    # family, or the registered sibling is never served and the owner earns
+    # nothing after a hotkey rotation. A family with no registered member
+    # still appears on the board.
     finalized_generations = finalized_rows
     finalized_rows = dedupe_owner_rows(
         finalized_rows,
         scores=board_official_composites,
         secondary_scores=board_efficiency_tiebreaks,
+        registered_hotkeys=(
+            set(registered_uids) if registered_uids is not None else None
+        ),
     )
     if finalized_rows:
         family_groups = await list_submission_family_members(
@@ -3673,11 +3680,10 @@ async def build_public_leaderboard(
                     bench_version=active_version,
                 )
             )
-    # Match the validator's weight-authoritative population exactly: first keep
-    # one representative per payment-time owner, then apply current registration
-    # eligibility. Projecting emissions from the pre-deduplicated rows can crown
-    # a generation that the public board has grouped under its representative,
-    # leaving the visible leaderboard with no champion row at all.
+    # Match the validator ledger: registration narrows the family before the
+    # representative is chosen, so the visible row and the paid hotkey are the
+    # same generation. A family whose hotkeys are all deregistered keeps its
+    # score-only row here and is removed from emissions below.
     #
     # Durable scores still remain on the board after deregistration, but a
     # hotkey without a current neuron cannot be the KOTH champion or occupy a
@@ -3924,9 +3930,9 @@ async def build_public_leaderboard(
     emission_incumbent_id: UUID | None = None
     provisional_incumbent: LedgerRow | None = None
     if enforcing_eligibility:
-        # The same pool the validator's ledger read is now serving -- withheld
-        # generations dropped before owner dedupe, then registration -- so the
-        # public champion and the folded champion cannot disagree.
+        # The same pool the validator's ledger read is now serving: withheld
+        # generations dropped, then registration, then one row per owner. The
+        # public champion and the folded champion stay the same hotkey.
         def withheld(agent_id: UUID) -> bool:
             record = projected_reward_eligibility.get(agent_id)
             return record is not None and not record.posture_satisfied
@@ -3934,15 +3940,15 @@ async def build_public_leaderboard(
         def registered(row: LedgerRow) -> bool:
             return registered_uids is None or row.miner_hotkey in registered_uids
 
-        emission_rows = [
-            row
-            for row in dedupe_owner_rows(
-                [row for row in finalized_generations if not withheld(row.agent_id)],
-                scores=board_official_composites,
-                secondary_scores=board_efficiency_tiebreaks,
-            )
-            if registered(row)
-        ]
+        emission_rows = dedupe_owner_rows(
+            [row for row in finalized_generations if not withheld(row.agent_id)],
+            scores=board_official_composites,
+            secondary_scores=board_efficiency_tiebreaks,
+            registered_hotkeys=(
+                set(registered_uids) if registered_uids is not None else None
+            ),
+            omit_unregistered_families=registered_uids is not None,
+        )
         # A withheld incumbent is resolved through its owner family exactly as
         # the next pin will: its best payable generation keeps the crown, or,
         # failing that, its best withheld generation keeps it as a provisional

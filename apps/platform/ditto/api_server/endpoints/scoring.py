@@ -21,10 +21,12 @@ proof that the caller controls it.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import math
 import re
 from collections.abc import Callable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -678,6 +680,7 @@ async def _ledger_entries(
     now: datetime,
     requesting_validator_hotkey: str | None,
     emit: Callable[[LedgerRow], bool] | None = None,
+    registered_hotkeys: AbstractSet[str] | None = None,
 ) -> tuple[list[LedgerRow], list[LedgerEntry]]:
     """Build the fold's ``LedgerEntry`` list from materialized rows.
 
@@ -751,10 +754,16 @@ async def _ledger_entries(
         efficiency_factors=efficiency_factors,
         efficiency_curve_versions=efficiency_curve_versions,
     )
+    pool = rows if emit is None else [r for r in rows if emit(r)]
+    # Registration before collapse, and only on the payable pool. The withheld
+    # incumbent path passes ``emit`` and must still see every withheld
+    # generation. Unknown registration leaves the score-only representative.
     rows = dedupe_owner_rows(
-        rows if emit is None else [r for r in rows if emit(r)],
+        pool,
         scores=ranking_scores,
         secondary_scores=efficiency_tiebreaks,
+        registered_hotkeys=None if emit is not None else registered_hotkeys,
+        omit_unregistered_families=emit is None and registered_hotkeys is not None,
     )
     entries = [
         LedgerEntry(
@@ -831,6 +840,37 @@ async def _ledger_entries(
         for r in rows
     ]
     return rows, entries
+
+
+async def _registered_miner_hotkeys(app_state: Any) -> set[str] | None:
+    """Hotkeys that currently have a neuron, or None when that is unknown.
+
+    Unknown is not an empty metagraph. A missing client or a failed read keeps
+    the score-only owner collapse so a chain hiccup cannot empty the ledger.
+    """
+    chain = getattr(app_state, "chain", None)
+    config = getattr(app_state, "config", None)
+    netuid = getattr(getattr(config, "chain", None), "netuid", None)
+    read = getattr(chain, "get_recent_neurons", None)
+    if read is None or not isinstance(netuid, int):
+        return None
+    try:
+        result = read(netuid)
+        neurons = await result if inspect.isawaitable(result) else result
+    except Exception:
+        logger.warning(
+            "miner registration read failed; owner collapse stays score-only",
+            exc_info=True,
+        )
+        return None
+    if neurons is None:
+        return None
+    hotkeys: set[str] = set()
+    for neuron in neurons:
+        hotkey = getattr(neuron, "hotkey", None)
+        if isinstance(hotkey, str) and hotkey:
+            hotkeys.add(hotkey)
+    return hotkeys
 
 
 async def materialize_ledger_snapshot(
@@ -955,6 +995,7 @@ async def materialize_ledger_snapshot(
         )
         if anchor.block_hash is not None
     )
+    registered_hotkeys = await _registered_miner_hotkeys(app_state)
     rows, entries = await _ledger_entries(
         session,
         rows,
@@ -963,6 +1004,7 @@ async def materialize_ledger_snapshot(
         efficiency_config=efficiency_config,
         now=now,
         requesting_validator_hotkey=requesting_validator_hotkey,
+        registered_hotkeys=registered_hotkeys,
     )
     generated_at = datetime.now(UTC)
     crown_mode: Literal["incumbent"] | None = (
