@@ -13,6 +13,7 @@ ignored_paths = [
   "scripts/collector_delegate_key.py", # Manual custody ceremony; exact reviewed main pin via protected infra, not a service image
   "scripts/test-collector-custody.sh", # Credentials-free custody CI driver
   "scripts/check-collector-custody-plan.py", # Protected infrastructure scope fence, not service runtime
+  "scripts/collector-custody-phase-input.py", # Typed public input for protected infrastructure only
   "scripts/preview-restore-snapshot.sh",
   ".env.example",
   ".agents/**",

@@ -10,6 +10,8 @@ on:
       - 'infra/terraform/stacks/gcp-gamma-custody/**'
       - 'infra/terraform/stacks/gcp-gamma-custody-bootstrap/**'
       - 'ditto/tests/test_gamma_custody_isolation.py'
+      - 'scripts/collector-custody-phase-input.py'
+      - 'ditto/tests/test_collector_custody_phase_input.py'
       - 'scripts/check-collector-custody-plan.py'
       - 'ditto/tests/test_collector_custody_scope.py'
       - '.github/workflows/infra-plan-apply.yml'
@@ -36,6 +38,8 @@ jobs:
         run: python3 -m unittest discover -s ditto/tests -p test_collector_custody_scope.py -v
       - name: Isolated Gamma project refusal controls
         run: python3 -m unittest discover -s ditto/tests -p test_gamma_custody_isolation.py -v
+      - name: Typed Gamma phase inputs
+        run: python3 -m unittest discover -s ditto/tests -p test_collector_custody_phase_input.py -v
       - name: Credentials-free concrete resource and IAM plans
         run: bash scripts/test-collector-custody.sh
   bootstrap:
