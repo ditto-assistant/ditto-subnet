@@ -128,7 +128,8 @@ def validate(plan: dict) -> int:
             )
             or value.get("direction") != "EGRESS"
             or value.get("priority") != 750
-            or set(value.get("destination_ranges", [])) != {"65.109.251.221/32"}
+            or set(value.get("destination_ranges", []))
+            != {"65.109.251.221/32", "65.109.254.0/32"}
             or set(value.get("target_tags", []))
             != {"collector-registration-sealed", "collector-transfer-sealed"}
             or value.get("allow") != [{"protocol": "tcp", "ports": ["443"]}]

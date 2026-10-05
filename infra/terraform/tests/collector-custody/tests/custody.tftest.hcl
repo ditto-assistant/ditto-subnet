@@ -142,7 +142,7 @@ run "sealed_runtime_rpc_is_one_tls_destination_without_public_hosts" {
     error_message = "The private plan must explicitly prove the reviewed RPC rule is enabled."
   }
   assert {
-    condition     = google_compute_firewall.collector_runtime_rpc[0].destination_ranges == toset(["65.109.251.221/32"]) && google_compute_firewall.collector_runtime_rpc[0].target_tags == toset(["collector-registration-sealed", "collector-transfer-sealed"]) && one(google_compute_firewall.collector_runtime_rpc[0].allow).protocol == "tcp" && toset(one(google_compute_firewall.collector_runtime_rpc[0].allow).ports) == toset(["443"]) && google_compute_firewall.collector_deny_private[0].priority < google_compute_firewall.collector_runtime_rpc[0].priority && google_compute_firewall.collector_deny_other[0].priority > google_compute_firewall.collector_runtime_rpc[0].priority
+    condition     = google_compute_firewall.collector_runtime_rpc[0].destination_ranges == toset(["65.109.251.221/32", "65.109.254.0/32"]) && google_compute_firewall.collector_runtime_rpc[0].target_tags == toset(["collector-registration-sealed", "collector-transfer-sealed"]) && one(google_compute_firewall.collector_runtime_rpc[0].allow).protocol == "tcp" && toset(one(google_compute_firewall.collector_runtime_rpc[0].allow).ports) == toset(["443"]) && google_compute_firewall.collector_deny_private[0].priority < google_compute_firewall.collector_runtime_rpc[0].priority && google_compute_firewall.collector_deny_other[0].priority > google_compute_firewall.collector_runtime_rpc[0].priority
     error_message = "Only exact Finney TLS must be reachable by sealed roles; private and other traffic stays denied."
   }
   assert {

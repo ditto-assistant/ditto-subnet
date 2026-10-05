@@ -80,7 +80,7 @@ class PrivatePlanScope(unittest.TestCase):
                         "collector-registration-sealed",
                         "collector-transfer-sealed",
                     ],
-                    "destination_ranges": ["65.109.251.221/32"],
+                    "destination_ranges": ["65.109.251.221/32", "65.109.254.0/32"],
                     "allow": [{"protocol": "tcp", "ports": ["443"]}],
                     "deny": [],
                     "disabled": False,
@@ -115,7 +115,12 @@ class PrivatePlanScope(unittest.TestCase):
     def test_refuses_broadened_rpc_rule(self):
         for name, value in (
             ("destination_ranges", ["0.0.0.0/0"]),
-            ("destination_ranges", ["65.109.251.221/32", "1.1.1.1/32"]),
+            ("destination_ranges", ["65.109.251.221/32"]),
+            ("destination_ranges", ["65.109.254.0/32"]),
+            (
+                "destination_ranges",
+                ["65.109.251.221/32", "65.109.254.0/32", "1.1.1.1/32"],
+            ),
             ("target_tags", ["collector-custody"]),
             ("allow", [{"protocol": "all", "ports": []}]),
             ("allow", [{"protocol": "tcp", "ports": ["443", "22"]}]),
