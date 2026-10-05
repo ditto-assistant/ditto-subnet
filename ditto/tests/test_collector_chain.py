@@ -629,3 +629,38 @@ def test_credential_redirect_is_refused_without_forwarding_authorization():
         NoCredentialRedirect().redirect_request(
             None, None, 302, None, None, "https://attacker.invalid"
         )
+
+
+@pytest.mark.parametrize("unit", [None, [], ()])
+def test_proxy_success_scale_unit_is_decoder_independent(unit):
+    p, c, op, observed, events = receipt_fixture()
+    events[0]["event"]["attributes"]["result"] = {"Ok": unit}
+    assert c.reconcile(p, op, observed).status == "finalized"
+    op["role"] = "registration"
+    c.role = "registration"
+    events[2]["event"]["attributes"]["who"] = p.registration_delegate
+    events[-2:] = [
+        event("SubtensorModule", "NeuronRegistered", [118, 14, p.collector_hotkey])
+    ]
+    assert c.reconcile(p, op, observed).uid == 14
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"Ok": [1]},
+        {"Ok": (1,)},
+        {"Ok": {}},
+        {"Ok": ""},
+        {"Ok": 0},
+        {"Ok": False},
+        {"Ok": b""},
+        {"Ok": (), "Err": "NoPermission"},
+        {},
+    ],
+)
+def test_proxy_nonunit_result_cannot_release_durable_claim(result):
+    p, c, op, observed, events = receipt_fixture()
+    events[0]["event"]["attributes"]["result"] = result
+    with pytest.raises(ValueError):
+        c.reconcile(p, op, observed)

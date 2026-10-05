@@ -616,7 +616,9 @@ class PublicCollectorChain:
             attrs = inner[0].get("event", {}).get("attributes")
             if not isinstance(attrs, dict) or set(attrs) != {"result"}:
                 raise ValueError("unsupported proxy result schema")
-            if attrs["result"] not in ({"Ok": None}, {"Ok": []}):
+            # SCALE unit is () in the pinned Linux SDK; JSON decoders use []
+            # (and older decoders None). Accept only these empty unit values.
+            if attrs["result"] not in ({"Ok": None}, {"Ok": []}, {"Ok": ()}):
                 error = attrs["result"]
                 if (
                     isinstance(error, dict)

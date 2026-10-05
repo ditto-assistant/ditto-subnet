@@ -171,6 +171,7 @@ def collector_transfer_effect(
     if len(inner) != 1 or _attributes(inner[0][1]) not in (
         {"result": {"Ok": None}},
         {"result": {"Ok": []}},
+        {"result": {"Ok": ()}},  # Pinned Linux SDK's decoded SCALE unit.
     ):
         raise ValueError("successful inner proxy dispatch unproved")
     removed = matching("SubtensorModule", "StakeRemoved")
