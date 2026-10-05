@@ -352,11 +352,30 @@ class PublicCollectorChain:
         block_hash = s.get_block_hash(block)
         code = self.guard_runtime(policy, block_hash, historical=True)
         parent_hash = s.get_block_hash(block - 1)
-        parent_code = self.guard_runtime(policy, parent_hash, historical=True)
+        # A successful adjacent scan already proved this immutable parent.
+        # Keep exactly one in-memory state, bound to the complete policy and
+        # exact hash. Replays, gaps and changed hashes/policies read it anew.
+        # Current observations/preparation never consult this receipt cache.
+        previous = getattr(self, "_last_receipt_state", None)
+        reuse_parent = previous is not None and previous[:3] == (
+            policy.digest,
+            block - 1,
+            parent_hash,
+        )
+        parent_code = (
+            previous[3]
+            if reuse_parent
+            else self.guard_runtime(policy, parent_hash, historical=True)
+        )
         collector_receipt_runtime(parent_code, code)
         uid = self._earnings_identity(policy, block_hash)
-        parent_uid = self._earnings_identity(policy, parent_hash)
+        parent_uid = (
+            previous[4]
+            if reuse_parent
+            else self._earnings_identity(policy, parent_hash)
+        )
         events = s.get_events(block_hash)
+        result = None
         if uid is None and parent_uid is None:
             # The signed start can predate first registration. An unrelated
             # miner's tempo is not this collector's earnings. A self-credit
@@ -367,41 +386,47 @@ class PublicCollectorChain:
                 collector_coldkey=policy.collector_coldkey,
                 gross_incentive_rao=0,
             )
-            return None
-        if uid is None or uid != parent_uid:
+        elif uid is None or uid != parent_uid:
             # Registration/rebind within payout block makes attribution ambiguous.
             if any(
                 e.get("event_id") == "IncentiveAlphaEmittedToMiners" for e in events
             ):
                 raise ValueError("emission intersects collector identity transition")
-            return None
-        gross = collector_gross_incentive(events, uid)
-        if gross is None:
-            return None
-        # Gross SERVER_EMISSION precedes collateral capture and routing. Only
-        # this exact liquid initialization credit authorizes distribution.
-        for at in (block_hash, s.get_block_hash(block - 1)):
-            if (
-                self.query(
-                    "SubtensorModule",
-                    "AutoStakeDestination",
-                    [policy.collector_coldkey, 118],
-                    at,
+        else:
+            gross = collector_gross_incentive(events, uid)
+            if gross is not None:
+                # Gross SERVER_EMISSION precedes collateral capture and routing.
+                # Only this exact liquid initialization credit authorizes spending.
+                for at in (block_hash, parent_hash):
+                    if (
+                        self.query(
+                            "SubtensorModule",
+                            "AutoStakeDestination",
+                            [policy.collector_coldkey, 118],
+                            at,
+                        )
+                        != policy.collector_hotkey
+                    ):
+                        raise ValueError(
+                            "liquid emission route is not pinned to collector"
+                        )
+                credit = liquid_collector_credit(
+                    events,
+                    collector_hotkey=policy.collector_hotkey,
+                    collector_coldkey=policy.collector_coldkey,
+                    gross_incentive_rao=gross,
                 )
-                != policy.collector_hotkey
-            ):
-                raise ValueError("liquid emission route is not pinned to collector")
-        credit = liquid_collector_credit(
-            events,
-            collector_hotkey=policy.collector_hotkey,
-            collector_coldkey=policy.collector_coldkey,
-            gross_incentive_rao=gross,
-        )
-        return (
-            FinalizedEarnings(credit.amount_rao, block_hash, credit.event_digest)
-            if credit is not None
-            else None
-        )
+                result = (
+                    FinalizedEarnings(
+                        credit.amount_rao, block_hash, credit.event_digest
+                    )
+                    if credit is not None
+                    else None
+                )
+        # Publish only after every receipt check succeeded. This never stores
+        # events, route authorization, spending approval or an unfinished proof.
+        self._last_receipt_state = (policy.digest, block, block_hash, code, uid)
+        return result
 
     def assert_no_sponsor(self, policy, delegate, block_hash):
         # SCALE Option<()> can decode BOTH absence and presence as None. Only

@@ -325,6 +325,74 @@ def test_liquid_credit_only_never_gross_or_prior_principal():
     assert c.earnings(p, 101).amount_rao == 20  # gross100, capture80
 
 
+def traced_income_fixture():
+    p, c, events = income_fixture()
+    proofs = []
+    identities = []
+    c.guard_runtime = lambda _p, at, **_kwargs: proofs.append(at) or AUDITED_CODE_HASH
+    c._earnings_identity = lambda _p, at: identities.append(at) or 14
+    return p, c, events, proofs, identities
+
+
+def test_adjacent_receipts_reuse_only_validated_exact_parent_state():
+    p, c, _, proofs, identities = traced_income_fixture()
+    assert c.earnings(p, 101).amount_rao == 20
+    assert c.earnings(p, 102).amount_rao == 20
+    assert proofs == identities == ["b101", "b100", "b102"]
+    # A one-entry observation cache never contains spending/route approval.
+    assert c._last_receipt_state == (p.digest, 102, "b102", AUDITED_CODE_HASH, 14)
+
+
+@pytest.mark.parametrize("next_block", [101, 103])
+def test_replayed_or_nonadjacent_receipt_rechecks_both_states(next_block):
+    p, c, _, proofs, identities = traced_income_fixture()
+    c.earnings(p, 101)
+    c.earnings(p, next_block)
+    assert (
+        proofs == identities == ["b101", "b100", f"b{next_block}", f"b{next_block - 1}"]
+    )
+
+
+def test_changed_parent_hash_cannot_reuse_height_only_proof():
+    p, c, _, proofs, identities = traced_income_fixture()
+    c.earnings(p, 101)
+    c.substrate.get_block_hash = lambda n: "replacement101" if n == 101 else f"b{n}"
+    c.earnings(p, 102)
+    assert proofs == identities == ["b101", "b100", "b102", "replacement101"]
+
+
+def test_changed_policy_cannot_reuse_receipt_proof():
+    p, c, _, proofs, identities = traced_income_fixture()
+    c.earnings(p, 101)
+    c.earnings(policy(revision=2), 102)
+    assert proofs == identities == ["b101", "b100", "b102", "b101"]
+
+
+def test_failed_receipt_never_publishes_state_for_adjacent_scan():
+    p, c, events, proofs, identities = traced_income_fixture()
+    events[1]["event"]["attributes"]["incentive"] = 101
+    with pytest.raises(ValueError, match="exceeds gross"):
+        c.earnings(p, 101)
+    assert not hasattr(c, "_last_receipt_state")
+    events[1]["event"]["attributes"]["incentive"] = 20
+    c.earnings(p, 102)
+    assert proofs == identities == ["b101", "b100", "b102", "b101"]
+
+
+def test_reused_parent_does_not_bypass_new_identity_or_route_checks():
+    p, c, _, _, _ = traced_income_fixture()
+    c.earnings(p, 101)
+    c._earnings_identity = lambda *_: 15
+    with pytest.raises(ValueError, match="identity transition"):
+        c.earnings(p, 102)
+    assert c._last_receipt_state[1] == 101
+    c._earnings_identity = lambda *_: 14
+    c.query = lambda *_: "redirected-hotkey"
+    with pytest.raises(ValueError, match="route is not pinned"):
+        c.earnings(p, 102)
+    assert c._last_receipt_state[1] == 101
+
+
 def inactive_income_fixture():
     p, c, events = income_fixture()
     c.identity = PublicCollectorChain.identity.__get__(c)
