@@ -526,7 +526,12 @@ class PublicCollectorChain:
         )
         era = {"period": 64, "current": current.block}
         nonce = s.get_account_nonce(key.ss58_address)
-        fee = uint(s.get_payment_info(proxy, key, era=era, nonce=nonce)["partialFee"])
+        # Pinned SDK 10.5 returns TransactionPaymentApi RuntimeDispatchInfo,
+        # whose SCALE field is partial_fee (the JSON RPC uses partialFee).
+        info = s.get_payment_info(proxy, key, era=era, nonce=nonce)
+        if not isinstance(info, dict) or "partial_fee" not in info:
+            raise ValueError("unsupported SDK payment info")
+        fee = uint(info["partial_fee"])
         if fee > policy.max_fee_rao:
             raise ValueError("estimated fee exceeds cap")
         extrinsic = s.create_signed_extrinsic(proxy, key, era=era, nonce=nonce, tip=0)

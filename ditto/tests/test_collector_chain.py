@@ -531,6 +531,65 @@ def test_no_generic_or_unbounded_call_reaches_key(function):
         )
 
 
+def registration_preparation(info):
+    p = policy()
+    observed = Observation(100, "finalized", None, 50, 2000, 200, 0)
+    signed = []
+    key = SimpleNamespace(ss58_address=p.registration_delegate)
+    c = PublicCollectorChain.__new__(PublicCollectorChain)
+    c.role = "registration"
+    c.guard_runtime = lambda *_: None
+    c.observe = lambda *_: observed
+    c.key = lambda *_: key
+    c.substrate = SimpleNamespace(
+        get_chain_head=lambda: "head",
+        compose_call=lambda *_args, **_kwargs: "proxy-call",
+        get_account_nonce=lambda _: 3,
+        get_payment_info=lambda *_args, **_kwargs: info,
+        create_signed_extrinsic=lambda *args, **kwargs: (
+            signed.append((args, kwargs))
+            or SimpleNamespace(data=SimpleNamespace(to_hex=lambda: "0xab"))
+        ),
+    )
+    call = {
+        "module": "SubtensorModule",
+        "function": "register_limit",
+        "params": {"netuid": 118, "hotkey": p.collector_hotkey, "limit_price": 100},
+    }
+    return c, p, call, observed, signed
+
+
+def test_registration_preparation_accepts_pinned_sdk_runtime_fee_shape():
+    c, p, call, observed, signed = registration_preparation(
+        {"partial_fee": 10, "class": "Normal", "weight": {"ref_time": 1}}
+    )
+    result = c.prepare(p, "registration", call, observed)
+    assert result.fee_rao == p.max_fee_rao == 10
+    assert result.encoded == "0xab"
+    assert len(signed) == 1
+    assert signed[0][1] == {"era": {"period": 64, "current": 100}, "nonce": 3, "tip": 0}
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        None,
+        {},
+        {"partialFee": 1},
+        {"partial_fee": True},
+        {"partial_fee": "1"},
+        {"partial_fee": -1},
+        {"partial_fee": 2**64},
+        {"partial_fee": 11},
+    ],
+)
+def test_registration_preparation_refuses_missing_invalid_or_over_cap_fee(info):
+    c, p, call, observed, signed = registration_preparation(info)
+    with pytest.raises(ValueError):
+        c.prepare(p, "registration", call, observed)
+    assert not signed
+
+
 def test_phase_mismatch_cannot_claim_an_extrinsic_effect():
     p, c, op, observed, events = receipt_fixture()
     events[-1]["phase"] = "Initialization"
