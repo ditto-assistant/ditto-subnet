@@ -19,6 +19,7 @@ ignored_paths = [
   ".agents/**",
   ".claude/**",
   ".codex/**",
+  ".depot/**", # Validation workflows only; protected releases remain on GitHub
   ".github/**",
   ".gitignore",
   ".impeccable/**",

@@ -22,10 +22,10 @@ Run a validation against the current checkout (local changes are uploaded):
 depot ci run --org 4q2czr6whg --workflow .depot/workflows/platform-ci.yml
 ```
 
-Automatic triggers are registered from the default branch after merge. Before
-merge, use the CLI and verify each run's exact head/patch. A passing local-patch
-run is separate from the pushed-head GitHub check. Do not merge while an
-applicable Depot validation fails or has not run.
+The installed Depot Code Access app reports automatic PR jobs as GitHub checks;
+verify their exact pushed head. The CLI is also available for pre-push iteration:
+a passing local-patch run is separate from the pushed-head PR check. Do not merge
+while an applicable Depot validation fails or has not run.
 
 `test_depot_ci.py` compares the executable jobs with the GitHub verifier copies
 to prevent command, service or security drift. Update both definitions whenever
