@@ -43,11 +43,11 @@ jobs:
           set -euo pipefail
           umask 077
           mkdir -m 700 "$PG_RESTORE_DIRECTORY"
-          gcloud secrets versions access latest --project=ditto-app-dev \
+          gcloud secrets versions access latest --project=ditto-subnet \
             --secret=platform-pg-backup-reader-access-key-id > "$PG_RESTORE_DIRECTORY/access-key-id"
-          gcloud secrets versions access latest --project=ditto-app-dev \
+          gcloud secrets versions access latest --project=ditto-subnet \
             --secret=platform-pg-backup-reader-secret-access-key > "$PG_RESTORE_DIRECTORY/secret-access-key"
-          gcloud secrets versions access latest --project=ditto-app-dev \
+          gcloud secrets versions access latest --project=ditto-subnet \
             --secret=platform-pg-backup-age-identity > "$PG_RESTORE_DIRECTORY/age-identity"
 
       - name: Restore verified encrypted daily backup in an isolated database

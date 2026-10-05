@@ -10,3 +10,5 @@ postgres_backup_secret_ids:
   access-key-id: platform-pg-backup-hippius-access-key-id
   secret-access-key: platform-pg-backup-hippius-secret-access-key
   age-recipient: platform-pg-backup-age-recipient
+
+postgres_backup_secret_project: ditto-subnet

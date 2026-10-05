@@ -26,10 +26,14 @@ authorization does not authorize IAM changes, a merge, or production convergence
    the PR. A local mocked-provider plan is not this evidence. Reject any VM
    replacement, disk recreation, or unrelated mutation. Apply only the reviewed
    binary plan through protected `infra-apply`, reusing the exact target string.
-3. Separately prepare a protected full plan for backup secret containers,
-   restore-drill identity, reader IAM and snapshot metadata IAM. This phase adds
-   more than two resources and requires its own review/approval. Verify the live
-   app uses the dedicated Platform API identity. The DB VM has no attached
+3. Provision recovery custody in the existing **`ditto-subnet`** project using
+   [`subnet-recovery-project.md`](subnet-recovery-project.md). Its separate
+   owner bootstrap links billing/enables APIs/delegates metadata administration;
+   the protected `gcp-subnet-recovery` root creates six empty containers and the
+   isolated restore identity. The old `gcp-platform` root owns only snapshot
+   metadata IAM and the recovery state-lock grants. Each plan has its own
+   review/approval; never fold these into the two-resource snapshot plan.
+   Verify the live app uses the dedicated Platform API identity. The DB VM has no attached
    service account (read-only inspection, 2026-10-04). The role fetches its three
    secrets on the authorized Ansible controller and copies root-owned files;
    the VM needs no cloud identity. Do not attach an identity to the DB VM (that
@@ -38,23 +42,25 @@ authorization does not authorize IAM changes, a merge, or production convergence
 4. Before storing the age identity, inspect **effective** Secret Manager IAM,
    including project/folder/org grants. The DB VM must have no path to the
    identity; neither Platform nor deploy/probe/worker identities may read it.
-   Remove conflicting inherited grants only with separately approved exact IAM
-   changes, or stop. Terraform creates containers only, never secret versions.
-   A project-level audit on 2026-10-04 found unconditional
+   Terraform creates containers only, never secret versions. Do not store any
+   backup credential or age identity in `ditto-app-dev`: an audit on 2026-10-04
+   found unconditional
    `roles/secretmanager.secretAccessor` grants to the default compute,
    Cloud Build, backend, GitHub Action and staging backend service accounts.
-   **Private-key installation is blocked** until an approved IAM/custody plan
-   removes those principals' effective access to this identity. Adding a narrow
-   per-secret grant does not negate inherited grants. Folder/org checks and
-   indirect impersonation must also be reviewed; this audit is not a complete
-   effective-access proof. Keep the private-key secret empty meanwhile.
+   These grants are not copied into `ditto-subnet`. The new project's initial
+   project policy contained only Peyton's Owner grant on 2026-10-05, with no
+   folder and no service-account members in the inspected organization policy.
+   Recheck after apply, including indirect impersonation. CI apply has IAM
+   administration and could change secret policies, so protected human review
+   remains a custody boundary even without direct payload-read permissions.
+   Keep the private-key secret empty until this effective-access review passes.
 5. In Chrome Hippius Console, verify `ditto-platform-pg-backups` stays private.
    Create distinct single-bucket writer and reader sub-tokens, using the
    owner-approved lifetime (initially 30 days). No all-bucket grant and no reuse
    of avatars, traces or Coding credentials. The writer needs write/delete;
    the reader must not write/delete. Capture one-time pairs directly into these
-   Secret Manager versions without printing, screenshotting, returning or
-   logging their bytes:
+   Secret Manager versions **in `ditto-subnet`** without printing,
+   screenshotting, returning or logging their bytes:
 
    | Credential | Secret |
    | --- | --- |
@@ -64,16 +70,17 @@ authorization does not authorize IAM changes, a merge, or production convergence
    | Reader secret | platform-pg-backup-reader-secret-access-key |
 
    Use a protected file/clipboard consumer and `gcloud secrets versions add
-   --data-file=<protected-file>`, never command arguments containing a payload.
+   --project=ditto-subnet --data-file=<protected-file>`, never command arguments
+   containing a payload.
    Delete protected staging copies and clear the clipboard after capture.
    Verify anonymous GET/HEAD/LIST refusal, exact-bucket writer operations,
    reader write/delete refusal and cross-bucket refusal with synthetic encrypted
    objects before binding either token to production. Fail closed on a scope
    mismatch; do not broaden the token to make a probe pass.
 6. The owner generates an age identity **offline**. Store the public recipient
-   in `platform-pg-backup-age-recipient` and the private identity in
-   `platform-pg-backup-age-identity`. Keep an independently protected human
-   recovery copy. The DB VM receives only the public recipient. Restrict private
+   in `ditto-subnet/platform-pg-backup-age-recipient` and the private identity in
+   `ditto-subnet/platform-pg-backup-age-identity`. Keep an independently
+   protected human recovery copy. The DB VM receives only the public recipient. Restrict private
    identity reads to humans and the dedicated restore service account after
    checking inherited IAM. No private key in Terraform state, host config or PR.
 7. Set protected prod environment variables from Terraform outputs:

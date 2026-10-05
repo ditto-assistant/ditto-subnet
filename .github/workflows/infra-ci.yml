@@ -55,6 +55,8 @@ jobs:
           - infra/terraform/stacks/gcp-gamma-custody
           - infra/terraform/stacks/gcp-gamma-custody-bootstrap
           - infra/terraform/stacks/gcp-platform
+          - infra/terraform/stacks/gcp-subnet-bootstrap
+          - infra/terraform/stacks/gcp-subnet-recovery
           - infra/terraform/stacks/gcp-preview
           - infra/terraform/stacks/cloudflare-dittobench
     steps:
@@ -74,6 +76,10 @@ jobs:
 
       - name: Validate
         run: terraform -chdir=${{ matrix.root }} validate
+
+      - name: Test recovery project custody with mocked providers
+        if: matrix.root == 'infra/terraform/stacks/gcp-subnet-bootstrap' || matrix.root == 'infra/terraform/stacks/gcp-subnet-recovery'
+        run: terraform -chdir=${{ matrix.root }} test
 
       - name: Lint
         working-directory: ${{ matrix.root }}

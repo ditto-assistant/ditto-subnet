@@ -130,6 +130,7 @@ platform_storage_region: auto
 # Platform VMs. Access keys must start with hip_.
 platform_hippius_endpoint: "https://s3.hippius.com"
 platform_database_backup_reader_enabled: false
+platform_database_backup_secret_project: ditto-subnet
 secret_database_backup_reader_access_key_id: platform-pg-backup-reader-access-key-id
 secret_database_backup_reader_secret_access_key: platform-pg-backup-reader-secret-access-key
 platform_hippius_region: decentralized

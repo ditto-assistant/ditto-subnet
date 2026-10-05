@@ -6,6 +6,7 @@
       ansible.builtin.assert:
         that:
           - inventory_hostname == 'ditto-pg-platform'
+          - postgres_backup_secret_project == 'ditto-subnet'
           - ansible_facts.distribution == 'Debian'
           - ansible_facts.distribution_major_version == '13'
           - ansible_facts.architecture == 'x86_64'
@@ -37,7 +38,7 @@
       delegate_to: localhost
       become: false
       ansible.builtin.command:
-        argv: [gcloud, secrets, versions, access, latest, "--project={{ gcp_project }}", "--secret={{ item.value }}"]
+        argv: [gcloud, secrets, versions, access, latest, "--project={{ postgres_backup_secret_project }}", "--secret={{ item.value }}"]
       loop: "{{ postgres_backup_secret_ids | dict2items }}"
       register: postgres_backup_secret_reads
       changed_when: false

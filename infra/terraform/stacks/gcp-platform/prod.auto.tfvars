@@ -8,10 +8,8 @@ enable_datapipeline   = true
 enable_embedder       = true
 enable_validator      = true
 enable_validator_prod = true
-# Recovery foundation only: empty secret containers and isolated reader/restore
-# identity. No secret payloads, DB identity change, timer or backup activation.
-# The initial snapshot apply remains targeted to exactly its two resources.
-enable_platform_postgres_backup_identity = true
+# Snapshot metadata only; encrypted-backup custody is in ditto-subnet.
+enable_platform_postgres_snapshot_reader = true
 # Treasury hosts remain physically absent until separately reviewed applies.
 enable_treasury_host         = false
 enable_treasury_planner_host = false

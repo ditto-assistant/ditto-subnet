@@ -326,7 +326,7 @@
 
 - name: Read the separate backup metadata reader access key
   ansible.builtin.command:
-    argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_access_key_id }}", "--project={{ gcp_project }}"]
+    argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_access_key_id }}", "--project={{ platform_database_backup_secret_project }}"]
   register: platform_backup_reader_access
   changed_when: false
   no_log: true
@@ -334,7 +334,7 @@
 
 - name: Read the separate backup metadata reader secret
   ansible.builtin.command:
-    argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_secret_access_key }}", "--project={{ gcp_project }}"]
+    argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_secret_access_key }}", "--project={{ platform_database_backup_secret_project }}"]
   register: platform_backup_reader_secret
   changed_when: false
   no_log: true

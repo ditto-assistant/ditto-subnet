@@ -12,7 +12,7 @@ on:
         description: Terraform state root
         required: true
         type: choice
-        options: [gcp-platform, gcp-preview, cloudflare-dittobench, gcp-collector-custody, gcp-gamma-custody]
+        options: [gcp-platform, gcp-preview, cloudflare-dittobench, gcp-collector-custody, gcp-gamma-custody, gcp-subnet-recovery]
       plan_sha:
         description: Exact main commit used by the plan (required for apply)
         required: false
@@ -103,6 +103,13 @@ jobs:
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
             gcp-preview) root=infra/terraform/stacks/gcp-preview ;;
             cloudflare-dittobench) root=infra/terraform/stacks/cloudflare-dittobench ;;
+            gcp-subnet-recovery)
+              test -z "$TF_TARGETS"
+              test "$HOTKEY_ADMIN_PHASE" = absent
+              test -z "$HOTKEY_ADMIN_REVISION"
+              test "$SCREENER_DEV_HOST_ENABLED" = false
+              root=infra/terraform/stacks/gcp-subnet-recovery
+              ;;
             gcp-collector-custody|gcp-gamma-custody)
               test -z "$TF_TARGETS"
               test "$HOTKEY_ADMIN_PHASE" = absent
@@ -174,7 +181,7 @@ jobs:
           echo "TF_VAR_validator_hotkey_admin_revision=$revision" >> "$GITHUB_ENV"
 
       - name: Create exact private plan
-        if: inputs.root != 'gcp-collector-custody' && inputs.root != 'gcp-gamma-custody'
+        if: inputs.root != 'gcp-collector-custody' && inputs.root != 'gcp-gamma-custody' && inputs.root != 'gcp-subnet-recovery'
         env:
           TF_VAR_db_password: ${{ secrets.PLATFORM_DB_PASSWORD }}
           TF_VAR_pylon_open_access_token: ${{ secrets.PLATFORM_PYLON_OPEN_ACCESS_TOKEN_JSON }}
@@ -222,6 +229,20 @@ jobs:
             extra+=(-var-file="$RUNNER_TEMP/gamma-phase.json")
           fi
           terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan "${extra[@]}"
+
+      - name: Create dedicated subnet recovery plan without app credentials
+        if: inputs.root == 'gcp-subnet-recovery'
+        run: terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan
+
+      - name: Verify dedicated subnet recovery plan scope
+        if: inputs.root == 'gcp-subnet-recovery'
+        run: |
+          set -euo pipefail
+          plan_json="$(mktemp)"
+          chmod 600 "$plan_json"
+          trap 'rm -f "$plan_json"' EXIT
+          terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan > "$plan_json"
+          python3 infra/scripts/check-subnet-recovery-plan.py recovery "$plan_json"
 
       - name: Verify isolated custody plan scope
         if: inputs.root == 'gcp-collector-custody' || inputs.root == 'gcp-gamma-custody'
@@ -333,6 +354,13 @@ jobs:
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
             gcp-preview) root=infra/terraform/stacks/gcp-preview ;;
             cloudflare-dittobench) root=infra/terraform/stacks/cloudflare-dittobench ;;
+            gcp-subnet-recovery)
+              test -z "$TF_TARGETS"
+              test "$HOTKEY_ADMIN_PHASE" = absent
+              test -z "$HOTKEY_ADMIN_REVISION"
+              test "$SCREENER_DEV_HOST_ENABLED" = false
+              root=infra/terraform/stacks/gcp-subnet-recovery
+              ;;
             gcp-collector-custody|gcp-gamma-custody)
               test -z "$TF_TARGETS"
               test "$HOTKEY_ADMIN_PHASE" = absent
@@ -378,7 +406,7 @@ jobs:
           python3 infra/scripts/check-postgres-snapshot-plan.py "$plan_json"
 
       - name: Apply the reviewed binary plan
-        if: inputs.root != 'gcp-collector-custody' && inputs.root != 'gcp-gamma-custody'
+        if: inputs.root != 'gcp-collector-custody' && inputs.root != 'gcp-gamma-custody' && inputs.root != 'gcp-subnet-recovery'
         env:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: terraform -chdir=${{ steps.root.outputs.path }} apply tfplan
@@ -396,6 +424,20 @@ jobs:
 
       - name: Apply the reviewed isolated custody binary plan
         if: inputs.root == 'gcp-collector-custody' || inputs.root == 'gcp-gamma-custody'
+        run: terraform -chdir=${{ steps.root.outputs.path }} apply tfplan
+
+      - name: Verify dedicated subnet recovery apply scope
+        if: inputs.root == 'gcp-subnet-recovery'
+        run: |
+          set -euo pipefail
+          plan_json="$(mktemp)"
+          chmod 600 "$plan_json"
+          trap 'rm -f "$plan_json"' EXIT
+          terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan > "$plan_json"
+          python3 infra/scripts/check-subnet-recovery-plan.py recovery "$plan_json"
+
+      - name: Apply the reviewed dedicated subnet recovery binary plan
+        if: inputs.root == 'gcp-subnet-recovery'
         run: terraform -chdir=${{ steps.root.outputs.path }} apply tfplan
 
       - name: Remove consumed private plan
