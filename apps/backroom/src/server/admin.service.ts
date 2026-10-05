@@ -963,7 +963,7 @@ export const databaseBackupStatusSchema = z.object({
 
 export async function fetchDatabaseBackupStatus() {
   return databaseBackupStatusSchema.parse(
-    await platformAdminRequest('/api/v1/admin/database-backup-status'),
+    await platformAdminRequest('/api/v1/admin/database-backup-status', { timeoutMs: 60_000 }),
   )
 }
 

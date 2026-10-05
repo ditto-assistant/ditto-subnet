@@ -123,6 +123,8 @@ def test_independent_review_covers_every_restore_import_and_dependency():
         "infra/scripts/platform-pg-restore-drill.py",
         "infra/scripts/pg-restore/**",
         "infra/scripts/check-subnet-recovery-plan.py",
+        "infra/scripts/check-postgres-snapshot-plan.py",
+        "infra/scripts/test-platform-pg-backup-workflow.py",
         "infra/ansible/roles/postgres_backup/**",
         "infra/terraform/stacks/gcp-subnet-bootstrap/**",
         "infra/terraform/stacks/gcp-subnet-recovery/**",

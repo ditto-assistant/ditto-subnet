@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 from datetime import UTC, datetime, timedelta
@@ -17,6 +18,7 @@ from ditto.api_models.database_backup import (
 )
 from ditto.api_server.hippius import HippiusClient, HippiusConfig, ObjectSummary
 
+_LOGGER = logging.getLogger(__name__)
 _BUCKET = "ditto-platform-pg-backups"
 _MANIFEST_KEY = re.compile(
     r"^daily/(\d{4})/(\d{2})/(\d{2})/manifest-(\d{8}T\d{6}Z)\.json$"
@@ -184,14 +186,18 @@ async def backup_status() -> DatabaseBackupStatus:
     )
     try:
         await asyncio.wait_for(read_backups(status), timeout=30)
-    except Exception:
+    except Exception as error:
         # No provider error/URL/credential bytes reach the wire.
+        _LOGGER.warning("database backup status unavailable: %s", type(error).__name__)
         status.backup_status = "unavailable"
         status.manifest = None
         status.hours_since_last_success = None
     try:
         status.newest_snapshot = await newest_snapshot()
         status.snapshot_status = "present" if status.newest_snapshot else "missing"
-    except Exception:
+    except Exception as error:
+        _LOGGER.warning(
+            "database snapshot status unavailable: %s", type(error).__name__
+        )
         status.snapshot_status = "unavailable"
     return status

@@ -118,7 +118,10 @@ async def test_partial_commit_never_reports_fresh(monkeypatch):
         await service.read_backups(status(now))
 
 
-async def test_provider_failure_is_explicit_and_never_leaks(monkeypatch):
+async def test_provider_failure_is_explicit_and_never_leaks(monkeypatch, caplog):
+    # The PostgreSQL harness may disable already-imported loggers during setup.
+    monkeypatch.setattr(service._LOGGER, "disabled", False)
+    caplog.set_level("WARNING", logger=service._LOGGER.name)
     monkeypatch.setattr(
         service,
         "read_backups",
@@ -132,6 +135,9 @@ async def test_provider_failure_is_explicit_and_never_leaks(monkeypatch):
     assert result.snapshot_status == "unavailable"
     assert result.hours_since_last_success is None
     assert "secret" not in result.model_dump_json()
+    assert "database backup status unavailable: RuntimeError" in caplog.text
+    assert "database snapshot status unavailable: RuntimeError" in caplog.text
+    assert "secret" not in caplog.text
 
 
 async def test_disabled_reader_does_not_fall_back_to_avatar_keys(monkeypatch):

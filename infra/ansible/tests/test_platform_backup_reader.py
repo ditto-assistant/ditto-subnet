@@ -62,10 +62,35 @@ class ReaderEnvironmentTest(unittest.TestCase):
             if task["name"]
             == "Fold only the read-only backup pair into Platform config"
         )
+        references = next(
+            task
+            for task in tasks
+            if task["name"]
+            == "Validate backup reader secret references before fetching"
+        )
+        names = [task["name"] for task in tasks]
+        self.assertLess(
+            names.index(references["name"]),
+            names.index("Read the separate backup metadata reader access key"),
+        )
+        self.assertLess(
+            names.index("Fold Hippius credentials into the secrets map"),
+            names.index(validation["name"]),
+        )
         with tempfile.TemporaryDirectory() as temporary:
             fixture = Path(temporary) / "reader.yml"
 
-            def run(task, enabled, access, secret):
+            def run(task, enabled, access, secret, overrides=None):
+                config = {
+                    "platform_database_backup_secret_project": "ditto-subnet",
+                    "secret_database_backup_reader_access_key_id": (
+                        "platform-pg-backup-reader-access-key-id"
+                    ),
+                    "secret_database_backup_reader_secret_access_key": (
+                        "platform-pg-backup-reader-secret-access-key"
+                    ),
+                    **(overrides or {}),
+                }
                 fixture.write_text(
                     yaml.safe_dump(
                         [
@@ -77,7 +102,11 @@ class ReaderEnvironmentTest(unittest.TestCase):
                                     "platform_database_backup_reader_enabled": enabled,
                                     "platform_backup_reader_access": access,
                                     "platform_backup_reader_secret": secret,
-                                    "platform_secrets": {},
+                                    "platform_secrets": {
+                                        "hippius_access_key_id": "avatar-access",
+                                        "hippius_secret_access_key": "avatar-secret",
+                                    },
+                                    **config,
                                 },
                                 "tasks": [task],
                             }
@@ -92,12 +121,54 @@ class ReaderEnvironmentTest(unittest.TestCase):
                 ).returncode
 
             good = {"stdout": "synthetic-reader"}
-            self.assertEqual(run(validation, True, good, good), 0)
+            good_secret = {"stdout": "synthetic-reader-secret"}
+            self.assertEqual(run(validation, True, good, good_secret), 0)
             for invalid in ({"stdout": ""}, {"stdout": "   "}, {}):
                 for access, secret in ((invalid, good), (good, invalid)):
                     with self.subTest(access=access, secret=secret):
                         self.assertNotEqual(run(validation, True, access, secret), 0)
             self.assertEqual(run(validation, False, {}, {}), 0)
+            self.assertEqual(run(references, True, good, good_secret), 0)
+            for field in (
+                "secret_database_backup_reader_access_key_id",
+                "secret_database_backup_reader_secret_access_key",
+            ):
+                for writer in (
+                    "platform-pg-backup-hippius-access-key-id",
+                    "platform-pg-backup-hippius-secret-access-key",
+                ):
+                    with self.subTest(field=field, writer=writer):
+                        self.assertNotEqual(
+                            run(references, True, good, good_secret, {field: writer}), 0
+                        )
+            self.assertNotEqual(
+                run(
+                    references,
+                    True,
+                    good,
+                    good_secret,
+                    {"platform_database_backup_secret_project": "ditto-app-dev"},
+                ),
+                0,
+            )
+            for shared in ("avatar-access", "avatar-secret"):
+                for access, secret in (
+                    ({"stdout": shared}, good_secret),
+                    (good, {"stdout": shared}),
+                ):
+                    with self.subTest(shared=shared, access=access, secret=secret):
+                        self.assertNotEqual(run(validation, True, access, secret), 0)
+            self.assertNotEqual(run(validation, True, good, good), 0)
+            former_validation = {
+                **validation,
+                "ansible.builtin.assert": {
+                    "that": validation["ansible.builtin.assert"]["that"][:2]
+                },
+            }
+            self.assertEqual(
+                run(former_validation, True, {"stdout": "avatar-access"}, good_secret),
+                0,
+            )
             # The former fold-only path accepts the empty pair: this is a real
             # negative control using the unchanged materialization task.
             self.assertEqual(run(fold, True, {"stdout": ""}, {"stdout": ""}), 0)
