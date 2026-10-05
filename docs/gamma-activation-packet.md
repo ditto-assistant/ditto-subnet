@@ -315,6 +315,37 @@ These are prepared actions, each requiring separate action-time approval.
 
 ## Shortest path to visible finalized earnings/distribution/payment
 
+### One-transfer canary
+
+The existing signed collector maximum is an upper bound, not a recommended
+test amount. A transfer-only tick can impose a stricter atomic SN118-alpha
+ceiling without changing the signed policy or initializing another journal:
+
+```bash
+python scripts/treasury_collector.py --role transfer \
+  --policy /etc/sn118-collector/transfer/policy.json \
+  --policy-sha256 <existing-approved-digest> \
+  --journal /var/lib/sn118-collector-transfer/journal.db \
+  --canary-max-alpha-rao 10000000 --canary-after-operation 0
+```
+
+This example caps the single claim at 0.01 SN118 alpha, **not TAO**. The baseline
+must equal the current largest operation ID (zero only for a journal without
+operations), with no unresolved dispatch. The canary is durably armed in the
+existing event history and remains enforced when subsequent commands omit the
+flags. A dispatch consumes the one-claim allowance even if it fails/expires;
+unknown delivery can only reconcile the persisted hash, never sign/send again.
+Keep recurring timers off. Arming or reconciling the canary is not authority to
+route emissions or rewrite a policy.
+
+An existing source/bucket amount above the canary ceiling is retained and held
+without signing; it is not partially split to fit a test. Ordinary receipt
+amounts and source attribution remain unchanged. A later recurring rollout needs
+an independently reviewed, explicitly authorized canary-release transition;
+changing or omitting flags cannot release the canary. Resetting/deleting the
+journal is not an authorized release and destroys custody history. TAO fees
+remain bounded independently by the signed policy.
+
 1. Resolve existing public inputs/custody/limits. Review/authorize exact infra
    and offline-primary ceremonies. Verify finalized non-owner collector and
    self auto-stake route; no UID/immunity shortcut.

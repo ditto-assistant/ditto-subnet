@@ -123,6 +123,72 @@ class Observation:
 
 
 @dataclass(frozen=True)
+class TransferCanary:
+    """Stricter operator ceiling; one new claim, persisted in existing history."""
+
+    max_alpha_rao: int
+    after_operation: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.max_alpha_rao) is not int
+            or not 0 < self.max_alpha_rao < 2**63
+            or type(self.after_operation) is not int
+            or not 0 <= self.after_operation < 2**63
+        ):
+            raise ValueError("invalid transfer canary bounds")
+
+
+def transfer_canary(
+    journal: CollectorJournal,
+    policy: CollectorPolicy,
+    role: str,
+    requested: TransferCanary | None,
+) -> TransferCanary | None:
+    """Keep a canary armed even if a later invocation omits CLI flags."""
+    db = journal.db
+    rows = db.execute(
+        "SELECT payload FROM events WHERE event='transfer_canary_armed'"
+    ).fetchall()
+    if len(rows) > 1:
+        raise ValueError("ambiguous transfer canary history")
+    if rows:
+        body = json.loads(rows[0][0])
+        if set(body) != {"policy", "max_alpha_rao", "after_operation"}:
+            raise ValueError("invalid transfer canary history")
+        if body["policy"] != policy.digest:
+            raise ValueError("transfer canary policy changed")
+        existing = TransferCanary(body["max_alpha_rao"], body["after_operation"])
+        if requested is not None and requested != existing:
+            raise ValueError("transfer canary cannot be reset or widened")
+        requested = existing
+    if requested is None:
+        return None
+    if role != "transfer" or requested.max_alpha_rao > policy.max_distribution_rao:
+        raise ValueError("canary requires transfer role within signed ceiling")
+    if not rows:
+        maximum = db.execute("SELECT COALESCE(MAX(id),0) FROM operations").fetchone()[0]
+        if (
+            maximum != requested.after_operation
+            or db.execute(
+                "SELECT 1 FROM operations WHERE state='dispatching' LIMIT 1"
+            ).fetchone()
+        ):
+            raise ValueError("canary baseline must equal quiesced current journal")
+        journal.event(
+            "transfer_canary_armed", {"policy": policy.digest, **asdict(requested)}
+        )
+    claimed = db.execute(
+        "SELECT role,amount FROM operations WHERE id>?", (requested.after_operation,)
+    ).fetchall()
+    if len(claimed) > 1 or any(
+        r[0] != "transfer" or not 0 < r[1] <= requested.max_alpha_rao for r in claimed
+    ):
+        raise ValueError("transfer canary claim exceeds approved bound")
+    return requested
+
+
+@dataclass(frozen=True)
 class SignedOperation:
     encoded: str
     extrinsic_hash: str
@@ -252,7 +318,12 @@ class CollectorJournal:
 
 
 def tick(
-    journal: CollectorJournal, policy: CollectorPolicy, chain: CollectorChain, role: str
+    journal: CollectorJournal,
+    policy: CollectorPolicy,
+    chain: CollectorChain,
+    role: str,
+    *,
+    canary: TransferCanary | None = None,
 ) -> str:
     """Run one bounded recovery/distribution step. Called periodically by systemd.
 
@@ -270,6 +341,16 @@ def tick(
             role,
         ):
             raise ValueError("policy or role changed")
+        canary = transfer_canary(journal, policy, role, canary)
+        if (
+            canary is not None
+            and db.execute(
+                "SELECT 1 FROM operations WHERE id>? AND state!='dispatching' LIMIT 1",
+                (canary.after_operation,),
+            ).fetchone()
+        ):
+            db.execute("COMMIT")
+            return "canary_spent"
         observed = chain.observe(policy, role)
         pending = db.execute(
             "SELECT * FROM operations WHERE state='dispatching'"
@@ -427,6 +508,11 @@ def tick(
                 part.holding_coldkey,
                 row["block"],
             )
+            if canary is not None and amount > canary.max_alpha_rao:
+                # Preserve attribution, but neither sign nor partially split a
+                # receipt-bound source amount merely to fit the canary.
+                db.execute("COMMIT")
+                return "canary_amount_exceeded"
             call = {
                 "module": "SubtensorModule",
                 "function": "transfer_stake",

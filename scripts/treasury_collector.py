@@ -10,7 +10,7 @@ from ditto.treasury.activity_export import (
     export_finalized_distributions,
     write_selector_snapshot,
 )
-from ditto.treasury.collector import CollectorJournal, tick
+from ditto.treasury.collector import CollectorJournal, TransferCanary, tick
 from ditto.treasury.collector_chain import PublicCollectorChain, load_policy
 
 
@@ -25,7 +25,28 @@ def main() -> None:
     parser.add_argument("--export-activity", action="store_true")
     parser.add_argument("--selector-snapshot", type=Path)
     parser.add_argument("--snapshot-only", action="store_true")
+    parser.add_argument("--canary-max-alpha-rao", type=int)
+    parser.add_argument("--canary-after-operation", type=int)
     args = parser.parse_args()
+    canary = None
+    if args.canary_max_alpha_rao is not None or args.canary_after_operation is not None:
+        if (
+            args.canary_max_alpha_rao is None
+            or args.canary_after_operation is None
+            or args.role != "transfer"
+            or not args.journal
+            or args.initialize_journal
+            or args.watch_only
+            or args.snapshot_only
+            or args.export_activity
+        ):
+            parser.error("canary requires both bounds and an existing transfer journal")
+        try:
+            canary = TransferCanary(
+                args.canary_max_alpha_rao, args.canary_after_operation
+            )
+        except ValueError as error:
+            parser.error(str(error))
     policy = load_policy(args.policy, args.policy_sha256)
     if args.snapshot_only and (not args.selector_snapshot or not args.journal):
         parser.error("snapshot-only requires existing transfer journal and snapshot")
@@ -112,7 +133,11 @@ def main() -> None:
             parser.error("--journal required for signer")
         journal = CollectorJournal(args.journal, policy, args.role)
         try:
-            result = tick(journal, policy, chain, args.role)
+            result = (
+                tick(journal, policy, chain, args.role, canary=canary)
+                if canary is not None
+                else tick(journal, policy, chain, args.role)
+            )
             if args.selector_snapshot is not None:
                 try:
                     write_selector_snapshot(journal.db, args.selector_snapshot, policy)

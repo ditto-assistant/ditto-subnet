@@ -9,7 +9,7 @@ import pytest
 from scripts import treasury_collector as cli
 
 
-@pytest.mark.parametrize("mode", ["watch", "tick", "export"])
+@pytest.mark.parametrize("mode", ["watch", "tick", "export", "canary"])
 def test_collector_uses_finney_archive_without_replacing_journal(
     monkeypatch, capsys, mode
 ):
@@ -29,8 +29,11 @@ def test_collector_uses_finney_archive_without_replacing_journal(
         def close(self):
             calls.append(("close",))
 
-    def tick(_journal, actual_policy, _chain, role):
+    def tick(_journal, actual_policy, _chain, role, **kwargs):
         assert actual_policy is policy and role == "transfer"
+        assert kwargs == (
+            {"canary": cli.TransferCanary(10_000_000, 0)} if mode == "canary" else {}
+        )
         calls.append(("tick",))
         return "waiting"
 
@@ -61,10 +64,14 @@ def test_collector_uses_finney_archive_without_replacing_journal(
         argv.append("--watch-only")
     elif mode == "export":
         argv.append("--export-activity")
+    elif mode == "canary":
+        argv.extend(
+            ["--canary-max-alpha-rao", "10000000", "--canary-after-operation", "0"]
+        )
     monkeypatch.setattr(sys, "argv", argv)
     cli.main()
     assert calls[0] == ("network", {"network": "archive"})
-    if mode == "tick":
+    if mode in {"tick", "canary"}:
         assert calls[1:] == [("journal", "/existing/journal.db"), ("tick",), ("close",)]
     elif mode == "export":
         assert calls[1:] == [("export", "/existing/journal.db")]
