@@ -15,9 +15,19 @@ The applied owner bootstrap links the existing open `Billing Omni Aura` account
 `gcp-subnet-bootstrap` uses a separate GCS state prefix and contains exactly:
 
 - The existing billing account link.
-- Five APIs: Secret Manager, IAM, IAM Credentials, STS, Cloud Resource Manager.
-- Two project custom roles and their grants to the existing Terraform plan/apply
-  service accounts in `ditto-app-dev`.
+- Six APIs: Secret Manager, IAM, IAM Credentials, STS, Cloud Resource Manager,
+  and Cloud Storage.
+- Two project custom roles, dedicated `subnet-recovery-tf-plan` and
+  `subnet-recovery-tf-apply` service accounts in `ditto-subnet`, and their grants.
+- A separate `subnet-recovery-infra` pool/provider admitting only the exact
+  repository/owner IDs, current main infrastructure workflow, manual dispatch
+  and protected `infra-plan` / `infra-apply` environment subjects.
+- Private, versioned `ditto-subnet-recovery-tfstate` storage with uniform bucket
+  access and public access prevention. Only the dedicated CI pair receives
+  object administration; neither receives bucket IAM administration.
+
+A fresh bootstrap contains 20 resources. The earlier 10-resource receipt below
+is historical and does not prove the new custody isolation has been applied.
 
 The first live plan on 2026-10-05 showed **10 creates, 0 updates, 0 deletes**.
 Its binary SHA-256 was
@@ -36,8 +46,22 @@ Applied role IDs:
 - `projects/ditto-subnet/roles/subnetRecoveryTerraformPlan` (15 permissions)
 - `projects/ditto-subnet/roles/subnetRecoveryTerraformApply` (25 permissions)
 
-This bootstrap is complete. The recovery root, snapshot schedule, review
-ruleset, credential custody and host activation remain separately gated.
+The original bootstrap completed, but its delegation is superseded by the
+custody migration. A live 2026-10-05 audit found unconditional old-project
+`roles/iam.serviceAccountTokenCreator` for `ditto-backend` and
+`firebase-adminsdk-4caea`. These principals can impersonate the shared Terraform
+apply account, whose recovery custom role can change per-secret IAM. Direct
+payload denial alone therefore did not close the private-key access path.
+
+The expanded owner bootstrap replaces exactly the two task-owned old CI
+custom-role grants with the dedicated new-project CI pair. The private saved-plan
+guard checks both old principals/roles/projects, rejects partial migration and
+rejects every other replacement/deletion. The new pool/provider and state bucket
+also remove dependencies on old-project federation and mutable plan storage.
+Do not install private-key versions until the migration is applied and effective
+project/ancestor and service-account IAM are read back. The owner bootstrap's
+own state remains in its owner-controlled old-project prefix; the dedicated CI
+identities have no write grant to that bootstrap state.
 
 The plan identity gets resource metadata and IAM-policy reads. The apply
 identity additionally manages empty containers, service accounts, federation,
@@ -76,22 +100,30 @@ review. Do not apply the recovery root locally under that bootstrap approval.
 
 After merge and bootstrap, use `infra-plan-apply.yml` on exact current main:
 
-1. Plan/apply the following four `gcp-platform` targets separately from the
-   snapshot schedule; require exactly four creates and no unrelated changes:
-
-   ```text
-   google_storage_bucket_iam_member.terraform_plan_subnet_recovery_state_lock,google_storage_bucket_iam_member.terraform_plan_subnet_recovery_state_initial_create,google_project_iam_custom_role.pg_backup_snapshot_reader,google_project_iam_member.pg_backup_snapshot_reader
-   ```
-
-   These are only two narrow recovery state-object grants and snapshot metadata
-   access for Platform. The existing state bucket and its other policies stay
-   in the existing project.
+1. The separate `gcp-platform` four-create access plan was applied from
+   `c4736e5ab72f02f9d7f3321644767c104a5dcbb1` in protected run `37385152877`.
+   Its checksum was
+   `cc23ecc3c3b44681049f01b7496bf52519fa50b61eb45c59417ffebeed79ef67`.
+   Two resources grant only `compute.snapshots.list` metadata to Platform; the
+   other two narrow shared-plan state grants predate the custody migration and
+   become unused when recovery state moves to the dedicated bucket. They do
+   not grant new-project secret access. Cleanup must use a separately reviewed
+   scoped protected plan, without altering unrelated shared-project grants.
+   The snapshot apply `37385744233` created `ditto-pg-platform-daily`, but its
+   disk attachment failed on a malformed policy path. Source now passes the
+   policy name; the recovery checker permits the exact unchanged policy plus
+   one attachment create, with no VM/disk or unrelated mutation. A fresh sealed
+   plan and protected apply are required before claiming the schedule is live.
 2. Plan root `gcp-subnet-recovery` without targets. The first plan must contain
    **15 creates**: six empty secrets, five per-secret reader grants, the restore
    service account, pool/provider and exact service-account federation grant.
    `check-subnet-recovery-plan.py recovery` rejects wrong projects, broader
    readers, replacements, deletions, unexpected resources or weaker federation.
-3. Review the private plan, exact current-main SHA, run id and checksum; apply
+3. The workflow selects the dedicated new-project federation provider, plan/apply
+   accounts and `ditto-subnet-recovery-tfstate` plan bucket only for this root.
+   Reconfigure the empty recovery backend after verifying the old prefix contains
+   no managed resources. Do not migrate a populated state without reviewing it.
+   Review the private plan, exact current-main SHA, run id and checksum; apply
    the saved binary through protected `infra-apply`. No Cloudflare/application
    password environment is passed to the recovery plan or apply command.
 
@@ -125,6 +157,10 @@ The old project's payload grants must not acquire a new-project binding.
 
 All six values belong in `ditto-subnet`, outside Terraform state. Generate the
 age key offline and retain an independently protected human recovery copy.
+The owner selected their password manager and requested a pause to save the
+private key. Generate into a protected file outside disposable workspaces;
+pause for confirmation before storing its private Secret Manager version or
+activating production. Never return the private bytes in tool output or chat.
 Capture the owner-approved 30-day Hippius single-bucket writer and reader
 tokens directly into Secret Manager, then prove their scopes. Follow
 [`platform-postgres-backup-restore.md`](platform-postgres-backup-restore.md)

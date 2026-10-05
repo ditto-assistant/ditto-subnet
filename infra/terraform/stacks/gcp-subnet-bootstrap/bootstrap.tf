@@ -9,6 +9,7 @@ locals {
     "iamcredentials.googleapis.com",
     "sts.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "storage.googleapis.com",
   ])
   metadata_permissions = [
     "resourcemanager.projects.get",
@@ -69,12 +70,12 @@ resource "google_project_iam_custom_role" "apply" {
 resource "google_project_iam_member" "plan" {
   project    = local.project
   role       = "projects/ditto-subnet/roles/subnetRecoveryTerraformPlan"
-  member     = "serviceAccount:github-actions-terraform-plan@ditto-app-dev.iam.gserviceaccount.com"
-  depends_on = [google_project_iam_custom_role.plan]
+  member     = "serviceAccount:${local.terraform_sa_emails.plan}"
+  depends_on = [google_project_iam_custom_role.plan, google_service_account.terraform]
 }
 resource "google_project_iam_member" "apply" {
   project    = local.project
   role       = "projects/ditto-subnet/roles/subnetRecoveryTerraformApply"
-  member     = "serviceAccount:github-actions-terraform-apply@ditto-app-dev.iam.gserviceaccount.com"
-  depends_on = [google_project_iam_custom_role.apply]
+  member     = "serviceAccount:${local.terraform_sa_emails.apply}"
+  depends_on = [google_project_iam_custom_role.apply, google_service_account.terraform]
 }

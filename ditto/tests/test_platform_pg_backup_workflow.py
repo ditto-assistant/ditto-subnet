@@ -84,6 +84,30 @@ def test_recovery_ci_has_no_application_credentials_or_owner_bootstrap_choice():
     assert "gcp-subnet-bootstrap" not in choices
     for job, command in (("plan", "plan -out=tfplan"), ("apply", "apply tfplan")):
         steps = workflow["jobs"][job]["steps"]
+        auth = next(
+            step
+            for step in steps
+            if "workload_identity_provider" in step.get("with", {})
+        )
+        assert (
+            "inputs.root == 'gcp-subnet-recovery'"
+            in auth["with"]["workload_identity_provider"]
+        )
+        assert (
+            "projects/286408627661/locations/global/workloadIdentityPools/subnet-recovery-infra/providers/github"
+            in auth["with"]["workload_identity_provider"]
+        )
+        assert (
+            f"subnet-recovery-tf-{job}@ditto-subnet.iam.gserviceaccount.com"
+            in auth["with"]["service_account"]
+        )
+        select = next(
+            step
+            for step in steps
+            if "root=infra/terraform/stacks/gcp-subnet-recovery" in step.get("run", "")
+        )
+        case = select["run"].split("gcp-subnet-recovery)", 1)[1].split(";;", 1)[0]
+        assert "PLAN_BUCKET=ditto-subnet-recovery-tfstate" in case
         dedicated = [
             step
             for step in steps

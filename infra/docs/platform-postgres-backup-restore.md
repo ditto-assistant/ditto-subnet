@@ -21,7 +21,11 @@ authorization does not authorize IAM changes, a merge, or production convergence
    google_compute_resource_policy.platform_postgres_daily,module.pg_vm.google_compute_disk_resource_policy_attachment.boot_snapshot
    ```
 
-   The dedicated plan checker must report **2 creates, 0 updates, 0 deletes**.
+   The first dedicated plan checker reports **2 creates, 0 updates, 0 deletes**.
+   If that apply created the exact policy before an attachment failure, a fresh
+   plan may report **1 create, 0 updates, 0 deletes** with that policy unchanged.
+   The checker verifies the exact policy name, target disk/project/zone, daily
+   schedule and retention in both cases.
    Paste its real output, exact main SHA, run id and sealed plan checksum into
    the PR. A local mocked-provider plan is not this evidence. Reject any VM
    replacement, disk recreation, or unrelated mutation. Apply only the reviewed
@@ -31,7 +35,10 @@ authorization does not authorize IAM changes, a merge, or production convergence
    owner bootstrap links billing/enables APIs/delegates metadata administration;
    the protected `gcp-subnet-recovery` root creates six empty containers and the
    isolated restore identity. The old `gcp-platform` root owns only snapshot
-   metadata IAM and the recovery state-lock grants. Each plan has its own
+   metadata IAM and two now-obsolete narrow state grants from the initial
+   bootstrap. Recovery CI, federation, state and plan storage now have dedicated
+   resources in `ditto-subnet`; their migration removes the shared CI grants
+   that were reachable through inherited backend impersonation. Each plan has its own
    review/approval; never fold these into the two-resource snapshot plan.
    Verify the live app uses the dedicated Platform API identity. The DB VM has no attached
    service account (read-only inspection, 2026-10-04). The role fetches its three

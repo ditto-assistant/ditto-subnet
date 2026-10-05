@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Credential-free workflow and two-resource snapshot-plan guards."""
 
+import copy
 import importlib.util
 import unittest
 from pathlib import Path
@@ -13,12 +14,55 @@ plan = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(plan)
 
 
+def snapshot_rows():
+    policy = {
+        "name": "ditto-pg-platform-daily",
+        "project": "ditto-app-dev",
+        "region": "us-central1",
+        "snapshot_schedule_policy": [
+            {
+                "retention_policy": [
+                    {
+                        "max_retention_days": 14,
+                        "on_source_disk_delete": "KEEP_AUTO_SNAPSHOTS",
+                    }
+                ],
+                "schedule": [
+                    {
+                        "daily_schedule": [{"days_in_cycle": 1, "start_time": "06:00"}],
+                        "hourly_schedule": [],
+                        "weekly_schedule": [],
+                    }
+                ],
+                "snapshot_properties": [
+                    {"guest_flush": False, "storage_locations": ["us"]}
+                ],
+            }
+        ],
+    }
+    attachment = {
+        "name": "ditto-pg-platform-daily",
+        "project": "ditto-app-dev",
+        "disk": "ditto-pg-platform",
+        "zone": "us-central1-a",
+    }
+    return [
+        {
+            "address": address,
+            "change": {
+                "actions": ["create"],
+                "after": policy
+                if address.startswith("google_compute_resource_policy.")
+                else attachment,
+            },
+        }
+        for address in plan.EXPECTED
+    ]
+
+
 class WorkflowTest(unittest.TestCase):
     def test_snapshot_plan_has_exactly_two_creates(self):
-        changes = [
-            {"address": address, "change": {"actions": ["create"]}}
-            for address in plan.EXPECTED
-        ]
+        changes = snapshot_rows()
         plan.check({"resource_changes": changes})
         for actions in (["delete", "create"], ["update"]):
             broken = [
@@ -41,12 +85,7 @@ class WorkflowTest(unittest.TestCase):
             )
 
     def test_snapshot_fence_uses_plan_resources_even_for_parent_module_targets(self):
-        valid = {
-            "resource_changes": [
-                {"address": address, "change": {"actions": ["create"]}}
-                for address in plan.EXPECTED
-            ]
-        }
+        valid = {"resource_changes": snapshot_rows()}
         plan.check_when_changed(valid)
         valid["resource_changes"].append(
             {
@@ -78,6 +117,27 @@ class WorkflowTest(unittest.TestCase):
                         ]
                     }
                 )
+
+    def test_attachment_can_finish_after_policy_was_created(self):
+        rows = snapshot_rows()
+        policy = next(
+            row
+            for row in rows
+            if row["address"].startswith("google_compute_resource_policy.")
+        )
+        policy["change"]["actions"] = ["no-op"]
+        plan.check({"resource_changes": rows})
+        for field, value in (("name", "other"), ("project", "other")):
+            broken = copy.deepcopy(rows)
+            broken[0]["change"]["after"][field] = value
+            with self.assertRaises(ValueError):
+                plan.check({"resource_changes": broken})
+        attached = next(row for row in rows if row["address"].startswith("module."))
+        attached["change"]["after"]["name"] = (
+            "projects/ditto-app-dev/regions/us-central1/resourcePolicies/ditto-pg-platform-daily"
+        )
+        with self.assertRaises(ValueError):
+            plan.check({"resource_changes": rows})
 
     def test_snapshot_fence_requires_the_change_list(self):
         with self.assertRaises(KeyError):

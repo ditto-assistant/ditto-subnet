@@ -111,7 +111,7 @@ module "pg_vm" {
   service_account_email = var.vm_service_account_email
   # Use the policy's known name so the optional attachment count is plan-time
   # known on the first apply (the newly-created policy's id is still unknown).
-  boot_disk_snapshot_policy = "projects/${var.project}/regions/${var.region}/resourcePolicies/${google_compute_resource_policy.platform_postgres_daily.name}"
+  boot_disk_snapshot_policy = google_compute_resource_policy.platform_postgres_daily.name
   labels                    = { env = local.env_label, role = "platform-postgres", managed = "terraform" }
 }
 

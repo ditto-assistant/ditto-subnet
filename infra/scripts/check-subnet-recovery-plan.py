@@ -27,6 +27,28 @@ SERVICES = {
     "iamcredentials.googleapis.com",
     "sts.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "storage.googleapis.com",
+}
+STATE_BUCKET = "ditto-subnet-recovery-tfstate"
+CI_POOL = (
+    "projects/286408627661/locations/global/workloadIdentityPools/subnet-recovery-infra"
+)
+CI_ACCOUNTS = {
+    mode: f"subnet-recovery-tf-{mode}@ditto-subnet.iam.gserviceaccount.com"
+    for mode in ("plan", "apply")
+}
+CI_SUBJECTS = {
+    mode: f"repo:ditto-assistant/ditto-subnet:environment:infra-{mode}"
+    for mode in ("plan", "apply")
+}
+CI_CONDITIONS = {
+    "assertion.repository_id == '1224630318'",
+    "assertion.repository_owner_id == '148669063'",
+    "assertion.ref == 'refs/heads/main'",
+    "assertion.event_name == 'workflow_dispatch'",
+    "assertion.workflow_ref == 'ditto-assistant/ditto-subnet/"
+    ".github/workflows/infra-plan-apply.yml@refs/heads/main'",
+    f"assertion.sub in ['{CI_SUBJECTS['plan']}', '{CI_SUBJECTS['apply']}']",
 }
 RESTORE = "github-platform-pg-restore@ditto-subnet.iam.gserviceaccount.com"
 API = "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com"
@@ -91,9 +113,42 @@ def expectations(phase):
             result[f"google_project_iam_custom_role.{mode}"] = {"role_id": role}
             result[f"google_project_iam_member.{mode}"] = {
                 "role": f"projects/{PROJECT}/roles/{role}",
-                "member": f"serviceAccount:github-actions-terraform-{mode}"
-                "@ditto-app-dev.iam.gserviceaccount.com",
+                "member": f"serviceAccount:{CI_ACCOUNTS[mode]}",
             }
+            result[f'google_service_account.terraform["{mode}"]'] = {
+                "account_id": f"subnet-recovery-tf-{mode}"
+            }
+            result[f'google_service_account_iam_member.terraform_wif["{mode}"]'] = {
+                "service_account_id": (
+                    f"projects/{PROJECT}/serviceAccounts/{CI_ACCOUNTS[mode]}"
+                ),
+                "role": "roles/iam.workloadIdentityUser",
+                "member": f"principal://iam.googleapis.com/{CI_POOL}/subject/{CI_SUBJECTS[mode]}",
+            }
+            result[f'google_storage_bucket_iam_member.terraform_state["{mode}"]'] = {
+                "bucket": STATE_BUCKET,
+                "role": "roles/storage.objectAdmin",
+                "member": f"serviceAccount:{CI_ACCOUNTS[mode]}",
+            }
+        result.update(
+            {
+                "google_iam_workload_identity_pool.terraform": {
+                    "workload_identity_pool_id": "subnet-recovery-infra"
+                },
+                "google_iam_workload_identity_pool_provider.terraform": {
+                    "workload_identity_pool_id": "subnet-recovery-infra",
+                    "workload_identity_pool_provider_id": "github",
+                },
+                "google_storage_bucket.recovery_state": {
+                    "name": STATE_BUCKET,
+                    "location": "US",
+                    "uniform_bucket_level_access": True,
+                    "public_access_prevention": "enforced",
+                    "force_destroy": False,
+                    "versioning": [{"enabled": True}],
+                },
+            }
+        )
         return result
     if phase != "recovery":
         raise ValueError("unknown recovery phase")
@@ -141,7 +196,7 @@ def check(plan, phase):
     ):
         raise ValueError("incomplete recovery plan")
     expected = expectations(phase)
-    observed, changes = set(), 0
+    observed, changes, replacements = set(), 0, 0
     for row in plan.get("resource_changes", []):
         address, change = row["address"], row["change"]
         if row.get("mode") == "data":
@@ -153,23 +208,55 @@ def check(plan, phase):
         if address not in expected or address in observed:
             raise ValueError("unexpected recovery resource")
         observed.add(address)
-        if change["actions"] not in (["no-op"], ["create"], ["update"]):
+        if row.get("type") != address.split(".", 1)[0]:
+            raise ValueError("unexpected recovery resource type")
+        if change["actions"] in (["delete", "create"], ["create", "delete"]):
+            if phase != "bootstrap" or address not in {
+                "google_project_iam_member.plan",
+                "google_project_iam_member.apply",
+            }:
+                raise ValueError("destructive recovery plan")
+            mode = address.rsplit(".", 1)[1]
+            before = change["before"]
+            if (
+                before.get("project") != PROJECT
+                or before.get("role") != expected[address]["role"]
+                or before.get("member")
+                != (
+                    f"serviceAccount:github-actions-terraform-{mode}"
+                    "@ditto-app-dev.iam.gserviceaccount.com"
+                )
+                or before.get("condition") not in (None, [])
+            ):
+                raise ValueError("unexpected old CI delegation")
+            replacements += 1
+        elif change["actions"] not in (["no-op"], ["create"], ["update"]):
             raise ValueError("destructive recovery plan")
         after = change["after"]
         if (
-            address != "google_service_account_iam_member.pg_restore_wif"
+            row["type"]
+            not in {
+                "google_service_account_iam_member",
+                "google_storage_bucket_iam_member",
+            }
             and after.get("project") != PROJECT
         ):
             raise ValueError("wrong recovery project")
         for key, value in expected[address].items():
             if after.get(key) != value:
                 raise ValueError("recovery scope or principal differs")
+        if row["type"].endswith("_iam_member") and after.get("condition") not in (
+            None,
+            [],
+        ):
+            raise ValueError("unexpected recovery IAM condition")
         if row["type"] == "google_project_iam_custom_role":
             permissions = READ | (WRITE if address.endswith(".apply") else set())
             if set(after["permissions"]) != permissions:
                 raise ValueError("unexpected bootstrap authority")
         if row["type"] == "google_iam_workload_identity_pool_provider":
-            if set(after["attribute_condition"].split(" && ")) != CONDITIONS:
+            conditions = CI_CONDITIONS if phase == "bootstrap" else CONDITIONS
+            if set(after["attribute_condition"].split(" && ")) != conditions:
                 raise ValueError("unexpected restore federation")
             if after["attribute_mapping"] != {"google.subject": "assertion.sub"}:
                 raise ValueError("unexpected federation mapping")
@@ -185,7 +272,10 @@ def check(plan, phase):
         changes += change["actions"] != ["no-op"]
     if observed != set(expected):
         raise ValueError("incomplete recovery resources")
-    print(f"subnet {phase} plan: {changes} changes; no compute, payloads or deletes")
+    if replacements not in (0, 2):
+        raise ValueError("both old CI delegations must migrate together")
+    detail = "exactly two old CI grant replacements" if replacements else "no deletes"
+    print(f"subnet {phase} plan: {changes} changes; no compute or payloads; {detail}")
 
 
 if __name__ == "__main__":

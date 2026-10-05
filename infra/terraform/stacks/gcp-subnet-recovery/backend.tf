@@ -1,6 +1,6 @@
 terraform {
   backend "gcs" {
-    bucket = "ditto-app-dev-tfstate"
+    bucket = "ditto-subnet-recovery-tfstate"
     prefix = "gcp-subnet-recovery"
   }
 }

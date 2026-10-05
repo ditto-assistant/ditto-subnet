@@ -27,7 +27,13 @@ def plan(phase):
         if kind == "google_iam_workload_identity_pool_provider":
             after.update(
                 {
-                    "attribute_condition": " && ".join(sorted(guard.CONDITIONS)),
+                    "attribute_condition": " && ".join(
+                        sorted(
+                            guard.CI_CONDITIONS
+                            if phase == "bootstrap"
+                            else guard.CONDITIONS
+                        )
+                    ),
                     "attribute_mapping": {"google.subject": "assertion.sub"},
                     "oidc": [
                         {
@@ -135,3 +141,100 @@ def test_provider_null_defaults_are_allowed_but_custom_issuer_keys_are_not():
         with pytest.raises(ValueError):
             guard.check(original, "recovery")
         oidc[key] = saved
+
+
+def migrated_plan():
+    result = plan("bootstrap")
+    for mode in ("plan", "apply"):
+        row = next(
+            r
+            for r in result["resource_changes"]
+            if r["address"] == f"google_project_iam_member.{mode}"
+        )
+        row["change"].update(
+            actions=["delete", "create"],
+            before={
+                "project": guard.PROJECT,
+                "role": row["change"]["after"]["role"],
+                "member": (
+                    f"serviceAccount:github-actions-terraform-{mode}"
+                    "@ditto-app-dev.iam.gserviceaccount.com"
+                ),
+                "condition": [],
+            },
+        )
+    return result
+
+
+def test_exact_old_ci_delegations_can_migrate_together():
+    guard.check(migrated_plan(), "bootstrap")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("project", "ditto-app-dev"),
+        ("role", "roles/owner"),
+        ("member", f"serviceAccount:{guard.API}"),
+        ("condition", [{"expression": "true"}]),
+    ],
+)
+def test_migration_rejects_unexpected_old_authority(field, value):
+    broken = migrated_plan()
+    row = next(
+        r
+        for r in broken["resource_changes"]
+        if r["address"] == "google_project_iam_member.apply"
+    )
+    row["change"]["before"][field] = value
+    with pytest.raises(ValueError):
+        guard.check(broken, "bootstrap")
+
+
+def test_partial_migration_is_rejected():
+    broken = migrated_plan()
+    row = next(
+        r
+        for r in broken["resource_changes"]
+        if r["address"] == "google_project_iam_member.plan"
+    )
+    row["change"]["actions"] = ["create"]
+    with pytest.raises(ValueError):
+        guard.check(broken, "bootstrap")
+
+
+@pytest.mark.parametrize(
+    "address,field,value",
+    [
+        (
+            "google_project_iam_member.apply",
+            "member",
+            "serviceAccount:github-actions-terraform-apply@ditto-app-dev.iam.gserviceaccount.com",
+        ),
+        ("google_storage_bucket.recovery_state", "name", "ditto-app-dev-tfstate"),
+        ("google_storage_bucket.recovery_state", "project", "ditto-app-dev"),
+        (
+            "google_storage_bucket.recovery_state",
+            "public_access_prevention",
+            "inherited",
+        ),
+        ("google_storage_bucket.recovery_state", "versioning", [{"enabled": False}]),
+        ("google_storage_bucket.recovery_state", "uniform_bucket_level_access", False),
+        (
+            "google_iam_workload_identity_pool_provider.terraform",
+            "attribute_condition",
+            "assertion.repository_id == '1224630318'",
+        ),
+        (
+            'google_service_account_iam_member.terraform_wif["apply"]',
+            "member",
+            guard.PRINCIPAL,
+        ),
+    ],
+)
+def test_custody_cannot_reuse_shared_infrastructure(address, field, value):
+    broken = plan("bootstrap")
+    row = next(r for r in broken["resource_changes"] if r["address"] == address)
+    row["change"]["after"][field] = value
+    with pytest.raises(ValueError):
+        guard.check(broken, "bootstrap")
