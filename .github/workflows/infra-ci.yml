@@ -50,6 +50,8 @@ jobs:
       matrix:
         root:
           - infra/terraform/stacks/gcp-collector-custody
+          - infra/terraform/stacks/gcp-gamma-custody
+          - infra/terraform/stacks/gcp-gamma-custody-bootstrap
           - infra/terraform/stacks/gcp-platform
           - infra/terraform/stacks/gcp-preview
           - infra/terraform/stacks/cloudflare-dittobench

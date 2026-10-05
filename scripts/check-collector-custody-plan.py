@@ -57,7 +57,9 @@ def resources(module: dict) -> list[dict]:
     return module.get("resources", [])
 
 
-def validate(plan: dict) -> int:
+def validate(plan: dict, *, project: str = "ditto-app-dev") -> int:
+    if project not in ("ditto-app-dev", "sn118-gamma-custody"):
+        raise ValueError("unapproved custody project")
     if (
         plan.get("errored")
         or plan.get("complete") is False
@@ -68,7 +70,7 @@ def validate(plan: dict) -> int:
     if any(
         variables.get(name) != value
         for name, value in {
-            "project": "ditto-app-dev",
+            "project": project,
             "region": "us-central1",
             "zone": "us-central1-a",
             "enable_treasury_host": False,
@@ -120,10 +122,10 @@ def validate(plan: dict) -> int:
     if rpc_resources:
         value = rpc_resources[0]["values"]
         if (
-            value.get("project") != "ditto-app-dev"
+            value.get("project") != project
             or value.get("name") != "sn118-collector-finney-rpc"
             or not re.fullmatch(
-                r"(?:https://www\.googleapis\.com/compute/v1/)?projects/ditto-app-dev/global/networks/sn118-collector-custody",
+                rf"(?:https://www\.googleapis\.com/compute/v1/)?projects/{re.escape(project)}/global/networks/sn118-collector-custody",
                 value.get("network", ""),
             )
             or value.get("direction") != "EGRESS"
@@ -137,6 +139,47 @@ def validate(plan: dict) -> int:
             or value.get("disabled") is not False
         ):
             raise ValueError("RPC rule differs from reviewed endpoint")
+    if (
+        project == "sn118-gamma-custody"
+        and variables.get("enable_collector_custody") is True
+    ):
+        phases = variables.get("collector_custody_phases")
+        order = {"bootstrap": 0, "armed": 1, "locked": 2, "sealed": 3}
+        if not isinstance(phases, dict) or set(phases) != {"registration", "transfer"}:
+            raise ValueError("unbound phases")
+        prior = {
+            r["address"]: r
+            for r in resources(
+                plan.get("prior_state", {}).get("values", {}).get("root_module", {})
+            )
+        }
+        planned = {
+            r["address"]: r for r in resources(plan["planned_values"]["root_module"])
+        }
+        for role, phase in phases.items():
+            if phase not in order:
+                raise ValueError("unknown phase")
+            address = f'google_compute_instance.collector_delegate["{role}"]'
+            new_host = planned.get(address, {}).get("values", {})
+            if new_host.get(
+                "project"
+            ) != project or f"collector-{role}-{phase}" not in new_host.get("tags", []):
+                raise ValueError("phase and host differ")
+            old_host = prior.get(address)
+            if old_host is None:
+                if phase != "bootstrap":
+                    raise ValueError("first apply must bootstrap")
+            else:
+                old = old_host.get("values", {})
+                matches = [
+                    p for p in order if f"collector-{role}-{p}" in old.get("tags", [])
+                ]
+                if (
+                    old.get("project") != project
+                    or len(matches) != 1
+                    or order[phase] not in (order[matches[0]], order[matches[0]] + 1)
+                ):
+                    raise ValueError("phase skipped or reversed")
     return sum(r["mode"] == "managed" for r in plan.get("resource_changes", []))
 
 
@@ -191,10 +234,17 @@ def validate_backend_bootstrap(plan: dict) -> int:
 def main() -> int:
     try:
         backend = len(sys.argv) == 3 and sys.argv[1] == "--backend-bootstrap"
-        if len(sys.argv) != 2 and not backend:
+        gamma = len(sys.argv) == 3 and sys.argv[1] == "--gamma-project"
+        if len(sys.argv) != 2 and not backend and not gamma:
             raise ValueError("one private file required")
         plan = json.loads(Path(sys.argv[-1]).read_text())
-        count = validate_backend_bootstrap(plan) if backend else validate(plan)
+        count = (
+            validate_backend_bootstrap(plan)
+            if backend
+            else validate(
+                plan, project="sn118-gamma-custody" if gamma else "ditto-app-dev"
+            )
+        )
     except (OSError, ValueError, KeyError, TypeError):
         print("Custody plan scope refused; inspect private evidence.", file=sys.stderr)
         return 2

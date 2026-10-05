@@ -321,7 +321,7 @@ class ProtectedWorkflow(unittest.TestCase):
     def test_same_sealed_binary_is_scoped_before_plan_handoff_and_apply(self):
         self.assertEqual(
             self.text.count(
-                'python3 scripts/check-collector-custody-plan.py "$plan_json"'
+                'python3 scripts/check-collector-custody-plan.py "${scope[@]}" "$plan_json"'
             ),
             2,
         )
