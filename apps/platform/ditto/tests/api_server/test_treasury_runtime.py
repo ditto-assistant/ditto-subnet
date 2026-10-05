@@ -519,3 +519,43 @@ async def test_concurrent_control_change_refuses_epoch_insert(
     assert materializer.newest_known is None
     async with session_maker() as s:
         assert list(await s.scalars(select(LedgerEpochSnapshot))) == []
+
+
+@pytest.mark.parametrize("kind,expected", [("database", 503), ("invalid", 409)])
+@pytest.mark.parametrize("endpoint", ["ledger-readiness", "activation-preflight"])
+async def test_admin_read_runtime_failure_is_bounded(
+    app, client, session_maker, monkeypatch, kind, expected, endpoint
+):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    setup(app, session_maker, monkeypatch)
+
+    async def failed(*_, **__):
+        raise (
+            SQLAlchemyError("private database detail")
+            if kind == "database"
+            else ValueError("private corruption detail")
+        )
+
+    monkeypatch.setattr("ditto.api_server.treasury_runtime.treasury_runtime", failed)
+    if endpoint == "ledger-readiness":
+        response = await client.get(
+            "/api/v1/admin/treasury-settings/ledger-readiness", headers=_HEADERS
+        )
+    else:
+        settings = payload()["settings"]
+        response = await client.post(
+            "/api/v1/admin/treasury-settings/activation-preflight",
+            headers=_HEADERS,
+            json={
+                "approval": settings["approval"],
+                "expected_policy_digest": settings["approved_policy_digest"],
+                "expected_collector_policy_digest": settings["collector_policy_digest"],
+                "managed_validator_hotkeys": settings["managed_validator_hotkeys"],
+            },
+        )
+    assert response.status_code == expected, response.text
+    assert "private" not in response.text
+    app.state.chain.get_treasury_dispatch_observation.assert_not_awaited()
+    async with session_maker() as session:
+        assert not list(await session.scalars(select(TreasuryRuntimeRevision)))

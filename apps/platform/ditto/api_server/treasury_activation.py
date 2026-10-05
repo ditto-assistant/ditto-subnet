@@ -7,6 +7,7 @@ from typing import Any, Literal
 from fastapi import HTTPException
 from pydantic import TypeAdapter
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.treasury_activation import (
@@ -110,6 +111,8 @@ async def activation_preflight(
 
     try:
         config = await treasury_runtime(session, state.config)
+    except SQLAlchemyError:
+        raise HTTPException(503, "Gamma runtime control is unavailable") from None
     except ValueError:
         raise HTTPException(409, "Gamma runtime control is invalid") from None
     # The operator-controlled roster is durable; never derive membership from

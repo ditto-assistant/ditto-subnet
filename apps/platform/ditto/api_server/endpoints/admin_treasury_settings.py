@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import ValidationError
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.treasury_activation import (
@@ -88,6 +88,8 @@ async def get_treasury_ledger_readiness(
 
     try:
         config = await treasury_runtime(session, state.config)
+    except SQLAlchemyError:
+        raise HTTPException(503, "Gamma runtime control is unavailable") from None
     except ValueError:
         raise HTTPException(409, "Gamma runtime control is invalid") from None
     row = await latest_pin(session, netuid=state.config.chain.netuid)
