@@ -172,6 +172,22 @@ resource "google_storage_bucket_iam_member" "apply_state" {
   }
 }
 
+# Terraform enumerates workspaces at bucket scope before reading an object.
+# Object-prefix IAM cannot authorize that request. Permit list metadata only;
+# get/create/update/delete stay on the existing exact custody prefixes.
+resource "google_project_iam_custom_role" "state_list" {
+  project     = google_project.custody.project_id
+  role_id     = "gammaStateListMetadata"
+  title       = "Gamma custody workspace metadata"
+  permissions = ["storage.objects.list"]
+}
+
+resource "google_storage_bucket_iam_member" "apply_list" {
+  bucket = google_storage_bucket.state.name
+  role   = google_project_iam_custom_role.state_list.name
+  member = "serviceAccount:${google_service_account.terraform["apply"].email}"
+}
+
 resource "google_project_iam_audit_config" "secret_reads" {
   project = google_project.custody.project_id
   service = "secretmanager.googleapis.com"
