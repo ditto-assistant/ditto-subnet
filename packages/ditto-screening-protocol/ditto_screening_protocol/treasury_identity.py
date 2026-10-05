@@ -6,6 +6,7 @@ signer, configuration, environment or transaction method is accessed here.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
@@ -18,6 +19,19 @@ from .treasury import (
     TreasuryEmissionPolicy,
     TreasuryLedgerPin,
 )
+
+
+async def _read_batch(*reads: Any) -> list[Any]:
+    """At most four public reads; drain cancelled siblings on failure/timeout."""
+    assert len(reads) <= 4
+    tasks = [asyncio.create_task(read) for read in reads]
+    try:
+        return await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def read_finalized_weight_setters(
@@ -46,29 +60,39 @@ async def read_finalized_weight_setters(
         or any(type(value) is not bool for value in permits)
     ):
         raise ValueError("invalid chain weight-setter permit roster")
+
+    async def reciprocal_key(uid: int) -> str:
+        key = _value(
+            await substrate.query(
+                module="SubtensorModule",
+                storage_function="Keys",
+                params=[policy.netuid, uid],
+                block_hash=block_hash,
+            )
+        )
+        key = TypeAdapter(Address).validate_python(key)
+        reciprocal_uid = _value(
+            await substrate.query(
+                module="SubtensorModule",
+                storage_function="Uids",
+                params=[policy.netuid, key],
+                block_hash=block_hash,
+            )
+        )
+        if type(reciprocal_uid) is not int or reciprocal_uid != uid:
+            raise ValueError("weight-setter permit identity is not reciprocal")
+        return key
+
+    # The permit query initializes the exact-hash runtime before concurrent
+    # storage queries. Read every permitted member, not only the managed roster.
+    uids = [uid for uid, permitted in enumerate(permits) if permitted]
     keys = []
-    for uid, permitted in enumerate(permits):
-        if permitted:
-            key = _value(
-                await substrate.query(
-                    module="SubtensorModule",
-                    storage_function="Keys",
-                    params=[policy.netuid, uid],
-                    block_hash=block_hash,
-                )
+    for offset in range(0, len(uids), 4):
+        keys.extend(
+            await _read_batch(
+                *(reciprocal_key(uid) for uid in uids[offset : offset + 4])
             )
-            key = TypeAdapter(Address).validate_python(key)
-            reciprocal_uid = _value(
-                await substrate.query(
-                    module="SubtensorModule",
-                    storage_function="Uids",
-                    params=[policy.netuid, key],
-                    block_hash=block_hash,
-                )
-            )
-            if type(reciprocal_uid) is not int or reciprocal_uid != uid:
-                raise ValueError("weight-setter permit identity is not reciprocal")
-            keys.append(key)
+        )
     if not keys or len(set(keys)) != len(keys):
         raise ValueError("empty or ambiguous chain weight-setter roster")
     return tuple(sorted(keys))
@@ -129,10 +153,13 @@ async def read_treasury_dispatch_observation(
         )
 
     epoch = _uint(await read("SubnetEpochIndex", [policy.netuid]))
-    first = _uint(await read("LastEpochBlock", [policy.netuid]))
-    owner = await read("Owner", [policy.collector_hotkey])
-    subnet_owner = await read("SubnetOwner", [policy.netuid])
-    uid = _uint(await read("Uids", [policy.netuid, policy.collector_hotkey]))
+    first, owner, subnet_owner, uid = await _read_batch(
+        read("LastEpochBlock", [policy.netuid]),
+        read("Owner", [policy.collector_hotkey]),
+        read("SubnetOwner", [policy.netuid]),
+        read("Uids", [policy.netuid, policy.collector_hotkey]),
+    )
+    first, uid = _uint(first), _uint(uid)
     uid_hotkey = await read("Keys", [policy.netuid, uid])
     return TreasuryDispatchObservation(
         identity=TreasuryCollectorIdentity(
@@ -204,8 +231,11 @@ async def read_finalized_collector_pin(
         )
 
     owner = await read("Owner", [policy.collector_hotkey])
-    subnet_owner = await read("SubnetOwner", [policy.netuid])
-    uid = _uint(await read("Uids", [policy.netuid, policy.collector_hotkey]))
+    subnet_owner, uid = await _read_batch(
+        read("SubnetOwner", [policy.netuid]),
+        read("Uids", [policy.netuid, policy.collector_hotkey]),
+    )
+    uid = _uint(uid)
     uid_hotkey = await read("Keys", [policy.netuid, uid])
     identity = TreasuryCollectorIdentity(
         genesis_hash=genesis_hash,
