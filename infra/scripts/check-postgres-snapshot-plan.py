@@ -30,10 +30,16 @@ def check(plan):
 def check_when_changed(plan):
     # Inspect the actual saved plan, including implicit dependencies and parent
     # module targets, rather than trusting the spelling of a target argument.
+    rows = plan["resource_changes"]
+    if not isinstance(rows, list):
+        raise ValueError("snapshot plan requires a resource change list")
     if any(
-        row["address"] in EXPECTED
+        (
+            "google_compute_resource_policy." in row["address"]
+            or "google_compute_disk_resource_policy_attachment." in row["address"]
+        )
         and row["change"]["actions"] not in (["no-op"], ["read"])
-        for row in plan.get("resource_changes", [])
+        for row in rows
     ):
         check(plan)
 

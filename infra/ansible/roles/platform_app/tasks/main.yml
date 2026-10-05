@@ -340,6 +340,14 @@
   no_log: true
   when: platform_database_backup_reader_enabled | bool
 
+- name: Validate the enabled backup metadata reader before rendering
+  ansible.builtin.assert:
+    that:
+      - platform_backup_reader_access.stdout | trim | length > 0
+      - platform_backup_reader_secret.stdout | trim | length > 0
+  no_log: true
+  when: platform_database_backup_reader_enabled | bool
+
 - name: Fold only the read-only backup pair into Platform config
   ansible.builtin.set_fact:
     platform_secrets: "{{ platform_secrets | combine({'database_backup_reader_access': platform_backup_reader_access.stdout, 'database_backup_reader_secret': platform_backup_reader_secret.stdout}) }}"

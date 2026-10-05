@@ -33,7 +33,7 @@ resource "google_storage_bucket_iam_member" "terraform_plan_preview_state_initia
 resource "google_storage_bucket_iam_member" "terraform_plan_subnet_recovery_state_lock" {
   bucket = "ditto-app-dev-tfstate"
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:github-actions-terraform-plan@${var.project}.iam.gserviceaccount.com"
+  member = "serviceAccount:github-actions-terraform-plan@ditto-app-dev.iam.gserviceaccount.com"
   condition {
     title      = "terraform_plan_subnet_recovery_state_lock"
     expression = "resource.name == \"projects/_/buckets/ditto-app-dev-tfstate/objects/gcp-subnet-recovery/default.tflock\""
@@ -42,7 +42,7 @@ resource "google_storage_bucket_iam_member" "terraform_plan_subnet_recovery_stat
 resource "google_storage_bucket_iam_member" "terraform_plan_subnet_recovery_state_initial_create" {
   bucket = "ditto-app-dev-tfstate"
   role   = "roles/storage.objectCreator"
-  member = "serviceAccount:github-actions-terraform-plan@${var.project}.iam.gserviceaccount.com"
+  member = "serviceAccount:github-actions-terraform-plan@ditto-app-dev.iam.gserviceaccount.com"
   condition {
     title      = "terraform_plan_subnet_recovery_state_initial_create"
     expression = "resource.name == \"projects/_/buckets/ditto-app-dev-tfstate/objects/gcp-subnet-recovery/default.tfstate\""

@@ -64,6 +64,29 @@ class WorkflowTest(unittest.TestCase):
             }
         )
 
+    def test_snapshot_fence_rejects_renamed_or_reindexed_resources(self):
+        for address in (
+            "module.pg_vm.google_compute_disk_resource_policy_attachment.boot_snapshot[1]",
+            "google_compute_resource_policy.renamed_daily",
+            "module.nested.google_compute_resource_policy.renamed_daily",
+        ):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                plan.check_when_changed(
+                    {
+                        "resource_changes": [
+                            {"address": address, "change": {"actions": ["create"]}}
+                        ]
+                    }
+                )
+
+    def test_snapshot_fence_requires_the_change_list(self):
+        with self.assertRaises(KeyError):
+            plan.check_when_changed({})
+        for invalid in (None, {}, ""):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                plan.check_when_changed({"resource_changes": invalid})
+        plan.check_when_changed({"resource_changes": []})
+
     def test_workflow_is_main_only_and_restorer_has_only_reader_credentials(self):
         workflow = (
             ROOT / ".github/workflows/platform-pg-restore-drill.yml"

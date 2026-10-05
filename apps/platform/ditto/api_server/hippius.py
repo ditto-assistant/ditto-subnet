@@ -274,6 +274,9 @@ class HippiusClient:
         if max_bytes is not None:
             # Metadata reads must remain bounded even if an object is replaced
             # after its inventory size was checked. Never return a provider URL.
+            # Share the configured retry policy with ordinary reads. Its current
+            # single attempt is intentional; bounded reads do not opt into extra
+            # provider traffic or change latency independently.
             for attempt in range(_RETRY_ATTEMPTS):
                 try:
                     async with self._http.stream("GET", url) as response:

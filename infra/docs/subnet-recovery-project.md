@@ -7,7 +7,7 @@ broad Secret Manager payload grants without moving or restarting a VM.
 
 The project was empty of service accounts and had only
 `user:peyton@omniaura.ai` as project Owner on 2026-10-05. Billing was disabled.
-The approved candidate links the existing open `Billing Omni Aura` account
+The applied owner bootstrap links the existing open `Billing Omni Aura` account
 `01279D-184F4C-3102C7`. No new compute is provisioned.
 
 ## One-time owner bootstrap
@@ -22,7 +22,22 @@ The approved candidate links the existing open `Billing Omni Aura` account
 The first live plan on 2026-10-05 showed **10 creates, 0 updates, 0 deletes**.
 Its binary SHA-256 was
 `d2f3292f7f77079342a044ec562f4d70747682904dcaefd0476914074dd6f03a`.
-It passed `check-subnet-recovery-plan.py bootstrap`. It has not been applied.
+It passed `check-subnet-recovery-plan.py bootstrap`. With explicit owner
+approval, that exact binary was applied from source
+`1aa25edd9f6a0a6d979c528a7a7f33ea0f492586` on 2026-10-05:
+**10 added, 0 changed, 0 destroyed**. Read-back at 16:38 UTC verified the
+billing account link, all five APIs, both custom roles' complete permission
+sets and their exact CI principals. The project policy contains only those two
+custom-role bindings and Peyton's existing Owner binding. A fresh owner plan
+reported no changes. No secret containers or values existed at that check.
+
+Applied role IDs:
+
+- `projects/ditto-subnet/roles/subnetRecoveryTerraformPlan` (15 permissions)
+- `projects/ditto-subnet/roles/subnetRecoveryTerraformApply` (25 permissions)
+
+This bootstrap is complete. The recovery root, snapshot schedule, review
+ruleset, credential custody and host activation remain separately gated.
 
 The plan identity gets resource metadata and IAM-policy reads. The apply
 identity additionally manages empty containers, service accounts, federation,
