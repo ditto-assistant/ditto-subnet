@@ -5,7 +5,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOTS = (Path(".github/workflows"),)
+ROOTS = (Path(".github/workflows"), Path(".depot/workflows"))
 TRIGGERS = {
     "pull_request_target",
     "workflow_run",

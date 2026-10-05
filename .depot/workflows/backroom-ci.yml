@@ -1,9 +1,12 @@
-name: Backroom CI
+# Validation only: current GitHub checks on Depot compute.
+name: Depot Backroom CI
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
+      - .depot/workflows/**
+      - .github/scripts/check_workflow_security.py
       - apps/backroom/**
       - apps/platform/ditto/api_models/**
       - apps/platform/ditto/api_server/endpoints/**
@@ -16,11 +19,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: depot-backroom-ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
-    # Same-repository PR validation runs on Depot; forks and manual rollback stay here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04-4
     defaults:
       run:
         working-directory: apps/backroom

@@ -1,4 +1,5 @@
-name: Conventional PR title
+# Validation only: current GitHub checks on Depot compute.
+name: Depot Conventional PR title
 
 on:
   pull_request:
@@ -7,11 +8,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: depot-conventional-pr-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   title:
-    # Same-repository PR validation runs on Depot; forks and manual rollback stay here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-4
     steps:
       # This list is python-semantic-release's conventional-parser
       # allowed_tags, held identical on purpose. PSR is the authority on what

@@ -1,14 +1,17 @@
-name: CI
+# Validation only: current GitHub checks on Depot compute.
+name: Depot CI
 
 on:
   workflow_dispatch:
   pull_request:
 
+concurrency:
+  group: depot-ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   compose-config:
-    # Same-repository PR validation runs on Depot; forks and manual rollback stay here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-4
     permissions:
       contents: read
     strategy:
@@ -57,9 +60,7 @@ jobs:
           python3 scripts/check_netns_incompatible.py /tmp/resolved-compose.json
 
   validator-stack-runtime-e2e:
-    # Same-repository PR validation runs on Depot; forks and manual rollback stay here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-4
     permissions:
       contents: read
     steps:
@@ -82,12 +83,10 @@ jobs:
         run: ./scripts/test-validator-stack-auto-update-e2e.sh
 
   lint-and-test:
-    # Same-repository PR validation runs on Depot; forks and manual rollback stay here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     # Same sharded exact-source verifier as the release gate, so the two
     # surfaces cannot drift and the pull request answers ~2x faster than the
     # previous single serial job.
-    uses: ./.github/workflows/root-verify.yml
+    uses: ./.depot/workflows/root-verify.yml
     permissions:
       contents: read
     with:

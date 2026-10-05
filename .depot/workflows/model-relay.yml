@@ -1,9 +1,12 @@
-name: Model Relay
+# Validation only: current GitHub checks on Depot compute.
+name: Depot Model Relay
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
+      - .depot/workflows/**
+      - .github/scripts/check_workflow_security.py
       - services/model-relay/**
       - .github/workflows/model-relay.yml
       # The relay's db/schema.sql is a generated mirror of the Alembic chain;
@@ -13,7 +16,7 @@ on:
       - docs/inference-request-fields.json
 
 concurrency:
-  group: model-relay-${{ github.ref }}
+  group: depot-model-relay-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -24,10 +27,8 @@ env:
 
 jobs:
   test:
-    # Same-repository PR validation runs on Depot; forks and manual rollback stay here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     name: build · vet · gofmt · test
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-4
     # The *_pg_test.go suites carry the money-critical DB semantics (lock
     # order, FOR UPDATE budget serialization, nonce replay, settle accounting
     # against real DDL). CI provisions the database and REQUIRES it —
@@ -76,8 +77,6 @@ jobs:
           TEST_POSTGRES_REQUIRED: "1"
 
   schema-sync:
-    # Same-repository PR validation runs on Depot; forks and manual rollback stay here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     # db/schema.sql (and the sqlc output compiled from it) is a generated
     # mirror of the apps/platform Alembic chain. Nothing else re-checks that
     # mirror when a migration lands, and release.yml rolls the relay from
@@ -85,7 +84,7 @@ jobs:
     # fleet-wide admission 500s in production. This job regenerates from the
     # real migration chain and fails on any diff.
     name: schema.sql mirrors the Alembic chain
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -119,8 +118,8 @@ jobs:
 
   static-release-build:
     name: static linux/amd64 release build links
-    if: (github.event_name == 'pull_request') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
-    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request'
+    runs-on: depot-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
