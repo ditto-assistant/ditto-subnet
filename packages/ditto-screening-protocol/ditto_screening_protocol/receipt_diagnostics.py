@@ -30,6 +30,7 @@ class ReceiptDiagnosticObservation(BaseModel):
         "validating_claim",
         "forwarded",
         "page_complete",
+        "conflict_dropped",
         "reading_pylon_failed",
         "validating_claim_failed",
         "forwarding_platform_failed",
@@ -41,6 +42,7 @@ class ReceiptDiagnosticObservation(BaseModel):
     page_finalized: Counter = 0
     page_forwarded: Counter = 0
     page_deferred: Counter = 0
+    conflicts_dropped: Counter = 0
 
 
 class ReceiptDiagnosticReport(BaseModel):

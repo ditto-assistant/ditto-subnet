@@ -322,6 +322,72 @@ async def test_recovery_logs_conflict_code_and_leaves_receipt_unacknowledged(cap
     assert "WeightReceiptConflictError(request_rebound)" in caplog.text
 
 
+async def test_persistent_conflict_is_acked_and_dropped_after_bounded_streak(caplog):
+    """A deterministic conflict must not 409 forever (#2712)."""
+    claim = finalized()
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(
+            return_value={"receipts": [envelope(claim)], "next_after_task_id": None}
+        ),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(
+            side_effect=WeightReceiptConflictError("ledger_pin_mismatch")
+        )
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    with caplog.at_level("WARNING", logger="ditto.validator.weight_receipts"):
+        for _ in range(4):
+            await relay.recover()
+        # Still below the threshold: deferred, unacknowledged.
+        setter.acknowledge_weight_receipt.assert_not_awaited()
+        assert relay.diagnostics.conflicts_dropped == 0
+        assert relay.diagnostics.page_deferred == 1
+
+        await relay.recover()
+    setter.acknowledge_weight_receipt.assert_awaited_once()
+    acked_body = setter.acknowledge_weight_receipt.call_args.args[1]
+    assert acked_body["attempt_id"] == str(claim.attempt.attempt_id)
+    assert acked_body["receipt_digest"] == weight_receipt_digest(claim)
+    assert relay.diagnostics.conflicts_dropped == 1
+    assert "dropped after 5 consecutive conflicts" in caplog.text
+
+
+async def test_successful_forwarding_clears_the_conflict_streak():
+    claim = finalized()
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(
+            return_value={"receipts": [envelope(claim)], "next_after_task_id": None}
+        ),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(
+            side_effect=WeightReceiptConflictError("ledger_pin_mismatch")
+        )
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    for _ in range(4):
+        await relay.recover()
+    platform.submit_weight_receipt.side_effect = None
+    platform.submit_weight_receipt.return_value = SubmitWeightReceiptResponse(
+        request_id=claim.request_id,
+        attempt_id=claim.attempt.attempt_id,
+        receipt_digest=weight_receipt_digest(claim),
+    )
+    await relay.recover()
+    assert relay.diagnostics.page_forwarded == 1
+    # A fresh conflict must again count from zero rather than ride the old streak.
+    platform.submit_weight_receipt.side_effect = WeightReceiptConflictError(
+        "ledger_pin_mismatch"
+    )
+    for _ in range(4):
+        await relay.recover()
+    setter.acknowledge_weight_receipt.assert_awaited_once()
+    assert relay.diagnostics.conflicts_dropped == 0
+
+
 async def test_pin_benchmark_identity_wins_over_compatible_champion_version():
     ledger, champion = context()
     champion.bench_version = 12

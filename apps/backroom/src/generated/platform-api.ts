@@ -28851,6 +28851,11 @@ export interface components {
         /** ReceiptDiagnosticObservation */
         ReceiptDiagnosticObservation: {
             /**
+             * Conflicts Dropped
+             * @default 0
+             */
+            conflicts_dropped: number;
+            /**
              * Page Deferred
              * @default 0
              */
@@ -28876,7 +28881,7 @@ export interface components {
              * Recovery Status
              * @enum {string}
              */
-            recovery_status: "not_attempted" | "unsupported" | "reading_pylon" | "validating_claim" | "forwarded" | "page_complete" | "reading_pylon_failed" | "validating_claim_failed" | "forwarding_platform_failed" | "acknowledging_pylon_failed" | "validating_page_failed";
+            recovery_status: "not_attempted" | "unsupported" | "reading_pylon" | "validating_claim" | "forwarded" | "page_complete" | "conflict_dropped" | "reading_pylon_failed" | "validating_claim_failed" | "forwarding_platform_failed" | "acknowledging_pylon_failed" | "validating_page_failed";
             /** Submission Observed At */
             submission_observed_at?: number | null;
             /**

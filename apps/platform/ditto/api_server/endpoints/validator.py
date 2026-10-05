@@ -3072,11 +3072,12 @@ async def submit_weight_receipt(
             )
     except WeightReceiptConflict as error:
         logger.warning(
-            "weight receipt conflict code=%s validator=%s request=%s attempt=%s",
+            "weight receipt conflict code=%s validator=%s request=%s attempt=%s %s",
             error.code,
             validator_hotkey,
             receipt.request_id,
             receipt.attempt.attempt_id,
+            error.claimed_provenance,
         )
         raise HTTPException(status_code=409, detail=f"{error.code}: {error}") from error
     return SubmitWeightReceiptResponse(

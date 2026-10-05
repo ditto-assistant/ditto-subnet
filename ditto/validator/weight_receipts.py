@@ -24,6 +24,16 @@ from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
 
 logger = logging.getLogger(__name__)
 
+RECEIPT_CONFLICT_DROP_THRESHOLD = 5
+"""Consecutive platform conflicts before an envelope is acked-and-dropped.
+
+A receipt that conflicts with an immutable pin fails deterministically: the
+same signed body re-validates to the same provenance every time. Retrying it
+forever floods the platform with 409s (issue #2712) and rides in front of
+genuine late-arriving receipts. The dropped count rides the relay diagnostics
+so the drop is observable without retaining any receipt content.
+"""
+
 
 @dataclass(frozen=True)
 class ReceiptRelayDiagnostics:
@@ -42,6 +52,7 @@ class ReceiptRelayDiagnostics:
     page_finalized: int = 0
     page_forwarded: int = 0
     page_deferred: int = 0
+    conflicts_dropped: int = 0
 
 
 class WeightReceiptRelay:
@@ -55,6 +66,7 @@ class WeightReceiptRelay:
         self._recovery_lock = asyncio.Lock()
         self._recovery_task: asyncio.Task[None] | None = None
         self._last_scheduled_recovery: float | None = None
+        self._conflict_counts: dict[tuple[str, str], int] = {}
 
     def _submission_observed(self, status: str) -> None:
         self.diagnostics = replace(
@@ -76,6 +88,9 @@ class WeightReceiptRelay:
                 "page_forwarded", self.diagnostics.page_forwarded
             ),
             page_deferred=counts.get("page_deferred", self.diagnostics.page_deferred),
+            conflicts_dropped=counts.get(
+                "conflicts_dropped", self.diagnostics.conflicts_dropped
+            ),
         )
 
     def schedule_recovery(self) -> None:
@@ -183,6 +198,10 @@ class WeightReceiptRelay:
                                 "forwarded",
                                 page_forwarded=self.diagnostics.page_forwarded + 1,
                             )
+                            self._conflict_counts.pop(
+                                (str(claim.request_id), str(claim.attempt.attempt_id)),
+                                None,
+                            )
                     except Exception as exc:  # noqa: BLE001 - keep other receipts moving
                         deferred_stage = stage + "_failed"
                         self._recovery_observed(
@@ -193,6 +212,46 @@ class WeightReceiptRelay:
                         if isinstance(exc, WeightReceiptConflictError):
                             reason += f"({exc.code})"
                         logger.warning("individual weight receipt deferred: %s", reason)
+                        if stage == "forwarding_platform" and isinstance(
+                            exc, WeightReceiptConflictError
+                        ):
+                            # A conflict is deterministic: the same signed body
+                            # re-validates to the same mismatched provenance on
+                            # every retry. Ack-and-drop after a bounded streak
+                            # so the envelope cannot 409 forever (#2712).
+                            key = (str(claim.request_id), str(claim.attempt.attempt_id))
+                            count = self._conflict_counts.get(key, 0) + 1
+                            self._conflict_counts[key] = count
+                            if count >= RECEIPT_CONFLICT_DROP_THRESHOLD:
+                                self._conflict_counts.pop(key, None)
+                                logger.warning(
+                                    "weight receipt dropped after %d consecutive "
+                                    "conflicts: dropping poisoned envelope",
+                                    count,
+                                )
+                                try:
+                                    stage = "acknowledging_pylon"
+                                    await acknowledge(
+                                        str(claim.request_id),
+                                        {
+                                            "request_digest": claim.request_digest,
+                                            "attempt_id": str(claim.attempt.attempt_id),
+                                            "receipt_digest": weight_receipt_digest(
+                                                claim
+                                            ),
+                                        },
+                                    )
+                                    self._recovery_observed(
+                                        "conflict_dropped",
+                                        conflicts_dropped=self.diagnostics.conflicts_dropped
+                                        + 1,
+                                    )
+                                    stage = "validating_claim"
+                                except Exception as ack_exc:  # noqa: BLE001 - drop retry waits for the next sweep
+                                    logger.warning(
+                                        "conflict-drop acknowledgement deferred: %s",
+                                        type(ack_exc).__name__,
+                                    )
                 stage = "validating_page"
                 next_cursor = page.get("next_after_task_id")
                 if next_cursor is not None and (
