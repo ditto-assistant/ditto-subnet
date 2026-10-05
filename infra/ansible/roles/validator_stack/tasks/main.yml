@@ -58,6 +58,34 @@
       release state must come only from the updater-validated current directory.
   when: validator_stack_coding_executor_connectivity_canary_run_enabled | bool
 
+- name: Validate the pre-positioned public Gamma approval profile
+  when: validator_stack_treasury_guard_enabled | bool
+  block:
+    - name: Require fixed proof path and exact policy digests
+      ansible.builtin.assert:
+        that:
+          - validator_stack_treasury_approval_path == '/var/lib/ditto-validator/treasury/emission-approval.json'
+          - validator_stack_treasury_policy_digest is match('^[0-9a-f]{64}$')
+          - validator_stack_treasury_collector_policy_digest is match('^[0-9a-f]{64}$')
+    - name: Inspect the existing public Gamma proof without reading its contents
+      ansible.builtin.stat:
+        path: "{{ validator_stack_treasury_approval_path }}"
+        follow: false
+      register: validator_stack_treasury_proof
+    - name: Require a bounded root-owned nonwritable public proof
+      ansible.builtin.assert:
+        that:
+          - validator_stack_treasury_proof.stat.exists | default(false)
+          - validator_stack_treasury_proof.stat.isreg | default(false)
+          - not (validator_stack_treasury_proof.stat.islnk | default(true))
+          - validator_stack_treasury_proof.stat.uid | default(-1) == 0
+          - validator_stack_treasury_proof.stat.mode | default('') in ['0444', '0644', '0400', '0600']
+          - validator_stack_treasury_proof.stat.size | default(0) > 0
+          - validator_stack_treasury_proof.stat.size | default(8193) <= 8192
+        fail_msg: >-
+          Stage only the public emission approval at the fixed path. The trusted
+          validator and Pylon each verify its signature and exact policy pins.
+
 - name: Require the production amd64 host profile
   ansible.builtin.assert:
     that:

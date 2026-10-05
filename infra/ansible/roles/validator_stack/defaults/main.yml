@@ -63,3 +63,10 @@ validator_stack_uv_bin: /usr/local/bin/uv
 # band, then update every copy; infra/ansible/tests/test_docker_apt_key_pin.py
 # keeps them identical.
 docker_apt_key_sha256: "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
+
+# Gamma uses only a pre-positioned public offline approval. No signing material
+# is read or copied by this profile and ordinary validators remain unarmed.
+validator_stack_treasury_guard_enabled: false
+validator_stack_treasury_approval_path: /var/lib/ditto-validator/treasury/emission-approval.json
+validator_stack_treasury_policy_digest: ""
+validator_stack_treasury_collector_policy_digest: ""
