@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from bittensor_wallet import Keypair
 
@@ -168,6 +169,62 @@ class Migration(unittest.TestCase):
         sha = hashlib.sha256(self.source.read_bytes()).hexdigest()
         with self.assertRaises(ValueError):
             m.manifest(self.source, self.old, self.new, "registration", sha)
+
+    def test_malformed_approval_is_bounded_refusal(self):
+        target = self.root / "target.db"
+        for signature in (None, 3, "abc", "zz" * 64):
+            with self.assertRaises(ValueError):
+                m.migrate(
+                    self.source, target, self.old, self.new, self.approval, signature
+                )
+        for field in ("schema", "role", "source_sha256"):
+            approval = {k: v for k, v in self.approval.items() if k != field}
+            with self.assertRaises(ValueError):
+                m.migrate(
+                    self.source,
+                    target,
+                    self.old,
+                    self.new,
+                    approval,
+                    self.signed(approval),
+                )
+        self.assertFalse(target.exists())
+
+    def test_file_sync_failure_does_not_publish_partial_target(self):
+        target = self.root / "target.db"
+        signature = self.signed(self.approval)
+        with (
+            patch.object(m.os, "fsync", side_effect=OSError("fixture sync failure")),
+            self.assertRaises(OSError),
+        ):
+            m.migrate(self.source, target, self.old, self.new, self.approval, signature)
+        self.assertFalse(target.exists())
+        self.assertEqual(list(self.root.glob(".custody-migration-*")), [])
+        self.assertEqual(hashlib.sha256(self.source.read_bytes()).hexdigest(), self.sha)
+        m.migrate(self.source, target, self.old, self.new, self.approval, signature)
+        self.assertTrue(target.exists())
+
+    def test_postpublication_sync_failure_preserves_complete_output(self):
+        target = self.root / "target.db"
+        signature = self.signed(self.approval)
+        with (
+            patch.object(
+                m.os, "fsync", side_effect=[None, OSError("directory sync uncertain")]
+            ),
+            self.assertRaises(OSError),
+        ):
+            m.migrate(self.source, target, self.old, self.new, self.approval, signature)
+        db = sqlite3.connect(target)
+        self.assertEqual(
+            db.execute("SELECT digest FROM pin").fetchone()[0], self.new.digest
+        )
+        self.assertEqual(
+            db.execute("SELECT SUM(amount) FROM operations").fetchone()[0], 3
+        )
+        self.assertEqual(db.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+        db.close()
+        with self.assertRaises(FileExistsError):
+            m.migrate(self.source, target, self.old, self.new, self.approval, signature)
 
     def test_symlinks_permissions_sidecars_and_hash_refused(self):
         link = self.root / "link.db"

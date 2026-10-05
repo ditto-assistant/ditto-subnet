@@ -11,6 +11,7 @@ import json
 import os
 import sqlite3
 import stat
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -216,10 +217,36 @@ def migrate(
     """Verify cold approval; exclusive output is never replayed or overwritten."""
     from bittensor_wallet import Keypair
 
+    if (
+        not isinstance(approval, dict)
+        or set(approval)
+        != {
+            "schema",
+            "role",
+            "from_policy_digest",
+            "to_policy_digest",
+            "source_sha256",
+            "history_sha256",
+            "cursor",
+            "counts",
+            "registration_reserved_rao",
+        }
+        or approval["schema"] != "ditto-collector-custody-migration-v1"
+        or approval["role"] not in ("registration", "transfer")
+        or not isinstance(approval["source_sha256"], str)
+        or not isinstance(signature, str)
+    ):
+        raise ValueError("malformed migration approval envelope")
+    try:
+        signature_bytes = bytes.fromhex(signature.removeprefix("0x"))
+    except ValueError:
+        raise ValueError("invalid migration signature encoding") from None
+    if len(signature_bytes) != 64:
+        raise ValueError("invalid migration signature length")
     digest = hashlib.sha256(canonical(approval).encode()).hexdigest()
     if not Keypair(ss58_address=old.collector_coldkey).verify(
         f"ditto-collector-custody-migration-v1:{digest}".encode(),
-        bytes.fromhex(signature.removeprefix("0x")),
+        signature_bytes,
     ):
         raise ValueError("migration lacks exact cold approval")
     policy_transition(old, new)
@@ -227,7 +254,7 @@ def migrate(
     db = snapshot(source, approval["source_sha256"])
     try:
         expected = describe(db, old, new, approval["role"], approval["source_sha256"])
-        if approval != expected:
+        if canonical(approval) != canonical(expected):
             raise ValueError("cold-approved history manifest mismatch")
         retained = history(db)
         db.execute("BEGIN IMMEDIATE")
@@ -248,18 +275,26 @@ def migrate(
         ):
             raise ValueError("history changed during migration")
         raw = db.serialize()
-        fd = os.open(
-            target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+        # The final path appears only after the complete DB is durable. A hard
+        # link publishes without replacing any existing path. If interruption
+        # occurs after publication, preserve the complete target for review.
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=".custody-migration-", dir=target.parent
         )
-        with os.fdopen(fd, "wb") as output:
-            output.write(raw)
-            output.flush()
-            os.fsync(output.fileno())
-        fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+        temporary = Path(temporary_name)
         try:
-            os.fsync(fd)
+            with os.fdopen(fd, "wb") as output:
+                output.write(raw)
+                output.flush()
+                os.fsync(output.fileno())
+            os.link(temporary, target, follow_symlinks=False)
+            fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         finally:
-            os.close(fd)
+            temporary.unlink(missing_ok=True)
         return {
             **approval,
             "target_sha256": hashlib.sha256(raw).hexdigest(),
