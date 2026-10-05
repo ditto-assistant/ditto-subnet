@@ -319,13 +319,13 @@ class ProtectedWorkflow(unittest.TestCase):
             self.assertIn("inputs.root != 'gcp-collector-custody'", step)
 
     def test_same_sealed_binary_is_scoped_before_plan_handoff_and_apply(self):
-        self.assertEqual(
-            self.text.count(
-                'python3 scripts/check-collector-custody-plan.py '
-                '"${scope[@]}" "$plan_json"'
-            ),
-            2,
+        command = " ".join(
+            (
+                "python3 scripts/check-collector-custody-plan.py",
+                '"${scope[@]}" "$plan_json"',
+            )
         )
+        self.assertEqual(self.text.count(command), 2)
         self.assertEqual(self.text.count("--backend-bootstrap"), 2)
         self.assertLess(
             self.text.index("Verify isolated custody plan scope"),
