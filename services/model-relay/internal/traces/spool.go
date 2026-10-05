@@ -382,13 +382,11 @@ func (s *Spooler) rotateLocked(key string, sf *streamFile, reason string) {
 		}
 		// The budget counted every buffered byte; release the ones that
 		// never landed so later records are not refused for phantom bytes.
-		// A failed Stat is indistinguishable from a fully-truncated file, so
-		// release sf.bytes as the safe upper bound (releaseBytes clamps at 0).
-		info, statErr := os.Stat(sf.path)
-		if statErr != nil {
-			s.releaseBytes(sf.bytes)
-			sf.bytes = 0
-		} else if info.Size() < sf.bytes {
+		// Leave the budget alone when Stat fails: over-charging is safe
+		// (the uploader releases the on-disk size at deletion), while
+		// releasing the full sf.bytes here would double-count against the
+		// uploader's own release and could push the spool over its limit.
+		if info, statErr := os.Stat(sf.path); statErr == nil && info.Size() < sf.bytes {
 			s.releaseBytes(sf.bytes - info.Size())
 			sf.bytes = info.Size()
 		}
