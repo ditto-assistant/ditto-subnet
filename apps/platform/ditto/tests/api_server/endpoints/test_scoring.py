@@ -251,6 +251,106 @@ async def test_failed_registration_read_is_not_an_empty_metagraph() -> None:
     assert await scoring_mod._registered_miner_hotkeys(state) == set()
 
 
+async def test_boolean_netuid_does_not_read_another_subnet() -> None:
+    called = False
+
+    async def _read(_netuid: object) -> list[object]:
+        nonlocal called
+        called = True
+        return []
+
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=True)),
+        chain=SimpleNamespace(get_recent_neurons=_read),
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+    assert called is False
+
+
+async def test_stalled_registration_read_stays_score_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(scoring_mod, "_REGISTRATION_LOOKUP_TIMEOUT_SECONDS", 0.05)
+
+    async def _hang(_netuid: int) -> list[object]:
+        await asyncio.Event().wait()
+        return []
+
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+        chain=SimpleNamespace(get_recent_neurons=_hang),
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+
+
+async def test_withheld_pool_keeps_the_registered_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registered_hotkey = "5" + "B" * 47
+    retired = SimpleNamespace(
+        agent_id=UUID("1" * 32),
+        miner_hotkey="5" + "A" * 47,
+        first_seen=datetime(2026, 1, 1, tzinfo=UTC),
+        composite=0.95,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        eligible=True,
+        v9_confirmation=None,
+    )
+    registered = SimpleNamespace(
+        agent_id=UUID("2" * 32),
+        miner_hotkey=registered_hotkey,
+        first_seen=datetime(2026, 1, 4, tzinfo=UTC),
+        composite=0.80,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        eligible=True,
+        v9_confirmation=None,
+    )
+    chosen: list[list[Any]] = []
+    real = scoring_mod.dedupe_owner_rows
+
+    def _observe(rows: Any, **kwargs: Any) -> list[Any]:
+        picked = real(rows, **kwargs)
+        chosen.append(picked)
+        return []
+
+    async def _empty(*_args: Any, **_kwargs: Any) -> dict[Any, Any]:
+        return {}
+
+    async def _no_adjustments(
+        *_args: Any, **_kwargs: Any
+    ) -> tuple[dict[Any, Any], dict[Any, Any], dict[Any, Any]]:
+        return {}, {}, {}
+
+    monkeypatch.setattr(scoring_mod, "dedupe_owner_rows", _observe)
+    monkeypatch.setattr(scoring_mod, "quorum_composites", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_history_by_agent", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_composites_by_seed", _empty)
+    monkeypatch.setattr(scoring_mod, "quorum_ledger_proof_rows", _empty)
+    monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", _no_adjustments)
+
+    async def _collapse(rows: list[Any]) -> None:
+        await scoring_mod._ledger_entries(
+            cast(Any, MagicMock()),
+            rows,
+            canonical_version=9,
+            continual_mean_active=False,
+            efficiency_config=cast(Any, SimpleNamespace()),
+            now=datetime(2026, 6, 1, tzinfo=UTC),
+            requesting_validator_hotkey=None,
+            emit=lambda _row: True,
+            registered_hotkeys={registered_hotkey},
+        )
+
+    await _collapse([retired, registered])
+    assert [row.agent_id for row in chosen[0]] == [registered.agent_id]
+
+    chosen.clear()
+    await _collapse([retired])
+    assert chosen[0] == []
+
+
 async def _seed_scored(
     maker: async_sessionmaker[AsyncSession],
     *,

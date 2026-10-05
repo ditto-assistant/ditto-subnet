@@ -118,6 +118,11 @@ from ditto_screening_protocol.treasury_enforcement import (
 
 logger = logging.getLogger(__name__)
 
+# Same budget the public board uses for this read. A stalled metagraph lookup
+# must not hold ledger materialization open until the chain client's own
+# request timeout; expiry keeps the score-only owner collapse.
+_REGISTRATION_LOOKUP_TIMEOUT_SECONDS = 3.0
+
 router = APIRouter(prefix="/scoring", tags=["scoring"])
 
 # Serve-last-known staleness policy: how long the cached ledger may be served
@@ -755,15 +760,16 @@ async def _ledger_entries(
         efficiency_curve_versions=efficiency_curve_versions,
     )
     pool = rows if emit is None else [r for r in rows if emit(r)]
-    # Registration before collapse, and only on the payable pool. The withheld
-    # incumbent path passes ``emit`` and must still see every withheld
-    # generation. Unknown registration leaves the score-only representative.
+    # Registration before collapse on this pool, payable or withheld. ``emit``
+    # still keeps every withheld generation in the pool; registration then
+    # picks the registered one, so a deregistered row cannot hold the unpaid
+    # crown. Unknown registration leaves the score-only representative.
     rows = dedupe_owner_rows(
         pool,
         scores=ranking_scores,
         secondary_scores=efficiency_tiebreaks,
-        registered_hotkeys=None if emit is not None else registered_hotkeys,
-        omit_unregistered_families=emit is None and registered_hotkeys is not None,
+        registered_hotkeys=registered_hotkeys,
+        omit_unregistered_families=registered_hotkeys is not None,
     )
     entries = [
         LedgerEntry(
@@ -852,11 +858,13 @@ async def _registered_miner_hotkeys(app_state: Any) -> set[str] | None:
     config = getattr(app_state, "config", None)
     netuid = getattr(getattr(config, "chain", None), "netuid", None)
     read = getattr(chain, "get_recent_neurons", None)
-    if read is None or not isinstance(netuid, int):
+    # ``bool`` is an ``int``, and ``True`` would be sent as subnet 1.
+    if read is None or isinstance(netuid, bool) or not isinstance(netuid, int):
         return None
     try:
-        result = read(netuid)
-        neurons = await result if inspect.isawaitable(result) else result
+        async with asyncio.timeout(_REGISTRATION_LOOKUP_TIMEOUT_SECONDS):
+            result = read(netuid)
+            neurons = await result if inspect.isawaitable(result) else result
     except Exception:
         logger.warning(
             "miner registration read failed; owner collapse stays score-only",
