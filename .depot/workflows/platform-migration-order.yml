@@ -31,7 +31,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          RUN_URL: https://depot.dev/orgs/4q2czr6whg/workflows/${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.pull_request.head.sha || github.sha }}/checks
           # GitHub forces GITHUB_TOKEN to read-only on a pull_request run from a
           # fork, whatever this job declares above, so the status POST below is
           # rejected with 403. Detect that case rather than reporting a passing

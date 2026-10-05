@@ -84,7 +84,8 @@ def test_depot_migration_owner_preserves_proof_and_excludes_the_main_sweep() -> 
     expected["if"] = "github.event_name != 'push'"
     expected["runs-on"] = "depot-ubuntu-24.04-4"
     expected["steps"][1]["env"]["RUN_URL"] = (
-        "https://depot.dev/orgs/4q2czr6whg/workflows/${{ github.run_id }}"
+        "${{ github.server_url }}/${{ github.repository }}/commit/"
+        "${{ github.event.pull_request.head.sha || github.sha }}/checks"
     )
     assert depot["jobs"]["migration-order"] == expected
     main = github["jobs"]["recheck-open-prs"]
