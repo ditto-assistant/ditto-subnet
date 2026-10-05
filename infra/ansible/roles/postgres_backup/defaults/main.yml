@@ -6,6 +6,7 @@ postgres_backup_packages:
   - age=1.2.1-1+b5
   - awscli=2.23.6-1
   - python3-boto3=1.37.9-1
+  - python3-requests=2.32.3+dfsg-5+deb13u1
 postgres_backup_secret_ids:
   access-key-id: platform-pg-backup-hippius-access-key-id
   secret-access-key: platform-pg-backup-hippius-secret-access-key

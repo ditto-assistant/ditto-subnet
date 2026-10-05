@@ -285,14 +285,14 @@ jobs:
           ' "$plan_json"
 
       - name: Fence the dedicated PostgreSQL snapshot plan
-        if: inputs.root == 'gcp-platform' && contains(inputs.targets, 'platform_postgres_daily')
+        if: inputs.root == 'gcp-platform'
         run: |
           set -euo pipefail
           plan_json="$(mktemp)"
           chmod 600 "$plan_json"
           trap 'rm -f "$plan_json"' EXIT
           terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan > "$plan_json"
-          python3 infra/scripts/check-postgres-snapshot-plan.py "$plan_json"
+          python3 infra/scripts/check-postgres-snapshot-plan.py --when-changed "$plan_json"
 
       - name: Seal plan in private GCS
         id: seal
@@ -396,14 +396,14 @@ jobs:
           python3 scripts/check-collector-custody-plan.py --backend-bootstrap "$plan_json"
 
       - name: Fence the dedicated PostgreSQL snapshot apply
-        if: inputs.root == 'gcp-platform' && contains(inputs.targets, 'platform_postgres_daily')
+        if: inputs.root == 'gcp-platform'
         run: |
           set -euo pipefail
           plan_json="$(mktemp)"
           chmod 600 "$plan_json"
           trap 'rm -f "$plan_json"' EXIT
           terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan > "$plan_json"
-          python3 infra/scripts/check-postgres-snapshot-plan.py "$plan_json"
+          python3 infra/scripts/check-postgres-snapshot-plan.py --when-changed "$plan_json"
 
       - name: Apply the reviewed binary plan
         if: inputs.root != 'gcp-collector-custody' && inputs.root != 'gcp-gamma-custody' && inputs.root != 'gcp-subnet-recovery'

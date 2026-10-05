@@ -103,7 +103,8 @@ authorization does not authorize IAM changes, a merge, or production convergence
    The role installs exact Debian 13 amd64 pins:
    [age 1.2.1-1+b5](https://packages.debian.org/trixie/age),
    [awscli 2.23.6-1](https://packages.debian.org/trixie/awscli), and
-   [python3-boto3 1.37.9-1](https://packages.debian.org/trixie/python3-boto3).
+   [python3-boto3 1.37.9-1](https://packages.debian.org/trixie/python3-boto3), plus
+   [python3-requests 2.32.3+dfsg-5+deb13u1](https://packages.debian.org/trixie/python3-requests).
    Refresh pins through review if Debian archives change; do not silently float.
 9. Enable the Platform reader with
    `platform_database_backup_reader_enabled=true` in its separately authorized
@@ -154,6 +155,8 @@ contents nor grants write authority. The weekly Sunday 08:17 UTC restore drill
 fails on stale backups, mismatched encrypted SHA-256/size, wrong PostgreSQL major,
 failed decryption/restore, different migration marker, or empty/core counts
 outside 5%. It also restores the globals in the isolated database. The container
+and metadata reader allow at most five minutes of future clock skew; the
+36-hour recovery-point age limit remains unchanged. The container
 has no network or published ports; the runner shreds the key and DB files in an
 always-run cleanup step. No decrypted artifact is uploaded.
 

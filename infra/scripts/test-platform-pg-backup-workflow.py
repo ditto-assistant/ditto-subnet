@@ -40,6 +40,30 @@ class WorkflowTest(unittest.TestCase):
                 }
             )
 
+    def test_snapshot_fence_uses_plan_resources_even_for_parent_module_targets(self):
+        valid = {
+            "resource_changes": [
+                {"address": address, "change": {"actions": ["create"]}}
+                for address in plan.EXPECTED
+            ]
+        }
+        plan.check_when_changed(valid)
+        valid["resource_changes"].append(
+            {
+                "address": "module.pg_vm.google_compute_instance.this",
+                "change": {"actions": ["update"]},
+            }
+        )
+        with self.assertRaises(ValueError):
+            plan.check_when_changed(valid)
+        plan.check_when_changed(
+            {
+                "resource_changes": [
+                    {"address": "unrelated.thing", "change": {"actions": ["create"]}}
+                ]
+            }
+        )
+
     def test_workflow_is_main_only_and_restorer_has_only_reader_credentials(self):
         workflow = (
             ROOT / ".github/workflows/platform-pg-restore-drill.yml"
@@ -60,6 +84,7 @@ class WorkflowTest(unittest.TestCase):
         ):
             self.assertIn(marker, workflow)
         self.assertNotIn("platform-pg-backup-hippius-access-key-id", workflow)
+        self.assertNotIn("platform-pg-backup-hippius-secret-access-key", workflow)
         self.assertNotIn("upload-artifact", workflow)
         self.assertNotIn("GCP_PLATFORM_DEPLOY_SERVICE_ACCOUNT", workflow)
         self.assertNotIn("--project apps/platform", workflow)

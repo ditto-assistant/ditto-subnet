@@ -6,8 +6,10 @@ import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -135,6 +137,52 @@ class BackupTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "non-age"):
                 client.upload("daily/archive.dump.age", file)
 
+    def test_multipart_accepts_exact_limit_but_aborts_one_more_part(self):
+        for count in (10000, 10001):
+            remaining = count
+            operations = []
+
+            def read(_size):
+                nonlocal remaining
+                if remaining:
+                    remaining -= 1
+                    return b"x"
+                return b""
+
+            file = SimpleNamespace(
+                stat=lambda count=count: SimpleNamespace(st_size=count),
+                open=lambda _mode: nullcontext(SimpleNamespace(read=read)),
+            )
+
+            def request(
+                operation, *_args, _operations=operations, _size=count, **_kwargs
+            ):
+                _operations.append(operation)
+                content = (
+                    b"<Created><UploadId>synthetic</UploadId></Created>"
+                    if operation == "create_multipart_upload"
+                    else b"<Completed/>"
+                )
+                return nullcontext(
+                    SimpleNamespace(
+                        content=content,
+                        headers={"ETag": "synthetic", "Content-Length": str(_size)},
+                    )
+                )
+
+            client = object.__new__(backup.S3)
+            with patch.object(client, "request", side_effect=request):
+                if count == 10000:
+                    client.upload("manifest.json", file)
+                    self.assertIn("complete_multipart_upload", operations)
+                    self.assertNotIn("abort_multipart_upload", operations)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "multipart limit"):
+                        client.upload("manifest.json", file)
+                    self.assertIn("abort_multipart_upload", operations)
+                    self.assertNotIn("complete_multipart_upload", operations)
+                self.assertEqual(operations.count("upload_part"), 10000)
+
     def manifest(self):
         return {
             "format_version": 1,
@@ -174,6 +222,16 @@ class BackupTest(unittest.TestCase):
         for actual in ({"agents": 106}, {"agents": 0}, {"unknown": 100}):
             with self.assertRaises(ValueError):
                 drill.compare_counts({"agents": 100}, actual)
+
+    def test_drill_allows_five_minutes_of_clock_skew_but_no_more(self):
+        data = self.manifest()
+        data["completed_at"] = "2026-10-04T06:31:00+00:00"
+        now = datetime(2026, 10, 4, 6, 26, tzinfo=UTC)
+        self.assertEqual(drill.validate_manifest(data, "20261004T063000Z", now), 17)
+        with self.assertRaises(ValueError):
+            drill.validate_manifest(
+                data, "20261004T063000Z", now - timedelta(seconds=1)
+            )
 
 
 if __name__ == "__main__":

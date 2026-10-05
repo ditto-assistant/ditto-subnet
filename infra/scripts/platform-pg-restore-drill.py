@@ -33,7 +33,13 @@ def validate_manifest(manifest, stamp, now):
     if started.strftime("%Y%m%dT%H%M%SZ") != stamp:
         raise ValueError("manifest does not match selected backup")
     age = (now - started).total_seconds()
-    if age < 0 or age > 36 * 3600 or ended < started or ended > now:
+    skew = 5 * 60
+    if (
+        age < -skew
+        or age > 36 * 3600
+        or ended < started
+        or (ended - now).total_seconds() > skew
+    ):
         raise ValueError("backup is stale or has invalid timestamps")
     major = int(manifest["server_version_num"]) // 10000
     if not 14 <= major <= 18:

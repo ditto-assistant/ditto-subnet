@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Reject any snapshot activation plan beyond the reviewed two additive resources."""
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -26,9 +27,25 @@ def check(plan):
     print("snapshot plan: 2 creates, 0 updates, 0 deletes; instances/disks unchanged")
 
 
+def check_when_changed(plan):
+    # Inspect the actual saved plan, including implicit dependencies and parent
+    # module targets, rather than trusting the spelling of a target argument.
+    if any(
+        row["address"] in EXPECTED
+        and row["change"]["actions"] not in (["no-op"], ["read"])
+        for row in plan.get("resource_changes", [])
+    ):
+        check(plan)
+
+
 if __name__ == "__main__":
     try:
-        check(json.loads(Path(sys.argv[1]).read_text()))
-    except (ValueError, KeyError, IndexError):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--when-changed", action="store_true")
+        parser.add_argument("plan_file")
+        args = parser.parse_args()
+        inspect = check_when_changed if args.when_changed else check
+        inspect(json.loads(Path(args.plan_file).read_text()))
+    except (ValueError, KeyError, IndexError, OSError, TypeError):
         print("snapshot plan rejected; review the private plan", file=sys.stderr)
         raise SystemExit(1) from None

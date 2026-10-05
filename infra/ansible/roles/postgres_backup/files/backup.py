@@ -226,7 +226,8 @@ class S3:
                     ) as response:
                         parts.append((number, response.headers["ETag"]))
                 else:
-                    raise RuntimeError("backup exceeds multipart limit")
+                    if stream.read(1):
+                        raise RuntimeError("backup exceeds multipart limit")
             document = ET.Element("CompleteMultipartUpload")
             for number, etag in parts:
                 part = ET.SubElement(document, "Part")

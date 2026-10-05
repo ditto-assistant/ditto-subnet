@@ -16,7 +16,10 @@ from ditto.api_server import database_backup as service
 from ditto.api_server.endpoints import admin_database_backup as endpoint
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.hippius import HippiusClient, ObjectSummary
-from ditto.api_server.storage.errors import ObjectDownloadFailedError
+from ditto.api_server.storage.errors import (
+    ObjectDownloadFailedError,
+    ObjectNotFoundError,
+)
 
 
 def manifest(now):
@@ -49,11 +52,18 @@ def status(now):
     )
 
 
-@pytest.mark.parametrize("hours,expected", [(2, "fresh"), (37, "stale")])
-async def test_metadata_freshness_and_separate_reader(monkeypatch, hours, expected):
+@pytest.mark.parametrize(
+    "hours,expected,completed_hours",
+    [(2, "fresh", None), (37, "stale", None), (37, "stale", 1)],
+)
+async def test_metadata_freshness_and_separate_reader(
+    monkeypatch, hours, expected, completed_hours
+):
     now = datetime(2026, 10, 4, 12, tzinfo=UTC)
     source = now - timedelta(hours=hours)
     data = manifest(source)
+    if completed_hours is not None:
+        data.completed_at = now - timedelta(hours=completed_hours)
     prefix = source.strftime("daily/%Y/%m/%d/")
     marker = prefix + source.strftime("manifest-%Y%m%dT%H%M%SZ.json")
     rows = [
@@ -153,6 +163,15 @@ def test_manifest_identity_and_time_are_validated():
         service.manifest_age(data, source - timedelta(hours=1), key)
 
 
+def test_metadata_clock_skew_is_bounded_to_five_minutes():
+    now = datetime(2026, 10, 4, 12, tzinfo=UTC)
+    source = now + timedelta(minutes=4)
+    key = source.strftime("daily/%Y/%m/%d/manifest-%Y%m%dT%H%M%SZ.json")
+    assert service.manifest_age(manifest(source), now, key) == 0
+    with pytest.raises(ValueError):
+        service.manifest_age(manifest(source), now - timedelta(seconds=1), key)
+
+
 async def test_metadata_read_is_bounded_after_listing():
     client = object.__new__(HippiusClient)
     client._presign = AsyncMock(return_value="https://test.invalid/synthetic")
@@ -166,6 +185,49 @@ async def test_metadata_read_is_bounded_after_listing():
             await client.get_object(key="manifest.json", max_bytes=10)
     finally:
         await client._http.aclose()
+
+
+@pytest.mark.parametrize("bound", [None, 10])
+async def test_missing_metadata_uses_the_same_exception_with_or_without_bound(bound):
+    client = object.__new__(HippiusClient)
+    client._presign = AsyncMock(return_value="https://test.invalid/synthetic")
+    client._http = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(404))
+    )
+    try:
+        with pytest.raises(ObjectNotFoundError):
+            await client.get_object(key="manifest.json", max_bytes=bound)
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.parametrize("failure", [503, 402, "network"])
+async def test_bounded_metadata_retries_transient_failures(monkeypatch, failure):
+    from ditto.api_server import hippius
+
+    monkeypatch.setattr(hippius, "_RETRY_ATTEMPTS", 2)
+    monkeypatch.setattr(hippius.asyncio, "sleep", AsyncMock())
+    calls = 0
+
+    def respond(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            if failure == "network":
+                raise httpx.ConnectError("synthetic", request=request)
+            return httpx.Response(
+                failure, content=b"UploadNotPermitted: failed to fetch billing balance"
+            )
+        return httpx.Response(200, content=b"{}")
+
+    client = object.__new__(HippiusClient)
+    client._presign = AsyncMock(return_value="https://test.invalid/synthetic")
+    client._http = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        assert await client.get_object(key="manifest.json", max_bytes=10) == b"{}"
+        assert calls == 2
+    finally:
+        await client.aclose()
 
 
 async def test_endpoint_requires_admin_and_is_no_store(monkeypatch):

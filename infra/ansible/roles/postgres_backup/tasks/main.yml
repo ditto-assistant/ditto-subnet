@@ -52,7 +52,7 @@
         owner: root
         group: root
         mode: "0600"
-      loop: "{{ postgres_backup_secret_reads.results | default([]) }}"
+      loop: "{{ postgres_backup_secret_reads.results }}"
       no_log: true
       when: not ansible_check_mode
 

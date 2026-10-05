@@ -18,6 +18,7 @@ resource "google_compute_resource_policy" "daily" {
         start_time    = "06:00"
       }
     }
+    retention_policy { max_retention_days = 14 }
   }
 }
 variable "enable_snapshots" {

@@ -274,17 +274,39 @@ class HippiusClient:
         if max_bytes is not None:
             # Metadata reads must remain bounded even if an object is replaced
             # after its inventory size was checked. Never return a provider URL.
-            async with self._http.stream("GET", url) as response:
-                if response.status_code >= 300:
-                    raise ObjectDownloadFailedError("bounded Hippius read failed")
-                body = bytearray()
-                async for chunk in response.aiter_bytes():
-                    body.extend(chunk)
-                    if len(body) > max_bytes:
-                        raise ObjectDownloadFailedError(
-                            "Hippius metadata exceeded bound"
-                        )
-                return bytes(body)
+            for attempt in range(_RETRY_ATTEMPTS):
+                try:
+                    async with self._http.stream("GET", url) as response:
+                        if response.status_code == 404:
+                            raise ObjectNotFoundError("Hippius metadata not found")
+                        if response.status_code >= 300:
+                            error_body = bytearray()
+                            async for chunk in response.aiter_bytes(chunk_size=4096):
+                                error_body.extend(chunk[: 4096 - len(error_body)])
+                                if len(error_body) >= 4096:
+                                    break
+                            if not _should_retry(
+                                response.status_code,
+                                error_body.decode("utf-8", errors="replace"),
+                            ):
+                                raise ObjectDownloadFailedError(
+                                    "bounded Hippius read failed"
+                                )
+                        else:
+                            body = bytearray()
+                            async for chunk in response.aiter_bytes(chunk_size=65536):
+                                if len(body) + len(chunk) > max_bytes:
+                                    raise ObjectDownloadFailedError(
+                                        "Hippius metadata exceeded bound"
+                                    )
+                                body.extend(chunk)
+                            return bytes(body)
+                except httpx.HTTPError:
+                    # Do not include the exception's presigned URL in an error.
+                    pass
+                if attempt + 1 < _RETRY_ATTEMPTS:
+                    await asyncio.sleep(min(0.25 * (2**attempt), 2.0))
+            raise ObjectDownloadFailedError("bounded Hippius read failed")
         response = await self._request_with_retry(
             "GET",
             url,

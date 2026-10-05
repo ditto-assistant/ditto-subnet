@@ -24,6 +24,7 @@ def test_restore_workflow_uses_main_prod_and_only_reader_credentials():
     assert "platform-pg-backup-reader-access-key-id" in text
     assert text.count("--project=ditto-subnet") == 3
     assert "platform-pg-backup-hippius-access-key-id" not in text
+    assert "platform-pg-backup-hippius-secret-access-key" not in text
     assert "upload-artifact" not in text
     assert "--project apps/platform" not in text
     install = next(

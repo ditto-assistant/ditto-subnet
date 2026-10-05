@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -80,7 +80,11 @@ def manifest_age(manifest: DatabaseBackupManifest, now: datetime, key: str) -> f
         or started.strftime("%Y/%m/%d") != f"{year}/{month}/{day}"
     ):
         raise ValueError("backup manifest identity differs")
-    if completed < started or completed > now or started > now:
+    if (
+        completed < started
+        or completed > now + timedelta(minutes=5)
+        or started > now + timedelta(minutes=5)
+    ):
         raise ValueError("invalid backup timestamps")
     expected = {f"ditto_platform_prod-{stamp}.dump.age", f"globals-{stamp}.sql.age"}
     if len(manifest.objects) != 2 or {row.name for row in manifest.objects} != expected:
@@ -91,7 +95,7 @@ def manifest_age(manifest: DatabaseBackupManifest, now: datetime, key: str) -> f
         raise ValueError("invalid backup row count set")
     if any(count <= 0 for count in manifest.row_counts.values()):
         raise ValueError("empty backup core tables")
-    return (now - started).total_seconds() / 3600
+    return max(0, (now - started).total_seconds() / 3600)
 
 
 async def read_backups(status: DatabaseBackupStatus) -> None:
@@ -133,9 +137,11 @@ async def read_backups(status: DatabaseBackupStatus) -> None:
         if any(sizes.get(prefix + row.name) != row.size for row in manifest.objects):
             raise ValueError("backup commit is missing encrypted objects")
         status.manifest = manifest
-        status.hours_since_last_success = (
-            status.observed_at - manifest.completed_at
-        ).total_seconds() / 3600
+        status.hours_since_last_success = max(
+            0, (status.observed_at - manifest.completed_at).total_seconds() / 3600
+        )
+        # Freshness is the snapshot's recovery point; a slow upload cannot make
+        # an old database snapshot fresh merely by completing recently.
         status.backup_status = "fresh" if hours <= 36 else "stale"
 
 

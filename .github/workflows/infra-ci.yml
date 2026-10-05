@@ -140,6 +140,8 @@ jobs:
       - name: Prove online backups fail closed and preserve credential custody
         run: |
           python3 tests/test_postgres_backup.py
+          uvx --from ansible-core==2.21.2 python3 tests/test_platform_backup_reader.py
+          uvx --from ansible-core==2.21.2 python3 tests/test_postgres_backup_missing_fetch.py
           uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/postgres-backup.yml
 
       - name: Check backup restore workflow
