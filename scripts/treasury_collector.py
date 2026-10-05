@@ -51,7 +51,7 @@ def main() -> None:
 
             def epoch_at(block):
                 at = subtensor.substrate.get_block_hash(block)
-                chain.guard_runtime(policy, at)
+                chain.guard_runtime(policy, at, historical=True)
                 return chain.query("SubtensorModule", "SubnetEpochIndex", [118], at)
 
             print(

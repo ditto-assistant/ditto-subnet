@@ -824,3 +824,80 @@ def test_upgrade_boundary_uses_same_exact_liquid_credit_not_balance_change():
     )
     with pytest.raises(ValueError, match="transition"):
         c.earnings(p, 101)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_reconciliation_checks_runtime_direction_before_settlement(reverse):
+    from ditto_screening_protocol.collector_receipts import (
+        HISTORICAL_COLLECTOR_CODE_HASH,
+    )
+
+    p, c, op, observed, _ = receipt_fixture()
+    before, after = HISTORICAL_COLLECTOR_CODE_HASH, AUDITED_CODE_HASH
+    if reverse:
+        before, after = after, before
+    c.guard_runtime = lambda _p, h, **_kwargs: before if h == "b100" else after
+    if reverse:
+        with pytest.raises(ValueError, match="transition"):
+            c.reconcile(p, op, observed)
+    else:
+        assert c.reconcile(p, op, observed).status == "finalized"
+
+
+@pytest.mark.parametrize(
+    "parent,post,allowed",
+    [
+        ("historic", "historic", True),
+        ("historic", "current", True),
+        ("current", "historic", False),
+    ],
+)
+def test_activity_and_epoch_readers_use_historical_guards_only(parent, post, allowed):
+    import runpy
+    from pathlib import Path
+    from ditto_screening_protocol.collector_receipts import (
+        HISTORICAL_COLLECTOR_CODE_HASH,
+    )
+
+    hashes = {"historic": HISTORICAL_COLLECTOR_CODE_HASH, "current": AUDITED_CODE_HASH}
+    c, _ = runtime_adapter(hashes[post])
+    s = c.substrate
+    s.get_block_hash = lambda n: FINNEY_GENESIS if n == 0 else f"b{n}"
+    s.get_chain_finalised_head = lambda: "b200"
+    s.get_block_number = lambda _: 200
+
+    def rpc(method, params):
+        if method == "state_getStorageHash":
+            return {"result": hashes[parent] if params[-1] == "b100" else hashes[post]}
+        assert method == "chain_getBlock"
+        return {"result": {"block": {"extrinsics": []}}}
+
+    s.rpc_request = rpc
+    s.get_events = lambda _: []
+    c.query = lambda *_: 7
+    p = policy(runtime_code_hash=AUDITED_CODE_HASH)
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+    cls = runpy.run_path(str(scripts / "treasury_activity_observer.py"))[
+        "FinalizedActivityReader"
+    ]
+    reader = cls.__new__(cls)
+    reader.substrate = s
+    reader.policy = p
+    reader.adapter = c
+    assert reader.epoch_at(101) == 7
+    if allowed:
+        assert reader.finalized_payment_block(101) == ("b101", 7, [], [])
+    else:
+        with pytest.raises(ValueError, match="transition"):
+            reader.finalized_payment_block(101)
+    cls = runpy.run_path(str(scripts / "treasury_selector_publisher.py"))[
+        "PublicEpochReader"
+    ]
+    selector = cls.__new__(cls)
+    selector.policy = p
+    selector.subtensor = SimpleNamespace(substrate=s)
+    selector.chain = c
+    assert selector.epoch_at(101) == 7
+    if post == "historic":
+        with pytest.raises(ValueError, match="runtime changed"):
+            c.guard_runtime(p, "b101")  # Default signing guard did not widen.

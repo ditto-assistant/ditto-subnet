@@ -572,9 +572,16 @@ class PublicCollectorChain:
         s = self.substrate
         start = max(signed["start_block"], operation["reconciled_through"])
         end = min(observation.block, signed["expires_block"], start + 32)
+        parent_code = (
+            self.guard_runtime(policy, s.get_block_hash(start), historical=True)
+            if end > start
+            else None
+        )
         for block in range(start + 1, end + 1):
             block_hash = s.get_block_hash(block)
-            self.guard_runtime(policy, block_hash, historical=True)
+            code = self.guard_runtime(policy, block_hash, historical=True)
+            collector_receipt_runtime(parent_code, code)
+            parent_code = code
             raw = s.rpc_request("chain_getBlock", [block_hash])["result"]["block"][
                 "extrinsics"
             ]
