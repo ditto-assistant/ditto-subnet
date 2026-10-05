@@ -1,6 +1,7 @@
 """Keep recovery credential custody out of ordinary application workflows."""
 
 import json
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -127,3 +128,31 @@ def test_independent_review_covers_every_restore_import_and_dependency():
         "infra/terraform/stacks/gcp-subnet-recovery/**",
         "infra/github/platform-pg-backup-ruleset.json",
     }
+
+
+def test_isolated_restore_dependency_versions_match_platform_lock():
+    package_names = {
+        "boto3",
+        "botocore",
+        "certifi",
+        "charset-normalizer",
+        "idna",
+        "jmespath",
+        "python-dateutil",
+        "requests",
+        "s3transfer",
+        "six",
+        "urllib3",
+    }
+    lock = tomllib.loads((ROOT / "apps/platform/uv.lock").read_text())
+    expected = {
+        package["name"]: package["version"]
+        for package in lock["package"]
+        if package["name"] in package_names
+    }
+    lines = (ROOT / "infra/scripts/pg-restore/requirements.in").read_text().splitlines()
+    pinned = dict(
+        line.split("==", 1) for line in lines if line and not line.startswith("#")
+    )
+    assert set(pinned) == package_names
+    assert pinned == expected

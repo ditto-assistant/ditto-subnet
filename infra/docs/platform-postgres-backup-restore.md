@@ -154,7 +154,7 @@ The read reports missing/unavailable explicitly. It neither returns database
 contents nor grants write authority. The weekly Sunday 08:17 UTC restore drill
 fails on stale backups, mismatched encrypted SHA-256/size, wrong PostgreSQL major,
 failed decryption/restore, different migration marker, or empty/core counts
-outside 5%. It also restores the globals in the isolated database. The container
+outside 5%. It also restores the globals in the isolated database. The restore drill
 and metadata reader allow at most five minutes of future clock skew; the
 36-hour recovery-point age limit remains unchanged. The container
 has no network or published ports; the runner shreds the key and DB files in an
