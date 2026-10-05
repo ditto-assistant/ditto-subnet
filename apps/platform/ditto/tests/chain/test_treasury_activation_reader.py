@@ -1,6 +1,7 @@
 """Real shared identity/permit readers on one request-local bounded connection."""
 
 import asyncio
+import time
 
 import pytest
 
@@ -20,6 +21,7 @@ from ditto.tests.chain.test_client import make_chain_config
         "none",
         "connection",
         "epoch_storage",
+        "identity_cpu",
         "permit_vector",
         "setter_binding",
         "connection_close",
@@ -56,6 +58,9 @@ async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
             assert 7.9 < when - asyncio.get_running_loop().time() <= 8
             windows.append(8)
             self.inner.reschedule(asyncio.get_running_loop().time() + 0.01)
+
+        def when(self):
+            return self.inner.when()
 
     async def stall(step):
         if fault == step:
@@ -105,6 +110,10 @@ async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
                 if params[1] == 1:
                     await stall("setter_binding")
                     return p.fleet[0].validator_hotkey
+                if fault == "identity_cpu":
+                    # Deliberate sync-decode simulation: cancellation has not
+                    # run yet when the first window's clock expires.
+                    time.sleep(0.02)
                 return p.identity.hotkey
             if storage_function == "Uids":
                 if params[1] == p.fleet[0].validator_hotkey:
@@ -135,7 +144,12 @@ async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
     else:
         with pytest.raises(ChainTreasuryActivationReadError) as refused:
             await chain.get_treasury_activation_observation(p.policy)
-        identity_fault = fault in {"connection", "epoch_storage", "owner"}
+        identity_fault = fault in {
+            "connection",
+            "epoch_storage",
+            "identity_cpu",
+            "owner",
+        }
         assert refused.value.read_stage == (
             "identity" if identity_fault else "setter_roster"
         )
@@ -145,8 +159,10 @@ async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
             assert cancelled == []
         else:
             assert isinstance(refused.value.read_error, ChainTreasuryReadTimeoutError)
-            assert refused.value.read_error.read_step == fault
-            assert cancelled == [fault]
+            assert refused.value.read_error.read_step == (
+                "uid_binding" if fault == "identity_cpu" else fault
+            )
+            assert cancelled == ([] if fault == "identity_cpu" else [fault])
         if identity_fault:
             assert all(c[0] != "ValidatorPermit" for c in calls)
         assert str(refused.value) == "bounded treasury activation read failed"

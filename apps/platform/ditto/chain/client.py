@@ -430,12 +430,19 @@ class ChainClient:
                     policy_digest=policy.digest,
                     identity=observed.identity,
                 )
+                now = asyncio.get_running_loop().time()
+                expires = deadline.when()
+                # A synchronous decode may have crossed the first deadline
+                # before its cancellation callback could run. Never renew an
+                # already elapsed identity window into authorization reads.
+                if expires is not None and now >= expires:
+                    raise TimeoutError()
                 stage = "setter_roster"
                 trace.setters = True
                 # The old path opened a second SDK connection with its own
                 # eight-second deadline. Keep that window, but reuse only this
                 # request's exact-hash metadata/transport, never permissions.
-                deadline.reschedule(asyncio.get_running_loop().time() + 8)
+                deadline.reschedule(now + 8)
                 keys = await read_finalized_weight_setters(
                     trace, policy, block_hash=observed.finalized_block_hash
                 )
