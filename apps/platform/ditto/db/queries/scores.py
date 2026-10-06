@@ -2286,7 +2286,12 @@ async def list_eligible_ledger(
         first_seen=rooted.c.first_seen,
         agent_id=rooted.c.agent_id,
     )
-    # Rank the owner's family once so the ledger can serve one row per owner.
+    # Rank the owner's family once so a deduped read can serve one row per
+    # owner. Weight and emission callers must not use this collapse on a pool
+    # that still contains deregistered hotkeys: ``dedupe_owner_rows`` applies
+    # the registration snapshot first, then picks the representative. Doing
+    # it in the other order lets a deregistered best row win the family and
+    # the later registration filter zeroes the linked owner.
     owner_ranked = select(
         rooted,
         func.row_number()

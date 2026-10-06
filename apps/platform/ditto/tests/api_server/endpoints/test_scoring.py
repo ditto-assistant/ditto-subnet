@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
@@ -228,6 +228,270 @@ def test_v8_score_proof_omits_v9_base_evidence_field() -> None:
         )
     )
     assert proof.base_evidence_sha256 is None
+
+
+async def test_failed_registration_read_is_not_an_empty_metagraph() -> None:
+    hotkey = "5" + "A" * 47
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+        chain=SimpleNamespace(
+            get_recent_neurons=AsyncMock(side_effect=RuntimeError("rpc down"))
+        ),
+    )
+
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+    assert await scoring_mod._registered_miner_hotkeys(SimpleNamespace()) is None
+
+    state.chain.get_recent_neurons = AsyncMock(
+        return_value=[SimpleNamespace(hotkey=hotkey), SimpleNamespace(hotkey="")]
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) == {hotkey}
+
+    state.chain.get_recent_neurons = AsyncMock(return_value=[])
+    assert await scoring_mod._registered_miner_hotkeys(state) == set()
+
+
+async def test_boolean_netuid_does_not_read_another_subnet() -> None:
+    called = False
+
+    async def _read(_netuid: object) -> list[object]:
+        nonlocal called
+        called = True
+        return []
+
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=True)),
+        chain=SimpleNamespace(get_recent_neurons=_read),
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+    assert called is False
+
+
+async def test_stalled_registration_read_stays_score_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(scoring_mod, "_REGISTRATION_LOOKUP_TIMEOUT_SECONDS", 0.05)
+
+    async def _hang(_netuid: int) -> list[object]:
+        await asyncio.Event().wait()
+        return []
+
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+        chain=SimpleNamespace(get_recent_neurons=_hang),
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+
+
+async def test_withheld_pool_keeps_the_registered_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registered_hotkey = "5" + "B" * 47
+    retired = SimpleNamespace(
+        agent_id=UUID("1" * 32),
+        miner_hotkey="5" + "A" * 47,
+        first_seen=datetime(2026, 1, 1, tzinfo=UTC),
+        composite=0.95,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        eligible=True,
+        v9_confirmation=None,
+    )
+    registered = SimpleNamespace(
+        agent_id=UUID("2" * 32),
+        miner_hotkey=registered_hotkey,
+        first_seen=datetime(2026, 1, 4, tzinfo=UTC),
+        composite=0.80,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        eligible=True,
+        v9_confirmation=None,
+    )
+    chosen: list[list[Any]] = []
+    real = scoring_mod.dedupe_owner_rows
+
+    def _observe(rows: Any, **kwargs: Any) -> list[Any]:
+        picked = real(rows, **kwargs)
+        chosen.append(picked)
+        return []
+
+    async def _empty(*_args: Any, **_kwargs: Any) -> dict[Any, Any]:
+        return {}
+
+    async def _no_adjustments(
+        *_args: Any, **_kwargs: Any
+    ) -> tuple[dict[Any, Any], dict[Any, Any], dict[Any, Any]]:
+        return {}, {}, {}
+
+    monkeypatch.setattr(scoring_mod, "dedupe_owner_rows", _observe)
+    monkeypatch.setattr(scoring_mod, "quorum_composites", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_history_by_agent", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_composites_by_seed", _empty)
+    monkeypatch.setattr(scoring_mod, "quorum_ledger_proof_rows", _empty)
+    monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", _no_adjustments)
+
+    async def _collapse(rows: list[Any]) -> None:
+        await scoring_mod._ledger_entries(
+            cast(Any, MagicMock()),
+            rows,
+            canonical_version=9,
+            continual_mean_active=False,
+            efficiency_config=cast(Any, SimpleNamespace()),
+            now=datetime(2026, 6, 1, tzinfo=UTC),
+            requesting_validator_hotkey=None,
+            emit=lambda _row: True,
+            registered_hotkeys={registered_hotkey},
+        )
+
+    await _collapse([retired, registered])
+    assert [row.agent_id for row in chosen[0]] == [registered.agent_id]
+
+    chosen.clear()
+    await _collapse([retired])
+    assert chosen[0] == []
+
+
+async def test_pin_passes_registration_into_the_withheld_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ditto.api_models.burn_settings import BurnSettings
+    from ditto.api_models.emission_eligibility import EmissionEligibilitySettings
+    from ditto.api_server.config import EfficiencyBonusConfig
+    from ditto.api_server.emission_eligibility import ResolvedEligibilityPolicy
+
+    @dataclass(frozen=True)
+    class _Row:
+        agent_id: UUID
+        miner_hotkey: str
+        first_seen: datetime
+        composite: float
+        bench_version: int
+        emission_owner_root: str
+        crown_first_seen: datetime
+        n: int = 20
+        sha256: str = "ab" * 32
+        size_bytes: int = 1
+        run_id: str = "run"
+        seed: int = 1
+        validator_hotkey: str = "5" + "V" * 47
+        signature: str | None = None
+        status: AgentStatus = AgentStatus.SCORED
+        eligible: bool = True
+        v9_confirmation: dict[str, int] | None = None
+        details: dict[str, object] | None = None
+
+        @property
+        def fold_first_seen(self) -> datetime:
+            return self.crown_first_seen or self.first_seen
+
+    registered_hotkey = "5" + "B" * 47
+    retired = _Row(
+        agent_id=UUID("1" * 32),
+        miner_hotkey="5" + "A" * 47,
+        first_seen=datetime(2026, 1, 1, tzinfo=UTC),
+        composite=0.95,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        crown_first_seen=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    registered = _Row(
+        agent_id=UUID("2" * 32),
+        miner_hotkey=registered_hotkey,
+        first_seen=datetime(2026, 1, 4, tzinfo=UTC),
+        composite=0.80,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        crown_first_seen=datetime(2026, 1, 4, tzinfo=UTC),
+    )
+
+    async def _ledger(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return [retired, registered]
+
+    async def _empty(*_args: Any, **_kwargs: Any) -> dict[Any, Any]:
+        return {}
+
+    async def _false(*_args: Any, **_kwargs: Any) -> bool:
+        return False
+
+    async def _none(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return []
+
+    async def _no_adjustments(
+        *_args: Any, **_kwargs: Any
+    ) -> tuple[dict[Any, Any], dict[Any, Any], dict[Any, Any]]:
+        return {}, {}, {}
+
+    class _Gate:
+        window_start = datetime(2026, 6, 1, tzinfo=UTC)
+        records: dict[UUID, Any] = {}
+        withheld: tuple[object, ...] = ()
+
+        def withholds(self, _agent_id: UUID) -> bool:
+            return True
+
+        def filter_rows(self, rows: list[Any]) -> list[Any]:
+            del rows
+            return []
+
+    def _evaluate(*_args: Any, **_kwargs: Any) -> _Gate:
+        return _Gate()
+
+    monkeypatch.setattr(scoring_mod, "list_eligible_ledger", _ledger)
+    monkeypatch.setattr(scoring_mod, "v9_confirmation_enforcement_active", _false)
+    monkeypatch.setattr(scoring_mod, "load_review_postures", _empty)
+    monkeypatch.setattr(scoring_mod, "evaluate_ledger", _evaluate)
+    monkeypatch.setattr(scoring_mod, "list_reign_seed_anchors", _none)
+    monkeypatch.setattr(scoring_mod, "quorum_composites", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_history_by_agent", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_composites_by_seed", _empty)
+    monkeypatch.setattr(scoring_mod, "quorum_ledger_proof_rows", _empty)
+    monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", _no_adjustments)
+
+    async def _rehearsal(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(scoring_mod, "_record_eligibility_rehearsal", _rehearsal)
+
+    session = MagicMock()
+    session.in_transaction.return_value = False
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    snapshot = await scoring_mod.materialize_ledger_snapshot(
+        SimpleNamespace(
+            config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+            chain=SimpleNamespace(
+                get_recent_neurons=AsyncMock(
+                    return_value=[SimpleNamespace(hotkey=registered_hotkey)]
+                )
+            ),
+        ),
+        cast(Any, session),
+        context=scoring_mod._LedgerContext(
+            policy=scoring_mod._LedgerPolicy(
+                efficiency=EfficiencyBonusConfig(enabled=False),
+                continual_retest=ContinualRetestSettings(
+                    crown_incumbent_mode="fleet_ready"
+                ),
+                burn=BurnSettings(),
+                reward_eligibility=ResolvedEligibilityPolicy(
+                    settings=EmissionEligibilitySettings(enforcement="enforce"),
+                ),
+            ),
+            active_bench_version=9,
+            continual_fleet_ready=False,
+            tie_weighting_fleet_ready=False,
+            factor_fleet_ready=False,
+            crown_incumbent_fleet_ready=True,
+            reward_eligibility_fleet_ready=True,
+        ),
+        now=now,
+        requesting_validator_hotkey=None,
+    )
+
+    assert snapshot.entries == []
+    assert snapshot.withheld_entries is not None
+    assert [entry.agent_id for entry in snapshot.withheld_entries] == [
+        registered.agent_id
+    ]
 
 
 async def _seed_scored(

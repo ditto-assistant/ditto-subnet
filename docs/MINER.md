@@ -601,10 +601,15 @@ the two directly linked hotkeys.
   hotkey's work only**, including byte-identical and repacked generations.
   Screening against every other miner is
   unchanged.
-- It does **not** grant an additional emission slot. Emission positions are one
-  per distinct agent no matter how many keys you hold, and this link is not an
-  input to that calculation. Rotating keys and attesting the link does not put
-  two of your agents in the weight vector.
+- It does **not** grant a second emission slot. The weight fold pays one
+  position per owner family: a payment coldkey, or hotkeys joined by an
+  owner-link attestation. The link is an input to that collapse. Rotating
+  keys and attesting the link keeps both hotkeys in one slot; it does not
+  put two of your agents in the weight vector.
+- That slot is paid to the best family member whose hotkey is registered
+  now. A deregistered hotkey cannot hold it. After a rotation, register the
+  new hotkey or the family earns nothing until you do. The copy-review
+  exemption above does not require the old hotkey to stay registered.
 - Links are recorded and auditable. If a key is sold or compromised, contact
   an operator and quote the attestation ID so the link can be revoked. The
   current miner CLI creates links; it does not provide self-service revocation.
@@ -888,4 +893,5 @@ scores, and payment record are kept, but a hotkey absent from the SN118
 metagraph cannot receive weight and is excluded from the weight fold.
 Registering the same hotkey again restores eligibility automatically. A
 different hotkey is a separate miner identity and requires a new signed, paid
-upload.
+upload, unless you attest an owner link to the previous hotkey. The link
+shares one slot, and the best registered hotkey in that family holds it.
