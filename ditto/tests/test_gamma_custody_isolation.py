@@ -151,6 +151,18 @@ class Isolation(unittest.TestCase):
         )
         self.assertIn('rules { enforce = "TRUE" }', bootstrap)
 
+    def test_manual_mailbox_infra_roles_have_no_payload_authority(self):
+        bootstrap = (
+            ROOT / "infra/terraform/stacks/gcp-gamma-custody-bootstrap/main.tf"
+        ).read_text()
+        self.assertIn('"pubsub.googleapis.com"', bootstrap)
+        self.assertIn('"pubsub.topics.getIamPolicy"', bootstrap)
+        self.assertIn('"pubsub.subscriptions.setIamPolicy"', bootstrap)
+        self.assertNotIn('"pubsub.topics.publish"', bootstrap)
+        self.assertNotIn('"pubsub.subscriptions.consume"', bootstrap)
+        self.assertIn("gammaManualMailboxPlan", bootstrap)
+        self.assertIn("gammaManualMailboxApply", bootstrap)
+
     def test_existing_identity_is_not_used_for_gamma_auth(self):
         workflow = (ROOT / ".github/workflows/infra-plan-apply.yml").read_text()
         for role in ("plan", "apply"):

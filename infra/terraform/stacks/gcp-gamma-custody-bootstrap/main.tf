@@ -38,6 +38,7 @@ resource "google_project_service" "api" {
     "iam.googleapis.com", "iamcredentials.googleapis.com", "sts.googleapis.com",
     "secretmanager.googleapis.com", "iap.googleapis.com",
     "storage.googleapis.com", "logging.googleapis.com", "orgpolicy.googleapis.com",
+    "pubsub.googleapis.com",
   ])
   project            = google_project.custody.project_id
   service            = each.value
@@ -89,10 +90,28 @@ resource "google_project_iam_custom_role" "secret_metadata" {
   depends_on = [google_project_service.api]
 }
 
+# Owner-reviewed bootstrap for the protected infrastructure identities only.
+# Plan can inspect mailbox metadata/IAM, apply can manage those resources. They
+# receive no publishing/consuming payload permission and no wallet authority.
+resource "google_project_iam_custom_role" "manual_mailbox" {
+  for_each = toset(["plan", "apply"])
+  project  = google_project.custody.project_id
+  role_id  = "gammaManualMailbox${title(each.key)}"
+  title    = "Gamma manual mailbox infrastructure ${each.key}"
+  permissions = concat([
+    "pubsub.topics.get", "pubsub.topics.list", "pubsub.topics.getIamPolicy",
+    "pubsub.subscriptions.get", "pubsub.subscriptions.list", "pubsub.subscriptions.getIamPolicy",
+    ], each.key == "apply" ? [
+    "pubsub.topics.create", "pubsub.topics.update", "pubsub.topics.delete", "pubsub.topics.setIamPolicy",
+    "pubsub.subscriptions.create", "pubsub.subscriptions.update", "pubsub.subscriptions.delete", "pubsub.subscriptions.setIamPolicy",
+  ] : [])
+  depends_on = [google_project_service.api]
+}
+
 locals {
   deployment_roles = {
-    plan  = ["roles/compute.viewer", "roles/iam.serviceAccountViewer", "roles/iam.roleViewer", "roles/iap.viewer", "roles/browser", "projects/sn118-gamma-custody/roles/gammaSecretMetadataPlan"]
-    apply = ["roles/compute.admin", "roles/iam.serviceAccountAdmin", "roles/iam.serviceAccountUser", "roles/iam.roleAdmin", "roles/iap.admin", "roles/browser", "projects/sn118-gamma-custody/roles/gammaSecretMetadataApply"]
+    plan  = ["roles/compute.viewer", "roles/iam.serviceAccountViewer", "roles/iam.roleViewer", "roles/iap.viewer", "roles/browser", "projects/sn118-gamma-custody/roles/gammaSecretMetadataPlan", "projects/sn118-gamma-custody/roles/gammaManualMailboxPlan"]
+    apply = ["roles/compute.admin", "roles/iam.serviceAccountAdmin", "roles/iam.serviceAccountUser", "roles/iam.roleAdmin", "roles/iap.admin", "roles/browser", "projects/sn118-gamma-custody/roles/gammaSecretMetadataApply", "projects/sn118-gamma-custody/roles/gammaManualMailboxApply"]
   }
   grants = merge([for purpose, roles in local.deployment_roles : { for role in roles : "${purpose}:${role}" => { purpose = purpose, role = role } }]...)
 }
@@ -102,7 +121,7 @@ resource "google_project_iam_member" "deployment" {
   project    = google_project.custody.project_id
   role       = each.value.role
   member     = "serviceAccount:${google_service_account.terraform[each.value.purpose].email}"
-  depends_on = [google_project_iam_custom_role.secret_metadata, google_project_service.compute]
+  depends_on = [google_project_iam_custom_role.secret_metadata, google_project_iam_custom_role.manual_mailbox, google_project_service.compute]
 }
 
 resource "google_iam_workload_identity_pool" "github" {

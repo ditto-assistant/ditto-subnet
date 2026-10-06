@@ -18,18 +18,11 @@ check "manual_mailbox_sealed" {
     error_message = "Manual mailbox requires sealed transfer custody and an explicit Platform identity."
   }
 }
-resource "google_project_service" "manual_pubsub" {
-  count              = var.enable_manual_mailbox ? 1 : 0
-  project            = var.project
-  service            = "pubsub.googleapis.com"
-  disable_on_destroy = false
-}
 resource "google_pubsub_topic" "manual" {
   for_each = var.enable_manual_mailbox ? toset(["requests", "reports"]) : toset([])
   project  = var.project
   name     = "sn118-manual-${each.key}"
   message_storage_policy { allowed_persistence_regions = [var.region] }
-  depends_on = [google_project_service.manual_pubsub]
 }
 resource "google_pubsub_subscription" "manual" {
   for_each                   = google_pubsub_topic.manual

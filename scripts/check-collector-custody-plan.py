@@ -40,7 +40,6 @@ ALLOWED = {f"{name}[0]" for name in SINGLE} | {
 }
 ALLOWED_DATA = "data.google_project.collector_custody[0]"
 MAILBOX = {
-    "google_project_service.manual_pubsub[0]",
     *{
         f'google_pubsub_{kind}.manual["{name}"]'
         for kind in ("topic", "subscription")
@@ -123,13 +122,7 @@ def validate(plan: dict, *, project: str = "ditto-app-dev") -> int:
             value = change["after"]
             if value.get("project") != "sn118-gamma-custody":
                 raise ValueError("mailbox project differs")
-            if address == "google_project_service.manual_pubsub[0]":
-                if (
-                    value.get("service") != "pubsub.googleapis.com"
-                    or value.get("disable_on_destroy") is not False
-                ):
-                    raise ValueError("mailbox service differs")
-            elif "_iam_member." not in address:
+            if "_iam_member." not in address:
                 name = "requests" if '["requests"]' in address else "reports"
                 if value.get("name") != f"sn118-manual-{name}":
                     raise ValueError("mailbox resource differs")
