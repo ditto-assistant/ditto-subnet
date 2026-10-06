@@ -99,7 +99,7 @@ async def get_treasury_ledger_readiness(
     from datetime import UTC, datetime
 
     from ditto.api_server.treasury_weights import (
-        current_managed_weight_setters,
+        current_managed_dispatch_observation,
         read_treasury_fleet,
     )
 
@@ -126,6 +126,7 @@ async def get_treasury_ledger_readiness(
         require_treasury_weight_authority,
     )
 
+    stage = "fleet_binding"
     try:
         if (
             fleet != pin.fleet
@@ -139,17 +140,13 @@ async def get_treasury_ledger_readiness(
             and pin.epoch_index < config.activation_epoch
         ):
             raise ValueError("stored pin predates runtime activation")
-        observed = await state.chain.get_treasury_dispatch_observation(pin.policy)
-        chain_keys = await current_managed_weight_setters(
+        stage = "identity"
+        observed = await current_managed_dispatch_observation(
             state.chain,
             pin.policy,
-            block_hash=observed.finalized_block_hash,
             managed_hotkeys=config.treasury_managed_validator_hotkeys,
         )
-        if not chain_keys or not set(
-            config.treasury_managed_validator_hotkeys
-        ).issubset(chain_keys):
-            raise ValueError("chain weight-setter roster differs from live fleet")
+        stage = "authority"
         require_treasury_weight_authority(
             pin,
             expected_policy_digest=config.treasury_approved_policy_digest,
@@ -162,7 +159,28 @@ async def get_treasury_ledger_readiness(
             finalized_block=observed.finalized_block,
             finalized_block_hash=observed.finalized_block_hash,
         )
-    except Exception:
+    except Exception as error:
+        from ditto.chain.errors import (
+            ChainConnectionError,
+            ChainTimeoutError,
+            ChainTreasuryActivationReadError,
+            ChainTreasuryReadTimeoutError,
+        )
+
+        if isinstance(error, ChainTreasuryActivationReadError):
+            stage = error.read_stage
+            error = error.read_error
+        step = error.read_step if isinstance(error, ChainTreasuryReadTimeoutError) else None
+        if isinstance(error, (TimeoutError, ChainTimeoutError)):
+            kind = "timeout"
+        elif isinstance(error, (ConnectionError, ChainConnectionError)):
+            kind = "connection"
+        elif isinstance(error, ValueError):
+            kind = "invalid_evidence"
+        elif isinstance(error, AttributeError):
+            kind = "reader_unavailable"
+        else:
+            kind = "unavailable"
         return readiness.model_copy(
             update={
                 "fleet_gate": "not_ready",
@@ -170,6 +188,9 @@ async def get_treasury_ledger_readiness(
                     *readiness.blocking_reasons,
                     "enforcing_pin_unverified",
                 ],
+                "validation_failure_stage": stage,
+                "validation_failure_step": step,
+                "validation_failure_kind": kind,
             }
         )
     return readiness.model_copy(

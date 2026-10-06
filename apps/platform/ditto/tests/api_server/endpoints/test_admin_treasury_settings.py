@@ -291,9 +291,10 @@ async def test_v2_service_wallets_are_shadow_only_and_v1_history_is_preserved(
         assert response.status_code == 422, (change, response.text)
 
 
-@pytest.mark.parametrize("fault", ["none", "wrong_hash", "permission_lost"])
+@pytest.mark.parametrize("fault", ["none", "wrong_hash", "permission_lost", "timeout"])
+@pytest.mark.parametrize("reader", ["separate", "combined"])
 async def test_readiness_proves_current_managed_permission_without_peer_bindings(
-    session, monkeypatch, fault
+    session, monkeypatch, fault, reader
 ):
     from datetime import UTC, datetime
     from types import SimpleNamespace
@@ -339,17 +340,41 @@ async def test_readiness_proves_current_managed_permission_without_peer_bindings
     scoped = AsyncMock(return_value=proof)
     if fault == "permission_lost":
         scoped.side_effect = ValueError("current permission lost")
+    if fault == "timeout":
+        from ditto.chain.errors import ChainTreasuryActivationReadError, ChainTreasuryReadTimeoutError
+        scoped.side_effect = ChainTreasuryActivationReadError(
+            "setter_roster", ChainTreasuryReadTimeoutError("permit_vector")
+        )
     state.chain.get_treasury_managed_weight_setters = scoped
+    if reader == "combined":
+        combined = AsyncMock(return_value=(state.chain.get_treasury_dispatch_observation.return_value, proof))
+        combined.side_effect = scoped.side_effect
+        state.chain.get_treasury_managed_activation_observation = combined
     request = SimpleNamespace(app=SimpleNamespace(state=state))
     result = await get_treasury_ledger_readiness(request, None, session)
     assert result.can_enforce_weights is (fault == "none")
     assert result.fleet_gate == ("ready" if fault == "none" else "not_ready")
     if fault != "none":
         assert "enforcing_pin_unverified" in result.blocking_reasons
-    scoped.assert_awaited_once_with(
-        p.policy,
-        block_hash=p.pinned_block_hash,
-        managed_hotkeys=state.config.treasury_managed_validator_hotkeys,
-    )
+        assert result.validation_failure_stage is not None
+        assert result.validation_failure_kind in {"invalid_evidence", "timeout"}
+    else:
+        assert result.validation_failure_stage is None
+    if fault == "timeout":
+        assert result.validation_failure_stage == "setter_roster"
+        assert result.validation_failure_step == "permit_vector"
+        assert result.validation_failure_kind == "timeout"
+    if reader == "combined":
+        combined.assert_awaited_once_with(
+            p.policy, managed_hotkeys=state.config.treasury_managed_validator_hotkeys
+        )
+        scoped.assert_not_awaited()
+        state.chain.get_treasury_dispatch_observation.assert_not_awaited()
+    else:
+        scoped.assert_awaited_once_with(
+            p.policy,
+            block_hash=p.pinned_block_hash,
+            managed_hotkeys=state.config.treasury_managed_validator_hotkeys,
+        )
     state.chain.get_treasury_weight_setters.assert_not_awaited()
     assert result.weight_effect == "none"
