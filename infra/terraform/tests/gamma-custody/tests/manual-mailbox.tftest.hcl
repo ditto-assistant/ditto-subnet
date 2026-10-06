@@ -1,4 +1,11 @@
 mock_provider "google" {}
+override_resource {
+  target          = google_service_account.collector_delegate["transfer"]
+  override_during = plan
+  values = {
+    email = "sn118-collector-transfer@sn118-gamma-custody.iam.gserviceaccount.com"
+  }
+}
 variables {
   project                  = "sn118-gamma-custody"
   region                   = "us-central1"
@@ -37,7 +44,7 @@ run "explicit_mailbox_has_only_directional_grants" {
     error_message = "First creation must retain exact known topics for the saved-plan fence."
   }
   assert {
-    condition     = google_pubsub_topic_iam_member.manual_reports[0].role == "roles/pubsub.publisher" && google_pubsub_subscription_iam_member.manual_requests[0].role == "roles/pubsub.subscriber" && google_pubsub_subscription.manual["requests"].ack_deadline_seconds == 600 && google_pubsub_subscription.manual["requests"].message_retention_duration == "604800s"
+    condition     = google_pubsub_topic_iam_member.manual_reports[0].role == "roles/pubsub.publisher" && google_pubsub_topic_iam_member.manual_reports[0].member == "serviceAccount:sn118-collector-transfer@sn118-gamma-custody.iam.gserviceaccount.com" && google_pubsub_subscription_iam_member.manual_requests[0].role == "roles/pubsub.subscriber" && google_pubsub_subscription_iam_member.manual_requests[0].member == "serviceAccount:sn118-collector-transfer@sn118-gamma-custody.iam.gserviceaccount.com" && google_pubsub_subscription.manual["requests"].ack_deadline_seconds == 600 && google_pubsub_subscription.manual["requests"].message_retention_duration == "604800s"
     error_message = "Custody result authority and bounded redelivery must stay separate."
   }
 }
