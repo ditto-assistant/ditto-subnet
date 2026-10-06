@@ -26,8 +26,26 @@ from ditto_screening_protocol.treasury_enforcement import (
     TreasuryFleetMember,
     require_treasury_weight_authority,
 )
+from ditto_screening_protocol.treasury_identity import TreasuryManagedSetterObservation
 
 TREASURY_FLEET_FRESHNESS = timedelta(minutes=15)
+
+
+async def current_managed_weight_setters(
+    chain: Any, policy: Any, *, block_hash: str, managed_hotkeys: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Use fresh managed chain bindings; older readers retain the full gate."""
+    if not managed_hotkeys or len(set(managed_hotkeys)) != len(managed_hotkeys):
+        raise ValueError("managed roster is empty or ambiguous")
+    scoped = getattr(chain, "get_treasury_managed_weight_setters", None)
+    if callable(scoped):
+        proof = TreasuryManagedSetterObservation.model_validate(
+            await scoped(policy, block_hash=block_hash, managed_hotkeys=managed_hotkeys)
+        )
+        if proof.block_hash != block_hash or set(proof.hotkeys) != set(managed_hotkeys):
+            raise ValueError("managed chain permission proof differs from pin scope")
+        return proof.hotkeys
+    return await chain.get_treasury_weight_setters(policy, block_hash=block_hash)
 
 
 def treasury_fleet_members(
@@ -115,10 +133,13 @@ async def enforcing_pin_from_observation(
     )
     if policy != shadow.policy:
         raise ValueError("finalized observation differs from approved policy")
-    authorized = await app_state.chain.get_treasury_weight_setters(
-        policy, block_hash=shadow.identity.finalized_block_hash
-    )
     required_hotkeys = tuple(getattr(config, "treasury_managed_validator_hotkeys", ()))
+    authorized = await current_managed_weight_setters(
+        app_state.chain,
+        policy,
+        block_hash=shadow.identity.finalized_block_hash,
+        managed_hotkeys=required_hotkeys,
+    )
     if not required_hotkeys or not set(required_hotkeys).issubset(authorized):
         raise ValueError("managed weight setter lacks current chain permission")
     fleet = await read_treasury_fleet(
@@ -174,8 +195,11 @@ async def require_enforcing_requester(
     }:
         raise ValueError("treasury requester or live fleet differs from immutable pin")
     observed = await app_state.chain.get_treasury_dispatch_observation(pin.policy)
-    required = await app_state.chain.get_treasury_weight_setters(
-        pin.policy, block_hash=observed.finalized_block_hash
+    required = await current_managed_weight_setters(
+        app_state.chain,
+        pin.policy,
+        block_hash=observed.finalized_block_hash,
+        managed_hotkeys=managed,
     )
     if not required or not set(managed).issubset(required):
         raise ValueError("managed weight setter lacks current chain permission")

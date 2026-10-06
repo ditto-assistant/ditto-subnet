@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from .treasury import (
     Address,
@@ -96,6 +96,92 @@ async def read_finalized_weight_setters(
     if not keys or len(set(keys)) != len(keys):
         raise ValueError("empty or ambiguous chain weight-setter roster")
     return tuple(sorted(keys))
+
+
+class TreasuryManagedSetterObservation(BaseModel):
+    """Current managed bindings plus the complete vector's permission count."""
+
+    model_config = ConfigDict(
+        extra="ignore", frozen=True, strict=True, revalidate_instances="always"
+    )
+
+    block_hash: Hash
+    permitted_count: int = Field(ge=1, le=4096)
+    hotkeys: tuple[Address, ...] = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def unambiguous(self):
+        if len(set(self.hotkeys)) != len(self.hotkeys) or (
+            len(self.hotkeys) > self.permitted_count
+        ):
+            raise ValueError("ambiguous managed permission evidence")
+        return self
+
+
+async def read_finalized_managed_weight_setters(
+    substrate: CollectorReadClient,
+    policy: TreasuryEmissionPolicy,
+    *,
+    block_hash: str,
+    managed_hotkeys: tuple[str, ...],
+) -> TreasuryManagedSetterObservation:
+    """Prove every explicit managed binding, not independent peer bindings.
+
+    Read and validate the entire current permit vector at the observation hash.
+    Resolve each managed hotkey's current UID and reciprocal Keys binding at
+    that same hash. No heartbeat, score, cached UID, or omitted managed member
+    may substitute for these chain reads.
+    """
+    keys = TypeAdapter(tuple[Address, ...]).validate_python(managed_hotkeys)
+    if not keys or len(keys) > 128 or len(set(keys)) != len(keys):
+        raise ValueError("invalid explicit managed roster")
+    permits = _value(
+        await substrate.query(
+            module="SubtensorModule",
+            storage_function="ValidatorPermit",
+            params=[policy.netuid],
+            block_hash=block_hash,
+        )
+    )
+    if (
+        not isinstance(permits, (list, tuple))
+        or not permits
+        or len(permits) > 4096
+        or any(type(value) is not bool for value in permits)
+    ):
+        raise ValueError("invalid chain weight-setter permit roster")
+
+    async def prove(key: str) -> str:
+        uid = _value(
+            await substrate.query(
+                module="SubtensorModule",
+                storage_function="Uids",
+                params=[policy.netuid, key],
+                block_hash=block_hash,
+            )
+        )
+        if type(uid) is not int or not 0 <= uid < len(permits) or not permits[uid]:
+            raise ValueError("managed setter lacks current chain permission")
+        reciprocal = _value(
+            await substrate.query(
+                module="SubtensorModule",
+                storage_function="Keys",
+                params=[policy.netuid, uid],
+                block_hash=block_hash,
+            )
+        )
+        if TypeAdapter(Address).validate_python(reciprocal) != key:
+            raise ValueError("managed weight-setter binding is not reciprocal")
+        return key
+
+    proved = []
+    for offset in range(0, len(keys), 4):
+        proved.extend(await _read_batch(*(prove(k) for k in keys[offset : offset + 4])))
+    return TreasuryManagedSetterObservation(
+        block_hash=block_hash,
+        permitted_count=sum(permits),
+        hotkeys=tuple(sorted(proved)),
+    )
 
 
 class CollectorReadClient(Protocol):

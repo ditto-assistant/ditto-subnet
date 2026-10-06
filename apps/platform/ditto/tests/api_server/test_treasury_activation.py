@@ -12,6 +12,76 @@ from ditto.tests.api_server.test_treasury_weights import heartbeat, pin
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "fault",
+    ["none", "wrong_hash", "wrong_owner", "wrong_scope", "partial", "rpc_failure"],
+)
+async def test_scoped_preflight_preserves_full_permission_count_and_exact_managed_proof(
+    session, monkeypatch, fault
+):
+    from unittest.mock import AsyncMock
+
+    from ditto.api_models.treasury_activation import TreasuryActivationPreflightRequest
+    from ditto.api_server.treasury_activation import activation_preflight
+    from ditto.tests.api_server.test_treasury_weights import add_runtime, app_state
+    from ditto_screening_protocol.treasury_identity import (
+        TreasuryManagedSetterObservation,
+    )
+
+    p = pin()
+    state = app_state(p)
+    observed = state.chain.get_treasury_dispatch_observation.return_value
+    proof = TreasuryManagedSetterObservation(
+        block_hash=observed.finalized_block_hash,
+        permitted_count=13,
+        hotkeys=(p.fleet[0].validator_hotkey,),
+    )
+    if fault == "wrong_hash":
+        proof = proof.model_copy(update={"block_hash": "0x" + "f" * 64})
+    elif fault == "wrong_owner":
+        observed = observed.model_copy(
+            update={
+                "identity": p.identity.model_copy(
+                    update={"owner_coldkey": p.identity.subnet_owner_coldkey},
+                )
+            }
+        )
+    elif fault == "wrong_scope":
+        proof = proof.model_copy(update={"hotkeys": (p.policy.collector_hotkey,)})
+    elif fault == "partial":
+        proof = proof.model_copy(update={"hotkeys": ()})
+    read = AsyncMock(return_value=(observed, proof))
+    if fault == "rpc_failure":
+        read.side_effect = TimeoutError()
+    state.chain.get_treasury_managed_activation_observation = read
+    now = datetime.now(UTC)
+    await add_runtime(session, now)
+    monkeypatch.setattr(
+        "ditto.api_server.treasury_activation.verify_public_signature", lambda *_: True
+    )
+    result = await activation_preflight(
+        state,
+        session,
+        TreasuryActivationPreflightRequest(
+            approval=p.approval,
+            expected_policy_digest=p.policy_digest,
+            expected_collector_policy_digest=p.policy.collector_policy_digest,
+            managed_validator_hotkeys=(p.fleet[0].validator_hotkey,),
+        ),
+        now=now,
+    )
+    assert result.fleet_ready_for_proposed_policy is (fault == "none")
+    assert result.required_setter_count == 1
+    assert result.chain_permitted_setter_count == (13 if fault == "none" else None)
+    assert result.weight_effect == "none" and result.can_enforce_weights is False
+    read.assert_awaited_once_with(
+        p.policy, managed_hotkeys=(p.fleet[0].validator_hotkey,)
+    )
+    state.chain.get_treasury_weight_setters.assert_not_awaited()
+    state.chain.get_treasury_dispatch_observation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "timing",
     ["arrived_during_read", "expired_during_read", "future_at_completion"],
 )

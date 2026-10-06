@@ -37,7 +37,10 @@ from ditto_screening_protocol.treasury_approval import (
     verify_policy_approval,
     verify_public_signature,
 )
-from ditto_screening_protocol.treasury_identity import TreasuryDispatchObservation
+from ditto_screening_protocol.treasury_identity import (
+    TreasuryDispatchObservation,
+    TreasuryManagedSetterObservation,
+)
 
 
 def setter_preflight(
@@ -132,6 +135,7 @@ async def activation_preflight(
         )
     )
     authorized: tuple[str, ...] = ()
+    permitted_count: int | None = None
     observation = None
     chain_status: Literal["verified", "unavailable"] = "unavailable"
     reasons: list[TreasuryPreflightBlockReason] = []
@@ -154,7 +158,28 @@ async def activation_preflight(
         combined_read = getattr(
             state.chain, "get_treasury_activation_observation", None
         )
-        if callable(combined_read):
+        managed_read = getattr(
+            state.chain, "get_treasury_managed_activation_observation", None
+        )
+        if required and callable(managed_read):
+            raw_observed, raw_proof = await managed_read(
+                policy, managed_hotkeys=required
+            )
+            observed = TreasuryDispatchObservation.model_validate(raw_observed)
+            TreasuryLedgerPin(
+                policy=policy, policy_digest=policy.digest, identity=observed.identity
+            )
+            stage = "setter_roster"
+            proof = TreasuryManagedSetterObservation.model_validate(raw_proof)
+            if proof.block_hash != observed.finalized_block_hash or not set(
+                proof.hotkeys
+            ).issubset(required):
+                raise ValueError(
+                    "managed permission proof differs from requested scope"
+                )
+            keys = proof.hotkeys
+            permitted_count = proof.permitted_count
+        elif callable(combined_read):
             raw_observed, keys = await combined_read(policy)
             observed = TreasuryDispatchObservation.model_validate(raw_observed)
         else:
@@ -165,11 +190,13 @@ async def activation_preflight(
             policy=policy, policy_digest=policy.digest, identity=observed.identity
         )
         stage = "setter_roster"
-        if not callable(combined_read):
+        if not (required and callable(managed_read)) and not callable(combined_read):
             keys = await state.chain.get_treasury_weight_setters(
                 policy, block_hash=observed.finalized_block_hash
             )
         authorized = TypeAdapter(tuple[Address, ...]).validate_python(keys)
+        if permitted_count is None:
+            permitted_count = len(authorized)
         if (
             not authorized
             or len(set(authorized)) != len(authorized)
@@ -252,7 +279,7 @@ async def activation_preflight(
         observation=observation,
         required_setter_count=len(required) if required else None,
         managed_validator_hotkeys=required,
-        chain_permitted_setter_count=len(authorized) if observation else None,
+        chain_permitted_setter_count=permitted_count if observation else None,
         setters=setters,
         truncated=truncated,
         fleet_ready_for_proposed_policy=not reasons,

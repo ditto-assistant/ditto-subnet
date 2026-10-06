@@ -430,9 +430,54 @@ class ChainClient:
         async with self._treasury_reader() as substrate:
             return await read_treasury_dispatch_observation(substrate, policy)
 
+    async def get_treasury_managed_weight_setters(
+        self,
+        policy: TreasuryEmissionPolicy,
+        *,
+        block_hash: str,
+        managed_hotkeys: tuple[str, ...],
+    ):
+        from ditto_screening_protocol.treasury_identity import (
+            read_finalized_managed_weight_setters,
+        )
+
+        async with self._treasury_reader(setters=True) as substrate:
+            return await read_finalized_managed_weight_setters(
+                substrate,
+                policy,
+                block_hash=block_hash,
+                managed_hotkeys=managed_hotkeys,
+            )
+
     async def get_treasury_activation_observation(self, policy: TreasuryEmissionPolicy):
+        observed, keys, _ = await self._treasury_activation_observation(policy)
+        return observed, keys
+
+    async def get_treasury_managed_activation_observation(
+        self, policy: TreasuryEmissionPolicy, *, managed_hotkeys: tuple[str, ...]
+    ):
+        from ditto_screening_protocol.treasury_identity import (
+            TreasuryManagedSetterObservation,
+        )
+
+        observed, keys, count = await self._treasury_activation_observation(
+            policy, managed_hotkeys=managed_hotkeys
+        )
+        return observed, TreasuryManagedSetterObservation(
+            block_hash=observed.finalized_block_hash,
+            hotkeys=keys,
+            permitted_count=count,
+        )
+
+    async def _treasury_activation_observation(
+        self,
+        policy: TreasuryEmissionPolicy,
+        *,
+        managed_hotkeys: tuple[str, ...] | None = None,
+    ):
         """One request-local connection and exact hash; two unchanged read windows."""
         from ditto_screening_protocol.treasury_identity import (
+            read_finalized_managed_weight_setters,
             read_finalized_weight_setters,
             read_treasury_dispatch_observation,
         )
@@ -465,11 +510,21 @@ class ChainClient:
                 # eight-second deadline. Keep that window, but reuse only this
                 # request's exact-hash metadata/transport, never permissions.
                 deadline.reschedule(now + 8)
-                keys = await read_finalized_weight_setters(
-                    trace, policy, block_hash=observed.finalized_block_hash
-                )
+                if managed_hotkeys is None:
+                    keys = await read_finalized_weight_setters(
+                        trace, policy, block_hash=observed.finalized_block_hash
+                    )
+                    count = len(keys)
+                else:
+                    proof = await read_finalized_managed_weight_setters(
+                        trace,
+                        policy,
+                        block_hash=observed.finalized_block_hash,
+                        managed_hotkeys=managed_hotkeys,
+                    )
+                    keys, count = proof.hotkeys, proof.permitted_count
                 trace.step = "connection_close"
-                return observed, keys
+                return observed, keys, count
         except TimeoutError as error:
             raise ChainTreasuryActivationReadError(
                 stage, ChainTreasuryReadTimeoutError(trace.step)

@@ -229,6 +229,74 @@ async def test_producer_binds_real_approval_complete_roster_and_epoch(session):
 
 
 @pytest.mark.parametrize(
+    "fault", ["none", "permission_lost", "wrong_hash", "partial", "wrong_scope"]
+)
+async def test_producer_and_dispatch_use_fresh_exact_managed_permission_scope(
+    session, fault
+):
+    from ditto_screening_protocol.treasury_identity import (
+        TreasuryManagedSetterObservation,
+    )
+
+    p = pin()
+    now = datetime.now(UTC)
+    await add_runtime(session, now)
+    state = app_state(p)
+    proof = TreasuryManagedSetterObservation(
+        block_hash=p.identity.finalized_block_hash,
+        permitted_count=13,
+        hotkeys=(p.fleet[0].validator_hotkey,),
+    )
+    if fault == "wrong_hash":
+        proof = proof.model_copy(update={"block_hash": "0x" + "f" * 64})
+    elif fault == "partial":
+        proof = proof.model_copy(update={"hotkeys": ()})
+    elif fault == "wrong_scope":
+        proof = proof.model_copy(update={"hotkeys": (p.policy.collector_hotkey,)})
+    scoped = AsyncMock(return_value=proof)
+    if fault == "permission_lost":
+        scoped.side_effect = ValueError("managed setter lost current permission")
+    state.chain.get_treasury_managed_weight_setters = scoped
+    shadow = TreasuryLedgerPin(
+        policy=p.policy, policy_digest=p.policy_digest, identity=p.identity
+    )
+    schedule = SimpleNamespace(
+        subnet_epoch_index=p.epoch_index,
+        last_epoch_block=p.first_block,
+        block=p.pinned_block,
+        block_hash=p.pinned_block_hash,
+    )
+
+    async def producer():
+        return await enforcing_pin_from_observation(
+            state, session, shadow, schedule, now=now
+        )
+
+    async def dispatch():
+        await require_enforcing_requester(
+            session,
+            p,
+            p.fleet[0].validator_hotkey,
+            now=now,
+            app_state=state,
+        )
+
+    for action in (producer, dispatch):
+        if fault == "none":
+            await action()
+        else:
+            with pytest.raises(ValueError):
+                await action()
+    assert scoped.await_count == 2
+    for call in scoped.await_args_list:
+        assert call.kwargs == {
+            "block_hash": p.identity.finalized_block_hash,
+            "managed_hotkeys": (p.fleet[0].validator_hotkey,),
+        }
+    state.chain.get_treasury_weight_setters.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
     "fault",
     [
         "none",

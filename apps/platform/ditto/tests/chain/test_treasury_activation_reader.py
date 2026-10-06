@@ -15,6 +15,7 @@ from ditto.tests.chain.test_client import make_chain_config
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("managed_scope", [False, True])
 @pytest.mark.parametrize(
     "fault",
     [
@@ -31,7 +32,7 @@ from ditto.tests.chain.test_client import make_chain_config
     ],
 )
 async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
-    monkeypatch, fault
+    monkeypatch, fault, managed_scope
 ):
     import async_substrate_interface
 
@@ -130,10 +131,21 @@ async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
     monkeypatch.setattr(async_substrate_interface, "AsyncSubstrateInterface", Reader)
     monkeypatch.setattr("ditto.chain.client.asyncio.timeout", Window)
     chain = ChainClient(make_chain_config())
+
+    async def invoke():
+        if managed_scope:
+            observed, proof = await chain.get_treasury_managed_activation_observation(
+                p.policy, managed_hotkeys=(p.fleet[0].validator_hotkey,)
+            )
+            assert proof.block_hash == observed.finalized_block_hash
+            assert proof.permitted_count == 1
+            return observed, proof.hotkeys
+        return await chain.get_treasury_activation_observation(p.policy)
+
     if fault == "none":
         # Separate requests always fetch fresh authorization again.
         for _ in range(2):
-            observed, keys = await chain.get_treasury_activation_observation(p.policy)
+            observed, keys = await invoke()
             assert observed.identity == p.identity
             assert keys == (p.fleet[0].validator_hotkey,)
         assert windows == [8, 8, 8, 8]
@@ -143,7 +155,7 @@ async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
         assert cancelled == []
     else:
         with pytest.raises(ChainTreasuryActivationReadError) as refused:
-            await chain.get_treasury_activation_observation(p.policy)
+            await invoke()
         identity_fault = fault in {
             "connection",
             "epoch_storage",
