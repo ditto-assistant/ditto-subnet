@@ -8699,6 +8699,9 @@ class ScoreAuditEntry(Base):
     __table_args__ = (
         UniqueConstraint("entry_hash", name="score_audit_log_entry_hash_key"),
         Index("score_audit_log_agent_id_idx", "agent_id"),
+        # Admission probes filter one exact event string per agent; see the
+        # 2026_10_06 migration of the same name.
+        Index("score_audit_log_event_agent_idx", "event", "agent_id"),
     )
 
 
