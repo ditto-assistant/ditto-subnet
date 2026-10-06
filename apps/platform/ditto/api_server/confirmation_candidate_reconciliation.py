@@ -145,9 +145,14 @@ async def _quorum_median_rows(
     )
     median_keys = (
         select(rank.c.agent_id, rank.c.bench_version, rank.c.validator_hotkey)
-        .where(
-            and_(
-                rank.c.srn * 2 == rank.c.cnt + 1,
+        .where(rank.c.cnt >= SCORING_QUORUM, rank.c.srn * 2 == rank.c.cnt + 1)
+        .union_all(
+            select(
+                rank.c.agent_id, rank.c.bench_version, rank.c.validator_hotkey
+            ).where(
+                rank.c.cnt >= SCORING_QUORUM,
+                rank.c.cnt % 2 == 0,
+                rank.c.srn * 2 == rank.c.cnt,
             )
         )
         .subquery()
