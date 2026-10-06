@@ -9774,10 +9774,10 @@ CREATE INDEX treasury_public_event_at_idx ON public.treasury_public_events USING
 
 
 --
--- Name: treasury_verified_distribution_once; Type: INDEX; Schema: public; Owner: -
+-- Name: treasury_verified_distribution_source; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX treasury_verified_distribution_once ON public.treasury_verified_receipts USING btree (epoch_index, source_block, bucket_id) WHERE (stage = 'service_distribution'::text);
+CREATE INDEX treasury_verified_distribution_source ON public.treasury_verified_receipts USING btree (epoch_index, source_block, bucket_id) WHERE (stage = 'service_distribution'::text);
 
 
 --

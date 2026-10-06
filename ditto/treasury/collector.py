@@ -323,7 +323,7 @@ def remaining_distribution(
 ) -> tuple[ServiceDistribution, ...]:
     """Conserve each receipt's bucket entitlement after finalized partial legs."""
     expected = {part.bucket_id: part for part in parts}
-    paid = {bucket: 0 for bucket in expected}
+    paid = dict.fromkeys(expected, 0)
     for operation in operations:
         bucket = operation["bucket"]
         amount = operation["amount"]
