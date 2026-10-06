@@ -3,7 +3,7 @@
 import time
 from datetime import UTC, datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import JSON, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
@@ -70,7 +70,15 @@ async def state(session, config, *, enabled):
     if enabled and not runtime.treasury_weight_enforcement:
         blocked = "Gamma is paused"
     if enabled and await session.scalar(
-        select(Transfer.request_id).where(Transfer.status.in_(ACTIVE)).limit(1)
+        select(Transfer.request_id)
+        .where(
+            Transfer.status.in_(ACTIVE)
+            | (
+                Transfer.status.in_(("failed", "refused"))
+                & (Transfer.report.is_(None) | (Transfer.report == JSON.NULL))
+            )
+        )
+        .limit(1)
     ):
         blocked = "A previous transfer or its public receipt is still pending"
     if readiness and await session.scalar(

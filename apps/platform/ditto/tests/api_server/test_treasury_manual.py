@@ -756,3 +756,35 @@ async def test_preview_skips_unapproved_entitlement_before_valid_destination(
     result = await get_preview(session_maker)
     assert result["envelope"]["destination"] == GM
     assert result["envelope"]["request"]["source_block"] == 200
+
+
+@pytest.mark.parametrize("local_status", ["failed", "refused"])
+@pytest.mark.parametrize("sql_null", [False, True])
+async def test_unreported_terminal_dispatch_blocks_new_claim_until_custody_proof(
+    session_maker, local_status, sql_null
+):
+    from sqlalchemy import null
+
+    await seed(session_maker)
+    payload = submission(await get_preview(session_maker))
+    async with session_maker() as session, session.begin():
+        await manual.submit(
+            session, None, payload, "operator@example.com", enabled=True
+        )
+        row = await session.get(
+            TreasuryManualTransfer, payload.envelope.request.request_id
+        )
+        row.status = local_status
+        row.report = null() if sql_null else None
+    with pytest.raises(ValueError, match="previous transfer"):
+        await get_preview(session_maker)
+    proof = ManualReport(
+        collector_policy_digest=POLICY,
+        observed_at=int(time.time()),
+        request_id=payload.envelope.request.request_id,
+        request_digest=payload.envelope.digest,
+        status="refused",
+    )
+    async with session_maker() as session, session.begin():
+        await manual.accept_report(session, None, proof.model_dump())
+    assert (await get_preview(session_maker))["spending_authority"] == "not_queued"
