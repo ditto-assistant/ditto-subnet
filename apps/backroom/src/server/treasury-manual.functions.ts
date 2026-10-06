@@ -26,6 +26,8 @@ export const queueManualTransfer = createServerFn({ method: 'POST' })
   .handler(async ({ context, data }) => {
     noStore()
     return manualTransferSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual', {
-      method: 'POST', body: data, actor: context.session.email,
+      // Validator checks the exact typed amount/destination before adapting
+      // to the existing Platform wire literal; no client-only confirmation.
+      method: 'POST', body: { ...data, confirmation: 'TRANSFER SN118 ALPHA ONCE' }, actor: context.session.email,
     }))
   })

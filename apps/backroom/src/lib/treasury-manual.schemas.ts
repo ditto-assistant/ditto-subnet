@@ -22,7 +22,11 @@ export const manualPreviewSchema = z.object({
 })
 export const manualSubmitSchema = z.object({
   envelope: manualEnvelopeSchema, confirmation_digest: digest,
-  confirmation: z.literal('TRANSFER SN118 ALPHA ONCE'),
+  confirmation: z.string().max(200),
+}).superRefine((data, ctx) => {
+  if (data.confirmation !== manualTransferConfirmation(data.envelope)) {
+    ctx.addIssue({ code: 'custom', path: ['confirmation'], message: 'Type the exact transfer amount and destination confirmation' })
+  }
 })
 export const manualTransferSchema = z.object({
   request_id: z.string().uuid(), envelope: manualEnvelopeSchema,
@@ -66,4 +70,8 @@ export function manualRequestId(): string {
   bytes[8] = (bytes[8] & 0x3f) | 0x80
   const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+export function manualTransferConfirmation(envelope: z.infer<typeof manualEnvelopeSchema>): string {
+  return `TRANSFER ${alphaDisplay(envelope.request.amount_rao)} ALPHA TO ${envelope.request.bucket_id.toUpperCase()} ${envelope.destination}`
 }

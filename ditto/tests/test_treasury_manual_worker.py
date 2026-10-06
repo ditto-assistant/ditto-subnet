@@ -360,3 +360,65 @@ def test_finalized_claim_waits_for_missing_receipt_coordinates_without_resend(
     result = consume_manual(mailbox, j, p, c, "restored", env.model_dump())
     assert result.status == "finalized" and result.settlement.epoch_index == 123
     assert mailbox.acks == ["restored"] and len(c.sent) == 2
+
+
+@pytest.mark.parametrize("claim_state", ["armed", "dispatching", "finalized"])
+def test_policy_change_never_silently_acks_armed_claim(tmp_path, claim_state):
+    p, c, j, env, mailbox = setup(tmp_path)
+    arm_manual_transfer(j, p, c, ManualTransfer(**env.request.model_dump()))
+    if claim_state != "armed":
+        process_manual(mailbox, j, p, c, "initial", env.model_dump())
+    if claim_state == "finalized":
+        tick(j, p, c, "transfer", manual_request_id=env.request.request_id)
+    before, sent = list(j.db.iterdump()), len(c.sent)
+    changed = replace(p, max_distribution_rao=p.max_distribution_rao + 1)
+    with pytest.raises(ValueError, match="requires its pinned custody policy"):
+        consume_manual(mailbox, j, changed, c, "changed", env.model_dump())
+    assert mailbox.acks == [] and list(j.db.iterdump()) == before
+    assert len(c.sent) == sent
+    result = consume_manual(mailbox, j, p, c, "restored", env.model_dump())
+    assert result.request_id == env.request.request_id
+    if claim_state == "armed":
+        assert result.status == "pending" and mailbox.acks == []
+    else:
+        assert result.status == "finalized" and mailbox.acks == ["restored"]
+        assert len(c.sent) == sent
+
+
+@pytest.mark.parametrize(
+    "damage", ["missing", "null", "invalid", "null_json", "bad_json"]
+)
+def test_finalized_claim_with_incomplete_saved_coordinates_stays_pending(
+    tmp_path, damage
+):
+    import json
+
+    p, c, j, env, mailbox = setup(tmp_path)
+    process_manual(mailbox, j, p, c, "initial", env.model_dump())
+    tick(j, p, c, "transfer", manual_request_id=env.request.request_id)
+    row = j.db.execute("SELECT * FROM operations WHERE id=2").fetchone()
+    saved = json.loads(row["settlement_json"])
+    if damage == "missing":
+        del saved["extrinsic_index"]
+    elif damage == "null":
+        saved["extrinsic_hash"] = None
+    elif damage == "invalid":
+        saved["extrinsic_index"] = -1
+    damaged = (
+        "null"
+        if damage == "null_json"
+        else "{"
+        if damage == "bad_json"
+        else json.dumps(saved)
+    )
+    j.db.execute("UPDATE operations SET settlement_json=? WHERE id=2", (damaged,))
+    result = consume_manual(mailbox, j, p, c, "damaged", env.model_dump())
+    assert result.status == "pending" and result.settlement is None
+    assert mailbox.reports[-1]["status"] == "pending" and mailbox.acks == []
+    assert len(c.sent) == 2
+    j.db.execute(
+        "UPDATE operations SET settlement_json=? WHERE id=2", (row["settlement_json"],)
+    )
+    result = consume_manual(mailbox, j, p, c, "restored", env.model_dump())
+    assert result.status == "finalized" and mailbox.acks == ["restored"]
+    assert len(c.sent) == 2

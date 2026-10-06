@@ -126,6 +126,19 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
         mailbox.publish(report.model_dump())
         mailbox.ack(ack_id)
         return report
+    if (
+        envelope.collector_policy_digest != policy.digest
+        and journal.db.execute(
+            "SELECT 1 FROM events WHERE event='manual_transfer_armed' "
+            "AND json_extract(payload,'$.request_id')=?",
+            (request.request_id,),
+        ).fetchone()
+    ):
+        # A changed active policy cannot authorize reconciliation/signing under
+        # an old journal pin. Keep the original message available; restoring the
+        # immutable journal policy permits exact reconciliation, never silently
+        # discard an already-armed claim as if it were an unarmed refusal.
+        raise ValueError("Armed request requires its pinned custody policy")
     if envelope.collector_policy_digest != policy.digest or not any(
         d.bucket_id == request.bucket_id
         and d.allocation_bps > 0
@@ -219,7 +232,6 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
         state = row["state"] if row else None
         settlement = None
         if state == "finalized":
-            saved = json.loads(row["settlement_json"])
             source_hash = chain.substrate.get_block_hash(request.source_block)
             epoch = (
                 chain.query("SubtensorModule", "SubnetEpochIndex", [118], source_hash)
@@ -229,18 +241,24 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
             if source_hash is None or epoch is None:
                 state = "pending"
             else:
-                settlement = ManualSettlement(
-                    epoch_index=epoch,
-                    **{
-                        k: saved[k]
-                        for k in (
-                            "block",
-                            "block_hash",
-                            "extrinsic_index",
-                            "extrinsic_hash",
-                        )
-                    },
-                )
+                try:
+                    saved = json.loads(row["settlement_json"])
+                    settlement = ManualSettlement(
+                        epoch_index=epoch,
+                        **{
+                            k: saved[k]
+                            for k in (
+                                "block",
+                                "block_hash",
+                                "extrinsic_index",
+                                "extrinsic_hash",
+                            )
+                        },
+                    )
+                except (KeyError, TypeError, ValueError):
+                    # Missing/corrupt saved coordinates are not terminal proof.
+                    # Publish pending, retain the old claim and do not ACK/send.
+                    state = "pending"
         report = ManualReport(
             collector_policy_digest=policy.digest,
             observed_at=int(time.time()),

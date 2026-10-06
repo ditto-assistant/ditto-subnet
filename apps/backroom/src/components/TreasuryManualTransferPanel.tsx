@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import type { z } from 'zod'
-import { alphaDisplay, alphaRao, manualRequestId, manualControlSchema, manualPreviewSchema } from '../lib/treasury-manual.schemas'
+import { alphaDisplay, alphaRao, manualRequestId, manualTransferConfirmation, manualControlSchema, manualPreviewSchema } from '../lib/treasury-manual.schemas'
 import { getManualTransfers, previewManualTransfer, queueManualTransfer } from '../server/treasury-manual.functions'
 
 type Control = z.infer<typeof manualControlSchema>
@@ -46,7 +46,7 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
     return () => { clearInterval(timer); ++refreshGeneration.current }
   }, [refresh]) // eslint-disable-line react-hooks/exhaustive-deps
   const invalidate = () => { setPreview(null); setConfirmation(''); setMessage(''); setActionError(''); setRequestId(manualRequestId()) }
-  const expected = preview ? `TRANSFER ${alphaDisplay(preview.envelope.request.amount_rao)} ALPHA TO ${preview.envelope.request.bucket_id.toUpperCase()}` : ''
+  const expected = preview ? manualTransferConfirmation(preview.envelope) : ''
   const blocked = readOnly || busy || !!state.blocked_reason || !!refreshError
   const previewDestinationEnabled = !!preview && state.destinations.some(d =>
     d.bucket_id === preview.envelope.request.bucket_id &&
@@ -80,7 +80,7 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
       <button className={inputClass} disabled={blocked || confirmation !== expected || !previewDestinationEnabled} onClick={async () => {
         setBusy(true); setActionError('')
         try {
-          const result = await queue({ data: { envelope: preview.envelope, confirmation_digest: preview.confirmation_digest, confirmation: 'TRANSFER SN118 ALPHA ONCE' } })
+          const result = await queue({ data: { envelope: preview.envelope, confirmation_digest: preview.confirmation_digest, confirmation } })
           setMessage(`${statusLabels[result.status]}. Track this request below.`); setPreview(null); setConfirmation(''); setRequestId(manualRequestId()); await load()
         } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'Unable to queue transfer; retry this same confirmation') }
         finally { setBusy(false) }
