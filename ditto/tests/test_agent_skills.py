@@ -69,6 +69,20 @@ def test_discord_sweep_routes_to_browser_triage() -> None:
     assert topic_list(topic, "skills") == ["discord-miner-triage"]
 
 
+def test_contributor_backlog_routes_to_review_and_delivery() -> None:
+    for query in (
+        "review all PRs from this contrib and merge or close them",
+        "take ownership of a contributor backlog",
+    ):
+        topic = lookup(query)[0]
+        assert topic["id"] == "contributor-pr-review"
+        assert topic_list(topic, "skills") == [
+            "contributor-pr-review",
+            "github",
+            "ditto-subnet-worktree",
+        ]
+
+
 def test_native_reserved_recovery_routes_to_operator_command() -> None:
     topic = lookup("native evidence recovery")[0]
     assert topic["id"] == "coding-evidence-recovery"
