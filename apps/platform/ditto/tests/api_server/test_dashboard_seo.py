@@ -94,6 +94,7 @@ class TestRobotsAndLlms:
         assert "max-age=30" in body
         assert "nothing here is a sample" in body
         assert "sample ranks" not in body.lower()
+        assert f"- Gamma service treasury: {_ORIGIN}/gamma" in body
 
 
 class TestSitemap:
@@ -101,6 +102,7 @@ class TestSitemap:
         xml = sitemap_xml(_ORIGIN, None)
         assert "<loc>https://platform-api.heyditto.ai/</loc>" in xml
         assert "<loc>https://platform-api.heyditto.ai/leaderboard</loc>" in xml
+        assert "<loc>https://platform-api.heyditto.ai/gamma</loc>" in xml
         assert "<loc>https://platform-api.heyditto.ai/operations/screeners</loc>" in xml
         assert (
             "<loc>https://platform-api.heyditto.ai/operations/validators</loc>" in xml
