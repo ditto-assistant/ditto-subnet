@@ -15,6 +15,7 @@ import stat
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Protocol
+from uuid import UUID
 
 from ditto.treasury.service_allocation import (
     ServiceDestination,
@@ -140,6 +141,214 @@ class TransferCanary:
             raise ValueError("invalid transfer canary bounds")
 
 
+@dataclass(frozen=True)
+class ManualTransfer:
+    """One operator intent narrowing the signed policy, never recurring authority."""
+
+    request_id: str
+    after_operation: int
+    source_block: int
+    bucket_id: str
+    amount_rao: int
+    retained_alpha_rao: int
+    expires_block: int
+    reason: str
+
+    def __post_init__(self):
+        if str(UUID(self.request_id)) != self.request_id:
+            raise ValueError("canonical manual request UUID required")
+        for name in (
+            "after_operation",
+            "source_block",
+            "amount_rao",
+            "retained_alpha_rao",
+            "expires_block",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or not 0 < value < 2**63:
+                raise ValueError("positive bounded manual transfer integer required")
+        if not isinstance(self.bucket_id, str) or not self.bucket_id:
+            raise ValueError("manual bucket required")
+        if not isinstance(self.reason, str) or not 8 <= len(self.reason.strip()) <= 240:
+            raise ValueError("bounded manual operator reason required")
+
+
+def manual_transfer_history(journal, policy):
+    rows = journal.db.execute(
+        "SELECT payload FROM events WHERE event='manual_transfer_armed' ORDER BY id"
+    ).fetchall()
+    if len(rows) > 100000:
+        raise ValueError("manual history exceeds explicit bound")
+    requests = []
+    ids = set()
+    previous = 0
+    for row in rows:
+        body = json.loads(row[0])
+        if body.pop("policy", None) != policy.digest:
+            raise ValueError("manual transfer policy changed")
+        request = ManualTransfer(**body)
+        if request.request_id in ids or request.after_operation <= previous:
+            raise ValueError("manual transfer history reset or reused")
+        if (
+            request.amount_rao > policy.max_distribution_rao
+            or not any(
+                d.bucket_id == request.bucket_id and d.allocation_bps > 0
+                for d in policy.destinations
+            )
+            or request.source_block < policy.start_block
+        ):
+            raise ValueError("manual intent exceeds signed policy")
+        ids.add(request.request_id)
+        previous = request.after_operation
+        requests.append(request)
+    for index, request in enumerate(requests):
+        end = (
+            requests[index + 1].after_operation
+            if index + 1 < len(requests)
+            else 2**63 - 1
+        )
+        claims = journal.db.execute(
+            "SELECT * FROM operations WHERE id>? AND id<=?",
+            (request.after_operation, end),
+        ).fetchall()
+        if len(claims) > 1 or any(
+            c["role"] != "transfer"
+            or c["amount"] != request.amount_rao
+            or c["source_block"] != request.source_block
+            or c["bucket"] != request.bucket_id
+            or c["destination"]
+            != next(
+                d.holding_coldkey
+                for d in policy.destinations
+                if d.bucket_id == request.bucket_id
+            )
+            for c in claims
+        ):
+            raise ValueError("manual transfer claim differs from exact request")
+        if index + 1 < len(requests) and (
+            len(claims) != 1 or claims[0]["state"] != "finalized"
+        ):
+            raise ValueError("manual history advanced without finalized claim")
+    return requests
+
+
+def arm_manual_transfer(journal, policy, chain, requested):
+    """Append a one-claim intent after independently rechecking prior finality.
+
+    No prepare/broadcast occurs. The caller must use the custody operator's
+    authenticated path; request JSON alone is never a network authorization.
+    """
+    if (
+        not isinstance(requested, ManualTransfer)
+        or not policy.enabled
+        or requested.amount_rao > policy.max_distribution_rao
+    ):
+        raise ValueError("manual request requires enabled signed policy")
+    db = journal.db
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        if tuple(db.execute("SELECT digest,role FROM pin").fetchone()) != (
+            policy.digest,
+            "transfer",
+        ):
+            raise ValueError("manual request requires pinned transfer journal")
+        history = manual_transfer_history(journal, policy)
+        for request in history:
+            if request.request_id == requested.request_id:
+                if request != requested:
+                    raise ValueError("manual idempotency key changed")
+                db.execute("COMMIT")
+                return "already_armed"
+        existing = transfer_canary(journal, policy, "transfer", None)
+        maximum = db.execute("SELECT COALESCE(MAX(id),0) FROM operations").fetchone()[0]
+        if (
+            existing is None
+            or maximum != requested.after_operation
+            or maximum != existing.after_operation + 1
+        ):
+            raise ValueError("manual request requires exact spent canary/current claim")
+        operation = db.execute(
+            "SELECT * FROM operations WHERE id=?", (maximum,)
+        ).fetchone()
+        if operation["state"] != "finalized" or operation["role"] != "transfer":
+            raise ValueError(
+                "prior claim must be finalized, not unknown/failed/expired"
+            )
+        observed = chain.observe(policy, "transfer")
+        proof = chain.reconcile(policy, dict(operation), observed)
+        saved = json.loads(operation["settlement_json"])
+        if (
+            not isinstance(proof, Settlement)
+            or proof.status != "finalized"
+            or type(proof.extrinsic_index) is not int
+            or proof.extrinsic_index < 0
+            or any(
+                getattr(proof, key) != saved.get(key)
+                for key in ("block", "block_hash", "extrinsic_index", "extrinsic_hash")
+            )
+            or proof.extrinsic_hash
+            != json.loads(operation["signed_json"])["extrinsic_hash"]
+        ):
+            raise ValueError("prior claim lacks exact independently finalized proof")
+        if not observed.block < requested.expires_block <= observed.block + 7200:
+            raise ValueError("manual request expiry must be within one bounded day")
+        if not any(
+            d.bucket_id == requested.bucket_id and d.allocation_bps > 0
+            for d in policy.destinations
+        ):
+            raise ValueError("manual request bucket is not allocated")
+        if (
+            requested.source_block < policy.start_block
+            or requested.source_block + policy.distribution_interval_blocks
+            > observed.block
+        ):
+            raise ValueError("manual source is not mature approved earnings")
+        if requested.amount_rao + requested.retained_alpha_rao > observed.alpha_rao:
+            raise ValueError("manual request would consume retained stake")
+        row = db.execute(
+            "SELECT * FROM earnings WHERE block=? AND completed=0",
+            (requested.source_block,),
+        ).fetchone()
+        if row is None or row["amount"] > policy.max_distribution_rao:
+            raise ValueError("manual source receipt absent or exceeds signed batch")
+        if chain.earnings(policy, requested.source_block) != FinalizedEarnings(
+            row["amount"], row["block_hash"], row["event_digest"]
+        ):
+            raise ValueError("manual source receipt changed")
+        replacement = canary_replacement(journal, policy)
+        split = plan_service_distribution(
+            attributed_alpha_rao=row["amount"],
+            available_alpha_rao=row["amount"],
+            collector_coldkey=policy.collector_coldkey,
+            destinations=policy.destinations,
+        )
+        remaining = remaining_distribution(
+            split,
+            db.execute(
+                "SELECT bucket,amount,destination,role,state FROM operations "
+                "WHERE source_block=? AND id!=?",
+                (
+                    requested.source_block,
+                    replacement["after_operation"] if replacement else -1,
+                ),
+            ).fetchall(),
+        )
+        if not any(
+            part.bucket_id == requested.bucket_id
+            and part.alpha_rao >= requested.amount_rao
+            for part in remaining
+        ):
+            raise ValueError("manual amount exceeds remaining exact bucket entitlement")
+        journal.event(
+            "manual_transfer_armed", {"policy": policy.digest, **asdict(requested)}
+        )
+        db.execute("COMMIT")
+        return "armed"
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
+
+
 def transfer_canary(
     journal: CollectorJournal,
     policy: CollectorPolicy,
@@ -204,14 +413,21 @@ def transfer_canary(
         journal.event(
             "transfer_canary_armed", {"policy": policy.digest, **asdict(requested)}
         )
+    manual = manual_transfer_history(journal, policy)
+    original_end = manual[0].after_operation if manual else 2**63 - 1
     claimed = db.execute(
-        "SELECT role,amount FROM operations WHERE id>?", (requested.after_operation,)
+        "SELECT role,amount FROM operations WHERE id>? AND id<=?",
+        (requested.after_operation, original_end),
     ).fetchall()
     if len(claimed) > 1 or any(
         r[0] != "transfer" or not 0 < r[1] <= requested.max_alpha_rao for r in claimed
     ):
         raise ValueError("transfer canary claim exceeds approved bound")
-    return requested
+    return (
+        TransferCanary(manual[-1].amount_rao, manual[-1].after_operation)
+        if manual
+        else requested
+    )
 
 
 def canary_replacement(
@@ -511,6 +727,7 @@ def tick(
     role: str,
     *,
     canary: TransferCanary | None = None,
+    manual_request_id: str | None = None,
 ) -> str:
     """Run one bounded recovery/distribution step. Called periodically by systemd.
 
@@ -529,6 +746,11 @@ def tick(
         ):
             raise ValueError("policy or role changed")
         canary = transfer_canary(journal, policy, role, canary)
+        manual = manual_transfer_history(journal, policy)
+        if manual_request_id is not None and (
+            not manual or manual[-1].request_id != manual_request_id
+        ):
+            raise ValueError("manual execute request differs from current exact intent")
         if (
             canary is not None
             and db.execute(
@@ -608,6 +830,13 @@ def tick(
             if observed.uid is None:
                 raise ValueError("collector absent; service transfers halted")
             replacement = canary_replacement(journal, policy)
+            intent = manual[-1] if manual else None
+            if intent is not None and manual_request_id is None:
+                db.execute("COMMIT")
+                return "manual_ready"
+            if intent is not None and observed.block > intent.expires_block:
+                db.execute("COMMIT")
+                return "manual_expired"
             row = db.execute(
                 """SELECT * FROM earnings e WHERE NOT EXISTS
                 (SELECT 1 FROM operations o WHERE o.source_block=e.block
@@ -615,12 +844,14 @@ def tick(
                 AND e.completed=0 AND e.block+?<=? ORDER BY e.block LIMIT 1""",
                 (policy.distribution_interval_blocks, observed.block),
             ).fetchone()
-            if replacement is not None:
+            if replacement is not None or intent is not None:
                 row = db.execute(
                     "SELECT * FROM earnings WHERE block=? AND completed=0 "
                     "AND block+?<=?",
                     (
-                        replacement["source_block"],
+                        intent.source_block
+                        if intent is not None
+                        else replacement["source_block"],
                         policy.distribution_interval_blocks,
                         observed.block,
                     ),
@@ -694,7 +925,20 @@ def tick(
             )
             if sum(part.alpha_rao for part in remaining) > observed.alpha_rao:
                 raise ValueError("remaining attributed earnings exceed finalized stake")
-            part = next(iter(remaining), None)
+            part = next(
+                (
+                    part
+                    for part in remaining
+                    if intent is None or part.bucket_id == intent.bucket_id
+                ),
+                None,
+            )
+            if intent is not None and (
+                part is None or intent.amount_rao > part.alpha_rao
+            ):
+                raise ValueError(
+                    "manual amount exceeds exact remaining bucket entitlement"
+                )
             if part is None:
                 # Earnings remain as audit records; complete batches skip onward.
                 db.execute(
@@ -717,6 +961,10 @@ def tick(
                 # The persisted one-claim guard still stops after this leg;
                 # omitting flags never enables distribution of its remainder.
                 amount = canary.max_alpha_rao
+            if intent is not None:
+                amount = intent.amount_rao
+                if observed.alpha_rao - amount < intent.retained_alpha_rao:
+                    raise ValueError("manual retained stake floor changed")
             if canary is not None:
                 journal.event(
                     "canary_receipt_reserved",

@@ -12,7 +12,9 @@ from ditto.treasury.activity_export import (
 )
 from ditto.treasury.collector import (
     CollectorJournal,
+    ManualTransfer,
     TransferCanary,
+    arm_manual_transfer,
     replace_failed_canary,
     tick,
 )
@@ -34,6 +36,9 @@ def main() -> None:
     parser.add_argument("--canary-after-operation", type=int)
     parser.add_argument("--replace-failed-canary", action="store_true")
     parser.add_argument("--operator-reason")
+    parser.add_argument("--arm-manual-transfer", type=Path)
+    parser.add_argument("--confirm-manual-request")
+    parser.add_argument("--execute-manual-request")
     args = parser.parse_args()
     canary = None
     if args.canary_max_alpha_rao is not None or args.canary_after_operation is not None:
@@ -55,6 +60,57 @@ def main() -> None:
         except ValueError as error:
             parser.error(str(error))
     policy = load_policy(args.policy, args.policy_sha256)
+    manual = None
+    if (
+        args.arm_manual_transfer
+        or args.confirm_manual_request
+        or args.execute_manual_request
+    ):
+        if (
+            args.role != "transfer"
+            or not args.journal
+            or any(
+                (
+                    args.initialize_journal,
+                    args.watch_only,
+                    args.snapshot_only,
+                    args.export_activity,
+                    canary is not None,
+                    args.replace_failed_canary,
+                )
+            )
+        ):
+            parser.error("manual control requires existing transfer journal only")
+        if args.arm_manual_transfer:
+            if args.execute_manual_request or not args.confirm_manual_request:
+                parser.error(
+                    "manual arming requires exact request digest confirmation "
+                    "and no execute"
+                )
+            import hashlib
+            import os
+            import stat
+
+            from ditto.treasury.collector import canonical
+
+            fd = os.open(args.arm_manual_transfer, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, "rb") as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    parser.error("manual request must be a bounded regular public file")
+                raw = source.read(4097)
+            if len(raw) > 4096:
+                parser.error("manual request exceeds bounded public input")
+            body = json.loads(raw)
+            if (
+                hashlib.sha256(canonical(body).encode()).hexdigest()
+                != args.confirm_manual_request
+            ):
+                parser.error("manual request digest differs from exact confirmation")
+            manual = ManualTransfer(**body)
+        elif args.confirm_manual_request or not args.selector_snapshot:
+            parser.error(
+                "manual execute requires exact request id and durable selector snapshot"
+            )
     if args.replace_failed_canary != (args.operator_reason is not None) or (
         args.replace_failed_canary
         and (canary is None or not 8 <= len(args.operator_reason.strip()) <= 240)
@@ -147,6 +203,18 @@ def main() -> None:
             parser.error("--journal required for signer")
         journal = CollectorJournal(args.journal, policy, args.role)
         try:
+            if manual is not None:
+                result = arm_manual_transfer(journal, policy, chain, manual)
+                print(
+                    json.dumps(
+                        {
+                            "status": result,
+                            "request_id": manual.request_id,
+                            "authority": "one explicit manual claim; not dispatched",
+                        }
+                    )
+                )
+                return
             if args.replace_failed_canary:
                 replace_failed_canary(
                     journal, policy, chain, canary, reason=args.operator_reason
@@ -164,7 +232,13 @@ def main() -> None:
             result = (
                 tick(journal, policy, chain, args.role, canary=canary)
                 if canary is not None
-                else tick(journal, policy, chain, args.role)
+                else tick(
+                    journal,
+                    policy,
+                    chain,
+                    args.role,
+                    manual_request_id=args.execute_manual_request,
+                )
             )
             if args.selector_snapshot is not None:
                 try:
