@@ -127,6 +127,24 @@ async def _get(app: FastAPI, path: str) -> httpx.Response:
 
 @pytest.mark.usefixtures("fake_dist")
 class TestDashboard:
+    async def test_gamma_direct_load_and_refresh_serve_dashboard(self) -> None:
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            first = await client.get("/gamma")
+            refreshed = await client.get("/gamma")
+            conditional = await client.get(
+                "/gamma", headers={"If-None-Match": first.headers.get("etag", "")}
+            )
+        for response in (first, refreshed):
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/html")
+            assert '<div id="root">' in response.text
+        assert conditional.status_code == 304
+        assert conditional.content == b""
+
     async def test_served_at_root_with_injected_wandb_url(self) -> None:
         url = "https://wandb.ai/ditto/ditto-sn118"
         app = create_api_server(

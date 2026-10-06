@@ -162,6 +162,13 @@ CRAWLABLE_PAGES: tuple[tuple[str, str, str, str], ...] = (
 
 CRAWLABLE_PAGES += (
     (
+        "/gamma",
+        "gamma",
+        "Gamma service treasury · Ditto SN118",
+        "Service funding policy and finalized public wallet receipts. "
+        "Chain transfers and confirmed service credits are separate evidence.",
+    ),
+    (
         "/activity",
         "activity",
         "Admin activity · Ditto SN118",
