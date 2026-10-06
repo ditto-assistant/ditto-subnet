@@ -5,6 +5,7 @@ import asyncio
 import httpx
 import pytest
 from fastapi import FastAPI, Response
+from starlette.responses import StreamingResponse
 
 from ditto.api_server.middleware.public_cache import PublicCacheMiddleware
 from ditto.api_server.middleware.sized_gzip import SizedGZipMiddleware
@@ -206,6 +207,47 @@ async def test_failed_background_refresh_backs_off_incoming_pollers(
     assert stale.headers["X-Public-Cache"] == "STALE"
     assert {response.json()["n"] for response in retries} == {1}
     assert calls["stale_fail"] == 2
+
+
+async def test_background_refresh_keeps_stream_open_until_body_is_complete(
+    clock: _Clock,
+) -> None:
+    app = FastAPI()
+    calls = 0
+
+    @app.get("/api/v1/public/stream")
+    async def stream() -> StreamingResponse:
+        nonlocal calls
+        calls += 1
+        value = calls
+
+        async def chunks():
+            yield b'{"n":'
+            await asyncio.sleep(0)
+            yield str(value).encode() + b"}"
+
+        return StreamingResponse(
+            chunks(),
+            media_type="application/json",
+            headers={"Cache-Control": "public, max-age=10, stale-while-revalidate=30"},
+        )
+
+    cache = PublicCacheMiddleware(app, now=clock, disabled=False)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=cache), base_url="http://test"
+    ) as client:
+        headers = {"Accept-Encoding": "identity"}
+        assert (await client.get("/api/v1/public/stream", headers=headers)).json() == {
+            "n": 1
+        }
+        clock.value += 11
+        stale = await client.get("/api/v1/public/stream", headers=headers)
+        assert stale.json() == {"n": 1}
+        await asyncio.wait_for(
+            cache._refreshing["/api/v1/public/stream?|identity"], timeout=1
+        )
+        hit = await client.get("/api/v1/public/stream", headers=headers)
+        assert hit.json() == {"n": 2}
 
 
 async def test_no_store_post_and_non_public_paths_bypass(clock: _Clock) -> None:
