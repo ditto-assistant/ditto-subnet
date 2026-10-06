@@ -56,11 +56,9 @@ def _index_state(bind) -> bool | None:  # noqa: ANN001 -- alembic bind
 def _run_concurrently(bind, statement: str, what: str) -> None:  # noqa: ANN001
     """Run one ``CONCURRENTLY`` statement, retrying lock contention.
 
-    Only the initial ``SHARE UPDATE EXCLUSIVE`` acquisition is subject to
-    ``lock_timeout``; the build itself is never cut short. ``autovacuum`` is the
-    usual holder of that lock on this table and yields to us on its own, so
-    the retry here is the same bounded backoff the column helpers use, not a
-    long wait.
+    A concurrent build can also time out waiting for older writers/snapshots
+    after committing an INVALID catalog entry. Creation therefore uses the
+    state-aware loop below, not a blind retry of ``IF NOT EXISTS``.
     """
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
@@ -81,31 +79,45 @@ def _run_concurrently(bind, statement: str, what: str) -> None:  # noqa: ANN001
             time.sleep(delay)
 
 
+def _ensure_valid_index(bind) -> None:  # noqa: ANN001 -- alembic bind
+    # Re-read after EVERY failed statement. CREATE can leave an invalid index,
+    # and DROP can complete some of its phases before a later wait times out.
+    # Neither result can be treated as the pre-attempt state on the next try.
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            state = _index_state(bind)
+            if state is True:
+                return
+            if state is False:
+                log.warning("%s is INVALID; rebuilding", INDEX_NAME)
+                bind.exec_driver_sql(f"DROP INDEX CONCURRENTLY IF EXISTS {INDEX_NAME}")
+            bind.exec_driver_sql(
+                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {INDEX_NAME} "
+                "ON score_audit_log (event, agent_id)"
+            )
+            if _index_state(bind) is not True:
+                raise RuntimeError(
+                    f"{INDEX_NAME} did not come up valid; re-run the migration"
+                )
+            return
+        except exc.DBAPIError as error:
+            if not is_retryable(error) or attempt == MAX_ATTEMPTS:
+                raise
+            delay = backoff_delay(attempt)
+            log.warning(
+                "build %s: %s on attempt %d/%d; rechecking catalog in %.1fs",
+                INDEX_NAME,
+                sqlstate(error),
+                attempt,
+                MAX_ATTEMPTS,
+                delay,
+            )
+            time.sleep(delay)
+
+
 def upgrade() -> None:
     with op.get_context().autocommit_block():
-        bind = op.get_bind()
-        state = _index_state(bind)
-        if state is False:
-            log.warning(
-                "%s is INVALID from an interrupted build; rebuilding", INDEX_NAME
-            )
-            _run_concurrently(
-                bind,
-                f"DROP INDEX CONCURRENTLY IF EXISTS {INDEX_NAME}",
-                f"drop invalid {INDEX_NAME}",
-            )
-            state = None
-        if state is None:
-            _run_concurrently(
-                bind,
-                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {INDEX_NAME} "
-                "ON score_audit_log (event, agent_id)",
-                f"create {INDEX_NAME}",
-            )
-        if _index_state(bind) is not True:
-            raise RuntimeError(
-                f"{INDEX_NAME} did not come up valid; re-run the migration"
-            )
+        _ensure_valid_index(op.get_bind())
 
 
 def downgrade() -> None:
