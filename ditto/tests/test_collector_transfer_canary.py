@@ -22,7 +22,10 @@ def setup_transfer(tmp_path, *, cap=40, amount=101):
     p, c = policy(), Chain()
     c.observation = replace(c.observation, uid=14)
     c.income = {10: amount}
-    return p, c, open_journal(tmp_path, p, "transfer"), TransferCanary(cap, 0)
+    journal = open_journal(tmp_path, p, "transfer")
+    assert tick(journal, p, c, "transfer") == "observing"
+    assert not c.prepared and not c.sent
+    return p, c, journal, TransferCanary(cap, 0)
 
 
 @pytest.mark.parametrize(

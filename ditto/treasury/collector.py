@@ -449,32 +449,6 @@ def tick(
         else:
             if observed.uid is None:
                 raise ValueError("collector absent; service transfers halted")
-            cursor = db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
-            # Bound archive/RPC work to 32 finalized blocks per invocation.
-            for block in range(cursor + 1, min(observed.block, cursor + 32) + 1):
-                earned = chain.earnings(policy, block)
-                if earned is not None:
-                    if (
-                        not isinstance(earned, FinalizedEarnings)
-                        or type(earned.amount_rao) is not int
-                        or not 0 < earned.amount_rao < 2**63
-                    ):
-                        raise ValueError("invalid finalized emission")
-                    db.execute(
-                        "INSERT INTO earnings(block,amount,block_hash,event_digest) "
-                        "VALUES (?,?,?,?)",
-                        (
-                            block,
-                            earned.amount_rao,
-                            earned.block_hash,
-                            earned.event_digest,
-                        ),
-                    )
-                    journal.event(
-                        "emission_attributed",
-                        {"block": block, "policy": policy.digest, **asdict(earned)},
-                    )
-                db.execute("UPDATE cursor SET block=? WHERE id=1", (block,))
             row = db.execute(
                 """SELECT * FROM earnings e WHERE NOT EXISTS
                 (SELECT 1 FROM operations o WHERE o.source_block=e.block
@@ -483,6 +457,36 @@ def tick(
                 (policy.distribution_interval_blocks, observed.block),
             ).fetchone()
             if not row:
+                cursor = db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
+                # Bound archive/RPC work to 32 finalized blocks per invocation.
+                for block in range(cursor + 1, min(observed.block, cursor + 32) + 1):
+                    earned = chain.earnings(policy, block)
+                    if earned is not None:
+                        if (
+                            not isinstance(earned, FinalizedEarnings)
+                            or type(earned.amount_rao) is not int
+                            or not 0 < earned.amount_rao < 2**63
+                        ):
+                            raise ValueError("invalid finalized emission")
+                        db.execute(
+                            "INSERT INTO earnings"
+                            "(block,amount,block_hash,event_digest) "
+                            "VALUES (?,?,?,?)",
+                            (
+                                block,
+                                earned.amount_rao,
+                                earned.block_hash,
+                                earned.event_digest,
+                            ),
+                        )
+                        journal.event(
+                            "emission_attributed",
+                            {"block": block, "policy": policy.digest, **asdict(earned)},
+                        )
+                    db.execute("UPDATE cursor SET block=? WHERE id=1", (block,))
+                # Commit independently proved history without using the now
+                # stale observation to sign. A following tick observes a fresh
+                # finalized head and prioritizes this durable mature receipt.
                 db.execute("COMMIT")
                 return "observing"
             previous_batch = db.execute(
