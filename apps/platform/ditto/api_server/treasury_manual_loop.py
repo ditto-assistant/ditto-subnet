@@ -118,16 +118,19 @@ class TreasuryManualLoop:
         async with self.state.session_maker() as session, session.begin():
             row = await session.scalar(
                 select(Transfer)
-                .where(Transfer.status == "audit_pending")
+                .where(
+                    Transfer.status == "audit_pending",
+                    Transfer.last_error.is_(None)
+                    | (
+                        Transfer.last_error
+                        != "Finalized receipt proof refused; operator review required"
+                    ),
+                )
                 .order_by(Transfer.created_at)
                 .with_for_update(skip_locked=True)
                 .limit(1)
             )
-            if (
-                row
-                and row.last_error
-                != "Finalized receipt proof refused; operator review required"
-            ):
+            if row:
                 try:
                     # A failed chain read rolls back only this attempt. Nothing
                     # invokes custody or resends funds to repair publication.

@@ -463,6 +463,71 @@ async def test_missing_historical_pin_retries_audit_without_custody_send(
         ).status == "published"
 
 
+async def test_permanently_refused_audit_does_not_starve_later_receipt(
+    session_maker, monkeypatch
+):
+    from ditto.api_server import treasury_manual_loop as module
+
+    await seed(session_maker)
+    first = submission(await get_preview(session_maker))
+    later = submission(await get_preview(session_maker))
+    async with session_maker() as session, session.begin():
+        await manual.submit(session, None, first, "operator@example.com", enabled=True)
+        row = await session.get(
+            TreasuryManualTransfer, first.envelope.request.request_id
+        )
+        row.status = "audit_pending"
+        row.created_at = datetime(2020, 1, 1, tzinfo=UTC)
+        # Historical late reports can leave multiple durable audits. The first
+        # refusal must remain held, while the later independent proof progresses.
+        session.add(
+            TreasuryManualTransfer(
+                request_id=later.envelope.request.request_id,
+                envelope=later.envelope.model_dump(),
+                digest=later.envelope.digest,
+                actor="operator@example.com",
+                status="audit_pending",
+            )
+        )
+    attempts, sent = [], []
+
+    async def audit(_session, _chain, row):
+        attempts.append(row.request_id)
+        if row.request_id == first.envelope.request.request_id:
+            raise ValueError("permanent independent proof refusal")
+        row.status = "published"
+
+    monkeypatch.setattr(module, "publish_audit", audit)
+    loop = module.TreasuryManualLoop(
+        SimpleNamespace(session_maker=session_maker, config=None, chain=None),
+        mailbox=SimpleNamespace(pull=lambda: None, publish=sent.append),
+    )
+    await loop.sweep()
+    await loop.sweep()
+    assert attempts == [
+        first.envelope.request.request_id,
+        later.envelope.request.request_id,
+    ]
+    assert sent == []
+    async with session_maker() as session:
+        refused = await session.get(
+            TreasuryManualTransfer, first.envelope.request.request_id
+        )
+        published = await session.get(
+            TreasuryManualTransfer, later.envelope.request.request_id
+        )
+        assert refused.status == "audit_pending"
+        assert (
+            refused.last_error
+            == "Finalized receipt proof refused; operator review required"
+        )
+        assert published.status == "published"
+    # A refused proof still prevents new spending; bypassing audit starvation
+    # does not erase the held row or grant new transfer authority.
+    with pytest.raises(ValueError, match="previous transfer"):
+        await get_preview(session_maker)
+
+
 async def test_readiness_locks_runtime_before_reading_policy(
     session_maker, monkeypatch
 ):

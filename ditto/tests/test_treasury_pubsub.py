@@ -2,6 +2,7 @@
 
 import base64
 import json
+from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
@@ -68,3 +69,43 @@ def test_malformed_message_ack_failure_is_not_hidden():
     )
     with pytest.raises(TimeoutError, match="delivery unknown"):
         TreasuryMailbox.pull(mailbox)
+
+
+@pytest.mark.parametrize("response", [b"", b"{}"])
+def test_successful_empty_ack_response_is_accepted(response):
+    replies = iter([b'{"access_token":"fixture-token"}', response])
+    calls = []
+
+    def open_request(request, *, timeout):
+        calls.append(request.full_url)
+        assert timeout == 30
+        return BytesIO(next(replies))
+
+    mailbox = TreasuryMailbox(
+        project="fixture-project", topic="manual-topic", subscription="manual-results"
+    )
+    mailbox.opener = SimpleNamespace(open=open_request)
+    mailbox.ack("fixture-ack")
+    assert calls[-1].endswith("subscriptions/manual-results:acknowledge")
+
+
+@pytest.mark.parametrize("response", [b"[]", b"null", b'"not-object"'])
+def test_non_object_ack_response_remains_rejected(response):
+    replies = iter([b'{"access_token":"fixture-token"}', response])
+    mailbox = TreasuryMailbox(
+        project="fixture-project", topic="manual-topic", subscription="manual-results"
+    )
+    mailbox.opener = SimpleNamespace(open=lambda *_a, **_k: BytesIO(next(replies)))
+    with pytest.raises(ValueError, match="object required"):
+        mailbox.ack("fixture-ack")
+
+
+@pytest.mark.parametrize("method", ["publish", "pull"])
+def test_empty_non_ack_response_is_not_silently_accepted(method):
+    replies = iter([b'{"access_token":"fixture-token"}', b""])
+    mailbox = TreasuryMailbox(
+        project="fixture-project", topic="manual-topic", subscription="manual-results"
+    )
+    mailbox.opener = SimpleNamespace(open=lambda *_a, **_k: BytesIO(next(replies)))
+    with pytest.raises(json.JSONDecodeError):
+        mailbox._call(mailbox.subscription, method, {})

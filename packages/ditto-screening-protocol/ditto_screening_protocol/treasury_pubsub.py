@@ -26,11 +26,13 @@ class TreasuryMailbox:
         self.subscription = f"projects/{project}/subscriptions/{subscription}"
         self.opener = build_opener(ProxyHandler({}), NoRedirect)
 
-    def _json(self, request):
+    def _json(self, request, *, allow_empty=False):
         with self.opener.open(request, timeout=30) as response:
             raw = response.read(MAX_BYTES + 1)
         if len(raw) > MAX_BYTES:
             raise ValueError("mailbox response exceeds bound")
+        if not raw and allow_empty:
+            return {}
         body = json.loads(raw)
         if not isinstance(body, dict):
             raise ValueError("mailbox object required")
@@ -55,7 +57,10 @@ class TreasuryMailbox:
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
                 },
-            )
+            ),
+            # Pub/Sub acknowledge may return no response payload. Metadata,
+            # publish and pull must still provide their bounded JSON object.
+            allow_empty=method == "acknowledge",
         )
 
     def publish(self, body):
