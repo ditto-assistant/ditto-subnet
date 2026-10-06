@@ -2333,7 +2333,20 @@ async def list_eligible_ledger(
     elif include_details:
         details_column = Score.details.label("details")
     else:
+        # No details blob is shipped, so the composite stderr cannot be read
+        # back in Python; extract exactly that one key as its own scalar JSON
+        # projection instead. This is the only remaining SQL detoast on this
+        # branch and it is a single small extraction, not a second full-blob
+        # read beside a shipped details column.
         details_column = null().label("details")
+    if details_keys is None and not include_details:
+        stderr_column: ColumnElement[Any] = (
+            Score.details["composite_stderr"]
+            .as_float()
+            .label("stored_composite_stderr")
+        )
+    else:
+        stderr_column = null().label("stored_composite_stderr")
     sketch_columns: tuple[ColumnElement[Any], ...]
     if include_fingerprints:
         sketch_columns = (
@@ -2457,6 +2470,7 @@ async def list_eligible_ledger(
             Score.n,
             winners.c.eligible,
             details_column,
+            stderr_column,
             Score.validator_hotkey,
             Score.signature,
             Score.bench_version,
@@ -2539,19 +2553,25 @@ async def list_eligible_ledger(
         grouped[row.agent_id].append(row)
 
     # The composite stderr was previously a second ``details`` JSON
-    # extraction in SQL, forcing PostgreSQL to detoast the per-case audit blob
-    # a second time per winner (41-45% of measured database statement time on
-    # repeated ledger reads). It is now derived in Python from the details
-    # already fetched — zero additional detoasting, and None exactly when the
-    # blob is absent or was not loaded.
+    # extraction in SQL beside a shipped details column, forcing PostgreSQL to
+    # detoast the per-case audit blob a second time per winner (41-45% of
+    # measured database statement time on repeated ledger reads). When the
+    # blob itself is fetched (``details_keys``/``include_details``), it is
+    # derived here in Python — zero additional detoasting. When the blob is
+    # not shipped, the scalar extraction above remains the only SQL read.
     def _stored_stderr(row: Any) -> float | None:
+        value = row.stored_composite_stderr
+        if value is not None:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            return float(value)
         details = row.details
         if not isinstance(details, dict):
             return None
-        value = details.get("composite_stderr")
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raw = details.get("composite_stderr")
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             return None
-        return float(value)
+        return float(raw)
 
     ledger: list[LedgerRow] = []
     for winner_id in winner_ids:
