@@ -1364,8 +1364,10 @@ describe('Backroom MCP tools', () => {
       })) as { guidance: string }
       expect(help.guidance.length).toBeGreaterThan(entry?.description?.length ?? 0)
       if (tool === 'get_treasury_ledger_readiness') {
-        expect(help.guidance).toContain('enforcement is false')
-        expect(help.guidance).toContain('no chain read')
+        expect(help.guidance).toContain('ledger-serving schedule reader')
+        expect(help.guidance).toContain('writes no pin')
+        expect(help.guidance).toContain('Authority readiness is not proof')
+        expect(help.guidance).toContain('no settings write, transfer or activation')
       }
     }
 

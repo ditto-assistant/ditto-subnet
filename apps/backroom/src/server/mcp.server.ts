@@ -3500,7 +3500,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_treasury_ledger_readiness',
     {
       title: 'Read treasury epoch observation and activation blockers',
-      description: 'Read the configured public shadow proposal separately from the latest stored epoch pin and this Platform process observation status. Includes finalized collector Owner/Uids/Keys evidence, policy and enclosing ledger digests, and bounded blockers for missing, invalid or mismatched evidence. Separately reports the configured proposal’s offline signature status and exact approved public digest. Proposal approval never retroactively approves a stored V1 epoch or its current freshness. Weight effect is none and enforcement is false; this tool performs no chain read, settings write, transfer or activation. Requires backroom:read.',
+      description: 'Read the configured proposal, stored epoch pin and fresh managed-roster authority evidence. When enforcement is configured, independently probes the actual ledger-serving schedule reader with its unchanged deadline and returns bounded status, epoch, block, stored-pin match and failure kind. The schedule probe writes no pin and does not change authority gates. Authority readiness is not proof that a validator received a ledger, submitted weights, earned funds or completed a transfer. Proposal approval never retroactively approves a stored V1 epoch. Weight effect is none; no settings write, transfer or activation. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchTreasuryLedgerReadiness()),

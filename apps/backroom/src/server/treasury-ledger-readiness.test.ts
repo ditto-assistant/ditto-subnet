@@ -19,6 +19,11 @@ const observation = {
   offline_epoch_verified: false,
   weight_effect: 'none',
   can_enforce_weights: false,
+  ledger_schedule_probe_status: 'not_checked',
+  ledger_schedule_probe_epoch: null,
+  ledger_schedule_probe_block: null,
+  ledger_schedule_matches_stored_pin: null,
+  ledger_schedule_failure_kind: null,
 }
 
 afterEach(() => {
@@ -63,9 +68,27 @@ describe('treasury ledger observation boundary', () => {
     const legacy: Partial<typeof observation> = { ...observation }
     delete legacy.proposal_approval_status
     delete legacy.proposal_approved_policy_digest
+    delete legacy.ledger_schedule_probe_status
+    delete legacy.ledger_schedule_probe_epoch
+    delete legacy.ledger_schedule_probe_block
+    delete legacy.ledger_schedule_matches_stored_pin
+    delete legacy.ledger_schedule_failure_kind
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-test-token'
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(legacy)))
     expect(await fetchTreasuryLedgerReadiness()).toEqual(observation)
+  })
+  it('preserves bounded schedule and authority failures through the public service', async () => {
+    const diagnostic = {
+      ...observation,
+      ledger_schedule_probe_status: 'unavailable',
+      ledger_schedule_failure_kind: 'timeout',
+      validation_failure_stage: 'setter_roster',
+      validation_failure_step: 'permit_vector',
+      validation_failure_kind: 'timeout',
+    }
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-test-token'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ...diagnostic, future_secret: 'never publish' })))
+    expect(await fetchTreasuryLedgerReadiness()).toEqual(diagnostic)
   })
   it('preserves known shadow evidence and ignores future fields at every level', async () => {
     const pin = JSON.parse(readFileSync(new URL(
@@ -114,6 +137,9 @@ describe('treasury ledger observation boundary', () => {
     { configured_proposal: {} },
     { stored_shadow_pin: { mode: 'active' } },
     { observer_status: 'future_state' },
+    { ledger_schedule_probe_status: 'future_state' },
+    { ledger_schedule_failure_kind: 'provider secret' },
+    { validation_failure_step: 'provider secret' },
     { blocking_reasons: ['unbounded_new_reason'] },
     { proposal_approval_status: 'verified' },
     { proposal_approved_policy_digest: 'a'.repeat(64) },

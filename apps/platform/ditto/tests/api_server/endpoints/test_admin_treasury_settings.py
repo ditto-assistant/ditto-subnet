@@ -293,8 +293,11 @@ async def test_v2_service_wallets_are_shadow_only_and_v1_history_is_preserved(
 
 @pytest.mark.parametrize("fault", ["none", "wrong_hash", "permission_lost", "timeout"])
 @pytest.mark.parametrize("reader", ["separate", "combined"])
+@pytest.mark.parametrize(
+    "schedule_fault", ["none", "next_epoch", "timeout", "connection"]
+)
 async def test_readiness_proves_current_managed_permission_without_peer_bindings(
-    session, monkeypatch, fault, reader
+    session, monkeypatch, fault, reader, schedule_fault
 ):
     from datetime import UTC, datetime
     from types import SimpleNamespace
@@ -311,6 +314,31 @@ async def test_readiness_proves_current_managed_permission_without_peer_bindings
 
     p = pin()
     state = app_state(p)
+    from ditto.api_server.ledger_pin import LedgerPinMaterializer
+    from ditto.chain.errors import ChainConnectionError
+    from ditto.chain.models import EpochSchedule
+
+    state.ledger_pin_materializer = LedgerPinMaterializer()
+    state.ledger_pin_materializer._load_or_build = AsyncMock()
+    schedule = EpochSchedule(
+        netuid=118,
+        subnet_epoch_index=p.epoch_index + (schedule_fault == "next_epoch"),
+        last_epoch_block=p.first_block,
+        pending_epoch_at=0,
+        tempo=360,
+        blocks_since_last_step=3,
+        block=p.pinned_block,
+        block_hash=p.pinned_block_hash,
+        block_timestamp=1,
+        next_epoch_block=p.first_block + 360,
+    )
+    state.chain.read_epoch_schedule = AsyncMock(return_value=schedule)
+    if schedule_fault == "timeout":
+        state.chain.read_epoch_schedule.side_effect = TimeoutError("provider secret")
+    elif schedule_fault == "connection":
+        state.chain.read_epoch_schedule.side_effect = ChainConnectionError(
+            "provider secret"
+        )
     state.config.treasury_shadow_policy = p.policy
     state.config.treasury_weight_enforcement = True
     await add_runtime(session, datetime.now(UTC))
@@ -361,6 +389,22 @@ async def test_readiness_proves_current_managed_permission_without_peer_bindings
         state.chain.get_treasury_managed_activation_observation = combined
     request = SimpleNamespace(app=SimpleNamespace(state=state))
     result = await get_treasury_ledger_readiness(request, None, session)
+    state.chain.read_epoch_schedule.assert_awaited_once_with(118)
+    state.ledger_pin_materializer._load_or_build.assert_not_awaited()
+    assert "provider secret" not in result.model_dump_json()
+    assert state.ledger_pin_materializer.newest_known is None
+    if schedule_fault in {"none", "next_epoch"}:
+        assert result.ledger_schedule_probe_status == "available"
+        assert result.ledger_schedule_probe_epoch == schedule.subnet_epoch_index
+        assert result.ledger_schedule_probe_block == schedule.block
+        assert result.ledger_schedule_matches_stored_pin is (schedule_fault == "none")
+        assert result.ledger_schedule_failure_kind is None
+    else:
+        assert result.ledger_schedule_probe_status == "unavailable"
+        assert result.ledger_schedule_probe_epoch is None
+        assert result.ledger_schedule_probe_block is None
+        assert result.ledger_schedule_matches_stored_pin is None
+        assert result.ledger_schedule_failure_kind == schedule_fault
     assert result.can_enforce_weights is (fault == "none")
     assert result.fleet_gate == ("ready" if fault == "none" else "not_ready")
     if fault != "none":

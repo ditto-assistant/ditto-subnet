@@ -94,6 +94,33 @@ async def get_treasury_ledger_readiness(
         raise HTTPException(409, "Gamma runtime control is invalid") from None
     row = await latest_pin(session, netuid=state.config.chain.netuid)
     readiness = shadow_readiness(state, row, runtime=config)
+    materializer = getattr(state, "ledger_pin_materializer", None)
+    if readiness.enforcement_configured and materializer is not None:
+        probe = await materializer.inspect_schedule(state)
+        schedule = probe.schedule
+        stored = readiness.stored_enforcing_pin
+        readiness = readiness.model_copy(
+            update={
+                "ledger_schedule_probe_status": "available"
+                if schedule is not None
+                else "unavailable",
+                "ledger_schedule_probe_epoch": schedule.subnet_epoch_index
+                if schedule is not None
+                else None,
+                "ledger_schedule_probe_block": schedule.block
+                if schedule is not None
+                else None,
+                "ledger_schedule_matches_stored_pin": (
+                    stored is not None
+                    and schedule.subnet_epoch_index == stored.epoch_index
+                    and schedule.last_epoch_block == stored.first_block
+                    and schedule.block >= stored.pinned_block
+                )
+                if schedule is not None
+                else None,
+                "ledger_schedule_failure_kind": probe.failure_kind,
+            }
+        )
     if readiness.configured_proposal is None:
         return readiness
     from datetime import UTC, datetime

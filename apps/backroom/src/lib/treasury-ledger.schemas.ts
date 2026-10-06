@@ -89,6 +89,18 @@ export const treasuryLedgerReadinessSchema = z.object({
   offline_epoch_verified: z.boolean().default(false),
   weight_effect: z.literal('none'),
   can_enforce_weights: z.boolean(),
+  ledger_schedule_probe_status: z.enum(['not_checked', 'available', 'unavailable']).default('not_checked'),
+  ledger_schedule_probe_epoch: z.number().int().nonnegative().nullable().default(null),
+  ledger_schedule_probe_block: z.number().int().nonnegative().nullable().default(null),
+  ledger_schedule_matches_stored_pin: z.boolean().nullable().default(null),
+  ledger_schedule_failure_kind: z.enum(['timeout', 'connection', 'reader_unavailable', 'unavailable']).nullable().default(null),
+  validation_failure_stage: z.enum(['fleet_binding', 'identity', 'setter_roster', 'authority']).nullable().optional(),
+  validation_failure_step: z.enum([
+    'connection', 'connection_close', 'finalized_head', 'finalized_height',
+    'canonical_hash', 'genesis_hash', 'epoch_storage', 'collector_storage',
+    'uid_binding', 'permit_vector', 'setter_binding',
+  ]).nullable().optional(),
+  validation_failure_kind: z.enum(['timeout', 'connection', 'invalid_evidence', 'reader_unavailable', 'unavailable']).nullable().optional(),
 }).superRefine((value, context) => {
   if ((value.proposal_approval_status === 'verified') !== (value.proposal_approved_policy_digest !== null)
     || (value.proposal_approval_status === 'verified' && value.configured_proposal === null)) {

@@ -28,7 +28,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -37,7 +37,7 @@ from ditto.api_models import LedgerEntry, LedgerResponse
 from ditto.api_models.validator import ConfirmationSeedAnchorPin
 from ditto.api_server.koth import koth_entries_from_ledger, project_koth
 from ditto.api_server.treasury_shadow import observe_shadow_treasury
-from ditto.chain.errors import ChainError
+from ditto.chain.errors import ChainConnectionError, ChainError, ChainTimeoutError
 from ditto.db.queries.ledger_epochs import (
     LedgerPinDraft,
     get_pin,
@@ -409,6 +409,16 @@ def classify_vector_against_pins(
     return "diverged"
 
 
+@dataclass(frozen=True)
+class LedgerScheduleRead:
+    """One fresh schedule read; fixed labels never contain provider messages."""
+
+    schedule: EpochSchedule | None
+    failure_kind: (
+        Literal["timeout", "connection", "reader_unavailable", "unavailable"] | None
+    ) = None
+
+
 class LedgerPinMaterializer:
     """Single-flight producer of the pin for the chain's current epoch.
 
@@ -433,18 +443,29 @@ class LedgerPinMaterializer:
 
     async def read_schedule(self, app_state: Any) -> EpochSchedule | None:
         """The chain's current epoch position, or ``None`` when unreadable."""
+        return (await self.inspect_schedule(app_state)).schedule
+
+    async def inspect_schedule(self, app_state: Any) -> LedgerScheduleRead:
+        """Read the exact serving clock with its unchanged deadline and no pin write."""
         chain = getattr(app_state, "chain", None)
         if chain is None:
-            return None
+            return LedgerScheduleRead(None, "reader_unavailable")
         netuid = app_state.config.chain.netuid
         try:
             async with asyncio.timeout(self._timeout):
-                return await chain.read_epoch_schedule(netuid)
+                return LedgerScheduleRead(await chain.read_epoch_schedule(netuid))
         except (ChainError, TimeoutError, OSError) as error:
             logger.warning(
                 "epoch schedule unavailable for netuid=%s: %s", netuid, error
             )
-            return None
+            kind: Literal["timeout", "connection", "reader_unavailable", "unavailable"]
+            if isinstance(error, (TimeoutError, ChainTimeoutError)):
+                kind = "timeout"
+            elif isinstance(error, (ChainConnectionError, ConnectionError)):
+                kind = "connection"
+            else:
+                kind = "unavailable"
+            return LedgerScheduleRead(None, kind)
 
     async def ensure(
         self,

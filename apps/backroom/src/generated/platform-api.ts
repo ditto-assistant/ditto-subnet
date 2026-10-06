@@ -33544,6 +33544,20 @@ export interface components {
             latest_stored_epoch_index: number | null;
             /** Latest Stored Ledger Digest */
             latest_stored_ledger_digest: string | null;
+            /** Ledger Schedule Failure Kind */
+            ledger_schedule_failure_kind?: ("timeout" | "connection" | "reader_unavailable" | "unavailable") | null;
+            /** Ledger Schedule Matches Stored Pin */
+            ledger_schedule_matches_stored_pin?: boolean | null;
+            /** Ledger Schedule Probe Block */
+            ledger_schedule_probe_block?: number | null;
+            /** Ledger Schedule Probe Epoch */
+            ledger_schedule_probe_epoch?: number | null;
+            /**
+             * Ledger Schedule Probe Status
+             * @default not_checked
+             * @enum {string}
+             */
+            ledger_schedule_probe_status: "not_checked" | "available" | "unavailable";
             /**
              * Observer Scope
              * @default this_platform_process
