@@ -232,6 +232,10 @@ def manual_transfer_history(journal, policy):
     return requests
 
 
+class ManualIntentRefused(ValueError):
+    """Permanent operator-intent defect, not unavailable settlement evidence."""
+
+
 def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
     """Append a one-claim intent after independently rechecking prior finality.
 
@@ -243,7 +247,7 @@ def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
         or not policy.enabled
         or requested.amount_rao > policy.max_distribution_rao
     ):
-        raise ValueError("manual request requires enabled signed policy")
+        raise ManualIntentRefused("manual request requires enabled signed policy")
     db = journal.db
     db.execute("BEGIN IMMEDIATE" if record else "BEGIN")
     try:
@@ -256,16 +260,16 @@ def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
         for request in history:
             if request.request_id == requested.request_id:
                 if request != requested:
-                    raise ValueError("manual idempotency key changed")
+                    raise ManualIntentRefused("manual idempotency key changed")
                 db.execute("COMMIT")
                 return "already_armed"
         existing = transfer_canary(journal, policy, "transfer", None)
         maximum = db.execute("SELECT COALESCE(MAX(id),0) FROM operations").fetchone()[0]
-        if (
-            existing is None
-            or maximum != requested.after_operation
-            or maximum != existing.after_operation + 1
-        ):
+        if existing is None:
+            raise ValueError("manual request requires a reconciled canary")
+        if maximum != requested.after_operation:
+            raise ManualIntentRefused("manual request requires current exact operation")
+        if maximum != existing.after_operation + 1:
             raise ValueError("manual request requires exact spent canary/current claim")
         operation = db.execute(
             "SELECT * FROM operations WHERE id=?", (maximum,)
@@ -291,12 +295,14 @@ def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
         ):
             raise ValueError("prior claim lacks exact independently finalized proof")
         if not observed.block < requested.expires_block <= observed.block + 7200:
-            raise ValueError("manual request expiry must be within one bounded day")
+            raise ManualIntentRefused(
+                "manual request expiry must be within one bounded day"
+            )
         if not any(
             d.bucket_id == requested.bucket_id and d.allocation_bps > 0
             for d in policy.destinations
         ):
-            raise ValueError("manual request bucket is not allocated")
+            raise ManualIntentRefused("manual request bucket is not allocated")
         if (
             requested.source_block < policy.start_block
             or requested.source_block + policy.distribution_interval_blocks
@@ -304,7 +310,7 @@ def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
         ):
             raise ValueError("manual source is not mature approved earnings")
         if requested.amount_rao + requested.retained_alpha_rao > observed.alpha_rao:
-            raise ValueError("manual request would consume retained stake")
+            raise ManualIntentRefused("manual request would consume retained stake")
         row = db.execute(
             "SELECT * FROM earnings WHERE block=? AND completed=0",
             (requested.source_block,),
@@ -338,7 +344,9 @@ def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
             and part.alpha_rao >= requested.amount_rao
             for part in remaining
         ):
-            raise ValueError("manual amount exceeds remaining exact bucket entitlement")
+            raise ManualIntentRefused(
+                "manual amount exceeds remaining exact bucket entitlement"
+            )
         if record:
             journal.event(
                 "manual_transfer_armed", {"policy": policy.digest, **asdict(requested)}

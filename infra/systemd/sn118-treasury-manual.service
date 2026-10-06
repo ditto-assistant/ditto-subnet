@@ -10,6 +10,7 @@ Type=simple
 User=sn118-collector-transfer
 Group=sn118-collector-transfer
 EnvironmentFile=/etc/sn118-collector/manual/activation.env
+ExecStartPre=/opt/sn118-collector/scripts/check-treasury-manual-mode.sh
 ExecStart=/opt/sn118-collector/.venv/bin/python /opt/sn118-collector/scripts/treasury_manual_worker.py --enabled --policy /etc/sn118-collector/transfer/policy.json --policy-sha256 ${POLICY_SHA256} --journal /var/lib/sn118-collector-transfer/journal.db --project sn118-gamma-custody --request-subscription sn118-manual-requests --report-topic sn118-manual-reports
 Restart=on-failure
 RestartSec=30

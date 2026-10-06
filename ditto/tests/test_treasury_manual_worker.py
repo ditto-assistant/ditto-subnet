@@ -247,3 +247,58 @@ def test_old_finalized_redelivery_does_not_execute_newer_armed_intent(
     assert result.status == "finalized" and result.settlement == prior.settlement
     assert list(j.db.iterdump()) == before and len(c.sent) == 2
     assert mailbox.acks[-1] == "old-redelivery"
+
+
+def test_unreconciled_prior_claim_retries_without_durable_refusal(tmp_path):
+    p, c, j, env, mailbox = setup(tmp_path)
+    j.db.execute("UPDATE operations SET state='dispatching' WHERE id=1")
+    with pytest.raises(ValueError, match="prior claim must be finalized"):
+        consume_manual(mailbox, j, p, c, "unreconciled", env.model_dump())
+    assert mailbox.acks == [] and mailbox.reports == [] and len(c.sent) == 1
+    assert not j.db.execute(
+        "SELECT 1 FROM events WHERE event='manual_mailbox_refused'"
+    ).fetchone()
+    j.db.execute("UPDATE operations SET state='finalized' WHERE id=1")
+    assert (
+        consume_manual(mailbox, j, p, c, "retry", env.model_dump()).status == "pending"
+    )
+    assert (
+        consume_manual(mailbox, j, p, c, "final", env.model_dump()).status
+        == "finalized"
+    )
+    assert mailbox.acks == ["final"] and len(c.sent) == 2
+
+
+@pytest.mark.parametrize("claim_state", ["absent", "dispatching"])
+def test_older_unsettled_intent_cannot_have_a_valid_newer_intent(
+    tmp_path, monkeypatch, claim_state
+):
+    import ditto.treasury.manual_worker as worker
+
+    p, c, j, env, mailbox = setup(tmp_path)
+    if claim_state == "absent":
+        arm_manual_transfer(j, p, c, ManualTransfer(**env.request.model_dump()))
+    else:
+        process_manual(mailbox, j, p, c, "initial", env.model_dump())
+    # Deliberately corrupt history to model the review's impossible predecessor:
+    # valid arm_manual_transfer cannot advance without the old finalized claim.
+    newer = replace(
+        ManualTransfer(**env.request.model_dump()),
+        request_id=str(uuid4()),
+        after_operation=2,
+    )
+    j.event("manual_transfer_armed", {"policy": p.digest, **asdict(newer)})
+    before = list(j.db.iterdump())
+
+    def never_tick(*_args, **_kwargs):
+        pytest.fail("Unverified history must not execute any current intent")
+
+    monkeypatch.setattr(worker, "tick", never_tick)
+    with pytest.raises(
+        ValueError, match="manual history advanced without finalized claim"
+    ):
+        consume_manual(mailbox, j, p, c, "corrupt-history", env.model_dump())
+    assert list(j.db.iterdump()) == before and mailbox.acks == []
+    assert not j.db.execute(
+        "SELECT 1 FROM events WHERE event='manual_mailbox_refused'"
+    ).fetchone()

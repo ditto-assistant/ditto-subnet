@@ -5,6 +5,7 @@ import logging
 import time
 
 from ditto.treasury.collector import (
+    ManualIntentRefused,
     ManualTransfer,
     arm_manual_transfer,
     manual_transfer_readiness,
@@ -136,7 +137,9 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
     manual = ManualTransfer(**request.model_dump())
     try:
         arm_manual_transfer(journal, policy, chain, manual)
-    except ValueError as error:
+    except ManualIntentRefused as error:
+        # Only explicitly permanent request defects are refused. Unavailable
+        # finality/chain/journal evidence remains retryable without an ACK.
         # A malformed/expired/stale request may be refused only before it was
         # armed. An already-armed operation must stay pending for reconciliation.
         if journal.db.execute(

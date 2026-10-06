@@ -101,8 +101,15 @@ not prove a provider purchase or credited GM balance.
    its journal, signed policy and numeric Secret Manager version unchanged.
    Install `sn118-treasury-manual.service`; its reviewed deployment drop-in must
    point to that exact source and existing venv. Keep automatic transfer timers
-   disabled. Create the activation file only after inspecting effective unit
-   configuration and mailbox IAM.
+   **persistently masked**, not merely disabled:
+   `systemctl mask --now sn118-collector@transfer.service sn118-collector@transfer.timer`.
+   Stage `scripts/check-treasury-manual-mode.sh` alongside the reviewed unit;
+   its pre-start guard requires both persistent masks. A later ordinary timer
+   or service start therefore fails without stopping the manual consumer.
+   Create the activation file only after inspecting effective unit configuration,
+   masks and mailbox IAM. Returning to recurring mode requires deliberately
+   stopping manual dispatch, reconciling all outstanding claims, removing manual
+   enablement and then unmasking; do not unmask during manual mode.
 4. Converge Platform with `platform_treasury_manual_enabled=true` and the exact
    project/request topic/report subscription defaults, via the owned deployment
    process. No new Backroom OAuth grant is required for this keyless bridge.
