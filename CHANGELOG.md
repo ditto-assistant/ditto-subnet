@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.355.5 (2026-10-06)
+
+### Bug Fixes
+
+- **dashboard**: Serve direct gamma page requests
+  ([#2763](https://github.com/ditto-assistant/ditto-subnet/pull/2763),
+  [`77a78fe`](https://github.com/ditto-assistant/ditto-subnet/commit/77a78fe5ab4e2e978e21d661b7a81795924a903f))
+
+
 ## v0.355.4 (2026-10-06)
 
 ### Performance Improvements
