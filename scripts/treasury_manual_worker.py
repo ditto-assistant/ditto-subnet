@@ -7,7 +7,7 @@ import time
 
 from ditto.treasury.collector import CollectorJournal, observe_earnings
 from ditto.treasury.collector_chain import PublicCollectorChain, load_policy
-from ditto.treasury.manual_worker import process_manual, publish_readiness
+from ditto.treasury.manual_worker import consume_manual, publish_readiness
 from ditto_screening_protocol.treasury_pubsub import TreasuryMailbox
 
 
@@ -49,7 +49,7 @@ def main():
                     publish_readiness(mailbox, journal, policy, chain)
                     message = mailbox.pull()
                     if message:
-                        process_manual(mailbox, journal, policy, chain, *message)
+                        consume_manual(mailbox, journal, policy, chain, *message)
             except Exception as error:
                 # No payloads, tokens, signed bytes or raw provider errors.
                 print(

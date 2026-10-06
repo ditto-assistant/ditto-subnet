@@ -184,8 +184,17 @@ async def submit(session, config, payload, actor, *, enabled):
     return transfer_result(row)
 
 
+class InvalidManualReport(ValueError):
+    """Permanent wire/provenance refusal; never a chain or database outage."""
+
+
 async def accept_report(session, config, body):
-    report = ManualReport.model_validate(body)
+    from pydantic import ValidationError
+
+    try:
+        report = ManualReport.model_validate(body)
+    except ValidationError as error:
+        raise InvalidManualReport("Invalid custody report contract") from error
     await lock_runtime(session)
     runtime = await treasury_runtime(session, config)
     await lock_manual(session)
@@ -194,12 +203,12 @@ async def accept_report(session, config, body):
             report.collector_policy_digest
             != runtime.treasury_approved_collector_policy_digest
         ):
-            raise ValueError("Custody readiness policy differs")
+            raise InvalidManualReport("Custody readiness policy differs")
         if (
             not report.readiness
             or report.readiness.policy != report.collector_policy_digest
         ):
-            raise ValueError("Custody readiness pin differs")
+            raise InvalidManualReport("Custody readiness pin differs")
         now = int(time.time())
         if not 0 <= now - report.observed_at <= 180:
             return
@@ -217,22 +226,22 @@ async def accept_report(session, config, body):
         or row.digest != report.request_digest
         or row.envelope["collector_policy_digest"] != report.collector_policy_digest
     ):
-        raise ValueError("Unknown or changed custody request")
+        raise InvalidManualReport("Unknown or changed custody request")
     if row.status == "published":
         if report.status != "finalized" or row.report != report.model_dump():
             # observation timestamp alone is not part of immutable settlement.
             prior = ManualReport.model_validate(row.report)
             if prior.settlement != report.settlement or report.status != "finalized":
-                raise ValueError("Published settlement changed")
+                raise InvalidManualReport("Published settlement changed")
         return
     if row.report:
         prior = ManualReport.model_validate(row.report)
         if prior.status in {"finalized", "failed", "refused"}:
             if prior.status != report.status or prior.settlement != report.settlement:
-                raise ValueError("Terminal custody result changed")
+                raise InvalidManualReport("Terminal custody result changed")
             return
     if report.status == "finalized" and report.settlement is None:
-        raise ValueError("Finalized coordinates absent")
+        raise InvalidManualReport("Finalized coordinates absent")
     row.report = report.model_dump()
     row.status = "audit_pending" if report.status == "finalized" else report.status
     row.updated_at = datetime.now(UTC)

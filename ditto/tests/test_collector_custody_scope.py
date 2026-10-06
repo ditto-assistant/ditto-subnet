@@ -121,6 +121,9 @@ class PrivatePlanScope(unittest.TestCase):
                 "change": {"actions": ["create"], "after": after},
             }
         ]
+        plan["planned_values"]["root_module"]["resources"] = [
+            {"address": address} for address in sorted(scope.MAILBOX)
+        ]
         self.assertEqual(scope.validate(plan, project="sn118-gamma-custody"), 1)
         for key, bad in (
             ("topic", "unrelated"),
@@ -135,6 +138,27 @@ class PrivatePlanScope(unittest.TestCase):
         plan["variables"]["enable_manual_mailbox"]["value"] = False
         with self.assertRaises(ValueError):
             scope.validate(plan, project="sn118-gamma-custody")
+
+    def test_mailbox_enabled_intent_requires_complete_planned_graph(self):
+        plan = fixture()
+        plan["variables"].update(
+            {
+                "project": {"value": "sn118-gamma-custody"},
+                "enable_manual_mailbox": {"value": True},
+                "collector_custody_phases": {
+                    "value": {"registration": "sealed", "transfer": "sealed"}
+                },
+                "manual_mailbox_platform_service_account": {
+                    "value": "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com"
+                },
+            }
+        )
+        for addresses in ([], list(scope.MAILBOX)[:7], [next(iter(scope.MAILBOX))] * 8):
+            plan["planned_values"]["root_module"]["resources"] = [
+                {"address": address} for address in addresses
+            ]
+            with self.assertRaisesRegex(ValueError, "mailbox intent and plan differ"):
+                scope.validate(plan, project="sn118-gamma-custody")
 
     def test_accepts_exact_sealed_finney_tls_rule(self):
         self.assertEqual(scope.validate(self.rpc_fixture()), 2)

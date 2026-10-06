@@ -16,6 +16,7 @@ on:
       - 'ditto/tests/test_collector_custody_scope.py'
       - '.github/workflows/infra-plan-apply.yml'
       - 'infra/terraform/tests/collector-custody/**'
+      - 'infra/terraform/tests/gamma-custody/**'
       - 'infra/terraform/tests/collector-backend/**'
       - 'infra/terraform/stacks/gcp-preview/**'
       - '.github/workflows/collector-custody.yml'

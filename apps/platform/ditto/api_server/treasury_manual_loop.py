@@ -11,6 +11,7 @@ from sqlalchemy import select
 from ditto.api_server.treasury_ingress import ReceiptHistoryUnavailable
 from ditto.api_server.treasury_manual import (
     ACTIVE,
+    InvalidManualReport,
     accept_report,
     lock_manual,
     publish_audit,
@@ -57,8 +58,13 @@ class TreasuryManualLoop:
         message = await asyncio.to_thread(self.mailbox.pull)
         if message:
             ack, body = message
-            async with self.state.session_maker() as session, session.begin():
-                await accept_report(session, self.state.config, body)
+            try:
+                async with self.state.session_maker() as session, session.begin():
+                    await accept_report(session, self.state.config, body)
+            except InvalidManualReport:
+                # Permanent contract/provenance rejection rolls back the inbox.
+                # Drop only these bytes, never a valid report on an outage.
+                logger.warning("manual custody report permanently refused")
             # ACK after durable inbox commit, never before independent audit.
             # The audit remains retryable in SQL even after this ACK is lost.
             await asyncio.to_thread(self.mailbox.ack, ack)

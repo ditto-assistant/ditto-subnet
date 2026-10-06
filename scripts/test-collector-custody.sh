@@ -21,6 +21,7 @@ mkdir "$GAMMA"
 cp -RL "$ROOT/infra/terraform/stacks/gcp-gamma-custody/." "$GAMMA/"
 rm "$GAMMA/backend.tf" "$GAMMA/prod.auto.tfvars"
 cp -R "$ROOT/infra/terraform/tests/collector-custody/tests" "$GAMMA/"
+cp "$ROOT/infra/terraform/tests/gamma-custody/tests/"*.tftest.hcl "$GAMMA/tests/"
 sed -i 's/ditto-app-dev/sn118-gamma-custody/g' "$GAMMA/tests/custody.tftest.hcl"
 terraform -chdir="$GAMMA" init -backend=false -input=false -lockfile=readonly
 terraform -chdir="$GAMMA" validate

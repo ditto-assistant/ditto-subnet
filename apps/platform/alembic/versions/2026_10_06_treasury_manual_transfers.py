@@ -46,7 +46,7 @@ def upgrade():
             name="treasury_manual_status",
         ),
         sa.CheckConstraint(
-            "length(digest)=64 AND length(actor) BETWEEN 1 AND 120",
+            "length(digest)=64 AND length(actor) BETWEEN 1 AND 254",
             name="treasury_manual_identity",
         ),
     )

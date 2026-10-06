@@ -8850,7 +8850,7 @@ class TreasuryManualTransfer(Base):
             name="treasury_manual_status",
         ),
         CheckConstraint(
-            "length(digest)=64 AND length(actor) BETWEEN 1 AND 120",
+            "length(digest)=64 AND length(actor) BETWEEN 1 AND 254",
             name="treasury_manual_identity",
         ),
         Index("treasury_manual_unfinished", "status", "created_at"),

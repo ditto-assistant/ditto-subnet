@@ -1,6 +1,7 @@
 """One manual mailbox claim at a time; unknown delivery uses the old journal."""
 
 import json
+import logging
 import time
 
 from ditto.treasury.collector import (
@@ -15,6 +16,63 @@ from ditto_screening_protocol.treasury_manual import (
     ManualReport,
     ManualSettlement,
 )
+
+logger = logging.getLogger(__name__)
+
+
+class InvalidManualRequest(ValueError):
+    """Permanent message refusal; chain/journal failures remain retryable."""
+
+    def __init__(self, message, envelope=None):
+        super().__init__(message)
+        self.envelope = envelope
+
+
+def consume_manual(mailbox, journal, policy, chain, ack_id, body):
+    try:
+        return process_manual(mailbox, journal, policy, chain, ack_id, body)
+    except InvalidManualRequest as error:
+        envelope = error.envelope
+        # An unidentifiable or changed already-bound message cannot become a
+        # report for the original claim. ACK only those invalid bytes, keeping
+        # the original journal and valid redelivery available for reconciliation.
+        bound = (
+            envelope
+            and journal.db.execute(
+                "SELECT 1 FROM events WHERE event IN "
+                "('manual_transfer_armed','manual_mailbox_refused') "
+                "AND json_extract(payload,'$.request_id')=?",
+                (envelope.request.request_id,),
+            ).fetchone()
+        )
+        if envelope is None or bound:
+            logger.warning("invalid manual mailbox message discarded")
+            mailbox.ack(ack_id)
+            return None
+        journal.db.execute("BEGIN IMMEDIATE")
+        try:
+            journal.event(
+                "manual_mailbox_refused",
+                {
+                    "request_id": envelope.request.request_id,
+                    "request_digest": envelope.digest,
+                    "policy": policy.digest,
+                },
+            )
+            journal.db.execute("COMMIT")
+        except BaseException:
+            journal.db.execute("ROLLBACK")
+            raise
+        report = ManualReport(
+            collector_policy_digest=envelope.collector_policy_digest,
+            observed_at=int(time.time()),
+            request_id=envelope.request.request_id,
+            request_digest=envelope.digest,
+            status="refused",
+        )
+        mailbox.publish(report.model_dump())
+        mailbox.ack(ack_id)
+        return report
 
 
 def publish_readiness(mailbox, journal, policy, chain):
@@ -38,15 +96,13 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
     exact request bytes and persists signed bytes before any network submission.
     No exception path creates a replacement claim or resets the journal.
     """
-    envelope = ManualEnvelope.model_validate(body)
+    from pydantic import ValidationError
+
+    try:
+        envelope = ManualEnvelope.model_validate(body)
+    except ValidationError as error:
+        raise InvalidManualRequest("Invalid manual request contract") from error
     request = envelope.request
-    if envelope.collector_policy_digest != policy.digest or not any(
-        d.bucket_id == request.bucket_id
-        and d.allocation_bps > 0
-        and d.holding_coldkey == envelope.destination
-        for d in policy.destinations
-    ):
-        raise ValueError("mailbox request differs from signed custody pin")
     cached = journal.db.execute(
         "SELECT payload FROM events WHERE event='manual_mailbox_refused' "
         "AND json_extract(payload,'$.request_id')=? ORDER BY rowid LIMIT 1",
@@ -54,9 +110,9 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
     ).fetchone()
     if cached:
         if json.loads(cached[0])["request_digest"] != envelope.digest:
-            raise ValueError("Refused mailbox UUID changed")
+            raise InvalidManualRequest("Refused mailbox UUID changed", envelope)
         report = ManualReport(
-            collector_policy_digest=policy.digest,
+            collector_policy_digest=envelope.collector_policy_digest,
             observed_at=int(time.time()),
             request_id=request.request_id,
             request_digest=envelope.digest,
@@ -65,10 +121,19 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
         mailbox.publish(report.model_dump())
         mailbox.ack(ack_id)
         return report
+    if envelope.collector_policy_digest != policy.digest or not any(
+        d.bucket_id == request.bucket_id
+        and d.allocation_bps > 0
+        and d.holding_coldkey == envelope.destination
+        for d in policy.destinations
+    ):
+        raise InvalidManualRequest(
+            "mailbox request differs from signed custody pin", envelope
+        )
     manual = ManualTransfer(**request.model_dump())
     try:
         arm_manual_transfer(journal, policy, chain, manual)
-    except ValueError:
+    except ValueError as error:
         # A malformed/expired/stale request may be refused only before it was
         # armed. An already-armed operation must stay pending for reconciliation.
         if journal.db.execute(
@@ -76,6 +141,17 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
             "AND json_extract(payload,'$.request_id')=?",
             (request.request_id,),
         ).fetchone():
+            from dataclasses import asdict
+
+            saved = journal.db.execute(
+                "SELECT payload FROM events WHERE event='manual_transfer_armed' "
+                "AND json_extract(payload,'$.request_id')=?",
+                (request.request_id,),
+            ).fetchone()
+            if json.loads(saved[0]) != {"policy": policy.digest, **asdict(manual)}:
+                raise InvalidManualRequest(
+                    "Armed mailbox UUID changed", envelope
+                ) from error
             raise
         # Persist refusal before publication/ACK. Otherwise a lost ACK could
         # make an old refused request executable after balances change.

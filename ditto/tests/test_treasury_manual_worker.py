@@ -12,7 +12,11 @@ from ditto.treasury.collector import (
     arm_manual_transfer,
     tick,
 )
-from ditto.treasury.manual_worker import process_manual, publish_readiness
+from ditto.treasury.manual_worker import (
+    consume_manual,
+    process_manual,
+    publish_readiness,
+)
 from ditto.treasury.service_allocation import ServiceDestination
 from ditto_screening_protocol.treasury_manual import ManualEnvelope
 
@@ -159,3 +163,58 @@ def test_refusal_survives_return_ack_failure_and_later_balance_change(tmp_path):
     result = process_manual(mailbox, j, p, c, "ack", env.model_dump())
     assert result.status == "refused" and len(c.sent) == 1
     assert mailbox.acks == ["ack"]
+
+
+@pytest.mark.parametrize("finalized", [False, True])
+def test_expired_armed_redelivery_reconciles_exact_claim(tmp_path, finalized):
+    p, c, j, env, mailbox = setup(tmp_path)
+    c.error = True
+    with pytest.raises(TimeoutError):
+        process_manual(mailbox, j, p, c, "first", env.model_dump())
+    c.observation = replace(c.observation, block=env.request.expires_block + 10)
+    if not finalized:
+        c.settlement = Settlement("pending")
+    result = process_manual(mailbox, j, p, c, "retry", env.model_dump())
+    assert result.status == ("finalized" if finalized else "pending")
+    assert mailbox.acks == (["retry"] if finalized else [])
+    assert len(c.prepared) == len(c.sent) == 2
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("destination", "5" + "b" * 47), ("collector_policy_digest", "b" * 64)],
+)
+def test_poison_unapproved_request_refuses_and_acks_without_send(
+    tmp_path, field, value
+):
+    p, c, j, env, mailbox = setup(tmp_path)
+    body = {**env.model_dump(), field: value}
+    mailbox.fail = True
+    with pytest.raises(TimeoutError):
+        consume_manual(mailbox, j, p, c, "first", body)
+    assert not mailbox.acks
+    mailbox.fail = False
+    result = consume_manual(mailbox, j, p, c, "retry", body)
+    assert result.status == "refused" and mailbox.acks == ["retry"]
+    assert len(c.sent) == 1
+
+
+def test_invalid_contract_and_changed_armed_message_drop_only_invalid_bytes(tmp_path):
+    p, c, j, env, mailbox = setup(tmp_path)
+    consume_manual(mailbox, j, p, c, "malformed", {})
+    assert mailbox.acks == ["malformed"] and mailbox.reports == []
+    c.error = True
+    with pytest.raises(TimeoutError):
+        consume_manual(mailbox, j, p, c, "first", env.model_dump())
+    before = list(j.db.iterdump())
+    changed = env.model_dump()
+    changed["request"]["amount_rao"] += 1
+    consume_manual(mailbox, j, p, c, "changed", changed)
+    assert list(j.db.iterdump()) == before
+    assert mailbox.acks == ["malformed", "changed"]
+    c.settlement = Settlement("pending")
+    assert (
+        consume_manual(mailbox, j, p, c, "original", env.model_dump()).status
+        == "pending"
+    )
+    assert len(c.sent) == 2 and mailbox.reports[-1]["status"] == "pending"

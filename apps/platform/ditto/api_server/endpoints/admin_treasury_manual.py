@@ -62,7 +62,7 @@ async def submit_manual(
     response.headers["Cache-Control"] = "no-store"
     # This is a Backroom asserted staff actor, under the server admin bearer.
     # Browser body actor fields are ignored; Backroom supplies its live session.
-    if not x_admin_actor or not 1 <= len(x_admin_actor) <= 120:
+    if not x_admin_actor or not 1 <= len(x_admin_actor) <= 254:
         raise HTTPException(422, "Backroom operator audit actor required")
     try:
         async with session.begin():

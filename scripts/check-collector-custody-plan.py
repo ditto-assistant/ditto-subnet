@@ -92,6 +92,15 @@ def validate(plan: dict, *, project: str = "ditto-app-dev") -> int:
         )
     ):
         raise ValueError("unapproved manual mailbox intent")
+    planned_mailbox = [
+        item["address"]
+        for item in resources(plan["planned_values"]["root_module"])
+        if item["address"] in MAILBOX
+    ]
+    if len(planned_mailbox) != 8 * int(mailbox) or (
+        mailbox and set(planned_mailbox) != MAILBOX
+    ):
+        raise ValueError("mailbox intent and plan differ")
     if any(
         variables.get(name) != value
         for name, value in {

@@ -481,3 +481,80 @@ async def test_readiness_locks_runtime_before_reading_policy(
     monkeypatch.setattr(manual, "lock_manual", lock_claim)
     await seed(session_maker)
     assert order == ["runtime", "read", "manual"]
+
+
+async def test_long_signed_in_email_is_stored_exactly(app, client, session_maker):
+    from dataclasses import replace
+
+    from ditto.api_server.dependencies import get_session
+
+    token = "manual-test-admin-token-at-least-32-characters"
+    app.state.config = replace(app.state.config, admin_api_token=token)
+    app.state.treasury_manual_loop = SimpleNamespace(enabled=True, last_error=None)
+
+    async def sessions():
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = sessions
+    await seed(session_maker)
+    payload = submission(await get_preview(session_maker)).model_dump()
+    actor = "a" * 64 + "@" + "b" * 60 + ".example.com"
+    response = await client.post(
+        "/api/v1/admin/treasury-manual",
+        headers={"Authorization": f"Bearer {token}", "X-Admin-Actor": actor},
+        json=payload,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["actor"] == actor
+
+
+@pytest.mark.parametrize(
+    "bad_report", [{}, {**report().model_dump(), "collector_policy_digest": "b" * 64}]
+)
+async def test_invalid_report_is_acked_without_poisoning_dispatch(
+    session_maker, monkeypatch, bad_report
+):
+    from ditto.api_server import treasury_manual_loop as module
+
+    await seed(session_maker)
+    payload = submission(await get_preview(session_maker))
+    async with session_maker() as session, session.begin():
+        await manual.submit(
+            session, None, payload, "operator@example.com", enabled=True
+        )
+    sent, acks = [], []
+    mailbox = SimpleNamespace(
+        pull=lambda: ("invalid", bad_report), publish=sent.append, ack=acks.append
+    )
+    loop = module.TreasuryManualLoop(
+        SimpleNamespace(session_maker=session_maker, config=None), mailbox=mailbox
+    )
+    monkeypatch.setattr(module, "treasury_runtime", manual.treasury_runtime)
+    await loop.sweep()
+    assert acks == ["invalid"] and sent == [payload.envelope.model_dump()]
+    async with session_maker() as session:
+        assert (
+            await session.get(
+                TreasuryManualTransfer, payload.envelope.request.request_id
+            )
+        ).status == "dispatched"
+
+
+async def test_inbox_transient_failure_does_not_ack(session_maker, monkeypatch):
+    from ditto.api_server import treasury_manual_loop as module
+
+    async def outage(*_):
+        raise TimeoutError()
+
+    acks = []
+    mailbox = SimpleNamespace(
+        pull=lambda: ("retry", report().model_dump()), ack=acks.append
+    )
+    loop = module.TreasuryManualLoop(
+        SimpleNamespace(session_maker=session_maker, config=None), mailbox=mailbox
+    )
+    monkeypatch.setattr(module, "accept_report", outage)
+    with pytest.raises(TimeoutError):
+        await loop.sweep()
+    assert not acks

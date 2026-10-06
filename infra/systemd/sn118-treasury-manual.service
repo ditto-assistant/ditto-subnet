@@ -2,7 +2,7 @@
 Description=SN118 manual Backroom request consumer (no recurring transfer ticks)
 After=network-online.target
 Wants=network-online.target
-Conflicts=sn118-collector@transfer.service
+Conflicts=sn118-collector@transfer.service sn118-collector@transfer.timer
 ConditionPathExists=/etc/sn118-collector/manual/activation.env
 
 [Service]
