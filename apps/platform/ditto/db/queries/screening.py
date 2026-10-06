@@ -583,9 +583,7 @@ def screening_priority_order(
     else:
         score_counts, last_served = aggregates
         score_count = func.coalesce(score_counts.c.score_count, 0)
-        last_served_at = func.coalesce(
-            last_served.c.last_served_at, Agent.created_at
-        )
+        last_served_at = func.coalesce(last_served.c.last_served_at, Agent.created_at)
         provisional_composite = score_counts.c.provisional_composite
     in_completion_lane = case(
         (score_count >= SCORING_QUORUM - 1, 1),
