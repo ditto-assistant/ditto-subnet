@@ -900,8 +900,8 @@ class TestBoundedFactorMaterialization:
         async def finalized(_session: AsyncSession):
             return rows
 
-        async def quorum(_session, agent_ids, *, bench_versions):
-            del agent_ids, bench_versions
+        async def quorum(_session, agent_ids, *, bench_versions, details_keys=None):
+            del agent_ids, bench_versions, details_keys
             return score_rows
 
         monkeypatch.setattr(
@@ -1042,8 +1042,8 @@ class TestBoundedFactorMaterialization:
         async def finalized(_session: AsyncSession):
             return rows
 
-        async def quorum(_session, agent_ids, *, bench_versions):
-            del agent_ids, bench_versions
+        async def quorum(_session, agent_ids, *, bench_versions, details_keys=None):
+            del agent_ids, bench_versions, details_keys
             return score_rows
 
         monkeypatch.setattr(
@@ -1154,7 +1154,8 @@ class TestBoundedFactorMaterialization:
         async def finalized(_session: AsyncSession):
             return rows
 
-        async def quorum(_session, agent_ids, *, bench_versions):
+        async def quorum(_session, agent_ids, *, bench_versions, details_keys=None):
+            del details_keys
             ids = list(agent_ids)
             assert bench_versions == dict.fromkeys(ids, 9)
             quorum_calls.append(ids)

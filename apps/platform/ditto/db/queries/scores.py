@@ -2794,16 +2794,28 @@ async def quorum_score_rows(
     agent_ids: Sequence[UUID],
     *,
     bench_versions: dict[UUID, int],
+    details_keys: Sequence[str] | None = None,
 ) -> dict[UUID, list[QuorumScoreRow]]:
     """Return every accepted score row backing each authoritative ledger row.
 
     Returns the bounded :class:`QuorumScoreRow` projection rather than ORM
     ``Score`` entities: no ``signature``, ``seed``, ``run_id``, timestamps or
     per-column re-hydration, and the ``details`` JSONB is fetched once as the
-    only remaining payload column.
+    only remaining payload column. Pass ``details_keys`` to project the blob
+    down to exactly the keys the consumer reads (e.g. the efficiency curves'
+    ``token_usage``/``v9_base``/``base_evidence_sha256``); the full blob ships
+    only when the consumer genuinely needs every key.
     """
     if not agent_ids:
         return {}
+    if details_keys is None:
+        details_column = Score.details.label("details")
+    else:
+        pairs: list[ColumnElement[Any]] = []
+        for key in details_keys:
+            pairs.append(literal(key))
+            pairs.append(Score.details[key])
+        details_column = func.jsonb_build_object(*pairs).label("details")
     result = await session.execute(
         select(
             Score.agent_id,
@@ -2811,7 +2823,7 @@ async def quorum_score_rows(
             Score.validator_hotkey,
             Score.composite,
             Score.n,
-            Score.details,
+            details_column,
         )
         .where(
             Score.agent_id.in_(agent_ids),
@@ -2903,6 +2915,45 @@ async def quorum_ledger_proof_rows(
     return out
 
 
+class _ProvisionalScoreView:
+    """The scalar Score fields :func:`list_provisional_ledger` consumes.
+
+    Stands in for an ORM ``Score`` row so the provisional read can stay a
+    scalar projection (the full entity would detoast the per-case audit blob
+    only to discard it) while the median/representative selection code keeps
+    its attribute access.
+    """
+
+    __slots__ = (
+        "composite",
+        "tool_mean",
+        "memory_mean",
+        "median_ms",
+        "n",
+        "run_id",
+        "seed",
+        "validator_hotkey",
+        "signature",
+        "bench_version",
+    )
+
+    def __init__(self, row: Any) -> None:
+        self.composite = row.score_composite
+        self.tool_mean = row.score_tool_mean
+        self.memory_mean = row.score_memory_mean
+        self.median_ms = row.score_median_ms
+        self.n = row.score_n
+        self.run_id = row.score_run_id
+        self.seed = row.score_seed
+        self.validator_hotkey = row.score_validator_hotkey
+        self.signature = row.score_signature
+        self.bench_version = row.score_bench_version
+
+
+def row_score_view(row: Any) -> _ProvisionalScoreView:
+    return _ProvisionalScoreView(row)
+
+
 async def list_provisional_ledger(
     session: AsyncSession,
     *,
@@ -2924,9 +2975,27 @@ async def list_provisional_ledger(
     from ditto.db.queries.benchmark_rollout import active_bench_version
 
     canonical_version = bench_version or await active_bench_version(session)
+    # Scalar projection, not select(Score): the returned LedgerRow carries
+    # details=None (opaque run details are deliberately omitted pre-quorum),
+    # so loading full ORM entities would detoast the large per-case audit
+    # blob for every accepted score and throw it away.
     rows = (
         await session.execute(
-            select(Agent, Score, EvaluationPayment.miner_coldkey)
+            select(
+                Agent,
+                Score.composite.label("score_composite"),
+                Score.tool_mean.label("score_tool_mean"),
+                Score.memory_mean.label("score_memory_mean"),
+                Score.median_ms.label("score_median_ms"),
+                Score.n.label("score_n"),
+                Score.run_id.label("score_run_id"),
+                Score.seed.label("score_seed"),
+                Score.validator_hotkey.label("score_validator_hotkey"),
+                Score.signature.label("score_signature"),
+                Score.bench_version.label("score_bench_version"),
+                Score.generated_at.label("score_generated_at"),
+                EvaluationPayment.miner_coldkey,
+            )
             .join(Score, Score.agent_id == Agent.agent_id)
             .outerjoin(
                 EvaluationPayment,
@@ -2945,11 +3014,12 @@ async def list_provisional_ledger(
         )
     ).all()
 
-    by_agent: dict[UUID, tuple[Agent, str | None, list[Score]]] = {}
-    for agent, score, miner_coldkey in rows:
+    by_agent: dict[UUID, tuple[Agent, str | None, list[Any]]] = {}
+    for row in rows:
+        agent = row[0]
         if agent.agent_id not in by_agent:
-            by_agent[agent.agent_id] = (agent, miner_coldkey, [])
-        by_agent[agent.agent_id][2].append(score)
+            by_agent[agent.agent_id] = (agent, row.miner_coldkey, [])
+        by_agent[agent.agent_id][2].append(row_score_view(row))
 
     candidates: list[tuple[LedgerRow, int]] = []
     for agent, miner_coldkey, scores in by_agent.values():
