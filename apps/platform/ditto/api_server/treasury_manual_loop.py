@@ -68,6 +68,7 @@ class TreasuryManualLoop:
             # ACK after durable inbox commit, never before independent audit.
             # The audit remains retryable in SQL even after this ACK is lost.
             await asyncio.to_thread(self.mailbox.ack, ack)
+        dispatch_id = None
         async with self.state.session_maker() as session, session.begin():
             await lock_runtime(session)
             await lock_manual(session)
@@ -85,17 +86,35 @@ class TreasuryManualLoop:
                     runtime.treasury_approved_collector_policy_digest
                     != row.envelope["collector_policy_digest"]
                 ):
-                    row.status, row.last_error = (
-                        "refused",
-                        "Gamma paused or signed policy changed; dispatch stopped, "
-                        "prior delivery may still settle",
-                    )
+                    self.refuse_dispatch(row)
                 else:
-                    # Publish-before-commit is safe only because custody binds
-                    # exact UUID/body and signed bytes before sending anything.
-                    await asyncio.to_thread(self.mailbox.publish, row.envelope)
-                    row.status = "dispatched"
+                    # Commit BEFORE any external side effect. Lost publication
+                    # ACKs must retain durable ambiguity even after rollback or
+                    # a later pause. A crash before publish stays conservative.
+                    if row.dispatch_attempted_at is None:
+                        row.dispatch_attempted_at = datetime.now(UTC)
+                    dispatch_id = row.request_id
                 row.updated_at = datetime.now(UTC)
+        if dispatch_id:
+            async with self.state.session_maker() as session, session.begin():
+                await lock_runtime(session)
+                await lock_manual(session)
+                row = await session.get(Transfer, dispatch_id)
+                # Another sweep/report may have settled this exact row while
+                # the durable attempt marker was committed. Never republish it.
+                if row and row.status == "queued":
+                    runtime = await treasury_runtime(session, self.state.config)
+                    if not runtime.treasury_weight_enforcement or (
+                        runtime.treasury_approved_collector_policy_digest
+                        != row.envelope["collector_policy_digest"]
+                    ):
+                        self.refuse_dispatch(row)
+                    else:
+                        # Exact UUID/body custody deduplication protects a
+                        # retry after publish succeeds but SQL commit fails.
+                        await asyncio.to_thread(self.mailbox.publish, row.envelope)
+                        row.status = "dispatched"
+                    row.updated_at = datetime.now(UTC)
         async with self.state.session_maker() as session, session.begin():
             row = await session.scalar(
                 select(Transfer)
@@ -123,6 +142,16 @@ class TreasuryManualLoop:
                     row.last_error = (
                         "Finalized receipt proof refused; operator review required"
                     )
+
+    @staticmethod
+    def refuse_dispatch(row):
+        row.status = "refused"
+        row.last_error = (
+            "Gamma paused or signed policy changed; dispatch stopped, "
+            "prior delivery may still settle"
+            if row.dispatch_attempted_at is not None
+            else "Gamma paused or signed policy changed; never dispatched"
+        )
 
     async def run(self):
         while True:

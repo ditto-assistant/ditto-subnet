@@ -28,6 +28,7 @@ def upgrade():
         sa.Column("report", postgresql.JSONB()),
         sa.Column("receipt", postgresql.JSONB()),
         sa.Column("last_error", sa.Text()),
+        sa.Column("dispatch_attempted_at", sa.DateTime(timezone=True)),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

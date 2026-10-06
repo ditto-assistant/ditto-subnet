@@ -5249,6 +5249,7 @@ CREATE TABLE public.treasury_manual_transfers (
     report jsonb,
     receipt jsonb,
     last_error text,
+    dispatch_attempted_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_treasury_manual_transfers_treasury_manual_identity CHECK (((length(digest) = 64) AND ((length(actor) >= 1) AND (length(actor) <= 254)))),

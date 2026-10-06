@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -352,11 +353,19 @@ async def test_queued_request_paused_before_dispatch_is_never_sent(
     await loop.sweep()
     assert sent == []
     async with session_maker() as session:
-        assert (
-            await session.get(
-                TreasuryManualTransfer, payload.envelope.request.request_id
-            )
-        ).status == "refused"
+        row = await session.get(
+            TreasuryManualTransfer, payload.envelope.request.request_id
+        )
+        assert row.status == "refused" and row.dispatch_attempted_at is None
+        assert row.last_error.endswith("never dispatched")
+    runtime.treasury_weight_enforcement = True
+    next_payload = submission(await get_preview(session_maker))
+    async with session_maker() as session, session.begin():
+        await manual.submit(
+            session, None, next_payload, "operator@example.com", enabled=True
+        )
+    await loop.sweep()
+    assert sent == [next_payload.envelope.model_dump()]
 
 
 async def test_disabled_bridge_preserves_reason_with_paused_pending_request(
@@ -692,7 +701,22 @@ async def test_late_finalized_report_after_lost_publish_ack_and_pause_is_audited
         )
     sent, acks, audits = [], [], []
 
+    event_loop = asyncio.get_running_loop()
+
+    async def committed_attempt():
+        # A separate transaction must see the marker before publish can run.
+        async with session_maker() as session:
+            return (
+                await session.get(TreasuryManualTransfer, request_id)
+            ).dispatch_attempted_at
+
     def lost_ack(body):
+        assert (
+            asyncio.run_coroutine_threadsafe(committed_attempt(), event_loop).result(
+                timeout=5
+            )
+            is not None
+        )
         sent.append(body)  # Custody has received this exact claim.
         raise TimeoutError("publication response lost")
 
@@ -709,6 +733,12 @@ async def test_late_finalized_report_after_lost_publish_ack_and_pause_is_audited
     async with session_maker() as session:
         row = await session.get(TreasuryManualTransfer, request_id)
         assert row.status == "refused" and row.report is None
+        assert row.dispatch_attempted_at is not None
+        assert row.last_error.endswith("prior delivery may still settle")
+    runtime.treasury_weight_enforcement = True
+    with pytest.raises(ValueError, match="previous transfer"):
+        await get_preview(session_maker)
+    runtime.treasury_weight_enforcement = False
     body = ManualReport(
         collector_policy_digest=payload.envelope.collector_policy_digest,
         observed_at=int(time.time()),
@@ -775,6 +805,7 @@ async def test_unreported_terminal_dispatch_blocks_new_claim_until_custody_proof
             TreasuryManualTransfer, payload.envelope.request.request_id
         )
         row.status = local_status
+        row.dispatch_attempted_at = datetime.now(UTC)
         row.report = null() if sql_null else None
     with pytest.raises(ValueError, match="previous transfer"):
         await get_preview(session_maker)

@@ -74,7 +74,13 @@ async def state(session, config, *, enabled):
         .where(
             Transfer.status.in_(ACTIVE)
             | (
-                Transfer.status.in_(("failed", "refused"))
+                (
+                    (Transfer.status == "failed")
+                    | (
+                        (Transfer.status == "refused")
+                        & Transfer.dispatch_attempted_at.is_not(None)
+                    )
+                )
                 & (Transfer.report.is_(None) | (Transfer.report == JSON.NULL))
             )
         )

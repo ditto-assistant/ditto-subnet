@@ -6,8 +6,8 @@ task_root=$(mktemp -d)
 task_prefix="sn118-manual-ci-${GITHUB_RUN_ID:-$$}-${GITHUB_RUN_ATTEMPT:-0}"
 [[ "$task_prefix" =~ ^sn118-manual-ci-[0-9]+-[0-9]+$ ]]
 cleanup() {
-  sudo systemctl stop "$task_prefix-manual.service" "$task_prefix-attempt.timer" "$task_prefix@transfer.service" "$task_prefix@transfer.timer" || true
-  sudo rm -f "/run/systemd/system/$task_prefix-manual.service" "/run/systemd/system/$task_prefix@.service" "/run/systemd/system/$task_prefix@.timer" "/run/systemd/system/$task_prefix-attempt.timer"
+  sudo systemctl stop "$task_prefix-manual.service" "$task_prefix-attempt.timer" "$task_prefix-attempt.service" "$task_prefix@transfer.service" "$task_prefix@transfer.timer" || true
+  sudo rm -f "/run/systemd/system/$task_prefix-manual.service" "/run/systemd/system/$task_prefix@.service" "/run/systemd/system/$task_prefix@.timer" "/run/systemd/system/$task_prefix-attempt.timer" "/run/systemd/system/$task_prefix-attempt.service"
   sudo rm -f "/etc/systemd/system/$task_prefix@transfer.service" "/etc/systemd/system/$task_prefix@transfer.timer"
   sudo systemctl daemon-reload
   rm -rf "$task_root"
@@ -31,11 +31,14 @@ guard = Path('scripts/check-treasury-manual-mode.sh').read_text().replace('sn118
 (root / (prefix + '@.service')).write_text(f'[Unit]\nDescription=Harmless transfer probe\n[Service]\nType=simple\nExecStart=/bin/sleep 120\nExecStartPost=/usr/bin/touch {root}/transfer-executed\n')
 timer = Path('infra/systemd/sn118-collector@.timer').read_text().replace('sn118-collector@%i.service', prefix + '@%i.service')
 (root / (prefix + '@.timer')).write_text(timer)
-# Another timer attempts to activate the masked service; systemd may refuse
-# its dependency at start or refuse the service when the timer fires.
-(root / (prefix + '-attempt.timer')).write_text(f'[Timer]\nOnActiveSec=100ms\nAccuracySec=1ms\nUnit={prefix}@transfer.service\n')
+# An unmasked probe service proves the timer actually fires, then attempts
+# the masked transfer service. No production names, keys or transaction code.
+(root / 'attempt.sh').write_text(f'#!/bin/bash\nset -euo pipefail\ntouch {root}/attempt-fired\nif systemctl start {prefix}@transfer.service; then\n  touch {root}/transfer-executed\n  exit 1\nfi\ntouch {root}/attempt-denied\n')
+(root / 'attempt.sh').chmod(0o755)
+(root / (prefix + '-attempt.service')).write_text(f'[Service]\nType=oneshot\nExecStart={root}/attempt.sh\n')
+(root / (prefix + '-attempt.timer')).write_text(f'[Timer]\nOnActiveSec=100ms\nAccuracySec=1ms\nUnit={prefix}-attempt.service\n')
 PY
-for name in "$task_prefix-manual.service" "$task_prefix@.service" "$task_prefix@.timer" "$task_prefix-attempt.timer"; do
+for name in "$task_prefix-manual.service" "$task_prefix@.service" "$task_prefix@.timer" "$task_prefix-attempt.timer" "$task_prefix-attempt.service"; do
   sudo cp "$task_root/$name" /run/systemd/system/
 done
 sudo systemctl daemon-reload
@@ -65,9 +68,9 @@ for suffix in transfer.timer transfer.service; do
   if sudo systemctl start "$task_prefix@$suffix"; then echo 'Masked recurring activation succeeded' >&2; exit 1; fi
   sudo systemctl is-active --quiet "$task_prefix-manual.service"
 done
-if sudo systemctl start "$task_prefix-attempt.timer"; then
-  sleep 1
-fi
+sudo systemctl start "$task_prefix-attempt.timer"
+sleep 1
+[[ -e "$task_root/attempt-fired" && -e "$task_root/attempt-denied" ]]
 sudo systemctl is-active --quiet "$task_prefix-manual.service"
 [[ ! -e "$task_root/transfer-executed" ]]
 printf '%s\n' 'Manual consumer survived both masked starts and attempted timer activation; no transfer executed.'

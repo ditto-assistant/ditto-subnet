@@ -66,6 +66,11 @@ one immutable envelope, including previous claim, source, expiry and reason.
 One pending claim or unpublished receipt blocks a second request. If delivery
 of a queue publish or signer broadcast is unknown, retry uses the original
 UUID/journal and signed bytes; it never creates an automatic replacement.
+The dispatch-attempt timestamp commits before mailbox publication. A request
+refused before that timestamp is guaranteed never attempted and does not block
+another claim after resume. A timestamped attempt remains unresolved after a
+lost publication ACK or later pause until custody supplies a terminal report;
+a crash between reservation and publication is conservatively unresolved.
 An intent expiring after arming stays in custody history and requires recovery.
 
 The default-off Google Pub/Sub bridge uses the attached VM identities, not
