@@ -9,9 +9,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import ValidationError
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.treasury_activation import (
+    TreasuryActivationPreflight,
+    TreasuryActivationPreflightRequest,
+)
 from ditto.api_models.treasury_readiness import TreasuryLedgerReadiness
 from ditto.api_models.treasury_settings import (
     AdminTreasurySettingsRequest,
@@ -50,18 +54,81 @@ async def _latest(session: AsyncSession) -> RevisionRow | None:
     )
 
 
+@router.post("/activation-preflight", response_model=TreasuryActivationPreflight)
+async def get_treasury_activation_preflight(
+    payload: TreasuryActivationPreflightRequest,
+    request: Request,
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> TreasuryActivationPreflight:
+    from datetime import UTC, datetime
+
+    from ditto.api_server.treasury_activation import activation_preflight
+
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return await activation_preflight(
+            request.app.state, session, payload, now=datetime.now(UTC)
+        )
+    except ValueError:
+        raise HTTPException(
+            400,
+            "Invalid public treasury approval or preflight evidence",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+
 @router.get("/ledger-readiness", response_model=TreasuryLedgerReadiness)
 async def get_treasury_ledger_readiness(
     request: Request, _admin: AdminDep, session: SessionDep
 ) -> TreasuryLedgerReadiness:
     state = request.app.state
+    from ditto.api_server.treasury_runtime import treasury_runtime
+
+    try:
+        config = await treasury_runtime(session, state.config)
+    except SQLAlchemyError:
+        raise HTTPException(503, "Gamma runtime control is unavailable") from None
+    except ValueError:
+        raise HTTPException(409, "Gamma runtime control is invalid") from None
     row = await latest_pin(session, netuid=state.config.chain.netuid)
-    readiness = shadow_readiness(state, row)
+    readiness = shadow_readiness(state, row, runtime=config)
+    materializer = getattr(state, "ledger_pin_materializer", None)
+    if readiness.enforcement_configured and materializer is not None:
+        probe = await materializer.inspect_schedule(state)
+        schedule = probe.schedule
+        stored = readiness.stored_enforcing_pin
+        readiness = readiness.model_copy(
+            update={
+                "ledger_schedule_probe_status": "available"
+                if schedule is not None
+                else "unavailable",
+                "ledger_schedule_probe_epoch": schedule.subnet_epoch_index
+                if schedule is not None
+                else None,
+                "ledger_schedule_probe_block": schedule.block
+                if schedule is not None
+                else None,
+                "ledger_schedule_matches_stored_pin": (
+                    stored is not None
+                    and schedule.subnet_epoch_index == stored.epoch_index
+                    and schedule.last_epoch_block == stored.first_block
+                    and schedule.block >= stored.pinned_block
+                )
+                if schedule is not None
+                else None,
+                "ledger_schedule_failure_kind": probe.failure_kind,
+            }
+        )
     if readiness.configured_proposal is None:
         return readiness
     from datetime import UTC, datetime
 
-    from ditto.api_server.treasury_weights import read_treasury_fleet
+    from ditto.api_server.treasury_weights import (
+        current_managed_dispatch_observation,
+        read_treasury_fleet,
+    )
 
     try:
         fleet = await read_treasury_fleet(
@@ -69,6 +136,7 @@ async def get_treasury_ledger_readiness(
             now=datetime.now(UTC),
             policy_digest=readiness.configured_proposal.digest,
             collector_digest=readiness.configured_proposal.collector_policy_digest,
+            required_hotkeys=config.treasury_managed_validator_hotkeys,
         )
     except ValueError:
         return readiness.model_copy(
@@ -79,27 +147,37 @@ async def get_treasury_ledger_readiness(
         )
     pin = readiness.stored_enforcing_pin
     if not readiness.enforcement_configured or pin is None:
-        # Fresh reports alone cannot prove the complete chain-active roster.
+        # Fresh reports alone cannot prove an active epoch for the managed roster.
         return readiness
     from ditto_screening_protocol.treasury_enforcement import (
         require_treasury_weight_authority,
     )
 
+    stage = "fleet_binding"
     try:
-        if fleet != pin.fleet or readiness.proposal_approval_status != "verified":
-            raise ValueError("enforcing pin differs from approved live fleet")
-        observed = await state.chain.get_treasury_dispatch_observation(pin.policy)
-        chain_keys = await state.chain.get_treasury_weight_setters(
-            pin.policy, block_hash=observed.finalized_block_hash
-        )
-        if not chain_keys or not set(chain_keys).issubset(
-            {member.validator_hotkey for member in fleet}
+        if (
+            fleet != pin.fleet
+            or readiness.proposal_approval_status != "verified"
+            or set(config.treasury_managed_validator_hotkeys)
+            != {m.validator_hotkey for m in pin.fleet}
         ):
-            raise ValueError("chain weight-setter roster differs from live fleet")
+            raise ValueError("enforcing pin differs from approved live fleet")
+        if (
+            config.activation_epoch is not None
+            and pin.epoch_index < config.activation_epoch
+        ):
+            raise ValueError("stored pin predates runtime activation")
+        stage = "identity"
+        observed = await current_managed_dispatch_observation(
+            state.chain,
+            pin.policy,
+            managed_hotkeys=config.treasury_managed_validator_hotkeys,
+        )
+        stage = "authority"
         require_treasury_weight_authority(
             pin,
-            expected_policy_digest=state.config.treasury_approved_policy_digest,
-            expected_collector_policy_digest=state.config.treasury_approved_collector_policy_digest,
+            expected_policy_digest=config.treasury_approved_policy_digest,
+            expected_collector_policy_digest=config.treasury_approved_collector_policy_digest,
             local_capability=fleet[0],
             current_identity=observed.identity,
             netuid=state.config.chain.netuid,
@@ -108,7 +186,32 @@ async def get_treasury_ledger_readiness(
             finalized_block=observed.finalized_block,
             finalized_block_hash=observed.finalized_block_hash,
         )
-    except Exception:
+    except Exception as error:
+        from ditto.chain.errors import (
+            ChainConnectionError,
+            ChainTimeoutError,
+            ChainTreasuryActivationReadError,
+            ChainTreasuryReadTimeoutError,
+        )
+
+        if isinstance(error, ChainTreasuryActivationReadError):
+            stage = error.read_stage
+            error = error.read_error
+        step = (
+            error.read_step
+            if isinstance(error, ChainTreasuryReadTimeoutError)
+            else None
+        )
+        if isinstance(error, (TimeoutError, ChainTimeoutError)):
+            kind = "timeout"
+        elif isinstance(error, (ConnectionError, ChainConnectionError)):
+            kind = "connection"
+        elif isinstance(error, ValueError):
+            kind = "invalid_evidence"
+        elif isinstance(error, AttributeError):
+            kind = "reader_unavailable"
+        else:
+            kind = "unavailable"
         return readiness.model_copy(
             update={
                 "fleet_gate": "not_ready",
@@ -116,6 +219,9 @@ async def get_treasury_ledger_readiness(
                     *readiness.blocking_reasons,
                     "enforcing_pin_unverified",
                 ],
+                "validation_failure_stage": stage,
+                "validation_failure_step": step,
+                "validation_failure_kind": kind,
             }
         )
     return readiness.model_copy(
@@ -199,6 +305,21 @@ async def record_treasury_settings(
     _admin: AdminDep,
     session: SessionDep,
 ) -> TreasurySettingsRevision:
+    from ditto.api_server.treasury_runtime import (
+        latest_runtime_row,
+        lock_runtime,
+        runtime_revision,
+    )
+
+    await lock_runtime(session)
+    runtime_row = await latest_runtime_row(session)
+    if runtime_row is not None:
+        try:
+            runtime = runtime_revision(runtime_row)
+        except ValueError:
+            raise HTTPException(409, "Gamma runtime control is invalid") from None
+        if runtime.settings.mode == "enforce":
+            raise HTTPException(409, "Pause Gamma before changing treasury settings")
     latest = await _latest(session)
     current = latest.revision if latest else 0
     if payload.expected_revision != current:

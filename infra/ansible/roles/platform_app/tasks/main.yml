@@ -324,6 +324,31 @@
   no_log: true
   when: secret_screener_controller_api_token | length > 0
 
+- name: Validate backup reader secret references before fetching
+  ansible.builtin.assert:
+    that:
+      - platform_database_backup_secret_project == 'ditto-subnet'
+      - secret_database_backup_reader_access_key_id == 'platform-pg-backup-reader-access-key-id'
+      - secret_database_backup_reader_secret_access_key == 'platform-pg-backup-reader-secret-access-key'
+    quiet: true
+  when: platform_database_backup_reader_enabled | bool
+
+- name: Read the separate backup metadata reader access key
+  ansible.builtin.command:
+    argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_access_key_id }}", "--project={{ platform_database_backup_secret_project }}"]
+  register: platform_backup_reader_access
+  changed_when: false
+  no_log: true
+  when: platform_database_backup_reader_enabled | bool
+
+- name: Read the separate backup metadata reader secret
+  ansible.builtin.command:
+    argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_secret_access_key }}", "--project={{ platform_database_backup_secret_project }}"]
+  register: platform_backup_reader_secret
+  changed_when: false
+  no_log: true
+  when: platform_database_backup_reader_enabled | bool
+
 - name: Read Hippius access key id when miner avatars are configured
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_hippius_access_key_id }} --project={{ gcp_project }}"
   register: platform_hippius_access_key_read
@@ -343,6 +368,25 @@
     platform_secrets: "{{ platform_secrets | combine({'hippius_access_key_id': platform_hippius_access_key_read.stdout, 'hippius_secret_access_key': platform_hippius_secret_key_read.stdout}) }}"
   no_log: true
   when: platform_hippius_bucket | default('') | length > 0
+
+- name: Validate the enabled backup metadata reader before rendering
+  ansible.builtin.assert:
+    that:
+      - platform_backup_reader_access.stdout | trim | length > 0
+      - platform_backup_reader_secret.stdout | trim | length > 0
+      - platform_backup_reader_access.stdout | trim != platform_backup_reader_secret.stdout | trim
+      - platform_backup_reader_access.stdout | trim != (platform_secrets.hippius_access_key_id | default(''))
+      - platform_backup_reader_access.stdout | trim != (platform_secrets.hippius_secret_access_key | default(''))
+      - platform_backup_reader_secret.stdout | trim != (platform_secrets.hippius_access_key_id | default(''))
+      - platform_backup_reader_secret.stdout | trim != (platform_secrets.hippius_secret_access_key | default(''))
+  no_log: true
+  when: platform_database_backup_reader_enabled | bool
+
+- name: Fold only the read-only backup pair into Platform config
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'database_backup_reader_access': platform_backup_reader_access.stdout, 'database_backup_reader_secret': platform_backup_reader_secret.stdout}) }}"
+  no_log: true
+  when: platform_database_backup_reader_enabled | bool
 
 - name: Read Backblaze key id when the trace mirror is configured
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_backblaze_key_id }} --project={{ gcp_project }}"

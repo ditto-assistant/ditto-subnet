@@ -20,7 +20,7 @@ was performed during these checks.
 
 | Runtime | Implemented | Remaining gate |
 | --- | --- | --- |
-| Platform/Pylon/validator | Offline approval, immutable V2 epoch policy/identity/fleet, service-before-burn weights, queued-dispatch fence | Deployment mounts/bindings, complete finalized setter roster, drain/adoption, financial activation |
+| Platform/Pylon/validator | Offline approval, immutable V2 epoch policy/identity/fleet, service-before-burn weights, queued-dispatch fence | Deployment mounts/bindings, audited managed setter roster with current finalized permission, drain/adoption, financial activation |
 | Registration signer | Bounded `register_limit`, separate delegate, durable budget/finality claims | Identity/custody/IAM/reserves, exact installed runtime/policy and action-time authorization |
 | Transfer signer | Attributed liquid earnings and same-hotkey SN118 bucket transfers with durable claims | Self auto-stake route, limits/reserves, durable journals and separate activation |
 | Receipt ingress | Independent historical policy/ledger/finalized chain/effect verification and atomic publication | Exact deployed ingress and bounded accepted receipt |
@@ -54,7 +54,7 @@ The pending inputs remain the existing question; do not repeat or invent them.
 - Separate GCE signer hosts/service accounts and fixed numerical delegate
   secret versions; exact collector policy/digest/offline approval and historical
   Platform revision/checksum/emission approval/digest.
-- Complete finalized permitted setter roster, every validator/Pylon runtime,
+- Explicit operator-selected managed setter roster, each managed validator/Pylon runtime,
   immutable descriptor/image pins, drain owner and rollback epoch boundary.
 
 ### Reserves and custody
@@ -93,7 +93,7 @@ No users/hosts/keys/secrets/grants/timers are created by preparing this package.
 | Registration | `/opt/sn118-collector`, role policy/digest, `sn118-collector@registration.service`/timer | Own journal and own fixed Secret Manager delegate version |
 | Transfer | Same exact runtime, transfer policy/digest, `sn118-collector@transfer.service`/timer | Own journal and own delegate version |
 | Observer | `/opt/sn118-treasury-observer`, `/etc/sn118-treasury-observer/config.json`, root-owned activation.env with `CONFIG_SHA256`, proposed unit | Private queue; separately approved exclusive OAuth credential via `LoadCredential` |
-| Platform/every validator/Pylon | Read-only public approval file and independently pinned digests | Existing identity only; no collector/holding keys |
+| Platform/each managed validator/Pylon | Read-only public approval file and independently pinned digests | Existing identity only; no collector/holding keys |
 
 The observer unit takes only the mounted credential **path** in `--token-file`.
 No token goes in arguments, environment file, unit, packet, screenshot or log.
@@ -295,7 +295,7 @@ These are prepared actions, each requiring separate action-time approval.
 1. Set exact public identities/buckets/payee rules via normal Backroom CAS.
    Retain returned historical revision/checksum. Obtain separate offline
    collector/emission signatures and independently compare all fields/digests.
-2. Install exact public proof/digests on Platform and **every** validator/Pylon.
+2. Install exact public proof/digests on Platform and each configured managed validator/Pylon.
    Config seams: `DITTO_TREASURY_SHADOW_APPROVAL_FILE`,
    `DITTO_TREASURY_APPROVED_POLICY_DIGEST`,
    `DITTO_TREASURY_COLLECTOR_POLICY_DIGEST`; Platform also resolves
@@ -304,16 +304,88 @@ These are prepared actions, each requiring separate action-time approval.
 3. Drain legacy weight work at the agreed epoch boundary. Arm each Pylon
    `DITTO_TREASURY_WEIGHT_ENFORCEMENT=true` fence; cached/new/queued V1 refuses.
    Verify matching capability and fresh signed protocol-30 heartbeats for the
-   complete finalized permitted roster, including stale/rejoining setters.
+   audited managed roster with current finalized permission. Missing or stale
+   managed members refuse; independent validators do not expand this gate.
 4. Only then authorize Platform enforcing producer/new immutable V2 epoch pin.
    Require signed receipt and normalized vectors bound to that pin. No V1
-   fallback, existing shadow epoch rewrite, burn/admission change or subset gate.
+   fallback, existing shadow epoch rewrite or burn/admission change. The immutable
+   pin binds the selected managed roster; this is not a whole-chain adoption claim.
 5. Rollback stops new work, drains/reconciles tasks/claims and preserves journals.
    Never disarm a Pylon fence while V2 epoch/queued V2 work remains. Review next
-   epoch/complete roster; no silent legacy reinterpretation. Drift halts until
+   epoch/configured managed roster; no silent legacy reinterpretation. Drift halts until
    audited rebind, not operator override.
 
 ## Shortest path to visible finalized earnings/distribution/payment
+
+### One-transfer canary
+
+The existing signed collector maximum is an upper bound, not a recommended
+test amount. A transfer-only tick can impose a stricter atomic SN118-alpha
+ceiling without changing the signed policy or initializing another journal:
+
+```bash
+python scripts/treasury_collector.py --role transfer \
+  --policy /etc/sn118-collector/transfer/policy.json \
+  --policy-sha256 <existing-approved-digest> \
+  --journal /var/lib/sn118-collector-transfer/journal.db \
+  --canary-max-alpha-rao 10000000 --canary-after-operation 0
+```
+
+This example caps the single claim at 0.01 SN118 alpha, **not TAO**. The baseline
+must equal the current largest operation ID (zero only for a journal without
+operations), with no unresolved dispatch. The canary is durably armed in the
+existing event history and remains enforced when subsequent commands omit the
+flags. A dispatch consumes the one-claim allowance even if it fails/expires;
+unknown delivery can only reconcile the persisted hash, never sign/send again.
+Keep recurring timers off. Arming or reconciling the canary is not authority to
+route emissions or rewrite a policy.
+
+If a source/bucket entitlement exceeds the canary ceiling, the tick may claim
+only the smaller of its verified unpaid remainder and that ceiling. The original
+source block, hash, event digest and earning amount remain attached to the
+receipt; its transfer amount records only the actual partial payment. The
+earning is not completed until every bucket entitlement is fully paid.
+
+Deploy the matching Platform cumulative-receipt ingress and migration before
+switching the collector to this behavior. Platform independently verifies each
+finalized chain effect and serializes cumulative payments against the exact
+historical bucket entitlement. Replays remain idempotent; changed source
+identity, overpayment and conflicting effects refuse. This does not grant a
+second canary claim or increase the signed source/distribution ceiling.
+
+A later recurring rollout needs
+an independently reviewed, explicitly authorized canary-release transition;
+changing or omitting flags cannot release the canary. Resetting/deleting the
+journal is not an authorized release and destroys custody history. TAO fees
+remain bounded independently by the signed policy.
+
+Before key loading, transfer preparation checks the finalized runtime's
+`InitialMinTransfer` against the conservative integer TAO value returned by
+`SwapRuntimeApi.current_alpha_price`. An undersized amount or unknown quote
+refuses; it never automatically increases an operator-approved amount. Price
+can change before inclusion, so passing this check is not an execution guarantee.
+
+One failed canary may be replaced only through a separate operator-approved
+command, with recurring timers still off:
+
+```bash
+python scripts/treasury_collector.py --role transfer \
+  --policy /etc/sn118-collector/transfer/policy.json \
+  --policy-sha256 <existing-approved-digest> \
+  --journal /var/lib/sn118-collector-transfer/journal.db \
+  --replace-failed-canary --canary-max-alpha-rao 100000000 \
+  --canary-after-operation <failed-operation-id> \
+  --operator-reason 'operator authorized one 0.1 alpha replacement canary'
+```
+
+This command signs and sends nothing. It re-verifies the exact finalized
+transaction, audited v473 `AmountTooLow` inner failure, expired mortality,
+unchanged collector/recipient alpha balances across that block, and the original
+earning. It appends an event without editing the old operation or earning.
+Unknown, expired-but-unincluded, paid, differently failed, or effect-bearing
+claims cannot be replaced. A following tick can reserve only one new capped
+claim against that same receipt. Ordinary invocations retain the replacement
+ceiling; a second replacement is refused. This is not a recurring release.
 
 1. Resolve existing public inputs/custody/limits. Review/authorize exact infra
    and offline-primary ceremonies. Verify finalized non-owner collector and

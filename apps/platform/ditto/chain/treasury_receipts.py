@@ -7,16 +7,20 @@ These reads prove money movement, not custody authorization or provider credits.
 from __future__ import annotations
 
 import hashlib
+import json
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
+from ditto.chain.errors import TreasuryReceiptReadProgress
 from ditto_screening_protocol.collector_receipts import (
-    AUDITED_COLLECTOR_CODE_HASH,
+    AUDITED_COLLECTOR_RECEIPT_HASHES,
     FINNEY_GENESIS,
     chain_uint,
     collector_gross_incentive,
+    collector_receipt_runtime,
     collector_transfer_effect,
     liquid_collector_credit,
 )
@@ -26,6 +30,48 @@ from ditto_screening_protocol.treasury_identity import read_finalized_collector_
 
 def value(raw: Any) -> Any:
     return getattr(raw, "value", raw)
+
+
+class _FinalizedReceiptSnapshot:
+    """Reuse exact finality/hash reads only inside one receipt proof.
+
+    All validation still runs. Storage, identity, events and effects are read
+    normally; no proof or authority is cached across calls/providers. A single
+    finalized head anchors the historical canonical blocks in this invocation.
+    """
+
+    def __init__(self, substrate: Any):
+        self.substrate = substrate
+        self.cache: dict[tuple[str, str], Any] = {}
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.substrate, name)
+
+    async def _read(self, name: str, args: tuple, kwargs: dict) -> Any:
+        key = (name, json.dumps((args, kwargs), sort_keys=True))
+        if key not in self.cache:
+            self.cache[key] = deepcopy(
+                await getattr(self.substrate, name)(*args, **kwargs)
+            )
+        return deepcopy(self.cache[key])
+
+    async def get_chain_finalised_head(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._read("get_chain_finalised_head", args, kwargs)
+
+    async def get_block_number(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._read("get_block_number", args, kwargs)
+
+    async def get_block_hash(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._read("get_block_hash", args, kwargs)
+
+    async def rpc_request(self, method: str, params: list[Any], **kwargs: Any) -> Any:
+        if (
+            method == "state_getStorageHash"
+            and len(params) == 2
+            and params[0] == "0x3a636f6465"
+        ):
+            return await self._read("rpc_request", (method, params), kwargs)
+        return await self.substrate.rpc_request(method, params, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -47,7 +93,7 @@ class TreasuryChainProof:
 async def finalized_block(
     substrate: Any, block: int, genesis: str
 ) -> tuple[str, str, str]:
-    """One fixed canonical hash and same audited parent/post runtime."""
+    """Fixed canonical hashes and audited execution/receipt runtime."""
     head = await substrate.get_chain_finalised_head()
     height = chain_uint(await substrate.get_block_number(head))
     if await substrate.get_block_hash(height) != head or not 0 < block <= height:
@@ -64,12 +110,10 @@ async def finalized_block(
             "state_getStorageHash", ["0x3a636f6465", pinned]
         )
         code = response.get("result") if isinstance(response, dict) else None
-        if code != AUDITED_COLLECTOR_CODE_HASH:
+        if code not in AUDITED_COLLECTOR_RECEIPT_HASHES:
             raise ValueError("receipt runtime is not audited")
         hashes.append(code)
-    if hashes[0] != hashes[1]:
-        raise ValueError("receipt crosses a runtime upgrade")
-    return at, parent, hashes[0]
+    return at, parent, collector_receipt_runtime(*hashes)
 
 
 async def read_treasury_chain_proof(
@@ -84,16 +128,22 @@ async def read_treasury_chain_proof(
     pinned_block: int,
     pinned_block_hash: str,
     pinned_uid: int,
+    progress: TreasuryReceiptReadProgress | None = None,
 ) -> TreasuryChainProof:
+    progress = progress or TreasuryReceiptReadProgress()
+    substrate = _FinalizedReceiptSnapshot(substrate)
+    progress.phase = "pinned_finality"
     pinned_at, _, _ = await finalized_block(
         substrate, pinned_block, policy.genesis_hash
     )
     if pinned_at != pinned_block_hash:
         raise ValueError("historical approved epoch hash is noncanonical")
+    progress.phase = "payment_finality"
     at, _, code = await finalized_block(substrate, selector.block, policy.genesis_hash)
     if at != selector.block_hash:
         raise ValueError("receipt hash changed or is noncanonical")
     # The historical approval identity is reread at its exact canonical pin.
+    progress.phase = "pinned_identity"
     anchor = await read_finalized_collector_pin(
         substrate, policy, first_block=pinned_block, pinned_block=pinned_block
     )
@@ -113,9 +163,11 @@ async def read_treasury_chain_proof(
     source_hash = None
     credit = None
     if selector.source_block is not None:
+        progress.phase = "source_finality"
         source_hash, source_parent, _ = await finalized_block(
             substrate, selector.source_block, policy.genesis_hash
         )
+        progress.phase = "receipt_identity"
         identities = []
         for block in sorted(
             {
@@ -138,11 +190,13 @@ async def read_treasury_chain_proof(
         )
         if any(identity != approved_identity for identity in identities):
             raise ValueError("collector identity drift in receipt history")
+        progress.phase = "source_epoch"
         epoch = chain_uint(
             await read("SubtensorModule", "SubnetEpochIndex", [118], source_hash)
         )
         if epoch != selector.epoch_index:
             raise ValueError("earning differs from historical epoch")
+        progress.phase = "autostake_route"
         for pinned in (source_parent, source_hash):
             route = await read(
                 "SubtensorModule",
@@ -152,6 +206,7 @@ async def read_treasury_chain_proof(
             )
             if route != policy.collector_hotkey:
                 raise ValueError("collector earning route is not liquid SN118")
+        progress.phase = "source_events"
         source_events = await read("System", "Events", [], source_hash)
         if not isinstance(source_events, list):
             raise ValueError("source credit events unavailable")
@@ -173,6 +228,7 @@ async def read_treasury_chain_proof(
     ):
         raise ValueError("vendor payment differs from historical policy epoch")
 
+    progress.phase = "payment_extrinsic"
     raw = await substrate.rpc_request("chain_getBlock", [at])
     raw_block = raw.get("result", {}).get("block", {}) if isinstance(raw, dict) else {}
     encoded = raw_block.get("extrinsics")
@@ -210,6 +266,7 @@ async def read_treasury_chain_proof(
             raise ValueError("receipt proxy real origin differs from sender")
     elif origin != sender:
         raise ValueError("receipt signed origin differs from sender")
+    progress.phase = "payment_events"
     events = await read("System", "Events", [], at)
     if not isinstance(events, list):
         raise ValueError("receipt events unavailable")
@@ -275,6 +332,7 @@ async def read_treasury_chain_proof(
             raise ValueError("TAO transfer differs from exact payee rule")
     else:
         raise ValueError("asset effect decoder is not implemented")
+    progress.phase = "timestamp"
     timestamp = chain_uint(await read("Timestamp", "Now", [], at))
     return TreasuryChainProof(
         source_hash,

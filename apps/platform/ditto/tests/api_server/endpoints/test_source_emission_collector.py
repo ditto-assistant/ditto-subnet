@@ -659,8 +659,9 @@ async def test_v467_transition_recovers_on_the_second_archive(
         )
 
 
-async def test_pending_payout_resolves_before_failing_block_scan(
-    app, client, session_maker, monkeypatch
+@pytest.mark.parametrize("finalized", [202, 15000])
+async def test_pending_payout_resolves_despite_failing_block_scan(
+    app, client, session_maker, monkeypatch, finalized
 ):
     a, b = await _prepare(app, session_maker)
     assert (await _post(client, _signed(a))).status_code == 200
@@ -676,13 +677,18 @@ async def test_pending_payout_resolves_before_failing_block_scan(
         "ditto.api_server.source_emission_collector.read_source_emission_block", scan
     )
     substrate = SimpleNamespace(
-        get_chain_finalised_head=AsyncMock(return_value=_hash(202)),
-        get_block_header=AsyncMock(return_value={"header": {"number": 202}}),
+        get_chain_finalised_head=AsyncMock(return_value=_hash(finalized)),
+        get_block_header=AsyncMock(return_value={"header": {"number": finalized}}),
     )
     with pytest.raises(RuntimeError, match="RPC work limit exceeded"):
         await collector._sweep_provider(substrate)
     scan.assert_awaited_once()
     async with session_maker() as session:
+        from ditto.db.models import SourceEmissionCollectorCursor
+
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        assert cursor.block == 201
+        assert cursor.block_hash == _hash(201)
         aid = UUID(a["provenance"]["champion_agent_id"])
         bid = UUID(b["provenance"]["champion_agent_id"])
         reveals = await get_king_reveal(session, agent_ids=[aid, bid])
@@ -690,3 +696,185 @@ async def test_pending_payout_resolves_before_failing_block_scan(
             _payout(a, 201).block_timestamp, UTC
         )
         assert bid not in reveals or reveals[bid].emission_confirmed_at is None
+
+
+async def test_sweep_widens_batch_and_skips_leading_resolution_in_catchup(
+    app, session_maker, monkeypatch
+):
+    """A deep backlog scans a wide batch; the leading payout resolution, which
+    re-reads the same historical evidence every sweep, waits for the batch end."""
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, _ = await _prepare(app, session_maker)
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        cursor.block = 100
+        cursor.block_hash = _hash(100)
+    collector = _collector(app, session_maker)
+    scanned = []
+
+    async def read(_substrate, *, netuid, block, expected_runtime_code_hash=None):
+        del netuid, expected_runtime_code_hash
+        scanned.append(block)
+        return _observed(a, block)
+
+    resolved = []
+
+    async def resolve(_substrate):
+        resolved.append(True)
+        return 0
+
+    substrate = SimpleNamespace(
+        get_chain_finalised_head=AsyncMock(return_value=_hash(15000)),
+        get_block_header=AsyncMock(return_value={"header": {"number": 15000}}),
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.source_emission_collector.read_source_emission_block",
+        read,
+    )
+    monkeypatch.setattr(collector, "resolve_pending_payouts", resolve)
+    await collector._sweep_provider(substrate)
+    assert scanned == list(range(101, 229))
+    assert len(resolved) == 1
+
+
+async def test_failed_catchup_scan_still_resolves_pending_payouts(
+    app, session_maker, monkeypatch
+):
+    """A mid-batch archive failure during deep catch-up must not starve payout
+    resolution: the resolver cycles pending rows with its own archive reads."""
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, _ = await _prepare(app, session_maker)
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        cursor.block = 100
+        cursor.block_hash = _hash(100)
+    collector = _collector(app, session_maker)
+
+    async def read(_substrate, *, netuid, block, expected_runtime_code_hash=None):  # noqa: ARG001
+        del netuid, block, expected_runtime_code_hash
+        raise RuntimeError("Historical work rate limit exceeded")
+
+    resolved = []
+
+    async def resolve(_substrate):
+        resolved.append(True)
+        return 0
+
+    substrate = SimpleNamespace(
+        get_chain_finalised_head=AsyncMock(return_value=_hash(15000)),
+        get_block_header=AsyncMock(return_value={"header": {"number": 15000}}),
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.source_emission_collector.read_source_emission_block",
+        read,
+    )
+    monkeypatch.setattr(collector, "resolve_pending_payouts", resolve)
+    with pytest.raises(RuntimeError, match="rate limit"):
+        await collector._sweep_provider(substrate)
+    assert len(resolved) == 1
+
+
+async def test_sweep_keeps_steady_state_batch_and_leading_resolution(
+    app, session_maker, monkeypatch
+):
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, _ = await _prepare(app, session_maker)
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        cursor.block = 200
+        cursor.block_hash = _hash(200)
+    collector = _collector(app, session_maker)
+    scanned = []
+
+    async def read(_substrate, *, netuid, block, expected_runtime_code_hash=None):
+        del netuid, expected_runtime_code_hash
+        scanned.append(block)
+        return _observed(a, block)
+
+    resolved = []
+
+    async def resolve(_substrate):
+        resolved.append(True)
+        return 0
+
+    substrate = SimpleNamespace(
+        get_chain_finalised_head=AsyncMock(return_value=_hash(204)),
+        get_block_header=AsyncMock(return_value={"header": {"number": 204}}),
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.source_emission_collector.read_source_emission_block",
+        read,
+    )
+    monkeypatch.setattr(collector, "resolve_pending_payouts", resolve)
+    await collector._sweep_provider(substrate)
+    assert scanned == list(range(201, 205))
+    assert len(resolved) == 2
+
+
+async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatch):
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, _ = await _prepare(app, session_maker)
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        cursor.block = 100
+        cursor.block_hash = _hash(100)
+
+    async def read(_substrate, *, netuid, block, expected_runtime_code_hash=None):
+        del netuid, expected_runtime_code_hash
+        return _observed(a, block)
+
+    collector = _collector(app, session_maker)
+
+    class Archive:
+        def __init__(self, *, url):
+            self.url = url
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get_chain_finalised_head(self):
+            return _hash(15000)
+
+        async def get_block_header(self, **_kwargs):
+            return {"header": {"number": 15000}}
+
+    timeouts = []
+
+    import ditto.api_server.source_emission_collector as collector_module
+
+    real_timeout = collector_module.asyncio.timeout
+
+    class TimeoutProbe:
+        def __init__(self, seconds):
+            self.seconds = seconds
+            timeouts.append(seconds)
+            self._inner = real_timeout(seconds)
+
+        async def __aenter__(self):
+            return await self._inner.__aenter__()
+
+        async def __aexit__(self, *args):
+            return await self._inner.__aexit__(*args)
+
+    monkeypatch.setattr(collector_module.asyncio, "timeout", TimeoutProbe)
+    monkeypatch.setattr(
+        "ditto.api_server.source_emission_collector.read_source_emission_block",
+        read,
+    )
+    import async_substrate_interface
+
+    monkeypatch.setattr(async_substrate_interface, "AsyncSubstrateInterface", Archive)
+    app.state.chain = SimpleNamespace(
+        _historical_substrate_urls=lambda: ["archive"],
+        _safe_rpc_error=lambda error: str(error),
+    )
+    await collector.sweep()
+    assert timeouts == [600.0]
+    assert collector._backlog_deep is True

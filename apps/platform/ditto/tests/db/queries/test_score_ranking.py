@@ -37,7 +37,7 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.efficiency import epoch_index_for
-from ditto.db.models import Agent, ValidatorHeartbeat, ValidatorTicket
+from ditto.db.models import Agent, Score, ValidatorHeartbeat, ValidatorTicket
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.db.queries.confirmation_scores import (
     ConfirmationSeedScore,
@@ -1525,6 +1525,220 @@ class TestContinuationFloor:
         assert isinstance(details, dict)
         assert set(details) == {"composite_stderr", "confirmation_seeds"}
         assert details["confirmation_seeds"] is None
+
+    async def test_scalar_stderr_degrades_to_none_on_malformed_values(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """The no-details scalar stderr extraction must never abort the read.
+
+        The extraction runs when ``include_details=False``, where the whole
+        leaderboard read rides on it. A malformed ``composite_stderr`` (boolean,
+        nonnumeric string, out-of-float8-range number) has to degrade to NULL —
+        the same contract the Python-side reader keeps on shipped-details reads —
+        instead of raising at the double-precision cast and 500ing the read.
+        """
+        malformed = {
+            "bool": True,
+            "string": "abc",
+            # 1e309 is a 310-digit plain decimal once JSONB normalizes it: an
+            # out-of-float8-range number, exactly what production could hold.
+            "out_of_range": int("1" + "0" * 309),
+            "huge_integer": int("9" * 309),
+            "float8_max_plus_one": int(
+                "179769313486231570814527423731704356798070567525844996598917"
+                "476803157260780028538760589558632766878171540458953514382464"
+                "234321326889464182768467546703537516986049910576551282076245"
+                "490090389328944075868508455133942304583236903222948165808559"
+                "332123348274797826204144723168738177180919299881250404026184"
+                "124858369"
+            ),
+        }
+        agents: dict[str, UUID] = {}
+        for label, value in malformed.items():
+            agent_id = uuid4()
+            agents[label] = agent_id
+            async with session_maker() as session, session.begin():
+                session.add(
+                    Agent(
+                        agent_id=agent_id,
+                        miner_hotkey="5" + label[0] * 47,
+                        name=f"stderr-{label}",
+                        sha256="ab" * 32,
+                        size_bytes=524288,
+                        status=AgentStatus.SCORED,
+                        created_at=_BASE,
+                    )
+                )
+                session.add(
+                    Score(
+                        agent_id=agent_id,
+                        validator_hotkey=_VALIDATORS[0],
+                        run_id=f"{label}-0",
+                        seed=987654321,
+                        composite=0.9,
+                        tool_mean=0.9,
+                        memory_mean=0.9,
+                        median_ms=500,
+                        n=114,
+                        generated_at=_BASE,
+                        signature="ab" * 64,
+                        details={"composite_stderr": value, "bench_version": _BENCH},
+                        bench_version=_BENCH,
+                    )
+                )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                include_details=False,
+                bench_version=_BENCH,
+                dedupe_owners=False,
+            )
+        by_agent = {row.agent_id: row for row in rows}
+        for label, agent_id in agents.items():
+            assert by_agent[agent_id].stored_composite_stderr is None, label
+
+    async def test_scalar_stderr_reads_valid_values_without_details(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """The no-details branch still carries a well-formed stored stderr."""
+        agent_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey="5" + "V" * 47,
+                    name="stderr-valid",
+                    sha256="ab" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=_BASE,
+                )
+            )
+            session.add(
+                Score(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATORS[0],
+                    run_id="valid-0",
+                    seed=987654321,
+                    composite=0.9,
+                    tool_mean=0.9,
+                    memory_mean=0.9,
+                    median_ms=500,
+                    n=114,
+                    generated_at=_BASE,
+                    signature="ab" * 64,
+                    details={"composite_stderr": 0.0125, "bench_version": _BENCH},
+                    bench_version=_BENCH,
+                )
+            )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                include_details=False,
+                bench_version=_BENCH,
+                dedupe_owners=False,
+            )
+        assert rows[0].stored_composite_stderr == 0.0125
+
+    async def test_scalar_stderr_admits_float8_max_integer(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A 309-digit integer within float8 range must not degrade to None.
+
+        1e308 is finite but renders as a 309-digit plain decimal once JSONB
+        normalizes it, so a length-only guard would reject a value the
+        details-fetching path returns fine.
+        """
+        agent_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey="5" + "M" * 47,
+                    name="stderr-max",
+                    sha256="ab" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=_BASE,
+                )
+            )
+            session.add(
+                Score(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATORS[0],
+                    run_id="max-0",
+                    seed=987654321,
+                    composite=0.9,
+                    tool_mean=0.9,
+                    memory_mean=0.9,
+                    median_ms=500,
+                    n=114,
+                    generated_at=_BASE,
+                    signature="ab" * 64,
+                    details={"composite_stderr": 1e308, "bench_version": _BENCH},
+                    bench_version=_BENCH,
+                )
+            )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                include_details=False,
+                bench_version=_BENCH,
+                dedupe_owners=False,
+            )
+        assert rows[0].stored_composite_stderr == 1e308
+
+    async def test_scalar_stderr_admits_subnormal_decimals(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A magnitude-below-1 value may normalize to 311+ chars; keep it.
+
+        1e-309 renders as a 311-character "0.000…001" decimal, which a
+        length-only guard rejects, but it casts to a finite float8 exactly as
+        the details-fetching path returns it.
+        """
+        agent_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey="5" + "T" * 47,
+                    name="stderr-tiny",
+                    sha256="ab" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=_BASE,
+                )
+            )
+            session.add(
+                Score(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATORS[0],
+                    run_id="tiny-0",
+                    seed=987654321,
+                    composite=0.9,
+                    tool_mean=0.9,
+                    memory_mean=0.9,
+                    median_ms=500,
+                    n=114,
+                    generated_at=_BASE,
+                    signature="ab" * 64,
+                    details={"composite_stderr": 1e-309, "bench_version": _BENCH},
+                    bench_version=_BENCH,
+                )
+            )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                include_details=False,
+                bench_version=_BENCH,
+                dedupe_owners=False,
+            )
+        assert rows[0].stored_composite_stderr == 1e-309
 
     async def test_no_floor_below_five_finalized_owners(
         self, session_maker: async_sessionmaker[AsyncSession]

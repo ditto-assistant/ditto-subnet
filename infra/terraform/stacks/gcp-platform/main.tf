@@ -109,7 +109,35 @@ module "pg_vm" {
   data_disk_gb          = var.pg_data_disk_gb
   assign_public_ip      = false
   service_account_email = var.vm_service_account_email
-  labels                = { env = local.env_label, role = "platform-postgres", managed = "terraform" }
+  # Use the policy's known name so the optional attachment count is plan-time
+  # known on the first apply (the newly-created policy's id is still unknown).
+  boot_disk_snapshot_policy = google_compute_resource_policy.platform_postgres_daily.name
+  labels                    = { env = local.env_label, role = "platform-postgres", managed = "terraform" }
+}
+
+resource "google_compute_resource_policy" "platform_postgres_daily" {
+  project = var.project
+  name    = "ditto-pg-platform-daily"
+  region  = var.region
+  snapshot_schedule_policy {
+    schedule {
+      daily_schedule {
+        days_in_cycle = 1
+        start_time    = "06:00"
+      }
+    }
+    retention_policy {
+      max_retention_days    = 14
+      on_source_disk_delete = "KEEP_AUTO_SNAPSHOTS"
+    }
+    snapshot_properties {
+      storage_locations = ["us"]
+      # Crash-consistent: PGDATA and WAL share the boot disk, so PostgreSQL
+      # replays WAL on recovery as it would after a power loss. No guest restart.
+      guest_flush = false
+      labels      = { role = "platform-postgres", managed = "terraform" }
+    }
+  }
 }
 
 # --- App VMs: one per deploy env (public IP for HTTP ingress + direct egress). ---

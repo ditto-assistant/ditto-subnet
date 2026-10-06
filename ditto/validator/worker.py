@@ -142,6 +142,7 @@ from ditto.validator.weights import (
     blend_track_weights,
     contested_confirmation_set,
     filter_weight_confirmed,
+    owner_burn_destination_required,
     reign_seed_planning,
     resolve_miner_emission_share,
     resolve_track_shares,
@@ -2200,10 +2201,6 @@ class ValidatorWorker:
             return _WeightOutcome(
                 leaderboard=[(e.miner_hotkey, e.composite) for e in ledger.entries]
             )
-        burn_hotkey = await self._resolve_burn_hotkey()
-        if burn_hotkey is None:
-            return _WeightOutcome(leaderboard=leaderboard)
-        self._last_burn_hotkey = burn_hotkey
 
         # Version-rollout re-scores are ordinary platform-leased jobs. The fold
         # reads every cryptographically verified contract it supports and skips
@@ -2300,6 +2297,29 @@ class ValidatorWorker:
                 "eligible tracks with no folded miners; their emission burns: %s",
                 empty_eligible,
             )
+        # Finney leaves the burn hotkey unset and reads SubnetOwnerHotkey from
+        # the public node. That read is required only when the vector will
+        # contain the owner: a positive burn, an unpaid incumbent, an empty
+        # track, or an empty miner pool. A full miner vector does not, so a
+        # failed lookup must not skip the epoch. A previous owner hotkey is
+        # not reused: the key rotates, and a stale target can pay the wrong one.
+        if enforcing:
+            assert treasury_pin is not None
+            service_bps = treasury_pin.policy.service_bps
+        else:
+            service_bps = 0
+        if self._config.burn_hotkey is not None or owner_burn_destination_required(
+            miner_weights,
+            miner_share=miner_share,
+            paid_miner_fraction=allocated * paid_fraction,
+            service_bps=service_bps,
+        ):
+            burn_hotkey = await self._resolve_burn_hotkey()
+            if burn_hotkey is None:
+                return _WeightOutcome(leaderboard=leaderboard)
+            self._last_burn_hotkey = burn_hotkey
+        else:
+            burn_hotkey = ""
         if enforcing:
             try:
                 assert treasury_authority is not None
@@ -2541,6 +2561,7 @@ class ValidatorWorker:
 
         Subtensor withholds incentive for the registered SubnetOwnerHotkey,
         not for UID 0. Preserve existing weights if either read is ambiguous.
+        Callers skip this when the folded vector has no owner residual.
         """
         if self._config.burn_hotkey is not None:
             return self._config.burn_hotkey

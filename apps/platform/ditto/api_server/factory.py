@@ -82,6 +82,7 @@ from ditto.api_server.endpoints import (
     admin_copy_court_router,
     admin_copy_review_router,
     admin_core_qualification_router,
+    admin_database_backup_router,
     admin_efficiency_bonus_settings_router,
     admin_emission_eligibility_router,
     admin_hotkey_bans_router,
@@ -699,6 +700,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_screener_fanout_shadow_router, prefix="/api/v1")
     app.include_router(admin_l2_report_canary_router, prefix="/api/v1")
     app.include_router(admin_screener_capacity_router, prefix="/api/v1")
+    app.include_router(admin_database_backup_router, prefix="/api/v1")
     app.include_router(admin_screening_infra_retry_router, prefix="/api/v1")
     app.include_router(admin_source_review_queue_slo_router, prefix="/api/v1")
     app.include_router(admin_outlier_escalation_router, prefix="/api/v1")
@@ -722,6 +724,11 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
     app.include_router(admin_emission_eligibility_router, prefix="/api/v1")
     app.include_router(admin_treasury_settings_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.admin_treasury_runtime import (
+        router as treasury_runtime_router,
+    )
+
+    app.include_router(treasury_runtime_router, prefix="/api/v1")
     app.include_router(admin_treasury_receipts_router, prefix="/api/v1")
     app.include_router(admin_treasury_quote_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")

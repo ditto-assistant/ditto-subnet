@@ -202,6 +202,34 @@ def session_maker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
+@pytest.fixture(autouse=True)
+def _reset_screener_policy_globals():
+    """Restore the screener-policy snapshot around every test.
+
+    ``ditto.screener_policy_state`` is process-global module state that the
+    policy-activation resolver publishes to on every ``resolve()`` call, and
+    synchronous query builders read it directly. A test that resolves a
+    scheduled activation (say, the v13 ceiling) without restoring leaves the
+    whole xdist worker requiring v13: every later test seeding a floor-policy
+    agent then fails with "screening policy v10 is below the required v13",
+    whether or not it shares a database with the polluter. The failure only
+    appears when xdist happens to schedule both files on one worker, so it
+    reads as a flake; this makes the isolation structural instead.
+    """
+    from ditto.screener_policy_state import (
+        update_effective_screener_policy,  # noqa: PLC0415
+    )
+    from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION  # noqa: PLC0415
+
+    update_effective_screener_policy(
+        SCREENING_FLOOR_POLICY_VERSION, rescreen_scored=False
+    )
+    yield
+    update_effective_screener_policy(
+        SCREENING_FLOOR_POLICY_VERSION, rescreen_scored=False
+    )
+
+
 @pytest.fixture
 async def session(
     session_maker: async_sessionmaker[AsyncSession],

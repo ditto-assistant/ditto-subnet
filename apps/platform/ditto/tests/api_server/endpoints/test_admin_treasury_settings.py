@@ -289,3 +289,145 @@ async def test_v2_service_wallets_are_shadow_only_and_v1_history_is_preserved(
             },
         )
         assert response.status_code == 422, (change, response.text)
+
+
+@pytest.mark.parametrize("fault", ["none", "wrong_hash", "permission_lost", "timeout"])
+@pytest.mark.parametrize("reader", ["separate", "combined"])
+@pytest.mark.parametrize(
+    "schedule_fault", ["none", "next_epoch", "timeout", "connection"]
+)
+async def test_readiness_proves_current_managed_permission_without_peer_bindings(
+    session, monkeypatch, fault, reader, schedule_fault
+):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ditto.api_models.treasury_readiness import TreasuryLedgerReadiness
+    from ditto.api_server.endpoints.admin_treasury_settings import (
+        get_treasury_ledger_readiness,
+    )
+    from ditto.tests.api_server.test_treasury_weights import add_runtime, app_state, pin
+    from ditto_screening_protocol.treasury_identity import (
+        TreasuryManagedSetterObservation,
+    )
+
+    p = pin()
+    state = app_state(p)
+    from ditto.api_server.ledger_pin import LedgerPinMaterializer
+    from ditto.chain.errors import ChainConnectionError
+    from ditto.chain.models import EpochSchedule
+
+    state.ledger_pin_materializer = LedgerPinMaterializer()
+    state.ledger_pin_materializer._load_or_build = AsyncMock()
+    schedule = EpochSchedule(
+        netuid=118,
+        subnet_epoch_index=p.epoch_index + (schedule_fault == "next_epoch"),
+        last_epoch_block=p.first_block,
+        pending_epoch_at=0,
+        tempo=360,
+        blocks_since_last_step=3,
+        block=p.pinned_block,
+        block_hash=p.pinned_block_hash,
+        block_timestamp=1,
+        next_epoch_block=p.first_block + 360,
+    )
+    state.chain.read_epoch_schedule = AsyncMock(return_value=schedule)
+    if schedule_fault == "timeout":
+        state.chain.read_epoch_schedule.side_effect = TimeoutError("provider secret")
+    elif schedule_fault == "connection":
+        state.chain.read_epoch_schedule.side_effect = ChainConnectionError(
+            "provider secret"
+        )
+    state.config.treasury_shadow_policy = p.policy
+    state.config.treasury_weight_enforcement = True
+    await add_runtime(session, datetime.now(UTC))
+    readiness = TreasuryLedgerReadiness(
+        configured_proposal=p.policy,
+        proposal_approval_status="verified",
+        proposal_approved_policy_digest=p.policy_digest,
+        observer_status="observed",
+        latest_stored_epoch_index=p.epoch_index,
+        latest_stored_ledger_digest="a" * 64,
+        stored_shadow_pin=None,
+        stored_enforcing_pin=p,
+        enforcement_configured=True,
+        blocking_reasons=["current_epoch_not_checked"],
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.admin_treasury_settings.shadow_readiness",
+        lambda *_args, **_kwargs: readiness,
+    )
+    proof = TreasuryManagedSetterObservation(
+        block_hash=p.pinned_block_hash,
+        permitted_count=13,
+        hotkeys=state.config.treasury_managed_validator_hotkeys,
+    )
+    if fault == "wrong_hash":
+        proof = proof.model_copy(update={"block_hash": "0x" + "f" * 64})
+    scoped = AsyncMock(return_value=proof)
+    if fault == "permission_lost":
+        scoped.side_effect = ValueError("current permission lost")
+    if fault == "timeout":
+        from ditto.chain.errors import (
+            ChainTreasuryActivationReadError,
+            ChainTreasuryReadTimeoutError,
+        )
+
+        scoped.side_effect = ChainTreasuryActivationReadError(
+            "setter_roster", ChainTreasuryReadTimeoutError("permit_vector")
+        )
+    state.chain.get_treasury_managed_weight_setters = scoped
+    if reader == "combined":
+        combined = AsyncMock(
+            return_value=(
+                state.chain.get_treasury_dispatch_observation.return_value,
+                proof,
+            )
+        )
+        combined.side_effect = scoped.side_effect
+        state.chain.get_treasury_managed_activation_observation = combined
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    result = await get_treasury_ledger_readiness(request, None, session)
+    state.chain.read_epoch_schedule.assert_awaited_once_with(118)
+    state.ledger_pin_materializer._load_or_build.assert_not_awaited()
+    assert "provider secret" not in result.model_dump_json()
+    assert state.ledger_pin_materializer.newest_known is None
+    if schedule_fault in {"none", "next_epoch"}:
+        assert result.ledger_schedule_probe_status == "available"
+        assert result.ledger_schedule_probe_epoch == schedule.subnet_epoch_index
+        assert result.ledger_schedule_probe_block == schedule.block
+        assert result.ledger_schedule_matches_stored_pin is (schedule_fault == "none")
+        assert result.ledger_schedule_failure_kind is None
+    else:
+        assert result.ledger_schedule_probe_status == "unavailable"
+        assert result.ledger_schedule_probe_epoch is None
+        assert result.ledger_schedule_probe_block is None
+        assert result.ledger_schedule_matches_stored_pin is None
+        assert result.ledger_schedule_failure_kind == schedule_fault
+    assert result.can_enforce_weights is (fault == "none")
+    assert result.fleet_gate == ("ready" if fault == "none" else "not_ready")
+    if fault != "none":
+        assert "enforcing_pin_unverified" in result.blocking_reasons
+        assert result.validation_failure_stage is not None
+        assert result.validation_failure_kind in {"invalid_evidence", "timeout"}
+    else:
+        assert result.validation_failure_stage is None
+    if fault == "timeout":
+        assert result.validation_failure_stage == "setter_roster"
+        assert result.validation_failure_step == "permit_vector"
+        assert result.validation_failure_kind == "timeout"
+    if reader == "combined":
+        combined.assert_awaited_once_with(
+            p.policy, managed_hotkeys=state.config.treasury_managed_validator_hotkeys
+        )
+        scoped.assert_not_awaited()
+        state.chain.get_treasury_dispatch_observation.assert_not_awaited()
+    else:
+        scoped.assert_awaited_once_with(
+            p.policy,
+            block_hash=p.pinned_block_hash,
+            managed_hotkeys=state.config.treasury_managed_validator_hotkeys,
+        )
+    state.chain.get_treasury_weight_setters.assert_not_awaited()
+    assert result.weight_effect == "none"

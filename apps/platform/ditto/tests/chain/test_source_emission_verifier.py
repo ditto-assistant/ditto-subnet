@@ -311,6 +311,42 @@ async def test_v467_artifact_preserves_reveal_and_resets_upgrade_boundary(
         assert block.updates[0].commit_ciphertext_hash is not None
 
 
+@pytest.mark.parametrize("upgrade", [False, True])
+async def test_v468_artifact_preserves_reveal_and_resets_upgrade_boundary(
+    chain: tuple, upgrade: bool
+) -> None:
+    substrate, state = chain
+    v467 = "0x2f175dcc64196ec8a6b9235f8d7cfd84efef6c68bb925c4455949591cef9f6d2"
+    v468 = "0x899a87a4e4610587d81d9237adeb3e420ea524cd39b397c7a9b4c811b0e7af1d"
+    state["runtime"] = v467 if upgrade else v468
+    state["post_runtime"] = v468
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.runtime_code_hash == v468
+    if upgrade:
+        assert block.reset_reason == "runtime_changed"
+        assert not block.updates and not block.is_payout
+    else:
+        assert block.reset_reason is None
+        assert block.updates[0].commit_ciphertext_hash is not None
+
+
+async def test_v468_through_v473_fingerprints_are_admitted(chain: tuple) -> None:
+    substrate, state = chain
+    for runtime in (
+        "0x899a87a4e4610587d81d9237adeb3e420ea524cd39b397c7a9b4c811b0e7af1d",
+        "0x8858cf3545c90255e5f865dec13713fa1d76cac2be6b8f1070256ee572280abe",
+        "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47",
+        "0x5b0168d2878c1fdcdc424dddca29111b8fe8960bd169742d1c14ce16b22ae381",
+        "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08",
+    ):
+        state["runtime"] = runtime
+        state["post_runtime"] = runtime
+        block = await read_source_emission_block(substrate, netuid=118, block=100)
+        assert block.runtime_code_hash == runtime
+        assert block.reset_reason is None
+        assert block.updates[0].commit_ciphertext_hash is not None
+
+
 @pytest.fixture
 def commit_chain(chain: tuple) -> tuple:
     import hashlib

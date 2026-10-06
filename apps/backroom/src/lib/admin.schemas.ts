@@ -1215,6 +1215,7 @@ export const sourceReleaseGateSchema = z.object({
         page_finalized: z.number().int().nonnegative(),
         page_forwarded: z.number().int().nonnegative(),
         page_deferred: z.number().int().nonnegative(),
+        conflicts_dropped: z.number().int().nonnegative().optional(),
       }),
     }),
     received_at: z.string(),

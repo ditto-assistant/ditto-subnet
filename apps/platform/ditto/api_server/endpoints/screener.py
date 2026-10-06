@@ -229,6 +229,7 @@ from ditto.db.queries.screening import (
     infra_retry_agent_admitted,
     prerequisite_screening_predicates,
     screening_priority_order,
+    screening_score_aggregates,
     sweep_screening_leases,
     try_acquire_screening_claim_lock,
 )
@@ -3448,9 +3449,20 @@ async def queue(
     stale_scored_rescreen = (
         screener_policy.rescreen_stale_agents and screener_policy.rescreen_scored
     )
+    # Precompute the per-agent score aggregates once rather than letting
+    # PostgreSQL re-evaluate correlated ORDER BY subqueries per candidate row.
+    score_aggregates = screening_score_aggregates()
     agents = (
         await session.scalars(
             select(Agent)
+            .outerjoin(
+                score_aggregates[0],
+                score_aggregates[0].c.agent_id == Agent.agent_id,
+            )
+            .outerjoin(
+                score_aggregates[1],
+                score_aggregates[1].c.agent_id == Agent.agent_id,
+            )
             .where(
                 or_(
                     Agent.status == AgentStatus.UPLOADED,
@@ -3477,7 +3489,7 @@ async def queue(
                     ),
                 )
             )
-            .order_by(*screening_priority_order())
+            .order_by(*screening_priority_order(score_aggregates))
             .limit(limit)
         )
     ).all()

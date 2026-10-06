@@ -93,6 +93,26 @@ def test_paused_collector_only_vector_burns_the_remainder():
     ) == {"burn": 1}
 
 
+def test_zero_residual_does_not_require_a_burn_hotkey():
+    assert service_first_weights(
+        {"miner": 1},
+        service_bps=0,
+        burn_share=0,
+        collector_hotkey="",
+        collector_verified=False,
+        burn_hotkey="",
+    ) == {"miner": 1}
+    with pytest.raises(ValueError, match="burn hotkey is required"):
+        service_first_weights(
+            {"miner": 1},
+            service_bps=0,
+            burn_share=0.4,
+            collector_hotkey="",
+            collector_verified=False,
+            burn_hotkey="",
+        )
+
+
 def test_no_configured_collector_preserves_ordinary_zero_service_payout():
     assert service_first_weights(
         {"miner": 1},

@@ -12,6 +12,8 @@ from ditto.api_server.coding_private_catalog_v2_compile import (
 )
 from ditto.api_server.coding_private_v2_payload import (
     PrivateV2PayloadError,
+    _archive_tree,
+    _tree_digest_from_tar,
     build_private_v2_payload,
     verify_private_v2_payload,
 )
@@ -379,3 +381,14 @@ def test_private_payload_rejects_snapshot_modes_after_export(tmp_path: Path) -> 
             groups_root=groups,
             output=protected / "payload",
         )
+
+
+def test_archived_tree_digest_matches_the_path_ordered_producer(
+    tmp_path: Path,
+) -> None:
+    # "pkg.go" sorts before "pkg/x.go" as a string ('.' < '/') but after it in
+    # Path order, which every producer of the catalog tree digest uses.
+    _write_text(tmp_path / "src" / "pkg.go", "package root\n")
+    _write_text(tmp_path / "src" / "pkg" / "x.go", "package pkg\n")
+
+    assert _tree_digest_from_tar(_archive_tree(tmp_path)) == _tree_digest(tmp_path)

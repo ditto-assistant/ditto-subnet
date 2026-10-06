@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ditto.chain.errors import TreasuryReceiptReadPhase
 from ditto_screening_protocol.treasury import Block, Digest, Hash
 
 
@@ -67,3 +68,17 @@ class TreasuryReceiptResult(BaseModel):
 class TreasuryReceiptPage(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     items: list[TreasuryReceiptResult]
+
+
+class TreasuryReceiptPreflight(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    ready: bool
+    receipt_id: Digest | None = None
+    already_recorded: bool = False
+    refusal: Literal["unavailable", "invalid_or_unsupported", "conflict"] | None = None
+    read_phase: TreasuryReceiptReadPhase | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    timed_out: bool = False
+    publication: Literal["not_performed"] = "not_performed"
+    spending_authority: Literal["none"] = "none"
+    provider_credit_status: Literal["not_proven"] = "not_proven"

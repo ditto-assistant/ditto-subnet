@@ -72,6 +72,7 @@ describe('Dedicated receipt OAuth protocol authority', () => {
   })
 
   it('permits only exact confirmed safe-integer ingestion with the signed actor', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
     process.env.DITTO_ADMIN_API_TOKEN = 'test-token'
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ ...selection,
       receipt_id: 'a'.repeat(64), policy_digest: 'b'.repeat(64), amount_atomic: '25',
@@ -91,7 +92,8 @@ describe('Dedicated receipt OAuth protocol authority', () => {
       expect(init.headers).toMatchObject({ 'X-Admin-Actor': props.session.email })
       expect(String(init.body)).not.toContain('FORGED')
       expect(String(init.body)).not.toContain('confirmation')
-    } finally { await client.close(); await server.close() }
+      expect(timeoutSpy).toHaveBeenCalledWith(120_000)
+    } finally { timeoutSpy.mockRestore(); await client.close(); await server.close() }
   })
 
   it('refuses a substituted historical revision instead of following latest policy', async () => {

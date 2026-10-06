@@ -1,0 +1,48 @@
+---
+# Render-only check: never accesses secrets or production. Host enablement and
+# actual installed modes are additionally checked by the activation runbook.
+- name: Assert backup rendering and credential custody
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    role_dir: "{{ playbook_dir }}/../roles/postgres_backup"
+    service: "{{ lookup('template', role_dir ~ '/templates/ditto-postgres-backup.service.j2') }}"
+    timer: "{{ lookup('template', role_dir ~ '/templates/ditto-postgres-backup.timer.j2') }}"
+    failure: "{{ lookup('template', role_dir ~ '/templates/ditto-postgres-backup-failed.service.j2') }}"
+    role_tasks: "{{ lookup('file', role_dir ~ '/tasks/main.yml') | from_yaml }}"
+    defaults: "{{ lookup('file', role_dir ~ '/defaults/main.yml') | from_yaml }}"
+  tasks:
+    - name: Timer, priority and failure reporting are present
+      ansible.builtin.assert:
+        that:
+          - "'OnCalendar=*-*-* 06:30:00 UTC' in timer"
+          - "'Persistent=true' in timer"
+          - "'RandomizedDelaySec=300' in timer"
+          - "'Nice=10' in service"
+          - "'IOSchedulingClass=idle' in service"
+          - "'OnFailure=ditto-postgres-backup-failed.service' in service"
+          - "'ditto-pg-backup: FAILED' in failure"
+          - "'age-identity' not in service"
+          - "'secret-access-key' not in service"
+          - "'HIPPIUS_SECRET' not in service"
+          - defaults.postgres_backup_enabled is false
+          - defaults.postgres_backup_secret_ids | length == 3
+          - "'python3-requests=2.32.3+dfsg-5+deb13u1' in defaults.postgres_backup_packages"
+
+    - name: Credential files are root-owned mode 0600 and redacted
+      ansible.builtin.assert:
+        that:
+          - role_tasks[0].block[4]['ansible.builtin.copy'].mode == '0600'
+          - role_tasks[0].block[4]['ansible.builtin.copy'].owner == 'root'
+          - role_tasks[0].block[4].no_log is true
+          - role_tasks[0].block[3].no_log is true
+          - role_tasks[0].block[3].delegate_to == 'localhost'
+          - role_tasks[0].block[3].become is false
+          - "'default' not in role_tasks[0].block[4].loop"
+
+    - name: Activation enables the rendered timer
+      ansible.builtin.assert:
+        that:
+          - role_tasks[0].block[7]['ansible.builtin.systemd'].enabled is true
+          - role_tasks[0].block[7]['ansible.builtin.systemd'].state == 'started'

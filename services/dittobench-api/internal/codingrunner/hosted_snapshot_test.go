@@ -216,3 +216,49 @@ func readPrivateFixture(path string, maximum int64) ([]byte, error) {
 	}
 	return body, nil
 }
+
+func TestHostedCapsuleTreeDigestUsesPythonPathOrdering(t *testing.T) {
+	// String order puts "pkg.go" before "pkg/x.go" ('.' < '/'); Python Path
+	// order, which produces the catalog digest, compares segments instead.
+	capsule := hostedCapsule(t, []tarEntry{
+		{name: "pkg.go", body: []byte("package root\n")},
+		{name: "pkg/x.go", body: []byte("package pkg\n")},
+	}, nil)
+	compiled, err := CompileHostedSnapshot(t.Context(), capsule, sha256Hex(capsule), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	type identity struct {
+		Path      string `json:"path"`
+		SHA256    string `json:"sha256"`
+		SizeBytes int64  `json:"size_bytes"`
+	}
+	byName := map[string]identity{}
+	reader := tar.NewReader(bytes.NewReader(capsule))
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byName[header.Name] = identity{header.Name, sha256Hex(body), int64(len(body))}
+	}
+	expected := []identity{}
+	for _, name := range []string{"manifest.json", "workspace/pkg/x.go", "workspace/pkg.go"} {
+		expected = append(expected, byName[name])
+	}
+	tree, err := canonicalStruct(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.CapsuleTreeSHA256 != sha256Hex(tree) {
+		t.Fatalf("capsule tree digest %s does not follow Python Path order (want %s)",
+			compiled.CapsuleTreeSHA256, sha256Hex(tree))
+	}
+}

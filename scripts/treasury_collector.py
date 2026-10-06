@@ -10,7 +10,16 @@ from ditto.treasury.activity_export import (
     export_finalized_distributions,
     write_selector_snapshot,
 )
-from ditto.treasury.collector import CollectorJournal, tick
+from ditto.treasury.collector import (
+    CollectorJournal,
+    ManualTransfer,
+    TransferCanary,
+    arm_manual_transfer,
+    manual_transfer_readiness,
+    observe_earnings,
+    replace_failed_canary,
+    tick,
+)
 from ditto.treasury.collector_chain import PublicCollectorChain, load_policy
 
 
@@ -25,8 +34,143 @@ def main() -> None:
     parser.add_argument("--export-activity", action="store_true")
     parser.add_argument("--selector-snapshot", type=Path)
     parser.add_argument("--snapshot-only", action="store_true")
+    parser.add_argument("--canary-max-alpha-rao", type=int)
+    parser.add_argument("--canary-after-operation", type=int)
+    parser.add_argument("--replace-failed-canary", action="store_true")
+    parser.add_argument("--operator-reason")
+    parser.add_argument("--arm-manual-transfer", type=Path)
+    parser.add_argument("--confirm-manual-request")
+    parser.add_argument("--execute-manual-request")
+    parser.add_argument("--observe-earnings-only", action="store_true")
+    parser.add_argument("--preview-manual-transfer", type=Path)
+    parser.add_argument("--manual-readiness", action="store_true")
     args = parser.parse_args()
+    if args.observe_earnings_only and (
+        args.role != "transfer"
+        or not args.journal
+        or any(
+            (
+                args.initialize_journal,
+                args.watch_only,
+                args.snapshot_only,
+                args.export_activity,
+                args.arm_manual_transfer,
+                args.preview_manual_transfer,
+                args.manual_readiness,
+                args.confirm_manual_request,
+                args.execute_manual_request,
+                args.canary_max_alpha_rao is not None,
+                args.canary_after_operation is not None,
+                args.replace_failed_canary,
+                args.operator_reason,
+            )
+        )
+    ):
+        parser.error("earnings observation requires existing transfer journal only")
+    canary = None
+    if args.canary_max_alpha_rao is not None or args.canary_after_operation is not None:
+        if (
+            args.canary_max_alpha_rao is None
+            or args.canary_after_operation is None
+            or args.role != "transfer"
+            or not args.journal
+            or args.initialize_journal
+            or args.watch_only
+            or args.snapshot_only
+            or args.export_activity
+        ):
+            parser.error("canary requires both bounds and an existing transfer journal")
+        try:
+            canary = TransferCanary(
+                args.canary_max_alpha_rao, args.canary_after_operation
+            )
+        except ValueError as error:
+            parser.error(str(error))
     policy = load_policy(args.policy, args.policy_sha256)
+    manual = None
+    if (
+        args.arm_manual_transfer
+        or args.preview_manual_transfer
+        or args.manual_readiness
+        or args.confirm_manual_request
+        or args.execute_manual_request
+    ):
+        if (
+            args.role != "transfer"
+            or not args.journal
+            or any(
+                (
+                    args.initialize_journal,
+                    args.watch_only,
+                    args.snapshot_only,
+                    args.export_activity,
+                    canary is not None,
+                    args.replace_failed_canary,
+                )
+            )
+        ):
+            parser.error("manual control requires existing transfer journal only")
+        if args.manual_readiness and any(
+            (
+                args.arm_manual_transfer,
+                args.preview_manual_transfer,
+                args.confirm_manual_request,
+                args.execute_manual_request,
+            )
+        ):
+            parser.error("manual readiness is read only")
+        if args.arm_manual_transfer or args.preview_manual_transfer:
+            if (
+                args.execute_manual_request
+                or (
+                    args.arm_manual_transfer
+                    and (
+                        not args.confirm_manual_request or args.preview_manual_transfer
+                    )
+                )
+                or (args.preview_manual_transfer and args.confirm_manual_request)
+            ):
+                parser.error(
+                    "manual arming requires exact request digest confirmation "
+                    "and no execute"
+                )
+            import hashlib
+            import os
+            import stat
+
+            from ditto.treasury.collector import canonical
+
+            fd = os.open(
+                args.arm_manual_transfer or args.preview_manual_transfer,
+                os.O_RDONLY | os.O_NOFOLLOW,
+            )
+            with os.fdopen(fd, "rb") as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    parser.error("manual request must be a bounded regular public file")
+                raw = source.read(4097)
+            if len(raw) > 4096:
+                parser.error("manual request exceeds bounded public input")
+            body = json.loads(raw)
+            manual_digest = hashlib.sha256(canonical(body).encode()).hexdigest()
+            if (
+                args.arm_manual_transfer
+                and manual_digest != args.confirm_manual_request
+            ):
+                parser.error("manual request digest differs from exact confirmation")
+            manual = ManualTransfer(**body)
+        elif not args.manual_readiness and (
+            args.confirm_manual_request or not args.selector_snapshot
+        ):
+            parser.error(
+                "manual execute requires exact request id and durable selector snapshot"
+            )
+    if args.replace_failed_canary != (args.operator_reason is not None) or (
+        args.replace_failed_canary
+        and (canary is None or not 8 <= len(args.operator_reason.strip()) <= 240)
+    ):
+        parser.error(
+            "replacement requires both canary bounds and bounded operator reason"
+        )
     if args.snapshot_only and (not args.selector_snapshot or not args.journal):
         parser.error("snapshot-only requires existing transfer journal and snapshot")
     if args.selector_snapshot is not None and (
@@ -51,7 +195,7 @@ def main() -> None:
 
             def epoch_at(block):
                 at = subtensor.substrate.get_block_hash(block)
-                chain.guard_runtime(policy, at)
+                chain.guard_runtime(policy, at, historical=True)
                 return chain.query("SubtensorModule", "SubnetEpochIndex", [118], at)
 
             print(
@@ -112,7 +256,67 @@ def main() -> None:
             parser.error("--journal required for signer")
         journal = CollectorJournal(args.journal, policy, args.role)
         try:
-            result = tick(journal, policy, chain, args.role)
+            if args.manual_readiness:
+                print(json.dumps(manual_transfer_readiness(journal, policy, chain)))
+                return
+            if args.observe_earnings_only:
+                print(
+                    json.dumps(
+                        {
+                            "status": observe_earnings(journal, policy, chain),
+                            "authority": "none",
+                        }
+                    )
+                )
+                return
+            if manual is not None:
+                result = arm_manual_transfer(
+                    journal,
+                    policy,
+                    chain,
+                    manual,
+                    record=not args.preview_manual_transfer,
+                )
+                print(
+                    json.dumps(
+                        {
+                            "status": result,
+                            "request_id": manual.request_id,
+                            "confirmation_digest": manual_digest,
+                            "request": asdict(manual),
+                            "authority": "none"
+                            if args.preview_manual_transfer
+                            else "one explicit manual claim; not dispatched",
+                        }
+                    )
+                )
+                return
+            if args.replace_failed_canary:
+                replace_failed_canary(
+                    journal, policy, chain, canary, reason=args.operator_reason
+                )
+                print(
+                    json.dumps(
+                        {
+                            "status": "canary_replaced",
+                            "policy": policy.digest,
+                            "authority": "one bounded replacement only",
+                        }
+                    )
+                )
+                return
+            if canary is not None:
+                result = tick(journal, policy, chain, args.role, canary=canary)
+            elif args.execute_manual_request is not None:
+                result = tick(
+                    journal,
+                    policy,
+                    chain,
+                    args.role,
+                    manual_request_id=args.execute_manual_request,
+                )
+            else:
+                result = tick(journal, policy, chain, args.role)
             if args.selector_snapshot is not None:
                 try:
                     write_selector_snapshot(journal.db, args.selector_snapshot, policy)

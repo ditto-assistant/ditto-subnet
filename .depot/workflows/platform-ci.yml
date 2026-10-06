@@ -1,0 +1,61 @@
+# Validation only: current GitHub checks on Depot compute.
+name: Depot Platform CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .depot/workflows/**
+      - .github/scripts/check_workflow_security.py
+      - apps/platform/**
+      - "!apps/platform/dashboard/**"
+      - "!apps/platform/faircopy.config.mjs"
+      - "!apps/platform/package.json"
+      - "!apps/platform/package-lock.json"
+      - packages/ditto-screening-protocol/**
+      - packages/dittobench-coding-contract/testdata/coding_contract_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_catalog_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_selection_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_certification_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json
+      - packages/dittobench-coding-contract/generate_execution_delivery_vectors.py
+      - ditto/api_models/coding_harness.py
+      - ditto/api_models/coding_claims.py
+      - ditto/api_models/coding_certification_leases.py
+      - ditto/api_models/coding_inference.py
+      - ditto/api_models/coding_inference_grants.py
+      # The static job checks the generated confirmation release assets
+      # against this generator's constants, so a generator-only change must
+      # reach that job.
+      - scripts/generate_confirmation_installation.py
+      # test_inference.py asserts the request-field fates against this table.
+      - docs/inference-request-fields.json
+      # The screener worker produces the signed verdicts Platform's submit
+      # endpoint consumes; a producer-only change must run the consumer tests.
+      - workers/screener/ditto_screener/policy.py
+      - workers/screener/ditto_screener/worker.py
+      - .github/workflows/platform-ci.yml
+      - .github/workflows/platform-verify.yml
+permissions:
+  contents: read
+
+concurrency:
+  group: depot-platform-ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    uses: ./.depot/workflows/platform-verify.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ github.sha }}
+      security: true
+      backend: true

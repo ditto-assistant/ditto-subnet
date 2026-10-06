@@ -206,7 +206,14 @@ class PublicActivityMCP:
         if not notification:
             body["id"] = self.next_id
         with self.client.stream(
-            "POST", PUBLIC_MCP, headers=self.headers, json=body
+            "POST",
+            PUBLIC_MCP,
+            headers=self.headers,
+            json=body,
+            timeout=130
+            if method == "tools/call"
+            and params.get("name") == "record_treasury_receipt"
+            else 60,
         ) as response:
             if response.status_code not in {200, 202, 204}:
                 if response.status_code == 429 or response.status_code >= 500:
