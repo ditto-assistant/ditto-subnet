@@ -1,6 +1,6 @@
 import '@tanstack/react-start/server-only'
 import { z } from 'zod'
-import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema } from '../lib/treasury-receipts.schemas'
+import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema, treasuryReceiptPreflightInputSchema, treasuryReceiptPreflightSchema } from '../lib/treasury-receipts.schemas'
 
 export async function recordTreasuryReceipt(rawInput: unknown, actor: string) {
   const { confirmation: _confirmation, ...body } = treasuryReceiptInputSchema.parse(rawInput)
@@ -8,6 +8,13 @@ export async function recordTreasuryReceipt(rawInput: unknown, actor: string) {
     // Archive verification has bounded provider fallback. Do not abandon the
     // verified audit write at the ordinary 20s read deadline; no signing occurs.
     method: 'POST', actor, body, timeoutMs: 120_000,
+  }))
+}
+
+export async function fetchTreasuryReceiptPreflight(rawInput: unknown) {
+  const body = treasuryReceiptPreflightInputSchema.parse(rawInput)
+  return treasuryReceiptPreflightSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts/preflight', {
+    method: 'POST', body, timeoutMs: 120_000,
   }))
 }
 

@@ -548,15 +548,24 @@ class ChainClient:
         """Canonical finalized receipt, with existing archive fallback and no signer."""
         from async_substrate_interface import AsyncSubstrateInterface
 
+        from ditto.chain.errors import (
+            ChainTreasuryReceiptUnavailable,
+            TreasuryReceiptReadProgress,
+        )
         from ditto.chain.treasury_receipts import read_treasury_chain_proof
 
+        attempts = 0
+        progress = TreasuryReceiptReadProgress()
+        timed_out = False
         for url in self._historical_substrate_urls():
+            attempts += 1
+            progress = TreasuryReceiptReadProgress()
             try:
                 async with (
                     asyncio.timeout(self._config.archive_rpc_timeout_seconds),
                     AsyncSubstrateInterface(url=url) as substrate,
                 ):
-                    return await read_treasury_chain_proof(
+                    proof = await read_treasury_chain_proof(
                         substrate,
                         selector,
                         policy,
@@ -567,14 +576,20 @@ class ChainClient:
                         pinned_block=pinned_block,
                         pinned_block_hash=pinned_block_hash,
                         pinned_uid=pinned_uid,
+                        progress=progress,
                     )
+                    progress.phase = "connection_close"
+                return proof
             except ValueError:
                 # Complete data contradicting the claim is not provider failure.
                 raise
-            except Exception:
+            except Exception as error:
+                timed_out = isinstance(error, TimeoutError)
                 # Provider addresses/credentials and raw exceptions stay private.
                 continue
-        raise ChainConnectionError("finalized treasury receipt unavailable")
+        raise ChainTreasuryReceiptUnavailable(
+            progress.phase, attempts, timed_out=timed_out
+        )
 
     async def get_finalized_block(self) -> BlockInfo:
         """Return the current finalized chain block from Substrate."""

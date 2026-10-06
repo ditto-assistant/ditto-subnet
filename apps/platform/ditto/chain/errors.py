@@ -4,6 +4,29 @@ from __future__ import annotations
 
 from typing import Literal
 
+TreasuryReceiptReadPhase = Literal[
+    "connection",
+    "pinned_finality",
+    "payment_finality",
+    "pinned_identity",
+    "source_finality",
+    "receipt_identity",
+    "source_epoch",
+    "autostake_route",
+    "source_events",
+    "payment_extrinsic",
+    "payment_events",
+    "timestamp",
+    "connection_close",
+]
+
+
+class TreasuryReceiptReadProgress:
+    """One provider invocation's fixed checkpoint, never provider data."""
+
+    phase: TreasuryReceiptReadPhase = "connection"
+
+
 TreasuryReadStep = Literal[
     "connection",
     "connection_close",
@@ -68,6 +91,18 @@ class ChainConnectionError(ChainError):
     """
 
     pass
+
+
+class ChainTreasuryReceiptUnavailable(ChainConnectionError):
+    """Sanitized last checkpoint across existing bounded archive fallback."""
+
+    def __init__(
+        self, phase: TreasuryReceiptReadPhase, attempts: int, *, timed_out: bool
+    ):
+        super().__init__("finalized treasury receipt unavailable")
+        self.read_phase = phase
+        self.attempt_count = attempts
+        self.timed_out = timed_out
 
 
 # --- Lookup errors ---

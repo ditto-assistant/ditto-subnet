@@ -598,6 +598,10 @@ async def test_negative_canonical_proofs_never_write(app, client, session_maker,
         payload = selection("provider_credit")
     response = await client.post(URL, headers=HEADERS, json=payload)
     assert response.status_code == 422, response.text
+    preflight = await client.post(URL + "/preflight", headers=HEADERS, json=payload)
+    assert preflight.status_code == 200, preflight.text
+    assert not preflight.json()["ready"]
+    assert preflight.json()["refusal"] == "invalid_or_unsupported"
     async with session_maker() as session:
         assert list(await session.scalars(select(TreasuryVerifiedReceipt))) == []
         assert list(await session.scalars(select(TreasuryPublicEvent))) == []
@@ -831,3 +835,62 @@ async def test_exact_historical_execution_runtime_and_forward_upgrade(
     else:
         with pytest.raises(ValueError, match="runtime"):
             await finalized_block(HistoricalRPC(), 120, FINNEY_GENESIS)
+
+
+async def test_preflight_checks_same_effect_without_publishing_or_consuming(
+    app, client, session_maker
+):
+    await install(app, session_maker)
+    response = await client.post(URL + "/preflight", headers=HEADERS, json=selection())
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ready"] and body["publication"] == "not_performed"
+    assert body["spending_authority"] == "none" and not body["already_recorded"]
+    async with session_maker() as db:
+        assert list(await db.scalars(select(TreasuryVerifiedReceipt))) == []
+        assert list(await db.scalars(select(TreasuryPublicEvent))) == []
+    app.state.chain.rpc.transfer_events[1]["event"]["attributes"] = {
+        "result": {"Err": "NoPermission"}
+    }
+    refused = await client.post(URL + "/preflight", headers=HEADERS, json=selection())
+    assert refused.json()["refusal"] == "invalid_or_unsupported"
+    assert not refused.json()["ready"]
+
+
+async def test_preflight_archive_checkpoint_is_sanitized_and_no_write(
+    app, client, session_maker
+):
+    from ditto.chain.errors import ChainTreasuryReceiptUnavailable
+
+    await install(app, session_maker)
+
+    class Unavailable:
+        async def get_treasury_receipt_proof(self, *_args, **_kwargs):
+            try:
+                raise ConnectionError("SECRET URL TOKEN PRIVATE SETTINGS")
+            except ConnectionError as error:
+                raise ChainTreasuryReceiptUnavailable(
+                    "receipt_identity", 3, timed_out=True
+                ) from error
+
+    app.state.chain = Unavailable()
+    response = await client.post(URL + "/preflight", headers=HEADERS, json=selection())
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "ready": False,
+        "receipt_id": None,
+        "already_recorded": False,
+        "refusal": "unavailable",
+        "read_phase": "receipt_identity",
+        "attempt_count": 3,
+        "timed_out": True,
+        "publication": "not_performed",
+        "spending_authority": "none",
+        "provider_credit_status": "not_proven",
+    }
+    assert "SECRET" not in response.text and "PRIVATE" not in response.text
+    unauthorized = await client.post(URL + "/preflight", json=selection())
+    assert unauthorized.status_code == 401
+    async with session_maker() as db:
+        assert list(await db.scalars(select(TreasuryVerifiedReceipt))) == []
+        assert list(await db.scalars(select(TreasuryPublicEvent))) == []

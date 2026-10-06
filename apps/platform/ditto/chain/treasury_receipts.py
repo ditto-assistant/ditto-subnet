@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
+from ditto.chain.errors import TreasuryReceiptReadProgress
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_RECEIPT_HASHES,
     FINNEY_GENESIS,
@@ -127,17 +128,22 @@ async def read_treasury_chain_proof(
     pinned_block: int,
     pinned_block_hash: str,
     pinned_uid: int,
+    progress: TreasuryReceiptReadProgress | None = None,
 ) -> TreasuryChainProof:
+    progress = progress or TreasuryReceiptReadProgress()
     substrate = _FinalizedReceiptSnapshot(substrate)
+    progress.phase = "pinned_finality"
     pinned_at, _, _ = await finalized_block(
         substrate, pinned_block, policy.genesis_hash
     )
     if pinned_at != pinned_block_hash:
         raise ValueError("historical approved epoch hash is noncanonical")
+    progress.phase = "payment_finality"
     at, _, code = await finalized_block(substrate, selector.block, policy.genesis_hash)
     if at != selector.block_hash:
         raise ValueError("receipt hash changed or is noncanonical")
     # The historical approval identity is reread at its exact canonical pin.
+    progress.phase = "pinned_identity"
     anchor = await read_finalized_collector_pin(
         substrate, policy, first_block=pinned_block, pinned_block=pinned_block
     )
@@ -157,9 +163,11 @@ async def read_treasury_chain_proof(
     source_hash = None
     credit = None
     if selector.source_block is not None:
+        progress.phase = "source_finality"
         source_hash, source_parent, _ = await finalized_block(
             substrate, selector.source_block, policy.genesis_hash
         )
+        progress.phase = "receipt_identity"
         identities = []
         for block in sorted(
             {
@@ -182,11 +190,13 @@ async def read_treasury_chain_proof(
         )
         if any(identity != approved_identity for identity in identities):
             raise ValueError("collector identity drift in receipt history")
+        progress.phase = "source_epoch"
         epoch = chain_uint(
             await read("SubtensorModule", "SubnetEpochIndex", [118], source_hash)
         )
         if epoch != selector.epoch_index:
             raise ValueError("earning differs from historical epoch")
+        progress.phase = "autostake_route"
         for pinned in (source_parent, source_hash):
             route = await read(
                 "SubtensorModule",
@@ -196,6 +206,7 @@ async def read_treasury_chain_proof(
             )
             if route != policy.collector_hotkey:
                 raise ValueError("collector earning route is not liquid SN118")
+        progress.phase = "source_events"
         source_events = await read("System", "Events", [], source_hash)
         if not isinstance(source_events, list):
             raise ValueError("source credit events unavailable")
@@ -217,6 +228,7 @@ async def read_treasury_chain_proof(
     ):
         raise ValueError("vendor payment differs from historical policy epoch")
 
+    progress.phase = "payment_extrinsic"
     raw = await substrate.rpc_request("chain_getBlock", [at])
     raw_block = raw.get("result", {}).get("block", {}) if isinstance(raw, dict) else {}
     encoded = raw_block.get("extrinsics")
@@ -254,6 +266,7 @@ async def read_treasury_chain_proof(
             raise ValueError("receipt proxy real origin differs from sender")
     elif origin != sender:
         raise ValueError("receipt signed origin differs from sender")
+    progress.phase = "payment_events"
     events = await read("System", "Events", [], at)
     if not isinstance(events, list):
         raise ValueError("receipt events unavailable")
@@ -319,6 +332,7 @@ async def read_treasury_chain_proof(
             raise ValueError("TAO transfer differs from exact payee rule")
     else:
         raise ValueError("asset effect decoder is not implemented")
+    progress.phase = "timestamp"
     timestamp = chain_uint(await read("Timestamp", "Now", [], at))
     return TreasuryChainProof(
         source_hash,

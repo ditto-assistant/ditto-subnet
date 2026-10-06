@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.treasury_ingress import (
     TreasuryReceiptPage,
+    TreasuryReceiptPreflight,
     TreasuryReceiptResult,
     TreasuryReceiptSelector,
 )
@@ -17,9 +18,10 @@ from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.treasury_ingress import (
     ReceiptConflict,
     ingest_receipt,
+    preflight_receipt,
     receipt_result,
 )
-from ditto.chain.errors import ChainError
+from ditto.chain.errors import ChainError, ChainTreasuryReceiptUnavailable
 from ditto.db.models import TreasuryVerifiedReceipt
 
 router = APIRouter(prefix="/admin/treasury-receipts", tags=["admin"])
@@ -71,3 +73,29 @@ async def record_treasury_receipt(
         raise HTTPException(
             status_code=503, detail="finalized treasury receipt unavailable"
         ) from error
+
+
+@router.post("/preflight", response_model=TreasuryReceiptPreflight)
+async def get_treasury_receipt_preflight(
+    payload: TreasuryReceiptSelector,
+    request: Request,
+    _admin: Annotated[None, Depends(require_admin)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> TreasuryReceiptPreflight:
+    """POST carries bounded selectors, but never locks, writes or signs."""
+    try:
+        return await preflight_receipt(session, request.app.state.chain, payload)
+    except ReceiptConflict:
+        return TreasuryReceiptPreflight(ready=False, refusal="conflict")
+    except ValueError:
+        return TreasuryReceiptPreflight(ready=False, refusal="invalid_or_unsupported")
+    except ChainTreasuryReceiptUnavailable as error:
+        return TreasuryReceiptPreflight(
+            ready=False,
+            refusal="unavailable",
+            read_phase=error.read_phase,
+            attempt_count=error.attempt_count,
+            timed_out=error.timed_out,
+        )
+    except ChainError:
+        return TreasuryReceiptPreflight(ready=False, refusal="unavailable")

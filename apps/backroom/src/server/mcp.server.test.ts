@@ -107,6 +107,31 @@ describe('Backroom MCP tools', () => {
     } finally { await writer.client.close(); await writer.server.close() }
   })
 
+  it('preflights a receipt with read scope and never invokes receipt ingress', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const selection = { stage: 'service_distribution', epoch_index: 9, bucket_id: 'gamma', source_block: 100,
+      block: 130, block_hash: '0x' + 'ab'.repeat(32), extrinsic_index: 0,
+      extrinsic_hash: '0x' + 'cd'.repeat(32), amount_atomic: 25, reason: 'Read exact finalized receipt',
+      payee_rule_id: null, parent_receipt_id: null }
+    const output = { ready: false, receipt_id: null, already_recorded: false, refusal: 'unavailable',
+      read_phase: 'source_events', attempt_count: 3, timed_out: true, publication: 'not_performed',
+      spending_authority: 'none', provider_credit_status: 'not_proven' }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(output))
+    vi.stubGlobal('fetch', fetchMock)
+    const readonly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const result = await readonly.client.callTool({ name: 'get_treasury_receipt_preflight', arguments: { selectorJson: JSON.stringify({
+        ...selection, actor: 'FORGED', confirmation: 'IGNORED', finalized: true }) } })
+      expect(result.isError).not.toBe(true)
+      expect(readJsonResult(result)).toEqual(output)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/admin/treasury-receipts/preflight')
+      expect(JSON.parse(String(init.body))).toEqual(selection)
+      expect(init.headers).not.toHaveProperty('X-Admin-Actor')
+    } finally { await readonly.client.close(); await readonly.server.close() }
+  })
+
   it('records a verified receipt with signed actor and refuses read-only, imprecise or unconfirmed writes', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const selection = {
@@ -438,6 +463,7 @@ describe('Backroom MCP tools', () => {
         'get_submission_cooldown',
         'get_treasury_settings',
         'get_treasury_receipts',
+        'get_treasury_receipt_preflight',
         'get_treasury_activation_preflight',
         'get_treasury_ledger_readiness',
         'quote_treasury_topup',

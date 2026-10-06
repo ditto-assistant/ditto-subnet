@@ -16,7 +16,7 @@ import { observerGrant } from './treasury-observer-access.server'
 import { createTreasuryObserverServer } from './treasury-observer-mcp.server'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
-import { fetchTreasuryReceipts, recordTreasuryReceipt } from './admin.service'
+import { fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight } from './admin.service'
 import { fetchTreasuryActivationPreflight, fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 import { fetchTreasuryRuntime, recordTreasuryRuntime } from './admin.service'
 import { recordTreasuryRuntimeInputSchema } from '../lib/treasury-ledger.schemas'
@@ -667,6 +667,8 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
+  list_screening_disputes: 'Page screening/scored-note appeals oldest-first; count/limit/offset. See help.',
+  refresh_benchmark_contract: 'Rescreen exact contract with guards; expire tickets, preserve scores/owner. Write scope; see help.',
   get_copy_review_source_diff:
     'Per-file held/reference source diff with rename and normalized identity. Artifact scope; bodies via file reader.',
   apply_copy_court_settings:
@@ -916,6 +918,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_treasury_ledger_readiness: 'Read epoch/policy readiness; no activation.',
   record_treasury_settings: 'Record shadow buckets with CAS/confirmation; no weights or funds.',
   get_treasury_receipts: 'Read treasury receipt history/publication.',
+  get_treasury_receipt_preflight: 'Read exact receipt readiness/archive checkpoint; no writes.',
   record_treasury_receipt: 'Ingest finalized receipt; no signing/provider credit.',
   quote_treasury_topup: 'Quote GM routes/impact; no execution.',
   preview_treasury_topup: 'Preview GM against shadow limits; no execution.',
@@ -3466,6 +3469,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_treasury_receipts',
     { title: 'Read verified treasury receipts', description: 'Read up to 100 independently finalized receipt records, including publication-off observations, historical policy digest, source selector and provider-credit not_proven state. No spending authority. Requires backroom:read.', annotations: toolAnnotations('read') },
     async () => result(await fetchTreasuryReceipts()),
+  )
+  registerTool(
+    'get_treasury_receipt_preflight',
+    { title: 'Preflight exact finalized treasury receipt', description: 'Read-only exact historical policy, destination, finalized runtime and effect validation with sanitized archive checkpoint on failure. No receipt publication, allocation reservation, signing or provider credit. Ingress repeats all checks. Requires backroom:read.', inputSchema: { selectorJson: z.string().min(2).max(4096).describe('Exact receipt selector JSON; no secrets.') }, annotations: toolAnnotations('read') },
+    async (input) => result(await fetchTreasuryReceiptPreflight(JSON.parse(input.selectorJson))),
   )
   registerTool(
     'record_treasury_receipt',

@@ -3424,6 +3424,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/treasury-receipts/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get Treasury Receipt Preflight
+         * @description POST carries bounded selectors, but never locks, writes or signs.
+         */
+        post: operations["get_treasury_receipt_preflight_api_v1_admin_treasury_receipts_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/treasury-runtime": {
         parameters: {
             query?: never;
@@ -33653,6 +33673,50 @@ export interface components {
             /** Items */
             items: components["schemas"]["TreasuryReceiptResult"][];
         };
+        /** TreasuryReceiptPreflight */
+        TreasuryReceiptPreflight: {
+            /**
+             * Already Recorded
+             * @default false
+             */
+            already_recorded: boolean;
+            /**
+             * Attempt Count
+             * @default 0
+             */
+            attempt_count: number;
+            /**
+             * Provider Credit Status
+             * @default not_proven
+             * @constant
+             */
+            provider_credit_status: "not_proven";
+            /**
+             * Publication
+             * @default not_performed
+             * @constant
+             */
+            publication: "not_performed";
+            /** Read Phase */
+            read_phase?: ("connection" | "pinned_finality" | "payment_finality" | "pinned_identity" | "source_finality" | "receipt_identity" | "source_epoch" | "autostake_route" | "source_events" | "payment_extrinsic" | "payment_events" | "timestamp" | "connection_close") | null;
+            /** Ready */
+            ready: boolean;
+            /** Receipt Id */
+            receipt_id?: string | null;
+            /** Refusal */
+            refusal?: ("unavailable" | "invalid_or_unsupported" | "conflict") | null;
+            /**
+             * Spending Authority
+             * @default none
+             * @constant
+             */
+            spending_authority: "none";
+            /**
+             * Timed Out
+             * @default false
+             */
+            timed_out: boolean;
+        };
         /** TreasuryReceiptResult */
         TreasuryReceiptResult: {
             /** Amount Atomic */
@@ -43309,6 +43373,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TreasuryReceiptResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_treasury_receipt_preflight_api_v1_admin_treasury_receipts_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TreasuryReceiptSelector"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasuryReceiptPreflight"];
                 };
             };
             /** @description Validation Error */
