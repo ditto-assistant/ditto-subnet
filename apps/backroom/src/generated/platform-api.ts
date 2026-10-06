@@ -28224,6 +28224,7 @@ export interface components {
              * @constant
              */
             routing_status: "not_activated";
+            runtime?: components["schemas"]["PublicTreasuryRuntime"];
             /** Service Bps */
             service_bps: number;
             /** Sweep Interval Hours */
@@ -28328,6 +28329,27 @@ export interface components {
             items: components["schemas"]["PublicTreasuryEvent"][];
             /** Next Before */
             next_before: number | null;
+        };
+        /**
+         * PublicTreasuryRuntime
+         * @description Recorded control only; no chain dispatch, payment or signer authority.
+         */
+        PublicTreasuryRuntime: {
+            /** Activation Epoch */
+            activation_epoch?: number | null;
+            /** Allocation Matches */
+            allocation_matches?: boolean | null;
+            /**
+             * Mode
+             * @default not_recorded
+             * @enum {string}
+             */
+            mode: "not_recorded" | "observe" | "enforce" | "pause" | "unavailable";
+            /**
+             * Revision
+             * @default 0
+             */
+            revision: number;
         };
         /**
          * PublicV13ReviewClockRevision
