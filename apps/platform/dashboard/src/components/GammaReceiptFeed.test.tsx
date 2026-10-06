@@ -27,7 +27,10 @@ it("shows the actual chain transaction and keeps GM credit unproven", async () =
     ],
   });
   render(() => <GammaReceiptFeed />);
-  await screen.findByText("Transaction: verified-transaction");
+  const transaction = await screen.findByRole("link", { name: "verified-transaction" });
+  expect(transaction).toHaveAttribute("href", "https://taostats.io/extrinsic/verified-transaction");
+  expect(transaction).toHaveAttribute("target", "_blank");
+  expect(transaction).toHaveAttribute("rel", "noopener noreferrer");
   expect(screen.getByText("GM credits not proven")).toBeInTheDocument();
   expect(screen.getByText(/0.1 SN118_ALPHA/)).toBeInTheDocument();
   expect(screen.queryByText(/No finalized/)).not.toBeInTheDocument();

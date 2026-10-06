@@ -22,9 +22,11 @@ from ditto_screening_protocol.treasury_approval import (
     verify_public_signature,
 )
 from ditto_screening_protocol.treasury_enforcement import (
+    TREASURY_WEIGHT_PROTOCOL,
     EnforcingTreasuryPin,
     TreasuryFleetMember,
     require_treasury_weight_authority,
+    treasury_follower_capability,
 )
 from ditto_screening_protocol.treasury_identity import (
     TreasuryDispatchObservation,
@@ -223,10 +225,27 @@ async def require_enforcing_requester(
         collector_digest=pin.policy.collector_policy_digest,
         required_hotkeys=tuple(member.validator_hotkey for member in pin.fleet),
     )
-    if fleet != pin.fleet or hotkey not in {
-        member.validator_hotkey for member in fleet
-    }:
-        raise ValueError("treasury requester or live fleet differs from immutable pin")
+    if fleet != pin.fleet:
+        raise ValueError("live managed fleet differs from immutable pin")
+    member = next((m for m in fleet if m.validator_hotkey == hotkey), None)
+    if member is None:
+        # Managed activation is a producer gate, not a ledger-read allowlist.
+        # Independent validators consume this same signed pin without needing
+        # our deployment's approval file or joining our managed roster.
+        row = await session.get(ValidatorHeartbeat, hotkey)
+        seen_at = row.seen_at if row is not None else None
+        if seen_at is not None and seen_at.tzinfo is None:
+            seen_at = seen_at.replace(tzinfo=UTC)
+        if (
+            row is None
+            or seen_at is None
+            or not now - TREASURY_FLEET_FRESHNESS <= seen_at <= now
+            or row.protocol_version < TREASURY_WEIGHT_PROTOCOL
+        ):
+            raise ValueError("treasury follower requires a fresh protocol 30 heartbeat")
+        member = treasury_follower_capability(
+            pin, validator_hotkey=hotkey, protocol_version=row.protocol_version
+        )
     observed = await current_managed_dispatch_observation(
         app_state.chain,
         pin.policy,
@@ -236,7 +255,7 @@ async def require_enforcing_requester(
         pin,
         expected_policy_digest=config.treasury_approved_policy_digest,
         expected_collector_policy_digest=config.treasury_approved_collector_policy_digest,
-        local_capability=next(m for m in fleet if m.validator_hotkey == hotkey),
+        local_capability=member,
         current_identity=observed.identity,
         netuid=app_state.config.chain.netuid,
         current_epoch_index=observed.epoch_index,

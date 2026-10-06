@@ -2,6 +2,55 @@
 
 <!-- version list -->
 
+## v0.355.4 (2026-10-06)
+
+### Performance Improvements
+
+- **platform**: Correlate screening aggregates per agent and bound remaining details reads
+  ([#2761](https://github.com/ditto-assistant/ditto-subnet/pull/2761),
+  [`43d3315`](https://github.com/ditto-assistant/ditto-subnet/commit/43d3315420c9f86d6d186e71a9cba1729ea36d0e))
+
+
+## v0.355.3 (2026-10-06)
+
+### Bug Fixes
+
+- **dashboard**: Link gamma receipts to Taostats transactions
+  ([`4944ed3`](https://github.com/ditto-assistant/ditto-subnet/commit/4944ed374333fe1b744a5313fb0b300b5e4c7b60))
+
+
+## v0.355.2 (2026-10-06)
+
+### Bug Fixes
+
+- **platform**: Recover invalid audit index during migration retries
+  ([#2758](https://github.com/ditto-assistant/ditto-subnet/pull/2758),
+  [`8291c4d`](https://github.com/ditto-assistant/ditto-subnet/commit/8291c4d05f87890e7b96759d92cac0c5a07da953))
+
+- **treasury**: Let all validators follow the signed gamma ledger
+  ([#2757](https://github.com/ditto-assistant/ditto-subnet/pull/2757),
+  [`b15c03d`](https://github.com/ditto-assistant/ditto-subnet/commit/b15c03d6832a769723d042e595da670dcc8901da))
+
+
+## v0.355.1 (2026-10-06)
+
+### Bug Fixes
+
+- **platform**: Collapse owner families after the registration filter
+  ([#2701](https://github.com/ditto-assistant/ditto-subnet/pull/2701),
+  [`fd17b78`](https://github.com/ditto-assistant/ditto-subnet/commit/fd17b7856354f7bd21da9cd043119c20745581e7))
+
+- **validator**: Stop polling the ledger while waiting for the weight window
+  ([#2754](https://github.com/ditto-assistant/ditto-subnet/pull/2754),
+  [`2123eac`](https://github.com/ditto-assistant/ditto-subnet/commit/2123eac1db04845ffc1af4f4d9b00bea0e428ec1))
+
+### Chores
+
+- **skills**: Add contributor PR review workflow
+  ([#2756](https://github.com/ditto-assistant/ditto-subnet/pull/2756),
+  [`4bb23de`](https://github.com/ditto-assistant/ditto-subnet/commit/4bb23de1f035233f28cdea3a70228938ad755703))
+
+
 ## v0.355.0 (2026-10-06)
 
 ### Features

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from bittensor_wallet import Keypair
 
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.validator import LedgerResponse
@@ -76,6 +77,63 @@ def make_worker(tmp_path, monkeypatch, *, empty=False, burn=0, service_bps=1000)
         recover=AsyncMock(), submit=AsyncMock(return_value=True)
     )
     return worker, ledger, chain
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [None, "signature", "identity", "partial_config", "receipt", "untrusted_signer"],
+)
+async def test_external_worker_without_managed_config_verifies_pin_and_transport(
+    tmp_path, monkeypatch, fault
+):
+    managed, _, _ = make_worker(tmp_path, monkeypatch)
+    expected = (await managed._update_weights()).weights
+    worker, ledger, chain = make_worker(tmp_path, monkeypatch)
+    worker._config.validator_hotkey = Keypair.create_from_uri("//Dave").ss58_address
+    worker._config.treasury_approval_file = None
+    worker._config.treasury_approved_policy_digest = None
+    worker._config.treasury_collector_policy_digest = None
+    chain.get_treasury_weight_capability.return_value = None
+    if fault != "untrusted_signer":
+        policy = ledger.treasury_pin.policy
+        monkeypatch.setattr(
+            "ditto_screening_protocol.treasury_approval.SN118_FOLLOWER_AUTHORITY",
+            (policy.genesis_hash, policy.netuid, policy.collector_coldkey),
+        )
+    if fault == "signature":
+        pin = ledger.treasury_pin
+        worker._platform.get_ledger.return_value = ledger.model_copy(
+            update={
+                "treasury_pin": pin.model_copy(
+                    update={
+                        "approval": pin.approval.model_copy(
+                            update={"signature": "0x" + "00" * 64}
+                        )
+                    }
+                )
+            }
+        )
+    elif fault == "identity":
+        observed = chain.get_treasury_dispatch_observation.return_value
+        chain.get_treasury_dispatch_observation.return_value = observed.model_copy(
+            update={"identity": observed.identity.model_copy(update={"uid": 1})}
+        )
+    elif fault == "partial_config":
+        worker._config.treasury_approved_policy_digest = "a" * 64
+    elif fault == "receipt":
+        worker._weight_receipt_relay.submit.return_value = None
+    result = await worker._update_weights()
+    assert result.submitted is (fault is None)
+    if fault is None:
+        assert result.weights == expected
+        chain.get_treasury_dispatch_observation.assert_awaited_once_with(
+            ledger.treasury_pin.policy
+        )
+        worker._weight_receipt_relay.submit.assert_awaited_once()
+    elif fault != "receipt":
+        worker._weight_receipt_relay.submit.assert_not_awaited()
+    worker._put_weights_with_retry.assert_not_awaited()
+    chain.get_treasury_weight_capability.assert_not_awaited()
 
 
 @pytest.mark.parametrize("empty", [False, True])

@@ -17,6 +17,7 @@ from sqlalchemy import (
     exists,
     false,
     func,
+    lateral,
     or_,
     select,
     true,
@@ -509,7 +510,7 @@ def screening_last_served_at() -> ColumnElement[Any]:
 
 
 def screening_score_aggregates() -> tuple[Any, Any]:
-    """One grouped aggregate relation per agent, joined once by each caller.
+    """One LATERAL aggregate pair per candidate agent, outerjoined by callers.
 
     The three aggregates the screening order needs (accepted-score count,
     average composite, and the latest current-policy screening-consumption
@@ -517,21 +518,24 @@ def screening_score_aggregates() -> tuple[Any, Any]:
     inside the ORDER BY, so PostgreSQL re-evaluated each of them for every
     candidate row on every sort term — the production audit measured an empty
     claim spending 6.5-13.7 s inside the claim transaction. Grouping them per
-    agent once and joining the result turns repeated correlated probes into one
-    aggregation pass over the scores and attempts tables.
+    agent once and joining the result fixed that, but a plain grouped relation
+    has no WHERE on the candidate set, so every claim aggregated the entire
+    ``scores`` table. Each aggregate is now LATERAL: correlated on the outer
+    agent, so the planner probes one agent's rows per candidate (an index
+    lookup against the claimable set) instead of one whole-table aggregation
+    pass per claim, while each aggregate still runs exactly once per row.
     """
-    score_count = (
+    score_count = lateral(
         select(
-            Score.agent_id.label("agent_id"),
-            func.count().label("score_count"),
+            func.count(Score.composite).label("score_count"),
             func.avg(Score.composite).label("provisional_composite"),
         )
-        .group_by(Score.agent_id)
+        .where(Score.agent_id == Agent.agent_id)
+        .correlate(Agent)
         .subquery()
     )
-    last_served = (
+    last_served = lateral(
         select(
-            ScreeningAttempt.agent_id.label("agent_id"),
             func.max(
                 func.coalesce(
                     ScreeningAttempt.finished_at,
@@ -540,8 +544,11 @@ def screening_score_aggregates() -> tuple[Any, Any]:
                 )
             ).label("last_served_at"),
         )
-        .where(ScreeningAttempt.policy_version == effective_screening_policy_version())
-        .group_by(ScreeningAttempt.agent_id)
+        .where(
+            ScreeningAttempt.agent_id == Agent.agent_id,
+            ScreeningAttempt.policy_version == effective_screening_policy_version(),
+        )
+        .correlate(Agent)
         .subquery()
     )
     return (score_count, last_served)
@@ -1515,14 +1522,9 @@ async def claim_screening_attempts(
     agents = list(
         await session.scalars(
             select(Agent)
-            .outerjoin(
-                score_aggregates[0],
-                score_aggregates[0].c.agent_id == Agent.agent_id,
-            )
-            .outerjoin(
-                score_aggregates[1],
-                score_aggregates[1].c.agent_id == Agent.agent_id,
-            )
+            # LATERAL aggregates carry their own correlation; no ON clause.
+            .outerjoin(score_aggregates[0], onclause=true())
+            .outerjoin(score_aggregates[1], onclause=true())
             .outerjoin(
                 candidate_payment,
                 candidate_payment.agent_id == Agent.agent_id,

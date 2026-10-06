@@ -1311,7 +1311,16 @@ async def _materialize_epoch(
         agent_ids = [row.agent_id for row in rows]
         versions = dict.fromkeys(agent_ids, bench_version)
 
-    score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
+    # Both token-cost curves read only these keys out of each score's details
+    # (legacy: token_usage; factor curves: the signature-bound v9 base root),
+    # so the quorum read projects the blob down to exactly that superset
+    # instead of shipping the full per-case audit document.
+    score_rows = await quorum_score_rows(
+        session,
+        agent_ids,
+        bench_versions=versions,
+        details_keys=("token_usage", "v9_base", "base_evidence_sha256"),
+    )
     if is_factor_curve(curve_version):
         from ditto.db.queries.confirmation_scores import (
             ConfirmationEfficiencyCosts,
@@ -1608,7 +1617,13 @@ async def preview_efficiency_board(
         return None
     agent_ids = [row.agent_id for row in rows]
     versions = dict.fromkeys(agent_ids, bench_version)
-    score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
+    # Both token-cost curves read only these keys (see _materialize_epoch).
+    score_rows = await quorum_score_rows(
+        session,
+        agent_ids,
+        bench_versions=versions,
+        details_keys=("token_usage", "v9_base", "base_evidence_sha256"),
+    )
     curve_version = (
         CURVE_VERSION_UNBOUNDED_FACTOR
         if bench_version >= BOUNDED_FACTOR_BENCH_VERSION

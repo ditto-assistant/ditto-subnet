@@ -276,7 +276,16 @@ export function ActivityPage(): JSX.Element {
                         <Show when={item.extrinsic_hash}>
                           <div>
                             <dt>Transaction ID</dt>
-                            <dd>{item.extrinsic_hash}</dd>
+                            <dd>
+                              <a
+                                href={`https://taostats.io/extrinsic/${encodeURIComponent(item.extrinsic_hash!)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="View transaction on Taostats (opens in a new tab)"
+                              >
+                                {item.extrinsic_hash}
+                              </a>
+                            </dd>
                           </div>
                         </Show>
                         <div>

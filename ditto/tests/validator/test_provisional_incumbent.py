@@ -366,13 +366,6 @@ class TestWorkerComposition:
         # Exactly what protocol 27 does when a payable incumbent deregisters.
         assert outcome.weights == {runner_up.miner_hotkey: pytest.approx(1.0)}
 
-    async def test_the_king_watch_sees_the_crown_the_fold_defends(self) -> None:
-        held, runner_up = _held_and_runner_up()
-        worker = _worker(_ledger([runner_up], held))
-        available, king = await worker._observe_platform_king()
-        assert available
-        assert king is not None and king[1] == held.agent_id
-
 
 class TestByteIdentityWithoutAProvisionalIncumbent:
     """Every ledger that does not serve a provisional incumbent -- or serves

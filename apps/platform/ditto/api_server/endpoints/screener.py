@@ -55,7 +55,7 @@ from fastapi import (
     Request,
     Response,
 )
-from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy import exists, func, or_, select, true, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -3449,20 +3449,16 @@ async def queue(
     stale_scored_rescreen = (
         screener_policy.rescreen_stale_agents and screener_policy.rescreen_scored
     )
-    # Precompute the per-agent score aggregates once rather than letting
-    # PostgreSQL re-evaluate correlated ORDER BY subqueries per candidate row.
+    # Precompute the per-agent score aggregates once per row: the LATERAL form
+    # correlates each aggregate on the outer agent, so the planner probes one
+    # agent's rows per candidate instead of aggregating the whole scores table.
     score_aggregates = screening_score_aggregates()
     agents = (
         await session.scalars(
             select(Agent)
-            .outerjoin(
-                score_aggregates[0],
-                score_aggregates[0].c.agent_id == Agent.agent_id,
-            )
-            .outerjoin(
-                score_aggregates[1],
-                score_aggregates[1].c.agent_id == Agent.agent_id,
-            )
+            # LATERAL aggregates carry their own correlation; no ON clause.
+            .outerjoin(score_aggregates[0], onclause=true())
+            .outerjoin(score_aggregates[1], onclause=true())
             .where(
                 or_(
                     Agent.status == AgentStatus.UPLOADED,

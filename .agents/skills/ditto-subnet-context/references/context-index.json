@@ -28,6 +28,19 @@
       "related": ["overview", "agent-skills"]
     },
     {
+      "id": "contributor-pr-review",
+      "title": "Contributor pull request review and completion",
+      "keywords": ["contributor", "contrib", "contributor PR", "contributor backlog", "batch PR review", "review all PRs", "contributor-pr-review"],
+      "summary": "Resolve a contributor's open backlog by validating real issues, repairing worthwhile patches, and merging or closing each PR within the user's authorization.",
+      "skills": ["contributor-pr-review", "github", "ditto-subnet-worktree"],
+      "owns": [".agents/skills/contributor-pr-review"],
+      "read": [".agents/skills/contributor-pr-review/SKILL.md", ".agents/skills/github/SKILL.md", ".agents/skills/ditto-subnet-worktree/SKILL.md"],
+      "search": ["gh pr list --repo ditto-assistant/ditto-subnet --author <login> --state open --limit 100 --json number,title,headRefOid,url", "git status --short --branch"],
+      "validate": ["uv run pytest ditto/tests/test_agent_skills.py -q", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "git diff --check"],
+      "invariants": ["Each PR needs evidence that it solves a current problem, not only passing checks.", "Repair worthwhile original PRs when permitted; close unsuitable approaches without closing genuine unresolved issues.", "Verify final heads and completed merge or closure state; merge authority does not authorize production activation."],
+      "related": ["worktrees", "agent-skills", "contracts", "release-delivery"]
+    },
+    {
       "id": "agent-skills",
       "title": "Agent skill trees and context routing",
       "keywords": ["agent skills", "agent skill", "context index", "lookup-context", "skill routing", "claude skills", "claude skill", "agents skills", "skill symlink", "context lookup", "ditto-subnet"],
