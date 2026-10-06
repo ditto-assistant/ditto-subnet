@@ -3,6 +3,7 @@ override_resource {
   target          = google_service_account.collector_delegate["transfer"]
   override_during = plan
   values = {
+    name  = "projects/sn118-gamma-custody/serviceAccounts/sn118-collector-transfer@sn118-gamma-custody.iam.gserviceaccount.com"
     email = "sn118-collector-transfer@sn118-gamma-custody.iam.gserviceaccount.com"
   }
 }
