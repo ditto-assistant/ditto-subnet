@@ -373,7 +373,13 @@ class LedgerRow:
     the score ``details`` JSON.
     """
     stored_composite_stderr: float | None = None
-    """Small ranking scalar projected from score details after winner selection."""
+    """Small ranking scalar projected from score details after winner selection.
+
+    Populated from the fetched details blob, from the ``composite_stderr`` key
+    when a ``details_keys`` projection is requested (include it in the key set
+    or this field reads None), or from a standalone scalar extraction when no
+    details are shipped at all.
+    """
     family_members: tuple[LedgerFamilyMember, ...] = ()
     """Compact owner-family rows, populated only for leaderboard list reads."""
     crown_first_seen: datetime | None = None
