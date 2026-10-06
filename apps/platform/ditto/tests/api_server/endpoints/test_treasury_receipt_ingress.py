@@ -54,7 +54,7 @@ def event(module, name, attrs, index=0, phase="ApplyExtrinsic"):
     }
 
 
-def fixture():
+def fixture(*, policy_revision=None):
     raw = json.loads(
         (
             Path(__file__).resolve().parents[6]
@@ -63,6 +63,8 @@ def fixture():
         ).read_text()
     )
     raw["policy"]["genesis_hash"] = FINNEY_GENESIS
+    if policy_revision is not None:
+        raw["policy"]["revision"] = policy_revision
     policy = TreasuryEmissionPolicy.model_validate(raw["policy"])
     raw["policy_digest"] = policy.digest
     raw["pinned_block_hash"] = h(101)
@@ -278,8 +280,16 @@ class Chain:
         )
 
 
-async def install(app, session_maker, *, publish=True, fault=None):
-    pin, settings = fixture()
+async def install(
+    app,
+    session_maker,
+    *,
+    publish=True,
+    fault=None,
+    policy_revision=None,
+    settings_revision=1,
+):
+    pin, settings = fixture(policy_revision=policy_revision)
     if fault == "signature":
         pin = pin.model_copy(
             update={
@@ -305,8 +315,8 @@ async def install(app, session_maker, *, publish=True, fault=None):
     async with session_maker() as session:
         session.add(
             TreasurySettingsRevision(
-                revision=1,
-                parent_revision=0,
+                revision=settings_revision,
+                parent_revision=settings_revision - 1,
                 settings=settings.model_dump(mode="json"),
                 checksum=digest(settings.model_dump(mode="json"))
                 if fault != "checksum"
@@ -445,6 +455,90 @@ async def test_publication_off_is_private_durable_not_dropped(
     )
     assert (await client.get("/api/v1/public/treasury-activity")).json()["items"] == []
     assert len((await client.get(URL, headers=HEADERS)).json()["items"]) == 1
+
+
+@pytest.mark.parametrize("publish", [True, False])
+@pytest.mark.parametrize("numeric_alias", [True, False])
+async def test_offline_policy_revision_is_not_operator_settings_revision(
+    app, client, session_maker, publish, numeric_alias
+):
+    pin, settings, _ = await install(
+        app, session_maker, policy_revision=5, settings_revision=2, publish=publish
+    )
+    # A later row even with the offline policy's numeric revision must not
+    # supply historical publication/payee rules. The complete signed routing
+    # tuple still matches; only publication is changed.
+    later = settings.model_copy(
+        update={
+            "service_buckets": [
+                settings.service_buckets[0].model_copy(
+                    update={"publish_payments": not publish}
+                )
+            ]
+        }
+    )
+    if numeric_alias:
+        async with session_maker() as db:
+            db.add(
+                TreasurySettingsRevision(
+                    revision=5,
+                    parent_revision=4,
+                    settings=later.model_dump(mode="json"),
+                    checksum=digest(later.model_dump(mode="json")),
+                    reason="Synthetic later publication policy",
+                    actor="synthetic-later-operator",
+                    created_at=datetime(2021, 1, 1, tzinfo=UTC),
+                )
+            )
+            await db.commit()
+    result = await client.post(URL, headers=HEADERS, json=selection())
+    assert result.status_code == 200, result.text
+    assert result.json()["published"] is publish
+    replay = await client.post(URL, headers=HEADERS, json=selection())
+    assert replay.status_code == 200 and replay.json()["replayed"]
+    async with session_maker() as db:
+        receipt = await db.get(TreasuryVerifiedReceipt, result.json()["receipt_id"])
+        assert receipt.settings_revision == 2
+        assert receipt.policy_digest == pin.policy.digest
+        events = list(await db.scalars(select(TreasuryPublicEvent)))
+        assert len(events) == int(publish)
+        if publish:
+            assert events[0].policy_revision == 5
+    vendor = await client.post(URL, headers=HEADERS, json=selection("vendor_payment"))
+    assert vendor.status_code == 200, vendor.text
+    assert vendor.json()["published"] is publish
+
+
+@pytest.mark.parametrize("fault", ["checksum", "routing", "schema"])
+async def test_latest_settings_before_epoch_pin_must_validate_without_fallback(
+    app, client, session_maker, fault
+):
+    _, settings, _ = await install(app, session_maker)
+    body = settings.model_dump(mode="json")
+    if fault == "routing":
+        body["service_buckets"][0]["holding_coldkey"] = Keypair.create_from_uri(
+            "//Eve"
+        ).ss58_address
+    elif fault == "schema":
+        body["allocation_version"] = 999
+    async with session_maker() as db:
+        db.add(
+            TreasurySettingsRevision(
+                revision=2,
+                parent_revision=1,
+                settings=body,
+                checksum="0" * 64 if fault == "checksum" else digest(body),
+                reason="Synthetic invalid latest historical settings",
+                actor="synthetic-operator",
+                created_at=datetime(2020, 1, 1, tzinfo=UTC),
+            )
+        )
+        await db.commit()
+    response = await client.post(URL, headers=HEADERS, json=selection())
+    assert response.status_code == 422, response.text
+    async with session_maker() as db:
+        assert list(await db.scalars(select(TreasuryVerifiedReceipt))) == []
+        assert list(await db.scalars(select(TreasuryPublicEvent))) == []
 
 
 @pytest.mark.parametrize(

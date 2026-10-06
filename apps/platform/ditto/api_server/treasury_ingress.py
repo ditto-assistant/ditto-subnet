@@ -97,7 +97,17 @@ async def ingest_receipt(
         raise ValueError("source earning precedes pinned epoch")
     if selector.block < pin.pinned_block:
         raise ValueError("payment precedes historical approved epoch")
-    revision = await session.get(TreasurySettingsRevision, policy.revision)
+    # Offline approvals and operator settings have independent revision counters.
+    # Bind publication/payee rules to the latest append-only settings recorded
+    # by the immutable epoch pin's time, never today's settings or a numerically
+    # matching offline revision. Validate that row below; do not search backward
+    # for an older row that happens to match the signed destinations.
+    revision = await session.scalar(
+        select(TreasurySettingsRevision)
+        .where(TreasurySettingsRevision.created_at <= ledger.pinned_at)
+        .order_by(TreasurySettingsRevision.revision.desc())
+        .limit(1)
+    )
     if revision is None or digest(revision.settings) != revision.checksum:
         raise ValueError("historical settings checksum invalid or absent")
     settings = TreasurySettings.model_validate(revision.settings)
@@ -329,7 +339,7 @@ async def ingest_receipt(
         stage=selector.stage,
         parent_receipt_id=selector.parent_receipt_id,
         epoch_index=selector.epoch_index,
-        settings_revision=policy.revision,
+        settings_revision=revision.revision,
         policy_digest=policy.digest,
         collector_policy_digest=policy.collector_policy_digest,
         bucket_id=bucket.bucket_id,
