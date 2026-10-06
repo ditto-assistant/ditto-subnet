@@ -3,6 +3,9 @@
 import base64
 import json
 import re
+from threading import Lock
+from time import monotonic
+from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 MAX_BYTES = 131072
@@ -25,6 +28,8 @@ class TreasuryMailbox:
         self.topic = f"projects/{project}/topics/{topic}"
         self.subscription = f"projects/{project}/subscriptions/{subscription}"
         self.opener = build_opener(ProxyHandler({}), NoRedirect)
+        self._cached_token = None
+        self._token_lock = Lock()
 
     def _json(self, request, *, allow_empty=False):
         with self.opener.open(request, timeout=30) as response:
@@ -38,30 +43,57 @@ class TreasuryMailbox:
             raise ValueError("mailbox object required")
         return body
 
-    def _call(self, resource, method, body):
-        token = self._json(
-            Request(
-                "http://metadata.google.internal/computeMetadata/v1/instance/"
-                "service-accounts/default/token",
-                headers={"Metadata-Flavor": "Google"},
+    def _token(self):
+        # Memory only, monotonic deadline, refresh before expiration. The lock
+        # prevents concurrent to_thread calls from stampeding metadata.
+        with self._token_lock:
+            now = monotonic()
+            if self._cached_token and now < self._cached_token[1]:
+                return self._cached_token[0]
+            self._cached_token = None
+            info = self._json(
+                Request(
+                    "http://metadata.google.internal/computeMetadata/v1/instance/"
+                    "service-accounts/default/token",
+                    headers={"Metadata-Flavor": "Google"},
+                )
             )
-        )["access_token"]
+            token = info["access_token"]
+            if not isinstance(token, str) or not token or len(token) > 16384:
+                raise ValueError("bounded metadata access token required")
+            lifetime = info.get("expires_in")
+            # Unknown/short lifetimes retain the uncached behavior. Never
+            # cache beyond one hour even if metadata returns a larger value.
+            if type(lifetime) is int and lifetime > 60:
+                self._cached_token = (token, now + min(lifetime, 3600) - 60)
+            return token
+
+    def _call(self, resource, method, body):
+        token = self._token()
         raw = json.dumps(body).encode()
         if len(raw) > MAX_BYTES:
             raise ValueError("mailbox request exceeds bound")
-        return self._json(
-            Request(
-                f"https://pubsub.googleapis.com/v1/{resource}:{method}",
-                data=raw,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-            ),
-            # Pub/Sub acknowledge may return no response payload. Metadata,
-            # publish and pull must still provide their bounded JSON object.
-            allow_empty=method == "acknowledge",
-        )
+        try:
+            return self._json(
+                Request(
+                    f"https://pubsub.googleapis.com/v1/{resource}:{method}",
+                    data=raw,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                ),
+                # Pub/Sub acknowledge may return no response payload. Metadata,
+                # publish and pull must still provide their bounded JSON object.
+                allow_empty=method == "acknowledge",
+            )
+        except HTTPError as error:
+            if error.code == 401:
+                with self._token_lock:
+                    if self._cached_token and self._cached_token[0] == token:
+                        self._cached_token = None
+            # Never automatically retry publish: its delivery may be unknown.
+            raise
 
     def publish(self, body):
         raw = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
