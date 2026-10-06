@@ -62,5 +62,9 @@ def downgrade():
         sa.text("SELECT EXISTS(SELECT 1 FROM treasury_manual_transfers)")
     ):
         raise RuntimeError("Manual transfer audit history prevents downgrade")
+    if op.get_bind().scalar(
+        sa.text("SELECT EXISTS(SELECT 1 FROM treasury_manual_bridge_state)")
+    ):
+        raise RuntimeError("Manual bridge state prevents downgrade")
     op.drop_table("treasury_manual_transfers")
     op.drop_table("treasury_manual_bridge_state")

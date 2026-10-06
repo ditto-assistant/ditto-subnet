@@ -45,6 +45,16 @@ sudo systemctl start "$task_prefix-transfer.service" "$task_prefix-transfer.time
 if sudo systemctl start "$task_prefix-manual.service"; then echo 'Unmasked manual activation succeeded' >&2; exit 1; fi
 sudo systemctl is-active --quiet "$task_prefix-transfer.service"
 sudo systemctl is-active --quiet "$task_prefix-transfer.timer"
+# Persistent masking alone does not stop a running process. Reject that state.
+sudo rm -f "/run/systemd/system/$task_prefix-transfer.service" "/run/systemd/system/$task_prefix-transfer.timer"
+sudo systemctl daemon-reload
+sudo systemctl mask "$task_prefix-transfer.service" "$task_prefix-transfer.timer"
+sudo systemctl is-active --quiet "$task_prefix-transfer.service"
+sudo systemctl is-active --quiet "$task_prefix-transfer.timer"
+if bash "$task_root/guard.sh"; then echo 'Masked active units passed the guard' >&2; exit 1; fi
+if sudo systemctl start "$task_prefix-manual.service"; then echo 'Masked active manual activation succeeded' >&2; exit 1; fi
+sudo systemctl is-active --quiet "$task_prefix-transfer.service"
+sudo systemctl is-active --quiet "$task_prefix-transfer.timer"
 sudo systemctl stop "$task_prefix-transfer.service" "$task_prefix-transfer.timer"
 sudo systemctl reset-failed "$task_prefix-manual.service"
 rm -f "$task_root/transfer-executed"

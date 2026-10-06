@@ -788,3 +788,50 @@ async def test_unreported_terminal_dispatch_blocks_new_claim_until_custody_proof
     async with session_maker() as session, session.begin():
         await manual.accept_report(session, None, proof.model_dump())
     assert (await get_preview(session_maker))["spending_authority"] == "not_queued"
+
+
+async def test_downgrade_preserves_populated_bridge_with_empty_transfers(session_maker):
+    import importlib.util
+    from pathlib import Path
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import func, select
+
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "alembic/versions/2026_10_06_treasury_manual_transfers.py"
+    )
+    spec = importlib.util.spec_from_file_location("manual_transfer_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    await seed(session_maker)
+
+    def downgrade(connection):
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+
+    async with session_maker() as session, session.begin():
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(TreasuryManualTransfer)
+            )
+            == 0
+        )
+        connection = await session.connection()
+        with pytest.raises(
+            RuntimeError, match="Manual bridge state prevents downgrade"
+        ):
+            await connection.run_sync(downgrade)
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(TreasuryManualBridgeState)
+            )
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(TreasuryManualTransfer)
+            )
+            == 0
+        )
