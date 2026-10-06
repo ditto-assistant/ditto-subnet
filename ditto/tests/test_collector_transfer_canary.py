@@ -1,12 +1,20 @@
 """One monetary claim stays bounded across retries, restarts and ordinary ticks."""
 
+import json
+import sqlite3
 import sys
 from dataclasses import replace
 
 import pytest
 
 from ditto.tests.test_collector_automation import Chain, open_journal, policy
-from ditto.treasury.collector import Settlement, TransferCanary, tick
+from ditto.treasury.collector import (
+    Settlement,
+    TransferCanary,
+    remaining_distribution,
+    tick,
+)
+from ditto.treasury.service_allocation import plan_service_distribution
 from scripts import treasury_collector as cli
 
 
@@ -42,7 +50,7 @@ def test_canary_uses_unchanged_bucket_receipt_and_stops_ordinary_next_tick(tmp_p
 
 @pytest.mark.parametrize("status", ["failed", "expired"])
 def test_failed_canary_consumes_claim_instead_of_starting_another(tmp_path, status):
-    p, c, j, bound = setup_transfer(tmp_path)
+    p, c, j, bound = setup_transfer(tmp_path, cap=39)
     tick(j, p, c, "transfer", canary=bound)
     c.settlement = Settlement(status, 101, "0x" + "c" * 64)
     assert tick(j, p, c, "transfer") == status
@@ -51,7 +59,7 @@ def test_failed_canary_consumes_claim_instead_of_starting_another(tmp_path, stat
 
 
 def test_unknown_delivery_reopens_to_reconciliation_without_resigning(tmp_path):
-    p, c, j, bound = setup_transfer(tmp_path)
+    p, c, j, bound = setup_transfer(tmp_path, cap=39)
     c.error = True
     with pytest.raises(TimeoutError):
         tick(j, p, c, "transfer", canary=bound)
@@ -77,13 +85,103 @@ def test_canary_transfers_only_ceiling_and_retains_receipt_remainder(tmp_path):
         0,
     )
     assert j.db.execute("SELECT SUM(amount) FROM operations").fetchone()[0] == 39
-    assert 101 - 39 == 62  # Entire unspent receipt remains attributed.
+    reserved = json.loads(
+        j.db.execute(
+            "SELECT payload FROM events WHERE event='canary_receipt_reserved'"
+        ).fetchone()[0]
+    )
+    assert reserved == {
+        "source_block": 10,
+        "source_hash": "0x" + "d" * 64,
+        "source_event_digest": "e" * 64,
+        "source_amount": 101,
+        "bucket": "bitsec",
+        "bucket_remaining_before": 40,
+        "canary_amount": 39,
+        "receipt_remaining_after": 62,
+    }
     assert (
         j.db.execute(
             "SELECT COUNT(*) FROM events WHERE event='transfer_canary_armed'"
         ).fetchone()[0]
         == 1
     )
+
+
+def distribution_history(rows):
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute(
+        "CREATE TABLE history (bucket TEXT, amount INTEGER, destination TEXT, "
+        "role TEXT, state TEXT)"
+    )
+    db.executemany("INSERT INTO history VALUES (?,?,?,?,?)", rows)
+    result = db.execute("SELECT * FROM history").fetchall()
+    db.close()
+    return result
+
+
+def receipt_parts():
+    p = policy()
+    return plan_service_distribution(
+        attributed_alpha_rao=101,
+        available_alpha_rao=101,
+        collector_coldkey=p.collector_coldkey,
+        destinations=p.destinations,
+    )
+
+
+def test_partial_finalized_leg_does_not_complete_its_bucket_or_other_buckets():
+    parts = receipt_parts()
+    rows = [("bitsec", 39, "bitsec", "transfer", "finalized")]
+    remaining = remaining_distribution(parts, distribution_history(rows))
+    assert {part.bucket_id: part.alpha_rao for part in remaining} == {
+        "bitsec": 1,
+        "gm": 61,
+    }
+    assert sum(part.alpha_rao for part in remaining) + 39 == 101
+    rows.extend(
+        [
+            ("bitsec", 1, "bitsec", "transfer", "finalized"),
+            ("gm", 60, "gm", "transfer", "finalized"),
+        ]
+    )
+    remaining = remaining_distribution(parts, distribution_history(rows))
+    assert [(part.bucket_id, part.alpha_rao) for part in remaining] == [("gm", 1)]
+    rows.append(("gm", 1, "gm", "transfer", "finalized"))
+    assert remaining_distribution(parts, distribution_history(rows)) == ()
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        ("unknown", 1, "gm", "transfer", "finalized"),
+        ("gm", 1, "wrong-wallet", "transfer", "finalized"),
+        ("gm", 1, "gm", "registration", "finalized"),
+        ("gm", 1, "gm", "transfer", "dispatching"),
+        ("gm", 1, "gm", "transfer", "failed"),
+        ("gm", 0, "gm", "transfer", "finalized"),
+        ("gm", -1, "gm", "transfer", "finalized"),
+        ("gm", 0.5, "gm", "transfer", "finalized"),
+        ("gm", 62, "gm", "transfer", "finalized"),
+    ],
+)
+def test_distribution_remainder_refuses_invalid_or_excess_history(row):
+    with pytest.raises(ValueError):
+        remaining_distribution(receipt_parts(), distribution_history([row]))
+
+
+def test_distribution_remainder_refuses_aggregate_bucket_overpayment():
+    with pytest.raises(ValueError, match="exceeds"):
+        remaining_distribution(
+            receipt_parts(),
+            distribution_history(
+                [
+                    ("gm", 40, "gm", "transfer", "finalized"),
+                    ("gm", 22, "gm", "transfer", "finalized"),
+                ]
+            ),
+        )
 
 
 @pytest.mark.parametrize("changed", [TransferCanary(41, 0), TransferCanary(40, 1)])

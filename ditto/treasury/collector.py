@@ -12,12 +12,13 @@ import json
 import os
 import sqlite3
 import stat
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
 from ditto.treasury.service_allocation import (
     ServiceDestination,
+    ServiceDistribution,
     plan_service_distribution,
 )
 
@@ -317,6 +318,34 @@ class CollectorJournal:
         self.db.close()
 
 
+def remaining_distribution(
+    parts: tuple[ServiceDistribution, ...], operations: list[sqlite3.Row]
+) -> tuple[ServiceDistribution, ...]:
+    """Conserve each receipt's bucket entitlement after finalized partial legs."""
+    expected = {part.bucket_id: part for part in parts}
+    paid = {bucket: 0 for bucket in expected}
+    for operation in operations:
+        bucket = operation["bucket"]
+        amount = operation["amount"]
+        if (
+            bucket not in expected
+            or operation["role"] != "transfer"
+            or operation["state"] != "finalized"
+            or operation["destination"] != expected[bucket].holding_coldkey
+            or type(amount) is not int
+            or amount <= 0
+        ):
+            raise ValueError("invalid finalized receipt distribution history")
+        paid[bucket] += amount
+        if paid[bucket] > expected[bucket].alpha_rao:
+            raise ValueError("finalized distribution exceeds receipt bucket")
+    return tuple(
+        replace(part, alpha_rao=part.alpha_rao - paid[part.bucket_id])
+        for part in parts
+        if part.alpha_rao > paid[part.bucket_id]
+    )
+
+
 def tick(
     journal: CollectorJournal,
     policy: CollectorPolicy,
@@ -477,20 +506,17 @@ def tick(
                 collector_coldkey=policy.collector_coldkey,
                 destinations=policy.destinations,
             )
-            done = {
-                r[0]
-                for r in db.execute(
-                    "SELECT bucket FROM operations WHERE source_block=? "
-                    "AND state='finalized'",
+            remaining = remaining_distribution(
+                parts,
+                db.execute(
+                    "SELECT bucket,amount,destination,role,state FROM operations "
+                    "WHERE source_block=?",
                     (row["block"],),
-                )
-            }
-            if (
-                sum(p.alpha_rao for p in parts if p.bucket_id not in done)
-                > observed.alpha_rao
-            ):
+                ).fetchall(),
+            )
+            if sum(part.alpha_rao for part in remaining) > observed.alpha_rao:
                 raise ValueError("remaining attributed earnings exceed finalized stake")
-            part = next((p for p in parts if p.bucket_id not in done), None)
+            part = next(iter(remaining), None)
             if part is None:
                 # Earnings remain as audit records; complete batches skip onward.
                 db.execute(
@@ -509,10 +535,27 @@ def tick(
                 row["block"],
             )
             if canary is not None and amount > canary.max_alpha_rao:
-                # Preserve attribution, but neither sign nor partially split a
-                # receipt-bound source amount merely to fit the canary.
-                db.execute("COMMIT")
-                return "canary_amount_exceeded"
+                # Preserve the full receipt and all other bucket entitlements.
+                # The persisted one-claim guard still stops after this leg;
+                # omitting flags never enables distribution of its remainder.
+                amount = canary.max_alpha_rao
+            if canary is not None:
+                journal.event(
+                    "canary_receipt_reserved",
+                    {
+                        "source_block": row["block"],
+                        "source_hash": row["block_hash"],
+                        "source_event_digest": row["event_digest"],
+                        "source_amount": row["amount"],
+                        "bucket": bucket,
+                        "bucket_remaining_before": part.alpha_rao,
+                        "canary_amount": amount,
+                        "receipt_remaining_after": sum(
+                            part.alpha_rao for part in remaining
+                        )
+                        - amount,
+                    },
+                )
             call = {
                 "module": "SubtensorModule",
                 "function": "transfer_stake",

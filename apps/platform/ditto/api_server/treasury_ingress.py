@@ -222,16 +222,16 @@ async def ingest_receipt(
             )
         return receipt_result(existing, replayed=True)
     if selector.stage == "service_distribution":
-        prior = await session.scalar(
-            select(TreasuryVerifiedReceipt.receipt_id).where(
-                TreasuryVerifiedReceipt.stage == "service_distribution",
-                TreasuryVerifiedReceipt.epoch_index == selector.epoch_index,
-                TreasuryVerifiedReceipt.source_block == selector.source_block,
-                TreasuryVerifiedReceipt.bucket_id == bucket.bucket_id,
+        prior = list(
+            await session.scalars(
+                select(TreasuryVerifiedReceipt).where(
+                    TreasuryVerifiedReceipt.stage == "service_distribution",
+                    TreasuryVerifiedReceipt.epoch_index == selector.epoch_index,
+                    TreasuryVerifiedReceipt.source_block == selector.source_block,
+                    TreasuryVerifiedReceipt.bucket_id == bucket.bucket_id,
+                )
             )
         )
-        if prior:
-            raise ReceiptConflict("source bucket already has a finalized distribution")
         split = plan_service_distribution(
             attributed_alpha_rao=proof.source_amount_rao,
             available_alpha_rao=proof.source_amount_rao,
@@ -242,8 +242,31 @@ async def ingest_receipt(
             ),
         )
         amounts = {item.bucket_id: item.alpha_rao for item in split}
-        if amounts.get(bucket.bucket_id) != proof.amount_atomic:
-            raise ValueError("transfer differs from exact attributed service split")
+        source_identity = (
+            proof.source_block_hash,
+            proof.source_event_digest,
+            proof.source_amount_rao,
+        )
+        for receipt in prior:
+            if (
+                receipt.policy_digest != policy.digest
+                or receipt.settings_revision != revision.revision
+                or (
+                    receipt.proof["source_block_hash"],
+                    receipt.proof["source_event_digest"],
+                    receipt.proof["source_amount_rao"],
+                )
+                != source_identity
+            ):
+                raise ReceiptConflict(
+                    "source credit differs from retained distribution"
+                )
+        consumed = sum(receipt.amount_atomic for receipt in prior)
+        entitlement = amounts.get(bucket.bucket_id, 0)
+        if not 0 < proof.amount_atomic <= entitlement:
+            raise ValueError("transfer exceeds exact attributed service bucket")
+        if consumed + proof.amount_atomic > entitlement:
+            raise ReceiptConflict("cumulative distributions exceed source bucket")
     elif asset == "SN118_ALPHA":
         payments = list(
             await session.scalars(

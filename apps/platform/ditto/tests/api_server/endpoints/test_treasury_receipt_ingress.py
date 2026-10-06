@@ -179,6 +179,7 @@ class RPC:
         self.epoch = 9
         self.rebound_uid = None
         self.distribution_blocks = {120}
+        self.distribution_amounts = {}
         self.proxy_vendor = False
 
     async def get_chain_finalised_head(self):
@@ -235,6 +236,15 @@ class RPC:
         assert module in {"System", "SubtensorModule", "Timestamp"}
         assert isinstance(params, list)
         if storage_function == "Events":
+            block = int(block_hash[2:], 16)
+            if block in self.distribution_amounts:
+                events = copy.deepcopy(self.transfer_events)
+                for item in events:
+                    if item["event_id"] in {"StakeRemoved", "StakeAdded"}:
+                        item["event"]["attributes"][3] = self.distribution_amounts[
+                            block
+                        ]
+                return events
             return (
                 self.source_events
                 if block_hash == h(110)
@@ -540,7 +550,10 @@ async def test_linked_alpha_payments_cannot_overspend_distribution(
     app, client, session_maker
 ):
     _, _, rpc = await install(app, session_maker)
-    distribution = await client.post(URL, headers=HEADERS, json=selection())
+    rpc.distribution_amounts[120] = 30
+    distribution = await client.post(
+        URL, headers=HEADERS, json={**selection(), "amount_atomic": 30}
+    )
     assert distribution.status_code == 200, distribution.text
     rpc.proxy_vendor = True
 
@@ -576,8 +589,9 @@ async def test_linked_alpha_payments_cannot_overspend_distribution(
     }
     result = await client.post(URL, headers=HEADERS, json=first)
     assert result.status_code == 200, result.text
-    rpc.vendor_events = effects(20)
-    second = {**first, "block": 131, "block_hash": h(131), "amount_atomic": 20}
+    # 25 + 10 fits the original 40 earning, but exceeds this partial parent 30.
+    rpc.vendor_events = effects(10)
+    second = {**first, "block": 131, "block_hash": h(131), "amount_atomic": 10}
     assert (await client.post(URL, headers=HEADERS, json=second)).status_code == 409
     async with session_maker() as db:
         assert len(list(await db.scalars(select(TreasuryVerifiedReceipt)))) == 2
@@ -589,6 +603,105 @@ async def test_linked_alpha_payments_cannot_overspend_distribution(
         409,
         422,
     }
+
+
+def partial_selection(rpc, block, amount):
+    rpc.distribution_blocks.add(block)
+    rpc.distribution_amounts[block] = amount
+    return {
+        **selection(),
+        "block": block,
+        "block_hash": h(block),
+        "amount_atomic": amount,
+    }
+
+
+async def test_partial_distribution_remainder_replay_and_public_amounts(
+    app, client, session_maker
+):
+    _, _, rpc = await install(app, session_maker)
+    first = partial_selection(rpc, 120, 15)
+    result = await client.post(URL, headers=HEADERS, json=first)
+    assert result.status_code == 200, result.text
+    replay = await client.post(URL, headers=HEADERS, json=first)
+    assert replay.status_code == 200 and replay.json()["replayed"]
+    second = partial_selection(rpc, 121, 25)
+    result = await client.post(URL, headers=HEADERS, json=second)
+    assert result.status_code == 200, result.text
+    assert result.json()["amount_atomic"] == "25"
+    excess = partial_selection(rpc, 122, 1)
+    assert (await client.post(URL, headers=HEADERS, json=excess)).status_code == 409
+    feed = (await client.get("/api/v1/public/treasury-activity")).json()["items"]
+    assert sorted(int(item["allocated_alpha_rao"]) for item in feed) == [15, 25]
+    assert all(item["source_alpha_rao"] == "40" for item in feed)
+    async with session_maker() as db:
+        rows = list(await db.scalars(select(TreasuryVerifiedReceipt)))
+        assert sum(row.amount_atomic for row in rows) == 40 and len(rows) == 2
+
+
+async def test_concurrent_partial_claims_cannot_oversubscribe_source(
+    app, client, session_maker
+):
+    _, _, rpc = await install(app, session_maker)
+    payloads = [partial_selection(rpc, block, 25) for block in (120, 121)]
+    results = await asyncio.gather(
+        *[client.post(URL, headers=HEADERS, json=payload) for payload in payloads]
+    )
+    assert sorted(result.status_code for result in results) == [200, 409]
+    async with session_maker() as db:
+        rows = list(await db.scalars(select(TreasuryVerifiedReceipt)))
+        assert len(rows) == 1 and rows[0].amount_atomic == 25
+
+
+@pytest.mark.parametrize("changed", ["hash", "amount", "digest"])
+async def test_partial_history_requires_identical_retained_source(
+    app, client, session_maker, changed
+):
+    _, _, rpc = await install(app, session_maker)
+    first = partial_selection(rpc, 120, 15)
+    assert (await client.post(URL, headers=HEADERS, json=first)).status_code == 200
+    if changed == "hash":
+        rpc.hashes[110] = h(111)
+    elif changed == "amount":
+        rpc.source_events[-1]["event"]["attributes"]["incentive"] = 41
+    else:
+        # The canonical liquid-credit digest, not unrelated gross emissions,
+        # is the source identity retained by ingress. Simulate corrupted
+        # historical proof without disabling the immutable receipt trigger.
+        async with session_maker() as db:
+            row = await db.get(
+                TreasuryVerifiedReceipt,
+                (await client.post(URL, headers=HEADERS, json=first)).json()[
+                    "receipt_id"
+                ],
+            )
+            assert row.proof["source_event_digest"]
+        original = app.state.chain.get_treasury_receipt_proof
+
+        async def altered_proof(*args, **kwargs):
+            proof = await original(*args, **kwargs)
+            return replace(proof, source_event_digest="0" * 64)
+
+        app.state.chain.get_treasury_receipt_proof = altered_proof
+    second = partial_selection(rpc, 121, 10)
+    result = await client.post(URL, headers=HEADERS, json=second)
+    assert result.status_code in {409, 422}, result.text
+    async with session_maker() as db:
+        rows = list(await db.scalars(select(TreasuryVerifiedReceipt)))
+        assert len(rows) == 1 and rows[0].amount_atomic == 15
+
+
+@pytest.mark.parametrize("amount", [0, 41])
+async def test_partial_amount_must_fit_signed_source_bucket(
+    app, client, session_maker, amount
+):
+    _, _, rpc = await install(app, session_maker)
+    result = await client.post(
+        URL, headers=HEADERS, json=partial_selection(rpc, 120, amount)
+    )
+    assert result.status_code == 422, result.text
+    async with session_maker() as db:
+        assert list(await db.scalars(select(TreasuryVerifiedReceipt))) == []
 
 
 @pytest.mark.parametrize(

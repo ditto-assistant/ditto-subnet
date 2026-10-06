@@ -11471,11 +11471,10 @@ class TreasuryVerifiedReceipt(Base):
             name="treasury_verified_parent",
         ),
         Index(
-            "treasury_verified_distribution_once",
+            "treasury_verified_distribution_source",
             "epoch_index",
             "source_block",
             "bucket_id",
-            unique=True,
             postgresql_where=text("stage = 'service_distribution'"),
         ),
     )

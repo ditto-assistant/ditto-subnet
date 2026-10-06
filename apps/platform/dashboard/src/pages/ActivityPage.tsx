@@ -223,7 +223,9 @@ export function ActivityPage(): JSX.Element {
                           <dd>
                             {item.denominator === "not_attributed"
                               ? "Alpha funding/conversion attribution unproven"
-                              : `${item.allocation_bps} bps of ${item.denominator.replaceAll("_", " ")} · ${item.allocated_alpha_rao} alpha rao`}
+                              : item.event_kind === "service_distribution"
+                                ? `Configured allocation ${item.allocation_bps} bps · transferred ${item.allocated_alpha_rao} alpha rao. A transfer may be part of the source earning.`
+                                : `${item.allocation_bps} bps of ${item.denominator.replaceAll("_", " ")} · ${item.allocated_alpha_rao} alpha rao`}
                           </dd>
                         </div>
                         <div>
