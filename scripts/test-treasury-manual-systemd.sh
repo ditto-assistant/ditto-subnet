@@ -8,6 +8,7 @@ task_prefix="sn118-manual-ci-${GITHUB_RUN_ID:-$$}-${GITHUB_RUN_ATTEMPT:-0}"
 cleanup() {
   sudo systemctl stop "$task_prefix-manual.service" "$task_prefix-attempt.timer" || true
   sudo rm -f "/run/systemd/system/$task_prefix-manual.service" "/run/systemd/system/$task_prefix-transfer.service" "/run/systemd/system/$task_prefix-transfer.timer" "/run/systemd/system/$task_prefix-attempt.timer"
+  sudo rm -f "/etc/systemd/system/$task_prefix-transfer.service" "/etc/systemd/system/$task_prefix-transfer.timer"
   sudo systemctl daemon-reload
   rm -rf "$task_root"
 }
@@ -43,7 +44,7 @@ if bash "$task_root/guard.sh"; then echo 'Unmasked units passed the guard' >&2; 
 sudo rm -f "/run/systemd/system/$task_prefix-transfer.service" "/run/systemd/system/$task_prefix-transfer.timer"
 sudo systemctl daemon-reload
 # Same lifecycle as documented production activation, scoped to CI-only names.
-sudo systemctl mask --runtime --now "$task_prefix-transfer.service" "$task_prefix-transfer.timer"
+sudo systemctl mask --now "$task_prefix-transfer.service" "$task_prefix-transfer.timer"
 sudo systemctl start "$task_prefix-manual.service"
 sudo systemctl is-active --quiet "$task_prefix-manual.service"
 for suffix in transfer.timer transfer.service; do
