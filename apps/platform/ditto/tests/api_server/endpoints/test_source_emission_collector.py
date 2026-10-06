@@ -732,6 +732,44 @@ async def test_sweep_widens_batch_and_skips_leading_resolution_in_catchup(
     assert len(resolved) == 1
 
 
+async def test_failed_catchup_scan_still_resolves_pending_payouts(
+    app, session_maker, monkeypatch
+):
+    """A mid-batch archive failure during deep catch-up must not starve payout
+    resolution: the resolver cycles pending rows with its own archive reads."""
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, _ = await _prepare(app, session_maker)
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        cursor.block = 100
+        cursor.block_hash = _hash(100)
+    collector = _collector(app, session_maker)
+
+    async def read(_substrate, *, netuid, block, expected_runtime_code_hash=None):  # noqa: ARG001
+        del netuid, block, expected_runtime_code_hash
+        raise RuntimeError("Historical work rate limit exceeded")
+
+    resolved = []
+
+    async def resolve(_substrate):
+        resolved.append(True)
+        return 0
+
+    substrate = SimpleNamespace(
+        get_chain_finalised_head=AsyncMock(return_value=_hash(15000)),
+        get_block_header=AsyncMock(return_value={"header": {"number": 15000}}),
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.source_emission_collector.read_source_emission_block",
+        read,
+    )
+    monkeypatch.setattr(collector, "resolve_pending_payouts", resolve)
+    with pytest.raises(RuntimeError, match="rate limit"):
+        await collector._sweep_provider(substrate)
+    assert len(resolved) == 1
+
+
 async def test_sweep_keeps_steady_state_batch_and_leading_resolution(
     app, session_maker, monkeypatch
 ):

@@ -215,32 +215,41 @@ class SourceEmissionCollector:
             # Keep archive verification and provider fallback on the same path.
             await self.resolve_pending_payouts(substrate)
         batch = _SWEEP_CATCHUP_BATCH_BLOCKS if catchup else _SWEEP_BATCH_BLOCKS
-        for block in range(current + 1, min(finalized, current + batch) + 1):
-            observed = await read_source_emission_block(
-                substrate, netuid=self.netuid, block=block
-            )
-            payout = None
-            payout_blocked_reason = None
-            if (
-                observed.is_payout
-                and (not observed.updates or observed.payout_initialization_reveals)
-                and not observed.reset_reason
-            ):
-                from ditto.chain.errors import ChainEmissionReceiptUnavailable
+        try:
+            for block in range(current + 1, min(finalized, current + batch) + 1):
+                observed = await read_source_emission_block(
+                    substrate, netuid=self.netuid, block=block
+                )
+                payout = None
+                payout_blocked_reason = None
+                if (
+                    observed.is_payout
+                    and (not observed.updates or observed.payout_initialization_reveals)
+                    and not observed.reset_reason
+                ):
+                    from ditto.chain.errors import ChainEmissionReceiptUnavailable
 
-                try:
-                    payout = await self.state.chain.get_miner_emission_receipt(
-                        self.netuid,
-                        payout_block=block,
-                        target_hotkeys=frozenset(),
-                        allow_initialization_reveals=observed.payout_initialization_reveals,
-                        substrate=substrate,
-                    )
-                except ChainEmissionReceiptUnavailable as error:
-                    payout_blocked_reason = f"unverifiable_payout: {str(error)[:200]}"
-            await self.process_block(
-                observed, payout, payout_blocked_reason=payout_blocked_reason
-            )
+                    try:
+                        payout = await self.state.chain.get_miner_emission_receipt(
+                            self.netuid,
+                            payout_block=block,
+                            target_hotkeys=frozenset(),
+                            allow_initialization_reveals=observed.payout_initialization_reveals,
+                            substrate=substrate,
+                        )
+                    except ChainEmissionReceiptUnavailable as error:
+                        payout_blocked_reason = (
+                            f"unverifiable_payout: {str(error)[:200]}"
+                        )
+                await self.process_block(
+                    observed, payout, payout_blocked_reason=payout_blocked_reason
+                )
+        except Exception:
+            # A failed scan must not starve payout resolution: the resolver
+            # cycles pending rows by last_checked_at with its own archive
+            # reads, so it can make progress when the block scan cannot.
+            await self.resolve_pending_payouts(substrate)
+            raise
         await self.resolve_pending_payouts(substrate)
 
     async def process_block(
