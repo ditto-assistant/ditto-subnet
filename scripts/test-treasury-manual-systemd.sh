@@ -47,12 +47,13 @@ sudo systemctl is-active --quiet "$task_prefix@transfer.service"
 sudo systemctl is-active --quiet "$task_prefix@transfer.timer"
 # Persistent masking alone does not stop a running process. Reject that state.
 sudo systemctl mask "$task_prefix@transfer.service" "$task_prefix@transfer.timer"
+sudo systemctl show --property=LoadState,ActiveState,SubState "$task_prefix@transfer.service" "$task_prefix@transfer.timer"
 sudo systemctl is-active --quiet "$task_prefix@transfer.service"
-sudo systemctl is-active --quiet "$task_prefix@transfer.timer"
+# Masking its target may stop the timer dependency; the already-running
+# service is the safety hazard and must remain active for this control.
 if bash "$task_root/guard.sh"; then echo 'Masked active units passed the guard' >&2; exit 1; fi
 if sudo systemctl start "$task_prefix-manual.service"; then echo 'Masked active manual activation succeeded' >&2; exit 1; fi
 sudo systemctl is-active --quiet "$task_prefix@transfer.service"
-sudo systemctl is-active --quiet "$task_prefix@transfer.timer"
 sudo systemctl stop "$task_prefix@transfer.service" "$task_prefix@transfer.timer"
 sudo systemctl reset-failed "$task_prefix-manual.service"
 rm -f "$task_root/transfer-executed"
