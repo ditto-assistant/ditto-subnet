@@ -340,9 +340,20 @@ unknown delivery can only reconcile the persisted hash, never sign/send again.
 Keep recurring timers off. Arming or reconciling the canary is not authority to
 route emissions or rewrite a policy.
 
-An existing source/bucket amount above the canary ceiling is retained and held
-without signing; it is not partially split to fit a test. Ordinary receipt
-amounts and source attribution remain unchanged. A later recurring rollout needs
+If a source/bucket entitlement exceeds the canary ceiling, the tick may claim
+only the smaller of its verified unpaid remainder and that ceiling. The original
+source block, hash, event digest and earning amount remain attached to the
+receipt; its transfer amount records only the actual partial payment. The
+earning is not completed until every bucket entitlement is fully paid.
+
+Deploy the matching Platform cumulative-receipt ingress and migration before
+switching the collector to this behavior. Platform independently verifies each
+finalized chain effect and serializes cumulative payments against the exact
+historical bucket entitlement. Replays remain idempotent; changed source
+identity, overpayment and conflicting effects refuse. This does not grant a
+second canary claim or increase the signed source/distribution ceiling.
+
+A later recurring rollout needs
 an independently reviewed, explicitly authorized canary-release transition;
 changing or omitting flags cannot release the canary. Resetting/deleting the
 journal is not an authorized release and destroys custody history. TAO fees
