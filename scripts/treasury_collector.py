@@ -15,6 +15,7 @@ from ditto.treasury.collector import (
     ManualTransfer,
     TransferCanary,
     arm_manual_transfer,
+    observe_earnings,
     replace_failed_canary,
     tick,
 )
@@ -39,7 +40,28 @@ def main() -> None:
     parser.add_argument("--arm-manual-transfer", type=Path)
     parser.add_argument("--confirm-manual-request")
     parser.add_argument("--execute-manual-request")
+    parser.add_argument("--observe-earnings-only", action="store_true")
     args = parser.parse_args()
+    if args.observe_earnings_only and (
+        args.role != "transfer"
+        or not args.journal
+        or any(
+            (
+                args.initialize_journal,
+                args.watch_only,
+                args.snapshot_only,
+                args.export_activity,
+                args.arm_manual_transfer,
+                args.confirm_manual_request,
+                args.execute_manual_request,
+                args.canary_max_alpha_rao is not None,
+                args.canary_after_operation is not None,
+                args.replace_failed_canary,
+                args.operator_reason,
+            )
+        )
+    ):
+        parser.error("earnings observation requires existing transfer journal only")
     canary = None
     if args.canary_max_alpha_rao is not None or args.canary_after_operation is not None:
         if (
@@ -203,6 +225,16 @@ def main() -> None:
             parser.error("--journal required for signer")
         journal = CollectorJournal(args.journal, policy, args.role)
         try:
+            if args.observe_earnings_only:
+                print(
+                    json.dumps(
+                        {
+                            "status": observe_earnings(journal, policy, chain),
+                            "authority": "none",
+                        }
+                    )
+                )
+                return
             if manual is not None:
                 result = arm_manual_transfer(journal, policy, chain, manual)
                 print(

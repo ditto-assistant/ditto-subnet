@@ -834,7 +834,7 @@ def tick(
             if intent is not None and manual_request_id is None:
                 db.execute("COMMIT")
                 return "manual_ready"
-            if intent is not None and observed.block > intent.expires_block:
+            if intent is not None and observed.block + 128 > intent.expires_block:
                 db.execute("COMMIT")
                 return "manual_expired"
             row = db.execute(
@@ -859,33 +859,7 @@ def tick(
                 if row is None:
                     raise ValueError("replacement same-source receipt unavailable")
             if not row:
-                cursor = db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
-                # Bound archive/RPC work to 32 finalized blocks per invocation.
-                for block in range(cursor + 1, min(observed.block, cursor + 32) + 1):
-                    earned = chain.earnings(policy, block)
-                    if earned is not None:
-                        if (
-                            not isinstance(earned, FinalizedEarnings)
-                            or type(earned.amount_rao) is not int
-                            or not 0 < earned.amount_rao < 2**63
-                        ):
-                            raise ValueError("invalid finalized emission")
-                        db.execute(
-                            "INSERT INTO earnings"
-                            "(block,amount,block_hash,event_digest) "
-                            "VALUES (?,?,?,?)",
-                            (
-                                block,
-                                earned.amount_rao,
-                                earned.block_hash,
-                                earned.event_digest,
-                            ),
-                        )
-                        journal.event(
-                            "emission_attributed",
-                            {"block": block, "policy": policy.digest, **asdict(earned)},
-                        )
-                    db.execute("UPDATE cursor SET block=? WHERE id=1", (block,))
+                _scan_finalized_earnings(journal, policy, chain, observed.block)
                 # Commit independently proved history without using the now
                 # stale observation to sign. A following tick observes a fresh
                 # finalized head and prioritizes this durable mature receipt.
@@ -1033,3 +1007,48 @@ def tick(
     # by the next invocation until finalized or provably expired.
     chain.broadcast(signed.encoded)
     return "dispatching"
+
+
+def _scan_finalized_earnings(journal, policy, chain, finalized):
+    db = journal.db
+    cursor = db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
+    for block in range(cursor + 1, min(finalized, cursor + 32) + 1):
+        earned = chain.earnings(policy, block)
+        if earned is not None:
+            if (
+                not isinstance(earned, FinalizedEarnings)
+                or type(earned.amount_rao) is not int
+                or not 0 < earned.amount_rao < 2**63
+            ):
+                raise ValueError("invalid finalized emission")
+            db.execute(
+                "INSERT INTO earnings(block,amount,block_hash,event_digest) "
+                "VALUES (?,?,?,?)",
+                (block, earned.amount_rao, earned.block_hash, earned.event_digest),
+            )
+            journal.event(
+                "emission_attributed",
+                {"block": block, "policy": policy.digest, **asdict(earned)},
+            )
+        db.execute("UPDATE cursor SET block=? WHERE id=1", (block,))
+
+
+def observe_earnings(journal, policy, chain):
+    """Bounded receipt-only scan, independent of daily/manual money frequency."""
+    if not policy.enabled:
+        return "disabled"
+    db = journal.db
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        if tuple(db.execute("SELECT digest,role FROM pin").fetchone()) != (
+            policy.digest,
+            "transfer",
+        ):
+            raise ValueError("earnings scan requires pinned transfer journal")
+        observed = chain.observe(policy, "transfer")
+        _scan_finalized_earnings(journal, policy, chain, observed.block)
+        db.execute("COMMIT")
+        return "observed"
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise

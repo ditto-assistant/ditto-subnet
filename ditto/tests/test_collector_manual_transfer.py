@@ -10,6 +10,7 @@ from ditto.treasury.collector import (
     ManualTransfer,
     Settlement,
     arm_manual_transfer,
+    observe_earnings,
     tick,
 )
 
@@ -172,3 +173,34 @@ def test_manual_rejects_ambiguous_or_nonpositive_input(tmp_path, field, value):
     _p, _c, _j, request = fixture(tmp_path)
     with pytest.raises((ValueError, TypeError, AttributeError)):
         replace(request, **{field: value})
+
+
+def test_receipt_only_scan_continues_after_spent_canary_without_signing(tmp_path):
+    p, c, j, _request = fixture(tmp_path)
+    cursor = j.db.execute("SELECT block FROM cursor").fetchone()[0]
+    c.income[cursor + 2] = 90
+    c.observation = replace(c.observation, block=1000)
+    assert observe_earnings(j, p, c) == "observed"
+    assert j.db.execute("SELECT block FROM cursor").fetchone()[0] == cursor + 32
+    assert (
+        j.db.execute(
+            "SELECT amount FROM earnings WHERE block=?", (cursor + 2,)
+        ).fetchone()[0]
+        == 90
+    )
+    assert len(c.prepared) == len(c.sent) == 1
+    assert tick(j, p, object(), "transfer") == "canary_spent"
+
+
+def test_receipt_only_scan_rolls_back_on_unavailable_history(tmp_path):
+    p, c, j, _request = fixture(tmp_path)
+    cursor = j.db.execute("SELECT block FROM cursor").fetchone()[0]
+
+    def unavailable(_policy, _block):
+        raise TimeoutError("chain unavailable")
+
+    c.earnings = unavailable
+    with pytest.raises(TimeoutError):
+        observe_earnings(j, p, c)
+    assert j.db.execute("SELECT block FROM cursor").fetchone()[0] == cursor
+    assert len(c.sent) == 1

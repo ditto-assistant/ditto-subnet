@@ -37,3 +37,9 @@ published. No broad desktop token may be copied into the observer.
 This change does not install a signer runtime, arm an intent, reset a journal,
 enable a timer, provision OAuth/IAM, or move funds. Backroom control wiring and
 public audit verification remain tracked in SN-54/SN-55/SN-57.
+
+`--observe-earnings-only` advances at most 32 independently verified finalized
+blocks in the existing transfer journal without preparing or broadcasting any
+transaction. It can continue after a spent manual/canary claim, so observation
+does not have to slow to the daily spending frequency. Historical failures
+roll back the scan; they never skip missing blocks or reset the cursor.
