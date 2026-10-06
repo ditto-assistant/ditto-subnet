@@ -37,9 +37,10 @@ The private selector snapshot contains allowlisted public receipt coordinates,
 not keys or signed bytes. Existing separate-user publisher/observer code can
 durably deliver these to public Backroom receipt ingress. A snapshot is not a
 published receipt; the independent historical chain checks must accept it.
-Do not mark the operator control ready until that observer is deployed with
-its dedicated normal-consent OAuth grant and a bounded receipt is visibly
-published. No broad desktop token may be copied into the observer.
+The CLI-only observer requires its dedicated normal-consent OAuth grant;
+no broad desktop token may be copied into it. The Backroom button uses the
+keyless mailbox bridge below instead. Neither path is ready solely from a
+selector snapshot: independent receipt publication must succeed.
 
 This change does not install a signer runtime, arm an intent, reset a journal,
 enable a timer, provision OAuth/IAM, or move funds. Backroom control wiring and

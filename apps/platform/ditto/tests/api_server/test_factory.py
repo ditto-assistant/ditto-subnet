@@ -126,7 +126,7 @@ class TestCreateApiServer:
         assert bounded == [
             "openapi.components.schemas.ManualPreviewInput.reason=240",
             "openapi.components.schemas.ManualRequest.reason=240",
-            "openapi.components.schemas.TreasuryReceiptSelector.reason=240"
+            "openapi.components.schemas.TreasuryReceiptSelector.reason=240",
         ]
 
 
