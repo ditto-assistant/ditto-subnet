@@ -14,6 +14,7 @@ from ditto_screening_protocol.treasury_approval import (
 from ditto_screening_protocol.treasury_enforcement import (
     EnforcingTreasuryPin,
     TreasuryFleetMember,
+    treasury_follower_capability,
 )
 
 
@@ -88,6 +89,18 @@ def fixture(*, service_bps=1000):
     }
 
 
+def test_independent_follower_uses_same_signed_service_allocation():
+    pin, args = fixture()
+    expected = fold_treasury_weights({"miner": 1}, **args)
+    args["local_capability"] = treasury_follower_capability(
+        pin,
+        validator_hotkey=Keypair.create_from_uri("//Dave").ss58_address,
+        protocol_version=30,
+    )
+    assert args["local_capability"] not in pin.fleet
+    assert fold_treasury_weights({"miner": 1}, **args) == expected
+
+
 @pytest.mark.parametrize("burn", [0, 0.2, 0.5, 1])
 @pytest.mark.parametrize("paid", [0, 0.3, 1])
 def test_service_reserved_before_burn_and_unpaid_remainder(burn, paid):
@@ -139,7 +152,7 @@ def test_empty_miner_vector_does_not_enlarge_service_pool():
         "wrong_first_block",
         "legacy_dispatch",
         "legacy_protocol",
-        "absent_self",
+        "wrong_follower_policy",
         "empty_fleet",
         "mixed_fleet",
         "burn_collector",
@@ -204,9 +217,12 @@ def test_refusal_preserves_caller_vector(fault):
         args["local_capability"] = args["local_capability"].model_copy(
             update={key: value}
         )
-    elif fault == "absent_self":
+    elif fault == "wrong_follower_policy":
         args["local_capability"] = args["local_capability"].model_copy(
-            update={"validator_hotkey": args["burn_hotkey"]}
+            update={
+                "validator_hotkey": args["burn_hotkey"],
+                "approved_policy_digest": "f" * 64,
+            }
         )
     elif fault == "empty_fleet":
         args["pin"] = pin.model_copy(update={"fleet": ()})

@@ -127,6 +127,27 @@ unreadable the worker keeps the previous `LastUpdate` cadence.
 
 ## Verification and rollout
 
+### Gamma allocation for every validator
+
+Platform publishes one signed Gamma policy and immutable epoch ledger for all
+validators. The pin's `fleet` is our managed activation evidence, not an
+allowlist of validators permitted to follow that ledger. An independent
+protocol-30 validator needs a fresh authenticated heartbeat but does not need
+our local approval file or membership in our managed roster.
+
+The validator and Pylon adapter both verify the supplied policy's coldkey
+signature, epoch, finalized collector identity and exact service allocation.
+Pylon repeats these checks inside the queued task and before the normalized
+commit. A managed member still requires its locally armed approval; explicitly
+configured independent deployments also must match their local approval.
+Missing or partial explicit configuration never becomes a follower fallback.
+There is no legacy submission fallback after an enforcing pin is encountered.
+
+Both the validator and Pylon image must update for independent followers to
+use this path. Older adapters refuse safely even after Platform's ledger API
+is repaired. Successful deployment is not evidence of fresh chain weights;
+verify each validator's commit/reveal state through Backroom diagnostics.
+
 Run `uv run pytest ditto/tests/test_pylon_epoch_schedule.py` and build Pylon with
 the exact named TurboBT context used by Compose/release. Then run
 `bash scripts/test-pylon-epoch-schedule.sh <image>`: the installed-image tests

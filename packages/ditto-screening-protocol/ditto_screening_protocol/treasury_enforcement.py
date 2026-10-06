@@ -1,7 +1,7 @@
 """Future enforcing contract; shape alone is never dispatch authorization.
 
 V1 remains shadow-only. V2 requires an exact offline proposal proof, immutable
-epoch identity and a nonempty complete weight-setter capability snapshot. A
+epoch identity and a nonempty managed activation capability snapshot. A
 consumer must additionally verify crypto and current finalized identity. No
 producer or configuration binding is enabled by defining this contract.
 """
@@ -55,6 +55,25 @@ class TreasuryFleetMember(TreasuryWeightCapability):
 
     validator_hotkey: Address
     protocol_version: Annotated[int, Field(ge=TREASURY_WEIGHT_PROTOCOL)]
+
+
+def treasury_follower_capability(
+    pin: EnforcingTreasuryPin, *, validator_hotkey: str, protocol_version: int
+) -> TreasuryFleetMember:
+    """Bind an independent follower to the Platform's signed allocation.
+
+    This constructs the policy binding, not authorization. Consumers still
+    verify the approval signature and fresh finalized identity/epoch, and the
+    queued transport repeats those checks immediately before submission.
+    """
+    return TreasuryFleetMember(
+        validator_hotkey=validator_hotkey,
+        protocol_version=protocol_version,
+        treasury_pin_version=2,
+        treasury_dispatch_version=2,
+        approved_policy_digest=pin.policy_digest,
+        collector_policy_digest=pin.policy.collector_policy_digest,
+    )
 
 
 class EnforcingTreasuryPin(BaseModel):
@@ -197,8 +216,16 @@ def require_treasury_weight_authority(
         for name in identity_fields
     ):
         raise ValueError("collector identity drift requires an audited rebind")
-    if member not in pin.fleet:
-        raise ValueError("this validator is absent or differs from pinned fleet")
+    if (
+        member.approved_policy_digest != pin.policy_digest
+        or member.collector_policy_digest != pin.policy.collector_policy_digest
+    ):
+        raise ValueError("validator policy binding differs from enforcing pin")
+    managed = next(
+        (m for m in pin.fleet if m.validator_hotkey == member.validator_hotkey), None
+    )
+    if managed is not None and member != managed:
+        raise ValueError("managed validator differs from pinned fleet")
     return pin
 
 

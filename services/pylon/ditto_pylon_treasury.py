@@ -1,8 +1,8 @@
 """Offline-pinned public policy and finalized guard for queued treasury weights.
 
-No approval file is installed by this source change. Missing configuration
-refuses every enforcing request. This module never loads keys or submits an
-extrinsic; it runs immediately before the existing dispatch path.
+Managed activation still requires its local offline approval. Independent
+followers verify the supplied signed Platform pin. This module never loads
+keys or submits an extrinsic; it runs before the existing dispatch path.
 """
 
 from __future__ import annotations
@@ -23,9 +23,11 @@ from ditto_screening_protocol.treasury_approval import (
     verify_public_signature,
 )
 from ditto_screening_protocol.treasury_enforcement import (
+    TREASURY_WEIGHT_PROTOCOL,
     EnforcingTreasuryPin,
     TreasuryFleetMember,
     require_treasury_weight_authority,
+    treasury_follower_capability,
 )
 from ditto_screening_protocol.treasury_identity import (
     read_treasury_dispatch_observation,
@@ -87,18 +89,40 @@ def configured_request(
     validator_hotkey: str,
 ) -> tuple[TreasuryFleetMember, str, str]:
     pin = EnforcingTreasuryPin.model_validate(pin)
-    approval, digest, collector_digest = approved_policy()
-    if (
-        approval.policy != pin.policy
-        or type(netuid) is not int
-        or netuid != pin.policy.netuid
-    ):
-        raise ValueError("queued treasury policy differs from deployment")
     member = next(
         (m for m in pin.fleet if m.validator_hotkey == validator_hotkey), None
     )
+    configured = (
+        any(
+            os.environ.get(name, "").strip()
+            for name in (
+                "DITTO_TREASURY_SHADOW_APPROVAL_FILE",
+                "DITTO_TREASURY_APPROVED_POLICY_DIGEST",
+                "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST",
+            )
+        )
+        or os.environ.get("DITTO_TREASURY_WEIGHT_ENFORCEMENT", "false") != "false"
+    )
+    if member is not None or configured:
+        approval, digest, collector_digest = approved_policy()
+        if approval.policy != pin.policy:
+            raise ValueError("queued treasury policy differs from deployment")
+    else:
+        digest, collector_digest = pin.policy_digest, pin.policy.collector_policy_digest
+        verify_policy_approval(
+            pin.approval,
+            expected_policy_digest=digest,
+            expected_collector_policy_digest=collector_digest,
+            verify_signature=verify_public_signature,
+        )
+    if type(netuid) is not int or netuid != pin.policy.netuid:
+        raise ValueError("queued treasury policy differs from deployment")
     if member is None:
-        raise ValueError("queued treasury validator is absent from pinned fleet")
+        member = treasury_follower_capability(
+            pin,
+            validator_hotkey=validator_hotkey,
+            protocol_version=TREASURY_WEIGHT_PROTOCOL,
+        )
     return member, digest, collector_digest
 
 

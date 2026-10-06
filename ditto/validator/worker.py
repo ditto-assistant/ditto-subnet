@@ -162,6 +162,7 @@ from ditto_screening_protocol.treasury_enforcement import (
     TreasuryFleetMember,
     TreasuryWeightCapability,
     require_treasury_weight_authority,
+    treasury_follower_capability,
 )
 
 if TYPE_CHECKING:
@@ -2096,22 +2097,42 @@ class ValidatorWorker:
                         "enforcing treasury ledger is stale or inconsistent"
                     )
                 approval = configured_treasury_approval(self._config)
-                capability = await self._treasury_weight_capability()
+                managed = any(
+                    m.validator_hotkey == self._config.validator_hotkey
+                    for m in treasury_pin.fleet
+                )
+                capability = (
+                    await self._treasury_weight_capability() if managed else None
+                )
                 read = getattr(self._chain, "get_treasury_dispatch_observation", None)
-                if approval is None or capability is None or not callable(read):
+                if (
+                    managed and (approval is None or capability is None)
+                ) or not callable(read):
                     raise ValueError("treasury consumer or transport proof is missing")
                 async with asyncio.timeout(8):
                     observed = await read(treasury_pin.policy)
-                member = TreasuryFleetMember(
-                    **capability.model_dump(),
-                    validator_hotkey=self._config.validator_hotkey,
-                    protocol_version=validator_build_info().protocol_version,
+                member = (
+                    TreasuryFleetMember(
+                        **capability.model_dump(),
+                        validator_hotkey=self._config.validator_hotkey,
+                        protocol_version=validator_build_info().protocol_version,
+                    )
+                    if capability is not None
+                    else treasury_follower_capability(
+                        treasury_pin,
+                        validator_hotkey=self._config.validator_hotkey,
+                        protocol_version=validator_build_info().protocol_version,
+                    )
                 )
                 treasury_authority = {
                     "pin": treasury_pin,
-                    "expected_policy_digest": approval.policy.digest,
+                    "expected_policy_digest": approval.policy.digest
+                    if approval
+                    else treasury_pin.policy_digest,
                     "expected_collector_policy_digest": (
                         approval.policy.collector_policy_digest
+                        if approval
+                        else treasury_pin.policy.collector_policy_digest
                     ),
                     "local_capability": member,
                     "current_identity": observed.identity,

@@ -195,6 +195,68 @@ async def add_runtime(session, now):
     return dbrow
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [None, "stale", "future", "legacy", "missing", "managed_stale", "epoch", "owner"],
+)
+async def test_independent_requester_reads_same_pin_without_managed_capability(
+    session, fault
+):
+    from bittensor_wallet import Keypair
+
+    p = pin()
+    now = datetime.now(UTC)
+    managed = await add_runtime(session, now)
+    state = app_state(p)
+    hotkey = Keypair.create_from_uri("//Dave").ss58_address
+    row = ValidatorHeartbeat(
+        validator_hotkey=hotkey,
+        protocol_version=30,
+        software_version="0.355.1",
+        seen_at=now,
+        reported_at=now,
+        signature="cd" * 64,
+        capabilities={},
+        state="idle",
+        active_agent_id=None,
+        code_digest="b" * 64,
+    )
+    if fault == "stale":
+        row.seen_at -= timedelta(minutes=16)
+    elif fault == "future":
+        row.seen_at += timedelta(minutes=1)
+    elif fault == "legacy":
+        row.protocol_version = 29
+    elif fault == "managed_stale":
+        managed.seen_at -= timedelta(minutes=16)
+    elif fault in {"epoch", "owner"}:
+        observed = state.chain.get_treasury_dispatch_observation.return_value
+        update = (
+            {"epoch_index": observed.epoch_index + 1}
+            if fault == "epoch"
+            else {
+                "identity": observed.identity.model_copy(
+                    update={"owner_coldkey": hotkey}
+                )
+            }
+        )
+        state.chain.get_treasury_dispatch_observation.return_value = (
+            observed.model_copy(update=update)
+        )
+    if fault != "missing":
+        session.add(row)
+    await session.flush()
+    if fault is None:
+        await require_enforcing_requester(session, p, hotkey, now=now, app_state=state)
+        assert tuple(m.validator_hotkey for m in p.fleet) == (managed.validator_hotkey,)
+        state.chain.get_treasury_dispatch_observation.assert_awaited_once()
+    else:
+        with pytest.raises(ValueError):
+            await require_enforcing_requester(
+                session, p, hotkey, now=now, app_state=state
+            )
+
+
 async def test_producer_binds_real_approval_complete_roster_and_epoch(session):
     p = pin()
     now = datetime.now(UTC)
