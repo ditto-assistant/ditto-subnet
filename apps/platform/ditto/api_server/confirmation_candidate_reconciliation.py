@@ -15,11 +15,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.confirmation_bundles import (
@@ -60,7 +60,6 @@ from ditto.db.queries.scores import (
     attested_emission_owner_roots,
     emission_owner,
     list_eligible_ledger,
-    quorum_score_rows,
 )
 
 if TYPE_CHECKING:
@@ -106,8 +105,68 @@ def lower_median_base_proof(
     )
 
 
+async def _quorum_median_rows(
+    session: AsyncSession,
+    agent_ids: Sequence[UUID],
+    *,
+    bench_versions: dict[UUID, int],
+) -> dict[UUID, Score]:
+    """The lower-median score row per agent, with its details loaded.
+
+    Mirrors :func:`lower_median_base_proof`'s selection over the exact
+    canonical ordering but reads only the scalars needed to pick it, then
+    fetches the winner's JSON evidence once per agent instead of
+    loading every quorum row's per-case audit blob.
+    """
+    if not agent_ids:
+        return {}
+    rank = (
+        select(
+            Score.agent_id.label("agent_id"),
+            Score.bench_version.label("bench_version"),
+            Score.validator_hotkey.label("validator_hotkey"),
+            Score.composite.label("composite"),
+            Score.n.label("n"),
+            func.count()
+            .over(partition_by=(Score.agent_id, Score.bench_version))
+            .label("cnt"),
+            func.row_number()
+            .over(
+                partition_by=(Score.agent_id, Score.bench_version),
+                order_by=(Score.composite.asc(), Score.validator_hotkey.asc()),
+            )
+            .label("srn"),
+        )
+        .where(
+            Score.agent_id.in_(agent_ids),
+            Score.bench_version.in_(set(bench_versions.values())),
+        )
+        .subquery()
+    )
+    median_keys = (
+        select(rank.c.agent_id, rank.c.bench_version, rank.c.validator_hotkey)
+        .where(
+            and_(
+                rank.c.srn * 2 == rank.c.cnt + 1,
+            )
+        )
+        .subquery()
+    )
+    rows = await session.execute(
+        select(Score).join(
+            median_keys,
+            and_(
+                median_keys.c.agent_id == Score.agent_id,
+                median_keys.c.bench_version == Score.bench_version,
+                median_keys.c.validator_hotkey == Score.validator_hotkey,
+            ),
+        )
+    )
+    return {row.agent_id: row for row in rows.scalars()}
+
+
 def _base_proof_from_score(
-    score: Score, *, artifact_sha256: str, bench_version: int
+    score: Any, *, artifact_sha256: str, bench_version: int
 ) -> ConfirmationBaseProof:
     details = score.details if isinstance(score.details, dict) else {}
     raw = details.get("v9_base")
@@ -365,9 +424,14 @@ async def reconcile_confirmation_candidates(
         if str(agent.agent_id) not in proofs
     ]
     if missing_rows:
-        score_rows = await quorum_score_rows(
+        # This fallback needs only the median row's signature-bound base
+        # evidence. Scalar aggregates select the representative without
+        # dragging every quorum row's per-case audit blob across the wire;
+        # the median's details are fetched in the exact second pass.
+        missing_agent_ids = [agent.agent_id for _, agent, _ in missing_rows]
+        medians = await _quorum_median_rows(
             session,
-            [agent.agent_id for _, agent, _ in missing_rows],
+            missing_agent_ids,
             bench_versions={
                 agent.agent_id: bench_version for _, agent, _ in missing_rows
             },
@@ -387,13 +451,9 @@ async def reconcile_confirmation_candidates(
         for root, (subject, agent, _coldkey) in zip(roots, missing_rows, strict=True):
             if root in ledger_owner_ids:
                 continue
-            rows = score_rows.get(agent.agent_id, [])
-            if len(rows) < SCORING_QUORUM:
+            representative = medians.get(agent.agent_id)
+            if representative is None:
                 continue
-            ordered = sorted(
-                rows, key=lambda row: (row.composite, row.validator_hotkey)
-            )
-            representative = ordered[(len(ordered) - 1) // 2]
             if representative.n < MIN_ELIGIBLE_CASES or representative.composite <= 0:
                 continue
             proof = _base_proof_from_score(
