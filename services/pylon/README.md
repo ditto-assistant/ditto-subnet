@@ -243,3 +243,9 @@ its evidence. The installed-image migration test rehearses a populated legacy
 task database, repeated upgrade, version-marker downgrade, and re-upgrade.
 This does not replace the required Backroom `disclosure=never` containment
 before reverting source-release behavior.
+
+Independent followers authenticate the approval against the public Finney/SN118
+collector coldkey shipped in the protocol package, never a signer supplied by
+the request. Allocation changes must carry that coldkey's valid signature;
+a collector rebind requires an audited software update. Managed activation
+continues to require the exact locally pinned policy and transport proof.

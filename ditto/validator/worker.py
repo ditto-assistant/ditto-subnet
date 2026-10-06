@@ -157,6 +157,9 @@ from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_FAILURE_CLASS_VALUES,
 )
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
+from ditto_screening_protocol.treasury_approval import (
+    verify_follower_policy_approval,
+)
 from ditto_screening_protocol.treasury_enforcement import (
     EnforcingTreasuryPin,
     TreasuryFleetMember,
@@ -2097,6 +2100,8 @@ class ValidatorWorker:
                         "enforcing treasury ledger is stale or inconsistent"
                     )
                 approval = configured_treasury_approval(self._config)
+                if approval is None:
+                    verify_follower_policy_approval(treasury_pin.approval)
                 managed = any(
                     m.validator_hotkey == self._config.validator_hotkey
                     for m in treasury_pin.fleet

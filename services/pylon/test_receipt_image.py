@@ -416,6 +416,12 @@ class ReceiptImageTests(unittest.IsolatedAsyncioTestCase):
             champion_artifact_sha256=None,
             vector_digest=receipt.canonical_digest(data["weights"]),
         )
+        authority = patch(
+            "ditto_screening_protocol.treasury_approval.SN118_FOLLOWER_AUTHORITY",
+            (pin.policy.genesis_hash, pin.policy.netuid, pin.policy.collector_coldkey),
+        )
+        self.addCleanup(authority.stop)
+        authority.start()
         with patch.dict(
             os.environ,
             {

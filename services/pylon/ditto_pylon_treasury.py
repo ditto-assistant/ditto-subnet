@@ -19,6 +19,7 @@ from scalecodec.utils.ss58 import ss58_encode
 from ditto_screening_protocol.treasury import Address, Hash
 from ditto_screening_protocol.treasury_approval import (
     TreasuryPolicyApproval,
+    verify_follower_policy_approval,
     verify_policy_approval,
     verify_public_signature,
 )
@@ -92,16 +93,16 @@ def configured_request(
     member = next(
         (m for m in pin.fleet if m.validator_hotkey == validator_hotkey), None
     )
-    configured = (
-        any(
-            os.environ.get(name, "").strip()
-            for name in (
-                "DITTO_TREASURY_SHADOW_APPROVAL_FILE",
-                "DITTO_TREASURY_APPROVED_POLICY_DIGEST",
-                "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST",
-            )
+    configured = any(
+        os.environ.get(name, "").strip()
+        for name in (
+            "DITTO_TREASURY_SHADOW_APPROVAL_FILE",
+            "DITTO_TREASURY_APPROVED_POLICY_DIGEST",
+            "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST",
         )
-        or os.environ.get("DITTO_TREASURY_WEIGHT_ENFORCEMENT", "false") != "false"
+    ) or os.environ.get("DITTO_TREASURY_WEIGHT_ENFORCEMENT", "false").strip() not in (
+        "",
+        "false",
     )
     if member is not None or configured:
         approval, digest, collector_digest = approved_policy()
@@ -109,12 +110,7 @@ def configured_request(
             raise ValueError("queued treasury policy differs from deployment")
     else:
         digest, collector_digest = pin.policy_digest, pin.policy.collector_policy_digest
-        verify_policy_approval(
-            pin.approval,
-            expected_policy_digest=digest,
-            expected_collector_policy_digest=collector_digest,
-            verify_signature=verify_public_signature,
-        )
+        verify_follower_policy_approval(pin.approval)
     if type(netuid) is not int or netuid != pin.policy.netuid:
         raise ValueError("queued treasury policy differs from deployment")
     if member is None:

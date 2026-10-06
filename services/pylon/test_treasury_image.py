@@ -288,7 +288,14 @@ class TreasuryImageTests(unittest.IsolatedAsyncioTestCase):
             "DITTO_TREASURY_APPROVED_POLICY_DIGEST": "",
             "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST": "",
         }
-        with patch.dict(os.environ, env):
+        policy = self.pin.policy
+        with (
+            patch.dict(os.environ, env),
+            patch(
+                "ditto_screening_protocol.treasury_approval.SN118_FOLLOWER_AUTHORITY",
+                (policy.genesis_hash, policy.netuid, policy.collector_coldkey),
+            ),
+        ):
             self.assertIsNone(treasury.capability())
             await treasury.queued_block(self.client, self.body, 118, self.other)
             with patch.object(
@@ -310,7 +317,14 @@ class TreasuryImageTests(unittest.IsolatedAsyncioTestCase):
             "DITTO_TREASURY_APPROVED_POLICY_DIGEST": "",
             "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST": "",
         }
-        with patch.dict(os.environ, env):
+        policy = self.pin.policy
+        with (
+            patch.dict(os.environ, env),
+            patch(
+                "ditto_screening_protocol.treasury_approval.SN118_FOLLOWER_AUTHORITY",
+                (policy.genesis_hash, policy.netuid, policy.collector_coldkey),
+            ),
+        ):
             self.body["treasury_pin"]["approval"]["signature"] = "0x" + "00" * 64
             with self.assertRaises(tasks.StopRetrying):
                 await treasury.queued_block(self.client, self.body, 118, self.other)
@@ -324,6 +338,27 @@ class TreasuryImageTests(unittest.IsolatedAsyncioTestCase):
             ):
                 await treasury.queued_block(self.client, self.body, 118, self.other)
         self.client.subtensor.rpc.assert_not_awaited()
+
+    async def test_external_self_signed_collector_is_not_a_trust_anchor(self):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            self.assertRaises(tasks.StopRetrying),
+        ):
+            await treasury.queued_block(self.client, self.body, 118, self.other)
+        self.client.subtensor.rpc.assert_not_awaited()
+
+    async def test_empty_enforcement_is_an_unconfigured_follower(self):
+        policy = self.pin.policy
+        with (
+            patch.dict(
+                os.environ, {"DITTO_TREASURY_WEIGHT_ENFORCEMENT": ""}, clear=True
+            ),
+            patch(
+                "ditto_screening_protocol.treasury_approval.SN118_FOLLOWER_AUTHORITY",
+                (policy.genesis_hash, policy.netuid, policy.collector_coldkey),
+            ),
+        ):
+            await treasury.queued_block(self.client, self.body, 118, self.other)
 
     async def test_precommit_rechecks_identity_after_successful_queue_check(self):
         await treasury.queued_block(

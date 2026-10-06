@@ -80,7 +80,8 @@ def make_worker(tmp_path, monkeypatch, *, empty=False, burn=0, service_bps=1000)
 
 
 @pytest.mark.parametrize(
-    "fault", [None, "signature", "identity", "partial_config", "receipt"]
+    "fault",
+    [None, "signature", "identity", "partial_config", "receipt", "untrusted_signer"],
 )
 async def test_external_worker_without_managed_config_verifies_pin_and_transport(
     tmp_path, monkeypatch, fault
@@ -93,6 +94,12 @@ async def test_external_worker_without_managed_config_verifies_pin_and_transport
     worker._config.treasury_approved_policy_digest = None
     worker._config.treasury_collector_policy_digest = None
     chain.get_treasury_weight_capability.return_value = None
+    if fault != "untrusted_signer":
+        policy = ledger.treasury_pin.policy
+        monkeypatch.setattr(
+            "ditto_screening_protocol.treasury_approval.SN118_FOLLOWER_AUTHORITY",
+            (policy.genesis_hash, policy.netuid, policy.collector_coldkey),
+        )
     if fault == "signature":
         pin = ledger.treasury_pin
         worker._platform.get_ledger.return_value = ledger.model_copy(
