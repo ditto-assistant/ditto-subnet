@@ -1,7 +1,8 @@
 """Bounded proposed-policy preflight over the explicit managed-validator roster."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any, Literal
 
 from fastapi import HTTPException
@@ -105,6 +106,7 @@ async def activation_preflight(
     *,
     now: datetime,
 ) -> TreasuryActivationPreflight:
+    started = monotonic()
     # Reject invalid signatures before any chain read. Public-key verification
     # does not load a wallet or access signing credentials.
     policy = verify_policy_approval(
@@ -209,6 +211,11 @@ async def activation_preflight(
             .limit(PREFLIGHT_ROW_LIMIT + 1)
         )
     )
+    # Heartbeats may arrive while finalized chain evidence is awaited. Evaluate
+    # the completed inventory at its read time, with the same freshness window
+    # and future-timestamp refusal. Anchor elapsed time to the supplied UTC clock
+    # so wall-clock adjustments cannot make the cutoff move backward mid-read.
+    checked_at = now + timedelta(seconds=monotonic() - started)
     inventory = {r.validator_hotkey: r for r in rows[:PREFLIGHT_ROW_LIMIT]}
     truncated = len(rows) > PREFLIGHT_ROW_LIMIT or len(required) > PREFLIGHT_ROW_LIMIT
     setters = [
@@ -216,7 +223,7 @@ async def activation_preflight(
             inventory.get(h),
             hotkey=h,
             required=h in authorized,
-            now=now,
+            now=checked_at,
             policy_digest=policy.digest,
             collector_digest=policy.collector_policy_digest,
             inventory_complete=len(rows) <= PREFLIGHT_ROW_LIMIT,
@@ -228,7 +235,7 @@ async def activation_preflight(
     if any(s.status != "ready" for s in setters):
         reasons.append("setter_proof_missing")
     return TreasuryActivationPreflight(
-        checked_at=now,
+        checked_at=checked_at,
         proposed_policy_digest=policy.digest,
         proposed_collector_policy_digest=policy.collector_policy_digest,
         configured_policy_matches=(

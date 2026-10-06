@@ -10,6 +10,61 @@ from ditto.api_server.treasury_weights import treasury_fleet_members
 from ditto.tests.api_server.test_treasury_weights import heartbeat, pin
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "timing",
+    ["arrived_during_read", "expired_during_read", "future_at_completion"],
+)
+async def test_preflight_inventory_uses_completed_read_time(
+    session, monkeypatch, timing
+):
+    from ditto.api_models.treasury_activation import TreasuryActivationPreflightRequest
+    from ditto.api_server.treasury_activation import activation_preflight
+    from ditto.api_server.treasury_weights import TREASURY_FLEET_FRESHNESS
+    from ditto.tests.api_server.test_treasury_weights import add_runtime, app_state
+
+    p = pin()
+    state = app_state(p)
+    started_at = datetime.now(UTC)
+    completed_at = started_at + timedelta(seconds=10)
+    seen_at = started_at + timedelta(seconds=5)
+    if timing == "expired_during_read":
+        seen_at = started_at - TREASURY_FLEET_FRESHNESS + timedelta(seconds=5)
+    elif timing == "future_at_completion":
+        seen_at = completed_at + timedelta(seconds=1)
+    row = await add_runtime(session, seen_at)
+    clocks = iter((100.0, 110.0))
+    monkeypatch.setattr(
+        "ditto.api_server.treasury_activation.monotonic", lambda: next(clocks)
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.treasury_activation.verify_public_signature", lambda *_: True
+    )
+    result = await activation_preflight(
+        state,
+        session,
+        TreasuryActivationPreflightRequest(
+            approval=p.approval,
+            expected_policy_digest=p.policy_digest,
+            expected_collector_policy_digest=p.policy.collector_policy_digest,
+            managed_validator_hotkeys=(p.fleet[0].validator_hotkey,),
+        ),
+        now=started_at,
+    )
+    assert result.checked_at == completed_at
+    assert result.setters[0].seen_at == seen_at
+    assert result.fleet_ready_for_proposed_policy is (timing == "arrived_during_read")
+    assert result.setters[0].status == (
+        "ready" if timing == "arrived_during_read" else "heartbeat_outside_window"
+    )
+    assert row.seen_at == seen_at
+    assert result.can_enforce_weights is False
+    assert result.weight_effect == "none"
+    state.chain.get_treasury_weight_setters.assert_awaited_once_with(
+        p.policy, block_hash=p.identity.finalized_block_hash
+    )
+
+
 @pytest.mark.parametrize(
     "fault,expected",
     [
