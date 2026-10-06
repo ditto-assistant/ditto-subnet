@@ -22,6 +22,7 @@ import {
   TimerReset,
   Timer,
   Zap,
+  Wallet,
 } from 'lucide-react'
 import type { BackroomUser } from '../lib/auth.types'
 import { logout } from '../server/auth.functions'
@@ -54,9 +55,15 @@ const navigation = [
   },
   {
     to: '/burn' as const,
-    label: 'Emissions & treasury',
-    description: 'Burn & service wallet policy',
+    label: 'Emissions & burn',
+    description: 'Miner burn weight policy',
     icon: Flame,
+  },
+  {
+    to: '/gamma' as const,
+    label: 'Gamma & transfers',
+    description: 'Collector transfers & service wallets',
+    icon: Wallet,
   },
   {
     to: '/continual-retests' as const,
