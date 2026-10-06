@@ -9410,6 +9410,13 @@ CREATE INDEX score_audit_log_agent_id_idx ON public.score_audit_log USING btree 
 
 
 --
+-- Name: score_audit_log_event_agent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX score_audit_log_event_agent_idx ON public.score_audit_log USING btree (event, agent_id);
+
+
+--
 -- Name: scored_policy_rescreen_releases_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
