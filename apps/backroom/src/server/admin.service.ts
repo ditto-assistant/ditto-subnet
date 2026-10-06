@@ -1,4 +1,9 @@
 import '@tanstack/react-start/server-only'
+import { manualControlSchema } from '../lib/treasury-manual.schemas'
+
+export async function fetchTreasuryManualTransfers() {
+  return manualControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual'))
+}
 import { z } from 'zod'
 import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema, treasuryReceiptPreflightInputSchema, treasuryReceiptPreflightSchema } from '../lib/treasury-receipts.schemas'
 

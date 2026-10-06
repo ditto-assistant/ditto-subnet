@@ -490,6 +490,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await emission_collector.start()
             app.state.source_emission_collector = emission_collector
 
+            from ditto.api_server.treasury_manual_loop import TreasuryManualLoop
+
+            app.state.treasury_manual_loop = TreasuryManualLoop(app.state)
+            stack.push_async_callback(app.state.treasury_manual_loop.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await app.state.treasury_manual_loop.start()
+
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)
             if _process_role() == PLATFORM_ROLE:
@@ -731,6 +738,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(treasury_runtime_router, prefix="/api/v1")
     app.include_router(admin_treasury_receipts_router, prefix="/api/v1")
     app.include_router(admin_treasury_quote_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.admin_treasury_manual import router as manual_router
+
+    app.include_router(manual_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
     app.include_router(admin_conversation_router, prefix="/api/v1")
     app.include_router(screener_conversation_router, prefix="/api/v1")

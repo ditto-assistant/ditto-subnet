@@ -89,6 +89,53 @@ class PrivatePlanScope(unittest.TestCase):
         ]
         return plan
 
+    def test_manual_mailbox_scope_requires_exact_direction_and_explicit_enablement(
+        self,
+    ):
+        plan = fixture()
+        plan["variables"].update(
+            {
+                "project": {"value": "sn118-gamma-custody"},
+                "enable_manual_mailbox": {"value": True},
+                "collector_custody_phases": {
+                    "value": {"registration": "sealed", "transfer": "sealed"}
+                },
+                "manual_mailbox_platform_service_account": {
+                    "value": "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com"
+                },
+            }
+        )
+        after = {
+            "project": "sn118-gamma-custody",
+            "topic": "sn118-manual-requests",
+            "role": "roles/pubsub.publisher",
+            "member": (
+                "serviceAccount:ditto-platform-api@"
+                "ditto-app-dev.iam.gserviceaccount.com"
+            ),
+        }
+        plan["resource_changes"] = [
+            {
+                "address": "google_pubsub_topic_iam_member.manual_requests[0]",
+                "mode": "managed",
+                "change": {"actions": ["create"], "after": after},
+            }
+        ]
+        self.assertEqual(scope.validate(plan, project="sn118-gamma-custody"), 1)
+        for key, bad in (
+            ("topic", "unrelated"),
+            ("role", "roles/pubsub.admin"),
+            ("member", "allUsers"),
+        ):
+            old = after[key]
+            after[key] = bad
+            with self.assertRaises(ValueError):
+                scope.validate(plan, project="sn118-gamma-custody")
+            after[key] = old
+        plan["variables"]["enable_manual_mailbox"]["value"] = False
+        with self.assertRaises(ValueError):
+            scope.validate(plan, project="sn118-gamma-custody")
+
     def test_accepts_exact_sealed_finney_tls_rule(self):
         self.assertEqual(scope.validate(self.rpc_fixture()), 2)
 

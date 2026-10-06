@@ -16,7 +16,7 @@ import { observerGrant } from './treasury-observer-access.server'
 import { createTreasuryObserverServer } from './treasury-observer-mcp.server'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
-import { fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight } from './admin.service'
+import { fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers } from './admin.service'
 import { fetchTreasuryActivationPreflight, fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 import { fetchTreasuryRuntime, recordTreasuryRuntime } from './admin.service'
 import { recordTreasuryRuntimeInputSchema } from '../lib/treasury-ledger.schemas'
@@ -807,7 +807,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   reinstate_evicted_submission_to_queue:
     'Reverse an active-era removal using a fresh snapshot and "REINSTATE TO VALIDATOR QUEUE", not "EVICT LIVE VALIDATOR LEASES" or "REMOVE FROM VALIDATOR QUEUE". It does not mint a no-fault retry grant or restore attempts; retry_budget_snapshot records that invariant. Refused when the removal era is no longer the active one.',
   set_inference_concurrency_settings:
-    'Write complete inference/runtime policy with expectedRevision, reason and "APPLY INFERENCE CONCURRENCY SETTINGS". Chat budgets affect new grants; chat/embedding concurrency is live; case_concurrency 1-64, default 4; relay delays off/shadow.',
+    'Apply complete inference policy with CAS/reason/confirmation. See tool help.',
   get_inference_runtime_metrics:
     'Read inference load and relay health.',
   get_source_review_queue_slo:
@@ -898,15 +898,15 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_screening_baseline_diff:
     'Starter diff. Incomplete custom lines are lower bounds; omitted paths are unexamined. Bodies via file reader. Artifact scope.',
   list_screening_source_files:
-    'Readable archive manifest. has_more or truncated means incomplete inventory; truncated paths cannot be paged back. Artifact scope.',
+    'Archive manifest; has_more/truncated means incomplete. Artifact scope.',
   get_efficiency_bonus_settings:
     'Read subnet efficiency policy, fold and optional history (default 0).',
   get_leaderboard:
     'Read rank, score, eligibility and registration; current benchmark default.',
   get_source_release_policy:
-    'Read disclosure gate/counts/25 receipts; completed winner required. History default 0.',
+    'Read disclosure gate and receipts; history default 0.',
   set_burn_settings:
-    'Apply a burn revision with expectedRevision, reason and "APPLY BURN SETTINGS". MOVES TAO; scales miner weights without reranking. Fleet effect takes an epoch. See tool help.',
+    'Change burn weights with CAS/reason/confirmation. MOVES TAO. See tool help.',
   get_burn_settings:
     'Read burn, miner remainder, revision and fleet fold. Optional history, default 0.',
   get_emission_eligibility_policy:
@@ -918,6 +918,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_treasury_ledger_readiness: 'Read epoch/policy readiness; no activation.',
   record_treasury_settings: 'Record shadow buckets with CAS/confirmation; no weights or funds.',
   get_treasury_receipts: 'Read treasury receipt history/publication.',
+  get_treasury_manual_transfers: 'Read manual custody readiness, requests and public receipts; no funds.',
   get_treasury_receipt_preflight: 'Read exact receipt readiness/archive checkpoint; no writes.',
   record_treasury_receipt: 'Ingest finalized receipt; no signing/provider credit.',
   quote_treasury_topup: 'Quote GM routes/impact; no execution.',
@@ -3469,6 +3470,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_treasury_receipts',
     { title: 'Read verified treasury receipts', description: 'Read up to 100 independently finalized receipt records, including publication-off observations, historical policy digest, source selector and provider-credit not_proven state. No spending authority. Requires backroom:read.', annotations: toolAnnotations('read') },
     async () => result(await fetchTreasuryReceipts()),
+  )
+  registerTool(
+    'get_treasury_manual_transfers',
+    { title: 'Read manual collector transfer controls', description: 'Read the manual bridge enablement, fresh signer observation, approved destinations, blocking reason and latest 20 requests with finality and independent public receipt state. Recurring transfers remain off. A signer report is not chain proof. No signing, transfer, settings mutation or provider credit authority. Requires backroom:read.', annotations: toolAnnotations('read') },
+    async () => result(await fetchTreasuryManualTransfers()),
   )
   registerTool(
     'get_treasury_receipt_preflight',

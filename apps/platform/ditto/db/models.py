@@ -8818,6 +8818,44 @@ class ContinualRetestSettingsRevision(Base):
     )
 
 
+class TreasuryManualBridgeState(Base):
+    __tablename__ = "treasury_manual_bridge_state"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+
+class TreasuryManualTransfer(Base):
+    __tablename__ = "treasury_manual_transfers"
+    request_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    envelope: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    report: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    receipt: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','dispatched','pending','audit_pending','published','failed','refused')",
+            name="treasury_manual_status",
+        ),
+        CheckConstraint(
+            "length(digest)=64 AND length(actor) BETWEEN 1 AND 120",
+            name="treasury_manual_identity",
+        ),
+        Index("treasury_manual_unfinished", "status", "created_at"),
+    )
+
+
 class TreasuryRuntimeRevision(Base):
     """Append-only public approvals and guarded producer mode; never signer custody."""
 

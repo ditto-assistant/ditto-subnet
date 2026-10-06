@@ -1,0 +1,89 @@
+"""Bounded keyless mailbox over restricted Google APIs. No desktop credentials."""
+
+import base64
+import json
+import re
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+MAX_BYTES = 131072
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, _req, _fp, _code, _msg, _headers, _newurl):
+        return None
+
+
+class TreasuryMailbox:
+    """Per-topic IAM is the authentication boundary; never accepts an arbitrary URL."""
+
+    def __init__(self, *, project, topic, subscription):
+        for value in (project, topic, subscription):
+            if not isinstance(value, str) or not re.fullmatch(
+                r"[a-z][a-z0-9-]{5,62}", value
+            ):
+                raise ValueError("explicit bounded mailbox resource required")
+        self.topic = f"projects/{project}/topics/{topic}"
+        self.subscription = f"projects/{project}/subscriptions/{subscription}"
+        self.opener = build_opener(ProxyHandler({}), NoRedirect)
+
+    def _json(self, request):
+        with self.opener.open(request, timeout=30) as response:
+            raw = response.read(MAX_BYTES + 1)
+        if len(raw) > MAX_BYTES:
+            raise ValueError("mailbox response exceeds bound")
+        body = json.loads(raw)
+        if not isinstance(body, dict):
+            raise ValueError("mailbox object required")
+        return body
+
+    def _call(self, resource, method, body):
+        token = self._json(
+            Request(
+                "http://metadata.google.internal/computeMetadata/v1/instance/"
+                "service-accounts/default/token",
+                headers={"Metadata-Flavor": "Google"},
+            )
+        )["access_token"]
+        raw = json.dumps(body).encode()
+        if len(raw) > MAX_BYTES:
+            raise ValueError("mailbox request exceeds bound")
+        return self._json(
+            Request(
+                f"https://pubsub.googleapis.com/v1/{resource}:{method}",
+                data=raw,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+            )
+        )
+
+    def publish(self, body):
+        raw = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+        if len(raw) > 65536:
+            raise ValueError("manual message exceeds bound")
+        result = self._call(
+            self.topic,
+            "publish",
+            {
+                "messages": [{"data": base64.b64encode(raw).decode()}],
+            },
+        )
+        if len(result.get("messageIds", [])) != 1:
+            raise ValueError("mailbox publish acknowledgment absent")
+
+    def pull(self):
+        result = self._call(self.subscription, "pull", {"maxMessages": 1})
+        rows = result.get("receivedMessages", [])
+        if not isinstance(rows, list) or len(rows) > 1:
+            raise ValueError("bounded mailbox pull required")
+        if not rows:
+            return None
+        row = rows[0]
+        raw = base64.b64decode(row["message"]["data"], validate=True)
+        if len(raw) > 65536:
+            raise ValueError("manual message exceeds bound")
+        return row["ackId"], json.loads(raw)
+
+    def ack(self, ack_id):
+        self._call(self.subscription, "acknowledge", {"ackIds": [ack_id]})

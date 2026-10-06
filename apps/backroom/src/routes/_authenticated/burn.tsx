@@ -5,17 +5,20 @@ import { PageHeader } from '../../components/PageHeader'
 import { getBurnSettings } from '../../server/admin.functions'
 import { getTreasurySettings } from '../../server/treasury.functions'
 import { TreasuryControlPanel } from '../../components/TreasuryControlPanel'
+import { TreasuryManualTransferPanel } from '../../components/TreasuryManualTransferPanel'
+import { getManualTransfers } from '../../server/treasury-manual.functions'
 
 export const Route = createFileRoute('/_authenticated/burn')({
   loader: async () => {
-    const [burn, treasury] = await Promise.all([
+    const [burn, treasury, manual] = await Promise.all([
       getBurnSettings(),
       getTreasurySettings().then(
         (state) => ({ state, error: null }),
         () => ({ state: null, error: 'Treasury policy is unavailable. Refresh to try again.' }),
       ),
+      getManualTransfers().then(state => ({ state, error: null }), () => ({ state: null, error: 'Manual transfer controls are unavailable. Refresh to try again.' })),
     ])
-    return { burn, treasury }
+    return { burn, treasury, manual }
   },
   pendingComponent: Pending,
   errorComponent: ErrorState,
@@ -39,6 +42,7 @@ function BurnPage() {
         }
       />
       <BurnControlPanel initialState={initialState.burn} readOnly={user.accessLevel === 'read'} />
+      {initialState.manual.state ? <TreasuryManualTransferPanel initialState={initialState.manual.state} readOnly={user.accessLevel === 'read'} /> : <p role="alert">{initialState.manual.error}</p>}
       {initialState.treasury.state ? (
         <TreasuryControlPanel
           initialState={initialState.treasury.state}

@@ -3389,6 +3389,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/treasury-manual": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Manual */
+        get: operations["get_manual_api_v1_admin_treasury_manual_get"];
+        put?: never;
+        /** Submit Manual */
+        post: operations["submit_manual_api_v1_admin_treasury_manual_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/treasury-manual/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Manual */
+        post: operations["preview_manual_api_v1_admin_treasury_manual_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/treasury-quote": {
         parameters: {
             query?: never;
@@ -22658,6 +22693,63 @@ export interface components {
             longmem_stderr_micros: number;
             /** Per Capability */
             per_capability: components["schemas"]["LongMemCapabilityScore"][];
+        };
+        /** ManualEnvelope */
+        ManualEnvelope: {
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /** Destination */
+            destination: string;
+            request: components["schemas"]["ManualRequest"];
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
+        /** ManualPreviewInput */
+        ManualPreviewInput: {
+            /** Amount Rao */
+            amount_rao: number;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Reason */
+            reason: string;
+            /** Request Id */
+            request_id: string;
+            /** Retained Alpha Rao */
+            retained_alpha_rao: number;
+        };
+        /** ManualRequest */
+        ManualRequest: {
+            /** After Operation */
+            after_operation: number;
+            /** Amount Rao */
+            amount_rao: number;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Expires Block */
+            expires_block: number;
+            /** Reason */
+            reason: string;
+            /** Request Id */
+            request_id: string;
+            /** Retained Alpha Rao */
+            retained_alpha_rao: number;
+            /** Source Block */
+            source_block: number;
+        };
+        /** ManualSubmitInput */
+        ManualSubmitInput: {
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "TRANSFER SN118 ALPHA ONCE";
+            /** Confirmation Digest */
+            confirmation_digest: string;
+            envelope: components["schemas"]["ManualEnvelope"];
         };
         /** MinerAvatarClearRequest */
         MinerAvatarClearRequest: {
@@ -43272,6 +43364,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TranscriptMirrorSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_manual_api_v1_admin_treasury_manual_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_manual_api_v1_admin_treasury_manual_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualSubmitInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_manual_api_v1_admin_treasury_manual_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualPreviewInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
