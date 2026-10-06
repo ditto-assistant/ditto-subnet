@@ -59,6 +59,9 @@ from ditto.api_server.endpoints.admin_copy_review import (
 from ditto.api_server.endpoints.admin_core_qualification import (
     router as admin_core_qualification_router,
 )
+from ditto.api_server.endpoints.admin_database_backup import (
+    router as admin_database_backup_router,
+)
 from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
     router as admin_efficiency_bonus_settings_router,
 )
@@ -227,6 +230,7 @@ from ditto.api_server.endpoints.validator_confirmation import (
 )
 
 __all__ = [
+    "admin_database_backup_router",
     "health_router",
     "inference_router",
     "admin_artifact_release_settings_router",

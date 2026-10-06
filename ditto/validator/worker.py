@@ -144,6 +144,7 @@ from ditto.validator.weights import (
     blend_track_weights,
     contested_confirmation_set,
     filter_weight_confirmed,
+    owner_burn_destination_required,
     reign_seed_planning,
     resolve_miner_emission_share,
     resolve_track_shares,
@@ -251,6 +252,21 @@ def _ledger_provisional_incumbent(ledger: LedgerResponse) -> LedgerEntry | None:
     return provisional
 
 
+def _receipt_provenance_ready(ledger: Any) -> bool:
+    """True when the ledger can take the Pylon receipt path.
+
+    ``submit`` falls back to ordinary ``put_weights`` when any of these is
+    missing, and that path is not deduplicated by request id.
+    """
+    digest = getattr(ledger, "ledger_digest", None)
+    return (
+        getattr(ledger, "ledger_snapshot_id", None) is not None
+        and getattr(ledger, "epoch_index", None) is not None
+        and isinstance(digest, str)
+        and len(digest) == 64
+    )
+
+
 def _ledger_weight_entries(ledger: LedgerResponse) -> list[LedgerEntry]:
     """The pool the KOTH fold reads: payable entries plus any provisional
     incumbent, through the same confirmation filter."""
@@ -315,6 +331,12 @@ _BOUNDARY_INCLUSION_MARGIN_BLOCKS = 6
 # 100-block rate-limit window for inclusion. Any host-specific value would
 # reintroduce exactly the ledger-read skew this exists to remove.
 _WEIGHT_COMMIT_OFFSET_BLOCKS = 270
+# How long a platform-served last-known-good pin may still be committed.
+# Inside the bound, each chain epoch gets its own weight request so LastUpdate
+# keeps moving through a multi-hour outage. Past it, the snapshot is too old
+# to keep paying from, and weights are left unchanged. ActivityCutoff on SN118
+# is about 16.7h, so this stays inside one activity window.
+MAX_STALE_LEDGER_AGE_SECONDS = 6 * 60 * 60
 
 # Substrings that identify a chain rate-limit rejection across the surfaces we
 # submit through (subtensor's ``SettingWeightsTooFast`` error, SDK / Pylon
@@ -2114,12 +2136,27 @@ class ValidatorWorker:
 
         # The platform serves a last-known-good ledger (flagged stale) when its own
         # DB read fails; folding it is safe (the pool is durable + slow-moving) but
-        # worth a loud line so an operator sees the platform is degraded.
+        # worth a loud line so an operator sees the platform is degraded. A pin
+        # older than the bound is not folded: recommitting it would keep paying
+        # from scores that are no longer current.
         if getattr(ledger, "stale", False):
+            age = getattr(ledger, "age_seconds", 0)
+            if type(age) is not int or age < 0:
+                age = 0
+            if age > MAX_STALE_LEDGER_AGE_SECONDS:
+                logger.warning(
+                    "scoring ledger is STALE and %ss old, past the %ss bound; "
+                    "weights unchanged this epoch",
+                    age,
+                    MAX_STALE_LEDGER_AGE_SECONDS,
+                )
+                return _WeightOutcome(
+                    leaderboard=[(e.miner_hotkey, e.composite) for e in ledger.entries]
+                )
             logger.warning(
                 "scoring ledger is STALE (platform served a %ss-old snapshot); "
                 "folding it but the platform DB read is failing",
-                getattr(ledger, "age_seconds", "?"),
+                age,
             )
 
         leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
@@ -2296,6 +2333,29 @@ class ValidatorWorker:
                 "eligible tracks with no folded miners; their emission burns: %s",
                 empty_eligible,
             )
+        # Finney leaves the burn hotkey unset and reads SubnetOwnerHotkey from
+        # the public node. That read is required only when the vector will
+        # contain the owner: a positive burn, an unpaid incumbent, an empty
+        # track, or an empty miner pool. A full miner vector does not, so a
+        # failed lookup must not skip the epoch. A previous owner hotkey is
+        # not reused: the key rotates, and a stale target can pay the wrong one.
+        if enforcing:
+            assert treasury_pin is not None
+            service_bps = treasury_pin.policy.service_bps
+        else:
+            service_bps = 0
+        if self._config.burn_hotkey is not None or owner_burn_destination_required(
+            miner_weights,
+            miner_share=miner_share,
+            paid_miner_fraction=allocated * paid_fraction,
+            service_bps=service_bps,
+        ):
+            burn_hotkey = await self._resolve_burn_hotkey()
+            if burn_hotkey is None:
+                return _WeightOutcome(leaderboard=leaderboard)
+            self._last_burn_hotkey = burn_hotkey
+        else:
+            burn_hotkey = ""
         if enforcing:
             try:
                 assert treasury_authority is not None
@@ -2339,7 +2399,27 @@ class ValidatorWorker:
             )
         await self._log_commit_reveal_mode()
         await self._weight_receipt_relay.recover()
-        submitted = await self._weight_receipt_relay.submit(weights, ledger, champion)
+        # A stale pin repeats the previous epoch's provenance, so the receipt
+        # request id would too, and Pylon would acknowledge the duplicate
+        # without a new commit. Bind LastEpochBlock into that id. Without a
+        # readable chain epoch the acknowledgement cannot be told from a
+        # duplicate, so leave the last vector in place.
+        chain_epoch_block = None
+        if getattr(ledger, "stale", False) and _receipt_provenance_ready(ledger):
+            chain_epoch_block = await self._read_chain_blocks("get_last_epoch_block")
+            if chain_epoch_block is None:
+                logger.warning(
+                    "stale scoring ledger has no readable chain epoch; "
+                    "weights unchanged this epoch"
+                )
+                return _WeightOutcome(
+                    leaderboard=leaderboard,
+                    weights=weights,
+                    king_fingerprint=king_fingerprint,
+                )
+        submitted = await self._weight_receipt_relay.submit(
+            weights, ledger, champion, chain_epoch_block=chain_epoch_block
+        )
         if submitted is None:
             if enforcing:
                 logger.warning("treasury receipt transport refused; no legacy fallback")
@@ -2517,6 +2597,7 @@ class ValidatorWorker:
 
         Subtensor withholds incentive for the registered SubnetOwnerHotkey,
         not for UID 0. Preserve existing weights if either read is ambiguous.
+        Callers skip this when the folded vector has no owner residual.
         """
         if self._config.burn_hotkey is not None:
             return self._config.burn_hotkey

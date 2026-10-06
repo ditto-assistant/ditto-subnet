@@ -193,12 +193,17 @@ def test_updater_authenticates_before_fetch_or_drain() -> None:
     assert updater.count("venv --relocatable") == 1
     assert updater.count("sync --frozen --no-editable") == 1
     activation = updater[updater.index("activate_release()") :]
-    assert activation.index(
-        '"$release_dir/src/scripts/screener-fleet-auto-update.sh"'
-    ) < (activation.index("stop_fleet\n"))
-    assert activation.index('"$release_dir/src/scripts/screener-fleet-drain.py"') < (
-        activation.index("stop_fleet\n")
+    installed = activation.index('"$release_dir/src/scripts/screener-fleet-drain.py"')
+    assert (
+        activation.index('"$release_dir/src/scripts/screener-fleet-auto-update.sh"')
+        < installed
     )
+    # Both activation modes run only after the authenticated release is staged
+    # and the updater has installed its own copy from it.
+    assert installed < activation.index("    stop_fleet\n")
+    assert installed < activation.index('rolling_check "$revision" "$PREV_TARGET"')
+    assert installed < activation.index('    roll_release "$revision"')
+    assert activation.index("rolling_check") < activation.index("roll_release")
     assert '"$SELF_PATH"' in activation
     assert '[[ "$SELF_PATH" = "$STATE_DIR/"* ]]' in updater
 
@@ -505,8 +510,29 @@ def worker_index(unit):
 def exit_process(unit):
     write(unit, "state", "activating")
     write(unit, "pid", 0)
+    write(unit, "seen", 0)
     lease = fleet / "workers" / worker_index(unit) / "active-lease.json"
     lease.unlink(missing_ok=True)
+
+
+def spawn(unit):
+    # systemd resolves the `current` WorkingDirectory when it execs a worker.
+    next_pid = int(read("next", "pid", "9000")) + 1
+    write("next", "pid", next_pid)
+    write(unit, "state", "active")
+    write(unit, "pid", next_pid)
+    write(unit, "seen", 0)
+    behavior = "idle"
+    proc = os.environ.get("SCREENER_FLEET_PROC_ROOT")
+    current = os.environ.get("SCREENER_FLEET_CURRENT_LINK")
+    if proc and current:
+        release = Path(os.path.realpath(current))
+        if release.name == os.environ.get("FAKE_CRASH_RELEASE"):
+            behavior = "crashes"
+        entry = Path(proc) / str(next_pid)
+        entry.mkdir(parents=True, exist_ok=True)
+        (entry / "cwd").symlink_to(release / "src/workers/screener")
+    write(unit, "behavior", behavior)
 
 
 command = args[0]
@@ -516,6 +542,15 @@ if command == "list-units":
         print(path.name[: -len(".state")] + " loaded active running")
 elif command == "show":
     key = args[2]
+    if os.environ.get("FAKE_AUTO_RESTART") and "worker@" in unit:
+        # Restart=always: a parked unit starts again after RestartSec, and a
+        # crashing candidate exits soon after each start.
+        state = read(unit, "state", "inactive")
+        seen = read(unit, "seen", "0") == "1"
+        if state == "activating":
+            spawn(unit) if seen else write(unit, "seen", 1)
+        elif state == "active" and read(unit, "behavior", "idle") == "crashes":
+            exit_process(unit) if seen else write(unit, "seen", 1)
     print(read(unit, "state" if key == "ActiveState" else "pid",
                "inactive" if key == "ActiveState" else "0"))
 elif command == "kill":
@@ -527,7 +562,9 @@ elif command == "kill":
             kills = int(read(unit, "kills", "0")) + 1
             write(unit, "kills", kills)
             behavior = read(unit, "behavior", "idle")
-            if behavior == "idle" or (behavior == "finishes" and kills >= 2):
+            if behavior in {"idle", "crashes"} or (
+                behavior == "finishes" and kills >= 2
+            ):
                 exit_process(unit)
     elif "--kill-whom=main" not in args:
         note("agent-children-signaled")
@@ -543,11 +580,7 @@ elif command == "stop":
         write(unit, "state", "inactive")
 elif command in {"start", "restart"}:
     if command == "restart" or read(unit, "state", "inactive") != "active":
-        next_pid = int(read("next", "pid", "9000")) + 1
-        write("next", "pid", next_pid)
-        write(unit, "state", "active")
-        write(unit, "pid", next_pid)
-        write(unit, "behavior", "idle")
+        spawn(unit)
 elif command == "is-active":
     sys.exit(0 if read(unit, "state", "inactive") == "active" else 3)
 elif command == "is-enabled":
@@ -1161,10 +1194,16 @@ def test_rollback_path_does_not_prune() -> None:
     activation = updater[updater.index("activate_release()") :]
     rollback = activation[
         activation.index("if ! start_fleet; then") : activation.index(
-            "  fi\n  disarm_fleet_restore"
+            "    fi\n    disarm_fleet_restore"
         )
     ]
     assert "prune" not in rollback
+    rolling = updater[
+        updater.index("roll_release()") : updater.index("prune_releases()")
+    ]
+    rolling_rollback = rolling[rolling.index("restore_previous_release ||") :]
+    assert "prune" not in rolling_rollback
+    assert "return 1" in rolling_rollback
     success = activation[activation.index('rm -f "$FAILED_CANDIDATE_FILE"') :]
     assert "prune_activated_release" in success
     assert "prune_analyzer_images || log" in updater
@@ -1213,3 +1252,335 @@ def test_drain_timeouts_outlast_the_longest_review() -> None:
     )
     # Worker stop exceeds a review; prep + 2 x 70 min drain < 180.
     assert 4200 * 2 + 20 * 60 < 180 * 60
+
+
+# Rolling activation. Releases are real analyzer build contexts (the committed
+# Dockerfile and the files it copies). The fake systemctl auto-restarts a
+# worker whose process exited, exactly like Restart=always, from whatever
+# release `current` names at that moment.
+OLD = "c" * 40
+NEW = "d" * 40
+THIRD = "e" * 40
+_ROLL_DOCKER = r"""#!/bin/sh
+printf 'DOCKER_HOST=%s %s\n' "${DOCKER_HOST:-}" "$*" >>"$FAKE_RELEASE_LOG"
+case "$*" in
+  *"image inspect --format {{.Id}} ditto-screener-l2-analyzer:active"*)
+    echo sha256:previous ;;
+esac
+"""
+
+
+def _analyzer_release(releases: Path, revision: str) -> Path:
+    context = releases / revision / "src/workers/screener"
+    source = ROOT / "workers/screener"
+    for relative in (
+        "deploy/l2-analyzer.Dockerfile",
+        ".dockerignore",
+        "tools/l2_analyzer.py",
+        *(
+            str(path.relative_to(source))
+            for path in (source / "ditto_screener/data").glob(
+                "starter-kit-provenance-*.json"
+            )
+        ),
+    ):
+        target = context / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((source / relative).read_bytes())
+    return context
+
+
+def _rolling_fleet(
+    tmp_path: Path, workers: dict[int, str]
+) -> tuple[dict[str, str], Path, Path, Path]:
+    env, releases, release_log = _release_harness(tmp_path)
+    (tmp_path / "bin/docker").write_text(_ROLL_DOCKER)
+    units = Path(env["FAKE_UNITS"])
+    state = Path(env["SCREENER_FLEET_STATE_DIR"])
+    for revision in (OLD, NEW):
+        _analyzer_release(releases, revision)
+    (tmp_path / "fleet-root/current").symlink_to(f"releases/{OLD}")
+    release_env = tmp_path / "config/release.env"
+    release_env.parent.mkdir()
+    release_env.write_text(
+        f"SCREENER_FLEET_BUILDER_IMAGE={BUILDER_IMAGE}\n"
+        f"SCREENER_FLEET_REVISION={OLD}\nSCREENER_FLEET_VERSION=1.2.2\n"
+    )
+    for index, behavior in workers.items():
+        _worker_unit(units, state, index, behavior=behavior, pid=100 + index)
+        _proc_entry(tmp_path, 100 + index, releases / OLD / "src/workers/screener")
+    env.update(
+        {
+            "FAKE_AUTO_RESTART": "1",
+            "SCREENER_FLEET_RELEASE_ENV": str(release_env),
+            "SCREENER_FLEET_TEST_REVISION": NEW,
+            "SCREENER_FLEET_TEST_PREVIOUS": f"releases/{OLD}",
+            "SCREENER_FLEET_TEST_BUILDER": BUILDER_IMAGE,
+            "SCREENER_FLEET_TEST_DESCRIPTOR": (
+                "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "f" * 64
+            ),
+            "SCREENER_FLEET_WORKER_PROCESSES": str(len(workers)),
+            "SCREENER_FLEET_DRAIN_BOUND_SECONDS": "30",
+            "SCREENER_FLEET_ROLL_SETTLE_SECONDS": "1",
+            "SCREENER_FLEET_ROLL_START_SECONDS": "4",
+        }
+    )
+    return env, units, state, release_log
+
+
+def _worker_release(tmp_path: Path, units: Path, index: int) -> str:
+    pid = _unit_value(units, index, "pid")
+    return Path(os.path.realpath(tmp_path / "proc" / pid / "cwd")).parents[2].name
+
+
+def _assert_no_review_interrupted(log: Path) -> None:
+    recorded = log.read_text()
+    assert "interrupted-review" not in recorded
+    assert "child-signaled" not in recorded
+    for line in recorded.splitlines():
+        if "worker@" not in line:
+            continue
+        verb = line.split()[0]
+        # The roll only signals a worker's main process with SIGTERM (sign the
+        # verdict, then exit), starts a unit with no process, or enables units.
+        # It never stops, restarts, or SIGKILLs a worker.
+        assert verb in {"list-units", "show", "kill", "start", "enable"}, line
+        if verb == "kill":
+            assert "--kill-whom=main -s SIGTERM" in line, line
+
+
+def test_rolling_activation_keeps_idle_workers_claiming(tmp_path: Path) -> None:
+    """Idle workers move to the candidate while a busy review finishes."""
+    env, units, state, release_log = _rolling_fleet(
+        tmp_path, {1: "idle", 2: "busy", 3: "idle"}
+    )
+    log = Path(env["SCREENER_TEST_SYSTEMCTL_LOG"])
+
+    result = _run(env, "roll_release")
+
+    assert result.returncode == 0, result.stderr
+    assert os.readlink(tmp_path / "fleet-root/current") == f"releases/{NEW}"
+    assert (
+        f"SCREENER_FLEET_REVISION={NEW}"
+        in Path(env["SCREENER_FLEET_RELEASE_ENV"]).read_text()
+    )
+    assert (
+        f"docker.sock tag ditto-screener-l2-analyzer:candidate-{NEW} "
+        "ditto-screener-l2-analyzer:active" in release_log.read_text()
+    )
+    for index in (1, 3):
+        assert _unit_value(units, index, "state") == "active"
+        assert _unit_value(units, index, "pid") != str(100 + index)
+        assert _worker_release(tmp_path, units, index) == NEW
+    # The busy review keeps its process on the release it started from.
+    assert _unit_value(units, 2, "state") == "active"
+    assert _unit_value(units, 2, "pid") == "102"
+    assert _worker_release(tmp_path, units, 2) == OLD
+    _assert_no_review_interrupted(log)
+    assert (state / "updater/held-workers").read_text() == "2 102\n"
+    status = (state / "updater/drain-status.env").read_text()
+    assert "PHASE=active" in status
+    assert "finishing on the previous release: 2:wait" in status
+
+
+def test_rolling_busy_worker_moves_only_after_its_review(tmp_path: Path) -> None:
+    """SIGTERM-then-exit is the only signal; the review ends on its own."""
+    env, units, _state, _release_log = _rolling_fleet(
+        tmp_path, {1: "busy", 2: "finishes", 3: "busy"}
+    )
+    log = Path(env["SCREENER_TEST_SYSTEMCTL_LOG"])
+
+    result = _run(env, "roll_release")
+
+    assert result.returncode == 0, result.stderr
+    assert int(_unit_value(units, 2, "kills")) >= 2
+    assert _worker_release(tmp_path, units, 2) == NEW
+    for index in (1, 3):
+        assert _unit_value(units, index, "pid") == str(100 + index)
+        assert _worker_release(tmp_path, units, index) == OLD
+    _assert_no_review_interrupted(log)
+
+
+def test_crashing_candidate_rolls_every_worker_back(tmp_path: Path) -> None:
+    env, units, state, release_log = _rolling_fleet(
+        tmp_path, {1: "idle", 2: "busy", 3: "idle"}
+    )
+    env["FAKE_CRASH_RELEASE"] = NEW
+    log = Path(env["SCREENER_TEST_SYSTEMCTL_LOG"])
+
+    result = _run(env, "roll_release")
+
+    assert result.returncode == 1
+    assert "candidate failed to start; restoring the previous release" in result.stderr
+    assert os.readlink(tmp_path / "fleet-root/current") == f"releases/{OLD}"
+    assert (
+        "docker.sock tag sha256:previous ditto-screener-l2-analyzer:active"
+        in release_log.read_text()
+    )
+    release_env = Path(env["SCREENER_FLEET_RELEASE_ENV"]).read_text()
+    assert f"SCREENER_FLEET_REVISION={OLD}" in release_env
+    assert "SCREENER_FLEET_VERSION=1.2.2" in release_env
+    assert (state / "updater/failed-candidate").read_text() == (
+        env["SCREENER_FLEET_TEST_DESCRIPTOR"] + "\n"
+    )
+    for index in (1, 3):
+        assert _unit_value(units, index, "state") == "active"
+        assert _worker_release(tmp_path, units, index) == OLD
+    assert _unit_value(units, 2, "pid") == "102"
+    _assert_no_review_interrupted(log)
+    assert "PHASE=rolled_back" in (state / "updater/drain-status.env").read_text()
+
+
+def test_roll_without_a_started_candidate_restores_and_retries(
+    tmp_path: Path,
+) -> None:
+    """Every worker busy past the bound: restore, but do not suppress."""
+    env, units, state, _release_log = _rolling_fleet(tmp_path, {1: "busy", 2: "busy"})
+    env["SCREENER_FLEET_DRAIN_BOUND_SECONDS"] = "1"
+    log = Path(env["SCREENER_TEST_SYSTEMCTL_LOG"])
+
+    result = _run(env, "roll_release")
+
+    assert result.returncode == 1
+    assert "no worker started on the candidate before the drain bound" in result.stderr
+    assert os.readlink(tmp_path / "fleet-root/current") == f"releases/{OLD}"
+    assert not (state / "updater/failed-candidate").exists()
+    status = (state / "updater/drain-status.env").read_text()
+    assert "PHASE=rolled_back" in status
+    assert "retried next run" in status
+    for index in (1, 2):
+        assert _unit_value(units, index, "pid") == str(100 + index)
+    _assert_no_review_interrupted(log)
+
+
+def test_sigterm_during_roll_restores_the_previous_release(tmp_path: Path) -> None:
+    env, units, state, _release_log = _rolling_fleet(tmp_path, {1: "busy"})
+    env["SCREENER_FLEET_DRAIN_BOUND_SECONDS"] = "600"
+    log = Path(env["SCREENER_TEST_SYSTEMCTL_LOG"])
+    status = state / "updater/drain-status.env"
+    process = subprocess.Popen(
+        ["bash", str(UPDATER)],
+        env={**env, "SCREENER_FLEET_TEST_ENTRYPOINT": "roll_release"},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while "finishing: 1:wait" not in (
+            status.read_text() if status.exists() else ""
+        ):
+            assert time.monotonic() < deadline, "roll never started"
+            time.sleep(0.05)
+        process.send_signal(signal.SIGTERM)
+        process.communicate(timeout=30)
+    finally:
+        if process.poll() is None:
+            process.kill()
+    assert process.returncode == 143
+    assert os.readlink(tmp_path / "fleet-root/current") == f"releases/{OLD}"
+    assert (
+        f"SCREENER_FLEET_REVISION={OLD}"
+        in Path(env["SCREENER_FLEET_RELEASE_ENV"]).read_text()
+    )
+    assert _unit_value(units, 1, "pid") == "101"
+    _assert_no_review_interrupted(log)
+    assert "PHASE=aborted" in status.read_text()
+
+
+def _rolling_check(env: dict[str, str]) -> str:
+    result = _run(env, "rolling_check")
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def test_identical_analyzer_inputs_allow_a_rolling_activation(
+    tmp_path: Path,
+) -> None:
+    env, _units, _state, _log = _rolling_fleet(tmp_path, {1: "idle", 2: "busy"})
+    # A worker-only change does not touch the analyzer image.
+    releases = Path(env["SCREENER_FLEET_RELEASES_DIR"])
+    (releases / NEW / "src/workers/screener/worker.py").write_text("changed\n")
+
+    assert _rolling_check(env) == "eligible"
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "tools/l2_analyzer.py",
+        "ditto_screener/data/starter-kit-provenance-v5.json",
+        "deploy/l2-analyzer.Dockerfile",
+        ".dockerignore",
+    ],
+)
+def test_analyzer_input_change_falls_back_to_drain_all(
+    tmp_path: Path, relative: str
+) -> None:
+    env, _units, _state, _log = _rolling_fleet(tmp_path, {1: "idle"})
+    releases = Path(env["SCREENER_FLEET_RELEASES_DIR"])
+    changed = releases / NEW / "src/workers/screener" / relative
+    changed.write_text(changed.read_text() + "\n# changed\n")
+
+    assert _rolling_check(env) == f"analyzer inputs differ from live release {OLD}"
+
+
+def test_unparsed_analyzer_dockerfile_falls_back_to_drain_all(
+    tmp_path: Path,
+) -> None:
+    env, _units, _state, _log = _rolling_fleet(tmp_path, {1: "idle"})
+    releases = Path(env["SCREENER_FLEET_RELEASES_DIR"])
+    for revision in (OLD, NEW):
+        dockerfile = (
+            releases / revision / "src/workers/screener/deploy/l2-analyzer.Dockerfile"
+        )
+        dockerfile.write_text(dockerfile.read_text() + "ADD tools /opt/tools\n")
+
+    assert _rolling_check(env) == f"analyzer inputs differ from live release {OLD}"
+
+
+def test_worker_still_on_an_older_release_gates_the_roll(tmp_path: Path) -> None:
+    """Back-to-back releases: a review from two releases ago still counts."""
+    env, _units, _state, _log = _rolling_fleet(tmp_path, {1: "idle", 2: "busy"})
+    releases = Path(env["SCREENER_FLEET_RELEASES_DIR"])
+    third = _analyzer_release(releases, THIRD)
+    (third / "tools/l2_analyzer.py").write_text("# older analyzer\n")
+    (tmp_path / "proc/102/cwd").unlink()
+    (tmp_path / "proc/102/cwd").symlink_to(third)
+
+    assert _rolling_check(env) == f"analyzer inputs differ from live release {THIRD}"
+
+
+def test_operator_drain_all_mode_disables_rolling(tmp_path: Path) -> None:
+    env, _units, _state, _log = _rolling_fleet(tmp_path, {1: "idle"})
+    env["SCREENER_FLEET_ROLLOUT_MODE"] = "drain-all"
+
+    assert _rolling_check(env) == "rollout mode is drain-all"
+    updater = UPDATER.read_text()
+    activation = updater[updater.index("activate_release()") :]
+    drain = activation[activation.index('if [ -z "$ROLLING_BLOCKER" ]; then') :]
+    drain = drain[drain.index("  else\n") :]
+    assert drain.index("arm_fleet_restore") < drain.index("stop_fleet")
+    assert drain.index("stop_fleet") < drain.index("start_fleet")
+
+
+@pytest.mark.parametrize(
+    ("setup", "blocker"),
+    [
+        ("no-previous", "no previous release to roll from"),
+        ("unknown-release", "worker 1 release is unknown"),
+        ("above-count", "worker 9 is above the requested count"),
+    ],
+)
+def test_unprovable_fleet_state_falls_back_to_drain_all(
+    tmp_path: Path, setup: str, blocker: str
+) -> None:
+    env, units, state, _log = _rolling_fleet(tmp_path, {1: "idle"})
+    if setup == "no-previous":
+        env["SCREENER_FLEET_TEST_PREVIOUS"] = ""
+    elif setup == "unknown-release":
+        (tmp_path / "proc/101/cwd").unlink()
+    else:
+        _worker_unit(units, state, 9, behavior="busy", pid=109)
+
+    assert _rolling_check(env) == blocker

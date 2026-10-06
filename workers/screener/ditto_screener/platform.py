@@ -80,6 +80,10 @@ logger = logging.getLogger(__name__)
 _PREFIX = "/api/v1/screener"
 _IMAGE_REQUEST_TIMEOUT = httpx.Timeout(300.0, connect=30.0, pool=30.0)
 _IMAGE_INIT_RETRY_DELAYS = (0.5, 1.0)
+# Completion hashes the whole stored image server-side, so a gateway can drop
+# the response (502) while Platform finishes the work. Platform answers a replay
+# of a completed session as verified, so wait long enough for that to land.
+_IMAGE_COMPLETE_RETRY_DELAYS = (5.0, 15.0, 30.0, 60.0)
 _TRANSIENT_PLATFORM_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
 _ROTATION_WINDOW = timedelta(minutes=15)
 _CREDENTIAL_LOCK_GRACE_SECONDS = 30.0
@@ -949,6 +953,7 @@ class PlatformClient:
                 operation="image upload complete",
                 json=complete.model_dump(mode="json"),
                 headers=await self._auth_headers(),
+                transient_retry_delays=_IMAGE_COMPLETE_RETRY_DELAYS,
             )
             ScreenedImageUploadCompleteResponse.model_validate(
                 completed_response.json()

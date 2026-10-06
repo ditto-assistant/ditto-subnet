@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from ditto.chain.errors import TreasuryReadStep
 from ditto_screening_protocol.treasury import (
     Digest,
     TreasuryEmissionPolicy,
@@ -52,6 +53,30 @@ class TreasuryLedgerReadiness(BaseModel):
     offline_epoch_verified: bool = False
     weight_effect: Literal["none"] = "none"
     can_enforce_weights: bool = False
+    # Independent delivery diagnostic: signed authority is not a served ledger.
+    ledger_schedule_probe_status: Literal["not_checked", "available", "unavailable"] = (
+        "not_checked"
+    )
+    ledger_schedule_probe_epoch: int | None = None
+    ledger_schedule_probe_block: int | None = None
+    ledger_schedule_matches_stored_pin: bool | None = None
+    ledger_schedule_failure_kind: (
+        Literal["timeout", "connection", "reader_unavailable", "unavailable"] | None
+    ) = None
+    validation_failure_stage: (
+        Literal["fleet_binding", "identity", "setter_roster", "authority"] | None
+    ) = None
+    validation_failure_step: TreasuryReadStep | None = None
+    validation_failure_kind: (
+        Literal[
+            "timeout",
+            "connection",
+            "invalid_evidence",
+            "reader_unavailable",
+            "unavailable",
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def proposal_status_binds_digest(self) -> TreasuryLedgerReadiness:

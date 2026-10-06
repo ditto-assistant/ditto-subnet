@@ -537,6 +537,37 @@ tools. Both leads skip Rust items restricted to the test build. A hit is a
 review lead, never a reject: trace the gate to the served `/run` prompt or
 routing effect before citing I5.
 
+The 2026-10-02 policy-v13 ATH sweep (I7 rejects of dittoreader v7, Artemis
+v8, delta v5 and Pentagon45; I5 rejects of clear v42, lets_634 and lets_635)
+adds eight executor, router and catalog leads:
+
+- `tool-name-execution-cap` (high) fires when a counter keyed on the tool name
+  alone (or `MAX_SAME_TOOL` / `per_tool_limit`) sits within eight lines of a
+  pre-execution refusal ("will not run again", "cap reached", "answer from the
+  results"). A name-only cap refuses a requested call with different arguments.
+- `successful-duplicate-suppression` (medium) fires when a success memo lookup
+  sits within twenty-four lines of a refusal note ("not sent again", "identical
+  to an earlier successful"). A model-visible repeat authorizer suppresses it.
+- `catalog-retired-after-step` (high) fires when a `_disable_tools` /
+  `tool_defs.clear()` call co-occurs with single-step completion wording
+  (`retire_after_read`, "single-lookup", "no further capability").
+- `sticky-capability-veto` (medium) fires when a `*_declined = True` flag
+  co-occurs with "rest of the request" / "records or nowhere" wording.
+- `uncertainty-narrows-route` (medium) fires on router prose sending an unsure
+  classification to a narrowed route ("If you are unsure, write records").
+- `tool-argument-grammar-sheet` (medium) fires when a `*_DESCRIPTION` constant
+  carries argument-shape grammar ("wire grammar", "OUTPUT SHAPE", "never omit
+  the", `<subject> is <value>`).
+- `review-turn-argument-template` (medium) fires when a `REVIEW_TURNS` table
+  sits near a `<thing> is <value>` or "word for word" pass test.
+- `self-reported-benchmark-fitting` (medium) fires on a probe-selected
+  experiment citation or an accuracy-on-recorded-turns comment.
+
+The permitted look-alikes stay silent: a stop after executed identical calls
+keyed on name plus canonical arguments, a model-authorized repeat (Thief v24,
+lets_636, lets_637), an unsure route that keeps the complete catalog, and plain
+field documentation. Each hit is a location for the reviewer, not a reject.
+
 Live schema-driven retrieval/reranking, runtime-described semantics, generic
 state reconstruction, and bounded shape-only correction remain allowed through
 their published pass clauses. Prompt specialization and tool routing do not

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -220,16 +221,22 @@ from ditto.db.queries.screener_provider_settings import (
     resolve_screener_provider_settings,
 )
 from ditto.db.queries.screening import (
+    L2_MODEL_INCONCLUSIVE_REASON_CODE,
     POLICY_ONLY_RESCREEN_REASON,
     claim_screening_attempts,
+    complete_static_inconclusive_count,
     get_screening_attempt,
     infra_retry_agent_admitted,
     prerequisite_screening_predicates,
     screening_priority_order,
+    screening_score_aggregates,
     sweep_screening_leases,
     try_acquire_screening_claim_lock,
 )
 from ditto.db.queries.screening_infra_retry import INFRA_AUTO_RETRY_REASON_CODES
+from ditto.db.queries.screening_retry import (
+    authorize_automatic_review_retry,
+)
 from ditto.db.queries.screening_review_events import append_automated_review_event
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
@@ -254,12 +261,18 @@ from ditto_screening_protocol.reason_codes import (
     DOCKER_BUILD_INFRASTRUCTURE,
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
+    SOURCE_REVIEW_CONFIRMED_VIOLATION,
+    V2_COMPLETE_STATIC_REVIEWS,
+    VERIFICATION_INCOMPLETE_UNREVIEWABLE,
     WORKER_CLAIM_NOT_STARTED,
 )
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
 
+AUTO_REVIEW_RETRY_PUBLIC_REASON = (
+    "Screening ended without a verdict; retrying automatically"
+)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/screener", tags=["screener"])
@@ -414,6 +427,94 @@ def _screened_image_key(agent_id: UUID, image_upload_id: UUID) -> str:
 # Agents a verdict may act on. ``screening`` is included for forward-compat with
 # a future claim step; the terminal targets are handled separately (idempotency).
 _SCREENABLE_STATUSES = (AgentStatus.UPLOADED, AgentStatus.SCREENING)
+# Miner-visible text for policy v13 V2.platform_verification_failed. It must
+# say no violation was found: V2 records ``violation_proven: false``.
+V2_UNREVIEWABLE_PUBLIC_REASON = (
+    "Rejected as unreviewable (policy v13 V2, platform verification not "
+    "completed): repeated complete source reviews could not settle the served "
+    "decision path. No violation was found. A simpler, more traceable version "
+    "may be resubmitted."
+)
+
+
+_INVARIANT_LABELS = {
+    "i1_model_invocation": "I1 model invocation",
+    "i2_evidence_retention": "I2 evidence retention",
+    "i3_model_dissent": "I3 model dissent",
+    "i4_derived_value_authority": "I4 derived-value authority",
+    "i5_production_engine": "I5 production engine",
+    "i6_tool_execution_fidelity": "I6 tool execution fidelity",
+    "i7_model_tool_planning": "I7 model tool planning",
+    "i8_evaluation_independence": "I8 evaluation independence",
+}
+
+
+def _confirmed_violation_reason(
+    payload: ScreenResultRequest, *, artifact_sha256: str
+) -> str | None:
+    """Miner-visible reject reason for an L3-confirmed v13 breach, else None.
+
+    The finding is digest-bound to the signed verdict at parse time; this also
+    binds it to the exact artifact and requires a named invariant breach, so a
+    copied or breach-free finding can never reject. Every confirmed breach is
+    named so the miner sees the whole finding.
+    """
+    finding = payload.finding
+    if (
+        payload.outcome != ScreenResultOutcome.QUARANTINE
+        or payload.policy_version < 13
+        or payload.reason_code != SOURCE_REVIEW_CONFIRMED_VIOLATION
+        or finding is None
+        or finding.artifact_sha256 != artifact_sha256.lower()
+        or finding.invariant_assessment is None
+        # An opposing court clear wins; a confirmed breach never overrides it.
+        or (
+            payload.adjudication is not None
+            and payload.adjudication.decision != "reject"
+        )
+    ):
+        return None
+    breaches = [
+        decision
+        for decision in finding.invariant_assessment.decisions
+        if decision.disposition.value == "breach"
+    ]
+    if not breaches:
+        return None
+    parts = []
+    for decision in breaches:
+        locations = sorted(
+            {
+                f"{finding.evidence[index].path}:{finding.evidence[index].line}"
+                for index in decision.evidence_indices
+                if index < len(finding.evidence)
+            }
+        )[:3]
+        label = _INVARIANT_LABELS.get(decision.invariant.value, decision.invariant)
+        cited = f" ({', '.join(locations)})" if locations else ""
+        parts.append(f"{label}: {decision.summary.rstrip('.')}{cited}.")
+    return (
+        "Rejected under screening policy v13: independent L2 and L3 source "
+        "review confirmed an invariant breach. " + " ".join(parts)
+    )
+
+
+def _completes_static_review(payload: ScreenResultRequest) -> bool:
+    """Whether a verdict is a finished review that stayed statically unsettled.
+
+    Budget, time, provider and infrastructure stops carry other reason codes or
+    a ``budget_stop_reason``; only a model-chosen inconclusive over a complete
+    review counts toward V2.
+    """
+    audit = payload.review_audit
+    return (
+        payload.outcome == ScreenResultOutcome.INCONCLUSIVE
+        and payload.reason_code == L2_MODEL_INCONCLUSIVE_REASON_CODE
+        and payload.adjudication is None
+        and audit is not None
+        and audit.resolution_basis == "insufficient_static_evidence"
+        and audit.budget_stop_reason in (None, "none")
+    )
 
 
 def _fresh_dataset_seed() -> int:
@@ -3348,9 +3449,20 @@ async def queue(
     stale_scored_rescreen = (
         screener_policy.rescreen_stale_agents and screener_policy.rescreen_scored
     )
+    # Precompute the per-agent score aggregates once rather than letting
+    # PostgreSQL re-evaluate correlated ORDER BY subqueries per candidate row.
+    score_aggregates = screening_score_aggregates()
     agents = (
         await session.scalars(
             select(Agent)
+            .outerjoin(
+                score_aggregates[0],
+                score_aggregates[0].c.agent_id == Agent.agent_id,
+            )
+            .outerjoin(
+                score_aggregates[1],
+                score_aggregates[1].c.agent_id == Agent.agent_id,
+            )
             .where(
                 or_(
                     Agent.status == AgentStatus.UPLOADED,
@@ -3377,7 +3489,7 @@ async def queue(
                     ),
                 )
             )
-            .order_by(*screening_priority_order())
+            .order_by(*screening_priority_order(score_aggregates))
             .limit(limit)
         )
     ).all()
@@ -4041,18 +4153,20 @@ async def _load_active_image_upload(
     storage_upload_id: str,
     screener_hotkey: str,
     for_update: bool = False,
+    allow_verified: bool = False,
 ) -> ScreenedImageUpload:
     """Load and authenticate one unexpired, attempt-bound multipart session."""
     upload = await session.get(
         ScreenedImageUpload, image_upload_id, with_for_update=for_update
     )
+    allowed_statuses = {"initiated", "verified"} if allow_verified else {"initiated"}
     if (
         upload is None
         or upload.agent_id != agent_id
         or upload.attempt_id != attempt_id
         or upload.screener_hotkey != screener_hotkey
         or upload.storage_upload_id != storage_upload_id
-        or upload.status != "initiated"
+        or upload.status not in allowed_statuses
     ):
         raise AgentNotScreenableError(
             "screened image multipart session is not active or does not match owner"
@@ -4060,7 +4174,8 @@ async def _load_active_image_upload(
     expires_at = upload.expires_at
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=UTC)
-    if datetime.now(UTC) > expires_at:
+    # A verified session's work is done; only an unfinished upload expires.
+    if upload.status != "verified" and datetime.now(UTC) > expires_at:
         raise AgentNotScreenableError("screened image multipart session has expired")
     attempt = await get_screening_attempt(
         session, attempt_id=attempt_id, for_update=for_update
@@ -4165,6 +4280,7 @@ async def screened_image_upload_complete(
             attempt_id=payload.attempt_id,
             storage_upload_id=payload.storage_upload_id,
             screener_hotkey=screener_hotkey,
+            allow_verified=True,
         )
         if (
             upload.sha256 != payload.sha256
@@ -4175,16 +4291,25 @@ async def screened_image_upload_complete(
             raise AgentNotScreenableError(
                 "multipart completion metadata does not match initiation"
             )
+        # Completion is idempotent: a gateway can drop the response of a long
+        # verification that still landed, and the worker replays it.
+        if upload.status == "verified":
+            return ScreenedImageCompleteResponse(verified=True)
     key = _screened_image_key(agent_id, image_upload_id)
     try:
-        await storage.complete_multipart_upload(
-            key=key,
-            upload_id=payload.storage_upload_id,
-            parts=[
-                {"PartNumber": part.part_number, "ETag": part.etag}
-                for part in payload.parts
-            ],
-        )
+        # A replay whose first request completed the object (consuming the
+        # multipart session) but never marked the row verified. The object is
+        # still checked byte-for-byte below; a truly missing object fails
+        # head_object.
+        with contextlib.suppress(ObjectNotFoundError):
+            await storage.complete_multipart_upload(
+                key=key,
+                upload_id=payload.storage_upload_id,
+                parts=[
+                    {"PartNumber": part.part_number, "ETag": part.etag}
+                    for part in payload.parts
+                ],
+            )
         stored = await storage.head_object(key=key)
         expected_metadata = {
             "sha256": payload.sha256,
@@ -4224,10 +4349,14 @@ async def screened_image_upload_complete(
         stored_upload = await session.get(
             ScreenedImageUpload, image_upload_id, with_for_update=True
         )
-        if stored_upload is None or stored_upload.status != "initiated":
+        if stored_upload is None or stored_upload.status not in {
+            "initiated",
+            "verified",
+        }:
             raise AgentNotScreenableError("multipart session is no longer active")
-        stored_upload.status = "verified"
-        stored_upload.verified_at = datetime.now(UTC)
+        if stored_upload.status == "initiated":
+            stored_upload.status = "verified"
+            stored_upload.verified_at = datetime.now(UTC)
     return ScreenedImageCompleteResponse(verified=True)
 
 
@@ -4486,6 +4615,11 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
             "The screening worker released this submission before starting it. "
             "This is operator-owned and is retried automatically with backoff for "
             "a limited time, then held for an operator retry."
+        )
+    if reason_code == SOURCE_REVIEW_CONFIRMED_VIOLATION:
+        return (
+            "Rejected under screening policy v13: independent L2 and L3 source "
+            "review confirmed an invariant breach in the submitted source."
         )
     if reason_code == "docker-build" or normalized.startswith("build failed"):
         if (
@@ -5477,6 +5611,48 @@ async def submit_result(
             target = AgentStatus.REJECTED
             public_reason = payload.adjudication.reason
             attempt_status = "rejected"
+        if (
+            payload.policy_version >= 13
+            and not deferred_attempt_lifecycle
+            and _completes_static_review(payload)
+            and (
+                attempt.reason_code == VERIFICATION_INCOMPLETE_UNREVIEWABLE
+                or (
+                    agent.status in _SCREENABLE_STATUSES
+                    and await complete_static_inconclusive_count(
+                        session,
+                        agent_id=agent_id,
+                        policy_version=payload.policy_version,
+                    )
+                    + 1
+                    >= V2_COMPLETE_STATIC_REVIEWS
+                )
+            )
+        ):
+            # Policy v13 has no indefinite INCONCLUSIVE outcome: a mandatory
+            # verification still incomplete after the published retries is
+            # V2, a terminal REJECT with violation_proven false. The worker's
+            # signed inconclusive evidence is kept below; only the outcome
+            # and its code change.
+            target = AgentStatus.REJECTED
+            public_reason = V2_UNREVIEWABLE_PUBLIC_REASON
+            attempt_status = "rejected"
+            stored_reason_code = VERIFICATION_INCOMPLETE_UNREVIEWABLE
+        confirmed_reason = _confirmed_violation_reason(
+            payload, artifact_sha256=agent.sha256
+        )
+        if (
+            confirmed_reason is not None
+            and not deferred_attempt_lifecycle
+            and (agent.status in _SCREENABLE_STATUSES or attempt.status == "rejected")
+        ):
+            # Policy v13: a breach the independent L3 adjudicator confirmed,
+            # with complete causal proof, is the screener's to reject. The
+            # worker transports it as a hold; Platform owns the terminal write.
+            # A scored or live agent keeps its hold for the ATH court.
+            target = AgentStatus.REJECTED
+            public_reason = confirmed_reason
+            attempt_status = "rejected"
         if attempt.reason_code == "exact-cross-miner-duplicate" and (
             payload.reason_code != attempt.reason_code
         ):
@@ -5783,6 +5959,13 @@ async def submit_result(
                 evidence_deferred = target != AgentStatus.QUARANTINED or (
                     deferred_attempt_lifecycle
                 )
+                v2_unreviewable = (
+                    stored_reason_code == VERIFICATION_INCOMPLETE_UNREVIEWABLE
+                )
+                confirmed_violation = (
+                    target == AgentStatus.REJECTED
+                    and stored_reason_code == SOURCE_REVIEW_CONFIRMED_VIOLATION
+                )
                 resolved_at = datetime.now(UTC) if evidence_deferred else None
                 session.add(
                     ScreeningQuarantine(
@@ -5821,13 +6004,27 @@ async def submit_result(
                         status="resolved" if evidence_deferred else "active",
                         resolved_at=resolved_at,
                         resolved_by=(
-                            "platform:deferred-source-review"
+                            "platform:v13-v2-unreviewable"
+                            if v2_unreviewable
+                            else "platform:v13-confirmed-violation"
+                            if confirmed_violation
+                            else "platform:deferred-source-review"
                             if evidence_deferred
                             else None
                         ),
-                        resolution="rescreen" if evidence_deferred else None,
+                        resolution=(
+                            "reject"
+                            if v2_unreviewable or confirmed_violation
+                            else "rescreen"
+                            if evidence_deferred
+                            else None
+                        ),
                         resolution_reason=(
-                            payload.adjudication.reason
+                            V2_UNREVIEWABLE_PUBLIC_REASON
+                            if v2_unreviewable
+                            else public_reason
+                            if confirmed_violation
+                            else payload.adjudication.reason
                             if payload.adjudication is not None
                             else (
                                 "Late deep-review evidence retained after operator "
@@ -5998,6 +6195,24 @@ async def submit_result(
                 reason_code=stored_reason_code,
                 reason=public_reason,
             )
+        if (
+            not late_deferred_result
+            and not deferred_attempt_lifecycle
+            and agent.status == AgentStatus.SCREENING_FAILED
+            and attempt.status in {"expired", "failed"}
+            and await authorize_automatic_review_retry(
+                session,
+                agent=agent,
+                attempt=attempt,
+                reason_code=attempt.reason_code,
+                now=datetime.now(UTC),
+            )
+            is not None
+        ):
+            # Same pairing as the operator retry: the failed attempt keeps its
+            # code; the agent no longer advertises it.
+            agent.screening_reason = AUTO_REVIEW_RETRY_PUBLIC_REASON
+            agent.screening_reason_code = None
         result_status = agent.status
 
     try:

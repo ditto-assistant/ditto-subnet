@@ -51,6 +51,7 @@ from ditto_screener.source_review import (
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    STRICT_TWO_OUTCOME_POLICY_VERSION,
     ScoredRuntimeEvidenceLease,
     ScreenReviewAudit,
     SourceReviewAuthorityTransition,
@@ -98,6 +99,15 @@ _COMPLETION_REQUEST_FLOOR_SECONDS = 45.0
 _COMPLETION_REQUEST_CEILING_SECONDS = 600.0
 _COMPLETION_REQUEST_MIN_TOKENS_PER_SECOND = 60.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
+# A provider fault relayed in a 200 body (OpenRouter ``server_error``) arrives in
+# bursts: an immediate replay of the exact turn usually lands in the same burst
+# and parks the miner on a manual retry. Back off within the lease instead.
+PROVIDER_BODY_FAULT_RETRY_DELAYS_SECONDS = (15.0, 45.0, 90.0)
+# Never sleep into a lease that could not fit a short turn afterwards: this
+# floor, or the node's own turn cap when that is shorter. Reserving the full
+# cap (up to 600s) would disable the backoff late in a lease, where a parked
+# review costs the most.
+_PROVIDER_BODY_FAULT_MIN_TURN_SECONDS = 45.0
 
 
 def default_completion_request_seconds(max_completion_tokens: int) -> float:
@@ -121,35 +131,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v50-policy-v13"
+        return "l2-terra-source-review-v53-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-adversarial-critic-v23-policy-v13"
+        return "l3-sol-adversarial-critic-v25-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-violation-cause-v28-policy-v13"
+        return "l3-sol-violation-cause-v30-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-cause-disagreement-v8-policy-v13"
+        return "l3-sol-cause-disagreement-v10-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-safety-adjudicator-v26-policy-v13"
+        return "l3-sol-safety-adjudicator-v28-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -1238,8 +1248,9 @@ substantive retrieval, authority, capabilities, execution, or output. This
 includes `bench_version` activating learned routing, capability ordering, or
 other substantive behavior beyond the published compatibility contract; use
 evaluation_identity_authoritative only for a reachable source-proven branch.
-Behavioral degradation alone is inconclusive until controlled, post-commit,
-predeclared and replicated evidence attributes it to evaluation dependence.
+Behavioral degradation alone is a lead, never an I8 breach. Screening runs no
+separate behavioral test that could attribute it later, so decide I8 from the
+traced served path.
 
 For I2, identify the exact applicable evidence and its discard point; generic
 top-k selection or an ordinary retrieval miss is insufficient. For I3, separate
@@ -1263,7 +1274,8 @@ causal_evidence schema_version 3 with i5_proof naming the concrete evaluation-
 dependent assumption, an evidence index for that assumption, and a distinct
 ordinary-product exclusion. Do not fill either field with a generic claim that
 prescriptive prose is benchmark-shaped. If the source does not support these
-proof obligations, mark I5 inconclusive; the finding remains held. For I6,
+proof obligations, mark I5 inconclusive; an inconclusive invariant cannot
+reject. For I6,
 trace the condition
 guarding each alleged fabricated tool result. A fallback that returns a
 local stub only when the request omits
@@ -1290,7 +1302,15 @@ identical effect suppressed without authority.
 For I7, reject unjustified removal of an applicable,
 authorized and available capability, including errors caused by quoted titles,
 compound requests, negation scope, setting-and-remember requests, or duplicate
-handling that removes unrelated pending tools.
+handling that removes unrelated pending tools. Executor and router shapes that
+remove a planned call are also I7: a per-tool cap keyed on the name alone, a
+successful-duplicate memo that refuses a repeat the request asks for (blanket
+or phrase-gated), a catalog disabled after one read, a sticky declined/vetoed
+flag that strips a capability for the rest of the request, and a router told
+to pick a narrowed route (records, read-only, no tools) when unsure. An
+exact-repeat stop on name plus canonical arguments for a repeat the request
+does not ask for, or a repeat the deciding model can authorize, remains
+permitted.
 Judge tool guards against the identity and argument schema of the offered tool,
 then trace the model-selected call to its actual local implementation or
 request-supplied endpoint. A local memory tool may check ownership of its own
@@ -1383,6 +1403,21 @@ _INCONCLUSIVE_ANALYST_CRITIC_TASK = (
     "with a grounded causal path, and inconclusive only when the shipped "
     "source itself cannot settle an invariant. "
 )
+_V13_VIOLATION_FINALITY_TASK = """\
+Your confirmation is final under policy v13. A violation you confirm is a
+terminal reject of this exact artifact: no behavioral test, operator review, or
+later court runs after you. First decide independently whether the provisional
+violation is real at all. Refute it by submitting risk_level low with the safe
+resolution basis that fits when the cited mechanism is unreachable on a valid
+scored request, does not change the scorer-visible answer or trajectory,
+matches a published safe harbor, or rests on a location you could not confirm
+in source. Confirm only a breach you would defend from the cited source alone.
+Submit within your step and time budget: running out without a submission
+confirms nothing and leaves the artifact unresolved.
+
+"""
+
+
 _VIOLATION_CAUSE_TASK = """\
 Adjudicate the primary causal mechanism of the provisional violation. The
 violation disposition is not authority to infer its cause. Re-read the smallest
@@ -2841,6 +2876,9 @@ class TerraSolSourceReviewAgent:
         terminal_verdict_required: bool = False,
         retry_provider_body_fault_once: bool = False,
         auth_retry_delays: Sequence[float] = ROUTER_AUTH_RETRY_DELAYS_SECONDS,
+        provider_fault_retry_delays: Sequence[float] = (
+            PROVIDER_BODY_FAULT_RETRY_DELAYS_SECONDS
+        ),
         analyst_provider: str | None = None,
         compact_review_packet: bool = False,
         analyst_reasoning_effort: str = "model_default",
@@ -2891,6 +2929,11 @@ class TerraSolSourceReviewAgent:
         self._retry_provider_body_fault_once = retry_provider_body_fault_once
         self._auth_retry_delays = tuple(
             max(0.0, float(delay)) for delay in auth_retry_delays
+        )
+        # The flag keeps its historical name because it is part of the review
+        # config digest; it now enables the bounded backoff below.
+        self._provider_fault_retry_delays = tuple(
+            max(0.0, float(delay)) for delay in provider_fault_retry_delays
         )
         self._analyst_provider = analyst_provider
         if compact_review_packet and not terminal_verdict_required:
@@ -3527,7 +3570,9 @@ class TerraSolSourceReviewAgent:
             if on_l3_start is not None:
                 on_l3_start()
             if not (analyst.observation.ok and analyst.observation.risk_level == "low"):
-                if _needs_violation_adjudication(analyst, l1_observation):
+                if _needs_violation_adjudication(
+                    analyst, l1_observation, policy_version=policy_version
+                ):
                     provisional_violation = {
                         "finding_digest": analyst.observation.finding_digest,
                         "finding": _compressed_l1_finding(analyst.observation),
@@ -4520,9 +4565,15 @@ class TerraSolSourceReviewAgent:
                 "submit violation for a causal challenge; otherwise inconclusive."
             )
         elif role == "violation_adjudicator":
-            task = _VIOLATION_CAUSE_TASK
+            task = (
+                _V13_VIOLATION_FINALITY_TASK if policy_version >= 13 else ""
+            ) + _VIOLATION_CAUSE_TASK
         elif role == "violation_tiebreaker":
-            task = _VIOLATION_CAUSE_DISAGREEMENT_TASK + _VIOLATION_CAUSE_TASK
+            task = (
+                (_V13_VIOLATION_FINALITY_TASK if policy_version >= 13 else "")
+                + _VIOLATION_CAUSE_DISAGREEMENT_TASK
+                + _VIOLATION_CAUSE_TASK
+            )
         else:
             raw_l1 = dossier.get("l1")
             raw_categories = (
@@ -4811,7 +4862,11 @@ class TerraSolSourceReviewAgent:
                             ),
                         }
                     )
-                raise failure("model-response-contract") from error
+                raise failure(
+                    "model-provider-fault"
+                    if _relayed_provider_fault(payload)
+                    else "model-response-contract"
+                ) from error
             usage = _add_usage(usage, turn_usage)
             if self._terminal_verdict_required:
                 self._audit.record(
@@ -5288,7 +5343,10 @@ class TerraSolSourceReviewAgent:
         # HTTPX's read timeout is an inactivity timeout, not a wall-clock cap.
         # A provider can keep a broken response alive with occasional bytes, so
         # bound each turn and allow one fresh connection before escalating.
-        for attempt in range(_MAX_COMPLETION_REQUEST_ATTEMPTS):
+        timeout_attempts = 0
+        fault_retries = 0
+        while True:
+            attempt = timeout_attempts + fault_retries
             timeout = min(
                 self._turn_timeout(deadline),
                 self._max_completion_request_seconds,
@@ -5382,16 +5440,29 @@ class TerraSolSourceReviewAgent:
                 if (
                     self._retry_provider_body_fault_once
                     and model_error is not None
-                    and attempt + 1 < _MAX_COMPLETION_REQUEST_ATTEMPTS
-                    and (
-                        deadline is None or asyncio.get_running_loop().time() < deadline
-                    )
+                    and fault_retries < len(self._provider_fault_retry_delays)
                 ):
-                    logger.warning(
-                        "L2/L3 provider body fault %s; retrying exact turn once",
-                        model_error,
-                    )
-                    continue
+                    delay = self._provider_fault_retry_delays[fault_retries]
+                    if (
+                        deadline is None
+                        or deadline - asyncio.get_running_loop().time()
+                        > delay
+                        + min(
+                            _PROVIDER_BODY_FAULT_MIN_TURN_SECONDS,
+                            self._max_completion_request_seconds,
+                        )
+                    ):
+                        fault_retries += 1
+                        logger.warning(
+                            "L2/L3 provider body fault %s; retrying exact turn "
+                            "retry=%d/%d delay_s=%.1f",
+                            model_error,
+                            fault_retries,
+                            len(self._provider_fault_retry_delays),
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
                 if model_error is not None:
                     logger.warning(
                         "L2/L3 model body reported a provider fault; parking "
@@ -5401,7 +5472,8 @@ class TerraSolSourceReviewAgent:
                     )
                 return response
             except (TimeoutError, httpx.TimeoutException):
-                if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
+                timeout_attempts += 1
+                if timeout_attempts >= _MAX_COMPLETION_REQUEST_ATTEMPTS:
                     raise
                 if (
                     deadline is not None
@@ -5410,10 +5482,9 @@ class TerraSolSourceReviewAgent:
                     raise
                 logger.warning(
                     "L2/L3 model turn timed out; retrying attempt %d/%d",
-                    attempt + 1,
+                    timeout_attempts,
                     _MAX_COMPLETION_REQUEST_ATTEMPTS,
                 )
-        raise RuntimeError("L2/L3 model turn retry loop exhausted")
 
     def _turn_timeout(self, deadline: float | None) -> float:
         if deadline is None:
@@ -6310,8 +6381,19 @@ def _enforce_causal_authority(
         return observation
     verification = verify_causal_finding(finding)
     if verification.role_complete:
+        if clearance_path in _L3_CONFIRMED_VIOLATION_PATHS:
+            return replace(observation, violation_certified=True)
         return observation
     return _failure(f"l2-{verification.reason_code}", "inconclusive")
+
+
+# Only an independent L3 violation adjudicator that saw the L2 finding and
+# could have refuted it (a low-risk verdict is an L3 disagreement) certifies a
+# violation. ``l2_violation`` skipped L3, and every L3 timeout, disagreement,
+# or missing verdict leaves a different path, so none of them certify.
+_L3_CONFIRMED_VIOLATION_PATHS = frozenset(
+    {"l3_adjudicated_violation_cause", "l3_adjudicated_violation_cause_tiebreak"}
+)
 
 
 def _l1_concerns_resolved(notes: tuple[Mapping[str, object], ...]) -> bool:
@@ -6617,9 +6699,17 @@ def _routes_inconclusive_to_l3(analyst: L2RunResult, policy_version: int) -> boo
 
 
 def _needs_violation_adjudication(
-    analyst: L2RunResult, l1_observation: SourceReviewObservation
+    analyst: L2RunResult,
+    l1_observation: SourceReviewObservation,
+    *,
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> bool:
-    """Escalate causal ambiguity, including a mechanism narrowed away from L1."""
+    """Escalate causal ambiguity, including a mechanism narrowed away from L1.
+
+    At policy v13 an L3-confirmed breach is a terminal reject, so every L2
+    violation goes to the independent L3 adjudicator that can refute it;
+    an L2-only finding would otherwise stay a held lead forever.
+    """
     if not analyst.observation.ok or analyst.observation.risk_level not in {
         "medium",
         "high",
@@ -6629,6 +6719,8 @@ def _needs_violation_adjudication(
         return True
     if analyst.resolution_basis not in _VIOLATION_RESOLUTION_BASES:
         return False
+    if policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION:
+        return True
     categories = set(analyst.observation.categories)
     benchmark_family = bool(
         categories & {"benchmark_emulation", "embedded_evaluator_logic"}
@@ -7249,6 +7341,19 @@ def _valid_location(repository: TarSourceRepository, path: str, line: int) -> bo
         return False
     total = repository.line_count(path)
     return total is None or line <= max(total, 1)
+
+
+def _relayed_provider_fault(payload: object) -> bool:
+    """Whether a 200 body relays the provider's own failure, not a bad answer.
+
+    OpenRouter returns an upstream outage (``server_error``,
+    ``provider_unavailable``, a rate limit) as ``status: failed`` with an error
+    in an ordinary 200 response. That is the provider's fault; naming it a
+    response-contract failure sent operators hunting for a reviewer bug.
+    """
+    return isinstance(payload, dict) and bool(
+        payload.get("error") or payload.get("error_type")
+    )
 
 
 def _response_contract_detail(payload: object) -> str:

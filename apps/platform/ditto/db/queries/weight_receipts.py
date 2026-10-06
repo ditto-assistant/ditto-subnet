@@ -41,12 +41,39 @@ class WeightReceiptConflict(ValueError):
     """A job/attempt identity was rebound or its provenance is not the frozen pin.
 
     ``code`` is a closed category safe for responses and logs; neither it nor the
-    message ever carries receipt contents.
+    message ever carries receipt contents. ``claimed_provenance`` carries identity
+    ids only (snapshot, epoch, champion) so a poisoned envelope can be triaged
+    without exposing receipt contents.
     """
 
-    def __init__(self, code: WeightReceiptConflictCode, message: str) -> None:
+    def __init__(
+        self,
+        code: WeightReceiptConflictCode,
+        message: str,
+        *,
+        claimed_provenance: str = "",
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.claimed_provenance = claimed_provenance
+
+
+def _claimed_provenance(receipt: FinalizedWeightReceipt) -> str:
+    """Identity ids of the receipt's claim; never receipt contents."""
+    provenance = receipt.provenance
+    champion = (
+        str(provenance.champion_agent_id)
+        if provenance.champion_agent_id is not None
+        else "none"
+    )
+    return (
+        f"claimed snapshot={provenance.ledger_snapshot_id}"
+        f" epoch={provenance.epoch_index}"
+        f" digest={provenance.ledger_digest[:12]}"
+        f" bench={provenance.bench_version}"
+        f" champion={champion}"
+        f" artifact={str(provenance.champion_artifact_sha256)[:12]}"
+    )
 
 
 async def _validate_provenance(
@@ -56,7 +83,9 @@ async def _validate_provenance(
     pin = await session.get(LedgerEpochSnapshot, provenance.ledger_snapshot_id)
     if pin is None:
         raise WeightReceiptConflict(
-            "unknown_ledger_snapshot", "unknown immutable ledger snapshot"
+            "unknown_ledger_snapshot",
+            "unknown immutable ledger snapshot",
+            claimed_provenance=_claimed_provenance(receipt),
         )
     digest = hashlib.sha256(
         json.dumps(
@@ -75,7 +104,9 @@ async def _validate_provenance(
         or pin.champion_agent_id != provenance.champion_agent_id
     ):
         raise WeightReceiptConflict(
-            "ledger_pin_mismatch", "receipt does not match its immutable champion pin"
+            "ledger_pin_mismatch",
+            "receipt does not match its immutable champion pin",
+            claimed_provenance=_claimed_provenance(receipt),
         )
     served = pin.context.get("served", {})
     raw_treasury = served.get("treasury_pin")
@@ -97,11 +128,15 @@ async def _validate_provenance(
             )
         except (ValueError, TypeError):
             raise WeightReceiptConflict(
-                "ledger_pin_mismatch", "invalid treasury epoch provenance"
+                "ledger_pin_mismatch",
+                "invalid treasury epoch provenance",
+                claimed_provenance=_claimed_provenance(receipt),
             ) from None
     elif isinstance(raw_treasury, dict) and raw_treasury.get("version") == 2:
         raise WeightReceiptConflict(
-            "ledger_pin_mismatch", "enforcing epoch requires V2 receipt"
+            "ledger_pin_mismatch",
+            "enforcing epoch requires V2 receipt",
+            claimed_provenance=_claimed_provenance(receipt),
         )
     # A provisional incumbent (protocol 28) holds the pin's crown from its served
     # markers rather than from the payable entries; it is folded, never paid.
@@ -123,11 +158,15 @@ async def _validate_provenance(
         or entries[0].get("sha256") != provenance.champion_artifact_sha256
     ):
         raise WeightReceiptConflict(
-            "artifact_pin_mismatch", "receipt artifact does not match its immutable pin"
+            "artifact_pin_mismatch",
+            "receipt artifact does not match its immutable pin",
+            claimed_provenance=_claimed_provenance(receipt),
         )
     if pin.pinned_block >= receipt.attempt.commit_block:
         raise WeightReceiptConflict(
-            "commit_before_pin", "receipt commit does not follow its ledger pin"
+            "commit_before_pin",
+            "receipt commit does not follow its ledger pin",
+            claimed_provenance=_claimed_provenance(receipt),
         )
 
 

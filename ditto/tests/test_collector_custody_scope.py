@@ -53,6 +53,92 @@ def fixture() -> dict:
 
 
 class PrivatePlanScope(unittest.TestCase):
+    @staticmethod
+    def rpc_fixture():
+        plan = fixture()
+        plan["variables"].update(
+            {
+                "collector_runtime_rpc_egress": {"value": True},
+                "enable_collector_custody": {"value": True},
+                "collector_custody_phases": {
+                    "value": {"registration": "sealed", "transfer": "sealed"}
+                },
+            }
+        )
+        plan["planned_values"]["root_module"]["resources"] = [
+            {
+                "address": "google_compute_firewall.collector_runtime_rpc[0]",
+                "values": {
+                    "project": "ditto-app-dev",
+                    "name": "sn118-collector-finney-rpc",
+                    "network": (
+                        "projects/ditto-app-dev/global/networks/sn118-collector-custody"
+                    ),
+                    "direction": "EGRESS",
+                    "priority": 750,
+                    "target_tags": [
+                        "collector-registration-sealed",
+                        "collector-transfer-sealed",
+                    ],
+                    "destination_ranges": ["65.109.251.221/32", "65.109.254.0/32"],
+                    "allow": [{"protocol": "tcp", "ports": ["443"]}],
+                    "deny": [],
+                    "disabled": False,
+                },
+            }
+        ]
+        return plan
+
+    def test_accepts_exact_sealed_finney_tls_rule(self):
+        self.assertEqual(scope.validate(self.rpc_fixture()), 2)
+
+    def test_refuses_rpc_intent_or_sealing_mismatch(self):
+        for name, value in (
+            ("collector_runtime_rpc_egress", False),
+            ("collector_runtime_rpc_egress", "true"),
+            ("enable_collector_custody", False),
+            (
+                "collector_custody_phases",
+                {"registration": "bootstrap", "transfer": "sealed"},
+            ),
+        ):
+            with self.subTest(name=name, value=value):
+                plan = self.rpc_fixture()
+                plan["variables"][name]["value"] = value
+                with self.assertRaises(ValueError):
+                    scope.validate(plan)
+        plan = self.rpc_fixture()
+        plan["planned_values"]["root_module"]["resources"] = []
+        with self.assertRaises(ValueError):
+            scope.validate(plan)
+
+    def test_refuses_broadened_rpc_rule(self):
+        for name, value in (
+            ("destination_ranges", ["0.0.0.0/0"]),
+            ("destination_ranges", ["65.109.251.221/32"]),
+            ("destination_ranges", ["65.109.254.0/32"]),
+            (
+                "destination_ranges",
+                ["65.109.251.221/32", "65.109.254.0/32", "1.1.1.1/32"],
+            ),
+            ("target_tags", ["collector-custody"]),
+            ("allow", [{"protocol": "all", "ports": []}]),
+            ("allow", [{"protocol": "tcp", "ports": ["443", "22"]}]),
+            ("priority", 500),
+            ("disabled", True),
+            ("project", "other"),
+            ("network", "projects/ditto-app-dev/global/networks/other"),
+            ("network", "projects/other/global/networks/sn118-collector-custody"),
+            ("network", ""),
+        ):
+            with self.subTest(name=name):
+                plan = self.rpc_fixture()
+                plan["planned_values"]["root_module"]["resources"][0]["values"][
+                    name
+                ] = value
+                with self.assertRaises(ValueError):
+                    scope.validate(plan)
+
     def test_accepts_only_custody_resources(self):
         self.assertEqual(scope.validate(fixture()), 2)
 
@@ -233,12 +319,13 @@ class ProtectedWorkflow(unittest.TestCase):
             self.assertIn("inputs.root != 'gcp-collector-custody'", step)
 
     def test_same_sealed_binary_is_scoped_before_plan_handoff_and_apply(self):
-        self.assertEqual(
-            self.text.count(
-                'python3 scripts/check-collector-custody-plan.py "$plan_json"'
-            ),
-            2,
+        command = " ".join(
+            (
+                "python3 scripts/check-collector-custody-plan.py",
+                '"${scope[@]}" "$plan_json"',
+            )
         )
+        self.assertEqual(self.text.count(command), 2)
         self.assertEqual(self.text.count("--backend-bootstrap"), 2)
         self.assertLess(
             self.text.index("Verify isolated custody plan scope"),

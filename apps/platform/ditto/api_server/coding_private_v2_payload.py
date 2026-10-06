@@ -8,7 +8,7 @@ import json
 import re
 import stat
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ditto.api_models.coding_canonical import coding_canonical_json_bytes
@@ -376,7 +376,10 @@ def _tree_digest_from_tar(body: bytes) -> str:
     identities: list[dict[str, Any]] = []
     try:
         with tarfile.open(fileobj=io.BytesIO(body), mode="r:") as archive:
-            for member in sorted(archive.getmembers(), key=lambda item: item.name):
+            # Path order, like _tree_digest: "pkg/x.go" sorts before "pkg.go".
+            for member in sorted(
+                archive.getmembers(), key=lambda item: PurePosixPath(item.name)
+            ):
                 if member.isdir():
                     continue
                 if not member.isfile() or member.issym() or member.islnk():

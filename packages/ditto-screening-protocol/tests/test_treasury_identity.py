@@ -6,7 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from ditto_screening_protocol.treasury import TreasuryEmissionPolicy
-from ditto_screening_protocol.treasury_identity import read_finalized_collector_pin
+from ditto_screening_protocol.treasury_identity import (
+    read_finalized_collector_pin,
+    read_treasury_dispatch_observation,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures/treasury_ledger_pin_v1.json"
 
@@ -112,3 +115,32 @@ def test_uid_zero_is_valid_only_with_reciprocal_registration_evidence():
     pin = reader.pin()
     assert pin.identity.uid == 0
     assert reader.reads[-1]["params"] == [118, 0]
+
+
+def test_dispatch_independent_reads_overlap_after_runtime_warmup():
+    class ConcurrentReader(Reader):
+        active = 0
+        peak = 0
+
+        async def query(self, **kwargs):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            try:
+                await asyncio.sleep(0)
+                return await super().query(**kwargs)
+            finally:
+                self.active -= 1
+
+    reader = ConcurrentReader()
+    reader.storage.update(SubnetEpochIndex=7, LastEpochBlock=100)
+    result = asyncio.run(
+        read_treasury_dispatch_observation(
+            reader, TreasuryEmissionPolicy.model_validate(reader.raw["policy"])
+        )
+    )
+    assert result.identity.model_dump(mode="json") == reader.raw["identity"]
+    assert result.epoch_index == 7 and result.first_block == 100
+    assert reader.peak == 4 and reader.active == 0
+    assert reader.reads[0]["storage_function"] == "SubnetEpochIndex"
+    assert reader.reads[-1]["storage_function"] == "Keys"
+    assert {read["block_hash"] for read in reader.reads} == {reader.block_hash}

@@ -59,7 +59,7 @@ export const ACTIVITY_FILTER_NAMES: readonly string[] = [
 export const ACTIVITY_FILTER_LABELS: Record<string, string> = {
   all: "All",
   rejected: "Rejected",
-  under_review: "Deferred review",
+  under_review: "Under review",
   waiting_validator: "Waiting for validators",
   queued: "Queued work",
   downloadable: "Source releases",
@@ -74,8 +74,9 @@ export const SCREENING_INCOMPLETE_LABEL = "Screening incomplete";
  * closed benchmark generation (#462) read as history, not failure:
  * not_queued/retired are neutral, never "bad". #623 renamed the screening
  * stages to the mechanical-admission vocabulary: screening builds a verified
- * image, and "Deferred source review" is the conditional later branch —
- * deep source review is deferred until a score qualifies.
+ * image. Source review runs in full before scoring; a held row reads "Under
+ * review", and only a row Platform actually deferred until a score qualified
+ * (it carries deferred_review_triggers) reads "Deferred source review".
  */
 export function activityStage(
   status: string | null | undefined,
@@ -94,7 +95,7 @@ export function activityStage(
     retired: ["Retired · earlier benchmark", ""],
     scored: ["Scored", "good"],
     live: ["Live", "good"],
-    under_review: ["Deferred source review", "warn"],
+    under_review: ["Under review", "warn"],
     rejected: ["Rejected", "bad"],
   };
   // #562: entering the branch is not a finding. Only an adverse automated
@@ -102,15 +103,17 @@ export function activityStage(
   // "warn"; a review that ended without a finding is neutral, and one that
   // has not reported yet is in progress.
   if (status === "under_review") {
+    const label = isDeferredReview(entry) ? "Deferred source review" : "Under review";
     const conclusion = entry?.review_conclusion;
     if (
       conclusion === "no_finding" ||
       conclusion === "budget_exhausted" ||
       conclusion === "not_completed"
     ) {
-      return ["Deferred source review", ""];
+      return [label, ""];
     }
-    if (conclusion === "pending") return ["Deferred source review", "progress"];
+    if (conclusion === "pending") return [label, "progress"];
+    return [label, "warn"];
   }
   return (status != null && stages[status]) || ["Pending", ""];
 }
@@ -120,6 +123,11 @@ export interface DeferredReviewFields {
   status?: string | null;
   deferred_review_triggers?: readonly DeferredReviewTrigger[] | null;
   review_conclusion?: ReviewConclusion | null;
+}
+
+/** True only for a hold Platform deferred until a score qualified (#562). */
+export function isDeferredReview(entry: DeferredReviewFields | undefined): boolean {
+  return (entry?.deferred_review_triggers?.length ?? 0) > 0;
 }
 
 /** Why a submission entered the deferred branch, in the miner's words. */
@@ -251,8 +259,8 @@ export function duplicateComparisonLabel(entry: ReviewEventFields): string {
  * The screening-policy chip (policyScreeningLabel 6892–6905). #623: a
  * build-only screening pass IS the active build stage — calling the image
  * "verified" before that build finishes was both redundant and temporally
- * false, so it renders nothing; a full review during screening names the
- * deferred branch, "Deferred source review".
+ * false, so it renders nothing; a full review during screening reads "Full
+ * source review".
  */
 export function policyScreeningLabel(entry: {
   status?: string | null;
@@ -262,7 +270,7 @@ export function policyScreeningLabel(entry: {
 }): string {
   if (entry.screening_build_only === true) return "";
   if (entry.screening_build_only === false && entry.status === "screening") {
-    return "Deferred source review";
+    return "Full source review";
   }
   const completed = Number(entry.screening_policy_version);
   const required = Number(entry.required_screening_policy_version);
@@ -409,8 +417,9 @@ export function validationDetail(e: ActivityStatusEntry): string {
     return "Queued for a screener to claim under the current policy.";
   if (e.status === "screening") return "A screener is currently checking this submission.";
   if (e.status === "under_review") {
-    const held =
-      "This submission is held for deferred source review. Existing scores do not clear the hold. ";
+    const held = isDeferredReview(e)
+      ? "This submission is held for deferred source review. Existing scores do not clear the hold. "
+      : "This submission is held for review. Holding is not a finding, and existing scores do not clear the hold. ";
     const why = e.deferred_review_triggers?.length
       ? "It entered review because " +
         e.deferred_review_triggers

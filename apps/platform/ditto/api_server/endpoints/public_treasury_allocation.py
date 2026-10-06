@@ -4,19 +4,60 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.treasury_allocation import (
     PublicServiceBucket,
     PublicTreasuryAllocation,
+    PublicTreasuryRuntime,
 )
 from ditto.api_models.treasury_settings import TreasurySettings, public_wallet_address
 from ditto.api_server.burn_settings import settings_from_row
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.treasury_runtime import latest_runtime_row, runtime_revision
 from ditto.db.models import TreasurySettingsRevision
 from ditto.db.queries.burn_settings import latest_burn_settings_revision
 
 router = APIRouter(prefix="/public/treasury-allocation", tags=["public"])
+
+
+async def public_runtime(
+    session: AsyncSession, allocation: TreasurySettings
+) -> PublicTreasuryRuntime:
+    """Expose only verified control mode, never approval, actor or failure text."""
+    row = None
+    try:
+        row = await latest_runtime_row(session)
+        if row is None:
+            return PublicTreasuryRuntime()
+        settings = runtime_revision(row).settings
+        policy = settings.approval.policy
+        matches = allocation.allocation_version == 2 and (
+            allocation.treasury_hotkey,
+            allocation.treasury_coldkey,
+            sorted(
+                (b.bucket_id, b.allocation_bps, b.holding_coldkey)
+                for b in allocation.service_buckets
+            ),
+        ) == (
+            policy.collector_hotkey,
+            policy.collector_coldkey,
+            sorted(
+                (b.bucket_id, b.allocation_bps, b.holding_coldkey)
+                for b in policy.buckets
+            ),
+        )
+        return PublicTreasuryRuntime(
+            revision=row.revision,
+            mode=settings.mode,
+            activation_epoch=settings.activation_epoch,
+            allocation_matches=matches,
+        )
+    except (ValueError, SQLAlchemyError):
+        return PublicTreasuryRuntime(
+            revision=row.revision if row else 0, mode="unavailable"
+        )
 
 
 @router.get("", response_model=PublicTreasuryAllocation)
@@ -66,4 +107,5 @@ async def get_public_treasury_allocation(
             )
             for b in policy.service_buckets
         ],
+        runtime=await public_runtime(session, policy),
     )

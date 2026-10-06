@@ -699,6 +699,7 @@ export function CopyReviewPanel({
                     <dt className="text-[var(--muted)]">Similarity (Jaccard / containment)</dt>
                     <dd className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono">
                       <span>lexical {formatSimilarity(selected.current_comparison.lexical?.jaccard)} / {formatSimilarity(selected.current_comparison.lexical?.containment)}</span>
+                      <span>line {formatSimilarity(selected.current_comparison.line?.jaccard)} / {formatSimilarity(selected.current_comparison.line?.containment)}</span>
                       <span>structural {formatSimilarity(selected.current_comparison.structural?.jaccard)} / {formatSimilarity(selected.current_comparison.structural?.containment)}</span>
                       <span>prompt {formatSimilarity(selected.current_comparison.prompt?.jaccard)} / {formatSimilarity(selected.current_comparison.prompt?.containment)}</span>
                     </dd>

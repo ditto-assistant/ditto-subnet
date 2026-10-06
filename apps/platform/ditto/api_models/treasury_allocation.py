@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ditto.api_models.treasury_settings import TreasuryPayeeRule
 
@@ -16,6 +16,19 @@ class PublicServiceBucket(BaseModel):
     holding_coldkey: str | None
     publish_payments: bool
     payee_rules: list[TreasuryPayeeRule]
+
+
+class PublicTreasuryRuntime(BaseModel):
+    """Recorded control only; no chain dispatch, payment or signer authority."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    revision: int = Field(default=0, ge=0)
+    mode: Literal["not_recorded", "observe", "enforce", "pause", "unavailable"] = (
+        "not_recorded"
+    )
+    activation_epoch: int | None = Field(default=None, ge=0)
+    allocation_matches: bool | None = None
 
 
 class PublicTreasuryAllocation(BaseModel):
@@ -39,3 +52,6 @@ class PublicTreasuryAllocation(BaseModel):
     sweep_status: Literal["not_activated"] = "not_activated"
     payment_observer_status: Literal["not_activated"] = "not_activated"
     buckets: list[PublicServiceBucket]
+    # Legacy shadow fields above describe the allocation projection, not the
+    # durable runtime. Runtime control still is not finalized funding proof.
+    runtime: PublicTreasuryRuntime = Field(default_factory=PublicTreasuryRuntime)

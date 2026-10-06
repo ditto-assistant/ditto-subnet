@@ -18,7 +18,7 @@ from ditto.api_models.treasury_settings import TreasurySettings
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.ledger_pin import ledger_digest
 from ditto.api_server.treasury_ingress import digest
-from ditto.chain.treasury_receipts import read_treasury_chain_proof
+from ditto.chain.treasury_receipts import finalized_block, read_treasury_chain_proof
 from ditto.db.models import (
     LedgerEpochSnapshot,
     TreasuryPublicEvent,
@@ -28,6 +28,7 @@ from ditto.db.models import (
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
     FINNEY_GENESIS,
+    HISTORICAL_COLLECTOR_CODE_HASH,
 )
 from ditto_screening_protocol.treasury import TreasuryEmissionPolicy
 from ditto_screening_protocol.treasury_approval import approval_message
@@ -53,7 +54,7 @@ def event(module, name, attrs, index=0, phase="ApplyExtrinsic"):
     }
 
 
-def fixture():
+def fixture(*, policy_revision=None):
     raw = json.loads(
         (
             Path(__file__).resolve().parents[6]
@@ -62,6 +63,8 @@ def fixture():
         ).read_text()
     )
     raw["policy"]["genesis_hash"] = FINNEY_GENESIS
+    if policy_revision is not None:
+        raw["policy"]["revision"] = policy_revision
     policy = TreasuryEmissionPolicy.model_validate(raw["policy"])
     raw["policy_digest"] = policy.digest
     raw["pinned_block_hash"] = h(101)
@@ -178,6 +181,7 @@ class RPC:
         self.epoch = 9
         self.rebound_uid = None
         self.distribution_blocks = {120}
+        self.distribution_amounts = {}
         self.proxy_vendor = False
 
     async def get_chain_finalised_head(self):
@@ -234,6 +238,15 @@ class RPC:
         assert module in {"System", "SubtensorModule", "Timestamp"}
         assert isinstance(params, list)
         if storage_function == "Events":
+            block = int(block_hash[2:], 16)
+            if block in self.distribution_amounts:
+                events = copy.deepcopy(self.transfer_events)
+                for item in events:
+                    if item["event_id"] in {"StakeRemoved", "StakeAdded"}:
+                        item["event"]["attributes"][3] = self.distribution_amounts[
+                            block
+                        ]
+                return events
             return (
                 self.source_events
                 if block_hash == h(110)
@@ -267,8 +280,16 @@ class Chain:
         )
 
 
-async def install(app, session_maker, *, publish=True, fault=None):
-    pin, settings = fixture()
+async def install(
+    app,
+    session_maker,
+    *,
+    publish=True,
+    fault=None,
+    policy_revision=None,
+    settings_revision=1,
+):
+    pin, settings = fixture(policy_revision=policy_revision)
     if fault == "signature":
         pin = pin.model_copy(
             update={
@@ -294,8 +315,8 @@ async def install(app, session_maker, *, publish=True, fault=None):
     async with session_maker() as session:
         session.add(
             TreasurySettingsRevision(
-                revision=1,
-                parent_revision=0,
+                revision=settings_revision,
+                parent_revision=settings_revision - 1,
                 settings=settings.model_dump(mode="json"),
                 checksum=digest(settings.model_dump(mode="json"))
                 if fault != "checksum"
@@ -362,6 +383,9 @@ async def test_real_ingress_replay_independent_vendor_and_history(
     response = await client.post(URL, headers=HEADERS, json=selection())
     assert response.status_code == 200, response.text
     assert response.json()["published"] and not response.json()["replayed"]
+    public = (await client.get("/api/v1/public/treasury-activity")).json()
+    assert public["items"][0]["extrinsic_hash"] == selection()["extrinsic_hash"]
+    assert public["items"][0]["payment_id"] == response.json()["receipt_id"]
     replay = await client.post(
         URL,
         headers=HEADERS,
@@ -436,6 +460,90 @@ async def test_publication_off_is_private_durable_not_dropped(
     assert len((await client.get(URL, headers=HEADERS)).json()["items"]) == 1
 
 
+@pytest.mark.parametrize("publish", [True, False])
+@pytest.mark.parametrize("numeric_alias", [True, False])
+async def test_offline_policy_revision_is_not_operator_settings_revision(
+    app, client, session_maker, publish, numeric_alias
+):
+    pin, settings, _ = await install(
+        app, session_maker, policy_revision=5, settings_revision=2, publish=publish
+    )
+    # A later row even with the offline policy's numeric revision must not
+    # supply historical publication/payee rules. The complete signed routing
+    # tuple still matches; only publication is changed.
+    later = settings.model_copy(
+        update={
+            "service_buckets": [
+                settings.service_buckets[0].model_copy(
+                    update={"publish_payments": not publish}
+                )
+            ]
+        }
+    )
+    if numeric_alias:
+        async with session_maker() as db:
+            db.add(
+                TreasurySettingsRevision(
+                    revision=5,
+                    parent_revision=4,
+                    settings=later.model_dump(mode="json"),
+                    checksum=digest(later.model_dump(mode="json")),
+                    reason="Synthetic later publication policy",
+                    actor="synthetic-later-operator",
+                    created_at=datetime(2021, 1, 1, tzinfo=UTC),
+                )
+            )
+            await db.commit()
+    result = await client.post(URL, headers=HEADERS, json=selection())
+    assert result.status_code == 200, result.text
+    assert result.json()["published"] is publish
+    replay = await client.post(URL, headers=HEADERS, json=selection())
+    assert replay.status_code == 200 and replay.json()["replayed"]
+    async with session_maker() as db:
+        receipt = await db.get(TreasuryVerifiedReceipt, result.json()["receipt_id"])
+        assert receipt.settings_revision == 2
+        assert receipt.policy_digest == pin.policy.digest
+        events = list(await db.scalars(select(TreasuryPublicEvent)))
+        assert len(events) == int(publish)
+        if publish:
+            assert events[0].policy_revision == 5
+    vendor = await client.post(URL, headers=HEADERS, json=selection("vendor_payment"))
+    assert vendor.status_code == 200, vendor.text
+    assert vendor.json()["published"] is publish
+
+
+@pytest.mark.parametrize("fault", ["checksum", "routing", "schema"])
+async def test_latest_settings_before_epoch_pin_must_validate_without_fallback(
+    app, client, session_maker, fault
+):
+    _, settings, _ = await install(app, session_maker)
+    body = settings.model_dump(mode="json")
+    if fault == "routing":
+        body["service_buckets"][0]["holding_coldkey"] = Keypair.create_from_uri(
+            "//Eve"
+        ).ss58_address
+    elif fault == "schema":
+        body["allocation_version"] = 999
+    async with session_maker() as db:
+        db.add(
+            TreasurySettingsRevision(
+                revision=2,
+                parent_revision=1,
+                settings=body,
+                checksum="0" * 64 if fault == "checksum" else digest(body),
+                reason="Synthetic invalid latest historical settings",
+                actor="synthetic-operator",
+                created_at=datetime(2020, 1, 1, tzinfo=UTC),
+            )
+        )
+        await db.commit()
+    response = await client.post(URL, headers=HEADERS, json=selection())
+    assert response.status_code == 422, response.text
+    async with session_maker() as db:
+        assert list(await db.scalars(select(TreasuryVerifiedReceipt))) == []
+        assert list(await db.scalars(select(TreasuryPublicEvent))) == []
+
+
 @pytest.mark.parametrize(
     "fault",
     [
@@ -493,6 +601,10 @@ async def test_negative_canonical_proofs_never_write(app, client, session_maker,
         payload = selection("provider_credit")
     response = await client.post(URL, headers=HEADERS, json=payload)
     assert response.status_code == 422, response.text
+    preflight = await client.post(URL + "/preflight", headers=HEADERS, json=payload)
+    assert preflight.status_code == 200, preflight.text
+    assert not preflight.json()["ready"]
+    assert preflight.json()["refusal"] == "invalid_or_unsupported"
     async with session_maker() as session:
         assert list(await session.scalars(select(TreasuryVerifiedReceipt))) == []
         assert list(await session.scalars(select(TreasuryPublicEvent))) == []
@@ -539,7 +651,10 @@ async def test_linked_alpha_payments_cannot_overspend_distribution(
     app, client, session_maker
 ):
     _, _, rpc = await install(app, session_maker)
-    distribution = await client.post(URL, headers=HEADERS, json=selection())
+    rpc.distribution_amounts[120] = 30
+    distribution = await client.post(
+        URL, headers=HEADERS, json={**selection(), "amount_atomic": 30}
+    )
     assert distribution.status_code == 200, distribution.text
     rpc.proxy_vendor = True
 
@@ -575,8 +690,9 @@ async def test_linked_alpha_payments_cannot_overspend_distribution(
     }
     result = await client.post(URL, headers=HEADERS, json=first)
     assert result.status_code == 200, result.text
-    rpc.vendor_events = effects(20)
-    second = {**first, "block": 131, "block_hash": h(131), "amount_atomic": 20}
+    # 25 + 10 fits the original 40 earning, but exceeds this partial parent 30.
+    rpc.vendor_events = effects(10)
+    second = {**first, "block": 131, "block_hash": h(131), "amount_atomic": 10}
     assert (await client.post(URL, headers=HEADERS, json=second)).status_code == 409
     async with session_maker() as db:
         assert len(list(await db.scalars(select(TreasuryVerifiedReceipt)))) == 2
@@ -588,3 +704,212 @@ async def test_linked_alpha_payments_cannot_overspend_distribution(
         409,
         422,
     }
+
+
+def partial_selection(rpc, block, amount):
+    rpc.distribution_blocks.add(block)
+    rpc.distribution_amounts[block] = amount
+    return {
+        **selection(),
+        "block": block,
+        "block_hash": h(block),
+        "amount_atomic": amount,
+    }
+
+
+async def test_partial_distribution_remainder_replay_and_public_amounts(
+    app, client, session_maker
+):
+    _, _, rpc = await install(app, session_maker)
+    first = partial_selection(rpc, 120, 15)
+    result = await client.post(URL, headers=HEADERS, json=first)
+    assert result.status_code == 200, result.text
+    replay = await client.post(URL, headers=HEADERS, json=first)
+    assert replay.status_code == 200 and replay.json()["replayed"]
+    second = partial_selection(rpc, 121, 25)
+    result = await client.post(URL, headers=HEADERS, json=second)
+    assert result.status_code == 200, result.text
+    assert result.json()["amount_atomic"] == "25"
+    excess = partial_selection(rpc, 122, 1)
+    assert (await client.post(URL, headers=HEADERS, json=excess)).status_code == 409
+    feed = (await client.get("/api/v1/public/treasury-activity")).json()["items"]
+    assert sorted(int(item["allocated_alpha_rao"]) for item in feed) == [15, 25]
+    assert all(item["source_alpha_rao"] == "40" for item in feed)
+    async with session_maker() as db:
+        rows = list(await db.scalars(select(TreasuryVerifiedReceipt)))
+        assert sum(row.amount_atomic for row in rows) == 40 and len(rows) == 2
+
+
+async def test_concurrent_partial_claims_cannot_oversubscribe_source(
+    app, client, session_maker
+):
+    _, _, rpc = await install(app, session_maker)
+    payloads = [partial_selection(rpc, block, 25) for block in (120, 121)]
+    results = await asyncio.gather(
+        *[client.post(URL, headers=HEADERS, json=payload) for payload in payloads]
+    )
+    assert sorted(result.status_code for result in results) == [200, 409]
+    async with session_maker() as db:
+        rows = list(await db.scalars(select(TreasuryVerifiedReceipt)))
+        assert len(rows) == 1 and rows[0].amount_atomic == 25
+
+
+@pytest.mark.parametrize("changed", ["hash", "amount", "digest"])
+async def test_partial_history_requires_identical_retained_source(
+    app, client, session_maker, changed
+):
+    _, _, rpc = await install(app, session_maker)
+    first = partial_selection(rpc, 120, 15)
+    assert (await client.post(URL, headers=HEADERS, json=first)).status_code == 200
+    if changed == "hash":
+        rpc.hashes[110] = h(111)
+    elif changed == "amount":
+        rpc.source_events[-1]["event"]["attributes"]["incentive"] = 41
+    else:
+        # The canonical liquid-credit digest, not unrelated gross emissions,
+        # is the source identity retained by ingress. Simulate corrupted
+        # historical proof without disabling the immutable receipt trigger.
+        async with session_maker() as db:
+            row = await db.get(
+                TreasuryVerifiedReceipt,
+                (await client.post(URL, headers=HEADERS, json=first)).json()[
+                    "receipt_id"
+                ],
+            )
+            assert row.proof["source_event_digest"]
+        original = app.state.chain.get_treasury_receipt_proof
+
+        async def altered_proof(*args, **kwargs):
+            proof = await original(*args, **kwargs)
+            return replace(proof, source_event_digest="0" * 64)
+
+        app.state.chain.get_treasury_receipt_proof = altered_proof
+    second = partial_selection(rpc, 121, 10)
+    result = await client.post(URL, headers=HEADERS, json=second)
+    assert result.status_code in {409, 422}, result.text
+    async with session_maker() as db:
+        rows = list(await db.scalars(select(TreasuryVerifiedReceipt)))
+        assert len(rows) == 1 and rows[0].amount_atomic == 15
+
+
+@pytest.mark.parametrize("amount", [0, 41])
+async def test_partial_amount_must_fit_signed_source_bucket(
+    app, client, session_maker, amount
+):
+    _, _, rpc = await install(app, session_maker)
+    result = await client.post(
+        URL, headers=HEADERS, json=partial_selection(rpc, 120, amount)
+    )
+    assert result.status_code == 422, result.text
+    async with session_maker() as db:
+        assert list(await db.scalars(select(TreasuryVerifiedReceipt))) == []
+
+
+@pytest.mark.parametrize(
+    "parent,post,allowed",
+    [
+        (HISTORICAL_COLLECTOR_CODE_HASH, HISTORICAL_COLLECTOR_CODE_HASH, True),
+        (AUDITED_COLLECTOR_CODE_HASH, AUDITED_COLLECTOR_CODE_HASH, True),
+        (HISTORICAL_COLLECTOR_CODE_HASH, AUDITED_COLLECTOR_CODE_HASH, True),
+        (AUDITED_COLLECTOR_CODE_HASH, HISTORICAL_COLLECTOR_CODE_HASH, False),
+        ("0x" + "aa" * 32, AUDITED_COLLECTOR_CODE_HASH, False),
+        (AUDITED_COLLECTOR_CODE_HASH, "0x" + "aa" * 32, False),
+    ],
+)
+async def test_exact_historical_execution_runtime_and_forward_upgrade(
+    parent, post, allowed
+):
+    class HistoricalRPC:
+        async def get_chain_finalised_head(self):
+            return h(200)
+
+        async def get_block_number(self, _):
+            return 200
+
+        async def get_block_hash(self, n):
+            return FINNEY_GENESIS if n == 0 else h(n)
+
+        async def rpc_request(self, _method, params):
+            return {"result": parent if params[-1] == h(119) else post}
+
+    if allowed:
+        at, previous, code = await finalized_block(HistoricalRPC(), 120, FINNEY_GENESIS)
+        assert (at, previous, code) == (h(120), h(119), parent)
+    else:
+        with pytest.raises(ValueError, match="runtime"):
+            await finalized_block(HistoricalRPC(), 120, FINNEY_GENESIS)
+
+
+async def test_preflight_checks_same_effect_without_publishing_or_consuming(
+    app, client, session_maker
+):
+    await install(app, session_maker)
+    response = await client.post(URL + "/preflight", headers=HEADERS, json=selection())
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ready"] and body["publication"] == "not_performed"
+    assert body["spending_authority"] == "none" and not body["already_recorded"]
+    async with session_maker() as db:
+        assert list(await db.scalars(select(TreasuryVerifiedReceipt))) == []
+        assert list(await db.scalars(select(TreasuryPublicEvent))) == []
+    app.state.chain.rpc.transfer_events[1]["event"]["attributes"] = {
+        "result": {"Err": "NoPermission"}
+    }
+    refused = await client.post(URL + "/preflight", headers=HEADERS, json=selection())
+    assert refused.json()["refusal"] == "invalid_or_unsupported"
+    assert not refused.json()["ready"]
+
+
+async def test_preflight_archive_checkpoint_is_sanitized_and_no_write(
+    app, client, session_maker
+):
+    from ditto.chain.errors import ChainTreasuryReceiptUnavailable
+
+    await install(app, session_maker)
+
+    class Unavailable:
+        async def get_treasury_receipt_proof(self, *_args, **_kwargs):
+            try:
+                raise ConnectionError("SECRET URL TOKEN PRIVATE SETTINGS")
+            except ConnectionError as error:
+                raise ChainTreasuryReceiptUnavailable(
+                    "receipt_identity", 3, timed_out=True
+                ) from error
+
+    app.state.chain = Unavailable()
+    response = await client.post(URL + "/preflight", headers=HEADERS, json=selection())
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "ready": False,
+        "receipt_id": None,
+        "already_recorded": False,
+        "refusal": "unavailable",
+        "read_phase": "receipt_identity",
+        "attempt_count": 3,
+        "timed_out": True,
+        "publication": "not_performed",
+        "spending_authority": "none",
+        "provider_credit_status": "not_proven",
+    }
+    assert "SECRET" not in response.text and "PRIVATE" not in response.text
+    unauthorized = await client.post(URL + "/preflight", json=selection())
+    assert unauthorized.status_code == 401
+    async with session_maker() as db:
+        assert list(await db.scalars(select(TreasuryVerifiedReceipt))) == []
+        assert list(await db.scalars(select(TreasuryPublicEvent))) == []
+
+
+async def test_preflight_missing_historical_epoch_is_unavailable(
+    app, client, session_maker
+):
+    await install(app, session_maker)
+    payload = selection()
+    payload["epoch_index"] = 10
+    response = await client.post(URL + "/preflight", headers=HEADERS, json=payload)
+    assert response.status_code == 200, response.text
+    assert not response.json()["ready"]
+    assert response.json()["refusal"] == "unavailable"
+    assert response.json()["attempt_count"] == 0
+    async with session_maker() as db:
+        assert list(await db.scalars(select(TreasuryVerifiedReceipt))) == []
+        assert list(await db.scalars(select(TreasuryPublicEvent))) == []

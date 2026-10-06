@@ -2612,10 +2612,18 @@ def _score_report() -> ScoreReport:
     )
 
 
-async def test_submit_score_parks_empty_502_as_infrastructure() -> None:
+async def test_submit_score_parks_persistent_502_after_bounded_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
     attempts = 0
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
 
     def handler(_: httpx.Request) -> httpx.Response:
         nonlocal attempts
@@ -2634,21 +2642,31 @@ async def test_submit_score_parks_empty_502_as_infrastructure() -> None:
                 agent_id,
                 signature="ab" * 64,
                 report=_score_report(),
+                ticket_deadline=datetime.now(UTC) + timedelta(hours=1),
             )
 
-    assert attempts == 1
+    assert attempts == 6
+    assert sleeps == [2.0, 8.0, 20.0, 45.0, 90.0]
 
 
-async def test_submit_score_does_not_replay_transient_502() -> None:
+async def test_submit_score_replays_identical_body_after_transient_502(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
-    attempts = 0
+    bodies: list[bytes] = []
 
-    def handler(_: httpx.Request) -> httpx.Response:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.content)
+        if len(bodies) == 1:
             return httpx.Response(502, text="")
+        if len(bodies) == 2:
+            raise httpx.ConnectError("relay restarting")
         return httpx.Response(
             200,
             json={
@@ -2663,14 +2681,85 @@ async def test_submit_score_does_not_replay_transient_502() -> None:
         validator_hotkey=keypair.ss58_address,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        with pytest.raises(
-            PlatformInfrastructureError, match="score rejected \\(502\\)"
-        ):
+        response = await PlatformClient(cast(Any, config), http, keypair).submit_score(
+            agent_id,
+            signature="ab" * 64,
+            report=_score_report(),
+            ticket_deadline=datetime.now(UTC) + timedelta(hours=1),
+        )
+
+    assert response.accepted is True
+    assert len(bodies) == 3
+    assert bodies[0] == bodies[1] == bodies[2]
+
+
+async def test_submit_score_stops_retrying_before_the_lease_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    attempts = 0
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(503, text="")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="\\(503\\)"):
             await PlatformClient(cast(Any, config), http, keypair).submit_score(
-                agent_id, signature="ab" * 64, report=_score_report()
+                agent_id,
+                signature="ab" * 64,
+                report=_score_report(),
+                ticket_deadline=datetime.now(UTC) + timedelta(seconds=45),
             )
 
-    assert attempts == 1
+    # 45s of lease minus the 30s margin leaves room only for the 2s and 8s waits.
+    assert sleeps == [2.0, 8.0]
+    assert attempts == 3
+
+
+async def test_submit_score_retries_through_a_naive_ticket_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    attempts = 0
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(502, text="")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="\\(502\\)"):
+            await PlatformClient(cast(Any, config), http, keypair).submit_score(
+                agent_id,
+                signature="ab" * 64,
+                report=_score_report(),
+                ticket_deadline=datetime(2099, 1, 1),
+            )
+
+    assert attempts == 6
 
 
 async def test_submit_score_4xx_stays_a_scoring_error() -> None:

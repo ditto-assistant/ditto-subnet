@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.treasury_ingress import (
+    TreasuryReceiptPreflight,
     TreasuryReceiptResult,
     TreasuryReceiptSelector,
 )
@@ -44,6 +45,10 @@ class ReceiptConflict(ValueError):
     """Replay or historical evidence does not match the immutable receipt."""
 
 
+class ReceiptHistoryUnavailable(ValueError):
+    """Required immutable historical data is unavailable, not contradicted."""
+
+
 def receipt_result(
     row: TreasuryVerifiedReceipt, *, replayed: bool
 ) -> TreasuryReceiptResult:
@@ -68,22 +73,41 @@ def receipt_result(
 async def ingest_receipt(
     session: AsyncSession, chain: Any, selector: TreasuryReceiptSelector
 ) -> TreasuryReceiptResult:
+    result = await _receipt(session, chain, selector, record=True)
+    assert isinstance(result, TreasuryReceiptResult)
+    return result
+
+
+async def preflight_receipt(
+    session: AsyncSession, chain: Any, selector: TreasuryReceiptSelector
+) -> TreasuryReceiptPreflight:
+    result = await _receipt(session, chain, selector, record=False)
+    assert isinstance(result, TreasuryReceiptPreflight)
+    return result
+
+
+async def _receipt(
+    session: AsyncSession,
+    chain: Any,
+    selector: TreasuryReceiptSelector,
+    *,
+    record: bool,
+) -> TreasuryReceiptResult | TreasuryReceiptPreflight:
     if selector.stage == "provider_credit":
         # No independently authenticated provider reconciliation contract exists.
         # An administrator, journal entry or chain transfer cannot supply it.
         raise ValueError("provider credit verifier is not configured")
     # Serialize source claims and linked payments across processes. No UPDATE
     # changes the pin; the row lock only fences duplicate/aggregate consumption.
+    ledger_query = select(LedgerEpochSnapshot).where(
+        LedgerEpochSnapshot.netuid == 118,
+        LedgerEpochSnapshot.epoch_index == selector.epoch_index,
+    )
     ledger = await session.scalar(
-        select(LedgerEpochSnapshot)
-        .where(
-            LedgerEpochSnapshot.netuid == 118,
-            LedgerEpochSnapshot.epoch_index == selector.epoch_index,
-        )
-        .with_for_update()
+        ledger_query.with_for_update() if record else ledger_query
     )
     if ledger is None:
-        raise ValueError("historical immutable epoch pin absent")
+        raise ReceiptHistoryUnavailable("historical immutable epoch pin absent")
     pin = treasury_pin_from_context(LedgerPin.from_row(ledger))
     if not isinstance(pin, EnforcingTreasuryPin):
         raise ValueError("historical approved enforcing epoch required")
@@ -97,7 +121,17 @@ async def ingest_receipt(
         raise ValueError("source earning precedes pinned epoch")
     if selector.block < pin.pinned_block:
         raise ValueError("payment precedes historical approved epoch")
-    revision = await session.get(TreasurySettingsRevision, policy.revision)
+    # Offline approvals and operator settings have independent revision counters.
+    # Bind publication/payee rules to the latest append-only settings recorded
+    # by the immutable epoch pin's time, never today's settings or a numerically
+    # matching offline revision. Validate that row below; do not search backward
+    # for an older row that happens to match the signed destinations.
+    revision = await session.scalar(
+        select(TreasurySettingsRevision)
+        .where(TreasurySettingsRevision.created_at <= ledger.pinned_at)
+        .order_by(TreasurySettingsRevision.revision.desc())
+        .limit(1)
+    )
     if revision is None or digest(revision.settings) != revision.checksum:
         raise ValueError("historical settings checksum invalid or absent")
     settings = TreasurySettings.model_validate(revision.settings)
@@ -220,18 +254,22 @@ async def ingest_receipt(
             raise ReceiptConflict(
                 "chain effect already recorded with different proof or policy"
             )
+        if not record:
+            return TreasuryReceiptPreflight(
+                ready=True, receipt_id=receipt_id, already_recorded=True
+            )
         return receipt_result(existing, replayed=True)
     if selector.stage == "service_distribution":
-        prior = await session.scalar(
-            select(TreasuryVerifiedReceipt.receipt_id).where(
-                TreasuryVerifiedReceipt.stage == "service_distribution",
-                TreasuryVerifiedReceipt.epoch_index == selector.epoch_index,
-                TreasuryVerifiedReceipt.source_block == selector.source_block,
-                TreasuryVerifiedReceipt.bucket_id == bucket.bucket_id,
+        prior = list(
+            await session.scalars(
+                select(TreasuryVerifiedReceipt).where(
+                    TreasuryVerifiedReceipt.stage == "service_distribution",
+                    TreasuryVerifiedReceipt.epoch_index == selector.epoch_index,
+                    TreasuryVerifiedReceipt.source_block == selector.source_block,
+                    TreasuryVerifiedReceipt.bucket_id == bucket.bucket_id,
+                )
             )
         )
-        if prior:
-            raise ReceiptConflict("source bucket already has a finalized distribution")
         split = plan_service_distribution(
             attributed_alpha_rao=proof.source_amount_rao,
             available_alpha_rao=proof.source_amount_rao,
@@ -242,8 +280,31 @@ async def ingest_receipt(
             ),
         )
         amounts = {item.bucket_id: item.alpha_rao for item in split}
-        if amounts.get(bucket.bucket_id) != proof.amount_atomic:
-            raise ValueError("transfer differs from exact attributed service split")
+        source_identity = (
+            proof.source_block_hash,
+            proof.source_event_digest,
+            proof.source_amount_rao,
+        )
+        for receipt in prior:
+            if (
+                receipt.policy_digest != policy.digest
+                or receipt.settings_revision != revision.revision
+                or (
+                    receipt.proof["source_block_hash"],
+                    receipt.proof["source_event_digest"],
+                    receipt.proof["source_amount_rao"],
+                )
+                != source_identity
+            ):
+                raise ReceiptConflict(
+                    "source credit differs from retained distribution"
+                )
+        consumed = sum(receipt.amount_atomic for receipt in prior)
+        entitlement = amounts.get(bucket.bucket_id, 0)
+        if not 0 < proof.amount_atomic <= entitlement:
+            raise ValueError("transfer exceeds exact attributed service bucket")
+        if consumed + proof.amount_atomic > entitlement:
+            raise ReceiptConflict("cumulative distributions exceed source bucket")
     elif asset == "SN118_ALPHA":
         payments = list(
             await session.scalars(
@@ -258,6 +319,10 @@ async def ingest_receipt(
         )
         if parent is None or consumed + proof.amount_atomic > parent.amount_atomic:
             raise ReceiptConflict("linked alpha payments exceed finalized distribution")
+    if not record:
+        # Read-only snapshot, not a reservation. Ingress repeats every check
+        # under the epoch lock before publishing or consuming an allocation.
+        return TreasuryReceiptPreflight(ready=True, receipt_id=receipt_id)
     event = None
     if bucket.publish_payments:
         # Vendor transfers prove payment, not alpha conversion/funding lineage.
@@ -306,7 +371,7 @@ async def ingest_receipt(
         stage=selector.stage,
         parent_receipt_id=selector.parent_receipt_id,
         epoch_index=selector.epoch_index,
-        settings_revision=policy.revision,
+        settings_revision=revision.revision,
         policy_digest=policy.digest,
         collector_policy_digest=policy.collector_policy_digest,
         bucket_id=bucket.bucket_id,

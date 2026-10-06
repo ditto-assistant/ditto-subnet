@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import select
 
 from ditto.api_server.admin_activity import public_details
 from ditto.db.models import BurnSettingsRevision, TreasurySettingsRevision
@@ -131,3 +132,69 @@ async def test_legacy_forecast_retains_released_share_denominator(
         {"settings": {"treasury_hotkey": "legacy private arbitrary text"}},
     )
     assert "legacy private" not in str(audit)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["observe", "enforce", "pause"])
+@pytest.mark.parametrize("fault", ["none", "checksum", "signature", "allocation"])
+async def test_public_runtime_exposes_verified_control_without_funding_or_private_audit(
+    app, client, session_maker, monkeypatch, mode, fault
+):
+    from ditto.api_server.treasury_runtime import canonical_settings
+    from ditto.db.models import TreasuryRuntimeRevision
+    from ditto.tests.api_server.test_treasury_runtime import payload, seed_shadow
+
+    app.state.session_maker = session_maker
+    await seed_shadow(session_maker)
+    raw = payload(mode)["settings"]
+    monkeypatch.setattr(
+        "ditto.api_server.treasury_runtime.verify_public_signature",
+        lambda *_: fault != "signature",
+    )
+    async with session_maker() as session:
+        row = TreasuryRuntimeRevision(
+            parent_revision=0,
+            settings=raw,
+            checksum="0" * 64 if fault == "checksum" else canonical_settings(raw),
+            actor="PRIVATE-ACTOR",
+            reason="PRIVATE-REASON",
+        )
+        session.add(row)
+        if fault == "allocation":
+            policy_row = await session.scalar(select(TreasurySettingsRevision))
+            changed = {**policy_row.settings, "treasury_coldkey": "5" + "a" * 47}
+            session.add(
+                TreasurySettingsRevision(
+                    parent_revision=policy_row.revision,
+                    settings=changed,
+                    checksum=canonical_settings(changed),
+                    actor="PRIVATE-SECOND-ACTOR",
+                    reason="PRIVATE-CHANGED-ALLOCATION",
+                )
+            )
+        await session.commit()
+        revision, stored_settings, checksum = row.revision, row.settings, row.checksum
+    response = await client.get("/api/v1/public/treasury-allocation")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    control = body["runtime"]
+    assert control["revision"] == revision
+    invalid = fault in {"checksum", "signature"}
+    assert control["mode"] == ("unavailable" if invalid else mode)
+    assert control["activation_epoch"] == (None if invalid else raw["activation_epoch"])
+    assert control["allocation_matches"] == (None if invalid else fault != "allocation")
+    assert set(control) == {
+        "revision",
+        "mode",
+        "activation_epoch",
+        "allocation_matches",
+    }
+    # Recording control cannot become chain routing, funds or sweep proof.
+    assert body["routing_status"] == body["sweep_status"] == "not_activated"
+    assert body["effective_service_share"] == 0
+    assert "PRIVATE" not in response.text
+    assert "signature" not in response.text
+    async with session_maker() as session:
+        preserved = await session.get(TreasuryRuntimeRevision, revision)
+        assert preserved.settings == stored_settings
+        assert preserved.checksum == checksum

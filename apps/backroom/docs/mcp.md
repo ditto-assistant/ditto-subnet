@@ -244,9 +244,12 @@ identity itself — when the session ends, the operator authorizes again.
 
 ### Dedicated treasury receipt observer
 
-An observer must request **only** `backroom:treasury:observe`. This scope is
-advertised in OAuth metadata but deliberately excluded from the ordinary 401
-scope bundle: mixing it with read, source or write is refused. The staff member
+An observer must explicitly request **only** `backroom:treasury:observe`. This
+scope is excluded from both OAuth discovery metadata and the ordinary 401
+scope bundle: general MCP clients may request every advertised scope, while
+mixing observer access with read, source or write is refused. All root and
+`/mcp` authorization-server and protected-resource metadata advertise only
+the three ordinary scopes. The staff member
 must explicitly select receipt observation and remain write-level at consent,
 code exchange, refresh and each MCP request. The original seven-day staff
 session and token TTL limits still apply; blocking, removing write entitlement

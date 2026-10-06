@@ -24,6 +24,37 @@ class TestMain:
         out = capsys.readouterr().out
         assert "upload" in out or "verify" in out
 
+    @pytest.mark.parametrize("value", ["", "sn118"])
+    def test_bad_netuid_env_does_not_break_unrelated_commands(
+        self,
+        value: str,
+        good_tar,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setenv("NETUID", value)
+        with pytest.raises(SystemExit) as ex:
+            main(["--help"])
+        assert ex.value.code == 0
+        assert main(["verify", "--path", str(good_tar)]) == 0
+        capsys.readouterr()
+
+    def test_empty_netuid_env_means_the_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("NETUID", "")
+        args = _build_parser().parse_args(["login"])
+        assert args.netuid == 118
+
+    def test_invalid_netuid_env_is_an_argparse_error_where_used(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("NETUID", "sn118")
+        with pytest.raises(SystemExit) as ex:
+            _build_parser().parse_args(["login"])
+        assert ex.value.code == 2
+        assert "invalid int value" in capsys.readouterr().err
+
     def test_unknown_network_rejected_by_argparse(self) -> None:
         with pytest.raises(SystemExit) as ex:
             main(["--network", "staging-canary", "verify", "--path", "/tmp/x.tar.gz"])

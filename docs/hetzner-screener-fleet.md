@@ -254,9 +254,66 @@ descriptor has been extracted and checked. The host timer then:
 3. validates the closed manifest and fleet-specific image labels;
 4. fetches the signed revision from canonical public `main` and prepares the
    locked worker Python environment without disturbing the running release;
-5. asks every service to stop claiming and drain active work, atomically moves
-   `current`, and starts the new release; and
-6. restores the previous link and active analyzer image if a worker fails to start.
+5. activates the release: a rolling activation by default, or a whole-fleet
+   drain when rolling cannot be proven safe (see below); and
+6. restores the previous link, active analyzer image, and `release.env` if a
+   worker fails to start, and records the descriptor in `failed-candidate`.
+
+### Rolling activation
+
+A whole-fleet drain stops claiming on every worker until the longest active
+review ends, which can take the full lease. By default the updater instead
+moves `current`, retags `ditto-screener-l2-analyzer:active`, and rewrites
+`release.env`. It then sends SIGTERM to each worker's main process, and
+nothing else. An idle worker exits at once, and `Restart=always` starts it
+from the new `current` about 10 seconds later. A busy worker posts its signed
+verdict, takes no further claim, and exits, and then comes back the same way.
+The updater never stops, restarts, or kills a running worker, so idle workers
+keep claiming on the new release while reviews finish. A process keeps the
+release it started from: systemd resolves the `current` working directory and
+the relocatable venv when it starts the process. Only the shared analyzer tag
+changes underneath it.
+
+The activation counts as started once at least one worker process stays active
+on the candidate for `SCREENER_FLEET_ROLL_SETTLE_SECONDS` (30 s). Workers still
+finishing a review are listed in `drain-status.env`
+(`finishing on the previous release`) and in `held-workers`. They restart on
+the new release when their review ends, after the updater exits. A later
+release that arrives first simply becomes the release they restart on.
+
+- **Failed candidate.** If any worker fails to settle on the candidate within
+  `SCREENER_FLEET_ROLL_START_SECONDS` (300 s), the updater restores the
+  previous link, analyzer tag, and `release.env`. It asks the candidate's
+  processes to finish and come back on the previous release, writes the
+  descriptor to `failed-candidate`, and sets `PHASE=rolled_back`.
+- **No worker came free.** If every worker stays busy past the 70 min drain
+  bound, no worker could start on the candidate. The updater restores the
+  previous release the same way but does not suppress the descriptor, so the
+  next timer tick retries.
+- **Abort.** A timeout SIGTERM or failed command after the flip runs the same
+  restore and asks every worker to come back on the previous release.
+
+The updater falls back to the whole-fleet drain, logging
+`draining every worker before activation: <reason>`, when:
+
+- the operator sets `SCREENER_FLEET_ROLLOUT_MODE=drain-all` in a drop-in for
+  `ditto-screener-fleet-auto-update.service`;
+- there is no valid previous `releases/<sha>` to roll from;
+- a running worker index is above `SCREENER_FLEET_WORKER_PROCESSES`;
+- the release a live worker runs from cannot be resolved from `/proc`; or
+- the analyzer build inputs differ between the candidate and the previous
+  release or any release a live worker still runs from. The inputs are
+  `l2-analyzer.Dockerfile`, the worker `.dockerignore`, and every file a
+  `COPY` names. A Dockerfile the updater cannot fully parse (`ADD`,
+  `COPY --from`, continued or heredoc `COPY`, variables, an `escape`
+  directive) also counts as different. `:active` is one rootless tag, so an old
+  review that starts an analyzer container after the flip must get an
+  equivalent image.
+
+Signature, exact-revision, and manifest verification run before either mode.
+Rolling changes only how the authenticated release is activated. The first
+release that ships this updater is still activated by the previous copy, so
+rolling takes effect from the next release.
 
 The updater also bounds its own disk use under `/opt/ditto/screener-fleet`. A
 failed preparation removes its `releases/<sha>.staging.<pid>` checkout on exit,

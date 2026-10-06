@@ -227,6 +227,7 @@ def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None
         "coding-executor-validator-ca",
         "coding-executor-validator-client-cert",
         "coding-executor-validator-client-key",
+        "treasury-emission-approval",
     }
     for secret in (
         "coding-executor-validator-ca",
@@ -874,3 +875,93 @@ def test_stack_updater_unit_outlasts_a_full_drain_and_rollback() -> None:
     assert timeout_start >= drain + 30 + (5 + 7) * ready
     env_example = ENV_EXAMPLE_PATH.read_text()
     assert f"VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS={drain}\n" in env_example
+
+
+def test_gamma_public_proof_is_shared_only_by_trusted_weight_processes() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    proof = "treasury-emission-approval"
+    assert _compose_default(compose["secrets"][proof]["file"]) == "/dev/null"
+    assert (
+        _compose_default(
+            compose["services"]["pylon"]["environment"][
+                "DITTO_TREASURY_WEIGHT_ENFORCEMENT"
+            ]
+        )
+        == "false"
+    )
+    for name, service in compose["services"].items():
+        mounted = [
+            item for item in service.get("secrets", []) if item["source"] == proof
+        ]
+        if name in {"pylon", "ditto-subnet"}:
+            assert mounted == [
+                {
+                    "source": proof,
+                    "target": "treasury-emission-approval.json",
+                    "mode": 0o444,
+                }
+            ]
+            for key in (
+                "DITTO_TREASURY_SHADOW_APPROVAL_FILE",
+                "DITTO_TREASURY_APPROVED_POLICY_DIGEST",
+                "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST",
+            ):
+                assert _compose_default(service["environment"][key]) == ""
+                assert (
+                    service["environment"][key]
+                    == compose["services"]["pylon"]["environment"][key]
+                )
+        else:
+            assert not mounted
+            assert not any(
+                key.startswith("DITTO_TREASURY_")
+                for key in service.get("environment", {})
+            )
+
+
+def test_gamma_ansible_template_normalizes_false_and_keeps_public_pins() -> None:
+    import pytest
+
+    jinja2 = pytest.importorskip("jinja2", reason="optional Ansible template runtime")
+
+    root = COMPOSE_PATH.parent
+    template = (
+        root / "infra/ansible/roles/validator_stack/templates/validator.env.j2"
+    ).read_text()
+    gamma = "\n".join(
+        line for line in template.splitlines() if line.startswith("DITTO_TREASURY_")
+    )
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    env.filters["bool"] = lambda value: value in (True, "true", "yes", 1)
+    vars = {
+        "validator_stack_treasury_approval_path": (
+            "/var/lib/ditto-validator/treasury/emission-approval.json"
+        ),
+        "validator_stack_treasury_policy_digest": "a" * 64,
+        "validator_stack_treasury_collector_policy_digest": "b" * 64,
+    }
+    for disabled in (False, "false"):
+        rendered = dict(
+            line.split("=", 1)
+            for line in env.from_string(gamma)
+            .render(**vars, validator_stack_treasury_guard_enabled=disabled)
+            .splitlines()
+        )
+        assert rendered["DITTO_TREASURY_WEIGHT_ENFORCEMENT"] == "false"
+        assert rendered["DITTO_TREASURY_APPROVAL_HOST_PATH"] == "/dev/null"
+        assert rendered["DITTO_TREASURY_SHADOW_APPROVAL_FILE"] == ""
+        assert rendered["DITTO_TREASURY_APPROVED_POLICY_DIGEST"] == ""
+        assert rendered["DITTO_TREASURY_COLLECTOR_POLICY_DIGEST"] == ""
+    enabled = dict(
+        line.split("=", 1)
+        for line in env.from_string(gamma)
+        .render(**vars, validator_stack_treasury_guard_enabled=True)
+        .splitlines()
+    )
+    assert enabled["DITTO_TREASURY_WEIGHT_ENFORCEMENT"] == "true"
+    assert (
+        enabled["DITTO_TREASURY_SHADOW_APPROVAL_FILE"]
+        == "/run/secrets/treasury-emission-approval.json"
+    )
+    assert enabled["DITTO_TREASURY_APPROVED_POLICY_DIGEST"] == "a" * 64
+    assert enabled["DITTO_TREASURY_COLLECTOR_POLICY_DIGEST"] == "b" * 64

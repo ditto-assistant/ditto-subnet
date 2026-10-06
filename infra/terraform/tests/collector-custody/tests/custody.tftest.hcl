@@ -126,6 +126,47 @@ run "sealed_only_matches_numeric_project_first_versions" {
   }
 }
 
+run "sealed_runtime_rpc_is_one_tls_destination_without_public_hosts" {
+  command = plan
+  variables {
+    enable_collector_custody     = true
+    collector_custody_phases     = { registration = "sealed", transfer = "sealed" }
+    collector_runtime_rpc_egress = true
+  }
+  assert {
+    condition     = length(google_compute_router_nat.collector_custody) == 1 && length(google_compute_router.collector_custody) == 1 && length(google_compute_firewall.collector_bootstrap) == 0
+    error_message = "Runtime NAT must not reintroduce bootstrap internet grants."
+  }
+  assert {
+    condition     = google_compute_firewall.collector_runtime_rpc[0].disabled == false
+    error_message = "The private plan must explicitly prove the reviewed RPC rule is enabled."
+  }
+  assert {
+    condition     = google_compute_firewall.collector_runtime_rpc[0].destination_ranges == toset(["65.109.251.221/32", "65.109.254.0/32"]) && google_compute_firewall.collector_runtime_rpc[0].target_tags == toset(["collector-registration-sealed", "collector-transfer-sealed"]) && one(google_compute_firewall.collector_runtime_rpc[0].allow).protocol == "tcp" && toset(one(google_compute_firewall.collector_runtime_rpc[0].allow).ports) == toset(["443"]) && google_compute_firewall.collector_deny_private[0].priority < google_compute_firewall.collector_runtime_rpc[0].priority && google_compute_firewall.collector_deny_other[0].priority > google_compute_firewall.collector_runtime_rpc[0].priority
+    error_message = "Only exact Finney TLS must be reachable by sealed roles; private and other traffic stays denied."
+  }
+  assert {
+    condition     = alltrue([for host in google_compute_instance.collector_delegate : length(host.network_interface[0].access_config) == 0]) && length(google_secret_manager_secret_iam_member.collector_generator) == 0 && alltrue([for role, binding in google_secret_manager_secret_iam_member.collector_reader : binding.condition[0].expression == "resource.name == 'projects/123456/secrets/sn118-collector-${role}-delegate/versions/1'"])
+    error_message = "Runtime network must preserve private hosts and own-version-only reader authority."
+  }
+}
+
+run "runtime_rpc_refuses_unsealed_role" {
+  command = plan
+  variables {
+    enable_collector_custody     = true
+    collector_custody_phases     = { registration = "sealed", transfer = "armed" }
+    collector_runtime_rpc_egress = true
+  }
+  expect_failures = [var.collector_runtime_rpc_egress]
+}
+
+run "runtime_rpc_refuses_disabled_custody" {
+  command = plan
+  variables { collector_runtime_rpc_egress = true }
+  expect_failures = [var.collector_runtime_rpc_egress]
+}
+
 run "active_missing_revision_refused" {
   command = plan
   variables {

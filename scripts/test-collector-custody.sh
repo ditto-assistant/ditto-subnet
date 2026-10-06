@@ -13,6 +13,18 @@ terraform -chdir="$QA" init -backend=false -input=false -lockfile=readonly
 terraform -chdir="$QA" validate
 terraform -chdir="$QA" test -no-color
 
+# The new project uses the identical resource graph and phase tests with a
+# different hard project pin; dereference only these repository-owned symlinks.
+GAMMA="$QA/gamma-qa"
+mkdir "$GAMMA"
+cp -RL "$ROOT/infra/terraform/stacks/gcp-gamma-custody/." "$GAMMA/"
+rm "$GAMMA/backend.tf" "$GAMMA/prod.auto.tfvars"
+cp -R "$ROOT/infra/terraform/tests/collector-custody/tests" "$GAMMA/"
+sed -i 's/ditto-app-dev/sn118-gamma-custody/g' "$GAMMA/tests/custody.tftest.hcl"
+terraform -chdir="$GAMMA" init -backend=false -input=false -lockfile=readonly
+terraform -chdir="$GAMMA" validate
+terraform -chdir="$GAMMA" test -no-color
+
 # The already-authorized preview backend bootstraps the new backend through
 # two exact-object grants only. Test its actual definitions without cloud calls.
 BACKEND="$QA/backend-qa"

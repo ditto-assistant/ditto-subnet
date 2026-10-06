@@ -1,0 +1,97 @@
+{
+  "status": "source-audited-with-isolated-compile-time-hash-seed-difference",
+  "chain_genesis": "0x2f0555cc76fc2840a25a6ea3b9637146806f1f44b090c175ffde2a7e5ab36c03",
+  "spec_version": 472,
+  "transaction_version": 1,
+  "live_code_blake2_256": "0x43bc67be9df30636d7e948e7bdb1ed065f2fb92029458cc939abf89d76d8ada3",
+  "live_code_sha256": "5e4ff64971b4baa31738215b4f79b0db3aaee1833d0a4f3ca62ff36de50f394f",
+  "live_code_bytes": 2561862,
+  "metadata_sha256": "11d536a4d31e1140630d4b443996c544ec2cdad82076241a66e3ef31d728eb18",
+  "finalized_observation_block_hash": "0xdb0897ce0f1cae9590b65f6fc0823994f12aea3c3270451d1c07f8715810f83b",
+  "source_base": "c004cebf360f4088187ee49d851dfb1a1eaaf710",
+  "escrow_source_commit": "47742598185b9adc900fe5fcae4da96902f19b6c",
+  "source_tree": "8594b96810d83e1538745c863cfaf1b7108fa114",
+  "source_patch_sha256": "25fe8982309436df92d2095a961651b18c05b3f3b58fb260662ebd916be3f756",
+  "builder": {
+    "srtool": "0.18.3",
+    "srtool_commit": "0a446889c5e60abe92a41e426377276f5c7295e6",
+    "rustc": "1.89.0",
+    "profile": "production",
+    "build_opts": "--features=metadata-hash",
+    "bounded_remote_build_exit": 0
+  },
+  "rebuild": {
+    "sha256": "980f8ee5bf958a66e1efc32034be9cc697a3b90bb496fe83fc72d01346166639",
+    "blake2_256": "0xfc81c64c6708dcde53da1dd5ccb548bfbb9e955909e722881ab2956da2f7afa5",
+    "bytes": 2562172,
+    "matches_live_bytes": false,
+    "differing_function": "<wasmi_collections::hash::RandomStateImpl as core::default::Default>::default",
+    "changed_i64_constants": 22,
+    "other_function_bodies_and_sections_identical": true
+  },
+  "source_dependencies": [
+    {
+      "name": "ahash",
+      "version": "0.8.12",
+      "crate_sha256": "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+    },
+    {
+      "name": "const-random-macro",
+      "version": "0.1.16",
+      "crate_sha256": "f9d839f2a20b0aee515dc581a6172f2321f96cab76c1a38a4c584a194955390e"
+    }
+  ],
+  "unchanged_collector_contracts": [
+    {
+      "path": "runtime/src/proxy_filters/mod.rs",
+      "sha256": "cbd460f709682d823e03fe0097b96569735506ea84d1cd1f3c9414a5d09b7d19",
+      "identical_to_v470": true
+    },
+    {
+      "path": "runtime/src/proxy_filters/call_groups.rs",
+      "sha256": "68cebbb31ac2ff33dba3ae4082161deba16de83611ed12ef7fe12281df148981",
+      "identical_to_v470": true
+    },
+    {
+      "path": "common/src/proxy.rs",
+      "sha256": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
+      "identical_to_v470": true
+    },
+    {
+      "path": "pallets/proxy/src/lib.rs",
+      "sha256": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
+      "identical_to_v470": true
+    },
+    {
+      "path": "pallets/subtensor/src/subnets/registration.rs",
+      "sha256": "ea13c9fc845228cbadd8990066f147429ca85772cb26efece7e834fb3fdbb6db",
+      "identical_to_v470": true
+    },
+    {
+      "path": "pallets/subtensor/src/staking/move_stake.rs",
+      "sha256": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
+      "identical_to_v470": true
+    },
+    {
+      "path": "pallets/subtensor/src/coinbase/run_coinbase.rs",
+      "sha256": "09cce211f362295e6e880dc9bb2cbc1c2ee3b83c510e58e40baf5d184ac7ad1d",
+      "identical_to_v470": true
+    },
+    {
+      "path": "pallets/subtensor/src/rpc_info/stake_info.rs",
+      "sha256": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
+      "identical_to_v470": true
+    },
+    {
+      "path": "pallets/subtensor/src/staking/account.rs",
+      "sha256": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
+      "identical_to_v470": true
+    },
+    {
+      "path": "pallets/subtensor/src/staking/lock.rs",
+      "sha256": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
+      "identical_to_v470": true
+    }
+  ],
+  "authority": "none; evidence only, no runtime upgrade or collector transaction"
+}

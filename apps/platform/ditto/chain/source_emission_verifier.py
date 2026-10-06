@@ -23,13 +23,21 @@ from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import ChainMinerEmissionReceipt
 
 # https://github.com/RaoFoundation/subtensor/releases/download/v464/subtensor-digest.json
-# Compressed/compact WASM for v464 and v459, plus verified compressed v466/v467.
-# Reveal, weights, epoch math and block_step are unchanged through v467.
-# Artifact verification and scoped runtime audits: docs/source-runtime-v{466,467}.md.
+# Compressed/compact WASM for v464 and v459, plus verified compressed
+# v466/v467 and v468-v473 (v472 was an untagged deploy of the v471 runtime).
+# Reveal, weights, epoch math and block_step are unchanged through v471; v473
+# only drops a redundant root-coldkey map population from block_step.
+# Artifact verification and scoped runtime audits:
+# docs/source-runtime-v{466,467,468}.md.
 AUDITED_RUNTIME_CODE_HASHES = frozenset(
     {
         "0x2f175dcc64196ec8a6b9235f8d7cfd84efef6c68bb925c4455949591cef9f6d2",
         "0xff4ba0da10fb8ac26fab3e446f23413ef7f91de4a604802097ece0b928d53a8e",
+        "0x899a87a4e4610587d81d9237adeb3e420ea524cd39b397c7a9b4c811b0e7af1d",
+        "0x8858cf3545c90255e5f865dec13713fa1d76cac2be6b8f1070256ee572280abe",
+        "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47",
+        "0x5b0168d2878c1fdcdc424dddca29111b8fe8960bd169742d1c14ce16b22ae381",
+        "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08",
         "0x637844a3ad94d3bdbea45664b67bbfa07a31f21c087834a56a772ba27f612b9f",
         "0xd32f5c4347c58f0c5e68dc3e5dd53a26d4e5a24b770fb01279d1b05ec0612218",
         "0x558275958401c026fa4a4159466d49eabd08c761f0c801390593fcba91dee69b",

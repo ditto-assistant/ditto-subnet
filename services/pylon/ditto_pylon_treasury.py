@@ -13,6 +13,10 @@ import os
 from pathlib import Path
 from typing import Any
 
+from pydantic import TypeAdapter
+from scalecodec.utils.ss58 import ss58_encode
+
+from ditto_screening_protocol.treasury import Address, Hash
 from ditto_screening_protocol.treasury_approval import (
     TreasuryPolicyApproval,
     verify_policy_approval,
@@ -142,9 +146,16 @@ class FinalizedReads:
         self.client = client
 
     async def get_chain_finalised_head(self) -> str:
-        return await self.client.subtensor.rpc(
-            method="chain_getFinalizedHead", params={}
+        # Finney requires positional empty params for this no-argument RPC.
+        # TurboBT's generic RPC decoder returns hex results as bytearray.
+        head = await self.client.subtensor.rpc(
+            method="chain_getFinalizedHead", params=[]
         )
+        if isinstance(head, (bytes, bytearray)):
+            if len(head) != 32:
+                raise ValueError("invalid finalized head length")
+            head = "0x" + bytes(head).hex()
+        return TypeAdapter(Hash).validate_python(head)
 
     async def get_block_number(self, block_hash: str) -> int:
         header = await self.client.subtensor.chain.getHeader(block_hash)
@@ -156,11 +167,24 @@ class FinalizedReads:
         return await self.client.subtensor.chain.getBlockHash(block_number)
 
     async def query(self, **kwargs: Any) -> Any:
-        return await self.client.subtensor.state.getStorage(
+        result = await self.client.subtensor.state.getStorage(
             f"{kwargs['module']}.{kwargs['storage_function']}",
             *kwargs["params"],
             block_hash=kwargs["block_hash"],
         )
+        # TurboBT decodes AccountId32 storage as hex, unlike the other public
+        # read adapters. Normalize only these known account-valued slots.
+        if kwargs["module"] == "SubtensorModule" and kwargs["storage_function"] in {
+            "Owner",
+            "SubnetOwner",
+            "Keys",
+        }:
+            if isinstance(result, str) and result.startswith("0x"):
+                if len(result) != 66:
+                    raise ValueError("invalid treasury account length")
+                result = ss58_encode(bytes.fromhex(result[2:]), ss58_format=42)
+            return TypeAdapter(Address).validate_python(result)
+        return result
 
 
 async def require_queued_binding(

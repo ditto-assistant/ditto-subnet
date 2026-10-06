@@ -48,6 +48,23 @@ language-aware AST/token analysis, which belongs in the screener/dittobench wher
 the crate is already unpacked and its Rust toolchain is available (the platform
 has no Rust parser). See ``docs`` handoff for that layer.
 
+**The line sub-sketch.** A copier can also defeat k-line windows *without*
+renaming anything: split one file into many modules, rewrite every call as a
+module-qualified name (``message(`` -> ``_contracts.message(``), and the
+import lists and helpers the split inserts between formerly adjacent lines break
+nearly every window. ira-1 ``4d44841b`` did exactly that to lets_638 ``8d3208ad``
+(different owners, 2026-10-03): 99.5% of the original's residual lines survive
+once qualifiers are dropped, yet the window channel measured Jaccard 0.55 and
+containment 0.73, under both holds. The fingerprint therefore also carries a
+``lines`` sub-sketch (:func:`_line_shingles`): one shingle per substantive
+source line, with comment-only lines dropped and qualifier chains collapsed to
+their final name. A set of lines is invariant to file splits, reordering, and
+inserted lines, which is precisely the refactor the window channel cannot see.
+It is versioned (:data:`_LINE_VERSION`) and reference-subtracted on its own, and
+the copy gate (:func:`ditto.api_server.scoring_gate._lexical_strength`) reads
+it beside the window channel on its own bar. It never feeds the same-owner
+resubmission rule, whose near-identity question the window channel answers.
+
 Computed here because ``/upload/agent`` already holds the whole tarball in memory
 (streamed for the size cap + sha256), so the platform gets the signal without a
 second unpack. Everything is pure + deterministic: the same tarball always yields
@@ -61,6 +78,7 @@ import hashlib
 import io
 import json
 import logging
+import re
 import sys
 import tarfile
 from array import array
@@ -126,7 +144,37 @@ _REFERENCE_BUNDLES = {
     "lexical": "reference_lexical_v2.bin",
     "normalized": "reference_normalized_v2.bin",
     "prompt": "reference_prompt_v2.bin",
+    "line": "reference_line_v2.bin",
 }
+
+# --- line sub-sketch (see the module docstring) ------------------------------
+# A string so it can never equal the integer window-channel ``_FP_VERSION`` in
+# :func:`content_similarity`'s ``v`` check: the two sketches live side by side in
+# one stored fingerprint and must never be compared with each other.
+_LINE_VERSION = "l1"
+# Whitespace-free characters a line needs to count. A single line is a far
+# weaker shingle than a 4-line window, so short lines (``returnNone``,
+# ``exceptValueError:``, ``}``) that every codebase shares are dropped. Measured
+# on the 2026-10-03 top-15 board: independent pairs peaked at Jaccard 0.244 at
+# 20, 0.221 at 30 and 0.206 at 40, while the refactored copy stayed at
+# 0.825-0.850 throughout, so the bar is not load-bearing and 30 sits between.
+_LINE_MIN_CHARS = 30
+_MIN_LINE_SHINGLES = 8
+# A qualifier chain (``self.store.``, ``_contracts.``, ``crate::agent::``)
+# directly before a name. Only the final name survives, so moving code between
+# modules or onto ``self`` does not change its lines. The look-behind anchors at
+# the chain's start, so a chain is removed whole and ``1.5`` is untouched.
+_QUALIFIER_RE = re.compile(r"(?<![\w.:])(?:[A-Za-z_]\w*(?:\.|::))+(?=[A-Za-z_]\w*)")
+# A stripped line that is only a comment. Copiers rewrite or delete comments
+# freely, so they would only dilute the measure. Each marker is bounded so code
+# that merely starts with the same token survives: ``#include`` / ``#[derive]``
+# (directives and attributes), ``*ptr = x`` / ``*args, = x`` (a ``*`` comment
+# continuation is followed by space, ``/`` or nothing), and ``--count;``.
+_COMMENT_LINE_RE = re.compile(
+    r"(?://|/\*"
+    r"|#(?!\[|\s*(?:include|define|undef|ifn?def|if|elif|else|endif|pragma|import)\b)"
+    r"|\*(?:\s|/|$)|--(?:\s|$))"
+)
 # Digests of every published starter-kit file we know about, across every kit
 # revision reachable from the monorepo kit path, the upstream mainline lineage
 # already packaged for operator review, and any curated additions. Built by
@@ -342,9 +390,10 @@ def _excluded_from_fingerprints(path: str, raw: bytes) -> bool:
 def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
     """Return a MinHash shingle sketch of the tarball's source, or ``None``.
 
-    The returned dict is ``{"v", "corpus", "k", "card", "m"}`` — algorithm
-    version, canonical reference-corpus identity, sketch budget, true residual
-    cardinality, and the sorted bottom-``k`` residual hashes — JSON-serializable
+    The returned dict is ``{"v", "corpus", "k", "card", "m", "lines"}`` —
+    algorithm version, canonical reference-corpus identity, sketch budget, true
+    residual cardinality, the sorted bottom-``k`` residual hashes, and the
+    same-shaped ``lines`` sub-sketch (:func:`_line_shingles`) — JSON-serializable
     for the ``agents.content_fingerprint`` column and consumed by
     :func:`content_similarity`.
 
@@ -362,6 +411,8 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
     content signal (the validator/screener still reject a broken harness downstream).
     """
     shingles: set[str] = set()
+    lines: set[str] = set()
+    lines_overflowed = False
     excluded_any = False
     total = 0
     members = 0
@@ -395,6 +446,14 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
                     if len(shingles) > _MAX_SHINGLES:
                         logger.warning("fingerprint: >%d shingles", _MAX_SHINGLES)
                         return None
+                if not lines_overflowed:
+                    lines.update(_line_shingles(raw))
+                    if len(lines) > _MAX_SHINGLES:
+                        # Only the line sub-sketch becomes incomparable; the
+                        # window channel keeps its own signal.
+                        logger.warning("fingerprint: >%d line shingles", _MAX_SHINGLES)
+                        lines_overflowed = True
+                        lines.clear()
     except (tarfile.TarError, gzip.BadGzipFile, EOFError, OSError) as e:
         logger.info("fingerprint: unreadable tarball (%s)", type(e).__name__)
         return None
@@ -406,20 +465,24 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
     # Returning ``None`` would instead mean "no content signal" and let the
     # legacy archive-size fallback hold two such forks on size proximity alone.
     shingles = _without_reference(shingles, "lexical")
-    if len(shingles) < _MIN_CONTENT_SHINGLES:
-        return {
-            "v": _FP_VERSION,
-            "corpus": _reference_corpus_id(),
-            "k": _MINHASH_K,
-            "card": len(shingles),
-            "m": [],
-        }
     return {
-        "v": _FP_VERSION,
+        **_sketch(_FP_VERSION, shingles, floor=_MIN_CONTENT_SHINGLES),
+        "lines": _sketch(
+            _LINE_VERSION,
+            _without_reference(lines, "line"),
+            floor=_MIN_LINE_SHINGLES,
+        ),
+    }
+
+
+def _sketch(version: int | str, residual: set[str], *, floor: int) -> dict:
+    """Bottom-k sketch of one residual; empty below ``floor`` (incomparable)."""
+    return {
+        "v": version,
         "corpus": _reference_corpus_id(),
         "k": _MINHASH_K,
-        "card": len(shingles),
-        "m": sorted(shingles)[:_MINHASH_K],
+        "card": len(residual),
+        "m": sorted(residual)[:_MINHASH_K] if len(residual) >= floor else [],
     }
 
 
@@ -836,6 +899,40 @@ def _file_shingles(raw: bytes) -> list[str]:
     return [
         _hash_shingle("\n".join(lines[i : i + k])) for i in range(len(lines) - k + 1)
     ]
+
+
+def _line_shingles(raw: bytes) -> list[str]:
+    """Return one hashed shingle per substantive, qualifier-collapsed line.
+
+    Comment-only lines are dropped, qualifier chains collapse to their final
+    name (:data:`_QUALIFIER_RE`), then whitespace is removed exactly as in
+    :func:`_file_shingles` and lines shorter than :data:`_LINE_MIN_CHARS` are
+    dropped. Collapsing first keeps a keyword from fusing into the qualifier
+    (``return _mod.name(`` must become ``returnname(``, as ``return name(``
+    does). Each surviving line is its own shingle, so a file split, a
+    reordering, or an inserted import list leaves every moved line matching.
+    """
+    text = raw.decode("utf-8", errors="replace")
+    out: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or _COMMENT_LINE_RE.match(stripped):
+            continue
+        norm = "".join(_QUALIFIER_RE.sub("", stripped).split())
+        if len(norm) >= _LINE_MIN_CHARS:
+            out.append(_hash_shingle(norm))
+    return out
+
+
+def line_similarity(a: dict | None, b: dict | None) -> tuple[float, float]:
+    """``(jaccard, containment)`` of two fingerprints' ``lines`` sub-sketches.
+
+    ``(0.0, 0.0)`` when either side predates the sub-sketch, exactly as
+    :func:`content_similarity` reports any other uncomparable pair.
+    """
+    return content_similarity(
+        a.get("lines") if a else None, b.get("lines") if b else None
+    )
 
 
 def _hash_shingle(shingle: str) -> str:

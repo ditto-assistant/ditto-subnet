@@ -118,6 +118,58 @@ func TestProxyCoalescesIdenticalInflightBatches(t *testing.T) {
 	}
 }
 
+func TestCoalescedRequestSharesResultWithoutTheDiskCache(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("block"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, cacheDir := range map[string]string{
+		"cache disabled":     "",
+		"cache write failed": filepath.Join(blocker, "cache"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int64
+			release := make(chan struct{})
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				<-release
+				writeJSON(w, http.StatusOK, map[string]any{
+					"data":  []map[string]any{{"index": 0, "embedding": testVector(1, embeddingDimensions)}},
+					"usage": map[string]int{"prompt_tokens": 1, "total_tokens": 1},
+				})
+			}))
+			defer upstream.Close()
+			proxy := newProxy("test-key", upstream.URL, cacheDir, upstream.Client())
+			body := `{"model":"embeddinggemma","input":"same input"}`
+			var wait sync.WaitGroup
+			statuses := make(chan int, 2)
+			for range 2 {
+				wait.Add(1)
+				go func() {
+					defer wait.Done()
+					statuses <- callProxy(proxy, body).Code
+				}()
+			}
+			deadline := time.Now().Add(time.Second)
+			for (calls.Load() == 0 || proxy.stats.CoalescedWaits.Load() == 0) && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			close(release)
+			wait.Wait()
+			close(statuses)
+			for status := range statuses {
+				if status != http.StatusOK {
+					t.Fatalf("status = %d; a coalesced request must get the leader's embedding", status)
+				}
+			}
+			if calls.Load() != 1 || proxy.stats.CoalescedWaits.Load() != 1 || proxy.stats.Failures.Load() != 0 {
+				t.Fatalf("calls=%d coalesced=%d failures=%d",
+					calls.Load(), proxy.stats.CoalescedWaits.Load(), proxy.stats.Failures.Load())
+			}
+		})
+	}
+}
+
 func TestProxyRejectsInvalidDimensionsOrderingAndProviderErrors(t *testing.T) {
 	tests := []struct {
 		name   string

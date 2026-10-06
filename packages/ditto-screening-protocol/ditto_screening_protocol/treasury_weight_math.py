@@ -29,8 +29,6 @@ def service_first_weights(
     for share in (burn_share, paid_miner_fraction):
         if isinstance(share, bool) or not math.isfinite(share) or not 0 <= share <= 1:
             raise ValueError("invalid burn or paid miner share")
-    if not burn_hotkey:
-        raise ValueError("burn hotkey is required")
     if service_bps and (
         collector_verified is not True
         or not collector_hotkey
@@ -41,7 +39,7 @@ def service_first_weights(
         isinstance(w, bool) or not math.isfinite(w) or w < 0 for w in weights.values()
     ):
         raise ValueError("invalid miner vector")
-    excluded = {burn_hotkey}
+    excluded = {burn_hotkey} if burn_hotkey else set()
     if collector_hotkey:
         excluded.add(collector_hotkey)
     miners = {h: w for h, w in weights.items() if h not in excluded and w > 0}
@@ -58,6 +56,8 @@ def service_first_weights(
         result[collector_hotkey] = service
     residual = 1 - service - miner
     if residual > 0:
+        if not burn_hotkey:
+            raise ValueError("burn hotkey is required")
         result[burn_hotkey] = residual
     return result
 

@@ -127,6 +127,20 @@ func (fixture publicationFixture) authoringAcknowledgement(t *testing.T) []byte 
 	return append(body, '\n')
 }
 
+func (fixture publicationFixture) authoringAcknowledgementFrozenAt(t *testing.T, frozenAt time.Time) []byte {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal(fixture.authoringAcknowledgement(t), &body); err != nil {
+		t.Fatal(err)
+	}
+	body["frozen_at"] = frozenAt
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(encoded, '\n')
+}
+
 func (fixture publicationFixture) terminalAuthority() PublicationAuthority {
 	authority := fixture.authority
 	authority.EvidenceSHA256 = strings.Repeat("9", 64)
@@ -711,5 +725,56 @@ func TestPlatformPublicationVectorsMatchJournalBoundary(t *testing.T) {
 		PublicationTerminalResult, terminalRecord, publication, terminal.Response,
 	); err != nil {
 		t.Fatalf("terminal vector response: %v", err)
+	}
+}
+
+func TestAuthoringAcknowledgementToleratesPlatformClockBehindValidator(t *testing.T) {
+	fixture := newPublicationFixture(t, "5")
+	artifact, err := fixture.attempt.PrepareAuthoringPublication(
+		t.Context(), fixture.authority, fixture.authoringRequest(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Platform stamps frozen_at from its own clock, two seconds behind ours.
+	behind := fixture.authoringAcknowledgementFrozenAt(t, fixture.clock.now.Add(-2*time.Second))
+	if _, err := fixture.attempt.AcknowledgeAuthoringPublication(
+		t.Context(), artifact.SHA256, behind,
+	); err != nil {
+		t.Fatalf("skewed acknowledgement err=%v", err)
+	}
+	pending, err := fixture.store.PendingPublications(t.Context(), 10)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending after skewed ack=%#v err=%v", pending, err)
+	}
+	if err := fixture.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Reopen re-validates the stored acknowledgement against the same bounds.
+	fixture.store, fixture.attempt = reopenPublicationStore(t, fixture)
+	if _, err := fixture.attempt.PrepareTerminalPublication(
+		t.Context(), fixture.terminalAuthority(), fixture.terminalRequest(t),
+	); err != nil {
+		t.Fatalf("terminal after skewed freeze ack err=%v", err)
+	}
+}
+
+func TestAuthoringAcknowledgementOutsideTicketLifetimeConflicts(t *testing.T) {
+	fixture := newPublicationFixture(t, "6")
+	artifact, err := fixture.attempt.PrepareAuthoringPublication(
+		t.Context(), fixture.authority, fixture.authoringRequest(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, frozenAt := range map[string]time.Time{
+		"before ticket issuance": fixture.binding.Deadline.Add(-maximumBindingLifetime - time.Second),
+		"after ticket deadline":  fixture.binding.Deadline.Add(time.Second),
+	} {
+		if _, err := fixture.attempt.AcknowledgeAuthoringPublication(
+			t.Context(), artifact.SHA256, fixture.authoringAcknowledgementFrozenAt(t, frozenAt),
+		); !errors.Is(err, ErrConflict) {
+			t.Fatalf("%s: err=%v", name, err)
+		}
 	}
 }

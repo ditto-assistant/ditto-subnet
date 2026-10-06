@@ -574,11 +574,29 @@ async def _build_reset_sql(conn: asyncpg.Connection) -> str:
     if not tables:  # pragma: no cover - means the template never migrated
         raise PostgresUnavailable("no public tables found; template is not migrated")
 
-    body = [
+    # Test-fixture reset deliberately has owner privileges on this worker's
+    # isolated clone. Bypass only the new statement-level history guard while
+    # resetting, then restore it in this same atomic DO block. Tests themselves
+    # still run with the production trigger enabled.
+    runtime_guard = "treasury_runtime_revisions" in tables
+    body = (
+        [
+            "  ALTER TABLE public.treasury_runtime_revisions "
+            "DISABLE TRIGGER treasury_runtime_no_truncate;"
+        ]
+        if runtime_guard
+        else []
+    )
+    body += [
         "  TRUNCATE "
         + ", ".join(f'public."{name}"' for name in tables)
         + " RESTART IDENTITY CASCADE;"
     ]
+    if runtime_guard:
+        body.append(
+            "  ALTER TABLE public.treasury_runtime_revisions "
+            "ENABLE TRIGGER treasury_runtime_no_truncate;"
+        )
     for name in tables:
         seed = await conn.fetchval(
             f'SELECT json_agg(t)::text FROM public."{name}" t'  # noqa: S608

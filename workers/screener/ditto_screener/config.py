@@ -352,10 +352,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             or os.environ.get("DOCKER_HOST")
             or None
         ),
-        # Additive rollout: deployments set this true only after their dedicated
-        # rootless daemon is present. A later release can remove the compatibility
-        # default once every pet and fleet worker has converged.
-        require_rootless_docker=_parse_bool("SCREENER_REQUIRE_ROOTLESS_DOCKER", False),
+        # Managed screener deployments already use a dedicated rootless daemon.
+        # A standalone worker must fail closed if it accidentally targets the
+        # host's rootful Docker socket. Explicit opt-out is local-only.
+        require_rootless_docker=_parse_bool("SCREENER_REQUIRE_ROOTLESS_DOCKER", True),
         build_timeout_seconds=_parse_float("SCREENER_BUILD_TIMEOUT_SECONDS", "2700"),
         run_timeout_seconds=_parse_float("SCREENER_RUN_TIMEOUT_SECONDS", "120"),
         image_build_memory=os.environ.get(

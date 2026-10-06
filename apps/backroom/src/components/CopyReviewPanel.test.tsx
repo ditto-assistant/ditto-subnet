@@ -62,6 +62,7 @@ function item(overrides: Partial<CopyReviewConsoleItem> = {}): CopyReviewConsole
       bulk_eligible: true,
       algorithm_version: 'reference-aware-v2',
       lexical_fingerprint_version: 2,
+      line_fingerprint_version: 'l1',
       normalized_source_fingerprint_version: 'v2',
       prompt_fingerprint_version: 'p2',
       canonical_reference_revision: '959cd69a1a8d3b0defbfb8296518adb7d4f17c14',
@@ -76,6 +77,11 @@ function item(overrides: Partial<CopyReviewConsoleItem> = {}): CopyReviewConsole
       lexical: {
         candidate_version: 2, reference_version: 2, compatible: true, applicable: true,
         candidate_cardinality: 100, reference_cardinality: 90, jaccard: 0.12, containment: 0.28,
+        above_threshold: false, decision_role: 'trigger',
+      },
+      line: {
+        candidate_version: 'l1', reference_version: 'l1', compatible: true, applicable: true,
+        candidate_cardinality: 60, reference_cardinality: 55, jaccard: 0.214, containment: 0.31,
         above_threshold: false, decision_role: 'trigger',
       },
       structural: {
@@ -193,6 +199,7 @@ describe('CopyReviewPanel', () => {
     fireEvent.click(screen.getByText(/held-agent/))
     expect(screen.getByRole('heading', { name: 'Review evidence' })).toBeDefined()
     expect(screen.getByText('Current calibrated comparison')).toBeDefined()
+    expect(screen.getByText('line 0.214 / 0.310')).toBeDefined()
   })
 
   it('labels a rotated-hotkey match as same-owner lineage', () => {

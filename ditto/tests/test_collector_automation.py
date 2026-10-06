@@ -182,6 +182,8 @@ def test_distribution_exact_buckets_conserve_and_do_not_spend_principal(tmp_path
     c.income = {10: 101}
     c.settlement = Settlement("finalized", 101, "0x" + "c" * 64, 14)
     j = open_journal(tmp_path, p, "transfer")
+    assert tick(j, p, c, "transfer") == "observing"
+    assert not c.prepared and not c.sent
     assert tick(j, p, c, "transfer") == "dispatching"
     assert tick(j, p, c, "transfer") == "finalized"
     # Remaining stake may be less than the ORIGINAL batch, still enough for the
@@ -215,11 +217,43 @@ def test_distribution_balance_increase_alone_is_never_income(tmp_path):
     assert not c.prepared
 
 
+def test_slow_archive_history_commits_before_fresh_head_money_step(tmp_path):
+    class MovingHead(Chain):
+        def earnings(self, p, block):
+            # Archive calls span finalized blocks. Production prepare requires
+            # its fresh observation to equal the tick's exact finalized head.
+            self.observation = replace(
+                self.observation, block=self.observation.block + 1
+            )
+            return super().earnings(p, block)
+
+        def prepare(self, p, role, call, observed):
+            if observed.block != self.observation.block:
+                raise ValueError("finalized observation changed before signing")
+            return super().prepare(p, role, call, observed)
+
+    p, c = policy(), MovingHead()
+    c.observation = replace(c.observation, uid=14)
+    c.income = {10: 101}
+    j = open_journal(tmp_path, p, "transfer")
+    assert tick(j, p, c, "transfer") == "observing"
+    assert j.db.execute("SELECT block FROM cursor").fetchone()[0] == 41
+    assert j.db.execute("SELECT block,amount FROM earnings").fetchone()[:] == (10, 101)
+    assert not c.prepared and not c.sent
+    j.close()
+    j = open_journal(tmp_path, p, "transfer")
+    assert tick(j, p, c, "transfer") == "dispatching"
+    assert j.db.execute("SELECT block FROM cursor").fetchone()[0] == 41
+    assert len(c.prepared) == len(c.sent) == 1
+    assert c.prepared[0][1]["params"]["alpha_amount"] == 40
+
+
 def test_failed_transfer_quarantines_batch_instead_of_duplicate_send(tmp_path):
     p, c = policy(), Chain()
     c.observation = replace(c.observation, uid=14)
     c.income = {10: 101}
     j = open_journal(tmp_path, p, "transfer")
+    assert tick(j, p, c, "transfer") == "observing"
     tick(j, p, c, "transfer")
     c.settlement = Settlement("failed", 101, "0x" + "c" * 64)
     assert tick(j, p, c, "transfer") == "failed"

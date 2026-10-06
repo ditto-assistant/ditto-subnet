@@ -48,8 +48,18 @@ services:
       PYLON_ID_DITTO_TOKEN: ${PYLON_TOKEN}
       PYLON_DATABASE_PATH: /data/pylon.db
       PYLON_METRICS_TOKEN: ${PYLON_METRICS_TOKEN:-}
+      DITTO_TREASURY_WEIGHT_ENFORCEMENT: ${DITTO_TREASURY_WEIGHT_ENFORCEMENT:-false}
+      # Public coldkey-signed Gamma policy only. Default off/empty; both
+      # trusted processes independently verify the same immutable proof.
+      DITTO_TREASURY_SHADOW_APPROVAL_FILE: ${DITTO_TREASURY_SHADOW_APPROVAL_FILE:-}
+      DITTO_TREASURY_APPROVED_POLICY_DIGEST: ${DITTO_TREASURY_APPROVED_POLICY_DIGEST:-}
+      DITTO_TREASURY_COLLECTOR_POLICY_DIGEST: ${DITTO_TREASURY_COLLECTOR_POLICY_DIGEST:-}
     security_opt:
       - no-new-privileges:true
+    secrets:
+      - source: treasury-emission-approval
+        target: treasury-emission-approval.json
+        mode: 0444
     # Pylon runs as root, but operator hotkeys are normally mode 0600 and may
     # be owned by a non-root host user. Restore only the capability needed to
     # traverse/read the read-only wallet mount after dropping all capabilities.
@@ -318,6 +328,11 @@ services:
       VALIDATOR_SANDBOX_DOCKER_PROBE_URL: http://sandbox-docker:8000/health
       VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS: "2"
       VALIDATOR_STACK_HEALTH_CACHE_SECONDS: "60"
+      # Public coldkey-signed Gamma policy only. Default off/empty; both
+      # trusted processes independently verify the same immutable proof.
+      DITTO_TREASURY_SHADOW_APPROVAL_FILE: ${DITTO_TREASURY_SHADOW_APPROVAL_FILE:-}
+      DITTO_TREASURY_APPROVED_POLICY_DIGEST: ${DITTO_TREASURY_APPROVED_POLICY_DIGEST:-}
+      DITTO_TREASURY_COLLECTOR_POLICY_DIGEST: ${DITTO_TREASURY_COLLECTOR_POLICY_DIGEST:-}
       VALIDATOR_HOTKEY: ${VALIDATOR_HOTKEY}
       VALIDATOR_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
       VALIDATOR_WALLET_HOTKEY: ${VALIDATOR_WALLET_HOTKEY}
@@ -430,6 +445,9 @@ services:
     cap_drop:
       - ALL
     secrets:
+      - source: treasury-emission-approval
+        target: treasury-emission-approval.json
+        mode: 0444
       - source: coding-executor-validator-ca
         target: coding-executor-validator-ca.pem
         mode: 0400
@@ -462,6 +480,10 @@ volumes:
   validator-update-bootstrap:
 
 secrets:
+  # /dev/null supplies an inert mount on ordinary installations. Operators
+  # install only the public emission_approval object, never custody packets.
+  treasury-emission-approval:
+    file: ${DITTO_TREASURY_APPROVAL_HOST_PATH:-/dev/null}
   coding-executor-validator-ca:
     file: ${VALIDATOR_CODING_EXECUTOR_CA_HOST_PATH:-/dev/null}
   coding-executor-validator-client-cert:

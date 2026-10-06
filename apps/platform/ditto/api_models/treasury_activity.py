@@ -48,6 +48,7 @@ class PublicTreasuryEvent(BaseModel):
     public_recipient: str
     block_hash: str
     extrinsic_index: int
+    extrinsic_hash: str | None = None
     event_index: int
     actor_provenance: str
     actor_public_id: str

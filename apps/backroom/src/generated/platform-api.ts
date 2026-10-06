@@ -1221,6 +1221,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/database-backup-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Database Backup Status */
+        get: operations["get_database_backup_status_api_v1_admin_database_backup_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/efficiency-bonus-settings": {
         parameters: {
             query?: never;
@@ -3407,6 +3424,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/treasury-receipts/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get Treasury Receipt Preflight
+         * @description POST carries bounded selectors, but never locks, writes or signs.
+         */
+        post: operations["get_treasury_receipt_preflight_api_v1_admin_treasury_receipts_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/treasury-runtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Treasury Runtime */
+        get: operations["get_treasury_runtime_api_v1_admin_treasury_runtime_get"];
+        put?: never;
+        /** Record Treasury Runtime */
+        post: operations["record_treasury_runtime_api_v1_admin_treasury_runtime_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/treasury-settings": {
         parameters: {
             query?: never;
@@ -3419,6 +3474,23 @@ export interface paths {
         put?: never;
         /** Record Treasury Settings */
         post: operations["record_treasury_settings_api_v1_admin_treasury_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/treasury-settings/activation-preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Get Treasury Activation Preflight */
+        post: operations["get_treasury_activation_preflight_api_v1_admin_treasury_settings_activation_preflight_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9559,6 +9631,9 @@ export interface components {
             lexical: components["schemas"]["AdminCopySimilarityEvidence"];
             /** Lexical Fingerprint Version */
             lexical_fingerprint_version: number;
+            line?: components["schemas"]["AdminCopySimilarityEvidence"] | null;
+            /** Line Fingerprint Version */
+            line_fingerprint_version?: string | null;
             /** Miner Exclusion Mode */
             miner_exclusion_mode: string;
             /** Normalized Source Fingerprint Version */
@@ -12942,6 +13017,16 @@ export interface components {
             expected_registration_sha256: string;
             /** Reason */
             reason: string;
+        };
+        /** AdminTreasuryRuntimeRequest */
+        AdminTreasuryRuntimeRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            settings: components["schemas"]["TreasuryRuntimeSettings"];
         };
         /** AdminTreasurySettingsRequest */
         AdminTreasurySettingsRequest: {
@@ -19331,6 +19416,109 @@ export interface components {
         /** CreateScreeningDisputeResponse */
         CreateScreeningDisputeResponse: {
             dispute: components["schemas"]["PublicScreeningDispute"];
+        };
+        /** DatabaseBackupManifest */
+        DatabaseBackupManifest: {
+            /** Alembic Version */
+            alembic_version: string;
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+            /**
+             * Database
+             * @constant
+             */
+            database: "ditto_platform_prod";
+            /** Database Bytes */
+            database_bytes: number;
+            /**
+             * Format Version
+             * @constant
+             */
+            format_version: 1;
+            /** Objects */
+            objects: components["schemas"]["DatabaseBackupManifestObject"][];
+            /** Pg Dump Version */
+            pg_dump_version: string;
+            /** Row Counts */
+            row_counts: {
+                [key: string]: number;
+            };
+            /** Server Version */
+            server_version: string;
+            /** Server Version Num */
+            server_version_num: number;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+        };
+        /** DatabaseBackupManifestObject */
+        DatabaseBackupManifestObject: {
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+        };
+        /** DatabaseBackupObject */
+        DatabaseBackupObject: {
+            /** Key */
+            key: string;
+            /** Last Modified */
+            last_modified: string;
+            /** Size */
+            size: number;
+        };
+        /** DatabaseBackupStatus */
+        DatabaseBackupStatus: {
+            /**
+             * Backup Status
+             * @enum {string}
+             */
+            backup_status: "disabled" | "unavailable" | "missing" | "stale" | "fresh";
+            /**
+             * Bucket
+             * @default ditto-platform-pg-backups
+             * @constant
+             */
+            bucket: "ditto-platform-pg-backups";
+            /** Daily */
+            daily?: components["schemas"]["DatabaseBackupObject"][];
+            /** Hours Since Last Success */
+            hours_since_last_success?: number | null;
+            manifest?: components["schemas"]["DatabaseBackupManifest"] | null;
+            /** Monthly */
+            monthly?: components["schemas"]["DatabaseBackupObject"][];
+            newest_snapshot?: components["schemas"]["DatabaseSnapshot"] | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Snapshot Status
+             * @enum {string}
+             */
+            snapshot_status: "unavailable" | "missing" | "present";
+        };
+        /** DatabaseSnapshot */
+        DatabaseSnapshot: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Disk Size Gb */
+            disk_size_gb: number;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
         };
         /**
          * DeferredSourceReviewSettings
@@ -28081,6 +28269,7 @@ export interface components {
              * @constant
              */
             routing_status: "not_activated";
+            runtime?: components["schemas"]["PublicTreasuryRuntime"];
             /** Service Bps */
             service_bps: number;
             /** Sweep Interval Hours */
@@ -28142,6 +28331,8 @@ export interface components {
              * @enum {string}
              */
             event_kind: "gm_token_deposit" | "gm_credit_purchase" | "maintenance_bounty" | "service_distribution" | "vendor_payment";
+            /** Extrinsic Hash */
+            extrinsic_hash?: string | null;
             /** Extrinsic Index */
             extrinsic_index: number;
             /** Finalized Event Id */
@@ -28185,6 +28376,27 @@ export interface components {
             items: components["schemas"]["PublicTreasuryEvent"][];
             /** Next Before */
             next_before: number | null;
+        };
+        /**
+         * PublicTreasuryRuntime
+         * @description Recorded control only; no chain dispatch, payment or signer authority.
+         */
+        PublicTreasuryRuntime: {
+            /** Activation Epoch */
+            activation_epoch?: number | null;
+            /** Allocation Matches */
+            allocation_matches?: boolean | null;
+            /**
+             * Mode
+             * @default not_recorded
+             * @enum {string}
+             */
+            mode: "not_recorded" | "observe" | "enforce" | "pause" | "unavailable";
+            /**
+             * Revision
+             * @default 0
+             */
+            revision: number;
         };
         /**
          * PublicV13ReviewClockRevision
@@ -28873,6 +29085,11 @@ export interface components {
         /** ReceiptDiagnosticObservation */
         ReceiptDiagnosticObservation: {
             /**
+             * Conflicts Dropped
+             * @default 0
+             */
+            conflicts_dropped: number;
+            /**
              * Page Deferred
              * @default 0
              */
@@ -28898,7 +29115,7 @@ export interface components {
              * Recovery Status
              * @enum {string}
              */
-            recovery_status: "not_attempted" | "unsupported" | "reading_pylon" | "validating_claim" | "forwarded" | "page_complete" | "reading_pylon_failed" | "validating_claim_failed" | "forwarding_platform_failed" | "acknowledging_pylon_failed" | "validating_page_failed";
+            recovery_status: "not_attempted" | "unsupported" | "reading_pylon" | "validating_claim" | "forwarded" | "page_complete" | "conflict_dropped" | "reading_pylon_failed" | "validating_claim_failed" | "forwarding_platform_failed" | "acknowledging_pylon_failed" | "validating_page_failed";
             /** Submission Observed At */
             submission_observed_at?: number | null;
             /**
@@ -33153,6 +33370,94 @@ export interface components {
             /** Revision */
             revision: number;
         };
+        /** TreasuryActivationPreflight */
+        TreasuryActivationPreflight: {
+            /** Blocking Reasons */
+            blocking_reasons: ("chain_unavailable" | "inventory_truncated" | "setter_proof_missing" | "managed_roster_missing" | "managed_setter_not_permitted")[];
+            /**
+             * Can Enforce Weights
+             * @default false
+             * @constant
+             */
+            can_enforce_weights: false;
+            /** Chain Failure Kind */
+            chain_failure_kind?: ("timeout" | "connection" | "invalid_evidence" | "reader_unavailable" | "unavailable") | null;
+            /** Chain Failure Stage */
+            chain_failure_stage?: ("identity" | "setter_roster") | null;
+            /** Chain Failure Step */
+            chain_failure_step?: ("connection" | "connection_close" | "finalized_head" | "finalized_height" | "canonical_hash" | "genesis_hash" | "epoch_storage" | "collector_storage" | "uid_binding" | "permit_vector" | "setter_binding") | null;
+            /** Chain Permitted Setter Count */
+            chain_permitted_setter_count?: number | null;
+            /**
+             * Chain Status
+             * @enum {string}
+             */
+            chain_status: "verified" | "unavailable";
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Configured Collector Matches */
+            configured_collector_matches: boolean;
+            /** Configured Policy Matches */
+            configured_policy_matches: boolean;
+            /**
+             * Copy Behavior Verified
+             * @default false
+             * @constant
+             */
+            copy_behavior_verified: false;
+            /** Fleet Ready For Proposed Policy */
+            fleet_ready_for_proposed_policy: boolean;
+            /**
+             * Gate Scope
+             * @default managed_validators
+             * @constant
+             */
+            gate_scope: "managed_validators";
+            /**
+             * Managed Validator Hotkeys
+             * @default []
+             */
+            managed_validator_hotkeys: string[];
+            observation: components["schemas"]["TreasuryDispatchObservation"] | null;
+            /**
+             * Proposal Signature Verified
+             * @default true
+             * @constant
+             */
+            proposal_signature_verified: true;
+            /** Proposed Collector Policy Digest */
+            proposed_collector_policy_digest: string;
+            /** Proposed Policy Digest */
+            proposed_policy_digest: string;
+            /** Required Setter Count */
+            required_setter_count: number | null;
+            /** Setters */
+            setters: components["schemas"]["TreasurySetterPreflight"][];
+            /** Truncated */
+            truncated: boolean;
+            /**
+             * Weight Effect
+             * @default none
+             * @constant
+             */
+            weight_effect: "none";
+        };
+        /** TreasuryActivationPreflightRequest */
+        TreasuryActivationPreflightRequest: {
+            approval: components["schemas"]["TreasuryPolicyApproval"];
+            /** Expected Collector Policy Digest */
+            expected_collector_policy_digest: string;
+            /** Expected Policy Digest */
+            expected_policy_digest: string;
+            /**
+             * Managed Validator Hotkeys
+             * @default []
+             */
+            managed_validator_hotkeys: string[];
+        };
         /**
          * TreasuryCollectorIdentity
          * @description Finalized read values, not a caller's unbound verified=True assertion.
@@ -33180,6 +33485,21 @@ export interface components {
             uid: number;
             /** Uid Hotkey */
             uid_hotkey: string;
+        };
+        /**
+         * TreasuryDispatchObservation
+         * @description Public storage observations at exactly one currently finalized hash.
+         */
+        TreasuryDispatchObservation: {
+            /** Epoch Index */
+            epoch_index: number;
+            /** Finalized Block */
+            finalized_block: number;
+            /** Finalized Block Hash */
+            finalized_block_hash: string;
+            /** First Block */
+            first_block: number;
+            identity: components["schemas"]["TreasuryCollectorIdentity"];
         };
         /** TreasuryEmissionBucket */
         TreasuryEmissionBucket: {
@@ -33291,6 +33611,20 @@ export interface components {
             latest_stored_epoch_index: number | null;
             /** Latest Stored Ledger Digest */
             latest_stored_ledger_digest: string | null;
+            /** Ledger Schedule Failure Kind */
+            ledger_schedule_failure_kind?: ("timeout" | "connection" | "reader_unavailable" | "unavailable") | null;
+            /** Ledger Schedule Matches Stored Pin */
+            ledger_schedule_matches_stored_pin?: boolean | null;
+            /** Ledger Schedule Probe Block */
+            ledger_schedule_probe_block?: number | null;
+            /** Ledger Schedule Probe Epoch */
+            ledger_schedule_probe_epoch?: number | null;
+            /**
+             * Ledger Schedule Probe Status
+             * @default not_checked
+             * @enum {string}
+             */
+            ledger_schedule_probe_status: "not_checked" | "available" | "unavailable";
             /**
              * Observer Scope
              * @default this_platform_process
@@ -33323,6 +33657,12 @@ export interface components {
             proposal_approved_policy_digest?: string | null;
             stored_enforcing_pin?: components["schemas"]["EnforcingTreasuryPin"] | null;
             stored_shadow_pin: components["schemas"]["TreasuryLedgerPin"] | null;
+            /** Validation Failure Kind */
+            validation_failure_kind?: ("timeout" | "connection" | "invalid_evidence" | "reader_unavailable" | "unavailable") | null;
+            /** Validation Failure Stage */
+            validation_failure_stage?: ("fleet_binding" | "identity" | "setter_roster" | "authority") | null;
+            /** Validation Failure Step */
+            validation_failure_step?: ("connection" | "connection_close" | "finalized_head" | "finalized_height" | "canonical_hash" | "genesis_hash" | "epoch_storage" | "collector_storage" | "uid_binding" | "permit_vector" | "setter_binding") | null;
             /**
              * Weight Effect
              * @default none
@@ -33379,6 +33719,50 @@ export interface components {
         TreasuryReceiptPage: {
             /** Items */
             items: components["schemas"]["TreasuryReceiptResult"][];
+        };
+        /** TreasuryReceiptPreflight */
+        TreasuryReceiptPreflight: {
+            /**
+             * Already Recorded
+             * @default false
+             */
+            already_recorded: boolean;
+            /**
+             * Attempt Count
+             * @default 0
+             */
+            attempt_count: number;
+            /**
+             * Provider Credit Status
+             * @default not_proven
+             * @constant
+             */
+            provider_credit_status: "not_proven";
+            /**
+             * Publication
+             * @default not_performed
+             * @constant
+             */
+            publication: "not_performed";
+            /** Read Phase */
+            read_phase?: ("connection" | "pinned_finality" | "payment_finality" | "pinned_identity" | "source_finality" | "receipt_identity" | "source_epoch" | "autostake_route" | "source_events" | "payment_extrinsic" | "payment_events" | "timestamp" | "connection_close") | null;
+            /** Ready */
+            ready: boolean;
+            /** Receipt Id */
+            receipt_id?: string | null;
+            /** Refusal */
+            refusal?: ("unavailable" | "invalid_or_unsupported" | "conflict") | null;
+            /**
+             * Spending Authority
+             * @default none
+             * @constant
+             */
+            spending_authority: "none";
+            /**
+             * Timed Out
+             * @default false
+             */
+            timed_out: boolean;
         };
         /** TreasuryReceiptResult */
         TreasuryReceiptResult: {
@@ -33456,6 +33840,66 @@ export interface components {
              */
             stage: "service_distribution" | "vendor_payment" | "provider_credit";
         };
+        /** TreasuryRuntimeControl */
+        TreasuryRuntimeControl: {
+            /**
+             * Can Enforce Weights
+             * @default false
+             * @constant
+             */
+            can_enforce_weights: false;
+            latest: components["schemas"]["TreasuryRuntimeRevision"] | null;
+            /** Revision */
+            revision: number;
+            /**
+             * Transfers Enabled
+             * @default false
+             * @constant
+             */
+            transfers_enabled: false;
+        };
+        /** TreasuryRuntimeRevision */
+        TreasuryRuntimeRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["TreasuryRuntimeSettings"];
+        };
+        /** TreasuryRuntimeSettings */
+        TreasuryRuntimeSettings: {
+            /** Activation Epoch */
+            activation_epoch?: number | null;
+            approval: components["schemas"]["TreasuryPolicyApproval"];
+            /** Approved Policy Digest */
+            approved_policy_digest: string;
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /** Managed Validator Hotkeys */
+            managed_validator_hotkeys: string[];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "observe" | "enforce" | "pause";
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
         /** TreasuryServiceBucket */
         TreasuryServiceBucket: {
             /**
@@ -33478,6 +33922,23 @@ export interface components {
             purpose: string;
             /** Service Account Ref */
             service_account_ref?: string | null;
+        };
+        /** TreasurySetterPreflight */
+        TreasurySetterPreflight: {
+            capability: components["schemas"]["TreasuryWeightCapability"] | null;
+            /** Protocol Version */
+            protocol_version: number | null;
+            /** Required By Chain */
+            required_by_chain: boolean;
+            /** Seen At */
+            seen_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "missing_heartbeat" | "inventory_not_checked" | "heartbeat_outside_window" | "invalid_heartbeat" | "missing_guard" | "unsupported_protocol" | "policy_mismatch";
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /** TreasurySettings */
         TreasurySettings: {
@@ -38791,6 +39252,37 @@ export interface operations {
             };
         };
     };
+    get_database_backup_status_api_v1_admin_database_backup_status_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatabaseBackupStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_settings_api_v1_admin_efficiency_bonus_settings_get: {
         parameters: {
             query?: never;
@@ -42941,6 +43433,107 @@ export interface operations {
             };
         };
     };
+    get_treasury_receipt_preflight_api_v1_admin_treasury_receipts_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TreasuryReceiptSelector"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasuryReceiptPreflight"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_treasury_runtime_api_v1_admin_treasury_runtime_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasuryRuntimeControl"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_treasury_runtime_api_v1_admin_treasury_runtime_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTreasuryRuntimeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasuryRuntimeRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_treasury_settings_api_v1_admin_treasury_settings_get: {
         parameters: {
             query?: never;
@@ -42994,6 +43587,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TreasurySettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_treasury_activation_preflight_api_v1_admin_treasury_settings_activation_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TreasuryActivationPreflightRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreasuryActivationPreflight"];
                 };
             };
             /** @description Validation Error */

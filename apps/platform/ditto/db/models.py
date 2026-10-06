@@ -8699,6 +8699,9 @@ class ScoreAuditEntry(Base):
     __table_args__ = (
         UniqueConstraint("entry_hash", name="score_audit_log_entry_hash_key"),
         Index("score_audit_log_agent_id_idx", "agent_id"),
+        # Admission probes filter one exact event string per agent; see the
+        # 2026_10_06 migration of the same name.
+        Index("score_audit_log_event_agent_idx", "event", "agent_id"),
     )
 
 
@@ -8812,6 +8815,33 @@ class ContinualRetestSettingsRevision(Base):
             "parent_revision",
             name="continual_retest_settings_scope_parent_key",
         ),
+    )
+
+
+class TreasuryRuntimeRevision(Base):
+    """Append-only public approvals and guarded producer mode; never signer custody."""
+
+    __tablename__ = "treasury_runtime_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    __table_args__ = (
+        CheckConstraint("parent_revision >= 0", name="treasury_runtime_parent_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="treasury_runtime_checksum_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="treasury_runtime_reason_check",
+        ),
+        UniqueConstraint("parent_revision", name="treasury_runtime_parent_key"),
     )
 
 
@@ -11444,11 +11474,10 @@ class TreasuryVerifiedReceipt(Base):
             name="treasury_verified_parent",
         ),
         Index(
-            "treasury_verified_distribution_once",
+            "treasury_verified_distribution_source",
             "epoch_index",
             "source_block",
             "bucket_id",
-            unique=True,
             postgresql_where=text("stage = 'service_distribution'"),
         ),
     )

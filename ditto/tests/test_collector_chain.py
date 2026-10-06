@@ -1,4 +1,4 @@
-"""Live v470 decode shapes and adversarial receipt/attribution controls."""
+"""Audited decode shapes and adversarial receipt/attribution controls."""
 
 import hashlib
 import json
@@ -9,7 +9,163 @@ import pytest
 
 from ditto.tests.test_collector_automation import policy
 from ditto.treasury.collector import Observation, SignedOperation
-from ditto.treasury.collector_chain import NoCredentialRedirect, PublicCollectorChain
+from ditto.treasury.collector_chain import (
+    AUDITED_CODE_HASH,
+    FINNEY_GENESIS,
+    NoCredentialRedirect,
+    PublicCollectorChain,
+)
+
+
+def identity_adapter(*, role="registration", owner="cold", uid=None, raw_owner=None):
+    chain = PublicCollectorChain.__new__(PublicCollectorChain)
+    chain.role = role
+    values = {"Owner": owner, "SubnetOwner": "subnet-owner", "Uids": uid, "Keys": "hot"}
+    calls = []
+    chain.query = lambda _module, name, _params, _hash: values[name]
+    chain.substrate = SimpleNamespace(
+        create_storage_key=lambda *_args, **_kwargs: SimpleNamespace(
+            to_hex=lambda: "0xowner"
+        ),
+        rpc_request=lambda method, params: (
+            calls.append((method, params)) or {"result": raw_owner}
+        ),
+    )
+    return (
+        chain,
+        SimpleNamespace(collector_coldkey="cold", collector_hotkey="hot"),
+        values,
+        calls,
+    )
+
+
+def test_first_registration_accepts_proven_absent_owner_only():
+    c, p, values, calls = identity_adapter(owner="default-zero")
+    assert c.identity(p, "finalized", allow_unowned=True) is None
+    assert calls == [("state_getStorageAt", ["0xowner", "finalized"])]
+    values["Owner"] = "cold"
+    values["Uids"] = 14
+    assert c.identity(p, "after-registration") == 14
+
+
+@pytest.mark.parametrize("role", ["registration", "transfer"])
+def test_unowned_collector_is_not_a_default_identity(role):
+    c, p, _, _ = identity_adapter(role=role, owner="default-zero")
+    with pytest.raises(ValueError, match="ownership"):
+        c.identity(p, "finalized")
+
+
+@pytest.mark.parametrize(
+    "role,uid,raw_owner,response",
+    [
+        ("transfer", None, None, None),
+        ("registration", 14, None, None),
+        ("registration", None, "0x00", None),
+        ("registration", None, None, {"error": "unavailable"}),
+        ("registration", None, None, {}),
+    ],
+)
+def test_unowned_bootstrap_refuses_existing_binding_and_uncertainty(
+    role, uid, raw_owner, response
+):
+    c, p, _, _ = identity_adapter(
+        role=role, owner="other-owner", uid=uid, raw_owner=raw_owner
+    )
+    if response is not None:
+        c.substrate.rpc_request = lambda *_: response
+    with pytest.raises(ValueError, match="ownership"):
+        c.identity(p, "finalized", allow_unowned=True)
+
+
+def test_unowned_bootstrap_cannot_use_subnet_owner_coldkey():
+    c, p, values, _ = identity_adapter(owner="default-zero")
+    values["SubnetOwner"] = p.collector_coldkey
+    with pytest.raises(ValueError, match="subnet-owner"):
+        c.identity(p, "finalized", allow_unowned=True)
+
+
+def test_historical_registered_identity_reads_each_binding_once_at_exact_hash():
+    c, p, values, _ = identity_adapter(role="transfer", uid=14)
+    reads = []
+
+    def query(module, name, params, at):
+        reads.append((module, name, params, at))
+        return values[name]
+
+    c.query = query
+    assert c._earnings_identity(p, "historical") == 14
+    assert [name for _, name, _, _ in reads] == ["Uids", "Owner", "SubnetOwner", "Keys"]
+    assert all(at == "historical" for _, _, _, at in reads)
+    assert reads[-1][2] == [118, 14]
+    values["Owner"] = "other-owner"
+    with pytest.raises(ValueError, match="ownership"):
+        c._earnings_identity(p, "next-historical")
+    with pytest.raises(ValueError, match="ownership"):
+        c.identity(p, "historical")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("Owner", "other-owner"),
+        ("Uids", -1),
+        ("Uids", True),
+        ("Uids", "14"),
+        ("SubnetOwner", "cold"),
+        ("Keys", "other-hotkey"),
+    ],
+)
+def test_historical_binding_refusals_remain_strict(field, value):
+    c, p, values, _ = identity_adapter(role="transfer", uid=14)
+    values[field] = value
+    with pytest.raises(ValueError):
+        c._earnings_identity(p, "historical")
+
+
+def test_historical_identity_read_failure_has_no_fallback():
+    c, p, values, _ = identity_adapter(role="transfer", uid=14)
+
+    def query(_module, name, _params, _at):
+        if name == "SubnetOwner":
+            raise ConnectionError("unavailable")
+        return values[name]
+
+    c.query = query
+    with pytest.raises(ConnectionError):
+        c._earnings_identity(p, "historical")
+
+
+def test_first_registration_observation_reaches_bounded_register_path():
+    p = policy()
+    c, _, _, _ = identity_adapter(owner="default-zero")
+    c.guard_runtime = lambda *_, **_kwargs: AUDITED_CODE_HASH
+    c.assert_no_sponsor = lambda *_, **_kwargs: AUDITED_CODE_HASH
+    c.alpha = lambda *_: 0
+    c.substrate.get_chain_finalised_head = lambda: "finalized"
+    c.substrate.get_block_number = lambda _: 100
+    values = {
+        "Owner": "default-zero",
+        "SubnetOwner": "subnet-owner",
+        "Uids": None,
+        "Burn": 1,
+        "Account": {"data": {"free": 100}},
+        "Proxies": (
+            [
+                {
+                    "delegate": p.registration_delegate,
+                    "proxy_type": "Registration",
+                    "delay": 0,
+                },
+                {"delegate": p.transfer_delegate, "proxy_type": "Transfer", "delay": 0},
+            ],
+            0,
+        ),
+    }
+    c.query = lambda _module, name, _params, _hash: values[name]
+    observed = c.observe(p, "registration")
+    assert observed.uid is None
+    assert observed.burn_rao == 1
+    assert observed.collector_free_rao == 100
 
 
 def event(module, name, attrs, index=0, phase="ApplyExtrinsic"):
@@ -26,8 +182,8 @@ def adapter(substrate):
     chain = PublicCollectorChain.__new__(PublicCollectorChain)
     chain.substrate = substrate
     chain.role = "transfer"
-    chain.guard_runtime = lambda *_: None
-    chain.identity = lambda _, h: None if h == "b100" else 14
+    chain.guard_runtime = lambda *_, **_kwargs: AUDITED_CODE_HASH
+    chain.identity = lambda _, h, **_kwargs: None if h == "b100" else 14
     chain.alpha = lambda *_: 100
     return chain
 
@@ -136,6 +292,40 @@ def test_registration_requires_exact_finalized_uid_event():
         c.reconcile(p, op, observed)
 
 
+def test_first_registration_receipt_proves_new_owner_and_finalized_uid():
+    p, c, op, observed, events = receipt_fixture()
+    c.role = "registration"
+    c.identity = PublicCollectorChain.identity.__get__(c)
+    c.query = lambda _module, name, _params, block_hash: {
+        "Owner": p.collector_coldkey if block_hash == "b101" else "default-zero",
+        "SubnetOwner": "subnet-owner",
+        "Uids": 14 if block_hash == "b101" else None,
+        "Keys": p.collector_hotkey,
+    }[name]
+    original_rpc = c.substrate.rpc_request
+    c.substrate.rpc_request = lambda method, params: (
+        {"result": None}
+        if method == "state_getStorageAt"
+        else original_rpc(method, params)
+    )
+    c.substrate.create_storage_key = lambda *_args, **_kwargs: SimpleNamespace(
+        to_hex=lambda: "0xowner"
+    )
+    op["role"] = "registration"
+    events[2]["event"]["attributes"]["who"] = p.registration_delegate
+    events[-2:] = [
+        event("SubtensorModule", "NeuronRegistered", [118, 14, p.collector_hotkey])
+    ]
+    assert c.reconcile(p, op, observed).uid == 14
+    c.substrate.rpc_request = lambda method, params: (
+        {"result": "0xexisting-owner"}
+        if method == "state_getStorageAt"
+        else original_rpc(method, params)
+    )
+    with pytest.raises(ValueError, match="ownership"):
+        c.reconcile(p, op, observed)
+
+
 def test_expiry_requires_all_finalized_mortal_blocks_scanned():
     p, c, op, observed, _ = receipt_fixture()
     c.substrate.rpc_request = lambda *_: {"result": {"block": {"extrinsics": []}}}
@@ -177,6 +367,7 @@ def income_fixture():
     )
     c = adapter(s)
     c.identity = lambda *_: 14
+    c._identity_binding = lambda *_, **_kwargs: 14
     c.query = lambda *_: p.collector_hotkey
     return p, c, events
 
@@ -184,6 +375,152 @@ def income_fixture():
 def test_liquid_credit_only_never_gross_or_prior_principal():
     p, c, _ = income_fixture()
     assert c.earnings(p, 101).amount_rao == 20  # gross100, capture80
+
+
+def traced_income_fixture():
+    p, c, events = income_fixture()
+    proofs = []
+    identities = []
+    c.guard_runtime = lambda _p, at, **_kwargs: proofs.append(at) or AUDITED_CODE_HASH
+    c._earnings_identity = lambda _p, at: identities.append(at) or 14
+    return p, c, events, proofs, identities
+
+
+def test_adjacent_receipts_reuse_only_validated_exact_parent_state():
+    p, c, _, proofs, identities = traced_income_fixture()
+    assert c.earnings(p, 101).amount_rao == 20
+    assert c.earnings(p, 102).amount_rao == 20
+    assert proofs == identities == ["b101", "b100", "b102"]
+    # A one-entry observation cache never contains spending/route approval.
+    assert c._last_receipt_state == (p.digest, 102, "b102", AUDITED_CODE_HASH, 14)
+
+
+@pytest.mark.parametrize("next_block", [101, 103])
+def test_replayed_or_nonadjacent_receipt_rechecks_both_states(next_block):
+    p, c, _, proofs, identities = traced_income_fixture()
+    c.earnings(p, 101)
+    c.earnings(p, next_block)
+    assert (
+        proofs == identities == ["b101", "b100", f"b{next_block}", f"b{next_block - 1}"]
+    )
+
+
+def test_changed_parent_hash_cannot_reuse_height_only_proof():
+    p, c, _, proofs, identities = traced_income_fixture()
+    c.earnings(p, 101)
+    c.substrate.get_block_hash = lambda n: "replacement101" if n == 101 else f"b{n}"
+    c.earnings(p, 102)
+    assert proofs == identities == ["b101", "b100", "b102", "replacement101"]
+
+
+def test_changed_policy_cannot_reuse_receipt_proof():
+    p, c, _, proofs, identities = traced_income_fixture()
+    c.earnings(p, 101)
+    c.earnings(policy(revision=2), 102)
+    assert proofs == identities == ["b101", "b100", "b102", "b101"]
+
+
+def test_failed_receipt_never_publishes_state_for_adjacent_scan():
+    p, c, events, proofs, identities = traced_income_fixture()
+    events[1]["event"]["attributes"]["incentive"] = 101
+    with pytest.raises(ValueError, match="exceeds gross"):
+        c.earnings(p, 101)
+    assert not hasattr(c, "_last_receipt_state")
+    events[1]["event"]["attributes"]["incentive"] = 20
+    c.earnings(p, 102)
+    assert proofs == identities == ["b101", "b100", "b102", "b101"]
+
+
+def test_reused_parent_does_not_bypass_new_identity_or_route_checks():
+    p, c, _, _, _ = traced_income_fixture()
+    c.earnings(p, 101)
+    c._earnings_identity = lambda *_: 15
+    with pytest.raises(ValueError, match="identity transition"):
+        c.earnings(p, 102)
+    assert c._last_receipt_state[1] == 101
+    c._earnings_identity = lambda *_: 14
+    c.query = lambda *_: "redirected-hotkey"
+    with pytest.raises(ValueError, match="route is not pinned"):
+        c.earnings(p, 102)
+    assert c._last_receipt_state[1] == 101
+
+
+def inactive_income_fixture():
+    p, c, events = income_fixture()
+    c.identity = PublicCollectorChain.identity.__get__(c)
+    c._identity_binding = PublicCollectorChain._identity_binding.__get__(c)
+    c.query = lambda _module, name, _params, _hash: {
+        "Uids": None,
+        "Owner": "default-zero",
+        "SubnetOwner": "other-subnet-owner",
+        "Keys": p.collector_hotkey,
+    }[name]
+    c.substrate.create_storage_key = lambda *_args, **_kwargs: SimpleNamespace(
+        to_hex=lambda: "0xowner"
+    )
+    c.substrate.rpc_request = lambda *_: {"result": None}
+    events.pop()  # Other miners' tempo, no credit to this inactive collector.
+    return p, c, events
+
+
+def test_historical_unregistered_tempo_has_no_earnings_and_no_spend_authority():
+    p, c, _ = inactive_income_fixture()
+    assert c.earnings(p, 101) is None
+    with pytest.raises(ValueError, match="ownership"):
+        c.identity(p, "b101")  # Current transfer identity remains strict.
+    with pytest.raises(ValueError, match="ownership"):
+        c.identity(p, "b101", allow_unowned=True)
+
+
+@pytest.mark.parametrize("response", [{}, {"error": "unavailable"}, {"result": "0xab"}])
+def test_historical_absence_requires_explicit_raw_owner_absence(response):
+    p, c, _ = inactive_income_fixture()
+    c.substrate.rpc_request = lambda *_: response
+    with pytest.raises(ValueError, match="ownership"):
+        c.earnings(p, 101)
+
+
+def test_historical_absence_with_collector_credit_halts():
+    p, c, events = inactive_income_fixture()
+    _, _, credited = income_fixture()
+    events.append(credited[1])
+    with pytest.raises(ValueError, match="exceeds gross"):
+        c.earnings(p, 101)
+
+
+def test_first_registration_tempo_remains_ambiguous():
+    p, c, _ = inactive_income_fixture()
+    absent_query = c.query
+    c.query = lambda module, name, params, at: (
+        {"Uids": 14, "Owner": p.collector_coldkey, "Keys": p.collector_hotkey}[name]
+        if at == "b101" and name in {"Uids", "Owner", "Keys"}
+        else absent_query(module, name, params, at)
+    )
+    with pytest.raises(ValueError, match="identity transition"):
+        c.earnings(p, 101)
+
+
+def test_signed_start_before_registration_advances_only_empty_history(tmp_path):
+    from ditto.treasury.collector import CollectorJournal, tick
+
+    p, c, events = inactive_income_fixture()
+    events.clear()
+    absent_query = c.query
+    c.query = lambda module, name, params, at: (
+        {"Uids": 14, "Owner": p.collector_coldkey, "Keys": p.collector_hotkey}[name]
+        if int(at[1:]) >= 12 and name in {"Uids", "Owner", "Keys"}
+        else absent_query(module, name, params, at)
+    )
+    c.observe = lambda *_: Observation(20, "b20", 14, 1, 100, 100, 0)
+    c.prepare = lambda *_: pytest.fail("Empty history must never acquire a signer")
+    journal = CollectorJournal(tmp_path / "transfer.db", p, "transfer", initialize=True)
+    try:
+        assert tick(journal, p, c, "transfer") == "observing"
+        assert journal.db.execute("SELECT block FROM cursor").fetchone()[0] == 20
+        assert journal.db.execute("SELECT COUNT(*) FROM earnings").fetchone()[0] == 0
+        assert journal.db.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 0
+    finally:
+        journal.close()
 
 
 def test_fully_captured_gross_creates_no_distributable_income():
@@ -240,6 +577,65 @@ def test_real_collateral_and_aggregate_lock_bound_available_amount():
     assert c.alpha(p, p.collector_coldkey, "b101") == 20
 
 
+@pytest.mark.parametrize("locked", [None, {"locked": 0}])
+def test_new_zero_position_does_not_require_omitted_availability(locked):
+    p = policy()
+
+    def call(_api, method, *_args, **_kwargs):
+        if method == "get_stake_info_for_hotkey_coldkey_netuid":
+            return {
+                "hotkey": p.collector_hotkey,
+                "coldkey": p.collector_coldkey,
+                "netuid": 118,
+                "stake": 0,
+            }
+        assert method == "get_stake_availability_for_coldkeys"
+        return {p.collector_coldkey: {}}
+
+    c = PublicCollectorChain.__new__(PublicCollectorChain)
+    c.substrate = SimpleNamespace(runtime_call=call)
+    c.query = lambda *_: locked
+    assert c.alpha(p, p.collector_coldkey, "finalized") == 0
+
+
+def test_zero_position_cannot_hide_positive_collateral_lock():
+    p = policy()
+    c = PublicCollectorChain.__new__(PublicCollectorChain)
+    c.substrate = SimpleNamespace(
+        runtime_call=lambda *_args, **_kwargs: {
+            "hotkey": p.collector_hotkey,
+            "coldkey": p.collector_coldkey,
+            "netuid": 118,
+            "stake": 0,
+        }
+    )
+    c.query = lambda *_: {"locked": 1}
+    with pytest.raises(ValueError, match="collateral"):
+        c.alpha(p, p.collector_coldkey, "finalized")
+
+
+@pytest.mark.parametrize(
+    "policy_hash,live_hash",
+    [
+        (
+            "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47",
+            "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47",
+        ),
+        ("0x" + "a" * 64, "0x" + "a" * 64),
+        (AUDITED_CODE_HASH, "0x" + "a" * 64),
+    ],
+)
+def test_old_or_unaudited_runtime_remains_refused(policy_hash, live_hash):
+    c = PublicCollectorChain.__new__(PublicCollectorChain)
+    c.substrate = SimpleNamespace(
+        get_block_hash=lambda _: FINNEY_GENESIS,
+        rpc_request=lambda *_: {"result": live_hash},
+        runtime_call=lambda *_args, **_kwargs: pytest.fail("must stop before APIs"),
+    )
+    with pytest.raises(ValueError, match="runtime"):
+        c.guard_runtime(policy(runtime_code_hash=policy_hash), "finalized")
+
+
 @pytest.mark.parametrize(
     "function", ["burned_register", "transfer_all", "batch", "proxy", "set_auto_stake"]
 )
@@ -254,6 +650,212 @@ def test_no_generic_or_unbounded_call_reaches_key(function):
             {"module": "SubtensorModule", "function": function, "params": {}},
             None,
         )
+
+
+def registration_preparation(info):
+    p = policy()
+    observed = Observation(100, "finalized", None, 50, 2000, 200, 0)
+    signed = []
+    key = SimpleNamespace(ss58_address=p.registration_delegate)
+    c = PublicCollectorChain.__new__(PublicCollectorChain)
+    c.role = "registration"
+    c.guard_runtime = lambda *_, **_kwargs: AUDITED_CODE_HASH
+    c.observe = lambda *_: observed
+    c.key = lambda *_: key
+    c.substrate = SimpleNamespace(
+        get_chain_head=lambda: "head",
+        compose_call=lambda *_args, **_kwargs: "proxy-call",
+        get_account_nonce=lambda _: 3,
+        get_payment_info=lambda *_args, **_kwargs: info,
+        create_signed_extrinsic=lambda *args, **kwargs: (
+            signed.append((args, kwargs))
+            or SimpleNamespace(data=SimpleNamespace(to_hex=lambda: "0xab"))
+        ),
+    )
+    call = {
+        "module": "SubtensorModule",
+        "function": "register_limit",
+        "params": {"netuid": 118, "hotkey": p.collector_hotkey, "limit_price": 100},
+    }
+    return c, p, call, observed, signed
+
+
+def test_registration_preparation_accepts_pinned_sdk_runtime_fee_shape():
+    c, p, call, observed, signed = registration_preparation(
+        {"partial_fee": 10, "class": "Normal", "weight": {"ref_time": 1}}
+    )
+    result = c.prepare(p, "registration", call, observed)
+    assert result.fee_rao == p.max_fee_rao == 10
+    assert result.encoded == "0xab"
+    assert len(signed) == 1
+    assert signed[0][1] == {"era": {"period": 64, "current": 100}, "nonce": 3, "tip": 0}
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        None,
+        {},
+        {"partialFee": 1},
+        {"partial_fee": True},
+        {"partial_fee": "1"},
+        {"partial_fee": -1},
+        {"partial_fee": 2**64},
+        {"partial_fee": 11},
+    ],
+)
+def test_registration_preparation_refuses_missing_invalid_or_over_cap_fee(info):
+    c, p, call, observed, signed = registration_preparation(info)
+    with pytest.raises(ValueError):
+        c.prepare(p, "registration", call, observed)
+    assert not signed
+
+
+def transfer_preparation(amount, minimum=100_000, price=6_488_750):
+    c, _, _, observed, signed = registration_preparation({"partial_fee": 10})
+    p = policy(max_distribution_rao=1_000_000_000)
+    c.role = "transfer"
+    key_reads, reads = [], []
+    c.key = lambda *_: (
+        key_reads.append(True) or SimpleNamespace(ss58_address=p.transfer_delegate)
+    )
+    c.substrate.get_constant = lambda *args, **kw: (
+        reads.append((args, kw)) or SimpleNamespace(value=minimum)
+    )
+    c.substrate.runtime_call = lambda *args, **kw: (
+        reads.append((args, kw)) or SimpleNamespace(value=price)
+    )
+    call = {
+        "module": "SubtensorModule",
+        "function": "transfer_stake",
+        "params": {
+            "destination_coldkey": "gm",
+            "hotkey": p.collector_hotkey,
+            "origin_netuid": 118,
+            "destination_netuid": 118,
+            "alpha_amount": amount,
+        },
+    }
+    return c, p, call, observed, signed, key_reads, reads
+
+
+def test_minimum_value_refuses_original_small_canary_before_key_access():
+    c, p, call, observed, signed, keys, reads = transfer_preparation(10_000_000)
+    with pytest.raises(ValueError, match="below finalized minimum"):
+        c.prepare(p, "transfer", call, observed)
+    assert not keys and not signed
+    assert all(kw["block_hash"] == observed.block_hash for _, kw in reads)
+
+
+def test_authorized_point_one_canary_passes_minimum_without_changing_amount():
+    c, p, call, observed, signed, keys, _ = transfer_preparation(100_000_000)
+    assert c.prepare(p, "transfer", call, observed).fee_rao == 10
+    assert len(keys) == len(signed) == 1
+    assert call["params"]["alpha_amount"] == 100_000_000
+
+
+@pytest.mark.parametrize("field", ["minimum", "price"])
+@pytest.mark.parametrize("invalid", [None, True, "100000", 1.0, -1, 0, 2**64])
+def test_unknown_minimum_or_price_never_loads_key(field, invalid):
+    c, p, call, observed, signed, keys, _ = transfer_preparation(
+        100_000_000, **{field: invalid}
+    )
+    with pytest.raises(ValueError):
+        c.prepare(p, "transfer", call, observed)
+    assert not keys and not signed
+
+
+def test_price_read_failure_has_no_default_or_key_access():
+    c, p, call, observed, signed, keys, _ = transfer_preparation(100_000_000)
+
+    def unavailable(*_, **__):
+        raise ConnectionError("unavailable")
+
+    c.substrate.runtime_call = unavailable
+    with pytest.raises(ConnectionError):
+        c.prepare(p, "transfer", call, observed)
+    assert not keys and not signed
+
+
+def retry_failure_fixture():
+    p, c, op, _, events = receipt_fixture()
+    events[0]["event"]["attributes"]["result"] = {
+        "Err": {"Module": {"index": 7, "error": "0x52000000"}}
+    }
+    del events[3:]
+    op.update(
+        state="failed",
+        settlement_json=json.dumps(
+            {"status": "failed", "block": 101, "block_hash": "b101"}
+        ),
+    )
+    c.observe = lambda *_: Observation(200, "b200", 14, 1, 100, 100, 100)
+    c.key = lambda *_: pytest.fail("failure proof loaded a key")
+    return p, c, op, events
+
+
+def test_amount_too_low_failure_is_reproved_at_exact_hash_without_key():
+    p, c, op, _ = retry_failure_fixture()
+    proof = c.retryable_transfer_failure(p, op)
+    assert (proof.status, proof.block, proof.block_hash, proof.extrinsic_index) == (
+        "failed",
+        101,
+        "b101",
+        0,
+    )
+    assert proof.extrinsic_hash == json.loads(op["signed_json"])["extrinsic_hash"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "other_error",
+        "paid",
+        "missing_outer",
+        "changed_stake",
+        "changed_block",
+        "live_mortality",
+        "unknown",
+        "wrong_phase",
+        "missing_hash",
+        "bad_fee",
+        "runtime",
+    ],
+)
+def test_canary_replacement_proof_refuses_uncertainty_or_effect(mutation):
+    p, c, op, events = retry_failure_fixture()
+    if mutation == "other_error":
+        events[0]["event"]["attributes"]["result"]["Err"]["Module"]["error"] = (
+            "0x53000000"
+        )
+    elif mutation == "paid":
+        events[0]["event"]["attributes"]["result"] = {"Ok": []}
+    elif mutation == "missing_outer":
+        events.pop(1)
+    elif mutation == "changed_stake":
+        c.alpha = lambda _p, _cold, at: 101 if at == "b101" else 100
+    elif mutation == "changed_block":
+        op["settlement_json"] = json.dumps(
+            {"status": "failed", "block": 101, "block_hash": "other"}
+        )
+    elif mutation == "live_mortality":
+        c.observe = lambda *_: Observation(164, "b164", 14, 1, 100, 100, 100)
+    elif mutation == "unknown":
+        op["state"] = "dispatching"
+    elif mutation == "wrong_phase":
+        events[0]["phase"] = "Initialization"
+    elif mutation == "missing_hash":
+        c.substrate.rpc_request = lambda *_: {"result": {"block": {"extrinsics": []}}}
+    elif mutation == "bad_fee":
+        events[2]["event"]["attributes"]["actual_fee"] = 11
+    elif mutation == "runtime":
+
+        def changed(*_, **__):
+            raise ValueError("runtime changed")
+
+        c.guard_runtime = changed
+    with pytest.raises(ValueError):
+        c.retryable_transfer_failure(p, op)
 
 
 def test_phase_mismatch_cannot_claim_an_extrinsic_effect():
@@ -295,3 +897,276 @@ def test_credential_redirect_is_refused_without_forwarding_authorization():
         NoCredentialRedirect().redirect_request(
             None, None, 302, None, None, "https://attacker.invalid"
         )
+
+
+@pytest.mark.parametrize("unit", [None, [], ()])
+def test_proxy_success_scale_unit_is_decoder_independent(unit):
+    p, c, op, observed, events = receipt_fixture()
+    events[0]["event"]["attributes"]["result"] = {"Ok": unit}
+    assert c.reconcile(p, op, observed).status == "finalized"
+    op["role"] = "registration"
+    c.role = "registration"
+    events[2]["event"]["attributes"]["who"] = p.registration_delegate
+    events[-2:] = [
+        event("SubtensorModule", "NeuronRegistered", [118, 14, p.collector_hotkey])
+    ]
+    assert c.reconcile(p, op, observed).uid == 14
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"Ok": [1]},
+        {"Ok": (1,)},
+        {"Ok": {}},
+        {"Ok": ""},
+        {"Ok": 0},
+        {"Ok": False},
+        {"Ok": b""},
+        {"Ok": (), "Err": "NoPermission"},
+        {},
+    ],
+)
+def test_proxy_nonunit_result_cannot_release_durable_claim(result):
+    p, c, op, observed, events = receipt_fixture()
+    events[0]["event"]["attributes"]["result"] = result
+    with pytest.raises(ValueError):
+        c.reconcile(p, op, observed)
+
+
+@pytest.mark.parametrize("sequence", [list, tuple])
+def test_registration_event_sequence_is_decoder_independent(sequence):
+    p, c, op, observed, events = receipt_fixture()
+    c.role = op["role"] = "registration"
+    events[0]["event"]["attributes"] = {"result": {"Ok": ()}}
+    events[2]["event"]["attributes"]["who"] = p.registration_delegate
+    events[-2:] = [
+        event(
+            "SubtensorModule",
+            "NeuronRegistered",
+            sequence([118, 14, p.collector_hotkey]),
+        )
+    ]
+    assert c.reconcile(p, op, observed).uid == 14
+
+
+@pytest.mark.parametrize(
+    "attrs",
+    [
+        (118, True, "hotkey"),
+        (True, 14, "hotkey"),
+        (118, "14", "hotkey"),
+        (118, 15, "hotkey"),
+        (119, 14, "hotkey"),
+        (118, 14, "wrong"),
+        (118, 14),
+        (118, 14, "hotkey", 0),
+        {"netuid": 118, "uid": 14, "hotkey": "hotkey"},
+    ],
+)
+def test_registration_tuple_does_not_relax_exact_typed_effect(attrs):
+    p, c, op, observed, events = receipt_fixture()
+    c.role = op["role"] = "registration"
+    events[2]["event"]["attributes"]["who"] = p.registration_delegate
+    if isinstance(attrs, (list, tuple)):
+        attrs = tuple(
+            p.collector_hotkey if value == "hotkey" else value for value in attrs
+        )
+    events[-2:] = [event("SubtensorModule", "NeuronRegistered", attrs)]
+    with pytest.raises(ValueError, match="registration effect"):
+        c.reconcile(p, op, observed)
+
+
+def test_registration_boolean_uid_cannot_equal_integer_one():
+    p, c, op, observed, events = receipt_fixture()
+    c.role = op["role"] = "registration"
+    c.identity = lambda _p, at, **_kwargs: None if at == "b100" else 1
+    events[2]["event"]["attributes"]["who"] = p.registration_delegate
+    events[-2:] = [
+        event("SubtensorModule", "NeuronRegistered", (118, True, p.collector_hotkey))
+    ]
+    with pytest.raises(ValueError, match="registration effect"):
+        c.reconcile(p, op, observed)
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_stale_v472_policy_cannot_authorize_any_runtime_read_or_signing(historical):
+    from ditto_screening_protocol.collector_receipts import (
+        HISTORICAL_COLLECTOR_CODE_HASH,
+    )
+
+    c = PublicCollectorChain.__new__(PublicCollectorChain)
+    c.substrate = SimpleNamespace(
+        get_block_hash=lambda _: pytest.fail("stale approval must stop before RPC")
+    )
+    with pytest.raises(ValueError, match="runtime policy"):
+        c.guard_runtime(
+            policy(runtime_code_hash=HISTORICAL_COLLECTOR_CODE_HASH),
+            "finalized",
+            historical=historical,
+        )
+
+
+def runtime_adapter(code):
+    expected = {
+        "Registration": [
+            ("SubtensorModule", "register"),
+            ("SubtensorModule", "register_limit"),
+            ("SubtensorModule", "burned_register"),
+        ],
+        "Transfer": [
+            ("Balances", "transfer_keep_alive"),
+            ("Balances", "transfer_allow_death"),
+            ("Balances", "transfer_all"),
+            ("SubtensorModule", "transfer_stake"),
+            ("SubtensorModule", "transfer_stake_and_hotkey"),
+        ],
+    }
+    filters = [
+        {
+            "name": name,
+            "deprecated": False,
+            "filter_mode": {
+                "Allow": [
+                    {"pallet_name": pallet, "call_name": call, "constraint": None}
+                    for pallet, call in calls
+                ]
+            },
+        }
+        for name, calls in expected.items()
+    ]
+    c = PublicCollectorChain.__new__(PublicCollectorChain)
+    c.substrate = SimpleNamespace(
+        get_block_hash=lambda _: FINNEY_GENESIS,
+        rpc_request=lambda *_: {"result": code},
+        runtime_call=lambda *_args, **_kwargs: filters,
+    )
+    return c, filters
+
+
+def test_historical_v472_is_receipt_only_and_still_checks_native_scope():
+    from ditto_screening_protocol.collector_receipts import (
+        HISTORICAL_COLLECTOR_CODE_HASH,
+    )
+
+    c, filters = runtime_adapter(HISTORICAL_COLLECTOR_CODE_HASH)
+    p = policy(runtime_code_hash=AUDITED_CODE_HASH)
+    with pytest.raises(ValueError, match="runtime changed"):
+        c.guard_runtime(p, "finalized")
+    assert (
+        c.guard_runtime(p, "historic", historical=True)
+        == HISTORICAL_COLLECTOR_CODE_HASH
+    )
+    filters[0]["filter_mode"]["Allow"].append(
+        {"pallet_name": "Utility", "call_name": "batch", "constraint": None}
+    )
+    with pytest.raises(ValueError, match="scope"):
+        c.guard_runtime(p, "historic", historical=True)
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_future_runtime_refuses_before_signer_access(historical):
+    c, _ = runtime_adapter("0x" + "aa" * 32)
+    with pytest.raises(ValueError, match="runtime changed"):
+        c.guard_runtime(
+            policy(runtime_code_hash=AUDITED_CODE_HASH),
+            "finalized",
+            historical=historical,
+        )
+
+
+def test_upgrade_boundary_uses_same_exact_liquid_credit_not_balance_change():
+    from ditto_screening_protocol.collector_receipts import (
+        HISTORICAL_COLLECTOR_CODE_HASH,
+    )
+
+    p, c, events = income_fixture()
+    c.guard_runtime = lambda _p, h, **_kwargs: (
+        HISTORICAL_COLLECTOR_CODE_HASH if h == "b100" else AUDITED_CODE_HASH
+    )
+    assert c.earnings(p, 101).amount_rao == 20
+    events.pop()  # A migration refund or principal change is not AutoStakeAdded.
+    assert c.earnings(p, 101) is None
+    c.guard_runtime = lambda _p, h, **_kwargs: (
+        AUDITED_CODE_HASH if h == "b100" else HISTORICAL_COLLECTOR_CODE_HASH
+    )
+    with pytest.raises(ValueError, match="transition"):
+        c.earnings(p, 101)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_reconciliation_checks_runtime_direction_before_settlement(reverse):
+    from ditto_screening_protocol.collector_receipts import (
+        HISTORICAL_COLLECTOR_CODE_HASH,
+    )
+
+    p, c, op, observed, _ = receipt_fixture()
+    before, after = HISTORICAL_COLLECTOR_CODE_HASH, AUDITED_CODE_HASH
+    if reverse:
+        before, after = after, before
+    c.guard_runtime = lambda _p, h, **_kwargs: before if h == "b100" else after
+    if reverse:
+        with pytest.raises(ValueError, match="transition"):
+            c.reconcile(p, op, observed)
+    else:
+        assert c.reconcile(p, op, observed).status == "finalized"
+
+
+@pytest.mark.parametrize(
+    "parent,post,allowed",
+    [
+        ("historic", "historic", True),
+        ("historic", "current", True),
+        ("current", "historic", False),
+    ],
+)
+def test_activity_and_epoch_readers_use_historical_guards_only(parent, post, allowed):
+    import runpy
+    from pathlib import Path
+
+    from ditto_screening_protocol.collector_receipts import (
+        HISTORICAL_COLLECTOR_CODE_HASH,
+    )
+
+    hashes = {"historic": HISTORICAL_COLLECTOR_CODE_HASH, "current": AUDITED_CODE_HASH}
+    c, _ = runtime_adapter(hashes[post])
+    s = c.substrate
+    s.get_block_hash = lambda n: FINNEY_GENESIS if n == 0 else f"b{n}"
+    s.get_chain_finalised_head = lambda: "b200"
+    s.get_block_number = lambda _: 200
+
+    def rpc(method, params):
+        if method == "state_getStorageHash":
+            return {"result": hashes[parent] if params[-1] == "b100" else hashes[post]}
+        assert method == "chain_getBlock"
+        return {"result": {"block": {"extrinsics": []}}}
+
+    s.rpc_request = rpc
+    s.get_events = lambda _: []
+    c.query = lambda *_: 7
+    p = policy(runtime_code_hash=AUDITED_CODE_HASH)
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+    cls = runpy.run_path(str(scripts / "treasury_activity_observer.py"))[
+        "FinalizedActivityReader"
+    ]
+    reader = cls.__new__(cls)
+    reader.substrate = s
+    reader.policy = p
+    reader.adapter = c
+    assert reader.epoch_at(101) == 7
+    if allowed:
+        assert reader.finalized_payment_block(101) == ("b101", 7, [], [])
+    else:
+        with pytest.raises(ValueError, match="transition"):
+            reader.finalized_payment_block(101)
+    cls = runpy.run_path(str(scripts / "treasury_selector_publisher.py"))[
+        "PublicEpochReader"
+    ]
+    selector = cls.__new__(cls)
+    selector.policy = p
+    selector.subtensor = SimpleNamespace(substrate=s)
+    selector.chain = c
+    assert selector.epoch_at(101) == 7
+    if post == "historic":
+        with pytest.raises(ValueError, match="runtime changed"):
+            c.guard_runtime(p, "b101")  # Default signing guard did not widen.

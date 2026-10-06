@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from ditto_screener.l2_review import (
     _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK,
     _SAFETY_ADJUDICATOR_TASK,
     _TOOLS,
+    _V13_VIOLATION_FINALITY_TASK,
     _VIOLATION_CAUSE_DISAGREEMENT_TASK,
     _VIOLATION_CAUSE_TASK,
     L2_DOSSIER_REVISION,
@@ -365,6 +367,39 @@ def test_l1_mechanism_narrowed_away_by_kimi_still_requires_sol() -> None:
     assert _needs_violation_adjudication(analyst, l1)
 
 
+def test_every_v13_violation_goes_to_the_l3_adjudicator_that_can_refute_it() -> None:
+    # A single-family violation skipped L3 before v13. At v13 an L3-confirmed
+    # breach rejects, so L2 alone must never be the last word.
+    analyst = L2RunResult(
+        observation=SourceReviewObservation(
+            ok=True,
+            risk_level="high",
+            finding_digest="b" * 64,
+            categories=("cross_user_access",),
+        ),
+        analyzed_files=(),
+        causal_path=(),
+        tools=(),
+        usage=L2Usage(),
+        cache_hit=False,
+        resolution_basis="cross_user_data_flow",
+    )
+    l1 = SourceReviewObservation(
+        ok=True,
+        risk_level="high",
+        finding_digest="a" * 64,
+        categories=("cross_user_access",),
+    )
+
+    assert not _has_mixed_causal_families(analyst, l1)
+    assert not _needs_violation_adjudication(analyst, l1, policy_version=12)
+    assert _needs_violation_adjudication(analyst, l1, policy_version=13)
+    assert "Your confirmation is final under policy v13." in (
+        _V13_VIOLATION_FINALITY_TASK
+    )
+    assert "submitting risk_level low" in _V13_VIOLATION_FINALITY_TASK
+
+
 def test_request_local_identical_tool_memoization_is_not_fabrication() -> None:
     assert l2_critic_prompt_revision(11) == "l3-sol-adversarial-critic-v21-policy-v11"
     assert l2_safety_prompt_revision(11) == "l3-sol-safety-adjudicator-v24-policy-v11"
@@ -422,9 +457,9 @@ def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     assert "blocks the call before endpoint dispatch" in v13
     assert "external tool's actual name and argument schema" in v13
     assert "hypothetically use the same field name" in v13
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v50-policy-v13"
-    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v23-policy-v13"
-    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v26-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v53-policy-v13"
+    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v25-policy-v13"
+    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v28-policy-v13"
     assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
     assert "Use at most four targeted analyzer" not in (
         l2_review._V13_SAFETY_ADJUDICATOR_TASK
@@ -509,7 +544,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "validator mints `inference_base_url`" in v13
     assert "A URL derived from user text" in v13
     assert "validator mints `inference_base_url`" not in _l2_review_system_prompt(12)
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v50-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v53-policy-v13"
     assert "v13" not in _benchmark_contract_capsule(12)
     assert _benchmark_contract_capsule(12)["supported_versions"] == [3, 4, 5, 6]
     assert (
@@ -3876,11 +3911,13 @@ async def test_partial_dossier_can_prove_violation_but_never_clear(
         deadline=None,
     )
 
-    assert requests == 1
+    # A partial dossier can still prove a violation: the L3 adjudicator
+    # (policy v13 sends every violation there) confirms it on the same evidence.
+    assert requests == 2
     assert result.observation.ok
     assert result.observation.risk_level == "high"
     assert not result.dossier_complete
-    assert result.clearance_path == "l2_violation"
+    assert result.clearance_path == "l3_adjudicated_violation_cause"
 
 
 @pytest.mark.parametrize("inventory_gap", [None, "failed", "omitted"])
@@ -4693,7 +4730,9 @@ async def test_parallel_model_tool_calls_cannot_exceed_trajectory_cap(
     assert result.response_models == ("openai/gpt-5.6-terra-20260709",)
 
 
-async def test_analyst_violation_stops_before_critic(tmp_path: Path) -> None:
+async def test_analyst_violation_goes_to_the_l3_adjudicator_not_the_critic(
+    tmp_path: Path,
+) -> None:
     source = "fn main() { bypass(); }\nfn bypass() {}"
     archive, artifact_sha = _tar(tmp_path, source)
     digest = hashlib.sha256(source.encode()).hexdigest()
@@ -4734,9 +4773,13 @@ async def test_analyst_violation_stops_before_critic(tmp_path: Path) -> None:
         deadline=None,
     )
 
-    assert requests == 1
+    # Policy v13: the independent L3 adjudicator re-decides every L2
+    # violation (it could refute it); the safe-result critic never runs.
+    assert requests == 2
     assert result.observation.risk_level == "medium"
-    assert result.critic_disposition is None
+    assert result.critic_disposition == "not_required"
+    assert result.adjudicator_disposition == "confirm_violation_cause"
+    assert result.clearance_path == "l3_adjudicated_violation_cause"
 
 
 async def test_mixed_benchmark_violation_gets_sol_cause_adjudication(
@@ -5257,7 +5300,8 @@ async def test_trajectory_recovers_after_bounded_shell_error(tmp_path: Path) -> 
         deadline=None,
     )
 
-    assert len(request_payloads) == 4
+    # +1: the policy-v13 L3 adjudicator confirms the final violation.
+    assert len(request_payloads) == 5
     assert harness.calls.count("shell") == 2
     assert result.observation.risk_level == "medium"
     assert result.observation.error_code is None
@@ -7079,7 +7123,7 @@ async def test_report_only_rejected_violation_cannot_become_safe(
     assert "report_only_unresolved_violation" in audit_path.read_text()
 
 
-async def test_report_only_provider_body_fault_retries_exact_turn_once(
+async def test_report_only_provider_body_fault_retries_exact_turn(
     tmp_path: Path,
 ) -> None:
     requests: list[bytes] = []
@@ -7121,6 +7165,7 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
         l3_enabled=False,
         terminal_verdict_required=True,
         retry_provider_body_fault_once=True,
+        provider_fault_retry_delays=(0.0,),
         transport=httpx.MockTransport(handler),
     )
     async with httpx.AsyncClient(transport=agent._transport) as client:
@@ -7133,7 +7178,7 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
             model="openai/gpt-6-sol",
             fallback_models=(),
             provider=None,
-            deadline=asyncio.get_running_loop().time() + 1,
+            deadline=asyncio.get_running_loop().time() + 60,
         )
     assert response.json()["status"] == "completed"
     assert len(requests) == 2
@@ -7147,6 +7192,133 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
         "x-ratelimit-remaining": "0",
     }
     assert requests[0] == requests[1]
+
+
+def _server_error_body() -> dict[str, object]:
+    return {
+        "id": "gen-fault",
+        "object": "response",
+        "model": "openai/gpt-6-sol",
+        "output": [],
+        "usage": {},
+        "error": {"code": "server_error", "message": "Internal Server Error"},
+    }
+
+
+def _provider_fault_agent(
+    tmp_path: Path,
+    handler: Callable[[httpx.Request], httpx.Response],
+    delays: tuple[float, ...],
+) -> SolL2SourceReviewAgent:
+    return SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(None, retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        retry_provider_body_fault_once=True,
+        provider_fault_retry_delays=delays,
+        transport=httpx.MockTransport(handler),
+    )
+
+
+async def test_provider_body_fault_burst_backs_off_until_the_turn_lands(
+    tmp_path: Path,
+) -> None:
+    requests: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.content)
+        if len(requests) <= 3:
+            return httpx.Response(200, json=_server_error_body())
+        return httpx.Response(200, json={"status": "completed", "output": []})
+
+    agent = _provider_fault_agent(tmp_path, handler, (0.0, 0.0, 0.0))
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        response = await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=(),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 600,
+        )
+    assert response.json()["status"] == "completed"
+    assert len(requests) == 4
+    assert len(set(requests)) == 1
+
+
+async def test_provider_body_fault_parks_after_bounded_backoff(
+    tmp_path: Path,
+) -> None:
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200, json=_server_error_body())
+
+    agent = _provider_fault_agent(tmp_path, handler, (0.0, 0.0, 0.0))
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        response = await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=(),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 600,
+        )
+    assert response.json()["error"]["code"] == "server_error"
+    assert requests == 4
+
+
+async def test_provider_body_fault_never_sleeps_past_the_lease(
+    tmp_path: Path,
+) -> None:
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200, json=_server_error_body())
+
+    # 75s of lease fits a 15s wait plus a 45s turn but not a 45s wait: retry once.
+    agent = _provider_fault_agent(tmp_path, handler, (15.0, 45.0, 90.0))
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(l2_review.asyncio, "sleep", fake_sleep)
+        async with httpx.AsyncClient(transport=agent._transport) as client:
+            response = await agent._post(
+                client,
+                "test-key",
+                [],
+                artifact_sha256="d" * 64,
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider=None,
+                deadline=asyncio.get_running_loop().time() + 75,
+            )
+    assert response.json()["error"]["code"] == "server_error"
+    assert sleeps == [15.0]
+    assert requests == 2
 
 
 async def test_model_turn_has_an_aggregate_wall_clock_deadline(
@@ -7784,7 +7956,7 @@ async def test_relayed_rate_limit_parks_after_one_post(tmp_path: Path) -> None:
         deadline=None,
     )
 
-    assert result.observation.error_code == "l2-model-response-contract"
+    assert result.observation.error_code == "l2-model-provider-fault"
     assert result.observation.failure_disposition == "retryable_infra"
     assert len(requests) == 1
 
@@ -7815,8 +7987,58 @@ async def test_persistent_relayed_rate_limit_still_posts_once(tmp_path: Path) ->
 
     assert not result.observation.ok
     assert result.observation.failure_disposition == "retryable_infra"
-    assert result.observation.error_code == "l2-model-response-contract"
+    assert result.observation.error_code == "l2-model-provider-fault"
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize("error_type", ["server_error", "provider_unavailable"])
+async def test_relayed_provider_outage_is_named_a_provider_fault(
+    tmp_path: Path, error_type: str
+) -> None:
+    """OpenRouter relays an upstream outage as a failed 200 body, not a bad answer."""
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error_type": error_type,
+                "error": "server_error",
+                "output": [],
+                "usage": {},
+            },
+        )
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.error_code == "l2-model-provider-fault"
+    assert result.observation.failure_disposition == "retryable_infra"
+
+
+async def test_malformed_body_without_a_provider_error_stays_a_contract_fault(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "completed", "output": "nope"})
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.error_code == "l2-model-response-contract"
 
 
 async def test_exhausted_l2_does_not_claim_coverage_it_lacks() -> None:
@@ -8755,7 +8977,8 @@ async def test_no_call_correction_budget_resets_after_a_tool_call(
         deadline=None,
     )
 
-    assert requests == 6
+    # +1: the policy-v13 L3 adjudicator confirms the final violation.
+    assert requests == 7
     assert result.observation.ok
     assert result.observation.risk_level == "high"
 

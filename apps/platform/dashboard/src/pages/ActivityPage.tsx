@@ -55,6 +55,7 @@ interface TreasuryEvent {
   public_recipient: string;
   block_hash: string;
   extrinsic_index: number;
+  extrinsic_hash?: string | null;
   event_index: number;
   actor_provenance: string;
   actor_public_id: string;
@@ -223,7 +224,9 @@ export function ActivityPage(): JSX.Element {
                           <dd>
                             {item.denominator === "not_attributed"
                               ? "Alpha funding/conversion attribution unproven"
-                              : `${item.allocation_bps} bps of ${item.denominator.replaceAll("_", " ")} · ${item.allocated_alpha_rao} alpha rao`}
+                              : item.event_kind === "service_distribution"
+                                ? `Configured allocation ${item.allocation_bps} bps · transferred ${item.allocated_alpha_rao} alpha rao. A transfer may be part of the source earning.`
+                                : `${item.allocation_bps} bps of ${item.denominator.replaceAll("_", " ")} · ${item.allocated_alpha_rao} alpha rao`}
                           </dd>
                         </div>
                         <div>
@@ -270,6 +273,12 @@ export function ActivityPage(): JSX.Element {
                           <dt>Public recipient</dt>
                           <dd>{item.public_recipient}</dd>
                         </div>
+                        <Show when={item.extrinsic_hash}>
+                          <div>
+                            <dt>Transaction ID</dt>
+                            <dd>{item.extrinsic_hash}</dd>
+                          </div>
+                        </Show>
                         <div>
                           <dt>Chain reference</dt>
                           <dd>

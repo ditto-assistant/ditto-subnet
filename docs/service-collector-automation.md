@@ -47,10 +47,16 @@ describe these proxies as hardware-constrained service wallets.
 Every tick verifies genesis, audited runtime bytes and public filter API;
 finalized `Owner`, `Uids` and `Keys`; non-owner collector association; narrow
 grants; and raw absence of fee-sponsorship consent. A numeric UID alone never
-authorizes a recipient. An absent hotkey must retain the configured Owner.
+authorizes a recipient. Re-registration retains the configured Owner. First
+registration also permits a previously unowned hotkey, only in the registration
+role with no SN118 UID and independently proven raw `Owner` storage absence at
+the same finalized block. A decoded default address is insufficient. Existing
+ownership, uncertain storage, subnet-owner association and transfer bootstrap
+refuse. Finalized registration must establish the exact Owner and reciprocal
+UID/Keys binding; its parent must prove absence of the SN118 UID.
 
 Only `register_limit(118, collector_hotkey, limit_price)` is signed. Runtime
-v470 enforces the execution-time TAO price limit before payment. No fallback
+The audited runtime enforces the execution-time TAO price limit before payment. No fallback
 to unbounded registration, no Utility batch and no nested proxy operation.
 Each attempted dispatch conservatively consumes **max burn + max fee** of the
 immutable lifetime budget, including proved failed/expired attempts. Cooldown
@@ -119,6 +125,18 @@ monitor fees, and budget this separately from custody and revocation.
 
 ## Initial setup and recovery boundary
 
+Sealed custody defaults to Google-only egress. Before a runner can observe Finney,
+a separately reviewed custody plan may set `collector_runtime_rpc_egress=true`.
+This requires both roles sealed and restores private Cloud NAT plus TCP 443 to
+`65.109.251.221/32`, the `entrypoint-finney.opentensor.ai` IPv4 independently
+resolved on 2026-10-03. It preserves own-version-only secret access, private
+hosts and the private/other-traffic deny rules. DNS changes require a reviewed
+source/plan update; do not broaden the firewall to recover connectivity. TLS
+hostname, genesis, runtime and proxy-filter checks remain required. This is an
+IP/port boundary, not a proof of confinement of every request to that server.
+Network provisioning does not install a runner, approve a policy or enable a
+timer. The binary-plan checker refuses a broadened RPC rule or unsealed roles.
+
 The root-owned systemd templates are deployment preparation only. The enabled
 policy must be approved and signed offline before initial journals are created.
 As each dedicated signer user, initialize once using
@@ -142,6 +160,18 @@ ingestion and historical-policy observer; bounded production canary and receipts
 None of those live actions is performed by this PR.
 
 ## Verified contract sources
+
+The active collector fingerprint is now the independently source-audited v472
+`0x43bc67be9df30636d7e948e7bdb1ed065f2fb92029458cc939abf89d76d8ada3`.
+See [the reconstruction audit](audits/collector-finney-v472/README.md) for exact
+source/tree/patch, bounded srtool build and the isolated build-time hash-seed
+constant difference. The unmodified rebuild is **not** byte-identical; every
+other function body and section is identical. Collector contract sources below
+were confirmed unchanged. A zero stake position still means zero available
+alpha when the runtime omits its empty aggregate-map entry. All positive stake
+and collateral checks remain required.
+
+Historical v470 evidence:
 
 Pinned SDK10.5.0 source:
 `opentensor/bittensor@b9af04ad3452dde398460d464598837313226101`.

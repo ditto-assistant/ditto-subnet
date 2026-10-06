@@ -1,4 +1,4 @@
-"""Canonical audited v470 effect decoders, with no finality or money authority.
+"""Canonical audited v472/v473 effect decoders, without money authority.
 
 Both the signer journal and Platform's receipt reader must independently bind
 the block, runtime fingerprint and historical identities before using these
@@ -14,10 +14,37 @@ from dataclasses import dataclass
 from typing import Any
 
 FINNEY_GENESIS = "0x2f0555cc76fc2840a25a6ea3b9637146806f1f44b090c175ffde2a7e5ab36c03"
-# Exact compressed v470 WASM audited for liquid credits and transfer effects.
-AUDITED_COLLECTOR_CODE_HASH = (
-    "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47"
+# Exact hashes, never version-only acceptance. Historical v472 evidence remains
+# readable; new signing requires the current hash and a new cold approval.
+HISTORICAL_COLLECTOR_CODE_HASH = (
+    "0x43bc67be9df30636d7e948e7bdb1ed065f2fb92029458cc939abf89d76d8ada3"
 )
+AUDITED_COLLECTOR_CODE_HASH = (
+    "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08"
+)
+AUDITED_COLLECTOR_RECEIPT_HASHES = frozenset(
+    (HISTORICAL_COLLECTOR_CODE_HASH, AUDITED_COLLECTOR_CODE_HASH)
+)
+
+
+def collector_receipt_runtime(parent: str, post: str) -> str:
+    """Return execution runtime for known states and the reviewed forward upgrade.
+
+    The code-changing block executes under its parent's runtime. Its collector
+    event contracts are unchanged in v473; reverse or unknown transitions refuse.
+    This is read-only receipt interpretation, never signing authorization.
+    """
+    if (
+        parent not in AUDITED_COLLECTOR_RECEIPT_HASHES
+        or post not in AUDITED_COLLECTOR_RECEIPT_HASHES
+    ):
+        raise ValueError("receipt runtime is not audited")
+    if parent != post and (parent, post) != (
+        HISTORICAL_COLLECTOR_CODE_HASH,
+        AUDITED_COLLECTOR_CODE_HASH,
+    ):
+        raise ValueError("receipt crosses an unaudited runtime transition")
+    return parent
 
 
 def chain_uint(value: Any) -> int:
@@ -51,7 +78,7 @@ class CollectorTransferEffect:
 def collector_gross_incentive(
     events: Sequence[Mapping[str, Any]], uid: int
 ) -> int | None:
-    """Reviewed v470 initialization event; gross is not liquid spending proof."""
+    """Reviewed initialization event; gross is not liquid spending proof."""
     uid = chain_uint(uid)
     amounts = []
     for event in events:
@@ -171,6 +198,7 @@ def collector_transfer_effect(
     if len(inner) != 1 or _attributes(inner[0][1]) not in (
         {"result": {"Ok": None}},
         {"result": {"Ok": []}},
+        {"result": {"Ok": ()}},  # Pinned Linux SDK's decoded SCALE unit.
     ):
         raise ValueError("successful inner proxy dispatch unproved")
     removed = matching("SubtensorModule", "StakeRemoved")

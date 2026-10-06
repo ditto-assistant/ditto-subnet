@@ -1727,6 +1727,211 @@ _EMULATION_FINGERPRINTS = (
         scan="code",
         skip_test_items=True,
     ),
+    # Policy-v13 I7 executor and router shapes (ATH sweep 2026-10-02). Every one
+    # of these passed automated screening and was rejected by an operator. They
+    # are leads: the reviewer must still name a reachable request, the valid
+    # blocked call and its consequence before promoting one.
+    _Fingerprint(
+        # tool-name-execution-cap (dittoreader v7/v9): a counter keyed on the
+        # tool name alone refuses a further call before execution, so a fourth
+        # distinct-argument effect never runs. An exact-repeat stop keyed on
+        # name plus canonical arguments has no name-keyed counter.
+        kind="tool-name-execution-cap",
+        severity="high",
+        roles=(
+            _Role(
+                "name-keyed-counter",
+                re.compile(
+                    r"\b\w*counts?\s*(?:\.get\(\s*&?|\[\s*&?)"
+                    r"(?:name|tool_name|call\.name|call\.function\.name|tool\.name)\b"
+                    r"[^\n]{0,40}(?:>=|>)"
+                    r"|\bMAX_SAME_TOOL\b|\bmax_same_tool\b|\bper_tool_(?:limit|cap)\b"
+                ),
+            ),
+            _Role(
+                "pre-execution-refusal",
+                re.compile(
+                    r"will not run again|not run again|(?:tool )?(?:cap|limit) reached"
+                    r"|answer from the results",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=8,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # successful-duplicate-suppression (Artemis v8, delta v5): a memo of
+        # successful calls returns a cached or synthetic result before the
+        # endpoint, so a separately requested identical effect ("send it twice")
+        # never executes. A model repeat authorizer in the guard is the honest
+        # look-alike (lets_636/637) and drops the lead.
+        kind="successful-duplicate-suppression",
+        severity="medium",
+        roles=(
+            _Role(
+                "success-memo-lookup",
+                re.compile(
+                    r"\b(?:successful|memo|completed_calls|done_calls|success_cache|"
+                    r"seen_calls)\s*(?:\.get\(|\.contains(?:_key)?\(|\[)"
+                    r"|\bin\s+(?:self\.)?(?:done_calls|successful|completed_calls|"
+                    r"seen_calls|memo)\b"
+                    r"|\bprior_success\b"
+                ),
+            ),
+            _Role(
+                "pre-execution-duplicate-refusal",
+                re.compile(
+                    r"not sent again|duplicate suppressed|exact successful duplicate"
+                    r"|not executed again|identical to an earlier successful",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        suppressors=(
+            _Role(
+                "model-repeat-authorizer",
+                re.compile(r"repeat_authori[sz]|authori[sz]e_repeat", re.IGNORECASE),
+            ),
+        ),
+        window=24,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # catalog-retired-after-step (crown-v166): a request-text lifecycle flag
+        # clears the tool definitions after one read and tells the model no
+        # further capability exists, so a second requested read cannot run.
+        kind="catalog-retired-after-step",
+        severity="high",
+        roles=(
+            _Role(
+                "tool-retire",
+                re.compile(
+                    r"\b_?(?:disable|retire|drop|clear|close)_(?:tools|catalog)\s*\("
+                    r"|\b(?:defs|tool_defs|tools_by_name|tool_definitions)\s*\.clear\(\)"
+                ),
+            ),
+            _Role(
+                "single-step-completion",
+                re.compile(
+                    r"\bretire_after_\w+|\bsingle[-_ ]lookup\b"
+                    r"|no further (?:capability|tool)|phase is complete",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=24,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # sticky-capability-veto (Sky v3): one host veto sets a flag that stays
+        # set for the rest of the request and blocks later, unrelated calls.
+        kind="sticky-capability-veto",
+        severity="medium",
+        roles=(
+            _Role(
+                "sticky-decline-flag",
+                re.compile(
+                    r"\b\w+_(?:declined|vetoed|refused|suppressed)\s*=\s*(?:True|true)\b"
+                ),
+            ),
+            _Role(
+                "request-wide-scope",
+                re.compile(
+                    r"rest of the request|remainder of the (?:request|turn)"
+                    r"|records or nowhere|stays? (?:true|set) for",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=90,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # uncertainty-narrows-route (Pentagon45 v1): a classifier prompt resolves
+        # doubt toward a route whose host catalog drops the external tools.
+        kind="uncertainty-narrows-route",
+        severity="medium",
+        roles=(
+            _Role(
+                "uncertain-default-label",
+                re.compile(
+                    r"\bif (?:you are |you're )?"
+                    r"(?:unsure|uncertain|in doubt|not sure)\b"
+                    r"[^\n]{0,40}?\b(?:write|output|return|answer|choose|pick|label|"
+                    r"classify(?: it)? as)\b[^\n]{0,6}?[\"'{]?\s*"
+                    r"(?:records?|read_only|memory|recall|none|no_tools?|lookup)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
+    _Fingerprint(
+        # tool-argument-grammar-sheet (clear v42): host text appended to a live
+        # tool description prescribes the argument wording the grader matches.
+        kind="tool-argument-grammar-sheet",
+        severity="medium",
+        roles=(
+            _Role(
+                "tool-description-constant",
+                re.compile(
+                    r"\b_?[A-Z0-9_]*(?:TOOL|PARAM|PAIR_ID|CONTENT|ARG)[A-Z0-9_]*"
+                    r"_DESCRIPTION\s*="
+                ),
+            ),
+            _Role(
+                "argument-grammar",
+                re.compile(
+                    r"\bwire grammar\b|\bOUTPUT SHAPE\b|\bnever omit the\b"
+                    r"|must be rewritten|<[a-z ]{2,30}>\s+is(?:/are)?\s+<[a-z ]{2,30}>",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=40,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # review-turn-argument-template (lets_635): a host-scheduled per-tool
+        # review turn whose pass test is an exact argument template.
+        kind="review-turn-argument-template",
+        severity="medium",
+        roles=(
+            _Role(
+                "per-tool-review-turn",
+                re.compile(r"\bREVIEW_TURNS\b|\breview_turns?\b"),
+            ),
+            _Role(
+                "argument-template",
+                re.compile(
+                    r"<[^<>\n]{2,40}>\s+is(?:/are)?\s+<[^<>\n]{2,30}>"
+                    r"|\bword for word\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=40,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # self-reported-benchmark-fitting (lets_635): a comment admitting the
+        # wording was selected by probing benchmark outcomes.
+        kind="self-reported-benchmark-fitting",
+        severity="medium",
+        roles=(
+            _Role(
+                "fitting-admission",
+                re.compile(
+                    r"probe[- ]selected|experiments/[A-Za-z0-9_-]+_\d{8}"
+                    r"|over \d+ recorded (?:first )?turns"
+                    r"|\d+(?:\.\d+)?%\s+(?:correct|accuracy|pass(?:ed)?)\s+vs\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
 )
 
 

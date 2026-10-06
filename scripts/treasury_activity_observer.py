@@ -19,6 +19,7 @@ from ditto.treasury.selector_handoff import SelectorHandoff
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
     chain_uint,
+    collector_receipt_runtime,
 )
 from ditto_screening_protocol.treasury_approval import TreasuryPolicyApproval
 
@@ -44,7 +45,7 @@ class FinalizedActivityReader:
 
     def epoch_at(self, block):
         at = self.block_hash(block)
-        self.adapter.guard_runtime(self.policy, at)
+        self.adapter.guard_runtime(self.policy, at, historical=True)
         return chain_uint(
             self.adapter.query("SubtensorModule", "SubnetEpochIndex", [118], at)
         )
@@ -53,8 +54,11 @@ class FinalizedActivityReader:
         if not 0 < block <= self.finalized_height():
             raise ValueError("observer block not finalized")
         at = self.block_hash(block)
-        for pinned in (self.block_hash(block - 1), at):
-            self.adapter.guard_runtime(self.policy, pinned)
+        codes = [
+            self.adapter.guard_runtime(self.policy, pinned, historical=True)
+            for pinned in (self.block_hash(block - 1), at)
+        ]
+        collector_receipt_runtime(*codes)
         raw = self.substrate.rpc_request("chain_getBlock", [at])
         encoded = raw["result"]["block"]["extrinsics"]
         events = self.substrate.get_events(at)

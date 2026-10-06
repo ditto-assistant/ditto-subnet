@@ -624,9 +624,9 @@ export function IntegrityReviewBranch(props: {
     <details class="pipeline-review-branch" aria-labelledby="pipeline-review-title">
       <summary class="pipeline-review-summary">
         <span>
-          <span class="pipeline-review-eyebrow">Conditional after scoring</span>
+          <span class="pipeline-review-eyebrow">Held submissions</span>
           <strong class="pipeline-review-title" id="pipeline-review-title">
-            Deferred source review
+            Under review
           </strong>
         </span>
         <span class="pipeline-review-count" id="pipeline-review-count">
@@ -634,9 +634,9 @@ export function IntegrityReviewBranch(props: {
         </span>
       </summary>
       <p class="pipeline-review-copy">
-        Only leaderboard qualifiers and robust anomaly holds enter this branch, and entering it is
-        not a finding. Each row names its trigger and what the automated review concluded; only a
-        raised concern is flagged. Other admitted submissions go directly through validator scoring.
+        Source review runs in full before scoring. A submission held by that review, or by an
+        operator review of a high score, waits here, and being held is not a finding. Each row names
+        why it is held and what the automated review concluded; only a raised concern is flagged.
       </p>
       <div class="pipeline-review-items" id="pipeline-review-items">
         <Show
@@ -646,11 +646,7 @@ export function IntegrityReviewBranch(props: {
           <Show when={!props.loading} fallback={<div class="pipeline-empty">Loading…</div>}>
             <Show
               when={shown().length > 0}
-              fallback={
-                <div class="pipeline-empty">
-                  No submissions are held for deferred source review.
-                </div>
-              }
+              fallback={<div class="pipeline-empty">No submissions are held for review.</div>}
             >
               <For each={shown()}>
                 {(item) => (
@@ -664,7 +660,7 @@ export function IntegrityReviewBranch(props: {
                       agentName(item.entry.name) +
                       ", " +
                       agentVersionLabel(item.entry.version) +
-                      " deferred source review details"
+                      " review details"
                     }
                     onClick={(ev) => cardClick(ev, String(item.entry.agent_id || ""))}
                   >

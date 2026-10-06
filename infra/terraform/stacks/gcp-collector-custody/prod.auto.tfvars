@@ -23,3 +23,7 @@ collector_custody_offline_addresses = [
   "5CD8TZWNSNtARxmB5VQF9qTNfCVjhdMdjmwBrniqU3E71ohQ", # Bitsec holding
   "5F2821EzMcBC2b8hWmrMWiNRcx6DgdaTQQiqmPkbAk7a6yn9", # Bitcast holding
 ]
+
+# Peyton authorized collector rollout; exact Finney TLS only after reviewed plan.
+# Both roles remain sealed; this does not activate policy, registration or timers.
+collector_runtime_rpc_egress = true
