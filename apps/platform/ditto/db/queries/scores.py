@@ -90,6 +90,20 @@ MIN_ELIGIBLE_CASES = 100
 # scores. Keep in sync with the ticket-issue cap and the validator quorum.
 SCORING_QUORUM = 3
 
+# 1.7976931348623157e308 — the float8 maximum, as PostgreSQL renders its 309-digit
+# plain decimal (str(float8 max) rounds to 1.7976931348623157e+308, but JSONB
+# normalizes stored JSON numbers to the full digit string, so the range guard
+# compares text against this exact boundary). Anything at or below it casts
+# finite; the next integer up overflows.
+_FLOAT8_MAX_TEXT = (
+    "1797693134862315708145274237317043567980705675258449965989174768031"
+    "572607800285387605895586327668781715404589535143824642343213268894"
+    "641827684675467035375169860499105765512820762454900903893289440758"
+    "685084551339423045832369032229481658085593321233482747978262041447"
+    "23168738177180919299881250404026184124858368"
+)
+assert len(_FLOAT8_MAX_TEXT) == 309
+
 
 def _is_ranked() -> ColumnElement[bool]:
     """SQL predicate for a *ranked* run: it administered the full benchmark AND
@@ -2351,19 +2365,47 @@ async def list_eligible_ledger(
         # Mirror _stored_stderr's degrade-to-None contract in SQL: a malformed
         # value (boolean, nonnumeric string, or an out-of-float8-range number)
         # must yield NULL rather than abort the whole ledger read at the cast.
-        # JSONB normalizes 1e309 to a 309+-digit plain decimal, so the length
-        # bound plus the plain-integer exclusion is exactly the float8 range
-        # guard; inside CASE arms the cast is lazy and never runs for rows the
-        # guard rejects.
+        # JSONB normalizes large numbers to plain decimals, so the range guard
+        # is textual: plain integers carry their full magnitude (309 digits can
+        # still be in range, e.g. 1e308, and only exceed float8 past
+        # 1.797...e308 — compared lexicographically against that exact
+        # boundary); anything with a decimal point or exponent text is in
+        # range up to 310 chars and overflows from 311. Inside CASE arms the
+        # cast is lazy and never runs for rows the guard rejects.
         stderr_text = Score.details["composite_stderr"].as_string()
         is_number = func.jsonb_typeof(Score.details["composite_stderr"]) == literal(
             "number"
         )
+        digits = func.regexp_replace(stderr_text, literal(r"^-"), literal(""))
+        is_plain_int = stderr_text.op("~")(literal(r"^-?[0-9]+$"))
         in_float8_range = or_(
-            func.length(stderr_text) <= 308,
+            # Decimal/exponent text: 310 chars with sign stays finite; 311
+            # overflows.
             and_(
+                ~is_plain_int,
                 func.length(stderr_text) <= 310,
-                stderr_text.op("!~")(literal(r"^-?[0-9]+$")),
+            ),
+            # Plain integers: compare magnitude against the 309-digit float8
+            # max (negatives carry one extra sign character).
+            and_(
+                is_plain_int,
+                stderr_text.op("~")(literal(r"^-")),
+                func.length(stderr_text) <= 310,
+                or_(
+                    func.length(digits) < 309,
+                    and_(func.length(digits) == 309, digits <= _FLOAT8_MAX_TEXT),
+                ),
+            ),
+            and_(
+                is_plain_int,
+                stderr_text.op("!~")(literal(r"^-")),
+                or_(
+                    func.length(stderr_text) < 309,
+                    and_(
+                        func.length(stderr_text) == 309,
+                        stderr_text <= _FLOAT8_MAX_TEXT,
+                    ),
+                ),
             ),
         )
         stderr_column: ColumnElement[Any] = case(

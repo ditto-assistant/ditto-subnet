@@ -1453,6 +1453,14 @@ class TestContinuationFloor:
             # out-of-float8-range number, exactly what production could hold.
             "out_of_range": int("1" + "0" * 309),
             "huge_integer": int("9" * 309),
+            "float8_max_plus_one": int(
+                "179769313486231570814527423731704356798070567525844996598917"
+                "476803157260780028538760589558632766878171540458953514382464"
+                "234321326889464182768467546703537516986049910576551282076245"
+                "490090389328944075868508455133942304583236903222948165808559"
+                "332123348274797826204144723168738177180919299881250404026184"
+                "124858369"
+            ),
         }
         agents: dict[str, UUID] = {}
         for label, value in malformed.items():
@@ -1542,6 +1550,55 @@ class TestContinuationFloor:
                 dedupe_owners=False,
             )
         assert rows[0].stored_composite_stderr == 0.0125
+
+    async def test_scalar_stderr_admits_float8_max_integer(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A 309-digit integer within float8 range must not degrade to None.
+
+        1e308 is finite but renders as a 309-digit plain decimal once JSONB
+        normalizes it, so a length-only guard would reject a value the
+        details-fetching path returns fine.
+        """
+        agent_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey="5" + "M" * 47,
+                    name="stderr-max",
+                    sha256="ab" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=_BASE,
+                )
+            )
+            session.add(
+                Score(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATORS[0],
+                    run_id="max-0",
+                    seed=987654321,
+                    composite=0.9,
+                    tool_mean=0.9,
+                    memory_mean=0.9,
+                    median_ms=500,
+                    n=114,
+                    generated_at=_BASE,
+                    signature="ab" * 64,
+                    details={"composite_stderr": 1e308, "bench_version": _BENCH},
+                    bench_version=_BENCH,
+                )
+            )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                include_details=False,
+                bench_version=_BENCH,
+                dedupe_owners=False,
+            )
+        assert rows[0].stored_composite_stderr == 1e308
 
     async def test_no_floor_below_five_finalized_owners(
         self, session_maker: async_sessionmaker[AsyncSession]
