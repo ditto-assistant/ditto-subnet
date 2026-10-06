@@ -85,7 +85,22 @@ export function GammaReceiptFeed(): JSX.Element {
                       <td class="gamma-address">
                         {item.state}
                         <small>
-                          Transaction: {item.extrinsic_hash || "Not recorded in legacy receipt"}
+                          Transaction:{" "}
+                          <Show
+                            when={item.extrinsic_hash}
+                            fallback="Not recorded in legacy receipt"
+                          >
+                            {(hash) => (
+                              <a
+                                href={`https://taostats.io/extrinsic/${encodeURIComponent(hash())}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="View transaction on Taostats (opens in a new tab)"
+                              >
+                                {hash()}
+                              </a>
+                            )}
+                          </Show>
                         </small>
                         <small>
                           {item.block_hash} / extrinsic {item.extrinsic_index}
