@@ -38,6 +38,10 @@ for suffix in manual.service transfer.service transfer.timer attempt.timer; do
 done
 sudo systemctl daemon-reload
 if bash "$task_root/guard.sh"; then echo 'Unmasked units passed the guard' >&2; exit 1; fi
+# Remove the CI probe definitions before masking their names (production
+# instances inherit a template rather than overriding unit files).
+sudo rm -f "/run/systemd/system/$task_prefix-transfer.service" "/run/systemd/system/$task_prefix-transfer.timer"
+sudo systemctl daemon-reload
 # Same lifecycle as documented production activation, scoped to CI-only names.
 sudo systemctl mask --runtime --now "$task_prefix-transfer.service" "$task_prefix-transfer.timer"
 sudo systemctl start "$task_prefix-manual.service"
