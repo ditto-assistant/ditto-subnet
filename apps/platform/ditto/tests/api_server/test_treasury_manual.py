@@ -558,3 +558,58 @@ async def test_inbox_transient_failure_does_not_ack(session_maker, monkeypatch):
     with pytest.raises(TimeoutError):
         await loop.sweep()
     assert not acks
+
+
+@pytest.mark.parametrize("status", ["finalized", "refused"])
+async def test_dispatched_result_survives_runtime_policy_rotation(
+    session_maker, monkeypatch, runtime, status
+):
+    from ditto.api_server import treasury_manual_loop as module
+
+    await seed(session_maker)
+    payload = submission(await get_preview(session_maker))
+    request_id = payload.envelope.request.request_id
+    async with session_maker() as session, session.begin():
+        await manual.submit(
+            session, None, payload, "operator@example.com", enabled=True
+        )
+        row = await session.get(TreasuryManualTransfer, request_id)
+        row.status = "dispatched"
+    runtime.treasury_approved_collector_policy_digest = "b" * 64
+    body = ManualReport(
+        collector_policy_digest=payload.envelope.collector_policy_digest,
+        observed_at=int(time.time()),
+        request_id=request_id,
+        request_digest=payload.envelope.digest,
+        status=status,
+        settlement={
+            "epoch_index": 100,
+            "block": 1001,
+            "block_hash": "0x" + "b" * 64,
+            "extrinsic_index": 2,
+            "extrinsic_hash": "0x" + "c" * 64,
+        }
+        if status == "finalized"
+        else None,
+    ).model_dump()
+    acks, audit_attempts = [], []
+
+    async def observe_audit(_session, _chain, row):
+        # Transport acceptance is not chain proof; independent receipt ingress
+        # is covered separately and remains pending in this transport control.
+        audit_attempts.append(row.request_id)
+
+    monkeypatch.setattr(module, "publish_audit", observe_audit)
+    mailbox = SimpleNamespace(pull=lambda: ("original-policy", body), ack=acks.append)
+    loop = module.TreasuryManualLoop(
+        SimpleNamespace(session_maker=session_maker, config=None, chain=None),
+        mailbox=mailbox,
+    )
+    await loop.sweep()
+    assert acks == ["original-policy"]
+    async with session_maker() as session:
+        row = await session.get(TreasuryManualTransfer, request_id)
+        assert row.report == body
+        assert row.status == ("audit_pending" if status == "finalized" else "refused")
+        assert row.receipt is None
+    assert audit_attempts == ([request_id] if status == "finalized" else [])

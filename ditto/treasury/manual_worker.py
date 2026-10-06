@@ -64,6 +64,9 @@ def consume_manual(mailbox, journal, policy, chain, ack_id, body):
             journal.db.execute("ROLLBACK")
             raise
         report = ManualReport(
+            # This identifies the refused request's pin, not an endorsement.
+            # Platform matches it to the immutable queued envelope; the journal
+            # separately records the custody policy that refused the request.
             collector_policy_digest=envelope.collector_policy_digest,
             observed_at=int(time.time()),
             request_id=envelope.request.request_id,

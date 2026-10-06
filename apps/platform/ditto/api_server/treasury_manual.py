@@ -220,6 +220,8 @@ async def accept_report(session, config, body):
             session.add(current)
         current.report, current.received_at = report.model_dump(), datetime.now(UTC)
         return
+    # A result belongs to its immutable dispatched request, not today's
+    # runtime policy. Rotation must not discard an older claim's settlement.
     row = await session.get(Transfer, report.request_id)
     if (
         row is None

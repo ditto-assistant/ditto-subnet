@@ -196,6 +196,8 @@ def test_poison_unapproved_request_refuses_and_acks_without_send(
     mailbox.fail = False
     result = consume_manual(mailbox, j, p, c, "retry", body)
     assert result.status == "refused" and mailbox.acks == ["retry"]
+    assert result.collector_policy_digest == body["collector_policy_digest"]
+    assert result.request_digest == ManualEnvelope.model_validate(body).digest
     assert len(c.sent) == 1
 
 
