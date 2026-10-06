@@ -153,6 +153,8 @@ def transfer_canary(
     ).fetchall()
     if len(rows) > 1:
         raise ValueError("ambiguous transfer canary history")
+    if not rows and canary_replacement(journal, policy) is not None:
+        raise ValueError("replacement lacks original canary history")
     if rows:
         body = json.loads(rows[0][0])
         if set(body) != {"policy", "max_alpha_rao", "after_operation"}:
@@ -160,6 +162,29 @@ def transfer_canary(
         if body["policy"] != policy.digest:
             raise ValueError("transfer canary policy changed")
         existing = TransferCanary(body["max_alpha_rao"], body["after_operation"])
+        replacement = canary_replacement(journal, policy)
+        if replacement is not None:
+            old = db.execute(
+                "SELECT * FROM operations WHERE id=?", (replacement["after_operation"],)
+            ).fetchone()
+            if (
+                old is None
+                or old["state"] != "failed"
+                or old["role"] != "transfer"
+                or old["source_block"] != replacement["source_block"]
+                or replacement["after_operation"] != existing.after_operation + 1
+                or not 0 < old["amount"] <= existing.max_alpha_rao
+                or replacement["proof"]["block"]
+                != json.loads(old["settlement_json"])["block"]
+                or replacement["proof"]["block_hash"]
+                != json.loads(old["settlement_json"])["block_hash"]
+                or replacement["proof"]["extrinsic_hash"]
+                != json.loads(old["signed_json"])["extrinsic_hash"]
+            ):
+                raise ValueError("replacement history differs from failed claim")
+            existing = TransferCanary(
+                replacement["max_alpha_rao"], replacement["after_operation"]
+            )
         if requested is not None and requested != existing:
             raise ValueError("transfer canary cannot be reset or widened")
         requested = existing
@@ -187,6 +212,136 @@ def transfer_canary(
     ):
         raise ValueError("transfer canary claim exceeds approved bound")
     return requested
+
+
+def canary_replacement(
+    journal: CollectorJournal, policy: CollectorPolicy
+) -> dict | None:
+    rows = journal.db.execute(
+        "SELECT payload FROM events WHERE event='transfer_canary_replaced'"
+    ).fetchall()
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise ValueError("only one explicit canary replacement is supported")
+    body = json.loads(rows[0][0])
+    if (
+        set(body)
+        != {
+            "policy",
+            "max_alpha_rao",
+            "after_operation",
+            "source_block",
+            "proof",
+            "reason",
+        }
+        or body["policy"] != policy.digest
+        or not isinstance(body["proof"], dict)
+        or body["proof"].get("status") != "failed"
+        or type(body["proof"].get("extrinsic_index")) is not int
+        or body["proof"]["extrinsic_index"] < 0
+        or not isinstance(body["proof"].get("extrinsic_hash"), str)
+        or type(body["source_block"]) is not int
+        or body["source_block"] < policy.start_block
+        or not isinstance(body["reason"], str)
+        or not 8 <= len(body["reason"].strip()) <= 240
+    ):
+        raise ValueError("invalid canary replacement history")
+    TransferCanary(body["max_alpha_rao"], body["after_operation"])
+    return body
+
+
+def replace_failed_canary(
+    journal: CollectorJournal,
+    policy: CollectorPolicy,
+    chain: CollectorChain,
+    requested: TransferCanary,
+    *,
+    reason: str,
+) -> None:
+    """Append one operator-authorized replacement, preserving the failed claim.
+
+    This command never prepares or broadcasts. A later bounded tick reuses only
+    the same independently reverified earnings receipt, not unrelated principal.
+    """
+    if (
+        not policy.enabled
+        or not isinstance(reason, str)
+        or not 8 <= len(reason.strip()) <= 240
+    ):
+        raise ValueError("enabled policy and bounded operator reason required")
+    db = journal.db
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        if tuple(db.execute("SELECT digest,role FROM pin").fetchone()) != (
+            policy.digest,
+            "transfer",
+        ):
+            raise ValueError("replacement requires pinned transfer journal")
+        if canary_replacement(journal, policy) is not None:
+            raise ValueError("canary already replaced")
+        existing = transfer_canary(journal, policy, "transfer", None)
+        maximum = db.execute("SELECT COALESCE(MAX(id),0) FROM operations").fetchone()[0]
+        if (
+            existing is None
+            or requested.after_operation != maximum
+            or maximum != existing.after_operation + 1
+            or requested.max_alpha_rao > policy.max_distribution_rao
+        ):
+            raise ValueError(
+                "replacement requires exactly one spent canary within signed ceiling"
+            )
+        operation = db.execute(
+            "SELECT * FROM operations WHERE id=?", (maximum,)
+        ).fetchone()
+        if operation["state"] != "failed" or operation["role"] != "transfer":
+            raise ValueError(
+                "replacement requires failed transfer, not unknown or paid"
+            )
+        proof = chain.retryable_transfer_failure(policy, dict(operation))
+        signed = json.loads(operation["signed_json"])
+        saved = json.loads(operation["settlement_json"])
+        if (
+            not isinstance(proof, Settlement)
+            or proof.status != "failed"
+            or proof.block != saved["block"]
+            or proof.block_hash != saved["block_hash"]
+            or proof.extrinsic_hash != signed["extrinsic_hash"]
+            or type(proof.extrinsic_index) is not int
+            or proof.extrinsic_index < 0
+        ):
+            raise ValueError("replacement lacks exact finalized failure proof")
+        row = db.execute(
+            "SELECT * FROM earnings WHERE block=?", (operation["source_block"],)
+        ).fetchone()
+        if (
+            row is None
+            or row["completed"]
+            or db.execute(
+                "SELECT COUNT(*) FROM operations WHERE source_block=?", (row["block"],)
+            ).fetchone()[0]
+            != 1
+        ):
+            raise ValueError("replacement requires untouched same-source receipt")
+        earned = chain.earnings(policy, row["block"])
+        if earned != FinalizedEarnings(
+            row["amount"], row["block_hash"], row["event_digest"]
+        ):
+            raise ValueError("replacement earnings changed or unavailable")
+        journal.event(
+            "transfer_canary_replaced",
+            {
+                "policy": policy.digest,
+                **asdict(requested),
+                "source_block": row["block"],
+                "proof": asdict(proof),
+                "reason": reason.strip(),
+            },
+        )
+        db.execute("COMMIT")
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
 
 
 @dataclass(frozen=True)
@@ -227,6 +382,9 @@ class CollectorChain(Protocol):
     def broadcast(self, encoded: str) -> None: ...
     def reconcile(
         self, policy: CollectorPolicy, operation: dict, observation: Observation
+    ) -> Settlement: ...
+    def retryable_transfer_failure(
+        self, policy: CollectorPolicy, operation: dict
     ) -> Settlement: ...
 
 
@@ -449,6 +607,7 @@ def tick(
         else:
             if observed.uid is None:
                 raise ValueError("collector absent; service transfers halted")
+            replacement = canary_replacement(journal, policy)
             row = db.execute(
                 """SELECT * FROM earnings e WHERE NOT EXISTS
                 (SELECT 1 FROM operations o WHERE o.source_block=e.block
@@ -456,6 +615,18 @@ def tick(
                 AND e.completed=0 AND e.block+?<=? ORDER BY e.block LIMIT 1""",
                 (policy.distribution_interval_blocks, observed.block),
             ).fetchone()
+            if replacement is not None:
+                row = db.execute(
+                    "SELECT * FROM earnings WHERE block=? AND completed=0 "
+                    "AND block+?<=?",
+                    (
+                        replacement["source_block"],
+                        policy.distribution_interval_blocks,
+                        observed.block,
+                    ),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("replacement same-source receipt unavailable")
             if not row:
                 cursor = db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
                 # Bound archive/RPC work to 32 finalized blocks per invocation.
@@ -514,8 +685,11 @@ def tick(
                 parts,
                 db.execute(
                     "SELECT bucket,amount,destination,role,state FROM operations "
-                    "WHERE source_block=?",
-                    (row["block"],),
+                    "WHERE source_block=? AND id!=?",
+                    (
+                        row["block"],
+                        replacement["after_operation"] if replacement else -1,
+                    ),
                 ).fetchall(),
             )
             if sum(part.alpha_rao for part in remaining) > observed.alpha_rao:

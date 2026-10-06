@@ -711,6 +711,153 @@ def test_registration_preparation_refuses_missing_invalid_or_over_cap_fee(info):
     assert not signed
 
 
+def transfer_preparation(amount, minimum=100_000, price=6_488_750):
+    c, _, _, observed, signed = registration_preparation({"partial_fee": 10})
+    p = policy(max_distribution_rao=1_000_000_000)
+    c.role = "transfer"
+    key_reads, reads = [], []
+    c.key = lambda *_: (
+        key_reads.append(True) or SimpleNamespace(ss58_address=p.transfer_delegate)
+    )
+    c.substrate.get_constant = lambda *args, **kw: (
+        reads.append((args, kw)) or SimpleNamespace(value=minimum)
+    )
+    c.substrate.runtime_call = lambda *args, **kw: (
+        reads.append((args, kw)) or SimpleNamespace(value=price)
+    )
+    call = {
+        "module": "SubtensorModule",
+        "function": "transfer_stake",
+        "params": {
+            "destination_coldkey": "gm",
+            "hotkey": p.collector_hotkey,
+            "origin_netuid": 118,
+            "destination_netuid": 118,
+            "alpha_amount": amount,
+        },
+    }
+    return c, p, call, observed, signed, key_reads, reads
+
+
+def test_minimum_value_refuses_original_small_canary_before_key_access():
+    c, p, call, observed, signed, keys, reads = transfer_preparation(10_000_000)
+    with pytest.raises(ValueError, match="below finalized minimum"):
+        c.prepare(p, "transfer", call, observed)
+    assert not keys and not signed
+    assert all(kw["block_hash"] == observed.block_hash for _, kw in reads)
+
+
+def test_authorized_point_one_canary_passes_minimum_without_changing_amount():
+    c, p, call, observed, signed, keys, _ = transfer_preparation(100_000_000)
+    assert c.prepare(p, "transfer", call, observed).fee_rao == 10
+    assert len(keys) == len(signed) == 1
+    assert call["params"]["alpha_amount"] == 100_000_000
+
+
+@pytest.mark.parametrize("field", ["minimum", "price"])
+@pytest.mark.parametrize("invalid", [None, True, "100000", 1.0, -1, 0, 2**64])
+def test_unknown_minimum_or_price_never_loads_key(field, invalid):
+    c, p, call, observed, signed, keys, _ = transfer_preparation(
+        100_000_000, **{field: invalid}
+    )
+    with pytest.raises(ValueError):
+        c.prepare(p, "transfer", call, observed)
+    assert not keys and not signed
+
+
+def test_price_read_failure_has_no_default_or_key_access():
+    c, p, call, observed, signed, keys, _ = transfer_preparation(100_000_000)
+
+    def unavailable(*_, **__):
+        raise ConnectionError("unavailable")
+
+    c.substrate.runtime_call = unavailable
+    with pytest.raises(ConnectionError):
+        c.prepare(p, "transfer", call, observed)
+    assert not keys and not signed
+
+
+def retry_failure_fixture():
+    p, c, op, _, events = receipt_fixture()
+    events[0]["event"]["attributes"]["result"] = {
+        "Err": {"Module": {"index": 7, "error": "0x52000000"}}
+    }
+    del events[3:]
+    op.update(
+        state="failed",
+        settlement_json=json.dumps(
+            {"status": "failed", "block": 101, "block_hash": "b101"}
+        ),
+    )
+    c.observe = lambda *_: Observation(200, "b200", 14, 1, 100, 100, 100)
+    c.key = lambda *_: pytest.fail("failure proof loaded a key")
+    return p, c, op, events
+
+
+def test_amount_too_low_failure_is_reproved_at_exact_hash_without_key():
+    p, c, op, _ = retry_failure_fixture()
+    proof = c.retryable_transfer_failure(p, op)
+    assert (proof.status, proof.block, proof.block_hash, proof.extrinsic_index) == (
+        "failed",
+        101,
+        "b101",
+        0,
+    )
+    assert proof.extrinsic_hash == json.loads(op["signed_json"])["extrinsic_hash"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "other_error",
+        "paid",
+        "missing_outer",
+        "changed_stake",
+        "changed_block",
+        "live_mortality",
+        "unknown",
+        "wrong_phase",
+        "missing_hash",
+        "bad_fee",
+        "runtime",
+    ],
+)
+def test_canary_replacement_proof_refuses_uncertainty_or_effect(mutation):
+    p, c, op, events = retry_failure_fixture()
+    if mutation == "other_error":
+        events[0]["event"]["attributes"]["result"]["Err"]["Module"]["error"] = (
+            "0x53000000"
+        )
+    elif mutation == "paid":
+        events[0]["event"]["attributes"]["result"] = {"Ok": []}
+    elif mutation == "missing_outer":
+        events.pop(1)
+    elif mutation == "changed_stake":
+        c.alpha = lambda _p, _cold, at: 101 if at == "b101" else 100
+    elif mutation == "changed_block":
+        op["settlement_json"] = json.dumps(
+            {"status": "failed", "block": 101, "block_hash": "other"}
+        )
+    elif mutation == "live_mortality":
+        c.observe = lambda *_: Observation(164, "b164", 14, 1, 100, 100, 100)
+    elif mutation == "unknown":
+        op["state"] = "dispatching"
+    elif mutation == "wrong_phase":
+        events[0]["phase"] = "Initialization"
+    elif mutation == "missing_hash":
+        c.substrate.rpc_request = lambda *_: {"result": {"block": {"extrinsics": []}}}
+    elif mutation == "bad_fee":
+        events[2]["event"]["attributes"]["actual_fee"] = 11
+    elif mutation == "runtime":
+
+        def changed(*_, **__):
+            raise ValueError("runtime changed")
+
+        c.guard_runtime = changed
+    with pytest.raises(ValueError):
+        c.retryable_transfer_failure(p, op)
+
+
 def test_phase_mismatch_cannot_claim_an_extrinsic_effect():
     p, c, op, observed, events = receipt_fixture()
     events[-1]["phase"] = "Initialization"

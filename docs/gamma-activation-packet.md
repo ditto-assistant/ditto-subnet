@@ -359,6 +359,34 @@ changing or omitting flags cannot release the canary. Resetting/deleting the
 journal is not an authorized release and destroys custody history. TAO fees
 remain bounded independently by the signed policy.
 
+Before key loading, transfer preparation checks the finalized runtime's
+`InitialMinTransfer` against the conservative integer TAO value returned by
+`SwapRuntimeApi.current_alpha_price`. An undersized amount or unknown quote
+refuses; it never automatically increases an operator-approved amount. Price
+can change before inclusion, so passing this check is not an execution guarantee.
+
+One failed canary may be replaced only through a separate operator-approved
+command, with recurring timers still off:
+
+```bash
+python scripts/treasury_collector.py --role transfer \
+  --policy /etc/sn118-collector/transfer/policy.json \
+  --policy-sha256 <existing-approved-digest> \
+  --journal /var/lib/sn118-collector-transfer/journal.db \
+  --replace-failed-canary --canary-max-alpha-rao 100000000 \
+  --canary-after-operation <failed-operation-id> \
+  --operator-reason 'operator authorized one 0.1 alpha replacement canary'
+```
+
+This command signs and sends nothing. It re-verifies the exact finalized
+transaction, audited v473 `AmountTooLow` inner failure, expired mortality,
+unchanged collector/recipient alpha balances across that block, and the original
+earning. It appends an event without editing the old operation or earning.
+Unknown, expired-but-unincluded, paid, differently failed, or effect-bearing
+claims cannot be replaced. A following tick can reserve only one new capped
+claim against that same receipt. Ordinary invocations retain the replacement
+ceiling; a second replacement is refused. This is not a recurring release.
+
 1. Resolve existing public inputs/custody/limits. Review/authorize exact infra
    and offline-primary ceremonies. Verify finalized non-owner collector and
    self auto-stake route; no UID/immunity shortcut.

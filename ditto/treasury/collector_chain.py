@@ -551,6 +551,30 @@ class PublicCollectorChain:
             or current.block_hash != observation.block_hash
         ):
             raise ValueError("finalized observation changed before signing")
+        if role == "transfer":
+            # v473 checks same-subnet stake's TAO value, not just alpha units.
+            # The price API rounds down to TAO rao per whole alpha: integer
+            # flooring here is conservative relative to the runtime's U64F64.
+            # Never upsize an approved amount or load a key on unknown quotes.
+            minimum = uint(
+                s.get_constant(
+                    "SubtensorModule",
+                    "InitialMinTransfer",
+                    block_hash=current.block_hash,
+                )
+            )
+            price = uint(
+                s.runtime_call(
+                    "SwapRuntimeApi",
+                    "current_alpha_price",
+                    [118],
+                    block_hash=current.block_hash,
+                )
+            )
+            if minimum == 0 or price == 0:
+                raise ValueError("transfer minimum or alpha price unavailable")
+            if params["alpha_amount"] * price // 1_000_000_000 < minimum:
+                raise ValueError("transfer amount below finalized minimum value")
         key = self.key(policy)
         self.guard_runtime(policy, s.get_chain_head())
         inner = s.compose_call(
@@ -661,7 +685,13 @@ class PublicCollectorChain:
                 ]
                 if len(failures) != 1:
                     raise ValueError("unknown outer outcome; retain durable claim")
-                return Settlement("failed", block, block_hash)
+                return Settlement(
+                    "failed",
+                    block,
+                    block_hash,
+                    extrinsic_index=matches[0],
+                    extrinsic_hash=signed["extrinsic_hash"],
+                )
             if len(outer) != 1 or len(inner) != 1:
                 raise ValueError("missing or ambiguous inner proxy result")
             attrs = inner[0].get("event", {}).get("attributes")
@@ -677,7 +707,13 @@ class PublicCollectorChain:
                     and isinstance(error["Err"], (dict, str))
                     and error["Err"]
                 ):
-                    return Settlement("failed", block, block_hash)
+                    return Settlement(
+                        "failed",
+                        block,
+                        block_hash,
+                        extrinsic_index=matches[0],
+                        extrinsic_hash=signed["extrinsic_hash"],
+                    )
                 raise ValueError("unsupported inner result; retain durable claim")
             uid = self.identity(policy, block_hash)
             if operation["role"] == "registration":
@@ -741,6 +777,67 @@ class PublicCollectorChain:
             else "pending"
         )
         return Settlement(status, scanned_through=end)
+
+    def retryable_transfer_failure(self, policy, operation):
+        """Reprove one finalized v473 AmountTooLow failure without signing.
+
+        Other failures, unknown delivery, expiry and changed stake are refused.
+        The caller supplies a separate explicit bounded operator authorization.
+        """
+        if (
+            self.role != "transfer"
+            or operation["role"] != "transfer"
+            or operation["state"] != "failed"
+        ):
+            raise ValueError("replacement requires a failed transfer")
+        saved = json.loads(operation["settlement_json"])
+        signed = json.loads(operation["signed_json"])
+        block = uint(saved.get("block"))
+        observed = self.observe(policy, "transfer")
+        if (
+            saved.get("status") != "failed"
+            or not signed["start_block"]
+            < block
+            <= signed["expires_block"]
+            < observed.block
+        ):
+            raise ValueError("replacement requires finalized expired mortality")
+        block_hash = self.substrate.get_block_hash(block)
+        if saved.get("block_hash") != block_hash:
+            raise ValueError("failed settlement block changed")
+        # Only the independently audited v473 error index is accepted.
+        self.guard_runtime(policy, block_hash)
+        result = self.reconcile(
+            policy, dict(operation, reconciled_through=block - 1), observed
+        )
+        if (
+            result.status != "failed"
+            or result.block != block
+            or result.block_hash != block_hash
+        ):
+            raise ValueError("failed transfer cannot be reproved")
+        events = [
+            e
+            for e in self.substrate.get_events(block_hash)
+            if e.get("extrinsic_idx") == result.extrinsic_index
+        ]
+        errors = [
+            e.get("event", {}).get("attributes")
+            for e in events
+            if e.get("module_id") == "Proxy" and e.get("event_id") == "ProxyExecuted"
+        ]
+        if errors != [
+            {"result": {"Err": {"Module": {"index": 7, "error": "0x52000000"}}}}
+        ]:
+            raise ValueError("replacement only permits audited AmountTooLow")
+        parent = self.substrate.get_block_hash(block - 1)
+        self.guard_runtime(policy, parent)
+        for coldkey in (policy.collector_coldkey, operation["destination"]):
+            if self.alpha(policy, coldkey, parent) != self.alpha(
+                policy, coldkey, block_hash
+            ):
+                raise ValueError("failed transfer changed stake; replacement refused")
+        return result
 
     @staticmethod
     def fee_evidence(policy, role, events):

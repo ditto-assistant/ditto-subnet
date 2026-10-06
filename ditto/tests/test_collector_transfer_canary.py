@@ -12,6 +12,7 @@ from ditto.treasury.collector import (
     Settlement,
     TransferCanary,
     remaining_distribution,
+    replace_failed_canary,
     tick,
 )
 from ditto.treasury.service_allocation import plan_service_distribution
@@ -59,6 +60,118 @@ def test_failed_canary_consumes_claim_instead_of_starting_another(tmp_path, stat
     assert tick(j, p, c, "transfer") == status
     assert tick(j, p, object(), "transfer", canary=bound) == "canary_spent"
     assert len(c.sent) == 1
+
+
+def failed_replacement_fixture(tmp_path):
+    p, c, j, bound = setup_transfer(tmp_path, cap=39)
+    assert tick(j, p, c, "transfer", canary=bound) == "dispatching"
+    c.settlement = Settlement("failed", 101, "0x" + "c" * 64)
+    assert tick(j, p, c, "transfer") == "failed"
+    c.retryable_transfer_failure = lambda *_: replace(
+        c.settlement, extrinsic_index=0, extrinsic_hash="0x" + "b" * 64
+    )
+    return p, c, j
+
+
+def test_explicit_replacement_preserves_failed_claim_and_same_source_entitlement(
+    tmp_path,
+):
+    p, c, j = failed_replacement_fixture(tmp_path)
+    original = tuple(j.db.execute("SELECT * FROM operations").fetchone())
+    replace_failed_canary(
+        j, p, c, TransferCanary(40, 1), reason="operator approved replacement"
+    )
+    assert tuple(j.db.execute("SELECT * FROM operations").fetchone()) == original
+    assert len(c.prepared) == len(c.sent) == 1  # rearming does not sign/send
+    j.close()
+    j = open_journal(tmp_path, p, "transfer")
+    assert tick(j, p, c, "transfer") == "dispatching"
+    assert c.prepared[-1][1]["params"]["alpha_amount"] == 40
+    assert j.db.execute(
+        "SELECT id,state,source_block,amount FROM operations ORDER BY id"
+    ).fetchall()[0][:] == (1, "failed", 10, 39)
+    assert j.db.execute(
+        "SELECT id,state,source_block,amount FROM operations ORDER BY id"
+    ).fetchall()[1][:] == (2, "dispatching", 10, 40)
+    c.settlement = Settlement("finalized", 102, "0x" + "f" * 64, 14)
+    assert tick(j, p, c, "transfer") == "finalized"
+    assert tick(j, p, object(), "transfer") == "canary_spent"
+    assert len(c.sent) == 2
+    assert j.db.execute("SELECT amount,completed FROM earnings").fetchone()[:] == (
+        101,
+        0,
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "pending",
+        "paid",
+        "expired",
+        "wrong_baseline",
+        "over_cap",
+        "wrong_proof",
+        "changed_income",
+        "bad_reason",
+    ],
+)
+def test_replacement_refuses_unsafe_transition_without_history_change(
+    tmp_path, mutation
+):
+    p, c, j = failed_replacement_fixture(tmp_path)
+    requested, reason = TransferCanary(40, 1), "operator approved replacement"
+    if mutation in {"pending", "paid", "expired"}:
+        j.db.execute(
+            "UPDATE operations SET state=?",
+            (
+                {"pending": "dispatching", "paid": "finalized", "expired": "expired"}[
+                    mutation
+                ],
+            ),
+        )
+    elif mutation == "wrong_baseline":
+        requested = TransferCanary(40, 0)
+    elif mutation == "over_cap":
+        requested = TransferCanary(1001, 1)
+    elif mutation == "wrong_proof":
+        c.retryable_transfer_failure = lambda *_: replace(
+            c.settlement, extrinsic_index=0, extrinsic_hash="wrong"
+        )
+    elif mutation == "changed_income":
+        c.income[10] = 102
+    elif mutation == "bad_reason":
+        reason = "short"
+    before = j.db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    with pytest.raises(ValueError):
+        replace_failed_canary(j, p, c, requested, reason=reason)
+    assert j.db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before
+    assert len(c.sent) == len(c.prepared) == 1
+
+
+def test_replacement_cannot_be_repeated_or_reset_by_tick_flags(tmp_path):
+    p, c, j = failed_replacement_fixture(tmp_path)
+    bound = TransferCanary(40, 1)
+    replace_failed_canary(j, p, c, bound, reason="operator approved replacement")
+    with pytest.raises(ValueError, match="already replaced"):
+        replace_failed_canary(j, p, c, bound, reason="operator approved replacement")
+    with pytest.raises(ValueError, match="reset or widened"):
+        tick(j, p, object(), "transfer", canary=TransferCanary(41, 1))
+
+
+def test_replacement_uncertain_broadcast_only_reconciles_after_restart(tmp_path):
+    p, c, j = failed_replacement_fixture(tmp_path)
+    replace_failed_canary(
+        j, p, c, TransferCanary(40, 1), reason="operator approved replacement"
+    )
+    c.error = True
+    with pytest.raises(TimeoutError):
+        tick(j, p, c, "transfer")
+    j.close()
+    j = open_journal(tmp_path, p, "transfer")
+    c.settlement = Settlement("pending")
+    assert tick(j, p, c, "transfer") == "pending"
+    assert len(c.sent) == len(c.prepared) == 2
 
 
 def test_unknown_delivery_reopens_to_reconciliation_without_resigning(tmp_path):
