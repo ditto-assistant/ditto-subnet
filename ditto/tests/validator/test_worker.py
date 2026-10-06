@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import ValidationError
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import ActiveBenchmarkSlot
@@ -5152,89 +5151,6 @@ class TestChainCadenceFloor:
 
 
 class TestIndependentWeightLoop:
-    @staticmethod
-    def _worker_observing(
-        entries: list[LedgerEntry], *, enforce: bool = False
-    ) -> ValidatorWorker:
-        platform = MagicMock()
-        platform.get_ledger = AsyncMock(
-            return_value=LedgerResponse(
-                entries=entries,
-                count=len(entries),
-                v9_confirmation_mode="enforce" if enforce else None,
-            )
-        )
-        return ValidatorWorker(
-            config=_config(),
-            platform=platform,
-            dittobench=MagicMock(),
-            chain=MagicMock(),
-            keypair=MagicMock(),
-        )
-
-    async def test_king_observer_ignores_unconfirmed_v9_in_mixed_ledger(
-        self,
-    ) -> None:
-        v8 = _entry("5V8" + "x" * 44, 0.70, bench_version=8)
-        unconfirmed_v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9)
-        worker = self._worker_observing([unconfirmed_v9, v8], enforce=True)
-
-        available, fingerprint = await worker._observe_platform_king()
-
-        assert available
-        assert fingerprint == worker._king_fingerprint(v8)
-
-    async def test_king_observer_reports_no_champion_for_v9_only_ledger(
-        self,
-    ) -> None:
-        unconfirmed_v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9)
-        worker = self._worker_observing([unconfirmed_v9], enforce=True)
-
-        available, fingerprint = await worker._observe_platform_king()
-
-        assert available
-        assert fingerprint is None
-
-    async def test_king_observer_accepts_ordinary_v9_while_shadowing(self) -> None:
-        ordinary_v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9)
-        worker = self._worker_observing([ordinary_v9])
-
-        available, fingerprint = await worker._observe_platform_king()
-
-        assert available
-        assert fingerprint == worker._king_fingerprint(ordinary_v9)
-
-    async def test_king_observer_accepts_confirmed_v9(self) -> None:
-        confirmed_v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9).model_copy(
-            update={"v9_confirmation": SimpleNamespace(full_effective_micros=990_000)}
-        )
-        worker = self._worker_observing([confirmed_v9])
-
-        available, fingerprint = await worker._observe_platform_king()
-
-        assert available
-        assert fingerprint == worker._king_fingerprint(confirmed_v9)
-
-    async def test_king_observer_survives_a_ledger_that_fails_validation(
-        self,
-    ) -> None:
-        try:
-            LedgerResponse.model_validate({"entries": "not-a-list", "count": 0})
-        except ValidationError as exc:
-            validation_error = exc
-        worker = self._worker_observing([])
-        worker._platform.get_ledger = AsyncMock(side_effect=validation_error)  # type: ignore[method-assign]
-
-        assert await worker._observe_platform_king() == (False, None)
-
-    async def test_king_observer_survives_an_undecodable_ledger(self) -> None:
-        worker = self._worker_observing([])
-        worker._platform.get_ledger = AsyncMock(  # type: ignore[method-assign]
-            side_effect=json.JSONDecodeError("Expecting value", "", 0)
-        )
-
-        assert await worker._observe_platform_king() == (False, None)
-
     async def test_weight_loop_restarts_after_an_unexpected_crash(self) -> None:
         config = _config()
         config.sweep_seconds = 0.001
@@ -5304,40 +5220,86 @@ class TestIndependentWeightLoop:
 
         assert 4319.0 <= delay <= 4320.0
 
-    async def test_king_event_never_bypasses_local_commit_reveal_floor(self) -> None:
-        config = _config()
-        config.sweep_seconds = 0.005
+    async def test_post_submit_wait_holds_the_local_floor_without_a_ledger_read(
+        self,
+    ) -> None:
+        platform = MagicMock()
+        platform.get_ledger = AsyncMock()
         worker = ValidatorWorker(
-            config=config,
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._seconds_until_weight_window = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+        worker._local_resubmit_guard_seconds = AsyncMock(return_value=0.03)  # type: ignore[method-assign]
+
+        started = time.monotonic()
+        await worker._wait_for_weight_window(
+            asyncio.Event(),
+            epoch_seconds=0.03,
+            drain_requested=None,
+        )
+
+        assert time.monotonic() - started >= 0.02
+        platform.get_ledger.assert_not_awaited()
+
+    async def test_post_submit_wait_uses_the_later_chain_window(self) -> None:
+        platform = MagicMock()
+        platform.get_ledger = AsyncMock()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._seconds_until_weight_window = AsyncMock(return_value=12.0)  # type: ignore[method-assign]
+        worker._local_resubmit_guard_seconds = AsyncMock(return_value=3.0)  # type: ignore[method-assign]
+        slept: list[float] = []
+
+        async def record_sleep(
+            _stop: asyncio.Event,
+            seconds: float,
+            _drain: asyncio.Event | None,
+        ) -> None:
+            slept.append(seconds)
+
+        worker._sleep_or_stop_or_drain = record_sleep  # type: ignore[method-assign]
+
+        await worker._wait_for_weight_window(
+            asyncio.Event(),
+            epoch_seconds=3600.0,
+            drain_requested=None,
+        )
+
+        assert slept == [12.0]
+        platform.get_ledger.assert_not_awaited()
+
+    async def test_post_submit_wait_returns_when_drain_is_already_requested(
+        self,
+    ) -> None:
+        worker = ValidatorWorker(
+            config=_config(),
             platform=MagicMock(),
             dittobench=MagicMock(),
             chain=MagicMock(),
             keypair=MagicMock(),
         )
-        worker._ledger_changed.set()
-        worker._seconds_until_weight_window = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
-        worker._observe_platform_king = AsyncMock(  # type: ignore[method-assign]
-            return_value=(
-                True,
-                (
-                    "5Miner" + "x" * 41,
-                    UUID("550e8400-e29b-41d4-a716-446655440000"),
-                    0.9,
-                    4,
-                ),
-            )
-        )
+        worker._seconds_until_weight_window = AsyncMock(return_value=30.0)  # type: ignore[method-assign]
+        worker._local_resubmit_guard_seconds = AsyncMock(return_value=30.0)  # type: ignore[method-assign]
+        drain = asyncio.Event()
+        drain.set()
 
         started = time.monotonic()
-        await worker._wait_for_king_or_weight_window(
+        await worker._wait_for_weight_window(
             asyncio.Event(),
-            epoch_seconds=0.03,
-            baseline=None,
-            drain_requested=None,
+            epoch_seconds=3600.0,
+            drain_requested=drain,
         )
 
-        assert time.monotonic() - started >= 0.02
-        worker._observe_platform_king.assert_awaited()
+        assert time.monotonic() - started < 1.0
 
     async def test_weights_run_while_scoring_sweep_is_still_busy(self) -> None:
         scoring_started = asyncio.Event()
