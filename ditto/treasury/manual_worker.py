@@ -172,7 +172,15 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
                 raise InvalidManualRequest(
                     "Armed mailbox UUID changed", envelope
                 ) from error
-            raise
+            pending = ManualReport(
+                collector_policy_digest=policy.digest,
+                observed_at=int(time.time()),
+                request_id=request.request_id,
+                request_digest=envelope.digest,
+                status="pending",
+            )
+            mailbox.publish(pending.model_dump())
+            return pending  # No ACK, no new operation, retry exact old claim.
         # Persist refusal before publication/ACK. Otherwise a lost ACK could
         # make an old refused request executable after balances change.
         journal.db.execute("BEGIN IMMEDIATE")

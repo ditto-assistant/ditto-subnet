@@ -177,3 +177,21 @@ it('uses a new intent ID after editing inputs following an uncertain queue respo
   expect(preview.mock.calls[1][0].data.amount_rao).toBe(200000000)
   expect(queue).toHaveBeenCalledOnce()
 })
+
+
+it('links each finalized receipt directly to its own Taostats transaction', () => {
+  const hashes = ['0x' + 'c'.repeat(64), '0x' + 'd'.repeat(64)]
+  const requests = hashes.map((hash, index) => ({
+    request_id: index === 0 ? result.envelope.request.request_id : '82b61a1b-2703-4895-b408-3ee6be9f7d83',
+    envelope: { ...result.envelope, version: 1 as const }, status: 'published' as const,
+    actor: 'operator@example.com', created_at: '2026-10-06T00:00:00Z', updated_at: '2026-10-06T00:00:00Z', last_error: null,
+    receipt: { receipt_id: 'a'.repeat(64), extrinsic_hash: hash, published: true },
+  }))
+  render(<TreasuryManualTransferPanel initialState={{ ...control, requests }} readOnly />)
+  const links = screen.getAllByRole('link', { name: 'View transaction on Taostats' })
+  expect(links).toHaveLength(2)
+  for (const [index, link] of links.entries()) {
+    expect(link.getAttribute('href')).toBe(`https://taostats.io/extrinsic/${hashes[index]}`)
+    expect(link.getAttribute('rel')).toBe('noreferrer')
+  }
+})

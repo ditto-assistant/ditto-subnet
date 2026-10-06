@@ -422,3 +422,36 @@ def test_finalized_claim_with_incomplete_saved_coordinates_stays_pending(
     result = consume_manual(mailbox, j, p, c, "restored", env.model_dump())
     assert result.status == "finalized" and mailbox.acks == ["restored"]
     assert len(c.sent) == 2
+
+
+def test_exact_armed_revalidation_refusal_publishes_pending_without_ack(
+    tmp_path, monkeypatch
+):
+    import ditto.treasury.manual_worker as worker
+    from ditto.treasury.collector import ManualIntentRefused
+
+    p, c, j, env, mailbox = setup(tmp_path)
+    process_manual(mailbox, j, p, c, "initial", env.model_dump())
+    original_arm = worker.arm_manual_transfer
+    before = list(j.db.iterdump())
+
+    def refused(*_args, **_kwargs):
+        raise ManualIntentRefused("Synthetic revalidation refusal")
+
+    monkeypatch.setattr(worker, "arm_manual_transfer", refused)
+    mailbox.fail = True
+    with pytest.raises(TimeoutError):
+        consume_manual(mailbox, j, p, c, "lost-publish", env.model_dump())
+    mailbox.fail = False
+    result = consume_manual(mailbox, j, p, c, "retry", env.model_dump())
+    assert result.status == "pending" and mailbox.acks == []
+    assert mailbox.reports[-1]["status"] == "pending"
+    assert list(j.db.iterdump()) == before and len(c.sent) == 2
+    changed = env.model_dump()
+    changed["request"]["amount_rao"] += 1
+    assert consume_manual(mailbox, j, p, c, "invalid-bytes", changed) is None
+    assert mailbox.acks == ["invalid-bytes"] and len(c.sent) == 2
+    monkeypatch.setattr(worker, "arm_manual_transfer", original_arm)
+    result = consume_manual(mailbox, j, p, c, "restored", env.model_dump())
+    assert result.status == "finalized"
+    assert mailbox.acks == ["invalid-bytes", "restored"] and len(c.sent) == 2
