@@ -49,11 +49,14 @@ def _ensure_valid_index(bind: Connection) -> None:
                 f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {INDEX_NAME} "
                 "ON score_audit_log (event, agent_id)"
             )
-            if _index_state(bind) is not True:
-                raise RuntimeError(
-                    f"{INDEX_NAME} did not come up valid; re-run the migration"
-                )
-            return
+            if _index_state(bind) is True:
+                return
+            # A second builder can publish an INVALID index between our read
+            # and IF NOT EXISTS. Retry the catalog, not that stale DDL outcome.
+            if attempt == MAX_ATTEMPTS:
+                raise RuntimeError(FAILURE)
+            log.warning("%s still not valid; rechecking catalog", INDEX_NAME)
+            time.sleep(backoff_delay(attempt))
         except exc.DBAPIError as error:
             if not is_retryable(error) or attempt == MAX_ATTEMPTS:
                 raise
@@ -79,7 +82,7 @@ def run_with_audit_index_recovery(
         if str(error) != FAILURE:
             raise
         connection.rollback()
-        if _index_state(connection) is not False:
+        if _index_state(connection) is True:
             connection.rollback()
             raise
         connection.rollback()
