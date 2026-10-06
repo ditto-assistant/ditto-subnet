@@ -11,6 +11,28 @@ from ditto.treasury.manual_worker import consume_manual, publish_readiness
 from ditto_screening_protocol.treasury_pubsub import TreasuryMailbox
 
 
+def consume_iteration(mailbox, journal, policy, chain):
+    # Advance proved earnings only; no automatic money tick.
+    observe_earnings(journal, policy, chain)
+    try:
+        publish_readiness(mailbox, journal, policy, chain)
+    except Exception as error:
+        # Readiness is an observation; existing exact requests still undergo
+        # independent custody validation and durable unknown-delivery handling.
+        print(
+            json.dumps(
+                {
+                    "status": "readiness_publish_failed",
+                    "error_type": type(error).__name__,
+                }
+            ),
+            flush=True,
+        )
+    message = mailbox.pull()
+    if message:
+        consume_manual(mailbox, journal, policy, chain, *message)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", required=True)
@@ -44,12 +66,7 @@ def main():
             try:
                 with bt.Subtensor(network="archive") as subtensor:
                     chain = PublicCollectorChain(subtensor.substrate, role="transfer")
-                    # Advance proved earnings only; no automatic money tick.
-                    observe_earnings(journal, policy, chain)
-                    publish_readiness(mailbox, journal, policy, chain)
-                    message = mailbox.pull()
-                    if message:
-                        consume_manual(mailbox, journal, policy, chain, *message)
+                    consume_iteration(mailbox, journal, policy, chain)
             except Exception as error:
                 # No payloads, tokens, signed bytes or raw provider errors.
                 print(

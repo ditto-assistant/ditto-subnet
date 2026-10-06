@@ -162,6 +162,10 @@ def test_refusal_survives_return_ack_failure_and_later_balance_change(tmp_path):
     mailbox.fail = True
     with pytest.raises(TimeoutError):
         process_manual(mailbox, j, p, c, "ack", env.model_dump())
+    assert not j.db.in_transaction
+    assert j.db.execute(
+        "SELECT 1 FROM events WHERE event='manual_mailbox_refused'"
+    ).fetchone()
     c.observation = replace(c.observation, alpha_rao=10000)
     mailbox.fail = False
     result = process_manual(mailbox, j, p, c, "ack", env.model_dump())
@@ -489,3 +493,40 @@ def test_epoch_zero_reports_finalized_receipt_and_keeps_strict_bounds(tmp_path):
             ManualSettlement.model_validate(
                 {**report.settlement.model_dump(), "epoch_index": value}
             )
+
+
+def test_readiness_publish_failure_still_pulls_and_reconciles_exact_request(
+    tmp_path, monkeypatch, capsys
+):
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "manual_consumer_script",
+        Path(__file__).resolve().parents[2] / "scripts/treasury_manual_worker.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    p, c, j, env, mailbox = setup(tmp_path)
+    monkeypatch.setattr(module, "observe_earnings", lambda *_: None)
+
+    def failed_readiness(*_):
+        raise TimeoutError("raw provider detail must not be logged")
+
+    monkeypatch.setattr(module, "publish_readiness", failed_readiness)
+    pulls = []
+
+    def pull():
+        pulls.append("pulled")
+        return "ack", env.model_dump()
+
+    mailbox.pull = pull
+    module.consume_iteration(mailbox, j, p, c)
+    module.consume_iteration(mailbox, j, p, c)
+    assert pulls == ["pulled", "pulled"]
+    assert mailbox.reports[-1]["status"] == "finalized" and mailbox.acks == ["ack"]
+    assert len(c.sent) == 2  # Original canary plus one bound manual transfer.
+    assert not j.db.in_transaction
+    logs = capsys.readouterr().out
+    assert "readiness_publish_failed" in logs and "TimeoutError" in logs
+    assert "raw provider detail" not in logs

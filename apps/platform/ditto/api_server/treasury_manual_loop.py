@@ -145,6 +145,7 @@ class TreasuryManualLoop:
                     row.last_error = (
                         "Finalized receipt proof refused; operator review required"
                     )
+                row.updated_at = datetime.now(UTC)
 
     @staticmethod
     def refuse_dispatch(row):

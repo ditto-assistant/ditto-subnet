@@ -371,6 +371,37 @@ class ProtectedWorkflow(unittest.TestCase):
                     result = subprocess.run(["bash", "-e", "-c", script], env=env)
                     self.assertEqual(result.returncode == 0, accepted)
 
+    def test_both_selectors_reject_mailbox_flag_for_other_roots(self):
+        selectors = re.findall(
+            r"      - name: Select exact root\n.*?        run: \|\n(.*?)(?=\n      - )",
+            self.text,
+            re.S,
+        )
+        self.assertEqual(len(selectors), 2)
+        for selector in selectors:
+            for root in ("gcp-gamma-custody", "gcp-collector-custody", "gcp-platform"):
+                for flag in ("true", "false"):
+                    script = "\n".join(line[10:] for line in selector.splitlines())
+                    script = script.replace("${{ inputs.root }}", root)
+                    with tempfile.TemporaryDirectory() as tmp:
+                        env = {
+                            "PATH": os.environ["PATH"],
+                            "GITHUB_OUTPUT": str(Path(tmp) / "output"),
+                            "GITHUB_ENV": str(Path(tmp) / "env"),
+                            "TF_TARGETS": "",
+                            "HOTKEY_ADMIN_PHASE": "absent",
+                            "HOTKEY_ADMIN_REVISION": "",
+                            "SCREENER_DEV_HOST_ENABLED": "false",
+                            "GAMMA_MANUAL_MAILBOX_ENABLED": flag,
+                        }
+                        result = subprocess.run(
+                            ["bash", "-e", "-c", script], env=env, capture_output=True
+                        )
+                        self.assertEqual(
+                            result.returncode == 0,
+                            flag == "false" or root == "gcp-gamma-custody",
+                        )
+
     def test_custody_steps_never_receive_platform_secret_env(self):
         for name in (
             "Create full isolated custody plan",

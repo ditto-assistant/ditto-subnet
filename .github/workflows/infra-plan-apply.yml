@@ -103,7 +103,12 @@ jobs:
           HOTKEY_ADMIN_PHASE: ${{ inputs.validator_hotkey_admin_phase }}
           HOTKEY_ADMIN_REVISION: ${{ inputs.validator_hotkey_admin_revision }}
           SCREENER_DEV_HOST_ENABLED: ${{ inputs.screener_fleet_dev_host_enabled }}
+          GAMMA_MANUAL_MAILBOX_ENABLED: ${{ inputs.gamma_manual_mailbox_enabled }}
         run: |
+          if [ "${GAMMA_MANUAL_MAILBOX_ENABLED:-false}" = true ] && [ '${{ inputs.root }}' != gcp-gamma-custody ]; then
+            echo 'gamma_manual_mailbox_enabled requires root=gcp-gamma-custody' >&2
+            exit 2
+          fi
           case '${{ inputs.root }}' in
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
             gcp-preview) root=infra/terraform/stacks/gcp-preview ;;
@@ -358,7 +363,12 @@ jobs:
           HOTKEY_ADMIN_PHASE: ${{ inputs.validator_hotkey_admin_phase }}
           HOTKEY_ADMIN_REVISION: ${{ inputs.validator_hotkey_admin_revision }}
           SCREENER_DEV_HOST_ENABLED: ${{ inputs.screener_fleet_dev_host_enabled }}
+          GAMMA_MANUAL_MAILBOX_ENABLED: ${{ inputs.gamma_manual_mailbox_enabled }}
         run: |
+          if [ "${GAMMA_MANUAL_MAILBOX_ENABLED:-false}" = true ] && [ '${{ inputs.root }}' != gcp-gamma-custody ]; then
+            echo 'gamma_manual_mailbox_enabled requires root=gcp-gamma-custody' >&2
+            exit 2
+          fi
           case '${{ inputs.root }}' in
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
             gcp-preview) root=infra/terraform/stacks/gcp-preview ;;

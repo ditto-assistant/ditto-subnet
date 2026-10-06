@@ -286,6 +286,11 @@ async def test_admin_button_requires_auth_and_server_actor(app, client, session_
     payload = submission(await get_preview(session_maker)).model_dump()
     headers = {"Authorization": f"Bearer {token}"}
     assert (await client.post(url, headers=headers, json=payload)).status_code == 422
+    for actor in ("   ", "bad\x01actor", "x" * 255):
+        rejected = await client.post(
+            url, headers={**headers, "X-Admin-Actor": actor}, json=payload
+        )
+        assert rejected.status_code == 422
     payload["actor"] = "spoofed@example.com"
     response = await client.post(
         url, headers={**headers, "X-Admin-Actor": "signed-in@example.com"}, json=payload
@@ -478,6 +483,7 @@ async def test_permanently_refused_audit_does_not_starve_later_receipt(
         )
         row.status = "audit_pending"
         row.created_at = datetime(2020, 1, 1, tzinfo=UTC)
+        row.updated_at = row.created_at
         # Historical late reports can leave multiple durable audits. The first
         # refusal must remain held, while the later independent proof progresses.
         session.add(
@@ -517,6 +523,7 @@ async def test_permanently_refused_audit_does_not_starve_later_receipt(
             TreasuryManualTransfer, later.envelope.request.request_id
         )
         assert refused.status == "audit_pending"
+        assert refused.updated_at > datetime(2020, 1, 1, tzinfo=UTC)
         assert (
             refused.last_error
             == "Finalized receipt proof refused; operator review required"
