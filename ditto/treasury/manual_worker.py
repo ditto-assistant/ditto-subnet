@@ -5,6 +5,7 @@ import logging
 import time
 
 from ditto.treasury.collector import (
+    ManualIntentChanged,
     ManualIntentRefused,
     ManualTransfer,
     arm_manual_transfer,
@@ -191,9 +192,26 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
         # Re-export its exact claim; never execute the newer intent for it.
         result = None
         if row is None or row["state"] == "dispatching":
-            result = tick(
-                journal, policy, chain, "transfer", manual_request_id=request.request_id
-            )
+            try:
+                result = tick(
+                    journal,
+                    policy,
+                    chain,
+                    "transfer",
+                    manual_request_id=request.request_id,
+                )
+            except ManualIntentChanged:
+                # Between SELECT and tick's lock, another process may finalize
+                # this claim and arm the next one. Revalidate exact history and
+                # export only this finalized old operation, never tick the new one.
+                arm_manual_transfer(journal, policy, chain, manual)
+                old = journal.db.execute(
+                    "SELECT * FROM operations WHERE id>? ORDER BY id LIMIT 1",
+                    (request.after_operation,),
+                ).fetchone()
+                if old is None or old["state"] != "finalized":
+                    raise
+
             row = journal.db.execute(
                 "SELECT * FROM operations WHERE id>? ORDER BY id LIMIT 1",
                 (request.after_operation,),

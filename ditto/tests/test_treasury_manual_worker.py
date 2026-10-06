@@ -302,3 +302,37 @@ def test_older_unsettled_intent_cannot_have_a_valid_newer_intent(
     assert not j.db.execute(
         "SELECT 1 FROM events WHERE event='manual_mailbox_refused'"
     ).fetchone()
+
+
+def test_concurrent_finalization_and_new_intent_reexports_only_old_claim(
+    tmp_path, monkeypatch
+):
+    import ditto.treasury.manual_worker as worker
+
+    p, c, j, env, mailbox = setup(tmp_path)
+    assert (
+        process_manual(mailbox, j, p, c, "initial", env.model_dump()).status
+        == "pending"
+    )
+    original_tick = worker.tick
+    newer = replace(
+        ManualTransfer(**env.request.model_dump()),
+        request_id=str(uuid4()),
+        after_operation=2,
+    )
+
+    def interleaved_tick(*args, **kwargs):
+        # Another process settles the old dispatching operation and advances
+        # after worker SELECT, but before the original tick obtains its lock.
+        assert (
+            original_tick(j, p, c, "transfer", manual_request_id=env.request.request_id)
+            == "finalized"
+        )
+        arm_manual_transfer(j, p, c, newer)
+        return original_tick(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "tick", interleaved_tick)
+    result = consume_manual(mailbox, j, p, c, "interleaved", env.model_dump())
+    assert result.status == "finalized" and result.request_id == env.request.request_id
+    assert mailbox.acks == ["interleaved"] and len(c.sent) == 2
+    assert j.db.execute("SELECT MAX(id) FROM operations").fetchone()[0] == 2

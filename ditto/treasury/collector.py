@@ -232,6 +232,10 @@ def manual_transfer_history(journal, policy):
     return requests
 
 
+class ManualIntentChanged(ValueError):
+    """Another process advanced the exact intent before this tick acquired its lock."""
+
+
 class ManualIntentRefused(ValueError):
     """Permanent operator-intent defect, not unavailable settlement evidence."""
 
@@ -830,7 +834,9 @@ def tick(
         if manual_request_id is not None and (
             not manual or manual[-1].request_id != manual_request_id
         ):
-            raise ValueError("manual execute request differs from current exact intent")
+            raise ManualIntentChanged(
+                "manual execute request differs from current exact intent"
+            )
         if (
             canary is not None
             and db.execute(
