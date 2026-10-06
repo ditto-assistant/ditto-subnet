@@ -58,7 +58,12 @@ if bash "$task_root/guard.sh"; then echo 'Masked active units passed the guard' 
 if sudo systemctl start "$task_prefix-manual.service"; then echo 'Masked active manual activation succeeded' >&2; exit 1; fi
 sudo systemctl is-active --quiet "$task_prefix@transfer.service"
 sudo systemctl stop "$task_prefix@transfer.service" "$task_prefix@transfer.timer"
-sudo systemctl reset-failed "$task_prefix-manual.service" "$task_prefix@transfer.timer"
+sudo systemctl reset-failed "$task_prefix-manual.service"
+# A stopped masked timer may already be unloaded. Reset it only when systemd
+# actually retains a failed state; later guard checks still require inactivity.
+if [[ $(systemctl show --value --property=ActiveState "$task_prefix@transfer.timer") == failed ]]; then
+  sudo systemctl reset-failed "$task_prefix@transfer.timer"
+fi
 rm -f "$task_root/transfer-executed"
 # Same lifecycle as documented production activation, scoped to CI-only names.
 sudo systemctl mask --now "$task_prefix@transfer.service" "$task_prefix@transfer.timer"
