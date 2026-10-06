@@ -69,8 +69,8 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
       <button className={inputClass} disabled={blocked || confirmation !== expected} onClick={async () => {
         setBusy(true); setError('')
         try {
-          await queue({ data: { envelope: preview.envelope, confirmation_digest: preview.confirmation_digest, confirmation: 'TRANSFER SN118 ALPHA ONCE' } })
-          setMessage('Transfer queued. Finality and the public receipt are tracked below.'); setPreview(null); setConfirmation(''); setRequestId(crypto.randomUUID()); await load()
+          const result = await queue({ data: { envelope: preview.envelope, confirmation_digest: preview.confirmation_digest, confirmation: 'TRANSFER SN118 ALPHA ONCE' } })
+          setMessage(`${statusLabels[result.status]}. Track this request below.`); setPreview(null); setConfirmation(''); setRequestId(crypto.randomUUID()); await load()
         } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to queue transfer; retry this same confirmation') }
         finally { setBusy(false) }
       }}>Transfer once</button>

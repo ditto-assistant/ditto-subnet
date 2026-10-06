@@ -46,8 +46,8 @@ async def state(session, config, *, enabled):
             select(Transfer).order_by(Transfer.created_at.desc()).limit(20)
         )
     )
-    readiness = None
-    blocked = "Manual custody bridge is disabled"
+    readiness: ManualReadiness | None = None
+    blocked: str | None = "Manual custody bridge is disabled"
     if enabled:
         blocked = "Waiting for a fresh custody observation"
         if bridge:
