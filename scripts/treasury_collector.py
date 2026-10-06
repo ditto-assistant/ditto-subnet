@@ -261,17 +261,18 @@ def main() -> None:
                     )
                 )
                 return
-            result = (
-                tick(journal, policy, chain, args.role, canary=canary)
-                if canary is not None
-                else tick(
+            if canary is not None:
+                result = tick(journal, policy, chain, args.role, canary=canary)
+            elif args.execute_manual_request is not None:
+                result = tick(
                     journal,
                     policy,
                     chain,
                     args.role,
                     manual_request_id=args.execute_manual_request,
                 )
-            )
+            else:
+                result = tick(journal, policy, chain, args.role)
             if args.selector_snapshot is not None:
                 try:
                     write_selector_snapshot(journal.db, args.selector_snapshot, policy)

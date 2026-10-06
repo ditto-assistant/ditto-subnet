@@ -845,13 +845,16 @@ def tick(
                 (policy.distribution_interval_blocks, observed.block),
             ).fetchone()
             if replacement is not None or intent is not None:
+                if intent is not None:
+                    selected_source = intent.source_block
+                else:
+                    assert replacement is not None
+                    selected_source = replacement["source_block"]
                 row = db.execute(
                     "SELECT * FROM earnings WHERE block=? AND completed=0 "
                     "AND block+?<=?",
                     (
-                        intent.source_block
-                        if intent is not None
-                        else replacement["source_block"],
+                        selected_source,
                         policy.distribution_interval_blocks,
                         observed.block,
                     ),
