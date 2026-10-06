@@ -134,8 +134,8 @@ async def test_fully_ready_current_era_agent_is_leaseable(
     agent_id = await _seed(sr_maker)
     _install(app, sr_maker)
     body = await _get(client, agent_id)
-    assert body["leaseable"] is True
-    assert body["blocking_reasons"] == []
+    assert body["leaseable"] is True, body["blocking_reasons"]
+    assert body["blocking_reasons"] == [], body["blocking_reasons"]
     assert body["active_bench_version"] == MIN_SCOREABLE_BENCH_VERSION
     assert body["has_versioned_dataset"] is True
     assert body["screened_image"]["complete"] is True
