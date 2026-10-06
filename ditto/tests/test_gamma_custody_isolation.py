@@ -160,6 +160,8 @@ class Isolation(unittest.TestCase):
         self.assertIn('"pubsub.subscriptions.setIamPolicy"', bootstrap)
         self.assertNotIn('"pubsub.topics.publish"', bootstrap)
         self.assertNotIn('"pubsub.subscriptions.consume"', bootstrap)
+        self.assertNotIn('"roles/pubsub.publisher"', bootstrap)
+        self.assertNotIn('"roles/pubsub.subscriber"', bootstrap)
         self.assertIn("gammaManualMailboxPlan", bootstrap)
         self.assertIn("gammaManualMailboxApply", bootstrap)
 

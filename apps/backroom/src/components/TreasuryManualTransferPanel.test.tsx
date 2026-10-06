@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { TreasuryManualTransferPanel } from './TreasuryManualTransferPanel'
 import { alphaRao } from '../lib/treasury-manual.schemas'
@@ -87,4 +87,28 @@ it('blocks preview when all allocations are disabled or a refresh disables the s
   fireEvent.click(screen.getByText('Refresh transfer status'))
   await waitFor(() => expect((screen.getByText('Preview manual transfer') as HTMLButtonElement).disabled).toBe(true))
   expect(preview).not.toHaveBeenCalled()
+})
+
+// An older poll must never restore an enabled state over newer custody status.
+it.each(['older success', 'older failure', 'newer failure'])('keeps the newest refresh authoritative: %s', async (scenario) => {
+  const pending: { resolve: (value: typeof control) => void; reject: (error: Error) => void }[] = []
+  refresh.mockImplementation(() => new Promise<typeof control>((resolve, reject) => { pending.push({ resolve, reject }) }))
+  render(<TreasuryManualTransferPanel initialState={control} readOnly={false} />)
+  fireEvent.click(screen.getByText('Refresh transfer status'))
+  fireEvent.click(screen.getByText('Refresh transfer status'))
+  await act(async () => {
+    if (scenario === 'newer failure') pending[1].reject(new Error('offline'))
+    else pending[1].resolve({ ...control, destinations: control.destinations.map(d => ({ ...d, allocation_bps: 0 })) })
+  })
+  await act(async () => {
+    if (scenario === 'older failure') pending[0].reject(new Error('old outage'))
+    else pending[0].resolve(control)
+  })
+  if (scenario === 'newer failure') {
+    expect(screen.getByRole('alert').textContent).toContain('Transfer status unavailable')
+    expect(screen.getByLabelText('Amount (SN118 alpha)').closest('fieldset')?.disabled).toBe(true)
+  } else {
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect((screen.getByLabelText('Destination wallet') as HTMLSelectElement).options[0].disabled).toBe(true)
+  }
 })

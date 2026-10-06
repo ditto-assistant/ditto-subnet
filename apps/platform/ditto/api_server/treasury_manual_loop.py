@@ -87,7 +87,8 @@ class TreasuryManualLoop:
                 ):
                     row.status, row.last_error = (
                         "refused",
-                        "Gamma paused or signed policy changed before dispatch",
+                        "Gamma paused or signed policy changed; dispatch stopped, "
+                        "prior delivery may still settle",
                     )
                 else:
                     # Publish-before-commit is safe only because custody binds

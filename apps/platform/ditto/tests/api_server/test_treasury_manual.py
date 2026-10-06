@@ -613,3 +613,129 @@ async def test_dispatched_result_survives_runtime_policy_rotation(
         assert row.status == ("audit_pending" if status == "finalized" else "refused")
         assert row.receipt is None
     assert audit_attempts == ([request_id] if status == "finalized" else [])
+
+
+@pytest.mark.parametrize(
+    "offset, accepted", [(-181, False), (-180, True), (5, True), (6, False)]
+)
+async def test_readiness_clock_skew_is_bounded_at_ingest_and_use(
+    session_maker, monkeypatch, offset, accepted
+):
+    now = int(time.time())
+    monkeypatch.setattr(manual.time, "time", lambda: now)
+    body = report().model_dump()
+    body["observed_at"] = now + offset
+    async with session_maker() as session, session.begin():
+        await manual.accept_report(session, None, body)
+    async with session_maker() as session:
+        stored = await session.get(TreasuryManualBridgeState, 1)
+        assert (stored is not None) is accepted
+        view = await manual.state(session, None, enabled=True)
+        assert (view["readiness"] is not None) is accepted
+    # The same bound applies if a stored observation later becomes unusable.
+    if accepted:
+        monkeypatch.setattr(manual.time, "time", lambda: now + offset + 181)
+        with pytest.raises(ValueError, match="fresh"):
+            await get_preview(session_maker)
+
+
+async def test_completed_claim_guard_is_not_limited_to_display_page(session_maker):
+    from datetime import UTC, datetime, timedelta
+
+    await seed(session_maker)
+    payload = submission(await get_preview(session_maker))
+    async with session_maker() as session, session.begin():
+        await manual.submit(
+            session, None, payload, "operator@example.com", enabled=True
+        )
+        row = await session.get(
+            TreasuryManualTransfer, payload.envelope.request.request_id
+        )
+        row.status = "published"
+        row.created_at = datetime.now(UTC) - timedelta(days=1)
+        for _ in range(20):
+            body = payload.envelope.model_dump()
+            body["request"]["request_id"] = str(uuid4())
+            envelope = ManualEnvelope.model_validate(body)
+            session.add(
+                TreasuryManualTransfer(
+                    request_id=envelope.request.request_id,
+                    envelope=envelope.model_dump(),
+                    digest=envelope.digest,
+                    actor="operator@example.com",
+                    status="refused",
+                )
+            )
+    async with session_maker() as session:
+        view = await manual.state(session, None, enabled=True)
+        assert len(view["requests"]) == 20
+        assert all(row["status"] == "refused" for row in view["requests"])
+        assert (
+            view["blocked_reason"]
+            == "Waiting for custody to observe the completed claim"
+        )
+    with pytest.raises(ValueError, match="completed claim"):
+        await get_preview(session_maker)
+
+
+async def test_late_finalized_report_after_lost_publish_ack_and_pause_is_audited(
+    session_maker, runtime, monkeypatch
+):
+    from ditto.api_server import treasury_manual_loop as module
+
+    await seed(session_maker)
+    payload = submission(await get_preview(session_maker))
+    request_id = payload.envelope.request.request_id
+    async with session_maker() as session, session.begin():
+        await manual.submit(
+            session, None, payload, "operator@example.com", enabled=True
+        )
+    sent, acks, audits = [], [], []
+
+    def lost_ack(body):
+        sent.append(body)  # Custody has received this exact claim.
+        raise TimeoutError("publication response lost")
+
+    mailbox = SimpleNamespace(pull=lambda: None, publish=lost_ack, ack=acks.append)
+    loop = module.TreasuryManualLoop(
+        SimpleNamespace(session_maker=session_maker, config=None, chain=None),
+        mailbox=mailbox,
+    )
+    monkeypatch.setattr(module, "treasury_runtime", manual.treasury_runtime)
+    with pytest.raises(TimeoutError):
+        await loop.sweep()
+    runtime.treasury_weight_enforcement = False
+    await loop.sweep()  # No second publication; local queued intent is refused.
+    async with session_maker() as session:
+        row = await session.get(TreasuryManualTransfer, request_id)
+        assert row.status == "refused" and row.report is None
+    body = ManualReport(
+        collector_policy_digest=payload.envelope.collector_policy_digest,
+        observed_at=int(time.time()),
+        request_id=request_id,
+        request_digest=payload.envelope.digest,
+        status="finalized",
+        settlement={
+            "epoch_index": 100,
+            "block": 1001,
+            "block_hash": "0x" + "b" * 64,
+            "extrinsic_index": 2,
+            "extrinsic_hash": "0x" + "c" * 64,
+        },
+    ).model_dump()
+
+    async def pending_audit(_session, _chain, row):
+        audits.append(row.request_id)  # Receipt still requires independent proof.
+
+    mailbox.pull = lambda: ("late-settlement", body)
+    monkeypatch.setattr(module, "publish_audit", pending_audit)
+    await loop.sweep()
+    assert sent == [payload.envelope.model_dump()] and acks == ["late-settlement"]
+    assert audits == [request_id]
+    async with session_maker() as session:
+        row = await session.get(TreasuryManualTransfer, request_id)
+        assert (
+            row.status == "audit_pending" and row.report == body and row.receipt is None
+        )
+    with pytest.raises(ValueError):
+        await get_preview(session_maker)

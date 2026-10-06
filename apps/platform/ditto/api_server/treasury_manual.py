@@ -21,6 +21,12 @@ from ditto_screening_protocol.treasury_manual import (
 ACTIVE = ("queued", "dispatched", "pending", "audit_pending")
 
 
+def readiness_is_fresh(observed_at):
+    # Independent hosts can differ by a few seconds; this is observation
+    # freshness only. Custody still rechecks the finalized chain and exact claim.
+    return -5 <= int(time.time()) - observed_at <= 180
+
+
 async def lock_manual(session):
     await session.execute(text("SELECT pg_advisory_xact_lock(118,2749)"))
 
@@ -54,7 +60,7 @@ async def state(session, config, *, enabled):
             report = ManualReport.model_validate(bridge.report)
             if (
                 report.readiness
-                and 0 <= int(time.time()) - report.observed_at <= 180
+                and readiness_is_fresh(report.observed_at)
                 and report.collector_policy_digest
                 == runtime.treasury_approved_collector_policy_digest
                 and report.readiness.policy == report.collector_policy_digest
@@ -67,10 +73,14 @@ async def state(session, config, *, enabled):
         select(Transfer.request_id).where(Transfer.status.in_(ACTIVE)).limit(1)
     ):
         blocked = "A previous transfer or its public receipt is still pending"
-    if readiness and any(
-        r.status == "published"
-        and readiness.after_operation <= r.envelope["request"]["after_operation"]
-        for r in rows
+    if readiness and await session.scalar(
+        select(Transfer.request_id)
+        .where(
+            Transfer.status == "published",
+            Transfer.envelope["request"]["after_operation"].as_integer()
+            >= readiness.after_operation,
+        )
+        .limit(1)
     ):
         blocked = "Waiting for custody to observe the completed claim"
     if readiness and not readiness.bounded_claim_available:
@@ -209,8 +219,7 @@ async def accept_report(session, config, body):
             or report.readiness.policy != report.collector_policy_digest
         ):
             raise InvalidManualReport("Custody readiness pin differs")
-        now = int(time.time())
-        if not 0 <= now - report.observed_at <= 180:
+        if not readiness_is_fresh(report.observed_at):
             return
         current = await session.get(BridgeState, 1)
         if current and current.report["observed_at"] >= report.observed_at:
@@ -244,6 +253,9 @@ async def accept_report(session, config, body):
             return
     if report.status == "finalized" and report.settlement is None:
         raise InvalidManualReport("Finalized coordinates absent")
+    # A local dispatch refusal without a custody report is not proof of no
+    # delivery: publication may have succeeded before its acknowledgment was
+    # lost. Preserve a late settlement for independent chain audit, never resend.
     row.report = report.model_dump()
     row.status = "audit_pending" if report.status == "finalized" else report.status
     row.updated_at = datetime.now(UTC)

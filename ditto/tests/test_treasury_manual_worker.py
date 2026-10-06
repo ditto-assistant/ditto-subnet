@@ -220,3 +220,30 @@ def test_invalid_contract_and_changed_armed_message_drop_only_invalid_bytes(tmp_
         == "pending"
     )
     assert len(c.sent) == 2 and mailbox.reports[-1]["status"] == "pending"
+
+
+def test_old_finalized_redelivery_does_not_execute_newer_armed_intent(
+    tmp_path, monkeypatch
+):
+    import ditto.treasury.manual_worker as worker
+
+    p, c, j, env, mailbox = setup(tmp_path)
+    process_manual(mailbox, j, p, c, "first", env.model_dump())
+    prior = process_manual(mailbox, j, p, c, "settled", env.model_dump())
+    assert prior.status == "finalized"
+    newer = replace(
+        ManualTransfer(**env.request.model_dump()),
+        request_id=str(uuid4()),
+        after_operation=2,
+    )
+    arm_manual_transfer(j, p, c, newer)
+    before = list(j.db.iterdump())
+
+    def never_tick(*_args, **_kwargs):
+        pytest.fail("Old terminal redelivery must not execute the current intent")
+
+    monkeypatch.setattr(worker, "tick", never_tick)
+    result = consume_manual(mailbox, j, p, c, "old-redelivery", env.model_dump())
+    assert result.status == "finalized" and result.settlement == prior.settlement
+    assert list(j.db.iterdump()) == before and len(c.sent) == 2
+    assert mailbox.acks[-1] == "old-redelivery"

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import type { z } from 'zod'
 import { alphaDisplay, alphaRao, manualControlSchema, manualPreviewSchema } from '../lib/treasury-manual.schemas'
@@ -12,7 +12,7 @@ const statusLabels = {
   pending: 'Delivery unresolved — funds will not be resent',
   audit_pending: 'Finalized — public receipt verification pending',
   published: 'Finalized — public receipt published',
-  failed: 'Failed — no automatic replacement', refused: 'Refused before signing',
+  failed: 'Failed — no automatic replacement', refused: 'Refused — check delivery details',
 }
 
 export function TreasuryManualTransferPanel({ initialState, readOnly }: { initialState: Control; readOnly: boolean }) {
@@ -30,13 +30,19 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const refreshGeneration = useRef(0)
   const load = async () => {
-    try { setState(await refresh()); setError('') }
-    catch { setError('Transfer status unavailable. Refresh before confirming another transfer.') }
+    const generation = ++refreshGeneration.current
+    try {
+      const nextState = await refresh()
+      if (generation === refreshGeneration.current) { setState(nextState); setError('') }
+    } catch {
+      if (generation === refreshGeneration.current) setError('Transfer status unavailable. Refresh before confirming another transfer.')
+    }
   }
   useEffect(() => {
     const timer = setInterval(() => { void load() }, 15000)
-    return () => clearInterval(timer)
+    return () => { clearInterval(timer); ++refreshGeneration.current }
   }, [refresh]) // eslint-disable-line react-hooks/exhaustive-deps
   const invalidate = () => { setPreview(null); setConfirmation(''); setMessage('') }
   const expected = preview ? `TRANSFER ${alphaDisplay(preview.envelope.request.amount_rao)} ALPHA TO ${preview.envelope.request.bucket_id.toUpperCase()}` : ''
