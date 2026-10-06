@@ -5,7 +5,9 @@ import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageS
 export async function recordTreasuryReceipt(rawInput: unknown, actor: string) {
   const { confirmation: _confirmation, ...body } = treasuryReceiptInputSchema.parse(rawInput)
   return treasuryReceiptSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts', {
-    method: 'POST', actor, body,
+    // Archive verification has bounded provider fallback. Do not abandon the
+    // verified audit write at the ordinary 20s read deadline; no signing occurs.
+    method: 'POST', actor, body, timeoutMs: 120_000,
   }))
 }
 

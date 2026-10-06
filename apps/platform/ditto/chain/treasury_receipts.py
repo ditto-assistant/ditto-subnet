@@ -7,6 +7,8 @@ These reads prove money movement, not custody authorization or provider credits.
 from __future__ import annotations
 
 import hashlib
+import json
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -27,6 +29,48 @@ from ditto_screening_protocol.treasury_identity import read_finalized_collector_
 
 def value(raw: Any) -> Any:
     return getattr(raw, "value", raw)
+
+
+class _FinalizedReceiptSnapshot:
+    """Reuse exact finality/hash reads only inside one receipt proof.
+
+    All validation still runs. Storage, identity, events and effects are read
+    normally; no proof or authority is cached across calls/providers. A single
+    finalized head anchors the historical canonical blocks in this invocation.
+    """
+
+    def __init__(self, substrate: Any):
+        self.substrate = substrate
+        self.cache: dict[tuple[str, str], Any] = {}
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.substrate, name)
+
+    async def _read(self, name: str, args: tuple, kwargs: dict) -> Any:
+        key = (name, json.dumps((args, kwargs), sort_keys=True))
+        if key not in self.cache:
+            self.cache[key] = deepcopy(
+                await getattr(self.substrate, name)(*args, **kwargs)
+            )
+        return deepcopy(self.cache[key])
+
+    async def get_chain_finalised_head(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._read("get_chain_finalised_head", args, kwargs)
+
+    async def get_block_number(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._read("get_block_number", args, kwargs)
+
+    async def get_block_hash(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._read("get_block_hash", args, kwargs)
+
+    async def rpc_request(self, method: str, params: list[Any], **kwargs: Any) -> Any:
+        if (
+            method == "state_getStorageHash"
+            and len(params) == 2
+            and params[0] == "0x3a636f6465"
+        ):
+            return await self._read("rpc_request", (method, params), kwargs)
+        return await self.substrate.rpc_request(method, params, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -84,6 +128,7 @@ async def read_treasury_chain_proof(
     pinned_block_hash: str,
     pinned_uid: int,
 ) -> TreasuryChainProof:
+    substrate = _FinalizedReceiptSnapshot(substrate)
     pinned_at, _, _ = await finalized_block(
         substrate, pinned_block, policy.genesis_hash
     )
