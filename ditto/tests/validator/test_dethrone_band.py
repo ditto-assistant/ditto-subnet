@@ -874,16 +874,19 @@ class TestFullSeedSetDethrone:
             "champ", 0.80, confirmations=[0.80, 0.80, 0.80], seeds=[1, 2, 3], minutes=0
         )
         chal = _e("chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1)
-        assert select_champion([champ, chal], margin=0.007, dethrone_z=1.64) is chal
-        assert (
-            select_champion(
-                [champ, chal],
-                margin=0.007,
-                dethrone_z=1.64,
-                dethrone_seed_full_set=True,
-            )
-            is champ
+        # Capture the results rather than `is`-narrowing the fixtures: an
+        # `assert call() is chal` re-types `chal` as the declared
+        # ``LedgerEntry | None`` return, and the second call's list literal
+        # then violates ``Sequence[LedgerEntry]`` under mypy.
+        ungated = select_champion([champ, chal], margin=0.007, dethrone_z=1.64)
+        gated = select_champion(
+            [champ, chal],
+            margin=0.007,
+            dethrone_z=1.64,
+            dethrone_seed_full_set=True,
         )
+        assert ungated is chal
+        assert gated is champ
 
     def test_coverage_is_trivially_complete_without_confirmation_evidence(self) -> None:
         # Entries with no per-seed composites at all take the historical
