@@ -522,8 +522,14 @@ async def test_permanently_refused_audit_does_not_starve_later_receipt(
             == "Finalized receipt proof refused; operator review required"
         )
         assert published.status == "published"
-    # A refused proof still prevents new spending; bypassing audit starvation
-    # does not erase the held row or grant new transfer authority.
+    # Advance custody past the completed claim so that gate cannot mask the
+    # unresolved proof gate. The held row still prevents new spending.
+    async with session_maker() as session, session.begin():
+        bridge = await session.get(TreasuryManualBridgeState, 1)
+        bridge.report = {
+            **bridge.report,
+            "readiness": {**bridge.report["readiness"], "after_operation": 3},
+        }
     with pytest.raises(ValueError, match="previous transfer"):
         await get_preview(session_maker)
 
