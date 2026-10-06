@@ -18,7 +18,7 @@ const result = { envelope: { version: 1, collector_policy_digest: 'a'.repeat(64)
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 
 it('previews exact integer amounts and queues only after amount and wallet confirmation', async () => {
-  preview.mockResolvedValue(result); queue.mockResolvedValue({})
+  preview.mockResolvedValue(result); queue.mockResolvedValue({ status: 'queued' })
   render(<TreasuryManualTransferPanel initialState={control} readOnly={false} />)
   fireEvent.change(screen.getByLabelText('Amount (SN118 alpha)'), { target: { value: '0.1' } })
   fireEvent.change(screen.getByLabelText('Minimum alpha to retain staked'), { target: { value: '55' } })
@@ -34,6 +34,7 @@ it('previews exact integer amounts and queues only after amount and wallet confi
   await waitFor(() => expect(queue).toHaveBeenCalledOnce())
   expect(queue.mock.calls[0][0].data.envelope).toEqual(result.envelope)
   expect(queue.mock.calls[0][0].data.confirmation_digest).toBe(result.confirmation_digest)
+  expect(await screen.findByText('Queued for custody. Track this request below.')).toBeTruthy()
 })
 
 it('read-only accounts and stale/disabled custody cannot dispatch', () => {
