@@ -53,6 +53,17 @@ from ditto.db.queries.weight_receipts import get_finalized_weight_receipts
 
 logger = logging.getLogger(__name__)
 
+# Steady state advances ~2 blocks per 30s sweep. A stalled collector (unaudited
+# runtime fingerprint, provider outage) can fall hundreds of thousands of blocks
+# behind; at the steady-state batch size that replay takes weeks and every day
+# of delay keeps crowned kings permanently embargoed. Past a small backlog the
+# sweep widens its batch and skips the leading payout resolution, which re-reads
+# the same historical evidence every sweep and is re-run at the end of each
+# successful batch anyway.
+_SWEEP_BATCH_BLOCKS = 16
+_SWEEP_CATCHUP_BATCH_BLOCKS = 128
+_SWEEP_CATCHUP_MIN_BACKLOG = 1000
+
 
 def _receipt_from_json(data: dict) -> ChainMinerEmissionReceipt:
     return ChainMinerEmissionReceipt(
@@ -110,6 +121,9 @@ class SourceEmissionCollector:
         self._stop = asyncio.Event()
         self.last_error: str | None = None
         self._verified_commits: set[str] = set()
+        # Set at the start of each provider sweep; a deep backlog widens the
+        # scan batch and its timeout, then decays back to steady state.
+        self._backlog_deep = False
 
     @property
     def netuid(self) -> int:
@@ -157,7 +171,7 @@ class SourceEmissionCollector:
         failures: list[str] = []
         for url in self.state.chain._historical_substrate_urls()[:3]:
             try:
-                async with asyncio.timeout(120):
+                async with asyncio.timeout(self._sweep_timeout_seconds()):
                     async with AsyncSubstrateInterface(url=url) as substrate:
                         await self._sweep_provider(substrate)
                 return
@@ -167,10 +181,11 @@ class SourceEmissionCollector:
             "all source-emission archive providers failed: " + "; ".join(failures)
         )
 
+    def _sweep_timeout_seconds(self) -> float:
+        """Scale the sweep budget with the batch a deep backlog will scan."""
+        return 120.0 if self._backlog_deep else 600.0
+
     async def _sweep_provider(self, substrate: Any) -> None:
-        # Durable payouts must not wait for a full scan batch to succeed.
-        # Keep archive verification and provider fallback on the same path.
-        await self.resolve_pending_payouts(substrate)
         finalized_hash = await substrate.get_chain_finalised_head()
         header = await substrate.get_block_header(block_hash=finalized_hash)
         number = header.get("header", header)["number"]
@@ -192,7 +207,15 @@ class SourceEmissionCollector:
                     expected_block_hash=None,
                     now=datetime.now(UTC),
                 )
-        for block in range(current + 1, min(finalized, current + 16) + 1):
+        backlog = finalized - current
+        catchup = backlog > _SWEEP_CATCHUP_MIN_BACKLOG
+        self._backlog_deep = catchup
+        if not catchup:
+            # Durable payouts must not wait for a full scan batch to succeed.
+            # Keep archive verification and provider fallback on the same path.
+            await self.resolve_pending_payouts(substrate)
+        batch = _SWEEP_CATCHUP_BATCH_BLOCKS if catchup else _SWEEP_BATCH_BLOCKS
+        for block in range(current + 1, min(finalized, current + batch) + 1):
             observed = await read_source_emission_block(
                 substrate, netuid=self.netuid, block=block
             )
