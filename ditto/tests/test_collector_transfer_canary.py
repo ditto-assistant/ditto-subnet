@@ -61,16 +61,23 @@ def test_unknown_delivery_reopens_to_reconciliation_without_resigning(tmp_path):
     assert len(c.sent) == len(c.prepared) == 1
 
 
-def test_over_ceiling_source_is_retained_and_never_partially_split(tmp_path):
+def test_canary_transfers_only_ceiling_and_retains_receipt_remainder(tmp_path):
     p, c, j, bound = setup_transfer(tmp_path, cap=39)
-    assert tick(j, p, c, "transfer", canary=bound) == "canary_amount_exceeded"
-    assert tick(j, p, c, "transfer") == "canary_amount_exceeded"
-    assert not c.prepared and not c.sent
+    assert tick(j, p, c, "transfer", canary=bound) == "dispatching"
+    assert c.prepared[0][1]["params"]["alpha_amount"] == 39
+    assert c.prepared[0][1]["params"]["destination_coldkey"] == "bitsec"
+    c.settlement = Settlement("finalized", 101, "0x" + "c" * 64, 14)
+    assert tick(j, p, c, "transfer") == "finalized"
+    j.close()
+    j = open_journal(tmp_path, p, "transfer")
+    assert tick(j, p, object(), "transfer") == "canary_spent"
+    assert len(c.prepared) == len(c.sent) == 1
     assert j.db.execute("SELECT amount,completed FROM earnings").fetchone()[:] == (
         101,
         0,
     )
-    assert j.db.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 0
+    assert j.db.execute("SELECT SUM(amount) FROM operations").fetchone()[0] == 39
+    assert 101 - 39 == 62  # Entire unspent receipt remains attributed.
     assert (
         j.db.execute(
             "SELECT COUNT(*) FROM events WHERE event='transfer_canary_armed'"
