@@ -98,7 +98,10 @@ async def get_treasury_ledger_readiness(
         return readiness
     from datetime import UTC, datetime
 
-    from ditto.api_server.treasury_weights import read_treasury_fleet
+    from ditto.api_server.treasury_weights import (
+        current_managed_weight_setters,
+        read_treasury_fleet,
+    )
 
     try:
         fleet = await read_treasury_fleet(
@@ -137,8 +140,11 @@ async def get_treasury_ledger_readiness(
         ):
             raise ValueError("stored pin predates runtime activation")
         observed = await state.chain.get_treasury_dispatch_observation(pin.policy)
-        chain_keys = await state.chain.get_treasury_weight_setters(
-            pin.policy, block_hash=observed.finalized_block_hash
+        chain_keys = await current_managed_weight_setters(
+            state.chain,
+            pin.policy,
+            block_hash=observed.finalized_block_hash,
+            managed_hotkeys=config.treasury_managed_validator_hotkeys,
         )
         if not chain_keys or not set(
             config.treasury_managed_validator_hotkeys

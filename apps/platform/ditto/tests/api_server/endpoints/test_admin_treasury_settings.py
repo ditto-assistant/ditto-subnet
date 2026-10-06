@@ -289,3 +289,67 @@ async def test_v2_service_wallets_are_shadow_only_and_v1_history_is_preserved(
             },
         )
         assert response.status_code == 422, (change, response.text)
+
+
+@pytest.mark.parametrize("fault", ["none", "wrong_hash", "permission_lost"])
+async def test_readiness_proves_current_managed_permission_without_peer_bindings(
+    session, monkeypatch, fault
+):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ditto.api_models.treasury_readiness import TreasuryLedgerReadiness
+    from ditto.api_server.endpoints.admin_treasury_settings import (
+        get_treasury_ledger_readiness,
+    )
+    from ditto.tests.api_server.test_treasury_weights import add_runtime, app_state, pin
+    from ditto_screening_protocol.treasury_identity import (
+        TreasuryManagedSetterObservation,
+    )
+
+    p = pin()
+    state = app_state(p)
+    state.config.treasury_shadow_policy = p.policy
+    state.config.treasury_weight_enforcement = True
+    await add_runtime(session, datetime.now(UTC))
+    readiness = TreasuryLedgerReadiness(
+        configured_proposal=p.policy,
+        proposal_approval_status="verified",
+        proposal_approved_policy_digest=p.policy_digest,
+        observer_status="observed",
+        latest_stored_epoch_index=p.epoch_index,
+        latest_stored_ledger_digest="a" * 64,
+        stored_shadow_pin=None,
+        stored_enforcing_pin=p,
+        enforcement_configured=True,
+        blocking_reasons=["current_epoch_not_checked"],
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.admin_treasury_settings.shadow_readiness",
+        lambda *_args, **_kwargs: readiness,
+    )
+    proof = TreasuryManagedSetterObservation(
+        block_hash=p.pinned_block_hash,
+        permitted_count=13,
+        hotkeys=state.config.treasury_managed_validator_hotkeys,
+    )
+    if fault == "wrong_hash":
+        proof = proof.model_copy(update={"block_hash": "0x" + "f" * 64})
+    scoped = AsyncMock(return_value=proof)
+    if fault == "permission_lost":
+        scoped.side_effect = ValueError("current permission lost")
+    state.chain.get_treasury_managed_weight_setters = scoped
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    result = await get_treasury_ledger_readiness(request, None, session)
+    assert result.can_enforce_weights is (fault == "none")
+    assert result.fleet_gate == ("ready" if fault == "none" else "not_ready")
+    if fault != "none":
+        assert "enforcing_pin_unverified" in result.blocking_reasons
+    scoped.assert_awaited_once_with(
+        p.policy,
+        block_hash=p.pinned_block_hash,
+        managed_hotkeys=state.config.treasury_managed_validator_hotkeys,
+    )
+    state.chain.get_treasury_weight_setters.assert_not_awaited()
+    assert result.weight_effect == "none"

@@ -21,6 +21,12 @@ export interface TreasuryAllocation {
   sweep_interval_hours: number;
   sweep_status: "not_activated";
   payment_observer_status: "not_activated";
+  runtime?: {
+    revision: number;
+    mode: "not_recorded" | "observe" | "enforce" | "pause" | "unavailable";
+    activation_epoch: number | null;
+    allocation_matches: boolean | null;
+  };
   buckets: {
     bucket_id: string;
     purpose: string;
@@ -72,14 +78,44 @@ export function GammaPage(): JSX.Element {
             <section class="gamma-policy" aria-label="Allocation policy">
               <div class="gamma-section-title">
                 <h3>Allocation policy</h3>
-                <span>Revision {policy().policy_revision} · Shadow</span>
+                <span>Policy revision {policy().policy_revision}</span>
               </div>
-              <p class="gamma-notice">
-                Funding is not activated. The configured service share is{" "}
-                {percent(policy().service_bps / 10_000)}; the effective service share is{" "}
-                {percent(policy().effective_service_share)}. Saving wallet settings does not move
-                funds.
-              </p>
+              <Show
+                when={policy().runtime && policy().runtime?.mode !== "not_recorded"}
+                fallback={
+                  <p class="gamma-notice">
+                    Funding is not activated. The configured service share is{" "}
+                    {percent(policy().service_bps / 10_000)}; the effective service share is{" "}
+                    {percent(policy().effective_service_share)}. Saving wallet settings does not
+                    move funds.
+                  </p>
+                }
+              >
+                <div class="gamma-notice" aria-label="Gamma runtime control">
+                  <Show when={policy().runtime?.mode === "enforce"}>
+                    <p>
+                      Gamma enforcement is armed for epoch {policy().runtime?.activation_epoch}.
+                    </p>
+                  </Show>
+                  <Show when={policy().runtime?.mode === "observe"}>
+                    <p>Gamma is observing the approved policy; enforcement is not armed.</p>
+                  </Show>
+                  <Show when={policy().runtime?.mode === "pause"}>
+                    <p>Gamma enforcement is paused. Earlier chain actions may remain effective.</p>
+                  </Show>
+                  <Show when={policy().runtime?.mode === "unavailable"}>
+                    <p>Gamma runtime control could not be verified.</p>
+                  </Show>
+                  <Show when={policy().runtime?.allocation_matches === false}>
+                    <p role="alert">This allocation differs from the approved runtime policy.</p>
+                  </Show>
+                  <p>
+                    Control revision {policy().runtime?.revision}. Recorded control does not prove
+                    finalized collector weights, emissions or transfers. Check wallet receipts for
+                    verified payments.
+                  </p>
+                </div>
+              </Show>
               <Show
                 when={policy().allocation_version === 2}
                 fallback={
