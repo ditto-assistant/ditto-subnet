@@ -3937,9 +3937,6 @@ async def build_public_leaderboard(
             record = projected_reward_eligibility.get(agent_id)
             return record is not None and not record.posture_satisfied
 
-        def registered(row: LedgerRow) -> bool:
-            return registered_uids is None or row.miner_hotkey in registered_uids
-
         emission_rows = dedupe_owner_rows(
             [row for row in finalized_generations if not withheld(row.agent_id)],
             scores=board_official_composites,
@@ -3981,14 +3978,21 @@ async def build_public_leaderboard(
                     for row in finalized_generations
                     if row.emission_owner_root == incumbent_owner
                     and withheld(row.agent_id)
-                    and registered(row)
                 ]
-                if heir is None and held:
-                    heir = provisional_incumbent = dedupe_owner_rows(
+                if heir is None:
+                    held_representatives = dedupe_owner_rows(
                         held,
                         scores=board_official_composites,
                         secondary_scores=board_efficiency_tiebreaks,
-                    )[0]
+                        registered_hotkeys=(
+                            set(registered_uids)
+                            if registered_uids is not None
+                            else None
+                        ),
+                        omit_unregistered_families=registered_uids is not None,
+                    )
+                    if held_representatives:
+                        heir = provisional_incumbent = held_representatives[0]
                 emission_incumbent_id = heir.agent_id if heir is not None else None
     entries = []
     for i, row in enumerate(finalized_rows, start=1):
