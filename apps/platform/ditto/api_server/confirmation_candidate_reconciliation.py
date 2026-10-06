@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, case, func, select
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.confirmation_bundles import (
@@ -164,6 +164,19 @@ async def _quorum_median_rows(
                 median_keys.c.agent_id == Score.agent_id,
                 median_keys.c.bench_version == Score.bench_version,
                 median_keys.c.validator_hotkey == Score.validator_hotkey,
+                # Per-agent era guard, as quorum_score_rows carried: only the
+                # caller-pinned bench_version may anchor the median, so a
+                # future mixed-era caller can never pick a stray other-era row.
+                Score.bench_version.in_(bench_versions.values())
+                if len(set(bench_versions.values())) == 1
+                else case(
+                    *(
+                        (Score.agent_id == agent_id, version)
+                        for agent_id, version in bench_versions.items()
+                    ),
+                    else_=Score.bench_version,
+                )
+                == Score.bench_version,
             ),
         )
     )
