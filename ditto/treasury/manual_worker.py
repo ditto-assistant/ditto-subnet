@@ -47,6 +47,24 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
         for d in policy.destinations
     ):
         raise ValueError("mailbox request differs from signed custody pin")
+    cached = journal.db.execute(
+        "SELECT payload FROM events WHERE event='manual_mailbox_refused' "
+        "AND json_extract(payload,'$.request_id')=? ORDER BY rowid LIMIT 1",
+        (request.request_id,),
+    ).fetchone()
+    if cached:
+        if json.loads(cached[0])["request_digest"] != envelope.digest:
+            raise ValueError("Refused mailbox UUID changed")
+        report = ManualReport(
+            collector_policy_digest=policy.digest,
+            observed_at=int(time.time()),
+            request_id=request.request_id,
+            request_digest=envelope.digest,
+            status="refused",
+        )
+        mailbox.publish(report.model_dump())
+        mailbox.ack(ack_id)
+        return report
     manual = ManualTransfer(**request.model_dump())
     try:
         arm_manual_transfer(journal, policy, chain, manual)
@@ -58,6 +76,22 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
             "AND json_extract(payload,'$.request_id')=?",
             (request.request_id,),
         ).fetchone():
+            raise
+        # Persist refusal before publication/ACK. Otherwise a lost ACK could
+        # make an old refused request executable after balances change.
+        journal.db.execute("BEGIN IMMEDIATE")
+        try:
+            journal.event(
+                "manual_mailbox_refused",
+                {
+                    "request_id": request.request_id,
+                    "request_digest": envelope.digest,
+                    "policy": policy.digest,
+                },
+            )
+            journal.db.execute("COMMIT")
+        except BaseException:
+            journal.db.execute("ROLLBACK")
             raise
         report = ManualReport(
             collector_policy_digest=policy.digest,

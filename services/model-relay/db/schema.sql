@@ -5206,6 +5206,57 @@ ALTER SEQUENCE public.transcript_mirror_settings_revisions_revision_seq OWNED BY
 
 
 --
+-- Name: treasury_manual_bridge_state; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_manual_bridge_state (
+    id integer NOT NULL,
+    report jsonb NOT NULL,
+    received_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: treasury_manual_bridge_state_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.treasury_manual_bridge_state_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: treasury_manual_bridge_state_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.treasury_manual_bridge_state_id_seq OWNED BY public.treasury_manual_bridge_state.id;
+
+
+--
+-- Name: treasury_manual_transfers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_manual_transfers (
+    request_id text NOT NULL,
+    envelope jsonb NOT NULL,
+    digest text NOT NULL,
+    actor text NOT NULL,
+    status text NOT NULL,
+    report jsonb,
+    receipt jsonb,
+    last_error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_treasury_manual_transfers_treasury_manual_identity CHECK (((length(digest) = 64) AND ((length(actor) >= 1) AND (length(actor) <= 120)))),
+    CONSTRAINT ck_treasury_manual_transfers_treasury_manual_status CHECK ((status = ANY (ARRAY['queued'::text, 'dispatched'::text, 'pending'::text, 'audit_pending'::text, 'published'::text, 'failed'::text, 'refused'::text])))
+);
+
+
+--
 -- Name: treasury_public_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6118,6 +6169,13 @@ ALTER TABLE ONLY public.submission_settings_revisions ALTER COLUMN revision SET 
 --
 
 ALTER TABLE ONLY public.transcript_mirror_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.transcript_mirror_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: treasury_manual_bridge_state id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_manual_bridge_state ALTER COLUMN id SET DEFAULT nextval('public.treasury_manual_bridge_state_id_seq'::regclass);
 
 
 --
@@ -7965,6 +8023,22 @@ ALTER TABLE ONLY public.transcript_mirror_settings_revisions
 
 
 --
+-- Name: treasury_manual_bridge_state pk_treasury_manual_bridge_state; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_manual_bridge_state
+    ADD CONSTRAINT pk_treasury_manual_bridge_state PRIMARY KEY (id);
+
+
+--
+-- Name: treasury_manual_transfers pk_treasury_manual_transfers; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_manual_transfers
+    ADD CONSTRAINT pk_treasury_manual_transfers PRIMARY KEY (request_id);
+
+
+--
 -- Name: treasury_public_events pk_treasury_public_events; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9771,6 +9845,13 @@ CREATE UNIQUE INDEX svrr_replay_code_idx ON public.screening_verification_replay
 --
 
 CREATE UNIQUE INDEX svrso_replay_check_idx ON public.screening_verification_replay_signed_observations USING btree (replay_id, check_code);
+
+
+--
+-- Name: treasury_manual_unfinished; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX treasury_manual_unfinished ON public.treasury_manual_transfers USING btree (status, created_at);
 
 
 --

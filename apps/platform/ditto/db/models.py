@@ -8845,7 +8845,8 @@ class TreasuryManualTransfer(Base):
     )
     __table_args__ = (
         CheckConstraint(
-            "status IN ('queued','dispatched','pending','audit_pending','published','failed','refused')",
+            "status IN ('queued','dispatched','pending','audit_pending',"
+            "'published','failed','refused')",
             name="treasury_manual_status",
         ),
         CheckConstraint(

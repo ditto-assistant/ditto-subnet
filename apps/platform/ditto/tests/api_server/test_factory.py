@@ -121,9 +121,11 @@ class TestCreateApiServer:
                     visit(value, f"{path}[{index}]")
 
         visit(schema, "openapi")
-        # Machine receipt selectors carry a bounded transport annotation, not
-        # an operator's potentially extensive source/policy review evidence.
+        # Receipt selectors and exact manual custody envelopes carry bounded
+        # transport annotations, not extensive source/policy review evidence.
         assert bounded == [
+            "openapi.components.schemas.ManualPreviewInput.reason=240",
+            "openapi.components.schemas.ManualRequest.reason=240",
             "openapi.components.schemas.TreasuryReceiptSelector.reason=240"
         ]
 

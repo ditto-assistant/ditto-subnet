@@ -146,3 +146,16 @@ def test_expired_armed_request_stops_without_unlocking_or_sending(tmp_path):
             ),
         )
     assert len(c.sent) == 1
+
+
+def test_refusal_survives_return_ack_failure_and_later_balance_change(tmp_path):
+    p, c, j, env, mailbox = setup(tmp_path)
+    c.observation = replace(c.observation, alpha_rao=900)
+    mailbox.fail = True
+    with pytest.raises(TimeoutError):
+        process_manual(mailbox, j, p, c, "ack", env.model_dump())
+    c.observation = replace(c.observation, alpha_rao=10000)
+    mailbox.fail = False
+    result = process_manual(mailbox, j, p, c, "ack", env.model_dump())
+    assert result.status == "refused" and len(c.sent) == 1
+    assert mailbox.acks == ["ack"]

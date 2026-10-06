@@ -1,7 +1,16 @@
 mock_provider "google" {}
 variables {
-  project                    = "sn118-gamma-custody"
-  enable_collector_custody   = true
+  project                  = "sn118-gamma-custody"
+  region                   = "us-central1"
+  zone                     = "us-central1-a"
+  enable_collector_custody = true
+  collector_custody_offline_addresses = [
+    "5Fhnko5TCPtR1hyD8aua6n23XRM8cxcBM6TgNEqqUhcxWs1t",
+    "5H93a8uVJC6ve2bNVZu9jAGEuBHDFspct3UbHRYGsxUNpA1e",
+    "5HeA6bjjt1apDMhLSqKkCWZCEGvZBPByjvMxZ7mKiUk67AGT",
+    "5CD8TZWNSNtARxmB5VQF9qTNfCVjhdMdjmwBrniqU3E71ohQ",
+    "5F2821EzMcBC2b8hWmrMWiNRcx6DgdaTQQiqmPkbAk7a6yn9",
+  ]
   collector_custody_revision = "0123456789012345678901234567890123456789"
   collector_custody_operator = "operator@example.com"
   collector_custody_phases   = { registration = "sealed", transfer = "sealed" }
