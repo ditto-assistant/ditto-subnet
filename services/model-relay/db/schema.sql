@@ -5251,7 +5251,7 @@ CREATE TABLE public.treasury_manual_transfers (
     last_error text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT ck_treasury_manual_transfers_treasury_manual_identity CHECK (((length(digest) = 64) AND ((length(actor) >= 1) AND (length(actor) <= 120)))),
+    CONSTRAINT ck_treasury_manual_transfers_treasury_manual_identity CHECK (((length(digest) = 64) AND ((length(actor) >= 1) AND (length(actor) <= 254)))),
     CONSTRAINT ck_treasury_manual_transfers_treasury_manual_status CHECK ((status = ANY (ARRAY['queued'::text, 'dispatched'::text, 'pending'::text, 'audit_pending'::text, 'published'::text, 'failed'::text, 'refused'::text])))
 );
 

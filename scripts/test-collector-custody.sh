@@ -9,7 +9,6 @@ trap 'rm -rf -- "$QA"' EXIT
 cp -R "$ROOT/infra/terraform/stacks/gcp-collector-custody/." "$QA/"
 rm "$QA/backend.tf" "$QA/prod.auto.tfvars"
 cp -R "$ROOT/infra/terraform/tests/collector-custody/tests" "$QA/"
-rm "$QA/tests/manual-mailbox.tftest.hcl"
 terraform -chdir="$QA" init -backend=false -input=false -lockfile=readonly
 terraform -chdir="$QA" validate
 terraform -chdir="$QA" test -no-color
