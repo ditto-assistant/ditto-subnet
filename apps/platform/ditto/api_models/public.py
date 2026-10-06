@@ -1727,8 +1727,7 @@ class PublicKothEmissions(BaseModel):
             default=31,
             ge=1,
             description=(
-                "Minimum fleet heartbeat protocol for the full-seed-set dethrone "
-                "gate."
+                "Minimum fleet heartbeat protocol for the full-seed-set dethrone gate."
             ),
         ),
     ] = 31

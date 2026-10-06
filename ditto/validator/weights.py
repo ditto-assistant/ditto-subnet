@@ -652,6 +652,7 @@ def compute_weights(
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
         incumbent_agent_id=incumbent_agent_id,
     )
     if len(rank_shares) != tail_size + 1:
@@ -669,6 +670,7 @@ def compute_weights(
             dethrone_z=dethrone_z,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            dethrone_seed_full_set=dethrone_seed_full_set,
         )
         if tie_pooling
         else []
@@ -777,6 +779,7 @@ def _score_ceiling_cohort(
     dethrone_z: float,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> list[LedgerEntry]:
     """Return the uncapped best-score cohort when KOTH cannot be dethroned.
 
@@ -799,6 +802,7 @@ def _score_ceiling_cohort(
         dethrone_z=dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
     ):
         return []
 
@@ -1671,7 +1675,12 @@ def _score_ceiling_deadlocked(
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
     )
+    if observed_score == -math.inf:
+        # Deferred protocol-31 decision: the window may still complete, so
+        # this is reachability-pending, not a ceiling deadlock.
+        return False
     quality_primary = _quality_primary_efficiency_active((challenger, champion))
     ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
     return observed_score <= required_score and required_score >= ceiling

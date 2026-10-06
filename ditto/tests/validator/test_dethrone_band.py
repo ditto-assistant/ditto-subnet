@@ -825,13 +825,9 @@ class TestFullSeedSetDethrone:
         champ = _e(
             "champ", 0.80, confirmations=[0.80, 0.80, 0.80], seeds=[1, 2, 3], minutes=0
         )
-        chal = _e(
-            "chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1
-        )
+        chal = _e("chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1)
         assert _beats(chal, champ, 0.007, 1.64)
-        assert not _beats(
-            chal, champ, 0.007, 1.64, dethrone_seed_full_set=True
-        )
+        assert not _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=True)
 
     def test_complete_pairing_dethrones_under_the_gate(self) -> None:
         champ = _e(
@@ -845,9 +841,7 @@ class TestFullSeedSetDethrone:
     def test_champion_missing_a_challenger_seed_also_defers(self) -> None:
         # Coverage is symmetric: a challenger scored deeper than the champion
         # is the same partial window from the other side.
-        champ = _e(
-            "champ", 0.80, confirmations=[0.80, 0.80], seeds=[1, 2], minutes=0
-        )
+        champ = _e("champ", 0.80, confirmations=[0.80, 0.80], seeds=[1, 2], minutes=0)
         chal = _e(
             "chal", 0.90, confirmations=[0.85, 0.85, 0.85], seeds=[1, 2, 3], minutes=1
         )
@@ -857,9 +851,7 @@ class TestFullSeedSetDethrone:
         champ = _e(
             "champ", 0.80, confirmations=[0.80, 0.80, 0.80], seeds=[1, 2, 3], minutes=0
         )
-        chal = _e(
-            "chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1
-        )
+        chal = _e("chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1)
         assert _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=False) == _beats(
             chal, champ, 0.007, 1.64
         )
@@ -868,9 +860,7 @@ class TestFullSeedSetDethrone:
         champ = _e(
             "champ", 0.80, confirmations=[0.80, 0.80, 0.80], seeds=[1, 2, 3], minutes=0
         )
-        chal = _e(
-            "chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1
-        )
+        chal = _e("chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1)
         assert not _score_ceiling_deadlocked(
             chal,
             champ,
@@ -883,15 +873,8 @@ class TestFullSeedSetDethrone:
         champ = _e(
             "champ", 0.80, confirmations=[0.80, 0.80, 0.80], seeds=[1, 2, 3], minutes=0
         )
-        chal = _e(
-            "chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1
-        )
-        assert (
-            select_champion(
-                [champ, chal], margin=0.007, dethrone_z=1.64
-            )
-            is chal
-        )
+        chal = _e("chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1)
+        assert select_champion([champ, chal], margin=0.007, dethrone_z=1.64) is chal
         assert (
             select_champion(
                 [champ, chal],

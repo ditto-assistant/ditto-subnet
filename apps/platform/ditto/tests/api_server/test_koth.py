@@ -910,9 +910,7 @@ def test_full_seed_set_gate_defers_a_partial_pairing() -> None:
     assert gated.dethrones is False
     assert gated.seed_coverage_complete is False
 
-    settled = _dethrone_decision(
-        complete, incumbent, dethrone_seed_full_set=True
-    )
+    settled = _dethrone_decision(complete, incumbent, dethrone_seed_full_set=True)
     assert settled.method == "paired"
     assert settled.dethrones is True
     assert settled.seed_coverage_complete is True
@@ -930,9 +928,7 @@ def test_full_seed_set_gate_is_inert_without_confirmation_evidence() -> None:
     incumbent = _entry(2, 0.80, minutes=0)
     challenger = _entry(1, 0.90, minutes=1)
 
-    gated = _dethrone_decision(
-        challenger, incumbent, dethrone_seed_full_set=True
-    )
+    gated = _dethrone_decision(challenger, incumbent, dethrone_seed_full_set=True)
     ungated = _dethrone_decision(challenger, incumbent)
     assert gated.seed_coverage_complete is True
     assert gated.dethrones == ungated.dethrones

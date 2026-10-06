@@ -392,9 +392,7 @@ def _score_ceiling_cohort(
     anchor = ranked[0]
     cohort = [anchor]
     for entry in ranked[1:]:
-        if not _weight_tied(
-            entry, anchor, statistical_band_cap=statistical_band_cap
-        ):
+        if not _weight_tied(entry, anchor, statistical_band_cap=statistical_band_cap):
             break
         cohort.append(entry)
     return tuple(cohort) if len(cohort) > 1 else ()
