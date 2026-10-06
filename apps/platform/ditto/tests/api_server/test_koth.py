@@ -877,6 +877,68 @@ def test_confirmation_median_and_paired_seed_band_match_validator_fold() -> None
     assert decision.seed_differences == pytest.approx((0.004, 0.004, 0.004))
 
 
+def test_full_seed_set_gate_defers_a_partial_pairing() -> None:
+    """Protocol 31: the platform mirror of the validator's full-set gate."""
+    incumbent = _entry(
+        2,
+        0.80,
+        minutes=0,
+        confirmations=(0.80, 0.80, 0.80),
+        seeds=(1, 2, 3),
+    )
+    partial = _entry(
+        1,
+        0.90,
+        minutes=1,
+        confirmations=(0.85, 0.85),
+        seeds=(1, 2),
+    )
+    complete = _entry(
+        3,
+        0.90,
+        minutes=7,
+        confirmations=(0.85, 0.85, 0.85),
+        seeds=(1, 2, 3),
+    )
+
+    legacy = _dethrone_decision(partial, incumbent)
+    assert legacy.method == "paired"
+    assert legacy.dethrones is True
+
+    gated = _dethrone_decision(partial, incumbent, dethrone_seed_full_set=True)
+    assert gated.method == "unpaired"
+    assert gated.dethrones is False
+    assert gated.seed_coverage_complete is False
+
+    settled = _dethrone_decision(
+        complete, incumbent, dethrone_seed_full_set=True
+    )
+    assert settled.method == "paired"
+    assert settled.dethrones is True
+    assert settled.seed_coverage_complete is True
+
+    projection = project_koth([incumbent, partial], dethrone_seed_full_set=True)
+    assert projection is not None
+    assert projection.champion == incumbent
+
+    projection = project_koth([incumbent, complete], dethrone_seed_full_set=True)
+    assert projection is not None
+    assert projection.champion == complete
+
+
+def test_full_seed_set_gate_is_inert_without_confirmation_evidence() -> None:
+    incumbent = _entry(2, 0.80, minutes=0)
+    challenger = _entry(1, 0.90, minutes=1)
+
+    gated = _dethrone_decision(
+        challenger, incumbent, dethrone_seed_full_set=True
+    )
+    ungated = _dethrone_decision(challenger, incumbent)
+    assert gated.seed_coverage_complete is True
+    assert gated.dethrones == ungated.dethrones
+    assert gated.required_score == pytest.approx(ungated.required_score)
+
+
 def test_efficiency_bonus_applies_inside_paired_seed_comparison() -> None:
     incumbent = _entry(
         2,

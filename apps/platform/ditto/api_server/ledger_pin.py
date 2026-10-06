@@ -167,6 +167,7 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
         tie_weighting_mode=served.get("tie_weighting_mode"),
         dethrone_band_mode=served.get("dethrone_band_mode"),
         statistical_band_mode=served.get("statistical_band_mode"),
+        dethrone_seed_mode=served.get("dethrone_seed_mode"),
         count=len(pin.entries),
         generated_at=pin.pinned_at,
         stale=stale,
@@ -322,11 +323,13 @@ def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
     tie_pooling = served.get("tie_weighting_mode") == "pool"
     clamp = served.get("dethrone_band_mode") == "headroom_capped"
     statistical_cap = served.get("statistical_band_mode") == "capped"
+    dethrone_seed_full = served.get("dethrone_seed_mode") == "full_set"
     projection = project_koth(
         fold_entries,
         distinct_hotkeys=tie_pooling,
         ceiling_band_clamp=clamp,
         statistical_band_cap=statistical_cap,
+        dethrone_seed_full_set=dethrone_seed_full,
         incumbent_agent_id=(
             pin.incumbent_agent_id if served.get("crown_mode") == "incumbent" else None
         ),
@@ -339,6 +342,7 @@ def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
         tie_pooling=tie_pooling,
         ceiling_band_clamp=clamp,
         statistical_band_cap=statistical_cap,
+        dethrone_seed_full_set=dethrone_seed_full,
     )
     total = sum(allocation.shares)
     if total <= 0.0:
@@ -682,6 +686,8 @@ def build_pin_draft(
         served["treasury_pin"] = treasury.model_dump(mode="json")
     if getattr(snapshot, "statistical_band_mode", None) == "capped":
         served["statistical_band_mode"] = "capped"
+    if getattr(snapshot, "dethrone_seed_mode", None) == "full_set":
+        served["dethrone_seed_mode"] = "full_set"
     # Bench v13+: freeze the pinned confirmation seed anchors with the pin so a
     # validator re-deriving the champion-anchored family from a pin sees the
     # same binding a live read would have served. Keyed only when present, so
@@ -750,6 +756,8 @@ def build_pin_draft(
         ceiling_band_clamp=snapshot.dethrone_band_mode == "headroom_capped",
         statistical_band_cap=getattr(snapshot, "statistical_band_mode", None)
         == "capped",
+        dethrone_seed_full_set=getattr(snapshot, "dethrone_seed_mode", None)
+        == "full_set",
         incumbent_agent_id=(incumbent if snapshot.crown_mode == "incumbent" else None),
     )
     champion_id = projection.champion.agent_id if projection is not None else None

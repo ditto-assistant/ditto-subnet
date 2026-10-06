@@ -18819,6 +18819,12 @@ export interface components {
              */
             statistical_band_mode: "disabled" | "fleet_ready";
             /**
+             * Dethrone Seed Mode
+             * @default disabled
+             * @enum {string}
+             */
+            dethrone_seed_mode: "disabled" | "fleet_ready";
+            /**
              * Tie Weighting Mode
              * @default disabled
              * @enum {string}
@@ -19756,6 +19762,21 @@ export interface components {
              * @default 29
              */
             statistical_band_required_protocol: number;
+            /**
+             * Dethrone Seed Active
+             * @default false
+             */
+            dethrone_seed_active: boolean;
+            /**
+             * Dethrone Seed Fleet Ready
+             * @default false
+             */
+            dethrone_seed_fleet_ready: boolean;
+            /**
+             * Dethrone Seed Required Protocol
+             * @default 31
+             */
+            dethrone_seed_required_protocol: number;
             /**
              * Tie Weighting Active
              * @default false
@@ -22464,6 +22485,11 @@ export interface components {
              * @description Protocol-29 consensus marker. When capped, paired tie and unpaired dethrone statistics are limited to twice the KOTH margin before decay. Absent preserves the legacy fold.
              */
             statistical_band_mode?: "capped" | null;
+            /**
+             * Dethrone Seed Mode
+             * @description Protocol-31 consensus marker. When full_set, a paired dethrone comparison may decide the crown only when the two entries' shared confirmation seeds cover the whole confirmation window — neither entry holds a window seed the other has not been scored on. A partial pairing falls back to the unpaired rule, which pending seeds cannot win. Absent preserves the legacy fold where a quorum of finished seeds may dethrone at once.
+             */
+            dethrone_seed_mode?: "full_set" | null;
             /**
              * Tie Weighting Mode
              * @description Consensus activation marker for tie-aware rank-share pooling. When set to pool, exact effective-score ties share the slots they occupy; non-exact ties require valid paired shared-seed evidence. Absent keeps the historical fixed rank shares.

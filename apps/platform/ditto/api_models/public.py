@@ -1707,6 +1707,31 @@ class PublicKothEmissions(BaseModel):
             ),
         ),
     ] = 24
+    dethrone_seed_full_set_active: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Whether a paired dethrone comparison must cover the whole "
+                "confirmation seed window before it may decide the crown "
+                "(protocol 31, ``dethrone_seed_mode: full_set``). Under it a "
+                "crown decided on a partial seed window cannot stand: the "
+                "comparison falls back to the unpaired rule, which pending "
+                "seeds cannot win."
+            ),
+        ),
+    ] = False
+    dethrone_seed_full_set_required_protocol: Annotated[
+        int,
+        Field(
+            default=31,
+            ge=1,
+            description=(
+                "Minimum fleet heartbeat protocol for the full-seed-set dethrone "
+                "gate."
+            ),
+        ),
+    ] = 31
     allocation_mode: Annotated[
         Literal["ranked", "score_ceiling_pool"],
         Field(

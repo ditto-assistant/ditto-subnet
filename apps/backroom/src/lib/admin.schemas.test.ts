@@ -3676,6 +3676,7 @@ describe('continual retest cohort sizing against an older platform', () => {
   const legacySupport = {
     tie_weighting_mode: false,
     statistical_band_mode: false,
+    dethrone_seed_mode: false,
     ledger_pin_mode: false,
     crown_incumbent_mode: false,
     retest_cohort_size: false,
@@ -3693,6 +3694,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     aggregate_mode: 'enabled' as const,
     tie_weighting_mode: 'disabled' as const,
     statistical_band_mode: 'disabled' as const,
+    dethrone_seed_mode: 'disabled' as const,
     ledger_pin_mode: 'live' as const,
     crown_incumbent_mode: 'disabled' as const,
     idle_retests_enabled: true,
@@ -3795,6 +3797,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     expect(continualRetestFieldSupport(partial)).toEqual({
       tie_weighting_mode: false,
       statistical_band_mode: false,
+      dethrone_seed_mode: false,
       ledger_pin_mode: false,
       crown_incumbent_mode: false,
       retest_cohort_size: false,
@@ -3812,6 +3815,7 @@ describe('continual retest write contract', () => {
     aggregate_mode: 'fleet_ready' as const,
     tie_weighting_mode: 'fleet_ready' as const,
     statistical_band_mode: 'disabled' as const,
+    dethrone_seed_mode: 'disabled' as const,
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'fleet_ready' as const,
     idle_retests_enabled: false,
@@ -3832,6 +3836,7 @@ describe('continual retest write contract', () => {
     for (const field of [
       'tie_weighting_mode',
       'statistical_band_mode',
+      'dethrone_seed_mode',
       'ledger_pin_mode',
       'crown_incumbent_mode',
       'wave_membership',
@@ -3897,6 +3902,7 @@ describe('continual retest write contract', () => {
       aggregate_mode: 'fleet_ready',
       tie_weighting_mode: 'disabled',
       statistical_band_mode: 'disabled',
+      dethrone_seed_mode: 'disabled',
       ledger_pin_mode: 'epoch',
       crown_incumbent_mode: 'disabled',
       idle_retests_enabled: false,

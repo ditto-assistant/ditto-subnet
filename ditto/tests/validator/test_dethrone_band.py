@@ -815,6 +815,101 @@ class TestBeatsWithConfirmations:
         assert _beats(chal, champ, 0.05, 1.64)
 
 
+class TestFullSeedSetDethrone:
+    """Protocol 31: a paired dethrone must cover the whole seed window."""
+
+    def test_partial_pairing_cannot_dethrone_under_the_gate(self) -> None:
+        # The challenger's paired lead is clear (0.85 vs 0.80) and would win
+        # under the legacy fold. Under the gate the missing seed defers the
+        # decision, exactly the miner-reported Oct-3 pattern.
+        champ = _e(
+            "champ", 0.80, confirmations=[0.80, 0.80, 0.80], seeds=[1, 2, 3], minutes=0
+        )
+        chal = _e(
+            "chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1
+        )
+        assert _beats(chal, champ, 0.007, 1.64)
+        assert not _beats(
+            chal, champ, 0.007, 1.64, dethrone_seed_full_set=True
+        )
+
+    def test_complete_pairing_dethrones_under_the_gate(self) -> None:
+        champ = _e(
+            "champ", 0.80, confirmations=[0.80, 0.80, 0.80], seeds=[1, 2, 3], minutes=0
+        )
+        chal = _e(
+            "chal", 0.90, confirmations=[0.85, 0.85, 0.85], seeds=[1, 2, 3], minutes=1
+        )
+        assert _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=True)
+
+    def test_champion_missing_a_challenger_seed_also_defers(self) -> None:
+        # Coverage is symmetric: a challenger scored deeper than the champion
+        # is the same partial window from the other side.
+        champ = _e(
+            "champ", 0.80, confirmations=[0.80, 0.80], seeds=[1, 2], minutes=0
+        )
+        chal = _e(
+            "chal", 0.90, confirmations=[0.85, 0.85, 0.85], seeds=[1, 2, 3], minutes=1
+        )
+        assert not _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=True)
+
+    def test_gate_off_is_byte_identical_to_the_legacy_fold(self) -> None:
+        champ = _e(
+            "champ", 0.80, confirmations=[0.80, 0.80, 0.80], seeds=[1, 2, 3], minutes=0
+        )
+        chal = _e(
+            "chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1
+        )
+        assert _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=False) == _beats(
+            chal, champ, 0.007, 1.64
+        )
+
+    def test_deferred_decision_is_not_a_ceiling_deadlock(self) -> None:
+        champ = _e(
+            "champ", 0.80, confirmations=[0.80, 0.80, 0.80], seeds=[1, 2, 3], minutes=0
+        )
+        chal = _e(
+            "chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1
+        )
+        assert not _score_ceiling_deadlocked(
+            chal,
+            champ,
+            margin=0.007,
+            dethrone_z=1.64,
+            statistical_band_cap=True,
+        )
+
+    def test_select_champion_keeps_the_incumbent_on_a_partial_pairing(self) -> None:
+        champ = _e(
+            "champ", 0.80, confirmations=[0.80, 0.80, 0.80], seeds=[1, 2, 3], minutes=0
+        )
+        chal = _e(
+            "chal", 0.90, confirmations=[0.85, 0.85], seeds=[1, 2], minutes=1
+        )
+        assert (
+            select_champion(
+                [champ, chal], margin=0.007, dethrone_z=1.64
+            )
+            is chal
+        )
+        assert (
+            select_champion(
+                [champ, chal],
+                margin=0.007,
+                dethrone_z=1.64,
+                dethrone_seed_full_set=True,
+            )
+            is champ
+        )
+
+    def test_coverage_is_trivially_complete_without_confirmation_evidence(self) -> None:
+        # Entries with no per-seed composites at all take the historical
+        # unpaired fold untouched by the gate.
+        champ = _e("champ", 0.80, minutes=0)
+        chal = _e("chal", 0.90, minutes=1)
+        assert _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=True)
+
+
 class TestBeats:
     def test_no_stderr_is_fixed_composite_point_margin(self) -> None:
         champ = _e("champ", 0.80, minutes=0)

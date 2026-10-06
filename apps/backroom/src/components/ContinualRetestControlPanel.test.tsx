@@ -22,6 +22,7 @@ const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   aggregate_mode: 'fleet_ready',
   tie_weighting_mode: 'disabled',
   statistical_band_mode: 'disabled',
+  dethrone_seed_mode: 'disabled',
   ledger_pin_mode: 'epoch',
   crown_incumbent_mode: 'disabled',
   idle_retests_enabled: false,
@@ -70,6 +71,7 @@ function control(
     field_support: {
       tie_weighting_mode: true,
       statistical_band_mode: true,
+      dethrone_seed_mode: true,
       ledger_pin_mode: true,
       crown_incumbent_mode: true,
       retest_cohort_size: true,
@@ -304,6 +306,7 @@ describe('ContinualRetestControlPanel', () => {
       aggregate_mode: 'fleet_ready',
       tie_weighting_mode: 'disabled',
       statistical_band_mode: 'disabled',
+      dethrone_seed_mode: 'disabled',
       ledger_pin_mode: 'live',
       crown_incumbent_mode: 'disabled',
       idle_retests_enabled: false,
