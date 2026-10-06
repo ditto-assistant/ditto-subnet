@@ -28,6 +28,7 @@ from ditto.db.queries.scores import (
     list_scores_for_agent,
     quorum_composites,
     quorum_ledger_proof_rows,
+    quorum_score_rows,
     ranked_quorum_agent_ids,
     upsert_score,
 )
@@ -2101,3 +2102,57 @@ class TestQuorumComposites:
 
     async def test_unknown_agent_absent(self, session: AsyncSession) -> None:
         assert await quorum_composites(session, [uuid4()]) == {}
+
+
+class TestQuorumScoreRows:
+    async def test_details_keys_projects_only_requested_keys(
+        self, session: AsyncSession
+    ) -> None:
+        """The narrow projection ships exactly the requested keys and no more.
+
+        The efficiency materializer reads three keys out of the per-case audit
+        blob; the full document must not leave Postgres.
+        """
+        agent = await _seed_agent(session)
+        await _upsert(
+            session,
+            agent.agent_id,
+            validator_hotkey="5V1",
+            run_id="r1",
+            details={"token_usage": {"total_tokens": 5}, "v9_base": {"run_id": "r1"}},
+        )
+        rows = await quorum_score_rows(
+            session,
+            [agent.agent_id],
+            bench_versions={agent.agent_id: _BENCH_VERSION},
+            details_keys=("token_usage", "v9_base"),
+        )
+        details = rows[agent.agent_id][0].details
+        assert details is not None
+        assert set(details) == {"token_usage", "v9_base"}
+        assert details["token_usage"] == {"total_tokens": 5}
+
+    async def test_details_keys_preserves_null_details(
+        self, session: AsyncSession
+    ) -> None:
+        """A SQL-NULL details column stays None under the narrow projection.
+
+        The CASE guard keeps the declared dict | None contract: without it,
+        jsonb_build_object would materialize each NULL extraction into an
+        object of JSON nulls.
+        """
+        agent = await _seed_agent(session)
+        await _upsert(
+            session,
+            agent.agent_id,
+            validator_hotkey="5V2",
+            run_id="r2",
+            details=None,
+        )
+        rows = await quorum_score_rows(
+            session,
+            [agent.agent_id],
+            bench_versions={agent.agent_id: _BENCH_VERSION},
+            details_keys=("token_usage", "v9_base"),
+        )
+        assert rows[agent.agent_id][0].details is None

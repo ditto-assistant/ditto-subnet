@@ -2815,7 +2815,19 @@ async def quorum_score_rows(
         for key in details_keys:
             pairs.append(literal(key))
             pairs.append(Score.details[key])
-        details_column = func.jsonb_build_object(*pairs).label("details")
+        # Absent details must stay None. Note Score.details uses _JSON_VARIANT
+        # without none_as_null, so upserting Python None stores a JSON null —
+        # test for both SQL NULL and JSON null, or jsonb_build_object will
+        # materialize them into an object of JSON nulls, breaking the declared
+        # dict | None contract the unprojected branch keeps.
+        details_is_absent = or_(
+            Score.details.is_(None),
+            func.jsonb_typeof(Score.details) == literal("null"),
+        )
+        details_column = case(
+            (details_is_absent, null()),
+            else_=func.jsonb_build_object(*pairs),
+        ).label("details")
     result = await session.execute(
         select(
             Score.agent_id,
