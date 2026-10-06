@@ -143,17 +143,15 @@ async def _quorum_median_rows(
         )
         .subquery()
     )
+    # Lower-median rank for either parity: rows before the midpoint. For odd
+    # cnt the last matching rank is (cnt+1)/2; for even cnt it is cnt/2 —
+    # both are exactly the reference sorted(...)[(len-1)//2] selection.
     median_keys = (
         select(rank.c.agent_id, rank.c.bench_version, rank.c.validator_hotkey)
-        .where(rank.c.cnt >= SCORING_QUORUM, rank.c.srn * 2 == rank.c.cnt + 1)
-        .union_all(
-            select(
-                rank.c.agent_id, rank.c.bench_version, rank.c.validator_hotkey
-            ).where(
-                rank.c.cnt >= SCORING_QUORUM,
-                rank.c.cnt % 2 == 0,
-                rank.c.srn * 2 == rank.c.cnt,
-            )
+        .where(
+            rank.c.cnt >= SCORING_QUORUM,
+            (rank.c.srn - 1) * 2 < rank.c.cnt,
+            rank.c.srn * 2 >= rank.c.cnt,
         )
         .subquery()
     )

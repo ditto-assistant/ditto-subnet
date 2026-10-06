@@ -21,6 +21,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     ColumnElement,
+    Float,
     and_,
     case,
     func,
@@ -30,6 +31,7 @@ from sqlalchemy import (
     select,
     union,
 )
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm.util import AliasedClass
 
@@ -2346,11 +2348,31 @@ async def list_eligible_ledger(
         # read beside a shipped details column.
         details_column = null().label("details")
     if details_keys is None and not include_details:
-        stderr_column: ColumnElement[Any] = (
-            Score.details["composite_stderr"]
-            .as_float()
-            .label("stored_composite_stderr")
+        # Mirror _stored_stderr's degrade-to-None contract in SQL: a malformed
+        # value (boolean, nonnumeric string, or an out-of-float8-range number)
+        # must yield NULL rather than abort the whole ledger read at the cast.
+        # JSONB normalizes 1e309 to a 309+-digit plain decimal, so the length
+        # bound plus the plain-integer exclusion is exactly the float8 range
+        # guard; inside CASE arms the cast is lazy and never runs for rows the
+        # guard rejects.
+        stderr_text = Score.details["composite_stderr"].as_string()
+        is_number = func.jsonb_typeof(Score.details["composite_stderr"]) == literal(
+            "number"
         )
+        in_float8_range = or_(
+            func.length(stderr_text) <= 308,
+            and_(
+                func.length(stderr_text) <= 310,
+                stderr_text.op("!~")(literal(r"^-?[0-9]+$")),
+            ),
+        )
+        stderr_column: ColumnElement[Any] = case(
+            (
+                and_(is_number, in_float8_range),
+                sql_cast(Score.details["composite_stderr"].as_string(), Float()),
+            ),
+            else_=None,
+        ).label("stored_composite_stderr")
     else:
         stderr_column = null().label("stored_composite_stderr")
     sketch_columns: tuple[ColumnElement[Any], ...]
