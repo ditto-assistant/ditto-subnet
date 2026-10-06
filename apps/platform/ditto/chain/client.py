@@ -90,6 +90,34 @@ _PENDING_EPOCH_AT_STORAGE = "PendingEpochAt"
 _SUBNET_EPOCH_INDEX_STORAGE = "SubnetEpochIndex"
 
 
+def _treasury_substrate(url: str) -> Any:
+    """Bind SDK startup metadata and treasury reads to one finalized snapshot.
+
+    The SDK otherwise starts metadata initialization at the best head before
+    our finalized reads arrive, which can initialize the same runtime twice.
+    This snapshot belongs only to this connection. Storage, identity, and
+    permissions are still queried anew, at their explicitly supplied hashes.
+    """
+    from async_substrate_interface import AsyncSubstrateInterface
+
+    class FinalizedTreasurySubstrate(AsyncSubstrateInterface):
+        def __init__(self) -> None:
+            super().__init__(url=url)
+            self._treasury_finalized_head: str | None = None
+
+        async def get_chain_head(self) -> str:
+            return await self.get_chain_finalised_head()
+
+        async def get_chain_finalised_head(self) -> str:
+            if self._treasury_finalized_head is None:
+                self._treasury_finalized_head = (
+                    await super().get_chain_finalised_head()
+                )
+            return self._treasury_finalized_head
+
+    return FinalizedTreasurySubstrate()
+
+
 class ChainClient:
     """Async context manager wrapping Pylon for chain access.
 
@@ -347,13 +375,11 @@ class ChainClient:
 
     @asynccontextmanager
     async def _treasury_reader(self, *, setters: bool = False):
-        from async_substrate_interface import AsyncSubstrateInterface
-
         trace = TreasuryReadTrace(setters=setters)
         try:
             async with (
                 asyncio.timeout(8),
-                AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
+                _treasury_substrate(self._substrate_url()) as substrate,
             ):
                 trace.client = substrate
                 yield trace
@@ -408,8 +434,6 @@ class ChainClient:
 
     async def get_treasury_activation_observation(self, policy: TreasuryEmissionPolicy):
         """One request-local connection and exact hash; two unchanged read windows."""
-        from async_substrate_interface import AsyncSubstrateInterface
-
         from ditto_screening_protocol.treasury_identity import (
             read_finalized_weight_setters,
             read_treasury_dispatch_observation,
@@ -420,7 +444,7 @@ class ChainClient:
         try:
             async with (
                 asyncio.timeout(8) as deadline,
-                AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
+                _treasury_substrate(self._substrate_url()) as substrate,
             ):
                 trace.client = substrate
                 observed = await read_treasury_dispatch_observation(trace, policy)
