@@ -1600,6 +1600,55 @@ class TestContinuationFloor:
             )
         assert rows[0].stored_composite_stderr == 1e308
 
+    async def test_scalar_stderr_admits_subnormal_decimals(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A magnitude-below-1 value may normalize to 311+ chars; keep it.
+
+        1e-309 renders as a 311-character "0.000…001" decimal, which a
+        length-only guard rejects, but it casts to a finite float8 exactly as
+        the details-fetching path returns it.
+        """
+        agent_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey="5" + "T" * 47,
+                    name="stderr-tiny",
+                    sha256="ab" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=_BASE,
+                )
+            )
+            session.add(
+                Score(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATORS[0],
+                    run_id="tiny-0",
+                    seed=987654321,
+                    composite=0.9,
+                    tool_mean=0.9,
+                    memory_mean=0.9,
+                    median_ms=500,
+                    n=114,
+                    generated_at=_BASE,
+                    signature="ab" * 64,
+                    details={"composite_stderr": 1e-309, "bench_version": _BENCH},
+                    bench_version=_BENCH,
+                )
+            )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                include_details=False,
+                bench_version=_BENCH,
+                dedupe_owners=False,
+            )
+        assert rows[0].stored_composite_stderr == 1e-309
+
     async def test_no_floor_below_five_finalized_owners(
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:

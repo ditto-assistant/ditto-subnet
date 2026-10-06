@@ -2379,11 +2379,16 @@ async def list_eligible_ledger(
         digits = func.regexp_replace(stderr_text, literal(r"^-"), literal(""))
         is_plain_int = stderr_text.op("~")(literal(r"^-?[0-9]+$"))
         in_float8_range = or_(
-            # Decimal/exponent text: 310 chars with sign stays finite; 311
-            # overflows.
+            # Decimal/exponent text: 310 chars with sign stays finite and 311
+            # overflows — except magnitudes below 1 (leading "0." / "-0."),
+            # which JSONB can render arbitrarily long (1e-309 normalizes to a
+            # 311-char decimal) and which always cast finite.
             and_(
                 ~is_plain_int,
-                func.length(stderr_text) <= 310,
+                or_(
+                    func.length(stderr_text) <= 310,
+                    stderr_text.op("~")(literal(r"^-?0")),
+                ),
             ),
             # Plain integers: compare magnitude against the 309-digit float8
             # max (negatives carry one extra sign character).
