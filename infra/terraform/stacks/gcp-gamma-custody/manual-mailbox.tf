@@ -23,12 +23,21 @@ resource "google_pubsub_topic" "manual" {
   project  = var.project
   name     = "sn118-manual-${each.key}"
   message_storage_policy { allowed_persistence_regions = [var.region] }
+  lifecycle {
+    precondition {
+      condition     = var.enable_collector_custody && var.collector_custody_phases.transfer == "sealed" && var.manual_mailbox_platform_service_account != ""
+      error_message = "Manual mailbox requires sealed transfer custody and an explicit Platform identity."
+    }
+  }
 }
 resource "google_pubsub_subscription" "manual" {
-  for_each                   = google_pubsub_topic.manual
-  project                    = var.project
-  name                       = "sn118-manual-${each.key}"
-  topic                      = each.value.id
+  for_each = google_pubsub_topic.manual
+  project  = var.project
+  name     = "sn118-manual-${each.key}"
+  # Keep the exact fully-qualified name known in the first saved plan; the
+  # scope fence must not accept an arbitrary unknown topic destination.
+  topic                      = "projects/${var.project}/topics/sn118-manual-${each.key}"
+  depends_on                 = [google_pubsub_topic.manual]
   ack_deadline_seconds       = 600
   message_retention_duration = "604800s"
   expiration_policy { ttl = "" }

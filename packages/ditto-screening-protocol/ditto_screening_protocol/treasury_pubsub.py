@@ -80,10 +80,20 @@ class TreasuryMailbox:
         if not rows:
             return None
         row = rows[0]
-        raw = base64.b64decode(row["message"]["data"], validate=True)
-        if len(raw) > 65536:
-            raise ValueError("manual message exceeds bound")
-        return row["ackId"], json.loads(raw)
+        try:
+            raw = base64.b64decode(row["message"]["data"], validate=True)
+            if len(raw) > 65536:
+                raise ValueError("manual message exceeds bound")
+            body = json.loads(raw)
+            if not isinstance(body, dict):
+                raise ValueError("manual message object required")
+        except (ValueError, TypeError, KeyError):
+            # Undecodable bytes cannot be a valid financial request/report.
+            # Keep ACK transport failures visible; never ACK a valid object
+            # here before the consumer commits its durable processing.
+            self.ack(row["ackId"])
+            return None
+        return row["ackId"], body
 
     def ack(self, ack_id):
         self._call(self.subscription, "acknowledge", {"ackIds": [ack_id]})

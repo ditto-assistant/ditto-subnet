@@ -28,7 +28,7 @@ async def get_manual(
     result = await state(session, request.app.state.config, enabled=enabled(request))
     loop = getattr(request.app.state, "treasury_manual_loop", None)
     result["bridge_error"] = loop.last_error if loop else None
-    if result["bridge_error"]:
+    if result["bridge_error"] and not result["blocked_reason"]:
         result["blocked_reason"] = result["bridge_error"]
     return result
 

@@ -357,3 +357,127 @@ async def test_queued_request_paused_before_dispatch_is_never_sent(
                 TreasuryManualTransfer, payload.envelope.request.request_id
             )
         ).status == "refused"
+
+
+async def test_disabled_bridge_preserves_reason_with_paused_pending_request(
+    session_maker, runtime
+):
+    await seed(session_maker)
+    payload = submission(await get_preview(session_maker))
+    async with session_maker() as session, session.begin():
+        await manual.submit(
+            session, None, payload, "operator@example.com", enabled=True
+        )
+    runtime.treasury_weight_enforcement = False
+    async with session_maker() as session:
+        assert (await manual.state(session, None, enabled=False))[
+            "blocked_reason"
+        ] == "Manual custody bridge is disabled"
+
+
+async def test_bridge_error_does_not_replace_policy_block(
+    app, client, session_maker, runtime
+):
+    from dataclasses import replace
+
+    from ditto.api_server.dependencies import get_session
+
+    token = "manual-test-admin-token-at-least-32-characters"
+    app.state.config = replace(app.state.config, admin_api_token=token)
+    app.state.treasury_manual_loop = SimpleNamespace(
+        enabled=True, last_error="mailbox unavailable"
+    )
+
+    async def sessions():
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = sessions
+    await seed(session_maker)
+    runtime.treasury_weight_enforcement = False
+    headers = {"Authorization": f"Bearer {token}"}
+    response = await client.get("/api/v1/admin/treasury-manual", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["blocked_reason"] == "Gamma is paused"
+    assert response.json()["bridge_error"] == "mailbox unavailable"
+    runtime.treasury_weight_enforcement = True
+    response = await client.get("/api/v1/admin/treasury-manual", headers=headers)
+    assert response.json()["blocked_reason"] == "mailbox unavailable"
+
+
+async def test_missing_historical_pin_retries_audit_without_custody_send(
+    session_maker, monkeypatch
+):
+    from ditto.api_server import treasury_manual_loop as module
+    from ditto.api_server.treasury_ingress import ReceiptHistoryUnavailable
+
+    await seed(session_maker)
+    payload = submission(await get_preview(session_maker))
+    async with session_maker() as session, session.begin():
+        await manual.submit(
+            session, None, payload, "operator@example.com", enabled=True
+        )
+        row = await session.get(
+            TreasuryManualTransfer, payload.envelope.request.request_id
+        )
+        row.status = "audit_pending"
+    sent = []
+    mailbox = SimpleNamespace(pull=lambda: None, publish=sent.append)
+    loop = module.TreasuryManualLoop(
+        SimpleNamespace(session_maker=session_maker, config=None, chain=None),
+        mailbox=mailbox,
+    )
+    attempts = 0
+
+    async def audit(_session, _chain, row):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ReceiptHistoryUnavailable("historical epoch not yet recorded")
+        row.status = "published"
+        row.last_error = None
+
+    monkeypatch.setattr(module, "publish_audit", audit)
+    await loop.sweep()
+    async with session_maker() as session:
+        row = await session.get(
+            TreasuryManualTransfer, payload.envelope.request.request_id
+        )
+        assert row.status == "audit_pending" and "retry pending" in row.last_error
+    await loop.sweep()
+    assert attempts == 2 and sent == []
+    async with session_maker() as session:
+        assert (
+            await session.get(
+                TreasuryManualTransfer, payload.envelope.request.request_id
+            )
+        ).status == "published"
+
+
+async def test_readiness_locks_runtime_before_reading_policy(
+    session_maker, monkeypatch
+):
+    order = []
+    old_lock, old_read, old_manual = (
+        manual.lock_runtime,
+        manual.treasury_runtime,
+        manual.lock_manual,
+    )
+
+    async def lock(session):
+        await old_lock(session)
+        order.append("runtime")
+
+    async def read(*args):
+        order.append("read")
+        return await old_read(*args)
+
+    async def lock_claim(session):
+        await old_manual(session)
+        order.append("manual")
+
+    monkeypatch.setattr(manual, "lock_runtime", lock)
+    monkeypatch.setattr(manual, "treasury_runtime", read)
+    monkeypatch.setattr(manual, "lock_manual", lock_claim)
+    await seed(session_maker)
+    assert order == ["runtime", "read", "manual"]

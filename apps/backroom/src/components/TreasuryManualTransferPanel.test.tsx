@@ -49,3 +49,22 @@ it('refuses binary float rounding, scientific notation, zero and excessive preci
   expect(alphaRao('0.100000001')).toBe(100000001)
   for (const bad of ['1e2', '0', '-1', '0.0000000001', '9007199254740992']) expect(alphaRao(bad)).toBeNull()
 })
+
+
+it('blocks preview when all allocations are disabled or a refresh disables the selection', async () => {
+  const fill = () => {
+    fireEvent.change(screen.getByLabelText('Amount (SN118 alpha)'), { target: { value: '0.1' } })
+    fireEvent.change(screen.getByLabelText('Minimum alpha to retain staked'), { target: { value: '55' } })
+    fireEvent.change(screen.getByLabelText('Audit reason'), { target: { value: 'manual inference purchase' } })
+  }
+  render(<TreasuryManualTransferPanel initialState={{ ...control, destinations: control.destinations.map(d => ({ ...d, allocation_bps: 0 })) }} readOnly={false} />)
+  fill()
+  expect((screen.getByText('Preview manual transfer') as HTMLButtonElement).disabled).toBe(true)
+  cleanup()
+  render(<TreasuryManualTransferPanel initialState={{ ...control, destinations: [{ ...control.destinations[0], bucket_id: 'bitsec', allocation_bps: 1000 }] }} readOnly={false} />)
+  fill()
+  expect((screen.getByText('Preview manual transfer') as HTMLButtonElement).disabled).toBe(false)
+  fireEvent.click(screen.getByText('Refresh transfer status'))
+  await waitFor(() => expect((screen.getByText('Preview manual transfer') as HTMLButtonElement).disabled).toBe(true))
+  expect(preview).not.toHaveBeenCalled()
+})

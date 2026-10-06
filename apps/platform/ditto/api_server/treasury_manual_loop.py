@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from ditto.api_server.treasury_ingress import ReceiptHistoryUnavailable
 from ditto.api_server.treasury_manual import (
     ACTIVE,
     accept_report,
@@ -106,7 +107,7 @@ class TreasuryManualLoop:
                     # invokes custody or resends funds to repair publication.
                     async with session.begin_nested():
                         await publish_audit(session, self.state.chain, row)
-                except ChainError:
+                except (ChainError, ReceiptHistoryUnavailable):
                     row.last_error = (
                         "Finalized receipt history temporarily unavailable; "
                         "automatic audit retry pending"

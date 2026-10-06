@@ -61,9 +61,9 @@ async def state(session, config, *, enabled):
             ):
                 readiness = report.readiness
                 blocked = None
-    if not runtime.treasury_weight_enforcement:
+    if enabled and not runtime.treasury_weight_enforcement:
         blocked = "Gamma is paused"
-    if await session.scalar(
+    if enabled and await session.scalar(
         select(Transfer.request_id).where(Transfer.status.in_(ACTIVE)).limit(1)
     ):
         blocked = "A previous transfer or its public receipt is still pending"
@@ -186,6 +186,7 @@ async def submit(session, config, payload, actor, *, enabled):
 
 async def accept_report(session, config, body):
     report = ManualReport.model_validate(body)
+    await lock_runtime(session)
     runtime = await treasury_runtime(session, config)
     await lock_manual(session)
     if report.status == "readiness":

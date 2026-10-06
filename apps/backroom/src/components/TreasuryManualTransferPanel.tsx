@@ -54,7 +54,7 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
       <label>Amount (SN118 alpha)<input className={inputClass} inputMode="decimal" value={amount} onChange={e => { setAmount(e.target.value); invalidate() }} /></label>
       <label>Minimum alpha to retain staked<input className={inputClass} inputMode="decimal" value={reserve} onChange={e => { setReserve(e.target.value); invalidate() }} /></label>
       <label>Audit reason<input className={inputClass} maxLength={240} value={reason} onChange={e => { setReason(e.target.value); invalidate() }} /></label>
-      <button className={inputClass} disabled={!alphaRao(amount) || !alphaRao(reserve) || reason.trim().length < 8} onClick={async () => {
+      <button className={inputClass} disabled={!alphaRao(amount) || !alphaRao(reserve) || reason.trim().length < 8 || !state.destinations.some(d => d.bucket_id === bucket && d.allocation_bps > 0)} onClick={async () => {
         setBusy(true); setError(''); setMessage('')
         try { setPreview(await previewTransfer({ data: { request_id: requestId, bucket_id: bucket, amount_rao: alphaRao(amount)!, retained_alpha_rao: alphaRao(reserve)!, reason: reason.trim() } })); setConfirmation('') }
         catch (cause) { setError(cause instanceof Error ? cause.message : 'Transfer preview unavailable') }
