@@ -110,9 +110,7 @@ def _treasury_substrate(url: str) -> Any:
 
         async def get_chain_finalised_head(self) -> str:
             if self._treasury_finalized_head is None:
-                self._treasury_finalized_head = (
-                    await super().get_chain_finalised_head()
-                )
+                self._treasury_finalized_head = await super().get_chain_finalised_head()
             return self._treasury_finalized_head
 
     return FinalizedTreasurySubstrate()
