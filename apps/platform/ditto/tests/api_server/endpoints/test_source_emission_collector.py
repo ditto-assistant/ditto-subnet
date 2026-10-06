@@ -659,8 +659,9 @@ async def test_v467_transition_recovers_on_the_second_archive(
         )
 
 
-async def test_pending_payout_resolves_before_failing_block_scan(
-    app, client, session_maker, monkeypatch
+@pytest.mark.parametrize("finalized", [202, 15000])
+async def test_pending_payout_resolves_despite_failing_block_scan(
+    app, client, session_maker, monkeypatch, finalized
 ):
     a, b = await _prepare(app, session_maker)
     assert (await _post(client, _signed(a))).status_code == 200
@@ -676,13 +677,18 @@ async def test_pending_payout_resolves_before_failing_block_scan(
         "ditto.api_server.source_emission_collector.read_source_emission_block", scan
     )
     substrate = SimpleNamespace(
-        get_chain_finalised_head=AsyncMock(return_value=_hash(202)),
-        get_block_header=AsyncMock(return_value={"header": {"number": 202}}),
+        get_chain_finalised_head=AsyncMock(return_value=_hash(finalized)),
+        get_block_header=AsyncMock(return_value={"header": {"number": finalized}}),
     )
     with pytest.raises(RuntimeError, match="RPC work limit exceeded"):
         await collector._sweep_provider(substrate)
     scan.assert_awaited_once()
     async with session_maker() as session:
+        from ditto.db.models import SourceEmissionCollectorCursor
+
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        assert cursor.block == 201
+        assert cursor.block_hash == _hash(201)
         aid = UUID(a["provenance"]["champion_agent_id"])
         bid = UUID(b["provenance"]["champion_agent_id"])
         reveals = await get_king_reveal(session, agent_ids=[aid, bid])
