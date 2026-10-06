@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 
+import pytest
 from sqlalchemy import text
 
 PARENT = "c1a72e9035bf"
@@ -17,6 +18,23 @@ def alembic(*args):
         capture_output=True,
         text=True,
     )
+
+
+@pytest.fixture(autouse=True)
+async def partial_distribution_schema(engine):
+    """Test this historical revision and always restore the current head.
+
+    A refused downgrade can still commit rollback of newer empty tables before
+    the financial-history guard fires. Restore the worker schema even when the
+    refusal assertions fail, so the next current-head reset is valid.
+    """
+    try:
+        result = alembic("downgrade", HEAD)
+        assert result.returncode == 0, result.stderr
+        yield
+    finally:
+        result = alembic("upgrade", "head")
+        assert result.returncode == 0, result.stderr
 
 
 async def indexes(engine):
