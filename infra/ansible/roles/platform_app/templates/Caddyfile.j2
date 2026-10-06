@@ -76,10 +76,30 @@
     }
 
     handle {
+{% if platform_api_standby_port | int > 0 %}
+        # Primary owns singleton loops. Passive failure detection sends new
+        # requests to the standby while a PM2 fork-mode reload stops primary.
+        reverse_proxy localhost:{{ platform_api_port }} localhost:{{ platform_api_standby_port }} {
+            lb_policy first
+            fail_duration 10s
+            max_fails 1
+            lb_try_duration 5s
+        }
+{% else %}
         reverse_proxy localhost:{{ platform_api_port }}
+{% endif %}
+    }
+{% else %}
+{% if platform_api_standby_port | int > 0 %}
+    reverse_proxy localhost:{{ platform_api_port }} localhost:{{ platform_api_standby_port }} {
+        lb_policy first
+        fail_duration 10s
+        max_fails 1
+        lb_try_duration 5s
     }
 {% else %}
     reverse_proxy localhost:{{ platform_api_port }}
+{% endif %}
 {% endif %}
 
     log {

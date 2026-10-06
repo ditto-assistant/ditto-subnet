@@ -4,9 +4,9 @@
 #   fetch -> reset -> preflight -> uv sync -> build dashboard -> set deploy
 #   config -> ensure Pylon -> migrate -> pm2 start/reload/recreate -> verify
 #   the app is serving the commit that was checked out.
-# NOT zero-downtime: ditto-api is a single fork-mode pm2 process, so the reload
-# below is a stop/start with ~6s of refused connections (measured), not a
-# rolling handover. See scripts/ecosystem.config.js.
+# Each fork-mode reload still stops its process for about 6s. When the
+# Ansible-owned standby is enabled, Caddy serves from the other process and
+# this script refuses to restart primary until standby serves the target SHA.
 # This script exits non-zero if the API does not come back up; see the
 # verification block at the bottom. It must never report success on a dead app,
 # and it must never leave the host looking deployed when it is not.
@@ -123,6 +123,7 @@ resolve_health_url() {
 app_health_url_for() {
   case "$1" in
     ditto-api) resolve_health_url ;;
+    ditto-api-standby) printf 'http://127.0.0.1:%s/health' "$DITTO_PLATFORM_STANDBY_PORT" ;;
     *) printf '' ;;
   esac
 }
@@ -462,14 +463,28 @@ uv run alembic upgrade head
 #   recreate -- launch identity drifted; `pm2 delete` + `pm2 start`
 #   reload   -- identity matches; in-place `pm2 reload` (the ordinary path)
 #
-# Reload stays the default for ordinary code-only deploys. Today that is a
-# stop/start anyway (single fork-mode process), but keeping the distinction
-# means a future move to `exec_mode: "cluster"` gets real zero-downtime reloads
-# without reintroducing this hazard.
+# Reload stays the default for ordinary code-only deploys. Fork-mode reload
+# stops one port; the standby keeps the API reachable while it happens.
 deploy_stage="pm2-plan"
 echo "==> planning pm2 actions"
 pm2_plan="$(pm2 jlist 2>/dev/null | node scripts/pm2_deploy_plan.js scripts/ecosystem.config.js)"
 [ -n "$pm2_plan" ] || { echo "ERROR: empty pm2 deploy plan; refusing to touch pm2" >&2; exit 1; }
+
+# A previous failed deploy may have left primary down and standby as the only
+# serving API. Refuse to restart that last healthy process. A fresh host is
+# exempt because neither process is serving traffic yet.
+if [ "${DITTO_PLATFORM_STANDBY_PORT:-0}" != 0 ]; then
+  planned_primary_action="$(printf '%s\n' "$pm2_plan" | awk -F'\t' '$2 == "ditto-api" { print $1; exit }')"
+  planned_standby_action="$(printf '%s\n' "$pm2_plan" | awk -F'\t' '$2 == "ditto-api-standby" { print $1; exit }')"
+  if [ "$planned_primary_action" != start ] || [ "$planned_standby_action" != start ]; then
+    primary_body="$(curl -fsS -m 5 "$(resolve_health_url)" 2>/dev/null || true)"
+    primary_commit="$(printf '%s' "$primary_body" | json_string_field commit || true)"
+    if [ -z "$primary_commit" ]; then
+      echo "ERROR: primary is not healthy; refusing to restart the standby" >&2
+      exit 1
+    fi
+  fi
+fi
 
 # Space-separated name lists rather than arrays: pm2 app names never contain
 # whitespace, and this keeps the script working on bash 3.2 as well as the
@@ -478,6 +493,7 @@ fresh_apps=""
 reload_apps=""
 service_apps=""
 oneshot_apps=""
+primary_action=""
 # Column 5 (the configured script path) is unused here; fail_deploy reads it
 # back out of "$pm2_plan" only when it has to explain a failure.
 while IFS=$'\t' read -r action name role err_log _ reason; do
@@ -490,6 +506,13 @@ while IFS=$'\t' read -r action name role err_log _ reason; do
     oneshot) oneshot_apps="$oneshot_apps $name" ;;
     *) service_apps="$service_apps $name" ;;
   esac
+  if [ "$name" = ditto-api ]; then
+    # The primary owns singleton loops. Keep it serving while the standby is
+    # changed and verified; a fork-mode pm2 reload stops this port outright.
+    primary_action="$action"
+    echo "    $name: $action ($reason; after standby is healthy)"
+    continue
+  fi
   case "$action" in
     recreate)
       echo "    $name: recreate ($reason)"
@@ -525,6 +548,37 @@ if [ -n "${reload_apps// /}" ]; then
   echo "==> reloading:$reload_apps"
   deploy_pm2_touched=1
   pm2 reload scripts/ecosystem.config.js --only "$(join_csv "$reload_apps")" --update-env
+fi
+
+if [ -n "$primary_action" ]; then
+  standby_port="${DITTO_PLATFORM_STANDBY_PORT:-0}"
+  if [ "$standby_port" != 0 ]; then
+    # Do not take the only proven API down. Caddy already has the standby as
+    # its failover upstream when this host's Ansible activation is applied.
+    echo "==> waiting for standby on port $standby_port before touching primary"
+    standby_deadline=$((SECONDS + ${DITTO_HEALTH_TIMEOUT:-120}))
+    while :; do
+      standby_body="$(curl -fsS -m 5 "http://127.0.0.1:$standby_port/health" 2>/dev/null || true)"
+      standby_commit="$(printf '%s' "$standby_body" | json_string_field commit || true)"
+      [ "$standby_commit" = "$deploy_target" ] && break
+      if [ "$SECONDS" -ge "$standby_deadline" ]; then
+        echo "ERROR: standby did not serve $deploy_target; primary was not touched" >&2
+        exit 1
+      fi
+      sleep 3
+    done
+    echo "    standby is healthy on commit $standby_commit"
+  fi
+  deploy_pm2_touched=1
+  case "$primary_action" in
+    recreate)
+      pm2 delete ditto-api >/dev/null 2>&1 || true
+      pm2 start scripts/ecosystem.config.js --only ditto-api --update-env ;;
+    start)
+      pm2 start scripts/ecosystem.config.js --only ditto-api --update-env ;;
+    reload)
+      pm2 reload scripts/ecosystem.config.js --only ditto-api --update-env ;;
+  esac
 fi
 pm2 save
 

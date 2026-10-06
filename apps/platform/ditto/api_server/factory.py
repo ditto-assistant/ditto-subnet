@@ -250,6 +250,16 @@ def _process_role() -> str:
     return role
 
 
+def _platform_background_tasks_enabled() -> bool:
+    """Keep singleton loops on the primary while a standby serves the same API."""
+    value = os.environ.get("DITTO_PLATFORM_BACKGROUND_TASKS", "true").strip().lower()
+    if value not in {"true", "false"}:
+        raise ApiServerConfigError(
+            "DITTO_PLATFORM_BACKGROUND_TASKS must be 'true' or 'false'"
+        )
+    return value == "true"
+
+
 def _efficiency_settings_ttl_seconds() -> float:
     """TTL for the hot-swappable efficiency-bonus policy read cache.
 
@@ -290,6 +300,9 @@ def _render_dashboard(wandb_url: str) -> str | None:
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     config: ApiServerConfig = app.state.config
+    run_background_tasks = (
+        _process_role() == PLATFORM_ROLE and _platform_background_tasks_enabled()
+    )
     async with AsyncExitStack() as stack:
         # Register teardown before opening dependencies. If anything fails,
         # no control signer remains reachable through this application.
@@ -440,13 +453,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             # request under `FOR UPDATE`, so there is no in-memory route cache
             # to keep warm. This makes the platform role the designated primary
             # for the one piece of background work that requires a singleton.
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await provider_routes.start()
             app.state.inference_provider_routes = provider_routes
 
             nonce_janitor = ValidatorNonceJanitor(session_maker=app.state.session_maker)
             stack.push_async_callback(nonce_janitor.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await nonce_janitor.start()
             app.state.validator_nonce_janitor = nonce_janitor
 
@@ -455,7 +468,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 retention_days=config.screener_auth.capacity_event_retention_days,
             )
             stack.push_async_callback(capacity_event_janitor.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await capacity_event_janitor.start()
             app.state.screener_capacity_event_janitor = capacity_event_janitor
 
@@ -464,7 +477,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             # platform role unconditionally like the nonce janitor.
             copy_court = CopyHoldCourt(session_maker=app.state.session_maker)
             stack.push_async_callback(copy_court.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await copy_court.start()
             app.state.copy_hold_court = copy_court
             # The epoch pin must land at the chain boundary even when no
@@ -477,7 +490,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 materializer=app.state.ledger_pin_materializer,
             )
             stack.push_async_callback(ledger_pin_loop.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await ledger_pin_loop.start()
             app.state.ledger_pin_loop = ledger_pin_loop
             emission_collector = SourceEmissionCollector(
@@ -486,13 +499,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 confirmation_enabled=app.state.config.source_emission_confirmation_enabled,
             )
             stack.push_async_callback(emission_collector.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await emission_collector.start()
             app.state.source_emission_collector = emission_collector
 
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await validator_names.start(app.state.session_maker)
 
         except Exception as e:

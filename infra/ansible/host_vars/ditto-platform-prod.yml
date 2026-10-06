@@ -53,6 +53,7 @@ platform_trace_hippius_bucket: ditto-subnet-traces
 # Setting this back to [] and re-converging is the durable rollback: it restores
 # the byte-exact pre-relay Caddyfile.
 platform_inference_relay_ports: [8010, 8011]
+platform_api_standby_port: 8002
 
 # Per-env Secret Manager secret ids (shared ones are in the platform_app role).
 # Deploy-owned runtime values live separately in /opt/ditto-platform/.env.deploy.
