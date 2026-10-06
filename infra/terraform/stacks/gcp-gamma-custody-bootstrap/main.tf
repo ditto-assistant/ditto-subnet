@@ -102,7 +102,7 @@ resource "google_project_iam_custom_role" "manual_mailbox" {
     "pubsub.topics.get", "pubsub.topics.list", "pubsub.topics.getIamPolicy",
     "pubsub.subscriptions.get", "pubsub.subscriptions.list", "pubsub.subscriptions.getIamPolicy",
     ], each.key == "apply" ? [
-    "pubsub.topics.create", "pubsub.topics.update", "pubsub.topics.delete", "pubsub.topics.setIamPolicy",
+    "pubsub.topics.create", "pubsub.topics.update", "pubsub.topics.delete", "pubsub.topics.setIamPolicy", "pubsub.topics.attachSubscription",
     "pubsub.subscriptions.create", "pubsub.subscriptions.update", "pubsub.subscriptions.delete", "pubsub.subscriptions.setIamPolicy",
   ] : [])
   depends_on = [google_project_service.api]

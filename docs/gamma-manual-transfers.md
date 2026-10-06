@@ -90,7 +90,8 @@ not prove a provider purchase or credited GM balance.
    `f4d95a6c827b` and the new read-only `get_treasury_manual_transfers` tool.
 2. First review/apply the owner bootstrap delta: Pub/Sub API and metadata-only
    plan/resource-management apply custom roles for the existing protected
-   infrastructure identities, with no payload or wallet permissions. Then run
+   infrastructure identities, with no payload or wallet permissions.
+   Subscription creation includes the [documented topic attachment permission](https://docs.cloud.google.com/pubsub/docs/access-control). Then run
    the existing protected Gamma custody plan with **sealed** roles,
    runtime RPC egress unchanged/true and `gamma_manual_mailbox_enabled=true`.
    Review the entire private plan before apply. Never apply the repository's
