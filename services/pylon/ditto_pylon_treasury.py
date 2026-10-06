@@ -17,7 +17,6 @@ from pydantic import TypeAdapter
 from scalecodec.utils.ss58 import ss58_encode
 
 from ditto_screening_protocol.treasury import Address, Hash
-
 from ditto_screening_protocol.treasury_approval import (
     TreasuryPolicyApproval,
     verify_policy_approval,

@@ -8,13 +8,13 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-from scalecodec.utils.ss58 import ss58_decode
 
 import ditto_pylon_receipts as receipts
 import ditto_pylon_treasury as treasury
 from bittensor_wallet import Keypair
 from pylon_service.api._unstable import tasks
 from pylon_service.bittensor.contact import AbstractBittensorContact
+from scalecodec.utils.ss58 import ss58_decode
 from turbobt.subnet import SubnetWeights
 
 from ditto_screening_protocol.treasury import TreasuryEmissionPolicy
