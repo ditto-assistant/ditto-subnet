@@ -84,6 +84,57 @@ def test_unowned_bootstrap_cannot_use_subnet_owner_coldkey():
         c.identity(p, "finalized", allow_unowned=True)
 
 
+def test_historical_registered_identity_reads_each_binding_once_at_exact_hash():
+    c, p, values, _ = identity_adapter(role="transfer", uid=14)
+    reads = []
+
+    def query(module, name, params, at):
+        reads.append((module, name, params, at))
+        return values[name]
+
+    c.query = query
+    assert c._earnings_identity(p, "historical") == 14
+    assert [name for _, name, _, _ in reads] == ["Uids", "Owner", "SubnetOwner", "Keys"]
+    assert all(at == "historical" for _, _, _, at in reads)
+    assert reads[-1][2] == [118, 14]
+    values["Owner"] = "other-owner"
+    with pytest.raises(ValueError, match="ownership"):
+        c._earnings_identity(p, "next-historical")
+    with pytest.raises(ValueError, match="ownership"):
+        c.identity(p, "historical")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("Owner", "other-owner"),
+        ("Uids", -1),
+        ("Uids", True),
+        ("Uids", "14"),
+        ("SubnetOwner", "cold"),
+        ("Keys", "other-hotkey"),
+    ],
+)
+def test_historical_binding_refusals_remain_strict(field, value):
+    c, p, values, _ = identity_adapter(role="transfer", uid=14)
+    values[field] = value
+    with pytest.raises(ValueError):
+        c._earnings_identity(p, "historical")
+
+
+def test_historical_identity_read_failure_has_no_fallback():
+    c, p, values, _ = identity_adapter(role="transfer", uid=14)
+
+    def query(_module, name, _params, _at):
+        if name == "SubnetOwner":
+            raise ConnectionError("unavailable")
+        return values[name]
+
+    c.query = query
+    with pytest.raises(ConnectionError):
+        c._earnings_identity(p, "historical")
+
+
 def test_first_registration_observation_reaches_bounded_register_path():
     p = policy()
     c, _, _, _ = identity_adapter(owner="default-zero")
@@ -316,6 +367,7 @@ def income_fixture():
     )
     c = adapter(s)
     c.identity = lambda *_: 14
+    c._identity_binding = lambda *_, **_kwargs: 14
     c.query = lambda *_: p.collector_hotkey
     return p, c, events
 
@@ -396,6 +448,7 @@ def test_reused_parent_does_not_bypass_new_identity_or_route_checks():
 def inactive_income_fixture():
     p, c, events = income_fixture()
     c.identity = PublicCollectorChain.identity.__get__(c)
+    c._identity_binding = PublicCollectorChain._identity_binding.__get__(c)
     c.query = lambda _module, name, _params, _hash: {
         "Uids": None,
         "Owner": "default-zero",

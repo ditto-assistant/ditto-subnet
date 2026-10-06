@@ -175,14 +175,20 @@ class PublicCollectorChain:
         owner = self.query(
             "SubtensorModule", "Owner", [policy.collector_hotkey], block_hash
         )
+        uid = self.query(
+            "SubtensorModule", "Uids", [118, policy.collector_hotkey], block_hash
+        )
+        return self._identity_binding(
+            policy, block_hash, owner=owner, uid=uid, allow_unowned=allow_unowned
+        )
+
+    def _identity_binding(self, policy, block_hash, *, owner, uid, allow_unowned=False):
+        """Verify freshly read values at this hash; no retained identity cache."""
         subnet_owner = self.query("SubtensorModule", "SubnetOwner", [118], block_hash)
         if subnet_owner == policy.collector_coldkey:
             raise ValueError(
                 "collector ownership changed or is subnet-owner associated"
             )
-        uid = self.query(
-            "SubtensorModule", "Uids", [118, policy.collector_hotkey], block_hash
-        )
         if owner != policy.collector_coldkey:
             # The first register_limit creates Owner. Its ValueQuery default is
             # an account address, not None; only raw storage absence proves this
@@ -322,7 +328,10 @@ class PublicCollectorChain:
             "SubtensorModule", "Owner", [policy.collector_hotkey], block_hash
         )
         if uid is not None or owner == policy.collector_coldkey:
-            return self.identity(policy, block_hash)
+            # These values were just read at the same immutable historical hash.
+            # Verify every remaining binding without rereading Owner/Uids. Current
+            # observations and subsequent blocks still fetch fresh values.
+            return self._identity_binding(policy, block_hash, owner=owner, uid=uid)
         if (
             self.query("SubtensorModule", "SubnetOwner", [118], block_hash)
             == policy.collector_coldkey
