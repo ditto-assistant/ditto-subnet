@@ -176,6 +176,13 @@ but before proof of finalization remains uncertain and is never silently retried
 a new epoch may create a fresh request. None of these states proves reveal or
 payment. Platform separately verifies the finalized chain lifecycle.
 
+The queued treasury guard adapts TurboBT's public wire shapes before checking
+the approved identity: the no-argument finalized-head RPC uses `[]`, its
+32-byte hash becomes canonical hex, and the `Owner`, `SubnetOwner`, and `Keys`
+AccountId32 results become SS58 format 42. Malformed values still refuse;
+UID/epoch storage is never converted into an address. Every identity and epoch
+check remains at the same fresh finalized hash under the existing deadline.
+
 GET the collection with `after_task_id` and `limit` (1–100) recovers unacknowledged
 receipts after validator restart. GET `/{request_id}` retrieves one receipt.
 POST `/{request_id}/ack` requires the request digest, attempt ID and exact
