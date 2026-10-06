@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { TreasuryManualTransferPanel } from './TreasuryManualTransferPanel'
-import { alphaRao } from '../lib/treasury-manual.schemas'
+import { alphaRao, manualControlSchema } from '../lib/treasury-manual.schemas'
 
 const preview = vi.fn(), queue = vi.fn(), refresh = vi.fn(() => Promise.resolve(control))
 vi.mock('@tanstack/react-start', () => ({ useServerFn: (fn: unknown) => fn }))
@@ -193,5 +193,17 @@ it('links each finalized receipt directly to its own Taostats transaction', () =
   for (const [index, link] of links.entries()) {
     expect(link.getAttribute('href')).toBe(`https://taostats.io/extrinsic/${hashes[index]}`)
     expect(link.getAttribute('rel')).toBe('noreferrer')
+  }
+})
+
+
+it('accepts an empty journal observation without authorizing a transfer', () => {
+  const readiness = { policy: 'a'.repeat(64), after_operation: 0, previous_state: null,
+    bounded_claim_available: false, finalized_block: 100, available_alpha_rao: 0,
+    max_distribution_rao: 100, sources: [],
+  }
+  expect(manualControlSchema.parse({ ...control, readiness }).readiness?.after_operation).toBe(0)
+  for (const value of [-1, Number.MAX_SAFE_INTEGER + 1, 0.5]) {
+    expect(manualControlSchema.safeParse({ ...control, readiness: { ...readiness, after_operation: value } }).success).toBe(false)
   }
 })

@@ -74,7 +74,10 @@ for suffix in transfer.timer transfer.service; do
   sudo systemctl is-active --quiet "$task_prefix-manual.service"
 done
 sudo systemctl start "$task_prefix-attempt.timer"
-sleep 1
+for _ in {1..100}; do
+  [[ -e "$task_root/attempt-fired" && -e "$task_root/attempt-denied" ]] && break
+  sleep 0.1
+done
 [[ -e "$task_root/attempt-fired" && -e "$task_root/attempt-denied" ]]
 sudo systemctl is-active --quiet "$task_prefix-manual.service"
 [[ ! -e "$task_root/transfer-executed" ]]

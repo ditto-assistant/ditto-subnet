@@ -18,7 +18,11 @@ from ditto.treasury.manual_worker import (
     publish_readiness,
 )
 from ditto.treasury.service_allocation import ServiceDestination
-from ditto_screening_protocol.treasury_manual import ManualEnvelope
+from ditto_screening_protocol.treasury_manual import (
+    ManualEnvelope,
+    ManualReadiness,
+    ManualSettlement,
+)
 
 GM = "5" + "a" * 47
 
@@ -455,3 +459,33 @@ def test_exact_armed_revalidation_refusal_publishes_pending_without_ack(
     result = consume_manual(mailbox, j, p, c, "restored", env.model_dump())
     assert result.status == "finalized"
     assert mailbox.acks == ["invalid-bytes", "restored"] and len(c.sent) == 2
+
+
+def test_empty_journal_readiness_reports_zero_without_spending(tmp_path):
+    p = policy(destinations=(ServiceDestination("gm", 1000, GM),))
+    c = Chain()
+    j = open_journal(tmp_path, p, "transfer")
+    mailbox = Mailbox()
+    before = list(j.db.iterdump())
+    publish_readiness(mailbox, j, p, c)
+    readiness = mailbox.reports[0]["readiness"]
+    assert readiness["after_operation"] == 0
+    assert not readiness["bounded_claim_available"]
+    assert not c.sent and list(j.db.iterdump()) == before
+    for value in (-1, 2**53, True, 0.5):
+        with pytest.raises(ValueError):
+            ManualReadiness.model_validate({**readiness, "after_operation": value})
+
+
+def test_epoch_zero_reports_finalized_receipt_and_keeps_strict_bounds(tmp_path):
+    p, c, j, env, mailbox = setup(tmp_path)
+    c.query = lambda *_: 0
+    process_manual(mailbox, j, p, c, "first", env.model_dump())
+    report = process_manual(mailbox, j, p, c, "ack", env.model_dump())
+    assert report.status == "finalized" and report.settlement.epoch_index == 0
+    assert mailbox.acks == ["ack"] and len(c.sent) == 2
+    for value in (-1, 2**53, True, 0.5):
+        with pytest.raises(ValueError):
+            ManualSettlement.model_validate(
+                {**report.settlement.model_dump(), "epoch_index": value}
+            )

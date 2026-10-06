@@ -39,7 +39,7 @@ export const manualControlSchema = z.object({
   enabled: z.boolean(), blocked_reason: z.string().nullable(), bridge_error: z.string().nullable(),
   recurring_enabled: z.literal(false),
   readiness: z.object({
-    policy: digest, after_operation: integer, previous_state: z.string().nullable(),
+    policy: digest, after_operation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), previous_state: z.string().nullable(),
     bounded_claim_available: z.boolean(), finalized_block: integer,
     available_alpha_rao: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     max_distribution_rao: integer,

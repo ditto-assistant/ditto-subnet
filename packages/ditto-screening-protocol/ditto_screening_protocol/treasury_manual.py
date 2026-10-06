@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .treasury import Address, Digest, Hash
 
 Positive = Annotated[int, Field(gt=0, le=2**53 - 1, strict=True)]
+Nonnegative = Annotated[int, Field(ge=0, le=2**53 - 1, strict=True)]
 Bucket = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{1,47}$")]
 
 
@@ -70,7 +71,7 @@ class ManualSource(Wire):
 
 class ManualReadiness(Wire):
     policy: Digest
-    after_operation: Positive
+    after_operation: Nonnegative
     previous_state: str | None
     bounded_claim_available: bool
     finalized_block: Positive
@@ -80,7 +81,7 @@ class ManualReadiness(Wire):
 
 
 class ManualSettlement(Wire):
-    epoch_index: Positive
+    epoch_index: Nonnegative
     block: Positive
     block_hash: Hash
     extrinsic_index: Annotated[int, Field(ge=0, strict=True)]
