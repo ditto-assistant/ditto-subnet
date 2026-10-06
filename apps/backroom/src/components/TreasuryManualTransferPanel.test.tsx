@@ -4,10 +4,10 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { TreasuryManualTransferPanel } from './TreasuryManualTransferPanel'
 import { alphaRao } from '../lib/treasury-manual.schemas'
 
-const preview = vi.fn(), queue = vi.fn()
+const preview = vi.fn(), queue = vi.fn(), refresh = vi.fn(() => Promise.resolve(control))
 vi.mock('@tanstack/react-start', () => ({ useServerFn: (fn: unknown) => fn }))
 vi.mock('../server/treasury-manual.functions', () => ({
-  getManualTransfers: () => Promise.resolve(control),
+  getManualTransfers: () => refresh(),
   previewManualTransfer: (input: unknown) => preview(input),
   queueManualTransfer: (input: unknown) => queue(input),
 }))
@@ -15,7 +15,7 @@ const control = { enabled: true, blocked_reason: null, bridge_error: null, recur
   readiness: null, destinations: [{ bucket_id: 'gm', holding_coldkey: '5' + 'a'.repeat(47), allocation_bps: 1000 }, { bucket_id: 'bitsec', holding_coldkey: '5' + 'b'.repeat(47), allocation_bps: 0 }], requests: [],
 }
 const result = { envelope: { version: 1, collector_policy_digest: 'a'.repeat(64), destination: '5' + 'a'.repeat(47), request: { request_id: 'fa1e68a6-5213-4b25-b90a-bec349ab0a0b', after_operation: 2, source_block: 200, bucket_id: 'gm', amount_rao: 100000000, retained_alpha_rao: 55000000000, expires_block: 1000, reason: 'manual inference purchase' } }, confirmation_digest: 'b'.repeat(64), spending_authority: 'not_queued' }
-afterEach(() => { cleanup(); vi.clearAllMocks() })
+afterEach(() => { cleanup(); vi.clearAllMocks(); refresh.mockImplementation(() => Promise.resolve(control)) })
 
 it('previews exact integer amounts and queues only after amount and wallet confirmation', async () => {
   preview.mockResolvedValue(result); queue.mockResolvedValue({ status: 'queued' })
@@ -48,6 +48,26 @@ it('refuses binary float rounding, scientific notation, zero and excessive preci
   expect(alphaRao('0.000000001')).toBe(1)
   expect(alphaRao('0.100000001')).toBe(100000001)
   for (const bad of ['1e2', '0', '-1', '0.0000000001', '9007199254740992']) expect(alphaRao(bad)).toBeNull()
+})
+
+it.each(['allocation off', 'wallet changed'])('blocks an existing confirmation after refreshed %s', async (change) => {
+  preview.mockResolvedValue(result)
+  render(<TreasuryManualTransferPanel initialState={control} readOnly={false} />)
+  fireEvent.change(screen.getByLabelText('Amount (SN118 alpha)'), { target: { value: '0.1' } })
+  fireEvent.change(screen.getByLabelText('Minimum alpha to retain staked'), { target: { value: '55' } })
+  fireEvent.change(screen.getByLabelText('Audit reason'), { target: { value: 'manual inference purchase' } })
+  fireEvent.click(screen.getByText('Preview manual transfer'))
+  await screen.findByText('Transfer once')
+  fireEvent.change(screen.getByLabelText('Type “TRANSFER 0.1 ALPHA TO GM”'), { target: { value: 'TRANSFER 0.1 ALPHA TO GM' } })
+  expect((screen.getByText('Transfer once') as HTMLButtonElement).disabled).toBe(false)
+  refresh.mockResolvedValueOnce({ ...control, destinations: control.destinations.map(d => d.bucket_id === 'gm' ? {
+    ...d, allocation_bps: change === 'allocation off' ? 0 : d.allocation_bps,
+    holding_coldkey: change === 'wallet changed' ? '5' + 'c'.repeat(47) : d.holding_coldkey,
+  } : d) })
+  fireEvent.click(screen.getByText('Refresh transfer status'))
+  await waitFor(() => expect((screen.getByText('Transfer once') as HTMLButtonElement).disabled).toBe(true))
+  fireEvent.click(screen.getByText('Transfer once'))
+  expect(queue).not.toHaveBeenCalled()
 })
 
 

@@ -41,6 +41,9 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
   const invalidate = () => { setPreview(null); setConfirmation(''); setMessage('') }
   const expected = preview ? `TRANSFER ${alphaDisplay(preview.envelope.request.amount_rao)} ALPHA TO ${preview.envelope.request.bucket_id.toUpperCase()}` : ''
   const blocked = readOnly || busy || !!state.blocked_reason || !!error
+  const previewDestinationEnabled = !!preview && state.destinations.some(d =>
+    d.bucket_id === preview.envelope.request.bucket_id &&
+    d.holding_coldkey === preview.envelope.destination && d.allocation_bps > 0)
   return <section className="mt-8 space-y-4 border-t border-[var(--line)] pt-6" aria-label="Manual collector transfers">
     <h2 className="text-lg font-semibold">Transfer to a service wallet</h2>
     <p className="text-sm text-[var(--muted-strong)]">Send SN118 alpha once from the collector to an approved holding wallet. Keep a minimum stake reserve. Recurring transfers are off. A wallet transfer does not prove purchased service credits.</p>
@@ -66,7 +69,8 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
       <p className="break-all font-mono text-xs">{preview.envelope.destination}</p>
       <p className="text-sm">Expires at finalized block {preview.envelope.request.expires_block}. Custody rechecks balances, reserve, signed destination and previous delivery before signing.</p>
       <label>Type “{expected}”<input className={inputClass} value={confirmation} disabled={readOnly || busy} onChange={e => setConfirmation(e.target.value)} /></label>
-      <button className={inputClass} disabled={blocked || confirmation !== expected} onClick={async () => {
+      {!previewDestinationEnabled && <p role="status">The destination wallet or allocation changed. Create a new preview before transferring.</p>}
+      <button className={inputClass} disabled={blocked || confirmation !== expected || !previewDestinationEnabled} onClick={async () => {
         setBusy(true); setError('')
         try {
           const result = await queue({ data: { envelope: preview.envelope, confirmation_digest: preview.confirmation_digest, confirmation: 'TRANSFER SN118 ALPHA ONCE' } })
