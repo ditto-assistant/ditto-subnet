@@ -507,6 +507,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             stack.push_async_callback(validator_names.aclose)
             if run_background_tasks:
                 await validator_names.start(app.state.session_maker)
+            elif _process_role() == PLATFORM_ROLE:
+                await validator_names.hydrate(app.state.session_maker)
 
         except Exception as e:
             raise ApiServerLifespanError(

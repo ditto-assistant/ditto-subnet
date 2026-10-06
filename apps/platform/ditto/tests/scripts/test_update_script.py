@@ -152,6 +152,7 @@ def _run_update(
     health_commit: str | None = TARGET_SHA,
     health_timeout: str = "15",
     standby_health_status: int | None = None,
+    standby_matches_primary: bool = False,
     uv_source: str = ":\n",
     npm_source: str | None = None,
     diverged_migrations: bool = False,
@@ -273,7 +274,9 @@ def _run_update(
             standby_port = stack.enter_context(
                 _health_server(standby_health_status, health_commit)
             )
-            env["DITTO_PLATFORM_STANDBY_PORT"] = str(standby_port)
+            env["DITTO_PLATFORM_STANDBY_PORT"] = str(
+                port if standby_matches_primary else standby_port
+            )
         result = subprocess.run(
             [str(scripts / "update.sh")],
             cwd=repo,
@@ -579,6 +582,19 @@ def test_update_keeps_existing_standby_when_primary_is_missing(tmp_path: Path) -
     assert result.returncode != 0
     assert "refusing to restart the standby" in result.stderr
     assert "pm2 reload" not in _actions(tmp_path)
+
+
+def test_update_refuses_shared_primary_and_standby_port(tmp_path: Path) -> None:
+    result, _, _, _ = _run_update(
+        tmp_path,
+        gcloud_source="exit 1\n",
+        standby_health_status=200,
+        standby_matches_primary=True,
+    )
+
+    assert result.returncode != 0
+    assert "primary health URL resolves to standby" in result.stderr
+    assert not (tmp_path / "repo" / "pm2-actions.log").exists()
 
 
 def test_update_recreates_the_app_when_the_script_path_drifted(tmp_path: Path) -> None:

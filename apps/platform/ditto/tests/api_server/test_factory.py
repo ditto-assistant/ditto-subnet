@@ -255,11 +255,14 @@ class TestRouteDiscoveryIsSingleton:
                 )
             )
             app.state.validator_names.start = AsyncMock()
+            app.state.validator_names.hydrate = AsyncMock()
             app.state.validator_names.aclose = AsyncMock()
             async with app.router.lifespan_context(app):
                 observed_source = app.state.coding_private_catalog_source
                 observed_evidence = app.state.coding_hippius_evidence_runtime
+                validator_names = app.state.validator_names
         evidence_factory.observed_runtime = observed_evidence
+        evidence_factory.validator_names = validator_names
         return refresher, catalog_factory, observed_source, evidence_factory
 
     @pytest.mark.parametrize(
@@ -307,6 +310,8 @@ class TestRouteDiscoveryIsSingleton:
         janitor.start.assert_not_awaited()
         refresher.aclose.assert_awaited_once()
         janitor.aclose.assert_awaited_once()
+        _evidence.validator_names.hydrate.assert_awaited_once()
+        _evidence.validator_names.start.assert_not_awaited()
 
         # The standby is an identical HTTP server, including admin routes.
         app = create_api_server(make_api_server_config())

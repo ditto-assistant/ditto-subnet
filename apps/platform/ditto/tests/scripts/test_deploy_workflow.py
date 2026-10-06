@@ -62,13 +62,13 @@ def test_production_api_has_a_passive_health_standby() -> None:
 
     assert production["platform_api_standby_port"] == 8002
     assert "DITTO_PLATFORM_STANDBY_PORT={{ platform_api_standby_port }}" in env
-    assert (
+    proxy = (
         "reverse_proxy localhost:{{ platform_api_port }} "
         "localhost:{{ platform_api_standby_port }} {"
-    ) in template
-    assert "lb_policy first" in template
-    assert "fail_duration 10s" in template
-    assert "lb_try_duration 5s" in template
+    )
+    assert proxy in template
+    for match in ("lb_policy first", "fail_duration 10s", "lb_try_duration 5s"):
+        assert match in template.split(proxy, 1)[1].split("}", 1)[0]
 
 
 def test_public_proxy_denials_precede_every_proxy_route() -> None:

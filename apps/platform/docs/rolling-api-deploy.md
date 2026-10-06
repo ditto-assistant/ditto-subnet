@@ -4,7 +4,8 @@ The production Python API has one primary PM2 process on port 8000 and one
 warm standby on loopback port 8002. Caddy prefers the primary and uses passive
 failure detection to send new requests to standby while a fork-mode PM2 reload
 stops the primary port. The standby serves the same HTTP routes but does not
-start the provider-route refresher or any other singleton background loop.
+start the provider-route refresher or any other singleton background loop. It
+hydrates the validator-name snapshot from the shared durable cache at boot.
 
 The standby's PostgreSQL pool is capped at 8 connections. The budget is
 primary 30 + development 30 + two inference relays at 12 each + standby 8 =

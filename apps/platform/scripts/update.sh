@@ -467,6 +467,14 @@ uv run alembic upgrade head
 # stops one port; the standby keeps the API reachable while it happens.
 deploy_stage="pm2-plan"
 echo "==> planning pm2 actions"
+if [ "${DITTO_PLATFORM_STANDBY_PORT:-0}" != 0 ]; then
+  primary_health_url="$(resolve_health_url)"
+  standby_health_url="http://127.0.0.1:$DITTO_PLATFORM_STANDBY_PORT/health"
+  if [ "$primary_health_url" = "$standby_health_url" ]; then
+    echo "ERROR: primary health URL resolves to standby; refusing to restart either API" >&2
+    exit 1
+  fi
+fi
 pm2_plan="$(pm2 jlist 2>/dev/null | node scripts/pm2_deploy_plan.js scripts/ecosystem.config.js)"
 [ -n "$pm2_plan" ] || { echo "ERROR: empty pm2 deploy plan; refusing to touch pm2" >&2; exit 1; }
 
@@ -477,7 +485,7 @@ if [ "${DITTO_PLATFORM_STANDBY_PORT:-0}" != 0 ]; then
   planned_primary_action="$(printf '%s\n' "$pm2_plan" | awk -F'\t' '$2 == "ditto-api" { print $1; exit }')"
   planned_standby_action="$(printf '%s\n' "$pm2_plan" | awk -F'\t' '$2 == "ditto-api-standby" { print $1; exit }')"
   if [ "$planned_primary_action" != start ] || [ "$planned_standby_action" != start ]; then
-    primary_body="$(curl -fsS -m 5 "$(resolve_health_url)" 2>/dev/null || true)"
+    primary_body="$(curl -fsS -m 5 "$primary_health_url" 2>/dev/null || true)"
     primary_commit="$(printf '%s' "$primary_body" | json_string_field commit || true)"
     if [ -z "$primary_commit" ]; then
       echo "ERROR: primary is not healthy; refusing to restart the standby" >&2
