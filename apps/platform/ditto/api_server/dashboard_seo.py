@@ -551,10 +551,19 @@ async def load_seo_snapshot(request: Request) -> SeoSnapshot | None:
             return cached.snapshot
         if cached.snapshot is None:
             return None
+    refresh_task = _refresh_task
+    assert refresh_task is not None
     try:
-        await asyncio.wait_for(asyncio.shield(_refresh_task), _SNAPSHOT_WAIT_SECONDS)
+        await asyncio.wait_for(asyncio.shield(refresh_task), _SNAPSHOT_WAIT_SECONDS)
     except TimeoutError:
         return None
+    except asyncio.CancelledError:
+        current_task = asyncio.current_task()
+        if refresh_task.cancelled() and (
+            current_task is None or not current_task.cancelling()
+        ):
+            return None
+        raise
     return _cached.snapshot if _cached is not None else None
 
 

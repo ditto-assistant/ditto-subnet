@@ -448,6 +448,50 @@ class TestSeoRoutes:
 
 @pytest.mark.usefixtures("seo_dist")
 class TestLiveHtmlThroughFactory:
+    async def test_reset_during_cold_seo_read_serves_static_shell(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        started = asyncio.Event()
+
+        async def slow_snapshot(_request):
+            started.set()
+            await asyncio.Event().wait()
+            return _snapshot(), 30.0
+
+        monkeypatch.setattr(dashboard_seo, "_read_snapshot", slow_snapshot)
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            pending = asyncio.create_task(client.get("/"))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            reset_seo_cache()
+            page = await asyncio.wait_for(pending, timeout=1)
+            assert page.status_code == 200
+            assert '<div id="root">' in page.text
+            assert '"@type":"ItemList"' not in page.text
+
+    async def test_caller_cancellation_still_stops_cold_seo_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        started = asyncio.Event()
+
+        async def slow_snapshot(_request):
+            started.set()
+            await asyncio.Event().wait()
+            return _snapshot(), 30.0
+
+        monkeypatch.setattr(dashboard_seo, "_read_snapshot", slow_snapshot)
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            pending = asyncio.create_task(client.get("/"))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+
     async def test_slow_seo_read_does_not_block_the_dashboard_shell(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
