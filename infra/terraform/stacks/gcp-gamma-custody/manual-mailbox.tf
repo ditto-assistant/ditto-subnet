@@ -14,8 +14,8 @@ variable "manual_mailbox_platform_service_account" {
 }
 check "manual_mailbox_sealed" {
   assert {
-    condition     = !var.enable_manual_mailbox || (var.enable_collector_custody && var.collector_custody_phases.transfer == "sealed" && var.manual_mailbox_platform_service_account != "")
-    error_message = "Manual mailbox requires sealed transfer custody and an explicit Platform identity."
+    condition     = !var.enable_manual_mailbox || (var.enable_collector_custody && var.collector_custody_phases.registration == "sealed" && var.collector_custody_phases.transfer == "sealed" && var.manual_mailbox_platform_service_account != "")
+    error_message = "Manual mailbox requires sealed registration and transfer custody and an explicit Platform identity."
   }
 }
 resource "google_pubsub_topic" "manual" {
@@ -25,8 +25,8 @@ resource "google_pubsub_topic" "manual" {
   message_storage_policy { allowed_persistence_regions = [var.region] }
   lifecycle {
     precondition {
-      condition     = var.enable_collector_custody && var.collector_custody_phases.transfer == "sealed" && var.manual_mailbox_platform_service_account != ""
-      error_message = "Manual mailbox requires sealed transfer custody and an explicit Platform identity."
+      condition     = var.enable_collector_custody && var.collector_custody_phases.registration == "sealed" && var.collector_custody_phases.transfer == "sealed" && var.manual_mailbox_platform_service_account != ""
+      error_message = "Manual mailbox requires sealed registration and transfer custody and an explicit Platform identity."
     }
   }
 }

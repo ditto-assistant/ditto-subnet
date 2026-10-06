@@ -51,3 +51,13 @@ run "mailbox_unsealed_fails_before_creation" {
   }
   expect_failures = [check.manual_mailbox_sealed, google_pubsub_topic.manual]
 }
+
+run "mailbox_registration_unsealed_fails_before_creation" {
+  command = plan
+  variables {
+    enable_manual_mailbox                   = true
+    manual_mailbox_platform_service_account = "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com"
+    collector_custody_phases                = { registration = "locked", transfer = "sealed" }
+  }
+  expect_failures = [check.manual_mailbox_sealed, google_pubsub_topic.manual]
+}

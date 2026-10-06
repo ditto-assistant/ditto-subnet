@@ -1,6 +1,7 @@
 """Malformed transport bytes must not starve valid durable requests."""
 
 import base64
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +18,7 @@ from ditto_screening_protocol.treasury_pubsub import TreasuryMailbox
         base64.b64encode(b"x" * 65537).decode(),
     ],
 )
-def test_undecodable_message_is_acknowledged_without_dispatch(data):
+def test_undecodable_message_is_acknowledged_without_dispatch(data, capsys):
     acknowledged = []
     mailbox = SimpleNamespace(
         subscription="requests",
@@ -28,6 +29,10 @@ def test_undecodable_message_is_acknowledged_without_dispatch(data):
     )
     assert TreasuryMailbox.pull(mailbox) is None
     assert acknowledged == ["bad-message"]
+    record = json.loads(capsys.readouterr().out)
+    assert record["status"] == "mailbox_message_dropped"
+    assert set(record) == {"status", "error_type"}
+    assert record["error_type"] in {"Error", "JSONDecodeError", "ValueError"}
 
 
 def test_valid_object_keeps_ack_with_durable_consumer():

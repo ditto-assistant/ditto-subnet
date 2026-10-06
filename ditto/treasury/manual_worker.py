@@ -221,21 +221,26 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
         if state == "finalized":
             saved = json.loads(row["settlement_json"])
             source_hash = chain.substrate.get_block_hash(request.source_block)
-            epoch = chain.query(
-                "SubtensorModule", "SubnetEpochIndex", [118], source_hash
+            epoch = (
+                chain.query("SubtensorModule", "SubnetEpochIndex", [118], source_hash)
+                if source_hash is not None
+                else None
             )
-            settlement = ManualSettlement(
-                epoch_index=epoch,
-                **{
-                    k: saved[k]
-                    for k in (
-                        "block",
-                        "block_hash",
-                        "extrinsic_index",
-                        "extrinsic_hash",
-                    )
-                },
-            )
+            if source_hash is None or epoch is None:
+                state = "pending"
+            else:
+                settlement = ManualSettlement(
+                    epoch_index=epoch,
+                    **{
+                        k: saved[k]
+                        for k in (
+                            "block",
+                            "block_hash",
+                            "extrinsic_index",
+                            "extrinsic_hash",
+                        )
+                    },
+                )
         report = ManualReport(
             collector_policy_digest=policy.digest,
             observed_at=int(time.time()),

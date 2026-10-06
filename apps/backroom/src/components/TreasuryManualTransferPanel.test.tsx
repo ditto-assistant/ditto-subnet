@@ -15,7 +15,7 @@ const control = { enabled: true, blocked_reason: null, bridge_error: null, recur
   readiness: null, destinations: [{ bucket_id: 'gm', holding_coldkey: '5' + 'a'.repeat(47), allocation_bps: 1000 }, { bucket_id: 'bitsec', holding_coldkey: '5' + 'b'.repeat(47), allocation_bps: 0 }], requests: [],
 }
 const result = { envelope: { version: 1, collector_policy_digest: 'a'.repeat(64), destination: '5' + 'a'.repeat(47), request: { request_id: 'fa1e68a6-5213-4b25-b90a-bec349ab0a0b', after_operation: 2, source_block: 200, bucket_id: 'gm', amount_rao: 100000000, retained_alpha_rao: 55000000000, expires_block: 1000, reason: 'manual inference purchase' } }, confirmation_digest: 'b'.repeat(64), spending_authority: 'not_queued' }
-afterEach(() => { cleanup(); vi.clearAllMocks(); refresh.mockImplementation(() => Promise.resolve(control)) })
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); refresh.mockImplementation(() => Promise.resolve(control)) })
 
 it('previews exact integer amounts and queues only after amount and wallet confirmation', async () => {
   preview.mockResolvedValue(result); queue.mockResolvedValue({ status: 'queued' })
@@ -111,4 +111,68 @@ it.each(['older success', 'older failure', 'newer failure'])('keeps the newest r
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.getByRole('option', { name: 'GM — allocation off' }).hasAttribute('disabled')).toBe(true)
   }
+})
+
+function fillAndPreview() {
+  fireEvent.change(screen.getByLabelText('Amount (SN118 alpha)'), { target: { value: '0.1' } })
+  fireEvent.change(screen.getByLabelText('Minimum alpha to retain staked'), { target: { value: '55' } })
+  fireEvent.change(screen.getByLabelText('Audit reason'), { target: { value: 'manual inference purchase' } })
+  fireEvent.click(screen.getByText('Preview manual transfer'))
+}
+
+it('renders and renews valid request IDs without secure-context randomUUID', async () => {
+  const getRandomValues = crypto.getRandomValues.bind(crypto)
+  vi.stubGlobal('crypto', { getRandomValues })
+  preview.mockResolvedValue(result); queue.mockResolvedValue({ status: 'queued' })
+  render(<TreasuryManualTransferPanel initialState={control} readOnly={false} />)
+  fillAndPreview()
+  await screen.findByText('Transfer once')
+  const first = preview.mock.calls[0][0].data.request_id
+  expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  fireEvent.change(screen.getByLabelText('Type “TRANSFER 0.1 ALPHA TO GM”'), { target: { value: 'TRANSFER 0.1 ALPHA TO GM' } })
+  fireEvent.click(screen.getByText('Transfer once'))
+  await screen.findByText('Queued for custody. Track this request below.')
+  fireEvent.click(screen.getByText('Preview manual transfer'))
+  await waitFor(() => expect(preview).toHaveBeenCalledTimes(2))
+  const second = preview.mock.calls[1][0].data.request_id
+  expect(second).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  expect(second).not.toBe(first)
+})
+
+it('preserves queue failure through successful polling and retries the same confirmation', async () => {
+  preview.mockResolvedValue(result)
+  queue.mockRejectedValueOnce(new Error('Dispatch unavailable')).mockResolvedValueOnce({ status: 'queued' })
+  render(<TreasuryManualTransferPanel initialState={control} readOnly={false} />)
+  fillAndPreview()
+  await screen.findByText('Transfer once')
+  fireEvent.change(screen.getByLabelText('Type “TRANSFER 0.1 ALPHA TO GM”'), { target: { value: 'TRANSFER 0.1 ALPHA TO GM' } })
+  fireEvent.click(screen.getByText('Transfer once'))
+  await screen.findByRole('alert')
+  fireEvent.click(screen.getByText('Refresh transfer status'))
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce())
+  expect(screen.getByRole('alert').textContent).toBe('Dispatch unavailable')
+  expect((screen.getByText('Transfer once') as HTMLButtonElement).disabled).toBe(false)
+  fireEvent.click(screen.getByText('Transfer once'))
+  await screen.findByText('Queued for custody. Track this request below.')
+  expect(queue.mock.calls[1][0]).toEqual(queue.mock.calls[0][0])
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+
+it('uses a new intent ID after editing inputs following an uncertain queue response', async () => {
+  preview.mockImplementation(input => Promise.resolve({ ...result, envelope: { ...result.envelope, request: { ...result.envelope.request, ...input.data } } }))
+  queue.mockRejectedValueOnce(new Error('Response lost'))
+  render(<TreasuryManualTransferPanel initialState={control} readOnly={false} />)
+  fillAndPreview()
+  await screen.findByText('Transfer once')
+  const original = preview.mock.calls[0][0].data.request_id
+  fireEvent.change(screen.getByLabelText('Type “TRANSFER 0.1 ALPHA TO GM”'), { target: { value: 'TRANSFER 0.1 ALPHA TO GM' } })
+  fireEvent.click(screen.getByText('Transfer once'))
+  await screen.findByRole('alert')
+  fireEvent.change(screen.getByLabelText('Amount (SN118 alpha)'), { target: { value: '0.2' } })
+  fireEvent.click(screen.getByText('Preview manual transfer'))
+  await screen.findByLabelText('Type “TRANSFER 0.2 ALPHA TO GM”')
+  expect(preview.mock.calls[1][0].data.request_id).not.toBe(original)
+  expect(preview.mock.calls[1][0].data.amount_rao).toBe(200000000)
+  expect(queue).toHaveBeenCalledOnce()
 })

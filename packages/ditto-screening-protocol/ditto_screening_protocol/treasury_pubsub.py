@@ -87,10 +87,19 @@ class TreasuryMailbox:
             body = json.loads(raw)
             if not isinstance(body, dict):
                 raise ValueError("manual message object required")
-        except (ValueError, TypeError, KeyError):
+        except (ValueError, TypeError, KeyError) as error:
             # Undecodable bytes cannot be a valid financial request/report.
             # Keep ACK transport failures visible; never ACK a valid object
             # here before the consumer commits its durable processing.
+            print(
+                json.dumps(
+                    {
+                        "status": "mailbox_message_dropped",
+                        "error_type": type(error).__name__,
+                    }
+                ),
+                flush=True,
+            )
             self.ack(row["ackId"])
             return None
         return row["ackId"], body

@@ -104,7 +104,9 @@ not prove a provider purchase or credited GM balance.
    **persistently masked**, not merely disabled:
    `systemctl mask --now sn118-collector@transfer.service sn118-collector@transfer.timer`.
    Stage `scripts/check-treasury-manual-mode.sh` alongside the reviewed unit;
-   its pre-start guard requires both persistent masks. A later ordinary timer
+   its pre-start guard requires both persistent masks. A rejected manual start
+   leaves existing recurring units untouched; no conflict stop occurs before
+   the guard. A later ordinary timer
    or service start therefore fails without stopping the manual consumer.
    Create the activation file only after inspecting effective unit configuration,
    masks and mailbox IAM. Returning to recurring mode requires deliberately

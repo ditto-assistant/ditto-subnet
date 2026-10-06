@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import type { z } from 'zod'
-import { alphaDisplay, alphaRao, manualControlSchema, manualPreviewSchema } from '../lib/treasury-manual.schemas'
+import { alphaDisplay, alphaRao, manualRequestId, manualControlSchema, manualPreviewSchema } from '../lib/treasury-manual.schemas'
 import { getManualTransfers, previewManualTransfer, queueManualTransfer } from '../server/treasury-manual.functions'
 
 type Control = z.infer<typeof manualControlSchema>
@@ -25,28 +25,29 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
   const [reserve, setReserve] = useState('')
   const [reason, setReason] = useState('')
   const [preview, setPreview] = useState<Preview | null>(null)
-  const [requestId, setRequestId] = useState(() => crypto.randomUUID())
+  const [requestId, setRequestId] = useState(manualRequestId)
   const [confirmation, setConfirmation] = useState('')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const [refreshError, setRefreshError] = useState('')
+  const [actionError, setActionError] = useState('')
   const [message, setMessage] = useState('')
   const refreshGeneration = useRef(0)
   const load = async () => {
     const generation = ++refreshGeneration.current
     try {
       const nextState = await refresh()
-      if (generation === refreshGeneration.current) { setState(nextState); setError('') }
+      if (generation === refreshGeneration.current) { setState(nextState); setRefreshError('') }
     } catch {
-      if (generation === refreshGeneration.current) setError('Transfer status unavailable. Refresh before confirming another transfer.')
+      if (generation === refreshGeneration.current) setRefreshError('Transfer status unavailable. Refresh before confirming another transfer.')
     }
   }
   useEffect(() => {
     const timer = setInterval(() => { void load() }, 15000)
     return () => { clearInterval(timer); ++refreshGeneration.current }
   }, [refresh]) // eslint-disable-line react-hooks/exhaustive-deps
-  const invalidate = () => { setPreview(null); setConfirmation(''); setMessage('') }
+  const invalidate = () => { setPreview(null); setConfirmation(''); setMessage(''); setActionError(''); setRequestId(manualRequestId()) }
   const expected = preview ? `TRANSFER ${alphaDisplay(preview.envelope.request.amount_rao)} ALPHA TO ${preview.envelope.request.bucket_id.toUpperCase()}` : ''
-  const blocked = readOnly || busy || !!state.blocked_reason || !!error
+  const blocked = readOnly || busy || !!state.blocked_reason || !!refreshError
   const previewDestinationEnabled = !!preview && state.destinations.some(d =>
     d.bucket_id === preview.envelope.request.bucket_id &&
     d.holding_coldkey === preview.envelope.destination && d.allocation_bps > 0)
@@ -64,9 +65,9 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
       <label>Minimum alpha to retain staked<input className={inputClass} inputMode="decimal" value={reserve} onChange={e => { setReserve(e.target.value); invalidate() }} /></label>
       <label>Audit reason<input className={inputClass} maxLength={240} value={reason} onChange={e => { setReason(e.target.value); invalidate() }} /></label>
       <button className={inputClass} disabled={!alphaRao(amount) || !alphaRao(reserve) || reason.trim().length < 8 || !state.destinations.some(d => d.bucket_id === bucket && d.allocation_bps > 0)} onClick={async () => {
-        setBusy(true); setError(''); setMessage('')
+        setBusy(true); setActionError(''); setMessage('')
         try { setPreview(await previewTransfer({ data: { request_id: requestId, bucket_id: bucket, amount_rao: alphaRao(amount)!, retained_alpha_rao: alphaRao(reserve)!, reason: reason.trim() } })); setConfirmation('') }
-        catch (cause) { setError(cause instanceof Error ? cause.message : 'Transfer preview unavailable') }
+        catch (cause) { setActionError(cause instanceof Error ? cause.message : 'Transfer preview unavailable') }
         finally { setBusy(false) }
       }}>Preview manual transfer</button>
     </fieldset>
@@ -77,15 +78,16 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
       <label>Type “{expected}”<input className={inputClass} value={confirmation} disabled={readOnly || busy} onChange={e => setConfirmation(e.target.value)} /></label>
       {!previewDestinationEnabled && <p role="status">The destination wallet or allocation changed. Create a new preview before transferring.</p>}
       <button className={inputClass} disabled={blocked || confirmation !== expected || !previewDestinationEnabled} onClick={async () => {
-        setBusy(true); setError('')
+        setBusy(true); setActionError('')
         try {
           const result = await queue({ data: { envelope: preview.envelope, confirmation_digest: preview.confirmation_digest, confirmation: 'TRANSFER SN118 ALPHA ONCE' } })
-          setMessage(`${statusLabels[result.status]}. Track this request below.`); setPreview(null); setConfirmation(''); setRequestId(crypto.randomUUID()); await load()
-        } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to queue transfer; retry this same confirmation') }
+          setMessage(`${statusLabels[result.status]}. Track this request below.`); setPreview(null); setConfirmation(''); setRequestId(manualRequestId()); await load()
+        } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'Unable to queue transfer; retry this same confirmation') }
         finally { setBusy(false) }
       }}>Transfer once</button>
     </div>}
-    {error && <p role="alert" className="text-[var(--red)]">{error}</p>}
+    {refreshError && <p role="alert" className="text-[var(--red)]">{refreshError}</p>}
+    {actionError && <p role="alert" className="text-[var(--red)]">{actionError}</p>}
     {message && <p role="status">{message}</p>}
     <ul className="space-y-3">{state.requests.map(r => <li key={r.request_id} className="rounded border border-[var(--line)] p-3 text-sm">
       <p>{alphaDisplay(r.envelope.request.amount_rao)} alpha → {r.envelope.request.bucket_id.toUpperCase()} · {statusLabels[r.status]}</p>

@@ -336,3 +336,27 @@ def test_concurrent_finalization_and_new_intent_reexports_only_old_claim(
     assert result.status == "finalized" and result.request_id == env.request.request_id
     assert mailbox.acks == ["interleaved"] and len(c.sent) == 2
     assert j.db.execute("SELECT MAX(id) FROM operations").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("missing", ["source_hash", "epoch"])
+def test_finalized_claim_waits_for_missing_receipt_coordinates_without_resend(
+    tmp_path, missing
+):
+    p, c, j, env, mailbox = setup(tmp_path)
+    process_manual(mailbox, j, p, c, "first", env.model_dump())
+    if missing == "source_hash":
+        c.substrate.get_block_hash = lambda _: None
+        c.query = lambda *_: pytest.fail(
+            "Must not read current epoch without source hash"
+        )
+    else:
+        c.query = lambda *_: None
+    result = consume_manual(mailbox, j, p, c, "missing", env.model_dump())
+    assert result.status == "pending" and result.settlement is None
+    assert mailbox.reports[-1]["status"] == "pending" and mailbox.acks == []
+    assert len(c.sent) == 2
+    c.substrate.get_block_hash = lambda _: "0x" + "d" * 64
+    c.query = lambda *_: 123
+    result = consume_manual(mailbox, j, p, c, "restored", env.model_dump())
+    assert result.status == "finalized" and result.settlement.epoch_index == 123
+    assert mailbox.acks == ["restored"] and len(c.sent) == 2

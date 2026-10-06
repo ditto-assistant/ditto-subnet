@@ -6,7 +6,7 @@ task_root=$(mktemp -d)
 task_prefix="sn118-manual-ci-${GITHUB_RUN_ID:-$$}-${GITHUB_RUN_ATTEMPT:-0}"
 [[ "$task_prefix" =~ ^sn118-manual-ci-[0-9]+-[0-9]+$ ]]
 cleanup() {
-  sudo systemctl stop "$task_prefix-manual.service" "$task_prefix-attempt.timer" || true
+  sudo systemctl stop "$task_prefix-manual.service" "$task_prefix-attempt.timer" "$task_prefix-transfer.service" "$task_prefix-transfer.timer" || true
   sudo rm -f "/run/systemd/system/$task_prefix-manual.service" "/run/systemd/system/$task_prefix-transfer.service" "/run/systemd/system/$task_prefix-transfer.timer" "/run/systemd/system/$task_prefix-attempt.timer"
   sudo rm -f "/etc/systemd/system/$task_prefix-transfer.service" "/etc/systemd/system/$task_prefix-transfer.timer"
   sudo systemctl daemon-reload
@@ -28,7 +28,7 @@ guard = Path('scripts/check-treasury-manual-mode.sh').read_text().replace('sn118
 (root / 'guard.sh').chmod(0o755)
 # Keep the actual reviewed relationships/condition, replace signing with sleep.
 (root / (prefix + '-manual.service')).write_text(unit + f'[Service]\nType=simple\nExecStartPre={root}/guard.sh\nExecStart=/bin/sleep 120\n')
-(root / (prefix + '-transfer.service')).write_text(f'[Unit]\nDescription=Harmless transfer probe\n[Service]\nType=oneshot\nExecStart=/usr/bin/touch {root}/transfer-executed\n')
+(root / (prefix + '-transfer.service')).write_text(f'[Unit]\nDescription=Harmless transfer probe\n[Service]\nType=simple\nExecStart=/bin/sleep 120\nExecStartPost=/usr/bin/touch {root}/transfer-executed\n')
 timer = Path('infra/systemd/sn118-collector@.timer').read_text().replace('sn118-collector@%i.service', prefix + '-transfer.service')
 (root / (prefix + '-transfer.timer')).write_text(timer)
 # Another timer attempts to activate the masked service; systemd may refuse
@@ -40,6 +40,14 @@ for suffix in manual.service transfer.service transfer.timer attempt.timer; do
 done
 sudo systemctl daemon-reload
 if bash "$task_root/guard.sh"; then echo 'Unmasked units passed the guard' >&2; exit 1; fi
+# Rejected manual activation must leave both existing recurring units running.
+sudo systemctl start "$task_prefix-transfer.service" "$task_prefix-transfer.timer"
+if sudo systemctl start "$task_prefix-manual.service"; then echo 'Unmasked manual activation succeeded' >&2; exit 1; fi
+sudo systemctl is-active --quiet "$task_prefix-transfer.service"
+sudo systemctl is-active --quiet "$task_prefix-transfer.timer"
+sudo systemctl stop "$task_prefix-transfer.service" "$task_prefix-transfer.timer"
+sudo systemctl reset-failed "$task_prefix-manual.service"
+rm -f "$task_root/transfer-executed"
 # Remove the CI probe definitions before masking their names (production
 # instances inherit a template rather than overriding unit files).
 sudo rm -f "/run/systemd/system/$task_prefix-transfer.service" "/run/systemd/system/$task_prefix-transfer.timer"

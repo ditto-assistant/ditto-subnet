@@ -7,6 +7,8 @@ on:
       - 'scripts/check-treasury-manual-mode.sh'
       - 'scripts/test-treasury-manual-systemd.sh'
       - 'infra/systemd/sn118-treasury-manual.service'
+      - 'infra/systemd/sn118-collector@.timer'
+      - 'scripts/manual-mailbox-input.py'
       - 'scripts/test-collector-custody.sh'
       - 'ditto/tests/test_collector_delegate_ceremony.py'
       - 'infra/terraform/stacks/gcp-collector-custody/**'

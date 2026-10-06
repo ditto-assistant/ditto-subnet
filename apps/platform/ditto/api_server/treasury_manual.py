@@ -140,11 +140,18 @@ async def preview(session, config, payload, *, enabled):
     if view["blocked_reason"]:
         raise ValueError(view["blocked_reason"])
     readiness = ManualReadiness.model_validate(view["readiness"])
+    approved = {
+        (b["bucket_id"], b["holding_coldkey"])
+        for b in view["destinations"]
+        if b["allocation_bps"] > 0
+    }
     matches = [
         (s.source_block, p.holding_coldkey)
         for s in readiness.sources
         for p in s.remaining
-        if p.bucket_id == payload.bucket_id and p.alpha_rao >= payload.amount_rao
+        if p.bucket_id == payload.bucket_id
+        and p.alpha_rao >= payload.amount_rao
+        and (p.bucket_id, p.holding_coldkey) in approved
     ]
     if not matches:
         raise ValueError("No mature approved source can fund this amount")

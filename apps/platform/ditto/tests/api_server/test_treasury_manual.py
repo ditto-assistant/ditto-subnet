@@ -739,3 +739,20 @@ async def test_late_finalized_report_after_lost_publish_ack_and_pause_is_audited
         )
     with pytest.raises(ValueError):
         await get_preview(session_maker)
+
+
+async def test_preview_skips_unapproved_entitlement_before_valid_destination(
+    session_maker,
+):
+    observation = report().model_dump()
+    old_source = dict(observation["readiness"]["sources"][0])
+    old_source["source_block"] = 199
+    old_source["remaining"] = [
+        {"bucket_id": "gm", "holding_coldkey": "5" + "b" * 47, "alpha_rao": 11000000000}
+    ]
+    observation["readiness"]["sources"].insert(0, old_source)
+    async with session_maker() as session, session.begin():
+        await manual.accept_report(session, None, observation)
+    result = await get_preview(session_maker)
+    assert result["envelope"]["destination"] == GM
+    assert result["envelope"]["request"]["source_block"] == 200
