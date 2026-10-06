@@ -15,6 +15,7 @@ from sqlalchemy import Connection, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from ditto.db.audit_index_recovery import run_with_audit_index_recovery
 from ditto.tests import pgharness
 from ditto.tests.pgharness import WorkerDatabase
 
@@ -31,8 +32,11 @@ def _migration() -> ModuleType:
 
 
 def _upgrade(connection: Connection, migration: ModuleType) -> None:
-    with Operations.context(MigrationContext.configure(connection=connection)):
-        migration.upgrade()
+    def run(conn: Connection) -> None:
+        with Operations.context(MigrationContext.configure(connection=conn)):
+            migration.upgrade()
+
+    run_with_audit_index_recovery(connection, run)
 
 
 async def _valid(engine: AsyncEngine) -> bool | None:
@@ -90,6 +94,7 @@ async def test_upgrade_recovers_in_same_run_after_writer_timeout(
 ) -> None:
     migration = _migration()
     monkeypatch.setattr(migration, "backoff_delay", lambda _: 0.03)
+    monkeypatch.setattr("ditto.db.audit_index_recovery.backoff_delay", lambda _: 0.03)
     blocker = await asyncpg.connect(worker_database.dsn.asyncpg)
     await blocker.execute(f"DROP INDEX {INDEX}")
     await blocker.execute("BEGIN; LOCK TABLE score_audit_log IN ROW EXCLUSIVE MODE")
