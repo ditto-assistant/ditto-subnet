@@ -351,6 +351,7 @@ def llms_txt(origin: str) -> str:
             f"- Screener fleet: {origin}/operations/screeners",
             f"- Recent submissions: {origin}/submissions",
             f"- ATH reviews: {origin}/ath",
+            f"- Gamma service treasury: {origin}/gamma",
             f"- Miner profile: {origin}/miner/{{hotkey}}",
             f"  or {origin}/h/{{handle}}",
             f"- Agent evidence: {origin}/agent/{{agent_id}}",
@@ -468,6 +469,7 @@ def sitemap_xml(origin: str, snapshot: SeoSnapshot | None) -> str:
         (origin + "/operations/builds", "0.5", "hourly"),
         (origin + "/submissions", "0.5", "hourly"),
         (origin + "/ath", "0.4", "hourly"),
+        (origin + "/gamma", "0.4", "hourly"),
     ]
     if snapshot is not None:
         seen: set[str] = set()
