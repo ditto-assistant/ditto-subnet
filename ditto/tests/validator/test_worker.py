@@ -5260,10 +5260,11 @@ class TestIndependentWeightLoop:
         slept: list[float] = []
 
         async def record_sleep(
-            _stop: asyncio.Event,
+            stop: asyncio.Event,
             seconds: float,
-            _drain: asyncio.Event | None,
+            drain_requested: asyncio.Event | None,
         ) -> None:
+            del stop, drain_requested
             slept.append(seconds)
 
         worker._sleep_or_stop_or_drain = record_sleep  # type: ignore[method-assign]
@@ -5300,6 +5301,39 @@ class TestIndependentWeightLoop:
         )
 
         assert time.monotonic() - started < 1.0
+
+    @pytest.mark.parametrize("interruption", ["stop", "drain"])
+    async def test_post_submit_wait_is_interrupted_after_sleep_starts(
+        self, interruption: str
+    ) -> None:
+        platform = MagicMock()
+        platform.get_ledger = AsyncMock()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._seconds_until_weight_window = AsyncMock(return_value=30.0)  # type: ignore[method-assign]
+        worker._local_resubmit_guard_seconds = AsyncMock(return_value=30.0)  # type: ignore[method-assign]
+        stop, drain = asyncio.Event(), asyncio.Event()
+        waiter = asyncio.create_task(
+            worker._wait_for_weight_window(
+                stop,
+                epoch_seconds=3600.0,
+                drain_requested=drain,
+            )
+        )
+        try:
+            await asyncio.sleep(0.01)
+            assert not waiter.done()
+            (stop if interruption == "stop" else drain).set()
+            await asyncio.wait_for(waiter, timeout=1.0)
+        finally:
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+        platform.get_ledger.assert_not_awaited()
 
     async def test_weights_run_while_scoring_sweep_is_still_busy(self) -> None:
         scoring_started = asyncio.Event()
