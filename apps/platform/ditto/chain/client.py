@@ -584,7 +584,7 @@ class ChainClient:
                 # Complete data contradicting the claim is not provider failure.
                 raise
             except Exception as error:
-                timed_out = isinstance(error, TimeoutError)
+                timed_out = timed_out or isinstance(error, TimeoutError)
                 # Provider addresses/credentials and raw exceptions stay private.
                 continue
         raise ChainTreasuryReceiptUnavailable(

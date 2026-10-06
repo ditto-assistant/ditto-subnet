@@ -894,3 +894,19 @@ async def test_preflight_archive_checkpoint_is_sanitized_and_no_write(
     async with session_maker() as db:
         assert list(await db.scalars(select(TreasuryVerifiedReceipt))) == []
         assert list(await db.scalars(select(TreasuryPublicEvent))) == []
+
+
+async def test_preflight_missing_historical_epoch_is_unavailable(
+    app, client, session_maker
+):
+    await install(app, session_maker)
+    payload = selection()
+    payload["epoch_index"] = 10
+    response = await client.post(URL + "/preflight", headers=HEADERS, json=payload)
+    assert response.status_code == 200, response.text
+    assert not response.json()["ready"]
+    assert response.json()["refusal"] == "unavailable"
+    assert response.json()["attempt_count"] == 0
+    async with session_maker() as db:
+        assert list(await db.scalars(select(TreasuryVerifiedReceipt))) == []
+        assert list(await db.scalars(select(TreasuryPublicEvent))) == []

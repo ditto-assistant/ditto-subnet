@@ -17,6 +17,7 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.treasury_ingress import (
     ReceiptConflict,
+    ReceiptHistoryUnavailable,
     ingest_receipt,
     preflight_receipt,
     receipt_result,
@@ -87,6 +88,8 @@ async def get_treasury_receipt_preflight(
         return await preflight_receipt(session, request.app.state.chain, payload)
     except ReceiptConflict:
         return TreasuryReceiptPreflight(ready=False, refusal="conflict")
+    except ReceiptHistoryUnavailable:
+        return TreasuryReceiptPreflight(ready=False, refusal="unavailable")
     except ValueError:
         return TreasuryReceiptPreflight(ready=False, refusal="invalid_or_unsupported")
     except ChainTreasuryReceiptUnavailable as error:

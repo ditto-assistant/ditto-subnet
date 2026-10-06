@@ -45,6 +45,10 @@ class ReceiptConflict(ValueError):
     """Replay or historical evidence does not match the immutable receipt."""
 
 
+class ReceiptHistoryUnavailable(ValueError):
+    """Required immutable historical data is unavailable, not contradicted."""
+
+
 def receipt_result(
     row: TreasuryVerifiedReceipt, *, replayed: bool
 ) -> TreasuryReceiptResult:
@@ -103,7 +107,7 @@ async def _receipt(
         ledger_query.with_for_update() if record else ledger_query
     )
     if ledger is None:
-        raise ValueError("historical immutable epoch pin absent")
+        raise ReceiptHistoryUnavailable("historical immutable epoch pin absent")
     pin = treasury_pin_from_context(LedgerPin.from_row(ledger))
     if not isinstance(pin, EnforcingTreasuryPin):
         raise ValueError("historical approved enforcing epoch required")
