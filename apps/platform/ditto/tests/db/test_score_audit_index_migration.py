@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import subprocess
 from types import ModuleType
 
 import asyncpg
@@ -76,6 +78,7 @@ async def test_upgrade_recovers_cancelled_build_and_preserves_valid_index(
         before = await conn.scalar(
             text("SELECT oid FROM pg_class WHERE relname=:name"), {"name": INDEX}
         )
+        await conn.rollback()
         await conn.run_sync(_upgrade, _migration())
     assert await _valid(engine) is True
     async with engine.connect() as conn:
@@ -119,3 +122,39 @@ async def test_upgrade_recovers_in_same_run_after_writer_timeout(
         await asyncio.gather(release, return_exceptions=True)
         await blocker.close()
         await runner.dispose()
+
+
+def _alembic(*args: str) -> None:
+    subprocess.run(
+        ["uv", "run", "alembic", *args],
+        check=True,
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+    )
+
+
+async def test_normal_alembic_runner_recovers_invalid_audit_index(
+    engine: AsyncEngine, worker_database: WorkerDatabase
+) -> None:
+    # Exercise env.py and the actual published migration, not just the helper.
+    try:
+        _alembic("downgrade", "e2b5f0a9467c")
+        builder = await asyncpg.connect(
+            worker_database.dsn.asyncpg, server_settings={"lock_timeout": "100ms"}
+        )
+        blocker = await asyncpg.connect(worker_database.dsn.asyncpg)
+        try:
+            await blocker.execute(
+                "BEGIN; LOCK TABLE score_audit_log IN ROW EXCLUSIVE MODE"
+            )
+            with pytest.raises(asyncpg.exceptions.LockNotAvailableError):
+                await builder.execute(CREATE)
+            assert await _valid(engine) is False
+        finally:
+            await blocker.close()
+            await builder.close()
+        _alembic("upgrade", "head")
+        assert await _valid(engine) is True
+    finally:
+        _alembic("upgrade", "head")
