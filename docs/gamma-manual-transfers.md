@@ -19,6 +19,14 @@ durable receipt journal. The amount cannot exceed its remaining bucket
 entitlement, the signed maximum, or the available stake minus the retained
 floor. Zero-allocated destinations refuse; arbitrary addresses are not accepted.
 
+`--manual-readiness` reads the current operation cursor, observed stake and up
+to 100 mature source earning rows. Its coordinates are inputs to a preview,
+not approval or a fresh proof of each source. `--preview-manual-transfer` takes
+the public request file and performs the same prior-effect/source/reserve checks
+as arming, without changing the journal or loading a key. It returns the exact
+canonical request digest needed for subsequent explicit confirmation. Both
+read modes report no spending authority.
+
 Execution requires the exact `--execute-manual-request` UUID and a private
 `--selector-snapshot` path. Ordinary ticks may reconcile pending transactions
 but return `manual_ready` without signing an unclaimed manual intent. Identity,

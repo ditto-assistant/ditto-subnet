@@ -15,6 +15,7 @@ from ditto.treasury.collector import (
     ManualTransfer,
     TransferCanary,
     arm_manual_transfer,
+    manual_transfer_readiness,
     observe_earnings,
     replace_failed_canary,
     tick,
@@ -41,6 +42,8 @@ def main() -> None:
     parser.add_argument("--confirm-manual-request")
     parser.add_argument("--execute-manual-request")
     parser.add_argument("--observe-earnings-only", action="store_true")
+    parser.add_argument("--preview-manual-transfer", type=Path)
+    parser.add_argument("--manual-readiness", action="store_true")
     args = parser.parse_args()
     if args.observe_earnings_only and (
         args.role != "transfer"
@@ -52,6 +55,8 @@ def main() -> None:
                 args.snapshot_only,
                 args.export_activity,
                 args.arm_manual_transfer,
+                args.preview_manual_transfer,
+                args.manual_readiness,
                 args.confirm_manual_request,
                 args.execute_manual_request,
                 args.canary_max_alpha_rao is not None,
@@ -85,6 +90,8 @@ def main() -> None:
     manual = None
     if (
         args.arm_manual_transfer
+        or args.preview_manual_transfer
+        or args.manual_readiness
         or args.confirm_manual_request
         or args.execute_manual_request
     ):
@@ -103,8 +110,26 @@ def main() -> None:
             )
         ):
             parser.error("manual control requires existing transfer journal only")
-        if args.arm_manual_transfer:
-            if args.execute_manual_request or not args.confirm_manual_request:
+        if args.manual_readiness and any(
+            (
+                args.arm_manual_transfer,
+                args.preview_manual_transfer,
+                args.confirm_manual_request,
+                args.execute_manual_request,
+            )
+        ):
+            parser.error("manual readiness is read only")
+        if args.arm_manual_transfer or args.preview_manual_transfer:
+            if (
+                args.execute_manual_request
+                or (
+                    args.arm_manual_transfer
+                    and (
+                        not args.confirm_manual_request or args.preview_manual_transfer
+                    )
+                )
+                or (args.preview_manual_transfer and args.confirm_manual_request)
+            ):
                 parser.error(
                     "manual arming requires exact request digest confirmation "
                     "and no execute"
@@ -115,7 +140,10 @@ def main() -> None:
 
             from ditto.treasury.collector import canonical
 
-            fd = os.open(args.arm_manual_transfer, os.O_RDONLY | os.O_NOFOLLOW)
+            fd = os.open(
+                args.arm_manual_transfer or args.preview_manual_transfer,
+                os.O_RDONLY | os.O_NOFOLLOW,
+            )
             with os.fdopen(fd, "rb") as source:
                 if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
                     parser.error("manual request must be a bounded regular public file")
@@ -123,13 +151,16 @@ def main() -> None:
             if len(raw) > 4096:
                 parser.error("manual request exceeds bounded public input")
             body = json.loads(raw)
+            manual_digest = hashlib.sha256(canonical(body).encode()).hexdigest()
             if (
-                hashlib.sha256(canonical(body).encode()).hexdigest()
-                != args.confirm_manual_request
+                args.arm_manual_transfer
+                and manual_digest != args.confirm_manual_request
             ):
                 parser.error("manual request digest differs from exact confirmation")
             manual = ManualTransfer(**body)
-        elif args.confirm_manual_request or not args.selector_snapshot:
+        elif not args.manual_readiness and (
+            args.confirm_manual_request or not args.selector_snapshot
+        ):
             parser.error(
                 "manual execute requires exact request id and durable selector snapshot"
             )
@@ -225,6 +256,9 @@ def main() -> None:
             parser.error("--journal required for signer")
         journal = CollectorJournal(args.journal, policy, args.role)
         try:
+            if args.manual_readiness:
+                print(json.dumps(manual_transfer_readiness(journal, policy, chain)))
+                return
             if args.observe_earnings_only:
                 print(
                     json.dumps(
@@ -236,13 +270,23 @@ def main() -> None:
                 )
                 return
             if manual is not None:
-                result = arm_manual_transfer(journal, policy, chain, manual)
+                result = arm_manual_transfer(
+                    journal,
+                    policy,
+                    chain,
+                    manual,
+                    record=not args.preview_manual_transfer,
+                )
                 print(
                     json.dumps(
                         {
                             "status": result,
                             "request_id": manual.request_id,
-                            "authority": "one explicit manual claim; not dispatched",
+                            "confirmation_digest": manual_digest,
+                            "request": asdict(manual),
+                            "authority": "none"
+                            if args.preview_manual_transfer
+                            else "one explicit manual claim; not dispatched",
                         }
                     )
                 )

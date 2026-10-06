@@ -1,6 +1,11 @@
 """Manual intents preserve prior history and authorize exactly one claim."""
 
-from dataclasses import replace
+import hashlib
+import json
+import sys
+from contextlib import nullcontext
+from dataclasses import asdict, replace
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -10,9 +15,12 @@ from ditto.treasury.collector import (
     ManualTransfer,
     Settlement,
     arm_manual_transfer,
+    canonical,
+    manual_transfer_readiness,
     observe_earnings,
     tick,
 )
+from scripts import treasury_collector as cli
 
 
 def fixture(tmp_path):
@@ -72,6 +80,94 @@ def test_manual_idempotency_and_stale_intent_refuse(tmp_path):
     with pytest.raises(ValueError, match="current exact"):
         tick(j, p, c, "transfer", manual_request_id=str(uuid4()))
     assert len(c.sent) == 1
+
+
+def test_manual_preview_checks_proof_without_arming_or_mutating_journal(tmp_path):
+    p, c, j, request = fixture(tmp_path)
+    before = list(j.db.iterdump())
+    assert arm_manual_transfer(j, p, c, request, record=False) == "ready_not_armed"
+    assert list(j.db.iterdump()) == before
+    assert tick(j, p, object(), "transfer") == "canary_spent"
+    assert len(c.prepared) == len(c.sent) == 1
+    c.settlement = replace(c.settlement, extrinsic_hash="wrong")
+    with pytest.raises(ValueError):
+        arm_manual_transfer(j, p, c, request, record=False)
+    assert list(j.db.iterdump()) == before
+
+
+def test_manual_readiness_is_read_only_and_preserves_remaining_entitlement(tmp_path):
+    p, c, j, request = fixture(tmp_path)
+    before = list(j.db.iterdump())
+    readiness = manual_transfer_readiness(j, p, c)
+    assert readiness["authority"] == "none"
+    assert readiness["publication"] == "not_performed"
+    assert readiness["bounded_claim_available"] is True
+    assert readiness["after_operation"] == 1
+    assert readiness["sources"][0]["source_block"] == request.source_block
+    remaining = readiness["sources"][0]["remaining"]
+    assert (
+        next(part for part in remaining if part["bucket_id"] == "gm")["alpha_rao"]
+        == 301
+    )
+    assert (
+        next(part for part in remaining if part["bucket_id"] == "bitsec")["alpha_rao"]
+        == 160
+    )
+    assert list(j.db.iterdump()) == before
+    assert len(c.prepared) == len(c.sent) == 1
+    j.db.execute("UPDATE operations SET state='pending'")
+    with pytest.raises(ValueError, match="finalized receipt distribution"):
+        manual_transfer_readiness(j, p, c)
+    assert len(c.sent) == 1
+
+
+@pytest.mark.parametrize("mode", ["readiness", "preview"])
+def test_cli_manual_read_modes_do_not_create_spending_authority(
+    tmp_path, monkeypatch, capsys, mode
+):
+    p, c, j, request = fixture(tmp_path)
+    before = list(j.db.iterdump())
+    public = tmp_path / "request.json"
+    public.write_text(json.dumps(asdict(request)))
+    monkeypatch.setattr(cli, "load_policy", lambda *_: p)
+    monkeypatch.setattr(cli, "CollectorJournal", lambda *_: j)
+    monkeypatch.setattr(j, "close", lambda: None)
+    monkeypatch.setattr(cli, "PublicCollectorChain", lambda *_a, **_k: c)
+    monkeypatch.setitem(
+        sys.modules,
+        "bittensor",
+        SimpleNamespace(
+            Subtensor=lambda **_: nullcontext(SimpleNamespace(substrate=object()))
+        ),
+    )
+    argv = [
+        "collector",
+        "--role",
+        "transfer",
+        "--policy",
+        "/signed/policy.json",
+        "--policy-sha256",
+        p.digest,
+        "--journal",
+        "/existing/journal.db",
+    ]
+    argv.extend(
+        ["--manual-readiness"]
+        if mode == "readiness"
+        else ["--preview-manual-transfer", str(public)]
+    )
+    monkeypatch.setattr(sys, "argv", argv)
+    cli.main()
+    output = json.loads(capsys.readouterr().out)
+    assert output["authority"] == "none"
+    if mode == "preview":
+        assert output["status"] == "ready_not_armed"
+        assert (
+            output["confirmation_digest"]
+            == hashlib.sha256(canonical(asdict(request)).encode()).hexdigest()
+        )
+    assert list(j.db.iterdump()) == before
+    assert len(c.prepared) == len(c.sent) == 1
 
 
 @pytest.mark.parametrize(

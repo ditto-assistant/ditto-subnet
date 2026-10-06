@@ -232,7 +232,7 @@ def manual_transfer_history(journal, policy):
     return requests
 
 
-def arm_manual_transfer(journal, policy, chain, requested):
+def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
     """Append a one-claim intent after independently rechecking prior finality.
 
     No prepare/broadcast occurs. The caller must use the custody operator's
@@ -245,7 +245,7 @@ def arm_manual_transfer(journal, policy, chain, requested):
     ):
         raise ValueError("manual request requires enabled signed policy")
     db = journal.db
-    db.execute("BEGIN IMMEDIATE")
+    db.execute("BEGIN IMMEDIATE" if record else "BEGIN")
     try:
         if tuple(db.execute("SELECT digest,role FROM pin").fetchone()) != (
             policy.digest,
@@ -339,11 +339,83 @@ def arm_manual_transfer(journal, policy, chain, requested):
             for part in remaining
         ):
             raise ValueError("manual amount exceeds remaining exact bucket entitlement")
-        journal.event(
-            "manual_transfer_armed", {"policy": policy.digest, **asdict(requested)}
-        )
+        if record:
+            journal.event(
+                "manual_transfer_armed", {"policy": policy.digest, **asdict(requested)}
+            )
         db.execute("COMMIT")
-        return "armed"
+        return "armed" if record else "ready_not_armed"
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
+
+
+def manual_transfer_readiness(journal, policy, chain):
+    """Read public custody coordinates; a preview is not spending authority."""
+    db = journal.db
+    db.execute("BEGIN")
+    try:
+        if tuple(db.execute("SELECT digest,role FROM pin").fetchone()) != (
+            policy.digest,
+            "transfer",
+        ):
+            raise ValueError("manual readiness requires pinned transfer journal")
+        bound = transfer_canary(journal, policy, "transfer", None)
+        maximum = db.execute("SELECT COALESCE(MAX(id),0) FROM operations").fetchone()[0]
+        previous = db.execute(
+            "SELECT state FROM operations WHERE id=?", (maximum,)
+        ).fetchone()
+        observed = chain.observe(policy, "transfer")
+        sources = []
+        replacement = canary_replacement(journal, policy)
+        for row in db.execute(
+            "SELECT * FROM earnings WHERE completed=0 AND block+?<=? "
+            "ORDER BY block LIMIT 100",
+            (policy.distribution_interval_blocks, observed.block),
+        ).fetchall():
+            if row["amount"] > policy.max_distribution_rao:
+                continue
+            parts = plan_service_distribution(
+                attributed_alpha_rao=row["amount"],
+                available_alpha_rao=row["amount"],
+                collector_coldkey=policy.collector_coldkey,
+                destinations=policy.destinations,
+            )
+            remaining = remaining_distribution(
+                parts,
+                db.execute(
+                    "SELECT bucket,amount,destination,role,state FROM operations "
+                    "WHERE source_block=? AND id!=?",
+                    (
+                        row["block"],
+                        replacement["after_operation"] if replacement else -1,
+                    ),
+                ).fetchall(),
+            )
+            if remaining:
+                sources.append(
+                    {
+                        "source_block": row["block"],
+                        "remaining": [asdict(part) for part in remaining],
+                    }
+                )
+        result = {
+            "policy": policy.digest,
+            "after_operation": maximum,
+            "previous_state": previous[0] if previous else None,
+            "bounded_claim_available": bound is not None
+            and maximum == bound.after_operation + 1
+            and previous is not None
+            and previous[0] == "finalized",
+            "finalized_block": observed.block,
+            "available_alpha_rao": observed.alpha_rao,
+            "max_distribution_rao": policy.max_distribution_rao,
+            "sources": sources,
+            "authority": "none",
+            "publication": "not_performed",
+        }
+        db.execute("COMMIT")
+        return result
     except BaseException:
         db.execute("ROLLBACK")
         raise
