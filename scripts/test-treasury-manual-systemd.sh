@@ -31,7 +31,8 @@ guard = Path('scripts/check-treasury-manual-mode.sh').read_text().replace('sn118
 (root / (prefix + '-transfer.service')).write_text(f'[Unit]\nDescription=Harmless transfer probe\n[Service]\nType=oneshot\nExecStart=/usr/bin/touch {root}/transfer-executed\n')
 timer = Path('infra/systemd/sn118-collector@.timer').read_text().replace('sn118-collector@%i.service', prefix + '-transfer.service')
 (root / (prefix + '-transfer.timer')).write_text(timer)
-# Another timer really fires at the masked service; it still cannot stop manual.
+# Another timer attempts to activate the masked service; systemd may refuse
+# its dependency at start or refuse the service when the timer fires.
 (root / (prefix + '-attempt.timer')).write_text(f'[Timer]\nOnActiveSec=100ms\nAccuracySec=1ms\nUnit={prefix}-transfer.service\n')
 PY
 for suffix in manual.service transfer.service transfer.timer attempt.timer; do
@@ -51,8 +52,9 @@ for suffix in transfer.timer transfer.service; do
   if sudo systemctl start "$task_prefix-$suffix"; then echo 'Masked recurring activation succeeded' >&2; exit 1; fi
   sudo systemctl is-active --quiet "$task_prefix-manual.service"
 done
-sudo systemctl start "$task_prefix-attempt.timer"
-sleep 1
+if sudo systemctl start "$task_prefix-attempt.timer"; then
+  sleep 1
+fi
 sudo systemctl is-active --quiet "$task_prefix-manual.service"
 [[ ! -e "$task_root/transfer-executed" ]]
-printf '%s\n' 'Manual consumer survived both masked starts and a timer firing; no transfer executed.'
+printf '%s\n' 'Manual consumer survived both masked starts and attempted timer activation; no transfer executed.'
