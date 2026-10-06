@@ -28,6 +28,7 @@ async def partial_distribution_schema(engine):
     the financial-history guard fires. Restore the worker schema even when the
     refusal assertions fail, so the next current-head reset is valid.
     """
+    assert engine.dialect.name == "postgresql"
     try:
         result = alembic("downgrade", HEAD)
         assert result.returncode == 0, result.stderr
