@@ -109,6 +109,6 @@ it.each(['older success', 'older failure', 'newer failure'])('keeps the newest r
     expect(screen.getByLabelText('Amount (SN118 alpha)').closest('fieldset')?.disabled).toBe(true)
   } else {
     expect(screen.queryByRole('alert')).toBeNull()
-    expect(screen.getByLabelText<HTMLSelectElement>('Destination wallet').options[0].disabled).toBe(true)
+    expect(screen.getByRole('option', { name: 'GM — allocation off' }).hasAttribute('disabled')).toBe(true)
   }
 })
