@@ -28306,6 +28306,8 @@ export interface components {
              * @enum {string}
              */
             event_kind: "gm_token_deposit" | "gm_credit_purchase" | "maintenance_bounty" | "service_distribution" | "vendor_payment";
+            /** Extrinsic Hash */
+            extrinsic_hash?: string | null;
             /** Extrinsic Index */
             extrinsic_index: number;
             /** Finalized Event Id */

@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import { useEndpoint } from "../data/useEndpoint";
+import { GammaReceiptFeed } from "../components/GammaReceiptFeed";
 import { dashboardHref } from "../lib/router";
 
 export interface TreasuryAllocation {
@@ -216,6 +217,7 @@ export function GammaPage(): JSX.Element {
                 policy, never seed phrases.
               </p>
             </section>
+            <GammaReceiptFeed />
             <section class="gamma-payees" aria-label="Payment transparency rules">
               <h3>Payment transparency rules</h3>
               <p>

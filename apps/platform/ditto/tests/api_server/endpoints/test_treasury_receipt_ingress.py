@@ -383,6 +383,9 @@ async def test_real_ingress_replay_independent_vendor_and_history(
     response = await client.post(URL, headers=HEADERS, json=selection())
     assert response.status_code == 200, response.text
     assert response.json()["published"] and not response.json()["replayed"]
+    public = (await client.get("/api/v1/public/treasury-activity")).json()
+    assert public["items"][0]["extrinsic_hash"] == selection()["extrinsic_hash"]
+    assert public["items"][0]["payment_id"] == response.json()["receipt_id"]
     replay = await client.post(
         URL,
         headers=HEADERS,
