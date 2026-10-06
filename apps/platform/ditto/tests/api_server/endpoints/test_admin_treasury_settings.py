@@ -341,13 +341,22 @@ async def test_readiness_proves_current_managed_permission_without_peer_bindings
     if fault == "permission_lost":
         scoped.side_effect = ValueError("current permission lost")
     if fault == "timeout":
-        from ditto.chain.errors import ChainTreasuryActivationReadError, ChainTreasuryReadTimeoutError
+        from ditto.chain.errors import (
+            ChainTreasuryActivationReadError,
+            ChainTreasuryReadTimeoutError,
+        )
+
         scoped.side_effect = ChainTreasuryActivationReadError(
             "setter_roster", ChainTreasuryReadTimeoutError("permit_vector")
         )
     state.chain.get_treasury_managed_weight_setters = scoped
     if reader == "combined":
-        combined = AsyncMock(return_value=(state.chain.get_treasury_dispatch_observation.return_value, proof))
+        combined = AsyncMock(
+            return_value=(
+                state.chain.get_treasury_dispatch_observation.return_value,
+                proof,
+            )
+        )
         combined.side_effect = scoped.side_effect
         state.chain.get_treasury_managed_activation_observation = combined
     request = SimpleNamespace(app=SimpleNamespace(state=state))

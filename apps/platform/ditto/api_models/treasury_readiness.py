@@ -7,7 +7,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from ditto.chain.errors import TreasuryReadStep
-
 from ditto_screening_protocol.treasury import (
     Digest,
     TreasuryEmissionPolicy,
@@ -54,9 +53,20 @@ class TreasuryLedgerReadiness(BaseModel):
     offline_epoch_verified: bool = False
     weight_effect: Literal["none"] = "none"
     can_enforce_weights: bool = False
-    validation_failure_stage: Literal["fleet_binding", "identity", "setter_roster", "authority"] | None = None
+    validation_failure_stage: (
+        Literal["fleet_binding", "identity", "setter_roster", "authority"] | None
+    ) = None
     validation_failure_step: TreasuryReadStep | None = None
-    validation_failure_kind: Literal["timeout", "connection", "invalid_evidence", "reader_unavailable", "unavailable"] | None = None
+    validation_failure_kind: (
+        Literal[
+            "timeout",
+            "connection",
+            "invalid_evidence",
+            "reader_unavailable",
+            "unavailable",
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def proposal_status_binds_digest(self) -> TreasuryLedgerReadiness:

@@ -62,10 +62,9 @@ async def current_managed_dispatch_observation(
         observed, raw_proof = await combined(policy, managed_hotkeys=managed_hotkeys)
         observed = TreasuryDispatchObservation.model_validate(observed)
         proof = TreasuryManagedSetterObservation.model_validate(raw_proof)
-        if (
-            proof.block_hash != observed.finalized_block_hash
-            or set(proof.hotkeys) != set(managed_hotkeys)
-        ):
+        if proof.block_hash != observed.finalized_block_hash or set(
+            proof.hotkeys
+        ) != set(managed_hotkeys):
             raise ValueError("managed permission proof differs from dispatch scope")
     else:
         observed = TreasuryDispatchObservation.model_validate(

@@ -373,6 +373,70 @@ async def test_requester_revalidates_current_chain_and_every_pinned_member(
             )
 
 
+@pytest.mark.parametrize(
+    "fault", ["none", "hash", "permission", "scope", "epoch", "owner", "timeout"]
+)
+async def test_dispatch_combined_reader_is_fresh_and_never_falls_back(session, fault):
+    from ditto.chain.errors import (
+        ChainTreasuryActivationReadError,
+        ChainTreasuryReadTimeoutError,
+    )
+    from ditto_screening_protocol.treasury_identity import (
+        TreasuryManagedSetterObservation,
+    )
+
+    p = pin()
+    now = datetime.now(UTC)
+    row = await add_runtime(session, now)
+    state = app_state(p)
+    observed = state.chain.get_treasury_dispatch_observation.return_value
+    proof = TreasuryManagedSetterObservation(
+        block_hash=observed.finalized_block_hash,
+        hotkeys=tuple(member.validator_hotkey for member in p.fleet),
+        permitted_count=13,
+    )
+    if fault == "hash":
+        proof = proof.model_copy(update={"block_hash": "0x" + "f" * 64})
+    elif fault == "permission":
+        proof = proof.model_copy(update={"hotkeys": ()})
+    elif fault == "scope":
+        proof = proof.model_copy(
+            update={"hotkeys": (*proof.hotkeys, p.policy.collector_hotkey)}
+        )
+    elif fault == "epoch":
+        observed = observed.model_copy(update={"epoch_index": observed.epoch_index + 1})
+    elif fault == "owner":
+        observed = observed.model_copy(
+            update={
+                "identity": observed.identity.model_copy(
+                    update={"owner_coldkey": row.validator_hotkey}
+                )
+            }
+        )
+    combined = AsyncMock(return_value=(observed, proof))
+    if fault == "timeout":
+        combined.side_effect = ChainTreasuryActivationReadError(
+            "setter_roster", ChainTreasuryReadTimeoutError("setter_binding")
+        )
+    state.chain.get_treasury_managed_activation_observation = combined
+    if fault == "none":
+        for _ in range(2):
+            await require_enforcing_requester(
+                session, p, row.validator_hotkey, now=now, app_state=state
+            )
+        assert combined.await_count == 2
+    else:
+        with pytest.raises((ValueError, ChainTreasuryActivationReadError)):
+            await require_enforcing_requester(
+                session, p, row.validator_hotkey, now=now, app_state=state
+            )
+    combined.assert_awaited_with(
+        p.policy, managed_hotkeys=state.config.treasury_managed_validator_hotkeys
+    )
+    state.chain.get_treasury_dispatch_observation.assert_not_awaited()
+    state.chain.get_treasury_weight_setters.assert_not_awaited()
+
+
 @pytest.mark.parametrize("empty", [False, True])
 @pytest.mark.parametrize("burn", [0, 0.5, 1])
 def test_backend_prescribed_vector_keeps_service_pool_when_miners_burn(empty, burn):

@@ -33576,6 +33576,12 @@ export interface components {
             proposal_approved_policy_digest?: string | null;
             stored_enforcing_pin?: components["schemas"]["EnforcingTreasuryPin"] | null;
             stored_shadow_pin: components["schemas"]["TreasuryLedgerPin"] | null;
+            /** Validation Failure Kind */
+            validation_failure_kind?: ("timeout" | "connection" | "invalid_evidence" | "reader_unavailable" | "unavailable") | null;
+            /** Validation Failure Stage */
+            validation_failure_stage?: ("fleet_binding" | "identity" | "setter_roster" | "authority") | null;
+            /** Validation Failure Step */
+            validation_failure_step?: ("connection" | "connection_close" | "finalized_head" | "finalized_height" | "canonical_hash" | "genesis_hash" | "epoch_storage" | "collector_storage" | "uid_binding" | "permit_vector" | "setter_binding") | null;
             /**
              * Weight Effect
              * @default none

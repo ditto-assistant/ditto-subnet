@@ -170,7 +170,11 @@ async def get_treasury_ledger_readiness(
         if isinstance(error, ChainTreasuryActivationReadError):
             stage = error.read_stage
             error = error.read_error
-        step = error.read_step if isinstance(error, ChainTreasuryReadTimeoutError) else None
+        step = (
+            error.read_step
+            if isinstance(error, ChainTreasuryReadTimeoutError)
+            else None
+        )
         if isinstance(error, (TimeoutError, ChainTimeoutError)):
             kind = "timeout"
         elif isinstance(error, (ConnectionError, ChainConnectionError)):
