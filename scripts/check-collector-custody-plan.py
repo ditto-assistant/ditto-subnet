@@ -70,6 +70,41 @@ def resources(module: dict) -> list[dict]:
     return module.get("resources", [])
 
 
+def reviewed_mailbox_storage(policy: object, unknown: object) -> bool:
+    """Accept only the reviewed region and known unset provider transit default."""
+    if not isinstance(policy, list) or len(policy) != 1:
+        return False
+    storage = policy[0]
+    if (
+        not isinstance(storage, dict)
+        or set(storage) - {"allowed_persistence_regions", "enforce_in_transit"}
+        or storage.get("allowed_persistence_regions") != ["us-central1"]
+        or (
+            storage.get("enforce_in_transit") is not None
+            and storage.get("enforce_in_transit") is not False
+        )
+    ):
+        return False
+    if unknown is False:
+        return True
+    if not isinstance(unknown, list) or len(unknown) != 1:
+        return False
+    flags = unknown[0]
+    return (
+        isinstance(flags, dict)
+        and not set(flags) - {"allowed_persistence_regions", "enforce_in_transit"}
+        and (
+            "allowed_persistence_regions" not in flags
+            or (
+                isinstance(flags["allowed_persistence_regions"], list)
+                and len(flags["allowed_persistence_regions"]) == 1
+                and flags["allowed_persistence_regions"][0] is False
+            )
+        )
+        and flags.get("enforce_in_transit", False) is False
+    )
+
+
 def validate(plan: dict, *, project: str = "ditto-app-dev") -> int:
     if project not in ("ditto-app-dev", "sn118-gamma-custody"):
         raise ValueError("unapproved custody project")
@@ -136,9 +171,12 @@ def validate(plan: dict, *, project: str = "ditto-app-dev") -> int:
                 if value.get("name") != f"sn118-manual-{name}":
                     raise ValueError("mailbox resource differs")
                 if address.startswith("google_pubsub_topic."):
-                    if value.get("message_storage_policy") != [
-                        {"allowed_persistence_regions": ["us-central1"]}
-                    ]:
+                    if not reviewed_mailbox_storage(
+                        value.get("message_storage_policy"),
+                        change.get("after_unknown", {}).get(
+                            "message_storage_policy", False
+                        ),
+                    ):
                         raise ValueError("mailbox persistence differs")
                 elif (
                     value.get("topic")

@@ -54,6 +54,102 @@ def fixture() -> dict:
 
 class PrivatePlanScope(unittest.TestCase):
     @staticmethod
+    def mailbox_topic_fixture():
+        plan = fixture()
+        plan["variables"].update(
+            {
+                "project": {"value": "sn118-gamma-custody"},
+                "enable_manual_mailbox": {"value": True},
+                "collector_custody_phases": {
+                    "value": {"registration": "sealed", "transfer": "sealed"}
+                },
+                "manual_mailbox_platform_service_account": {
+                    "value": "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com"
+                },
+            }
+        )
+        plan["resource_changes"] = [
+            {
+                "address": 'google_pubsub_topic.manual["requests"]',
+                "mode": "managed",
+                "change": {
+                    "actions": ["create"],
+                    "after": {
+                        "project": "sn118-gamma-custody",
+                        "name": "sn118-manual-requests",
+                        "message_storage_policy": [
+                            {
+                                "allowed_persistence_regions": ["us-central1"],
+                                "enforce_in_transit": None,
+                            }
+                        ],
+                    },
+                    "after_unknown": {
+                        "message_storage_policy": [
+                            {"allowed_persistence_regions": [False]}
+                        ]
+                    },
+                },
+            }
+        ]
+        plan["planned_values"]["root_module"]["resources"] = [
+            {"address": address} for address in sorted(scope.MAILBOX)
+        ]
+        return plan
+
+    def test_accepts_provider_unset_mailbox_transit_default(self):
+        for representation in (
+            {},
+            {"enforce_in_transit": None},
+            {"enforce_in_transit": False},
+        ):
+            with self.subTest(representation=representation):
+                plan = self.mailbox_topic_fixture()
+                plan["resource_changes"][0]["change"]["after"][
+                    "message_storage_policy"
+                ] = [{"allowed_persistence_regions": ["us-central1"], **representation}]
+                self.assertEqual(scope.validate(plan, project="sn118-gamma-custody"), 1)
+
+    def test_refuses_changed_or_unknown_mailbox_persistence(self):
+        for policy in (
+            [],
+            [{"allowed_persistence_regions": ["us-east1"]}],
+            [{"allowed_persistence_regions": ["us-central1", "us-east1"]}],
+            [
+                {
+                    "allowed_persistence_regions": ["us-central1"],
+                    "enforce_in_transit": True,
+                }
+            ],
+            [{"allowed_persistence_regions": ["us-central1"], "enforce_in_transit": 0}],
+            [
+                {
+                    "allowed_persistence_regions": ["us-central1"],
+                    "unreviewed_field": None,
+                }
+            ],
+        ):
+            with self.subTest(policy=policy):
+                plan = self.mailbox_topic_fixture()
+                plan["resource_changes"][0]["change"]["after"][
+                    "message_storage_policy"
+                ] = policy
+                with self.assertRaisesRegex(ValueError, "mailbox persistence differs"):
+                    scope.validate(plan, project="sn118-gamma-custody")
+        for unknown in (
+            True,
+            [{"allowed_persistence_regions": [True]}],
+            [{"enforce_in_transit": True}],
+        ):
+            with self.subTest(unknown=unknown):
+                plan = self.mailbox_topic_fixture()
+                plan["resource_changes"][0]["change"]["after_unknown"][
+                    "message_storage_policy"
+                ] = unknown
+                with self.assertRaisesRegex(ValueError, "mailbox persistence differs"):
+                    scope.validate(plan, project="sn118-gamma-custody")
+
+    @staticmethod
     def rpc_fixture():
         plan = fixture()
         plan["variables"].update(
