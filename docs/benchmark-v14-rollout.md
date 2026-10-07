@@ -7,8 +7,8 @@ alter emissions, or change a production setting.
 
 ## Immutable boundary
 
-V14 changes only the declarative memory over-call rule and benchmark identity.
-V13 keeps its whole-case exclusion. V2–v12 keep their existing rules. Lifecycle
+V14 changes only the declarative memory over-call rule, one claim-set grading
+correction, and benchmark identity. V13 keeps its whole-case exclusion. V2–v12 keep their existing rules. Lifecycle
 write cases remain excluded at every version. V14 counts each observed
 declarative-ack case and permits save/update/delete memory actions on that case;
 unrelated actions count once even when mixed with permitted writes.
@@ -21,9 +21,17 @@ unrelated actions count once even when mixed with permitted writes.
 | Declarative save, read, or no call alone | 1 | 1 |
 
 These are over-call factors. Other existing composite gates still apply.
+
+The grading correction: in a typed claim set, a sentence that is wholly one of
+the case's own claim values is no longer read as a self-correction just because
+that value is also a correction cue. "better safe than sorry" is published as
+`safe; sorry`, and v13 discards `safe` because the next sentence starts with
+`sorry`. V14 credits both. A sentence that carries anything beyond the value
+("Sorry, I mean safe.") is still a correction, and v13 grading is unchanged.
 The v14 full/public vector at seed 123456789 is
 `8a08dfe713fd6df2d67ece92148118a3fbd64b5d0f6a90f78dccb9853e329d50`,
-with epoch `2027-06-01T00:00:00Z`. The surface, grader, v13 gate postures,
+with epoch `2027-06-01T00:00:00Z`. The surface, grader (apart from the claim-set
+correction above), v13 gate postures,
 LongMem instrument and public harness wire (9) carry forward. There is no private
 surface expansion or screening policy v14 activation in this change.
 
