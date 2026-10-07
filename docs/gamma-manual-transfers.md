@@ -102,6 +102,18 @@ not prove a provider purchase or credited GM balance.
    Review the entire private plan before apply. Never apply the repository's
    old bootstrap defaults over live sealed custody. Only the dedicated Platform
    API principal may receive the resource-specific publisher/subscriber grants.
+   On the transfer host, resolve `pubsub.googleapis.com` through the already
+   allowed restricted Google API VIP (`199.36.153.4`), retaining the public API
+   hostname for TLS/SNI. The original custody bootstrap pins only Secret
+   Manager; public Pub/Sub DNS addresses are intentionally blocked by sealed
+   egress. Preserve existing `/etc/hosts` entries and refuse conflicting pins;
+   add the single reviewed Pub/Sub mapping during manual runtime convergence.
+   Verify the resolved address and normal TLS certificate validation before
+   starting the worker. Do not widen the firewall or disable TLS verification.
+   Pub/Sub is [supported by VPC Service Controls](https://docs.cloud.google.com/vpc-service-controls/docs/supported-products),
+   and Google's [Private Google Access guidance](https://docs.cloud.google.com/vpc/docs/configure-private-google-access)
+   defines the restricted VIP range. A credential-free TLS/API refusal proves
+   connectivity only; require a fresh IAM-authenticated readiness report too.
 3. Stage the exact merged worker/shared protocol on the existing signer with
    its journal, signed policy and numeric Secret Manager version unchanged.
    Install `sn118-treasury-manual.service`; its reviewed deployment drop-in must
