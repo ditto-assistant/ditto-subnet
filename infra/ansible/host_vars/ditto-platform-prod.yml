@@ -73,3 +73,10 @@ secret_screener_controller_api_token: "screener-controller-api-token-prod"
 # (terraform infra/terraform/stacks/gcp-platform/screener-fleet.tf). Needs the metricWriter
 # grant from enable_screener_fleet applied first.
 screening_queue_metric_enabled: true
+
+# Manual-only Gamma mailbox: isolated custody keeps recurring transfer units
+# persistently masked. This enables preview/explicit confirmation, not a timer.
+platform_treasury_manual_enabled: true
+platform_treasury_manual_project: sn118-gamma-custody
+platform_treasury_manual_request_topic: sn118-manual-requests
+platform_treasury_manual_report_subscription: sn118-manual-reports
