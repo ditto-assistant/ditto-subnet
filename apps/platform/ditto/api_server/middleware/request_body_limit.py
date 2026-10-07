@@ -9,8 +9,12 @@ grow past the largest body the API actually accepts.
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Awaitable, Callable, MutableMapping
 from typing import Any
+
+from ditto.api_server.middleware.request_id import REQUEST_ID_HEADER, request_id_var
 
 # A published transcript is the largest body a route accepts. The default
 # upload tarball is 20 MiB and fits inside this. One extra MiB covers
@@ -18,7 +22,11 @@ from typing import Any
 _TRANSCRIPT_MAX_BYTES = 32 << 20
 _MULTIPART_FRAMING_BYTES = 1 << 20
 
-_TOO_LARGE = b'{"detail":"request body is too large"}'
+# Same code the HTTP exception handler stamps on a route-level 413.
+_ERROR_CODE_HTTP_EXCEPTION = 3002
+_TOO_LARGE_MESSAGE = "request body is too large"
+
+logger = logging.getLogger(__name__)
 
 Scope = MutableMapping[str, Any]
 Message = MutableMapping[str, Any]
@@ -88,6 +96,7 @@ class RequestBodyLimitMiddleware:
         except Exception:
             if not rejected:
                 raise
+            logger.exception("application failed after the request body was refused")
 
 
 def _content_length(scope: Scope) -> int | None:
@@ -103,15 +112,30 @@ def _content_length(scope: Scope) -> int | None:
     return None
 
 
+def _too_large_body() -> bytes:
+    request_id = request_id_var.get()
+    return json.dumps(
+        {
+            "error_code": _ERROR_CODE_HTTP_EXCEPTION,
+            "message": _TOO_LARGE_MESSAGE,
+            "request_id": request_id,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 async def _send_too_large(send: Send) -> None:
+    body = _too_large_body()
+    request_id = request_id_var.get().encode("ascii", "replace")
     await send(
         {
             "type": "http.response.start",
             "status": 413,
             "headers": [
                 (b"content-type", b"application/json"),
-                (b"content-length", str(len(_TOO_LARGE)).encode("ascii")),
+                (b"content-length", str(len(body)).encode("ascii")),
+                (REQUEST_ID_HEADER.lower().encode("ascii"), request_id),
             ],
         }
     )
-    await send({"type": "http.response.body", "body": _TOO_LARGE})
+    await send({"type": "http.response.body", "body": body})

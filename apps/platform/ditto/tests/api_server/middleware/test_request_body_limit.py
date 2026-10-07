@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import logging
+
 import pytest
 
 from ditto.api_server.middleware.request_body_limit import (
@@ -58,8 +61,9 @@ async def test_declared_length_over_the_cap_never_reaches_the_app() -> None:
     )
 
     assert called is False
-    assert sent[0]["status"] == 413
-    assert sent[1]["body"] == b'{"detail":"request body is too large"}'
+    assert _rejection(sent)["error_code"] == 3002
+    assert _rejection(sent)["message"] == "request body is too large"
+    assert _rejection(sent)["request_id"] == "-"
 
 
 async def test_a_body_at_the_cap_is_delivered_intact() -> None:
@@ -119,7 +123,40 @@ async def test_a_chunked_body_stops_at_the_cap() -> None:
     )
 
     assert seen == b"abc"
+    assert _rejection(sent)["error_code"] == 3002
+
+
+async def test_a_post_rejection_error_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def app(_scope, receive, _send):
+        await receive()
+        message = await receive()
+        assert message["type"] == "http.disconnect"
+        raise RuntimeError("handler failed after cutoff")
+
+    with caplog.at_level(logging.ERROR):
+        sent = await _invoke(
+            app,
+            _scope(),
+            [
+                {"type": "http.request", "body": b"abc", "more_body": True},
+                {"type": "http.request", "body": b"def", "more_body": False},
+            ],
+        )
+
+    assert _rejection(sent)["error_code"] == 3002
+    assert "handler failed after cutoff" in caplog.text
+
+
+def _rejection(sent: list[dict]) -> dict:
     assert sent[0]["status"] == 413
+    body = b"".join(
+        message.get("body", b"")
+        for message in sent
+        if message["type"] == "http.response.body"
+    )
+    return json.loads(body)
 
 
 def test_a_bool_tarball_cap_is_rejected() -> None:

@@ -27,11 +27,19 @@ def _render(**overrides: object) -> str:
     return env.from_string(TEMPLATE).render(context)
 
 
+def _directive_line(rendered: str, prefix: str) -> int:
+    for index, line in enumerate(rendered.splitlines()):
+        if line.lstrip().startswith(prefix):
+            return index
+    raise AssertionError(prefix)
+
+
 def test_direct_proxy_caps_the_body() -> None:
     rendered = _render()
-    assert "request_body {" in rendered
     assert "max_size 32MiB" in rendered
-    assert rendered.index("request_body {") < rendered.index("reverse_proxy")
+    assert _directive_line(rendered, "request_body {") < _directive_line(
+        rendered, "reverse_proxy "
+    )
 
 
 def test_relay_handles_each_cap_the_body() -> None:
