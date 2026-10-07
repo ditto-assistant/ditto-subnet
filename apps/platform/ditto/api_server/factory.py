@@ -160,6 +160,7 @@ from ditto.api_server.endpoints.admin_conversation import (
 from ditto.api_server.endpoints.screener_conversation import (
     router as screener_conversation_router,
 )
+from ditto.api_server.endpoints.upload import MAX_TARBALL_SIZE_BYTES
 from ditto.api_server.endpoints.validator_coding_hosted import HostedCodingControl
 from ditto.api_server.endpoints.validator_coding_hosted import (
     router as validator_coding_hosted_router,
@@ -182,11 +183,13 @@ from ditto.api_server.ledger_pin import LedgerPinLoop, LedgerPinMaterializer
 from ditto.api_server.middleware import (
     PublicCacheMiddleware,
     PublicRateLimitMiddleware,
+    RequestBodyLimitMiddleware,
     RequestIDMiddleware,
     SizedGZipMiddleware,
     register_exception_handlers,
 )
 from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
+from ditto.api_server.middleware.request_body_limit import request_body_limit_bytes
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
@@ -618,6 +621,14 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     from ditto.api_server.admin_activity import AdminActivityMiddleware
 
     app.add_middleware(AdminActivityMiddleware)
+    # Inside the request id, and outside every route. A multipart file is
+    # spooled as it arrives, before the upload signature is checked, so an
+    # oversized body has to be refused here. The public rate limiter stays
+    # opt-in; this cap is what bounds the spool when that limiter is off.
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=request_body_limit_bytes(MAX_TARBALL_SIZE_BYTES),
+    )
     app.add_middleware(RequestIDMiddleware)
 
     register_exception_handlers(app)

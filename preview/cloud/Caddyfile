@@ -4,6 +4,9 @@
 
 dashboard.{$PREVIEW_BASE_DOMAIN} {
   handle /api/* {
+    request_body {
+      max_size 32MiB
+    }
     reverse_proxy platform:8000
   }
   handle {
@@ -15,6 +18,9 @@ platform.{$PREVIEW_BASE_DOMAIN} {
   handle /__preview/health {
     header Content-Type application/json
     respond `{"status":"ok","sha":"{$PREVIEW_SHA}","profile":"{$PREVIEW_PROFILE}"}` 200
+  }
+  request_body {
+    max_size 32MiB
   }
   reverse_proxy platform:8000
 }
