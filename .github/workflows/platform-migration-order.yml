@@ -14,7 +14,7 @@ permissions:
 jobs:
   migration-order:
     name: Platform migration order
-    if: github.event_name != 'push' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+    if: github.event_name != 'push'
     # Per-ref check: a PR, merge-queue entry, or branch dispatch (the anti-copy
     # refresh dispatches this by branch) replaces only its own earlier run.
     concurrency:

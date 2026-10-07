@@ -269,10 +269,7 @@ def test_migration_order_sweeps_share_one_lane_and_checks_stay_isolated() -> Non
     }
 
     # PR, merge_group and dispatch checks are keyed by head/ref, never the sweep.
-    assert check["if"] == (
-        "github.event_name != 'push' && (github.event_name != 'pull_request' || "
-        "github.event.pull_request.head.repo.full_name != github.repository)"
-    )
+    assert check["if"] == "github.event_name != 'push'"
     assert check["concurrency"] == {
         "group": "platform-migration-order-${{ github.head_ref || github.ref }}",
         "cancel-in-progress": True,

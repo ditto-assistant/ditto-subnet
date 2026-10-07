@@ -6,8 +6,6 @@ on:
 
 jobs:
   compose-config:
-    # Same-repository PR validation runs on Depot; forks and manual rollback stay here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -57,8 +55,6 @@ jobs:
           python3 scripts/check_netns_incompatible.py /tmp/resolved-compose.json
 
   validator-stack-runtime-e2e:
-    # Same-repository PR validation runs on Depot; forks and manual rollback stay here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -82,8 +78,6 @@ jobs:
         run: ./scripts/test-validator-stack-auto-update-e2e.sh
 
   lint-and-test:
-    # Same-repository PR validation runs on Depot; forks and manual rollback stay here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     # Same sharded exact-source verifier as the release gate, so the two
     # surfaces cannot drift and the pull request answers ~2x faster than the
     # previous single serial job.
