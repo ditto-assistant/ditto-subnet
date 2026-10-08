@@ -202,6 +202,7 @@ class DethroneDecision:
     paired_standard_error: float | None = None
     shared_seed_count: int | None = None
     seed_differences: tuple[float, ...] | None = None
+    seed_coverage_complete: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -317,6 +318,7 @@ def emission_allocation(
     tie_pooling: bool = False,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> EmissionAllocation:
     """Return the exact validator payout mode, membership, and shares.
 
@@ -334,6 +336,7 @@ def emission_allocation(
             projection,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            dethrone_seed_full_set=dethrone_seed_full_set,
         )
         if ceiling_cohort:
             share = 1.0 / len(ceiling_cohort)
@@ -359,6 +362,7 @@ def _score_ceiling_cohort(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> tuple[KothEntry, ...]:
     # Curve-v3 protocol 21 has no continuous adjusted-score ceiling: quality is
     # the primary order and efficiency only breaks an exact quality tie.
@@ -380,6 +384,7 @@ def _score_ceiling_cohort(
         projection.champion,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
     )
     if not decision.ceiling_deadlocked:
         return ()
@@ -399,6 +404,7 @@ def champion_defense(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> DethroneDecision | None:
     """What the best rival miner currently needs to take the crown.
 
@@ -431,6 +437,7 @@ def champion_defense(
         projection.champion,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
     )
 
 
@@ -698,6 +705,7 @@ def project_koth(
     distinct_hotkeys: bool = False,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
     incumbent_agent_id: UUID | None = None,
 ) -> KothProjection | None:
     """Return the champion and participation tail for an eligible score pool.
@@ -744,6 +752,7 @@ def project_koth(
             champion,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            dethrone_seed_full_set=dethrone_seed_full_set,
         ).dethrones:
             champion = challenger
 
@@ -772,6 +781,7 @@ def project_koth(
             champion,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            dethrone_seed_full_set=dethrone_seed_full_set,
         )
     )
     return KothProjection(
@@ -996,6 +1006,28 @@ def _seed_composites(entry: KothEntry) -> dict[int, float] | None:
     return out
 
 
+def _seed_coverage_complete(
+    challenger: KothEntry, champion: KothEntry, *, full_set: bool
+) -> bool:
+    """Mirror the validator's protocol-31 paired-coverage gate.
+
+    Byte-for-byte aligned with ``ditto-subnet`` ``weights._seed_coverage_complete``:
+    when ``full_set`` is active the paired statistic may decide the crown only
+    when the two seed maps' intersection equals their union — neither entry
+    holds a window seed the other has not been scored on. Absent maps (no
+    confirmation evidence) stay trivially complete.
+    """
+    if not full_set:
+        return True
+    challenger_by_seed = _seed_composites(challenger)
+    champion_by_seed = _seed_composites(champion)
+    if challenger_by_seed is None or champion_by_seed is None:
+        return True
+    return set(challenger_by_seed) & set(champion_by_seed) == set(
+        challenger_by_seed
+    ) | set(champion_by_seed)
+
+
 def _paired_statistic(
     challenger: KothEntry, champion: KothEntry
 ) -> PairedStatistic | None:
@@ -1060,9 +1092,31 @@ def _dethrone_decision(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> DethroneDecision:
     quality_primary = _quality_primary_efficiency_active((challenger, champion))
     score_ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
+    coverage_complete = _seed_coverage_complete(
+        challenger, champion, full_set=dethrone_seed_full_set
+    )
+    if not coverage_complete:
+        # Protocol 31: the two windows do not span each other, so neither the
+        # paired nor the unpaired branch may decide the crown — a partial draw
+        # would decide on evidence the outstanding seeds can contradict. The
+        # requirement becomes the challenger's unreachable ceiling, deferring
+        # the decision until the window completes and the lane re-decides it.
+        return DethroneDecision(
+            challenger_lead=0.0,
+            required_lead=math.inf,
+            margin_lead=KOTH_MARGIN,
+            statistical_lead=None,
+            method="unpaired",
+            dethrones=False,
+            required_score=score_ceiling,
+            score_ceiling=score_ceiling,
+            ceiling_deadlocked=False,
+            seed_coverage_complete=False,
+        )
     paired = _paired_statistic(challenger, champion)
     if paired is not None:
         margin_lead = KOTH_MARGIN
@@ -1096,6 +1150,7 @@ def _dethrone_decision(
             paired_standard_error=paired.standard_error,
             shared_seed_count=len(paired.differences),
             seed_differences=paired.differences,
+            seed_coverage_complete=coverage_complete,
         )
 
     challenger_composite = _dethrone_composite(
@@ -1140,4 +1195,5 @@ def _dethrone_decision(
         required_score=required_score,
         score_ceiling=score_ceiling,
         ceiling_deadlocked=(not dethrones and required_score >= score_ceiling),
+        seed_coverage_complete=coverage_complete,
     )

@@ -172,6 +172,7 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "rollout_standdown",
                 "tie_weighting_mode",
                 "statistical_band_mode",
+                "dethrone_seed_mode",
                 "wave_membership",
             )
         ),

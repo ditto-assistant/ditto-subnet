@@ -41,6 +41,7 @@ from ditto.api_models import ConfirmationScoreRecord, LedgerEntry, LedgerRespons
 from ditto.api_models.burn_settings import BurnSettings
 from ditto.api_models.continual_retest_settings import (
     CROWN_INCUMBENT_PROTOCOL,
+    DETHRONE_SEED_FULL_SET_PROTOCOL,
     PROVISIONAL_INCUMBENT_PROTOCOL,
     ContinualRetestSettings,
 )
@@ -58,6 +59,7 @@ from ditto.api_server.confirmation_seed_anchor import list_reign_seed_anchors
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
     crown_incumbent_is_active,
+    dethrone_seed_full_set_is_active,
     statistical_band_cap_is_active,
     tie_weighting_is_active,
 )
@@ -163,6 +165,11 @@ _CROWN_INCUMBENT_PROTOCOL = CROWN_INCUMBENT_PROTOCOL
 # or an older validator would crown and pay the held incumbent's runner-up.
 _PROVISIONAL_INCUMBENT_PROTOCOL = PROVISIONAL_INCUMBENT_PROTOCOL
 _STATISTICAL_BAND_CAP_PROTOCOL = 29
+# The first validator protocol whose fold reads ``dethrone_seed_mode:
+# full_set``: a paired dethrone must cover the whole confirmation seed window
+# before it may decide the crown. Withheld until every recently-live weight
+# setter reports it, or a mixed fleet folds two different champions.
+_DETHRONE_SEED_FULL_SET_PROTOCOL = DETHRONE_SEED_FULL_SET_PROTOCOL
 
 
 def _fleet_safe_efficiency_adjustments(
@@ -206,6 +213,7 @@ class _LedgerSnapshot:
     tie_weighting_mode: Literal["pool"] | None = None
     dethrone_band_mode: Literal["headroom_capped"] | None = None
     statistical_band_mode: Literal["capped"] | None = None
+    dethrone_seed_mode: Literal["full_set"] | None = None
     continual_retest_cohort_size: int = 5
     requesting_validator_hotkey: str | None = None
     context: _LedgerContext | None = None
@@ -258,6 +266,7 @@ class _LedgerContext:
     unbounded_factor_fleet_ready: bool = False
     dethrone_band_clamp_fleet_ready: bool = False
     statistical_band_cap_fleet_ready: bool = False
+    dethrone_seed_fleet_ready: bool = False
     crown_incumbent_fleet_ready: bool = False
     reward_eligibility_fleet_ready: bool = False
 
@@ -454,6 +463,9 @@ async def resolve_ledger_context(
     statistical_band_cap_fleet_ready = await live_weight_setter_fleet_supports_protocol(
         session, minimum_protocol=_STATISTICAL_BAND_CAP_PROTOCOL, now=now
     )
+    dethrone_seed_fleet_ready = await live_weight_setter_fleet_supports_protocol(
+        session, minimum_protocol=_DETHRONE_SEED_FULL_SET_PROTOCOL, now=now
+    )
     crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
         session,
         minimum_protocol=_CROWN_INCUMBENT_PROTOCOL,
@@ -475,6 +487,7 @@ async def resolve_ledger_context(
         unbounded_factor_fleet_ready=unbounded_factor_fleet_ready,
         dethrone_band_clamp_fleet_ready=dethrone_band_clamp_fleet_ready,
         statistical_band_cap_fleet_ready=statistical_band_cap_fleet_ready,
+        dethrone_seed_fleet_ready=dethrone_seed_fleet_ready,
         crown_incumbent_fleet_ready=crown_incumbent_fleet_ready,
         reward_eligibility_fleet_ready=reward_eligibility_fleet_ready,
     )
@@ -556,6 +569,7 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         tie_weighting_mode=snapshot.tie_weighting_mode,
         dethrone_band_mode=snapshot.dethrone_band_mode,
         statistical_band_mode=snapshot.statistical_band_mode,
+        dethrone_seed_mode=snapshot.dethrone_seed_mode,
         count=len(snapshot.entries),
         generated_at=snapshot.generated_at,
         stale=False,
@@ -1066,6 +1080,14 @@ async def materialize_ledger_snapshot(
             )
             else None
         ),
+        dethrone_seed_mode=(
+            "full_set"
+            if dethrone_seed_full_set_is_active(
+                continual_settings,
+                fleet_protocol_ready=ledger_context.dethrone_seed_fleet_ready,
+            )
+            else None
+        ),
         continual_retest_cohort_size=continual_settings.retest_cohort_size,
         requesting_validator_hotkey=requesting_validator_hotkey,
         context=ledger_context,
@@ -1210,8 +1232,42 @@ async def _require_statistical_cap_requester(
             raise HTTPException(
                 status_code=428, detail="treasury weight-setting fleet not ready"
             ) from error
-    if ledger.statistical_band_mode != "capped":
-        return ledger
+    if ledger.statistical_band_mode == "capped":
+        await _require_validator_protocol(
+            session,
+            validator_hotkey,
+            now=now,
+            minimum_protocol=_STATISTICAL_BAND_CAP_PROTOCOL,
+            detail="validator protocol 29 is required for the pinned statistical band",
+        )
+    if ledger.dethrone_seed_mode == "full_set":
+        await _require_validator_protocol(
+            session,
+            validator_hotkey,
+            now=now,
+            minimum_protocol=_DETHRONE_SEED_FULL_SET_PROTOCOL,
+            detail=(
+                "validator protocol 31 is required for the pinned full-seed-set "
+                "dethrone gate"
+            ),
+        )
+    return ledger
+
+
+async def _require_validator_protocol(
+    session: AsyncSession,
+    validator_hotkey: str,
+    *,
+    now: datetime,
+    minimum_protocol: int,
+    detail: str,
+) -> None:
+    """Refuse one validator folding a pin whose marker its protocol predates.
+
+    The pin froze the marker for the whole fleet; a validator whose heartbeat
+    is stale or below the marker's floor would fold the same ledger with the
+    older rule and submit a different weight vector, so it is refused with 428
+    until its heartbeat is fresh at the new protocol."""
     heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
     seen_at = heartbeat.seen_at if heartbeat is not None else None
     if seen_at is not None and seen_at.tzinfo is None:
@@ -1220,13 +1276,9 @@ async def _require_statistical_cap_requester(
         heartbeat is None
         or seen_at is None
         or seen_at < now - VALIDATOR_STALE_WINDOW
-        or heartbeat.protocol_version < _STATISTICAL_BAND_CAP_PROTOCOL
+        or heartbeat.protocol_version < minimum_protocol
     ):
-        raise HTTPException(
-            status_code=428,
-            detail="validator protocol 29 is required for the pinned statistical band",
-        )
-    return ledger
+        raise HTTPException(status_code=428, detail=detail)
 
 
 @router.get(
@@ -1625,6 +1677,7 @@ def _serve_last_known(
         tie_weighting_mode=snapshot.tie_weighting_mode,
         dethrone_band_mode=snapshot.dethrone_band_mode,
         statistical_band_mode=snapshot.statistical_band_mode,
+        dethrone_seed_mode=snapshot.dethrone_seed_mode,
         count=len(entries),
         generated_at=snapshot.generated_at,
         stale=True,

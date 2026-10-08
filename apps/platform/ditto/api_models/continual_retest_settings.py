@@ -56,6 +56,14 @@ CROWN_INCUMBENT_PROTOCOL = 27
 # an older validator would crown and pay the runner-up instead.
 PROVISIONAL_INCUMBENT_PROTOCOL = 28
 
+# The first validator heartbeat protocol whose fold reads
+# ``dethrone_seed_mode: full_set``: a paired dethrone comparison must cover the
+# whole confirmation seed window before it may decide the crown. A validator
+# below this protocol ignores the additive marker and would crown on a partial
+# pairing, so Platform withholds the marker until every recently-live weight
+# setter reports at least this.
+DETHRONE_SEED_FULL_SET_PROTOCOL = 31
+
 
 class LedgerPinStatus(BaseModel):
     """Identity of the epoch-pinned ledger currently served to validators."""
@@ -94,6 +102,21 @@ class ContinualRetestSettings(BaseModel):
     """Activate the protocol-29 statistical cap only after operator selection
     and every recently-live weight setter reports support. The default keeps
     the historical fold throughout a rolling upgrade."""
+
+    dethrone_seed_mode: Literal["disabled", "fleet_ready"] = "disabled"
+    """Whether a paired dethrone decision must cover the whole confirmation
+    seed window (protocol 31).
+
+    ``disabled`` is the historical fold and the exact rollback: a challenger
+    may take the crown on whichever shared seeds have finished, and the decision
+    stands even when the remaining seeds later reverse the paired lead.
+    ``fleet_ready`` serves the additive ``dethrone_seed_mode: full_set`` ledger
+    marker once every recently-live weight-setting validator reports the
+    protocol that reads it; a partial pairing then falls back to the unpaired
+    rule, which pending seeds cannot win, so the crown only moves on
+    apples-to-apples evidence. Like every fold marker there is deliberately no
+    unconditional override: a mixed fleet would fold two different champions.
+    """
 
     ledger_pin_mode: Literal["live", "epoch"] = "epoch"
     """Whether ``GET /scoring/scores`` serves one pinned ledger per chain epoch.
@@ -291,6 +314,9 @@ class EffectiveContinualRetestSettings(BaseModel):
     statistical_band_fleet_ready: bool = False
     statistical_band_active: bool = False
     statistical_band_required_protocol: int = 29
+    dethrone_seed_fleet_ready: bool = False
+    dethrone_seed_active: bool = False
+    dethrone_seed_required_protocol: int = DETHRONE_SEED_FULL_SET_PROTOCOL
     crown_incumbent_fleet_ready: bool = False
     crown_incumbent_active: bool = False
     crown_incumbent_required_protocol: int = CROWN_INCUMBENT_PROTOCOL
