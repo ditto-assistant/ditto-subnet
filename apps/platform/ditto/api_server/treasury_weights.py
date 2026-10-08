@@ -9,12 +9,21 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.validator_capabilities import ValidatorCapabilities
+from ditto.api_server.treasury_read_diagnostics import (
+    record_treasury_read,
+    treasury_read_failure_kind,
+)
+from ditto.chain.errors import (
+    ChainTreasuryActivationReadError,
+    ChainTreasuryReadTimeoutError,
+)
 from ditto.db.models import ValidatorHeartbeat
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_approval import (
@@ -250,11 +259,29 @@ async def require_enforcing_requester(
         member = treasury_follower_capability(
             pin, validator_hotkey=hotkey, protocol_version=row.protocol_version
         )
-    observed = await current_managed_dispatch_observation(
-        app_state.chain,
-        pin.policy,
-        managed_hotkeys=managed,
-    )
+    started = monotonic()
+    try:
+        observed = await current_managed_dispatch_observation(
+            app_state.chain,
+            pin.policy,
+            managed_hotkeys=managed,
+        )
+    except ChainTreasuryActivationReadError as error:
+        record_treasury_read(
+            app_state,
+            "requester_activation",
+            elapsed=monotonic() - started,
+            failure_kind=treasury_read_failure_kind(error.read_error),
+            failure_stage=error.read_stage,
+            failure_step=error.read_error.read_step
+            if isinstance(error.read_error, ChainTreasuryReadTimeoutError)
+            else None,
+        )
+        raise
+    else:
+        record_treasury_read(
+            app_state, "requester_activation", elapsed=monotonic() - started
+        )
     require_treasury_weight_authority(
         pin,
         expected_policy_digest=config.treasury_approved_policy_digest,

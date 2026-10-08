@@ -134,6 +134,14 @@ not be.
 
 ## Authorization
 
+`get_treasury_ledger_readiness` includes bounded `chain_reads` diagnostics for
+completed epoch-schedule and requester-activation reads in this Platform
+process. Counts reset on process restart and include background schedule reads;
+they are not an endpoint availability metric. The last failure retains its
+request ID, elapsed time, fixed stage, step and category after a later success.
+Provider messages and URLs are omitted. These observations grant no weight or
+spending authority and do not replace fresh chain permission checks.
+
 `get_coding_private_v2_releases` reads native private-v2 registration digests and
 quarantine/retirement audit state through Platform's existing admin endpoint.
 It is distinct from the older `get_coding_catalog_releases` surface. A result

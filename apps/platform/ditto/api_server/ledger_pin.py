@@ -44,6 +44,7 @@ from ditto.api_models.treasury_readiness import (
 )
 from ditto.api_models.validator import ConfirmationSeedAnchorPin
 from ditto.api_server.koth import koth_entries_from_ledger, project_koth
+from ditto.api_server.treasury_read_diagnostics import record_treasury_read
 from ditto.api_server.treasury_shadow import observe_shadow_treasury
 from ditto.chain.errors import (
     ChainConnectionError,
@@ -522,24 +523,40 @@ class LedgerPinMaterializer:
 
     async def inspect_schedule(self, app_state: Any) -> LedgerScheduleRead:
         """Read the exact serving clock with its unchanged deadline and no pin write."""
+        started = monotonic()
         chain = getattr(app_state, "chain", None)
         if chain is None:
+            record_treasury_read(
+                app_state,
+                "epoch_schedule",
+                elapsed=monotonic() - started,
+                failure_kind="unavailable",
+                failure_stage="epoch_schedule",
+            )
             return LedgerScheduleRead(None, "reader_unavailable")
         netuid = app_state.config.chain.netuid
         try:
             async with asyncio.timeout(self._timeout):
-                return LedgerScheduleRead(await chain.read_epoch_schedule(netuid))
-        except (ChainError, TimeoutError, OSError) as error:
-            logger.warning(
-                "epoch schedule unavailable for netuid=%s: %s", netuid, error
+                schedule = await chain.read_epoch_schedule(netuid)
+            record_treasury_read(
+                app_state, "epoch_schedule", elapsed=monotonic() - started
             )
-            kind: Literal["timeout", "connection", "reader_unavailable", "unavailable"]
+            return LedgerScheduleRead(schedule)
+        except (ChainError, TimeoutError, OSError) as error:
+            kind: Literal["timeout", "connection", "unavailable"]
             if isinstance(error, (TimeoutError, ChainTimeoutError)):
                 kind = "timeout"
             elif isinstance(error, (ChainConnectionError, ConnectionError)):
                 kind = "connection"
             else:
                 kind = "unavailable"
+            record_treasury_read(
+                app_state,
+                "epoch_schedule",
+                elapsed=monotonic() - started,
+                failure_kind=kind,
+                failure_stage="epoch_schedule",
+            )
             return LedgerScheduleRead(None, kind)
 
     async def ensure(

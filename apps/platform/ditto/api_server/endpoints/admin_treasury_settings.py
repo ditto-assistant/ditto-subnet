@@ -100,6 +100,9 @@ async def get_treasury_ledger_readiness(
         update={
             "producer": materializer.diagnostic() if materializer is not None else None,
             "producer_loop": loop.diagnostic() if loop is not None else None,
+            "chain_reads": list(
+                getattr(state, "treasury_chain_read_diagnostics", {}).values()
+            ),
         }
     )
     if readiness.enforcement_configured and materializer is not None:

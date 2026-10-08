@@ -68,6 +68,21 @@ const enforcingPin = z.object({
 }) satisfies z.ZodType<components['schemas']['EnforcingTreasuryPin']>
 
 export const treasuryLedgerReadinessSchema = z.object({
+  chain_reads: z.array(z.object({
+    scope: z.literal('this_platform_process'),
+    operation: z.enum(['epoch_schedule', 'requester_activation']),
+    attempts: z.number().int().nonnegative(),
+    successes: z.number().int().nonnegative(),
+    failures: z.number().int().nonnegative(),
+    last_finished_at: z.string(),
+    last_elapsed_seconds: z.number().nonnegative(),
+    last_failure_at: z.string().nullable(),
+    last_failure_elapsed_seconds: z.number().nonnegative().nullable(),
+    last_failure_stage: z.enum(['epoch_schedule', 'identity', 'setter_roster']).nullable(),
+    last_failure_step: z.enum(['connection', 'connection_close', 'finalized_head', 'finalized_height', 'canonical_hash', 'genesis_hash', 'epoch_storage', 'collector_storage', 'uid_binding', 'permit_vector', 'setter_binding']).nullable(),
+    last_failure_kind: z.enum(['timeout', 'connection', 'invalid_evidence', 'unavailable']).nullable(),
+    last_failure_request_id: z.string().max(128).nullable(),
+  })).max(2).default([]),
   producer: z.object({
     scope: z.literal('this_platform_process'),
     in_progress: z.boolean(),

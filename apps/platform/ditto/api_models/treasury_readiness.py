@@ -94,6 +94,29 @@ class LedgerPinLoopDiagnostic(BaseModel):
     failure: LedgerPinFailure | None = None
 
 
+class TreasuryChainReadDiagnostic(BaseModel):
+    """Completed read counts and safe last-failure evidence, never authority."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    scope: Literal["this_platform_process"] = "this_platform_process"
+    operation: Literal["epoch_schedule", "requester_activation"]
+    attempts: int = Field(default=0, ge=0)
+    successes: int = Field(default=0, ge=0)
+    failures: int = Field(default=0, ge=0)
+    last_finished_at: datetime
+    last_elapsed_seconds: float = Field(ge=0)
+    last_failure_at: datetime | None = None
+    last_failure_elapsed_seconds: float | None = Field(default=None, ge=0)
+    last_failure_stage: (
+        Literal["epoch_schedule", "identity", "setter_roster"] | None
+    ) = None
+    last_failure_step: TreasuryReadStep | None = None
+    last_failure_kind: (
+        Literal["timeout", "connection", "invalid_evidence", "unavailable"] | None
+    ) = None
+    last_failure_request_id: str | None = Field(default=None, max_length=128)
+
+
 class TreasuryLedgerReadiness(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -117,6 +140,9 @@ class TreasuryLedgerReadiness(BaseModel):
     can_enforce_weights: bool = False
     producer: LedgerPinProducerDiagnostic | None = None
     producer_loop: LedgerPinLoopDiagnostic | None = None
+    chain_reads: list[TreasuryChainReadDiagnostic] = Field(
+        default_factory=list, max_length=2
+    )
     # Independent delivery diagnostic: signed authority is not a served ledger.
     ledger_schedule_probe_status: Literal["not_checked", "available", "unavailable"] = (
         "not_checked"

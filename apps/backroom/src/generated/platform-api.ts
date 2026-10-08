@@ -33577,6 +33577,57 @@ export interface components {
             managed_validator_hotkeys: string[];
         };
         /**
+         * TreasuryChainReadDiagnostic
+         * @description Completed read counts and safe last-failure evidence, never authority.
+         */
+        TreasuryChainReadDiagnostic: {
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts: number;
+            /**
+             * Failures
+             * @default 0
+             */
+            failures: number;
+            /** Last Elapsed Seconds */
+            last_elapsed_seconds: number;
+            /** Last Failure At */
+            last_failure_at?: string | null;
+            /** Last Failure Elapsed Seconds */
+            last_failure_elapsed_seconds?: number | null;
+            /** Last Failure Kind */
+            last_failure_kind?: ("timeout" | "connection" | "invalid_evidence" | "unavailable") | null;
+            /** Last Failure Request Id */
+            last_failure_request_id?: string | null;
+            /** Last Failure Stage */
+            last_failure_stage?: ("epoch_schedule" | "identity" | "setter_roster") | null;
+            /** Last Failure Step */
+            last_failure_step?: ("connection" | "connection_close" | "finalized_head" | "finalized_height" | "canonical_hash" | "genesis_hash" | "epoch_storage" | "collector_storage" | "uid_binding" | "permit_vector" | "setter_binding") | null;
+            /**
+             * Last Finished At
+             * Format: date-time
+             */
+            last_finished_at: string;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "epoch_schedule" | "requester_activation";
+            /**
+             * Scope
+             * @default this_platform_process
+             * @constant
+             */
+            scope: "this_platform_process";
+            /**
+             * Successes
+             * @default 0
+             */
+            successes: number;
+        };
+        /**
          * TreasuryCollectorIdentity
          * @description Finalized read values, not a caller's unbound verified=True assertion.
          */
@@ -33713,6 +33764,8 @@ export interface components {
              * @default false
              */
             can_enforce_weights: boolean;
+            /** Chain Reads */
+            chain_reads?: components["schemas"]["TreasuryChainReadDiagnostic"][];
             configured_proposal: components["schemas"]["TreasuryEmissionPolicy"] | null;
             /**
              * Enforcement Configured

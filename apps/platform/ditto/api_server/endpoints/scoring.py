@@ -76,6 +76,10 @@ from ditto.api_server.endpoints.validator import (
     _assert_validator_permitted,
     _verify_signature,
 )
+from ditto.api_server.treasury_read_diagnostics import treasury_read_failure_kind
+from ditto.chain.errors import (
+    ChainTreasuryActivationReadError,
+)
 from ditto.db.models import Score, ValidatorHeartbeat
 from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.confirmation_scores import (
@@ -1205,6 +1209,19 @@ async def _require_statistical_cap_requester(
                 validator_hotkey,
                 app_state=app_state,
             )
+        except ChainTreasuryActivationReadError as error:
+            kind = treasury_read_failure_kind(error.read_error)
+            if kind in ("timeout", "connection"):
+                raise HTTPException(
+                    status_code=503,
+                    detail="treasury chain read unavailable",
+                    headers={"Retry-After": "5"},
+                ) from error
+            if kind == "invalid_evidence":
+                raise HTTPException(
+                    status_code=428, detail="treasury chain evidence invalid"
+                ) from error
+            raise
         except ValueError as error:
             raise HTTPException(
                 status_code=428, detail="treasury weight-setting fleet not ready"

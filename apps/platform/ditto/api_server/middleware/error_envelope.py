@@ -516,5 +516,13 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _unhandled_exception_handler(
         _request: Request, _exc: Exception
     ) -> JSONResponse:
-        logger.exception("unhandled exception in request handler")
-        return envelope_response(500, ERROR_CODE_UNHANDLED, "internal server error")
+        # The outer error handler runs after request middleware unwinds. Its
+        # ContextVar has been reset, but the request still owns the validated ID.
+        token = request_id_var.set(
+            getattr(_request.state, "request_id", request_id_var.get())
+        )
+        try:
+            logger.exception("unhandled exception in request handler")
+            return envelope_response(500, ERROR_CODE_UNHANDLED, "internal server error")
+        finally:
+            request_id_var.reset(token)

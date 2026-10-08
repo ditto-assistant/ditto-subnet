@@ -225,15 +225,27 @@ class TestErrorEnvelope:
         assert "request_id" in body
 
     async def test_unhandled_exception_returns_500_envelope(
-        self, app: FastAPI, client: httpx.AsyncClient
+        self, app: FastAPI, client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture
     ):
         _attach_error_routes(app)
-        response = await client.get("/_test/unhandled")
+        rid = "unhandled-correlated"
+        handler_filter = RequestIdFilter()
+        caplog.handler.addFilter(handler_filter)
+        try:
+            response = await client.get(
+                "/_test/unhandled", headers={REQUEST_ID_HEADER: rid}
+            )
+        finally:
+            caplog.handler.removeFilter(handler_filter)
         assert response.status_code == 500
         body = response.json()
         assert body["error_code"] == ERROR_CODE_UNHANDLED
         assert body["message"] == "internal server error"
-        assert "request_id" in body
+        assert body["request_id"] == rid
+        assert response.headers[REQUEST_ID_HEADER] == rid
+        errors = [r for r in caplog.records if "unhandled exception" in r.getMessage()]
+        assert errors and all(getattr(r, "request_id", None) == rid for r in errors)
+        assert request_id_var.get() == "-"
 
     async def test_envelope_request_id_matches_middleware(
         self, app: FastAPI, client: httpx.AsyncClient
