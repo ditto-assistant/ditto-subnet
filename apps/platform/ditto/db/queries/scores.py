@@ -22,6 +22,7 @@ from uuid import UUID
 from sqlalchemy import (
     ColumnElement,
     Float,
+    Text,
     and_,
     case,
     column,
@@ -2365,12 +2366,33 @@ async def list_eligible_ledger(
         details_column = Score.details.label("details")
     else:
         # No details blob is shipped, so the composite stderr cannot be read
-        # back in Python; extract exactly that one key as its own scalar JSON
-        # projection instead. This is the only remaining SQL detoast on this
-        # branch and it is a single small extraction, not a second full-blob
-        # read beside a shipped details column.
+        # back in Python; extract exactly that one key below, after selecting
+        # the physical median row for each winner.
         details_column = null().label("details")
+    stderr_evidence = None
     if details_keys is None and not include_details:
+        # PostgreSQL otherwise expands every CASE guard reference into another
+        # extraction from the large toasted audit blob. Materialize only this
+        # scalar, once per winning physical row, before validating it.
+        stderr_evidence = (
+            select(
+                winners.c.agent_id,
+                winners.c.bench_version,
+                winners.c.validator_hotkey,
+                Score.details["composite_stderr"].label("value"),
+            )
+            .select_from(winners)
+            .join(
+                Score,
+                and_(
+                    Score.agent_id == winners.c.agent_id,
+                    Score.bench_version == winners.c.bench_version,
+                    Score.validator_hotkey == winners.c.validator_hotkey,
+                ),
+            )
+            .cte("ledger_winner_stderr")
+            .prefix_with("MATERIALIZED")
+        )
         # Mirror _stored_stderr's degrade-to-None contract in SQL: a malformed
         # value (boolean, nonnumeric string, or an out-of-float8-range number)
         # must yield NULL rather than abort the whole ledger read at the cast.
@@ -2381,10 +2403,8 @@ async def list_eligible_ledger(
         # boundary); anything with a decimal point or exponent text is in
         # range up to 310 chars and overflows from 311. Inside CASE arms the
         # cast is lazy and never runs for rows the guard rejects.
-        stderr_text = Score.details["composite_stderr"].as_string()
-        is_number = func.jsonb_typeof(Score.details["composite_stderr"]) == literal(
-            "number"
-        )
+        stderr_text = sql_cast(stderr_evidence.c.value, Text())
+        is_number = func.jsonb_typeof(stderr_evidence.c.value) == literal("number")
         digits = func.regexp_replace(stderr_text, literal(r"^-"), literal(""))
         is_plain_int = stderr_text.op("~")(literal(r"^-?[0-9]+$"))
         in_float8_range = or_(
@@ -2425,7 +2445,7 @@ async def list_eligible_ledger(
         stderr_column: ColumnElement[Any] = case(
             (
                 and_(is_number, in_float8_range),
-                sql_cast(Score.details["composite_stderr"].as_string(), Float()),
+                sql_cast(stderr_text, Float()),
             ),
             else_=None,
         ).label("stored_composite_stderr")
@@ -2561,6 +2581,7 @@ async def list_eligible_ledger(
             winners.c.crown_first_seen,
             *receipt_columns,
         )
+        .select_from(winners)
         .join(Agent, Agent.agent_id == winners.c.agent_id)
         .join(
             Score,
@@ -2572,6 +2593,15 @@ async def list_eligible_ledger(
         )
         .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
     )
+    if stderr_evidence is not None:
+        stmt = stmt.join(
+            stderr_evidence,
+            and_(
+                stderr_evidence.c.agent_id == winners.c.agent_id,
+                stderr_evidence.c.bench_version == winners.c.bench_version,
+                stderr_evidence.c.validator_hotkey == winners.c.validator_hotkey,
+            ),
+        )
     if v9_enforce:
         stmt = (
             stmt.outerjoin(

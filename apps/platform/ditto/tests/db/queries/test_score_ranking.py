@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -1525,6 +1526,40 @@ class TestContinuationFloor:
         assert isinstance(details, dict)
         assert set(details) == {"composite_stderr", "confirmation_seeds"}
         assert details["confirmation_seeds"] is None
+
+    @pytest.mark.parametrize("family_members", [False, True])
+    async def test_scalar_stderr_stays_bound_to_the_signed_median_row(
+        self, session_maker: async_sessionmaker[AsyncSession], family_members: bool
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "M" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        async with session_maker() as session, session.begin():
+            scores = await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            )
+            for score in scores:
+                score.details = {
+                    "composite_stderr": score.composite / 100,
+                    "audit_payload": "large unused telemetry" * 5000,
+                }
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                bench_version=_BENCH,
+                include_details=False,
+                include_fingerprints=False,
+                include_family_members=family_members,
+            )
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.composite == 0.8
+        assert row.validator_hotkey == _VALIDATORS[0]
+        assert row.stored_composite_stderr == 0.008
+        assert row.details is None
 
     async def test_scalar_stderr_degrades_to_none_on_malformed_values(
         self, session_maker: async_sessionmaker[AsyncSession]
