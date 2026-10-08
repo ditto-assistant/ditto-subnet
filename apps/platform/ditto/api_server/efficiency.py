@@ -1117,7 +1117,34 @@ async def ensure_current_efficiency_state(
     *,
     now: datetime,
 ) -> None:
-    """Use the app coordinator, with a direct-call fallback for small tests."""
+    """Materialize committed evidence without owning the caller's transaction.
+
+    Request authentication or a composed endpoint may already have autobegun
+    the supplied session. The materializer commits frozen rows, so it needs an
+    independent session rather than a savepoint or rollback on that caller.
+    Direct callers without an app maker still supply a pristine session.
+    """
+
+    if not config.enabled:
+        return
+
+    maker = getattr(app_state, "session_maker", None)
+    if maker is not None:
+        async with maker() as materialization_session:
+            await _ensure_current_efficiency_state(
+                app_state, materialization_session, config, now=now
+            )
+        return
+    await _ensure_current_efficiency_state(app_state, session, config, now=now)
+
+
+async def _ensure_current_efficiency_state(
+    app_state: Any,
+    session: AsyncSession,
+    config: EfficiencyBonusConfig,
+    *,
+    now: datetime,
+) -> None:
 
     materializer = getattr(app_state, "efficiency_materializer", None)
     if materializer is None:

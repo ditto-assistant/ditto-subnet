@@ -19,7 +19,7 @@ from uuid import UUID, uuid4
 import bittensor
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -29,7 +29,11 @@ from sqlalchemy.ext.asyncio import (
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server import EfficiencyBonusConfig, create_api_server
 from ditto.api_server.dependencies import get_chain_client, get_session
-from ditto.api_server.efficiency import ensure_efficiency_state
+from ditto.api_server.efficiency import (
+    EfficiencyStateMaterializer,
+    ensure_efficiency_state,
+)
+from ditto.api_server.endpoints.public import build_public_leaderboard
 from ditto.chain.models import NeuronInfo
 from ditto.db.models import (
     Agent,
@@ -201,6 +205,42 @@ def _entry(payload: dict, agent_id: UUID) -> dict:
 
 
 class TestLeaderboardBonusExposure:
+    async def test_composed_board_preserves_caller_transaction_and_frozen_bonus(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        agents = await _seed_v7_board(session_maker)
+        app = _make_app(session_maker, efficiency=_ENABLED)
+        app.state.session_maker = session_maker
+        app.state.efficiency_materializer = EfficiencyStateMaterializer()
+        request = Request({"type": "http", "app": app})
+        pending_id = uuid4()
+        async with session_maker() as caller:
+            # A read has already autobegun this composed request's transaction.
+            assert await caller.get(Agent, agents["lean"]) is not None
+            caller.add(
+                Agent(
+                    agent_id=pending_id,
+                    miner_hotkey=_MINERS[4],
+                    name="caller-uncommitted-agent",
+                    sha256="ab" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=_T0,
+                )
+            )
+            await caller.flush()
+            transaction = caller.get_transaction()
+            board = await build_public_leaderboard(request, Response(), caller)
+            assert caller.get_transaction() is transaction
+            assert transaction is not None and transaction.is_active
+            lean = next(row for row in board.entries if row.agent_id == agents["lean"])
+            assert lean.efficiency_bonus == 0.05
+            await caller.rollback()
+        async with session_maker() as verify:
+            assert await verify.get(Agent, pending_id) is None
+            bonuses = list((await verify.scalars(select(EfficiencyBonus))).all())
+            assert len(bonuses) == 3
+
     async def test_active_cohort_awards_frozen_bonuses(
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:

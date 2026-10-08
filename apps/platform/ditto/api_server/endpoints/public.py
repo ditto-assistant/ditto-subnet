@@ -3315,18 +3315,17 @@ async def build_public_leaderboard(
     from ditto.db.queries.benchmark_rollout import open_rollout
 
     # Resolve the hot-swappable efficiency-bonus policy (latest append-only
-    # revision overlaid on the env seed, short TTL) BEFORE ensure_efficiency_state
-    # opens its own transaction on this session — the resolver reads on an
-    # independent session so the request session stays pristine for that begin().
+    # revision overlaid on the env seed, short TTL). Both the resolver and
+    # materializer use independent sessions; composed endpoints can already
+    # have opened a transaction on the request session.
     # A backroom flip therefore lands on the next leaderboard read with no restart.
     efficiency_config = await request.app.state.efficiency_settings.resolve(
         getattr(request.app.state, "session_maker", None)
     )
     if efficiency_config.enabled and bench_version is None:
         # Materialize the current efficiency epoch (frozen cohort snapshot +
-        # insert-once bonus rows) before any other read opens a transaction on
-        # this session. A no-op below bench_version 7 and after the first call
-        # of an epoch; failure degrades to serving the board without bonuses.
+        # insert-once bonus rows). A no-op below bench_version 7 and after the
+        # first call of an epoch; failure serves the board without bonuses.
         try:
             await ensure_current_efficiency_state(
                 request.app.state,
