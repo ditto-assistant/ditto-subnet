@@ -41,7 +41,7 @@ func TestV14UnprotectedCorrectionStillRetracts(t *testing.T) {
 }
 
 func TestV14CueSentenceCarryingMoreThanAValueIsStillACorrection(t *testing.T) {
-	for _, text := range []string{"Reckless. Sorry, I mean safe.", "Careless. Sorry, the lesson was caution."} {
+	for _, text := range []string{"Reckless. Sorry, I mean safe.", "Careless. Sorry, the lesson was caution.", "Safe. Sorry, I meant reckless."} {
 		resp := protocol.RunResponse{FinalText: text}
 		v13 := Memory(lessonCase(protocol.BenchVersionV13), resp)
 		v14 := Memory(lessonCase(protocol.BenchVersionV14), resp)
