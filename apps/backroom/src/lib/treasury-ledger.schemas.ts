@@ -68,6 +68,36 @@ const enforcingPin = z.object({
 }) satisfies z.ZodType<components['schemas']['EnforcingTreasuryPin']>
 
 export const treasuryLedgerReadinessSchema = z.object({
+  producer: z.object({
+    scope: z.literal('this_platform_process'),
+    in_progress: z.boolean(),
+    epoch_index: z.number().int().nullable(),
+    stage: z.enum(['load_or_build', 'runtime', 'ledger_context', 'ledger_snapshot', 'treasury_observation', 'treasury_authorization', 'draft', 'insert']).nullable(),
+    started_at: z.string().nullable(),
+    finished_at: z.string().nullable(),
+    elapsed_seconds: z.number().nonnegative().nullable(),
+    lock_wait_seconds: z.number().nonnegative().nullable(),
+    outcome: z.enum(['pinned', 'unavailable', 'error', 'cancelled']).nullable(),
+    failure: z.object({
+      kind: z.enum(['timeout', 'connection', 'database', 'validation', 'value', 'type', 'key', 'runtime', 'chain', 'other']),
+      location: z.string().max(256).nullable(),
+      read_step: z.enum(['connection', 'connection_close', 'finalized_head', 'finalized_height', 'canonical_hash', 'genesis_hash', 'epoch_storage', 'collector_storage', 'uid_binding', 'permit_vector', 'setter_binding']).nullable().default(null),
+    }).nullable(),
+    last_success_epoch: z.number().int().nullable(),
+    last_success_at: z.string().nullable(),
+  }).nullable().default(null),
+  producer_loop: z.object({
+    task_state: z.enum(['not_started', 'running', 'done', 'cancelled']),
+    in_progress: z.boolean(),
+    stage: z.enum(['settings', 'materializer']).nullable(),
+    started_at: z.string().nullable(),
+    finished_at: z.string().nullable(),
+    failure: z.object({
+      kind: z.enum(['timeout', 'connection', 'database', 'validation', 'value', 'type', 'key', 'runtime', 'chain', 'other']),
+      location: z.string().max(256).nullable(),
+      read_step: z.enum(['connection', 'connection_close', 'finalized_head', 'finalized_height', 'canonical_hash', 'genesis_hash', 'epoch_storage', 'collector_storage', 'uid_binding', 'permit_vector', 'setter_binding']).nullable().default(null),
+    }).nullable(),
+  }).nullable().default(null),
   configured_proposal: policy.nullable(),
   proposal_approval_status: z.enum(['not_configured', 'verified', 'invalid']).default('not_configured'),
   proposal_approved_policy_digest: digest.nullable().default(null),

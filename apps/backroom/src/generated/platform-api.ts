@@ -22339,6 +22339,77 @@ export interface components {
             validator_hotkey: string;
         };
         /**
+         * LedgerPinFailure
+         * @description Fixed error kinds and repository source locations, never exception text.
+         */
+        LedgerPinFailure: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "timeout" | "connection" | "database" | "validation" | "value" | "type" | "key" | "runtime" | "chain" | "other";
+            /** Location */
+            location?: string | null;
+            /** Read Step */
+            read_step?: ("connection" | "connection_close" | "finalized_head" | "finalized_height" | "canonical_hash" | "genesis_hash" | "epoch_storage" | "collector_storage" | "uid_binding" | "permit_vector" | "setter_binding") | null;
+        };
+        /** LedgerPinLoopDiagnostic */
+        LedgerPinLoopDiagnostic: {
+            failure?: components["schemas"]["LedgerPinFailure"] | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /**
+             * In Progress
+             * @default false
+             */
+            in_progress: boolean;
+            /** Stage */
+            stage?: ("settings" | "materializer") | null;
+            /** Started At */
+            started_at?: string | null;
+            /**
+             * Task State
+             * @enum {string}
+             */
+            task_state: "not_started" | "running" | "done" | "cancelled";
+        };
+        /**
+         * LedgerPinProducerDiagnostic
+         * @description Process-local producer evidence; reading it never attempts a build.
+         */
+        LedgerPinProducerDiagnostic: {
+            /** Elapsed Seconds */
+            elapsed_seconds?: number | null;
+            /** Epoch Index */
+            epoch_index?: number | null;
+            failure?: components["schemas"]["LedgerPinFailure"] | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /**
+             * In Progress
+             * @default false
+             */
+            in_progress: boolean;
+            /** Last Success At */
+            last_success_at?: string | null;
+            /** Last Success Epoch */
+            last_success_epoch?: number | null;
+            /** Lock Wait Seconds */
+            lock_wait_seconds?: number | null;
+            /** Outcome */
+            outcome?: ("pinned" | "unavailable" | "error" | "cancelled") | null;
+            /**
+             * Scope
+             * @default this_platform_process
+             * @constant
+             */
+            scope: "this_platform_process";
+            /** Stage */
+            stage?: ("load_or_build" | "runtime" | "ledger_context" | "ledger_snapshot" | "treasury_observation" | "treasury_authorization" | "draft" | "insert") | null;
+            /** Started At */
+            started_at?: string | null;
+        };
+        /**
          * LedgerPinStatus
          * @description Identity of the epoch-pinned ledger currently served to validators.
          */
@@ -33694,6 +33765,8 @@ export interface components {
              * @constant
              */
             offline_policy_verified: false;
+            producer?: components["schemas"]["LedgerPinProducerDiagnostic"] | null;
+            producer_loop?: components["schemas"]["LedgerPinLoopDiagnostic"] | null;
             /**
              * Proposal Approval Status
              * @default not_configured

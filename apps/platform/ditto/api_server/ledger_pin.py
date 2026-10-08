@@ -14,8 +14,8 @@ Two invariants this module keeps:
   the pin cannot be produced, the previous pin flagged ``stale`` -- to every
   validator alike. The live time-based read is reached only when no pin has
   ever been taken (bootstrap).
-* **Failures are never cached.** A chain read or materialization error leaves
-  no state behind; the next caller retries.
+* **Failed pins are never cached.** A chain read or materialization error stores
+  no pin; the next caller retries. Bounded diagnostic evidence remains visible.
 """
 
 from __future__ import annotations
@@ -24,20 +24,34 @@ import asyncio
 import hashlib
 import json
 import logging
-from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from ditto.api_models import LedgerEntry, LedgerResponse
+from ditto.api_models.treasury_readiness import (
+    LedgerPinFailure,
+    LedgerPinFailureKind,
+    LedgerPinLoopDiagnostic,
+    LedgerPinProducerDiagnostic,
+    LedgerPinStage,
+)
 from ditto.api_models.validator import ConfirmationSeedAnchorPin
 from ditto.api_server.koth import koth_entries_from_ledger, project_koth
 from ditto.api_server.treasury_shadow import observe_shadow_treasury
-from ditto.chain.errors import ChainConnectionError, ChainError, ChainTimeoutError
+from ditto.chain.errors import (
+    ChainConnectionError,
+    ChainError,
+    ChainTimeoutError,
+    ChainTreasuryActivationReadError,
+    ChainTreasuryReadTimeoutError,
+)
 from ditto.db.queries.ledger_epochs import (
     LedgerPinDraft,
     get_pin,
@@ -65,6 +79,54 @@ DEFAULT_SCHEDULE_TIMEOUT_SECONDS = 8.0
 # Two blocks. The worker commits at boundary + 270 blocks, so a pin landing
 # within a few blocks of the boundary leaves the whole fleet folding it.
 DEFAULT_LEDGER_PIN_LOOP_INTERVAL_SECONDS = 24.0
+
+
+def _diagnostic_failure(error: Exception) -> LedgerPinFailure:
+    """Return no messages, locals, provider paths, SQL or validation inputs."""
+    if isinstance(error, ChainTreasuryActivationReadError):
+        error = error.read_error
+    read_step = (
+        error.read_step if isinstance(error, ChainTreasuryReadTimeoutError) else None
+    )
+    kind: LedgerPinFailureKind = "other"
+    labels: tuple[tuple[type[Exception], LedgerPinFailureKind], ...] = (
+        (TimeoutError, "timeout"),
+        (ChainTimeoutError, "timeout"),
+        (ConnectionError, "connection"),
+        (ChainConnectionError, "connection"),
+        (SQLAlchemyError, "database"),
+        (ValidationError, "validation"),
+        (ValueError, "value"),
+        (TypeError, "type"),
+        (KeyError, "key"),
+        (RuntimeError, "runtime"),
+        (ChainError, "chain"),
+    )
+    for error_type, label in labels:
+        if isinstance(error, error_type):
+            kind = label
+            break
+    location = None
+    traceback = error.__traceback__
+    while traceback is not None:
+        try:
+            path = (
+                Path(traceback.tb_frame.f_code.co_filename)
+                .resolve()
+                .relative_to(Path(__file__).resolve().parents[1])
+            )
+        except ValueError:
+            path = None
+        if path is not None and path.parts[0] in {"api_server", "chain", "db"}:
+            relative = "ditto/" + path.as_posix()
+            if (
+                relative.endswith(".py")
+                and len(relative) < 240
+                and all(c.isascii() and (c.isalnum() or c in "/_.-") for c in relative)
+            ):
+                location = f"{relative}:{traceback.tb_lineno}"
+        traceback = traceback.tb_next
+    return LedgerPinFailure(kind=kind, location=location, read_step=read_step)
 
 
 @dataclass(frozen=True)
@@ -435,6 +497,19 @@ class LedgerPinMaterializer:
         self._timeout = max(1.0, schedule_timeout_seconds)
         self._lock = asyncio.Lock()
         self._current: LedgerPin | None = None
+        self._diagnostic = LedgerPinProducerDiagnostic()
+        self._started_clock: float | None = None
+
+    def diagnostic(self) -> LedgerPinProducerDiagnostic:
+        value = self._diagnostic
+        if value.in_progress and self._started_clock is not None:
+            return value.model_copy(
+                update={"elapsed_seconds": monotonic() - self._started_clock}
+            )
+        return value
+
+    def _stage(self, stage: LedgerPinStage) -> None:
+        self._diagnostic = self._diagnostic.model_copy(update={"stage": stage})
 
     @property
     def newest_known(self) -> LedgerPin | None:
@@ -487,28 +562,67 @@ class LedgerPinMaterializer:
         cached = self._current
         if cached is not None and cached.epoch_index == schedule.subnet_epoch_index:
             return cached
+        waiting = monotonic()
         async with self._lock:
             cached = self._current
             if cached is not None and cached.epoch_index == schedule.subnet_epoch_index:
                 return cached
+            self._started_clock = monotonic()
+            self._diagnostic = LedgerPinProducerDiagnostic(
+                in_progress=True,
+                epoch_index=schedule.subnet_epoch_index,
+                stage="load_or_build",
+                started_at=datetime.now(UTC),
+                lock_wait_seconds=self._started_clock - waiting,
+                last_success_epoch=self._diagnostic.last_success_epoch,
+                last_success_at=self._diagnostic.last_success_at,
+            )
             try:
                 pin = await self._load_or_build(
                     app_state, session_maker, schedule, now=now
                 )
-            except SQLAlchemyError:
+            except SQLAlchemyError as error:
+                self._diagnostic = self._diagnostic.model_copy(
+                    update={"outcome": "error", "failure": _diagnostic_failure(error)}
+                )
                 LEDGER_PIN_MATERIALIZATIONS.labels(outcome="db_error").inc()
                 logger.exception(
                     "ledger pin for epoch %d could not be read or written",
                     schedule.subnet_epoch_index,
                 )
                 return None
-            except Exception:  # noqa: BLE001 - the pin path must never raise upward
+            except Exception as error:  # noqa: BLE001 - the pin path must never raise upward
+                self._diagnostic = self._diagnostic.model_copy(
+                    update={"outcome": "error", "failure": _diagnostic_failure(error)}
+                )
                 LEDGER_PIN_MATERIALIZATIONS.labels(outcome="error").inc()
                 logger.exception(
                     "ledger pin for epoch %d failed to materialize",
                     schedule.subnet_epoch_index,
                 )
                 return None
+            except asyncio.CancelledError:
+                self._diagnostic = self._diagnostic.model_copy(
+                    update={"outcome": "cancelled"}
+                )
+                raise
+            finally:
+                self._diagnostic = self._diagnostic.model_copy(
+                    update={
+                        "in_progress": False,
+                        "finished_at": datetime.now(UTC),
+                        "elapsed_seconds": monotonic() - self._started_clock,
+                    }
+                )
+            updates: dict[str, Any] = {
+                "outcome": "pinned" if pin is not None else "unavailable"
+            }
+            if pin is not None:
+                updates.update(
+                    last_success_epoch=pin.epoch_index,
+                    last_success_at=self._diagnostic.finished_at,
+                )
+            self._diagnostic = self._diagnostic.model_copy(update=updates)
             if pin is not None and (
                 self._current is None or pin.epoch_index >= self._current.epoch_index
             ):
@@ -542,6 +656,7 @@ class LedgerPinMaterializer:
         netuid = schedule.netuid
         from ditto.api_server.treasury_runtime import lock_runtime, treasury_runtime
 
+        self._stage("runtime")
         async with session_maker() as session:
             runtime = await treasury_runtime(session, app_state.config)
             existing = await get_pin(
@@ -568,7 +683,9 @@ class LedgerPinMaterializer:
         )
 
         async with session_maker() as session:
+            self._stage("ledger_context")
             context = await resolve_ledger_context(app_state, session, now=now)
+            self._stage("ledger_snapshot")
             snapshot = await materialize_ledger_snapshot(
                 app_state,
                 session,
@@ -576,6 +693,7 @@ class LedgerPinMaterializer:
                 now=now,
                 requesting_validator_hotkey=None,
             )
+        self._stage("treasury_observation")
         treasury: TreasuryPin | None = await observe_shadow_treasury(
             app_state, schedule, runtime=runtime
         )
@@ -588,6 +706,7 @@ class LedgerPinMaterializer:
             if treasury is None:
                 raise ValueError("enforcing treasury requires finalized observation")
             async with session_maker() as session:
+                self._stage("treasury_authorization")
                 treasury = await enforcing_pin_from_observation(
                     app_state, session, treasury, schedule, runtime=runtime
                 )
@@ -608,6 +727,7 @@ class LedgerPinMaterializer:
                         if e.miner_hotkey != collector
                     ],
                 )
+        self._stage("draft")
         draft = build_pin_draft(
             schedule,
             snapshot=snapshot,
@@ -615,6 +735,7 @@ class LedgerPinMaterializer:
             previous_champion_owner_root=previous_owner_root,
             now=now,
         )
+        self._stage("insert")
         async with session_maker() as session:
             try:
                 async with session.begin():
@@ -818,6 +939,20 @@ class LedgerPinLoop:
         self._interval_seconds = interval_seconds
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+        self._diagnostic = LedgerPinLoopDiagnostic(task_state="not_started")
+
+    def diagnostic(self) -> LedgerPinLoopDiagnostic:
+        task = self._task
+        state = (
+            "not_started"
+            if task is None
+            else "cancelled"
+            if task.cancelled()
+            else "done"
+            if task.done()
+            else "running"
+        )
+        return self._diagnostic.model_copy(update={"task_state": state})
 
     async def start(self) -> None:
         if self._task is not None:
@@ -833,6 +968,25 @@ class LedgerPinLoop:
 
     async def sweep(self, *, now: datetime | None = None) -> LedgerPin | None:
         """Ensure the current epoch's pin exists; exposed for real-DB tests."""
+        self._diagnostic = LedgerPinLoopDiagnostic(
+            task_state="running",
+            in_progress=True,
+            stage="settings",
+            started_at=datetime.now(UTC),
+        )
+        try:
+            return await self._sweep(now=now)
+        except Exception as error:
+            self._diagnostic = self._diagnostic.model_copy(
+                update={"failure": _diagnostic_failure(error)}
+            )
+            raise
+        finally:
+            self._diagnostic = self._diagnostic.model_copy(
+                update={"in_progress": False, "finished_at": datetime.now(UTC)}
+            )
+
+    async def _sweep(self, *, now: datetime | None = None) -> LedgerPin | None:
         started = monotonic()
         settings = await self._app_state.continual_retest_settings.resolve(
             self._session_maker
@@ -840,6 +994,7 @@ class LedgerPinLoop:
         if settings.ledger_pin_mode != "epoch":
             LEDGER_PIN_LOOP_RUNS.labels(outcome="disabled").inc()
             return None
+        self._diagnostic = self._diagnostic.model_copy(update={"stage": "materializer"})
         pin = await self._materializer.ensure(
             self._app_state, self._session_maker, now=now or datetime.now(UTC)
         )
@@ -849,8 +1004,10 @@ class LedgerPinLoop:
 
     async def _run(self) -> None:
         while not self._stop.is_set():
-            with suppress(Exception):
+            try:
                 await self.sweep()
+            except Exception:
+                logger.exception("ledger pin background sweep failed")
             try:
                 await asyncio.wait_for(
                     self._stop.wait(), timeout=self._interval_seconds

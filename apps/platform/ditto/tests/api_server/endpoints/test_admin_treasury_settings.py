@@ -391,6 +391,9 @@ async def test_readiness_proves_current_managed_permission_without_peer_bindings
     result = await get_treasury_ledger_readiness(request, None, session)
     state.chain.read_epoch_schedule.assert_awaited_once_with(118)
     state.ledger_pin_materializer._load_or_build.assert_not_awaited()
+    assert result.producer is not None
+    assert result.producer.epoch_index is None
+    assert result.producer.in_progress is False
     assert "provider secret" not in result.model_dump_json()
     assert state.ledger_pin_materializer.newest_known is None
     if schedule_fault in {"none", "next_epoch"}:

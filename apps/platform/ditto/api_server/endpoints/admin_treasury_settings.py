@@ -95,6 +95,13 @@ async def get_treasury_ledger_readiness(
     row = await latest_pin(session, netuid=state.config.chain.netuid)
     readiness = shadow_readiness(state, row, runtime=config)
     materializer = getattr(state, "ledger_pin_materializer", None)
+    loop = getattr(state, "ledger_pin_loop", None)
+    readiness = readiness.model_copy(
+        update={
+            "producer": materializer.diagnostic() if materializer is not None else None,
+            "producer_loop": loop.diagnostic() if loop is not None else None,
+        }
+    )
     if readiness.enforcement_configured and materializer is not None:
         probe = await materializer.inspect_schedule(state)
         schedule = probe.schedule

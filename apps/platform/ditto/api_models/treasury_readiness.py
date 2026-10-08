@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ditto.chain.errors import TreasuryReadStep
 from ditto_screening_protocol.treasury import (
@@ -32,6 +33,67 @@ TreasuryBlockReason = Literal[
 ]
 
 
+LedgerPinFailureKind = Literal[
+    "timeout",
+    "connection",
+    "database",
+    "validation",
+    "value",
+    "type",
+    "key",
+    "runtime",
+    "chain",
+    "other",
+]
+LedgerPinStage = Literal[
+    "load_or_build",
+    "runtime",
+    "ledger_context",
+    "ledger_snapshot",
+    "treasury_observation",
+    "treasury_authorization",
+    "draft",
+    "insert",
+]
+
+
+class LedgerPinFailure(BaseModel):
+    """Fixed error kinds and repository source locations, never exception text."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    kind: LedgerPinFailureKind
+    location: str | None = Field(default=None, max_length=256)
+    read_step: TreasuryReadStep | None = None
+
+
+class LedgerPinProducerDiagnostic(BaseModel):
+    """Process-local producer evidence; reading it never attempts a build."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    scope: Literal["this_platform_process"] = "this_platform_process"
+    in_progress: bool = False
+    epoch_index: int | None = None
+    stage: LedgerPinStage | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    elapsed_seconds: float | None = Field(default=None, ge=0)
+    lock_wait_seconds: float | None = Field(default=None, ge=0)
+    outcome: Literal["pinned", "unavailable", "error", "cancelled"] | None = None
+    failure: LedgerPinFailure | None = None
+    last_success_epoch: int | None = None
+    last_success_at: datetime | None = None
+
+
+class LedgerPinLoopDiagnostic(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    task_state: Literal["not_started", "running", "done", "cancelled"]
+    in_progress: bool = False
+    stage: Literal["settings", "materializer"] | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    failure: LedgerPinFailure | None = None
+
+
 class TreasuryLedgerReadiness(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -53,6 +115,8 @@ class TreasuryLedgerReadiness(BaseModel):
     offline_epoch_verified: bool = False
     weight_effect: Literal["none"] = "none"
     can_enforce_weights: bool = False
+    producer: LedgerPinProducerDiagnostic | None = None
+    producer_loop: LedgerPinLoopDiagnostic | None = None
     # Independent delivery diagnostic: signed authority is not a served ledger.
     ledger_schedule_probe_status: Literal["not_checked", "available", "unavailable"] = (
         "not_checked"
