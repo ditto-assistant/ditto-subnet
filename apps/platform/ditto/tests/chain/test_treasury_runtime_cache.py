@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ditto.chain.client import _treasury_substrate
+from ditto.chain.errors import ChainConnectionError
 from ditto.chain.treasury_runtime_cache import TreasuryRuntimeCache
 
 
@@ -129,3 +130,71 @@ async def test_failed_or_cancelled_metadata_does_not_poison_next_read(fault):
     load = AsyncMock(return_value=SimpleNamespace(runtime_version=1))
     assert (await cache.get("a", "g", 1, load)).runtime_version == 1
     load.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_warm_hit_does_not_wait_behind_unrelated_cold_load():
+    cache = TreasuryRuntimeCache()
+    warm = SimpleNamespace(runtime_version=1)
+    await cache.get("a", "g", 1, AsyncMock(return_value=warm))
+    entered = asyncio.Event()
+
+    async def blocked_load():
+        entered.set()
+        await asyncio.Future()
+
+    cold = asyncio.create_task(cache.get("b", "g", 2, blocked_load))
+    try:
+        await entered.wait()
+        unused_load = AsyncMock()
+        assert await asyncio.wait_for(cache.get("a", "g", 1, unused_load), 1) is warm
+        unused_load.assert_not_awaited()
+        assert not cold.done()
+    finally:
+        cold.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cold
+
+
+@pytest.mark.asyncio
+async def test_unavailable_genesis_is_connection_failure_without_caching(monkeypatch):
+    import async_substrate_interface
+
+    class SDK:
+        def __init__(self, *, url):
+            pass
+
+        async def get_block_hash(self, block):
+            assert block == 0
+            return None
+
+    monkeypatch.setattr(async_substrate_interface, "AsyncSubstrateInterface", SDK)
+    cache = TreasuryRuntimeCache()
+    reader = _treasury_substrate("ws://synthetic", runtime_cache=cache)
+    with pytest.raises(ChainConnectionError, match="genesis unavailable"):
+        await reader.get_runtime_for_version(1, "head")
+    assert not cache._values
+
+
+@pytest.mark.asyncio
+async def test_different_cold_keys_load_independently_and_clean_up():
+    cache = TreasuryRuntimeCache()
+    entered = asyncio.Event()
+
+    async def blocked_load():
+        entered.set()
+        await asyncio.Future()
+
+    cold = asyncio.create_task(cache.get("a", "g", 1, blocked_load))
+    try:
+        await entered.wait()
+        load = AsyncMock(return_value=SimpleNamespace(runtime_version=2))
+        assert (
+            await asyncio.wait_for(cache.get("b", "g", 2, load), 1)
+        ).runtime_version == 2
+        assert not cold.done()
+    finally:
+        cold.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cold
+    assert not cache._loads

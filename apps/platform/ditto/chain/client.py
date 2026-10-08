@@ -128,7 +128,7 @@ def _treasury_substrate(
             # upgrade boundary. Genesis is also read on this new connection.
             genesis = await self.get_block_hash(0)
             if not isinstance(genesis, str) or not genesis:
-                raise ValueError("treasury runtime genesis unavailable")
+                raise ChainConnectionError("treasury runtime genesis unavailable")
             load = super().get_runtime_for_version
             runtime = await runtime_cache.get(
                 url,

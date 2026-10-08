@@ -3,7 +3,14 @@
 import asyncio
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any
+
+
+@dataclass
+class _RuntimeLoad:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
 
 
 class TreasuryRuntimeCache:
@@ -16,8 +23,8 @@ class TreasuryRuntimeCache:
     """
 
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
         self._values: OrderedDict[tuple[str, str, int], Any] = OrderedDict()
+        self._loads: dict[tuple[str, str, int], _RuntimeLoad] = {}
 
     async def get(
         self,
@@ -27,14 +34,28 @@ class TreasuryRuntimeCache:
         load: Callable[[], Awaitable[Any]],
     ) -> Any:
         key = (url, genesis, version)
-        async with self._lock:
-            if key in self._values:
-                self._values.move_to_end(key)
-                return self._values[key]
-            runtime = await load()
-            if runtime.runtime_version != version:
-                raise ValueError("treasury runtime metadata version mismatch")
-            self._values[key] = runtime
-            if len(self._values) > 4:
-                self._values.popitem(last=False)
-            return runtime
+        # No await occurs here: event-loop-local hits and their LRU update
+        # cannot interleave, and never wait behind another key's network load.
+        if key in self._values:
+            self._values.move_to_end(key)
+            return self._values[key]
+        pending = self._loads.setdefault(key, _RuntimeLoad())
+        pending.users += 1
+        try:
+            async with pending.lock:
+                if key in self._values:
+                    self._values.move_to_end(key)
+                    return self._values[key]
+                runtime = await load()
+                if runtime.runtime_version != version:
+                    raise ValueError("treasury runtime metadata version mismatch")
+                self._values[key] = runtime
+                if len(self._values) > 4:
+                    self._values.popitem(last=False)
+                return runtime
+        finally:
+            # Include waiters so cancellation never removes a lock still used
+            # by another caller. No detached task survives its read deadline.
+            pending.users -= 1
+            if not pending.users:
+                del self._loads[key]
