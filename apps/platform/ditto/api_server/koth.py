@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
+from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.validator import LedgerEntry
 from ditto.api_server.efficiency import (
     CURVE_VERSION_BOUNDED_FACTOR,
@@ -155,7 +156,9 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
                     or entry.confirmation_composites
                     or entry.confirmation_seeds
                 ),
-                confirmation_receipt_authority=entry.bench_version == 9
+                confirmation_receipt_authority=supports_confirmation(
+                    entry.bench_version
+                )
                 and receipt is not None,
                 efficiency_bonus=entry.efficiency_bonus,
                 efficiency_factor=entry.efficiency_factor,

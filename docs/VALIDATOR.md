@@ -745,7 +745,7 @@ confirmation evidence retain the legacy comparison. This gate covers the
 **served** seed windows, not future seeds the adaptive lane has yet to request.
 The authoritative continual-retest cohort retains the incumbent and admits the
 challenger so its missing seeds can finish on the normal leased path.
-Bench-v9 signed full-confirmation receipts retain their separate score authority;
+Signed full-confirmation receipts retain their separate score authority;
 they do not wait for legacy continual windows or use unbound legacy seed evidence.
 
 Public decisions expose `seed_coverage_complete: false` while deferred, `true`

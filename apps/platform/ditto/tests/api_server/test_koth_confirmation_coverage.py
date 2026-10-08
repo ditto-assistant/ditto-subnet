@@ -110,7 +110,10 @@ def test_wire_lift_preserves_the_presence_of_one_confirmation() -> None:
     assert projection is not None and projection.champion.agent_id == UUID(int=1)
 
 
-def test_signed_v9_receipt_projection_ignores_unbound_legacy_evidence() -> None:
+@pytest.mark.parametrize("bench_version", [9, 13])
+def test_signed_receipt_projection_ignores_unbound_legacy_evidence(
+    bench_version: int,
+) -> None:
     # Signature/receipt verification happens before the pure projection; this
     # fixture exercises only which already-verified score authority it uses.
     receipt_entry = LedgerEntry.model_construct(
@@ -118,13 +121,13 @@ def test_signed_v9_receipt_projection_ignores_unbound_legacy_evidence() -> None:
         agent_id=UUID(int=2),
         composite=0.1,
         first_seen=_T0 + timedelta(minutes=2),
-        bench_version=9,
+        bench_version=bench_version,
         v9_confirmation=SimpleNamespace(full_effective_micros=900_000),
         confirmation_composites=[0.1, 0.1],
         confirmation_seeds=[4, 5],
     )
     challenger = koth_entries_from_ledger([receipt_entry])[0]
-    champion = replace(_entry(1, 0.8, seeds=(1, 2, 3)), bench_version=9)
+    champion = replace(_entry(1, 0.8, seeds=(1, 2, 3)), bench_version=bench_version)
     assert challenger.confirmation_receipt_authority
     assert challenger.confirmation_composites is None
     decision = _dethrone_decision(challenger, champion, dethrone_seed_full_set=True)

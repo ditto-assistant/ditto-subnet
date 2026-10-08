@@ -2952,7 +2952,7 @@ def _public_koth_emissions(
                 ),
                 confirmation_evidence_present=not v9_confirmed
                 and bool(by_seed.get(row.agent_id)),
-                confirmation_receipt_authority=row.bench_version == 9 and v9_confirmed,
+                confirmation_receipt_authority=v9_confirmed,
                 efficiency_bonus=bonus_values.get(row.agent_id),
                 efficiency_factor=factor_values.get(row.agent_id),
                 efficiency_curve_version=curve_values.get(row.agent_id),

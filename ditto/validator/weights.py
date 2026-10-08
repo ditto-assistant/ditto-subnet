@@ -1087,7 +1087,7 @@ def _effective_composite(entry: LedgerEntry) -> float:
 def _quality_composite(entry: LedgerEntry) -> float:
     """Return authoritative quality before relative efficiency is applied."""
     receipt = getattr(entry, "v9_confirmation", None)
-    if _entry_version(entry) == 9 and receipt is not None:
+    if _entry_version(entry) in RECEIPT_CONTRACT_VERSIONS and receipt is not None:
         value = getattr(receipt, "full_effective_micros", None)
         if isinstance(value, int) and not isinstance(value, bool):
             return value / 1_000_000
@@ -1184,7 +1184,7 @@ def _entry_seed_composites(entry: LedgerEntry) -> dict[int, float] | None:
     # histories that the receipt does not bind and an untrusted Platform could
     # otherwise attach to recreate the pre-v9 paired-dethrone path.
     if (
-        _entry_version(entry) == 9
+        _entry_version(entry) in CONFIRMATION_BENCH_VERSIONS
         and getattr(entry, "v9_confirmation", None) is not None
     ):
         return None
@@ -1535,10 +1535,10 @@ def _seed_coverage_complete(
     """
     if not full_set:
         return True
-    # Bench-v9 full receipts are already a separate verified score authority,
+    # Full receipts are already a separate verified score authority,
     # not participants in the legacy shared-seed confirmation window.
     if any(
-        _entry_version(entry) == 9
+        _entry_version(entry) in CONFIRMATION_BENCH_VERSIONS
         and getattr(entry, "v9_confirmation", None) is not None
         for entry in (challenger, champion)
     ):
@@ -1558,7 +1558,7 @@ def _seed_coverage_complete(
 def _has_confirmation_evidence(entry: LedgerEntry) -> bool:
     """Distinguish an absent legacy window from unusable confirmation data."""
     if (
-        _entry_version(entry) == 9
+        _entry_version(entry) in CONFIRMATION_BENCH_VERSIONS
         and getattr(entry, "v9_confirmation", None) is not None
     ):
         return False

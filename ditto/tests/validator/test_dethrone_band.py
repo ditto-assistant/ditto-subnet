@@ -924,21 +924,24 @@ class TestFullSeedSetDethrone:
         chal = _e("chal", 0.9, wave_scores={1: [0.9]}, minutes=1)
         assert not _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=True)
 
-    def test_signed_v9_authority_does_not_wait_for_legacy_windows(self) -> None:
+    @pytest.mark.parametrize("bench_version", [9, 13])
+    def test_signed_authority_does_not_wait_for_legacy_windows(
+        self, bench_version: int
+    ) -> None:
         champ = _e(
             "champ",
             0.8,
             confirmations=[0.8] * 3,
             seeds=[1, 2, 3],
-            bench_version=9,
+            bench_version=bench_version,
             minutes=0,
         )
         chal = _e(
             "chal",
-            0.1,
+            0.9,
             confirmations=[0.1] * 2,
             seeds=[4, 5],
-            bench_version=9,
+            bench_version=bench_version,
             v9_full_composite=0.9,
             minutes=1,
         )
