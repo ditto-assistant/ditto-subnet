@@ -72,13 +72,37 @@ if not re.match(r"^\s*(select|with|table|values|explain|show)\b", without_commen
 blocked = re.compile(
     r"\b(insert|update|delete|merge|create|alter|drop|truncate|grant|revoke|"
     r"comment|copy|call|do|vacuum|cluster|reindex|refresh|set|reset|"
-    r"begin|start|commit|rollback|end|prepare|execute|deallocate|discard|lock|"
+    r"begin|start|commit|rollback|prepare|execute|deallocate|discard|lock|"
     r"listen|unlisten|notify|security\s+label)\b",
     re.I,
 )
 match = blocked.search(without_comments)
 if match:
     raise SystemExit(f"error: blocked SQL keyword: {match.group(0)}")
+
+# END closes both CASE expressions and transactions. Permit only the former,
+# without letting a quoted CASE or an unfinished expression cross a statement
+# boundary and hide a transaction escape. Keep all other conservative gates.
+syntax = re.sub(
+    r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|"
+    r"(?P<dollar>\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$).*?(?P=dollar)|"
+    r"/\*.*?\*/|--[^\n]*",
+    " ",
+    text,
+    flags=re.S,
+)
+case_depth = 0
+for token in re.findall(r"\bCASE\b|\bEND\b|;", syntax, re.I):
+    if token.upper() == "CASE":
+        case_depth += 1
+    elif token.upper() == "END":
+        if case_depth == 0:
+            raise SystemExit("error: blocked SQL keyword: END")
+        case_depth -= 1
+    elif case_depth:
+        raise SystemExit("error: CASE cannot cross a statement boundary")
+if case_depth:
+    raise SystemExit("error: unterminated CASE expression")
 PY
 
 {
