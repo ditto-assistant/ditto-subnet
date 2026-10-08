@@ -71,6 +71,7 @@ def test_jit_probe_is_connection_local_and_keeps_read_only(tmp_path, disable_jit
             "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
             "GUARD_CAPTURE": str(captured),
             "DITTO_DB_DISABLE_JIT": disable_jit,
+            "DITTO_DB_STATEMENT_TIMEOUT_MS": "30000",
         },
         capture_output=True,
         text=True,
