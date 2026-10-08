@@ -895,6 +895,144 @@ class TestFullSeedSetDethrone:
         chal = _e("chal", 0.90, minutes=1)
         assert _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=True)
 
+    @pytest.mark.parametrize("confirmed_challenger", [False, True])
+    def test_one_sided_evidence_cannot_use_the_unpaired_fallback(
+        self, confirmed_challenger: bool
+    ) -> None:
+        champ = _e("champ", 0.8, minutes=0)
+        chal = _e("chal", 0.9, minutes=1)
+        confirmed = chal if confirmed_challenger else champ
+        confirmed.confirmation_composites = [confirmed.composite] * 3
+        confirmed.confirmation_seeds = [1, 2, 3]
+        assert _beats(chal, champ, 0.007, 1.64)
+        assert not _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=True)
+
+    @pytest.mark.parametrize(
+        ("composites", "seeds"),
+        [([0.9], [1]), ([0.9, 0.9], [1]), ([0.9, 0.9], [1, 1])],
+    )
+    def test_unusable_evidence_is_not_an_absent_legacy_window(
+        self, composites: list[float], seeds: list[int]
+    ) -> None:
+        champ = _e("champ", 0.8, minutes=0)
+        chal = _e("chal", 0.9, confirmations=composites, seeds=seeds, minutes=1)
+        assert _beats(chal, champ, 0.007, 1.64)
+        assert not _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=True)
+
+    def test_matching_single_observation_histories_are_still_incomplete(self) -> None:
+        champ = _e("champ", 0.8, wave_scores={1: [0.8]}, minutes=0)
+        chal = _e("chal", 0.9, wave_scores={1: [0.9]}, minutes=1)
+        assert not _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=True)
+
+    def test_signed_v9_authority_does_not_wait_for_legacy_windows(self) -> None:
+        champ = _e(
+            "champ",
+            0.8,
+            confirmations=[0.8] * 3,
+            seeds=[1, 2, 3],
+            bench_version=9,
+            minutes=0,
+        )
+        chal = _e(
+            "chal",
+            0.1,
+            confirmations=[0.1] * 2,
+            seeds=[4, 5],
+            bench_version=9,
+            v9_full_composite=0.9,
+            minutes=1,
+        )
+        assert _paired_dethrone(chal, champ, 1.64) is None
+        assert _beats(chal, champ, 0.007, 1.64, dethrone_seed_full_set=True)
+
+    def test_pending_window_is_not_a_score_ceiling_deadlock(self) -> None:
+        champ = _e(
+            "champ",
+            0.9984,
+            confirmations=[0.9984] * 3,
+            seeds=[1, 2, 3],
+            bench_version=13,
+        )
+        chal = _e(
+            "chal",
+            1.0,
+            confirmations=[1.0] * 2,
+            seeds=[1, 2],
+            bench_version=13,
+            minutes=1,
+        )
+        assert _score_ceiling_deadlocked(chal, champ, margin=0.007, dethrone_z=1.64)
+        assert not _score_ceiling_deadlocked(
+            chal,
+            champ,
+            margin=0.007,
+            dethrone_z=1.64,
+            dethrone_seed_full_set=True,
+        )
+
+    def test_last_two_seeds_cannot_ratchet_a_premature_crown(self) -> None:
+        # Synthetic regression for the reported shape, not historical scores:
+        # 13 seeds qualify; all 15 leave only +0.0077 against a ~0.01086 band.
+        seeds = list(range(15))
+        differences = [0.011 + offset for offset in [-0.04, 0.04] * 6 + [0.0]]
+        champ = _e(
+            "delta",
+            0.727,
+            bench_version=13,
+            confirmations=[0.727] * 15,
+            seeds=seeds,
+            minutes=0,
+        )
+        chal = _e(
+            "lets",
+            0.9,
+            bench_version=13,
+            confirmations=[0.727 + value for value in differences],
+            seeds=seeds[:13],
+            minutes=1,
+        )
+        legacy = select_champion([champ, chal], margin=0.007, dethrone_z=1.64)
+        assert legacy is not None and legacy.agent_id == chal.agent_id
+        gated = select_champion(
+            [champ, chal],
+            margin=0.007,
+            dethrone_z=1.64,
+            dethrone_seed_full_set=True,
+            incumbent_agent_id=champ.agent_id,
+        )
+        assert gated is not None and gated.agent_id == champ.agent_id
+        chal.confirmation_composites += [0.727 - 0.01375] * 2
+        chal.confirmation_seeds = seeds
+        paired = _paired_dethrone(chal, champ, 1.64)
+        assert paired is not None and paired[0] == pytest.approx(0.0077)
+        settled = select_champion(
+            [champ, chal],
+            margin=0.007,
+            dethrone_z=1.64,
+            dethrone_seed_full_set=True,
+            incumbent_agent_id=champ.agent_id,
+        )
+        assert settled is not None and settled.agent_id == champ.agent_id
+        # A crown awarded prematurely is not automatically undone by its
+        # subsequently incomplete lead: the new incumbent is protected too.
+        ratcheted = select_champion(
+            [champ, chal],
+            margin=0.007,
+            dethrone_z=1.64,
+            incumbent_agent_id=chal.agent_id,
+        )
+        assert ratcheted is not None and ratcheted.agent_id == chal.agent_id
+        weights = compute_weights(
+            [champ, chal],
+            margin=0.007,
+            dethrone_z=1.64,
+            tail_size=1,
+            rank_shares=(0.65, 0.35),
+            dethrone_seed_full_set=True,
+            incumbent_agent_id=champ.agent_id,
+        )
+        assert weights == {"delta": pytest.approx(0.65), "lets": pytest.approx(0.35)}
+
 
 class TestBeats:
     def test_no_stderr_is_fixed_composite_point_margin(self) -> None:

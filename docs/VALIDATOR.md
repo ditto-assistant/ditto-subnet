@@ -739,6 +739,24 @@ outstanding seeds finish. Tie pooling and the score-ceiling cohort are
 untouched: they measure evidence-tied *grouping*, not the crown decision, and
 exact ties still pool.
 
+One-sided, single-observation, or malformed confirmation evidence also defers
+the decision; it must not fall through to an unpaired win. Two entries without
+confirmation evidence retain the legacy comparison. This gate covers the
+**served** seed windows, not future seeds the adaptive lane has yet to request.
+The authoritative continual-retest cohort retains the incumbent and admits the
+challenger so its missing seeds can finish on the normal leased path.
+Bench-v9 signed full-confirmation receipts retain their separate score authority;
+they do not wait for legacy continual windows or use unbound legacy seed evidence.
+
+Public decisions expose `seed_coverage_complete: false` while deferred, `true`
+when the gate is satisfied, and `null` when disabled. Deferred diagnostics use
+finite numbers: `required_score` is the challenger's ceiling, not a statistical
+threshold. A score lead on the board does not by itself explain a crown change:
+the paired statistic uses shared-seed differences, while official scores also
+include the initial quorum. The base margin remains 0.007; the computed band
+depends on statistical uncertainty, versioned high-score decay, and the optional
+headroom clamp. No fixed 0.01 rule is introduced.
+
 The shipped `dethrone_seed_mode: disabled` policy preserves the pre-31 fold
 exactly. An operator may select `fleet_ready`; Platform serves the additive
 `dethrone_seed_mode: full_set` ledger marker only after every recently-live

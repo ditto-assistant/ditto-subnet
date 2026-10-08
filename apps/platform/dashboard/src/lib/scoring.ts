@@ -562,7 +562,7 @@ export function crownContest(
   decision: RawLeaderDecision | null | undefined,
   emissions?: EmissionsFold | null,
 ): CrownContest | null {
-  if (!decision) return null;
+  if (!decision || decision.seed_coverage_complete === false) return null;
   const challengerLead = finiteOrNull(decision.challenger_lead);
   const requiredLead = finiteOrNull(decision.required_lead);
   if (challengerLead == null || requiredLead == null) return null;

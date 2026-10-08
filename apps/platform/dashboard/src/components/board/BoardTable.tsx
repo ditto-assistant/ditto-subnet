@@ -618,6 +618,9 @@ function BoardRow(props: {
   const aboveChampionTip = (): string => {
     const emissions = props.store.emissions();
     const isRawLeader = String(emissions?.raw_leader_agent_id) === String(e().agent_id);
+    if (isRawLeader && emissions?.raw_leader_decision?.seed_coverage_complete === false) {
+      return "Confirmation incomplete. The incumbent keeps the crown until both agents cover the same confirmation seeds.";
+    }
     const contest = crownContest(emissions?.raw_leader_decision, emissions);
     if (contest && isRawLeader) {
       return crownHeldRowTip(contest);
@@ -627,6 +630,9 @@ function BoardRow(props: {
   const aboveChampionLabel = (): string => {
     const emissions = props.store.emissions();
     const isRawLeader = String(emissions?.raw_leader_agent_id) === String(e().agent_id);
+    if (isRawLeader && emissions?.raw_leader_decision?.seed_coverage_complete === false) {
+      return "#1 · confirmation pending";
+    }
     const contest = crownContest(emissions?.raw_leader_decision, emissions);
     if (contest && isRawLeader) return crownHeldRowLabel(contest, true);
     return isRawLeader ? "#1 · crown held" : "outscores · crown held";

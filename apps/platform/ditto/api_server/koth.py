@@ -71,6 +71,8 @@ class KothEntry:
     completed_wave_composites: tuple[float, ...] | None = None
     confirmation_composites: tuple[float, ...] | None = None
     confirmation_seeds: tuple[int, ...] | None = None
+    confirmation_evidence_present: bool = False
+    confirmation_receipt_authority: bool = False
     efficiency_bonus: float | None = None
     efficiency_factor: float | None = None
     efficiency_curve_version: int | None = None
@@ -93,7 +95,7 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
     lifted: list[KothEntry] = []
     for entry in entries:
         receipt = entry.v9_confirmation
-        history = _confirmation_history(entry)
+        history = _confirmation_history(entry) if receipt is None else None
         confirmations = (
             tuple(history.values())
             if history is not None
@@ -105,7 +107,8 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
         paired_composites: tuple[float, ...] | None = None
         paired_seeds: tuple[int, ...] | None = None
         if (
-            confirmations is not None
+            receipt is None
+            and confirmations is not None
             and seeds is not None
             and len(confirmations) == len(seeds)
             and len(confirmations) >= 2
@@ -146,6 +149,14 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
                 ),
                 confirmation_composites=paired_composites,
                 confirmation_seeds=paired_seeds,
+                confirmation_evidence_present=receipt is None
+                and bool(
+                    entry.confirmation_history
+                    or entry.confirmation_composites
+                    or entry.confirmation_seeds
+                ),
+                confirmation_receipt_authority=entry.bench_version == 9
+                and receipt is not None,
                 efficiency_bonus=entry.efficiency_bonus,
                 efficiency_factor=entry.efficiency_factor,
                 efficiency_curve_version=entry.efficiency_curve_version,
@@ -1014,18 +1025,29 @@ def _seed_coverage_complete(
     Byte-for-byte aligned with ``ditto-subnet`` ``weights._seed_coverage_complete``:
     when ``full_set`` is active the paired statistic may decide the crown only
     when the two seed maps' intersection equals their union — neither entry
-    holds a window seed the other has not been scored on. Absent maps (no
-    confirmation evidence) stay trivially complete.
+    holds a window seed the other has not been scored on. Only two entries
+    with no confirmation evidence retain the historical unpaired comparison.
     """
     if not full_set:
+        return True
+    if any(entry.confirmation_receipt_authority for entry in (challenger, champion)):
         return True
     challenger_by_seed = _seed_composites(challenger)
     champion_by_seed = _seed_composites(champion)
     if challenger_by_seed is None or champion_by_seed is None:
-        return True
-    return set(challenger_by_seed) & set(champion_by_seed) == set(
-        challenger_by_seed
-    ) | set(champion_by_seed)
+        return (
+            challenger_by_seed is None
+            and champion_by_seed is None
+            and not any(
+                entry.confirmation_evidence_present
+                or entry.confirmation_composites
+                or entry.confirmation_seeds
+                for entry in (challenger, champion)
+            )
+        )
+    return len(challenger_by_seed) >= 2 and set(challenger_by_seed) == set(
+        champion_by_seed
+    )
 
 
 def _paired_statistic(
@@ -1105,9 +1127,13 @@ def _dethrone_decision(
         # would decide on evidence the outstanding seeds can contradict. The
         # requirement becomes the challenger's unreachable ceiling, deferring
         # the decision until the window completes and the lane re-decides it.
+        champion_score = _dethrone_composite(champion, quality_primary=quality_primary)
+        challenger_score = _dethrone_composite(
+            challenger, quality_primary=quality_primary
+        )
         return DethroneDecision(
-            challenger_lead=0.0,
-            required_lead=math.inf,
+            challenger_lead=challenger_score - champion_score,
+            required_lead=max(0.0, score_ceiling - champion_score),
             margin_lead=KOTH_MARGIN,
             statistical_lead=None,
             method="unpaired",
@@ -1150,7 +1176,9 @@ def _dethrone_decision(
             paired_standard_error=paired.standard_error,
             shared_seed_count=len(paired.differences),
             seed_differences=paired.differences,
-            seed_coverage_complete=coverage_complete,
+            seed_coverage_complete=coverage_complete
+            if dethrone_seed_full_set
+            else None,
         )
 
     challenger_composite = _dethrone_composite(
@@ -1195,5 +1223,5 @@ def _dethrone_decision(
         required_score=required_score,
         score_ceiling=score_ceiling,
         ceiling_deadlocked=(not dethrones and required_score >= score_ceiling),
-        seed_coverage_complete=coverage_complete,
+        seed_coverage_complete=coverage_complete if dethrone_seed_full_set else None,
     )

@@ -223,6 +223,9 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
               <summary>Why this crown</summary>
               <div class="champion-note" id="champion-note">
                 {(() => {
+                  if (emissions()?.raw_leader_decision?.seed_coverage_complete === false) {
+                    return "Confirmation incomplete. The incumbent keeps the crown until both agents cover the same confirmation seeds.";
+                  }
                   const contest = crownContest(emissions()?.raw_leader_decision, emissions());
                   const rank = championEntry()?.rank as number;
                   const above = rank - 1;

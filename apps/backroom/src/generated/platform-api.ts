@@ -25704,6 +25704,11 @@ export interface components {
             /** Score Ceiling */
             score_ceiling: number;
             /**
+             * Seed Coverage Complete
+             * @description Whether both entries cover the served confirmation window under the full-set gate. False defers the crown decision; required_score then reports the challenger's ceiling, not a statistical threshold. Null when the gate is inactive.
+             */
+            seed_coverage_complete?: boolean | null;
+            /**
              * Seed Differences
              * @description Per-seed challenger minus champion composites, sorted by seed id. These are score differences, not case answers. Null when the fold is not a paired comparison.
              */

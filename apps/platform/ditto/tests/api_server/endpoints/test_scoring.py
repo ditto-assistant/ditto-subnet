@@ -65,13 +65,19 @@ _BENCH_VERSION = 7
 
 
 @pytest.mark.asyncio
-async def test_protocol_28_requester_cannot_read_capped_pin() -> None:
+@pytest.mark.parametrize(
+    ("field", "value", "protocol"),
+    [("statistical_band_mode", "capped", 29), ("dethrone_seed_mode", "full_set", 31)],
+)
+async def test_older_requester_cannot_read_protocol_gated_pin(
+    field: str, value: str, protocol: int
+) -> None:
     now = datetime.now(UTC)
     heartbeat_get = AsyncMock(
-        return_value=SimpleNamespace(protocol_version=28, seen_at=now)
+        return_value=SimpleNamespace(protocol_version=protocol - 1, seen_at=now)
     )
     session = cast(AsyncSession, SimpleNamespace(get=heartbeat_get))
-    ledger = LedgerResponse(entries=[], count=0, statistical_band_mode="capped")
+    ledger = LedgerResponse.model_validate({"entries": [], "count": 0, field: value})
 
     with pytest.raises(HTTPException) as rejected:
         await scoring_mod._require_statistical_cap_requester(
@@ -79,7 +85,7 @@ async def test_protocol_28_requester_cannot_read_capped_pin() -> None:
         )
     assert rejected.value.status_code == 428
 
-    heartbeat_get.return_value.protocol_version = 29
+    heartbeat_get.return_value.protocol_version = protocol
     assert (
         await scoring_mod._require_statistical_cap_requester(
             session, _VALIDATOR_HOTKEY, ledger, now=now
@@ -927,11 +933,21 @@ class TestScoringLedger:
         assert ready.status_code == 200
         assert ready.json()["tie_weighting_mode"] == "pool"
 
-    async def test_statistical_band_marker_requires_operator_and_protocol_29(
+    @pytest.mark.parametrize(
+        ("field", "value", "protocol"),
+        [
+            ("statistical_band_mode", "capped", 29),
+            ("dethrone_seed_mode", "full_set", 31),
+        ],
+    )
+    async def test_consensus_marker_requires_operator_and_ready_fleet(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        field: str,
+        value: str,
+        protocol: int,
     ) -> None:
         await _seed_scored(session_maker, miner=_MINER, composite=0.9)
         now = datetime.now(UTC)
@@ -940,7 +956,7 @@ class TestScoringLedger:
                 ValidatorHeartbeat(
                     validator_hotkey=_VALIDATOR_HOTKEY,
                     software_version="0.55.0",
-                    protocol_version=29,
+                    protocol_version=protocol,
                     code_digest="ab" * 32,
                     state="idle",
                     reported_at=now,
@@ -955,10 +971,10 @@ class TestScoringLedger:
 
         default = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert default.status_code == 200
-        assert default.json().get("statistical_band_mode") is None
+        assert default.json().get(field) is None
 
-        settings = ContinualRetestSettings(
-            statistical_band_mode="fleet_ready"
+        settings = ContinualRetestSettings.model_validate(
+            {field: "fleet_ready"}
         ).model_dump(mode="json")
         async with session_maker() as session, session.begin():
             session.add(
@@ -967,28 +983,28 @@ class TestScoringLedger:
                     scope="*",
                     settings=settings,
                     checksum="ab" * 32,
-                    reason="prepare statistical band cap",
+                    reason="prepare consensus marker",
                     actor="operator@example.com",
                 )
             )
             heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
             assert heartbeat is not None
-            heartbeat.protocol_version = 28
+            heartbeat.protocol_version = protocol - 1
         app.state.continual_retest_settings.invalidate()
 
         mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert mixed.status_code == 200
-        assert mixed.json().get("statistical_band_mode") is None
+        assert mixed.json().get(field) is None
 
         async with session_maker() as session, session.begin():
             heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
             assert heartbeat is not None
-            heartbeat.protocol_version = 29
+            heartbeat.protocol_version = protocol
         app.state.continual_retest_settings.invalidate()
 
         ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert ready.status_code == 200
-        assert ready.json()["statistical_band_mode"] == "capped"
+        assert ready.json()[field] == value
 
     async def test_empty_ledger(
         self,

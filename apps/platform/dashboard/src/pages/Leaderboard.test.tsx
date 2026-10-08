@@ -1513,10 +1513,47 @@ describe("dethrone floor + rollout strip (row 36)", () => {
 // the table, dim the not-yet-dethroning leaders, and crown the incumbent's
 // row, all from fold-fed numbers.
 describe("held-crown standing clarity", () => {
+  it("explains pending confirmation without displaying a numerical dethrone bar", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          emissions: {
+            ...payload.emissions,
+            raw_leader_decision: {
+              ...payload.emissions?.raw_leader_decision,
+              method: "unpaired",
+              challenger_lead: 0.1,
+              required_lead: 0.2,
+              required_score: 1,
+              seed_coverage_complete: false,
+            },
+          },
+        };
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("koth-standing-copy").textContent).toContain("Confirmation incomplete"),
+    );
+    expect(el("koth-standing-copy").textContent).not.toContain("Needed to take crown");
+    const note = document.querySelector("tr.above-champion .above-champion-note");
+    expect(note?.textContent).toBe("#1 · confirmation pending");
+    expect(note?.getAttribute("data-tooltip")).toContain("Confirmation incomplete");
+  });
+
   it("calls out the held crown above the board with the exact fold decision", async () => {
     renderPage();
     await waitForBoard();
     await waitFor(() => expect(el("koth-standing").classList.contains("show")).toBe(true));
+    // A prior mount can leave a cached pending decision until this fetch lands.
+    await waitFor(() =>
+      expect(el("koth-standing-copy").textContent).toContain(
+        "Difference+" + fxScore(emissions?.raw_leader_decision?.challenger_lead as number),
+      ),
+    );
     const callout = el("koth-standing");
     expect(callout).toHaveAttribute("role", "note");
     expect(callout.textContent).toContain("Rank is not the crown");

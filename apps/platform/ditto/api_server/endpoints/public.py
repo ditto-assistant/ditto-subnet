@@ -2950,6 +2950,9 @@ def _public_koth_emissions(
                     if confirmations is not None
                     else None
                 ),
+                confirmation_evidence_present=not v9_confirmed
+                and bool(by_seed.get(row.agent_id)),
+                confirmation_receipt_authority=row.bench_version == 9 and v9_confirmed,
                 efficiency_bonus=bonus_values.get(row.agent_id),
                 efficiency_factor=factor_values.get(row.agent_id),
                 efficiency_curve_version=curve_values.get(row.agent_id),
@@ -3067,6 +3070,7 @@ def _public_koth_emissions(
                 paired_standard_error=decision.paired_standard_error,
                 shared_seed_count=decision.shared_seed_count,
                 seed_differences=decision.seed_differences,
+                seed_coverage_complete=decision.seed_coverage_complete,
             )
             if decision is not None
             else None
@@ -3085,6 +3089,7 @@ def _public_koth_emissions(
                 paired_standard_error=defense.paired_standard_error,
                 shared_seed_count=defense.shared_seed_count,
                 seed_differences=defense.seed_differences,
+                seed_coverage_complete=defense.seed_coverage_complete,
             )
             if defense is not None
             else None

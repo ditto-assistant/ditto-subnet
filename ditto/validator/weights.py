@@ -1526,20 +1526,50 @@ def _seed_coverage_complete(
     contributes, so a decision made while either side is missing seeds the
     other holds is a decision on a partial draw. The paired intersection over
     both maps must equal the UNION of the two windows -- i.e. neither entry
-    holds a seed the other has not been scored on. When the mode is off, or
-    either map is absent (the ledger carries no confirmation evidence at all,
-    the historical pre-P5 fold), coverage is trivially complete and the fold is
-    byte-identical. Pure and deterministic over the same seed maps
+    holds a seed the other has not been scored on. Missing, single-observation,
+    or malformed evidence cannot fall through to the unpaired comparison.
+    Only two entries with no confirmation evidence retain the historical
+    pre-P5 fold. Pure and deterministic over the same seed maps
     :func:`_paired_dethrone` reads, so every validator reaches the same
     verdict.
     """
     if not full_set:
         return True
+    # Bench-v9 full receipts are already a separate verified score authority,
+    # not participants in the legacy shared-seed confirmation window.
+    if any(
+        _entry_version(entry) == 9
+        and getattr(entry, "v9_confirmation", None) is not None
+        for entry in (challenger, champion)
+    ):
+        return True
     chall_map = _entry_seed_composites(challenger)
     champ_map = _entry_seed_composites(champion)
     if chall_map is None or champ_map is None:
-        return True
-    return set(chall_map) & set(champ_map) == set(chall_map) | set(champ_map)
+        return (
+            chall_map is None
+            and champ_map is None
+            and not _has_confirmation_evidence(challenger)
+            and not _has_confirmation_evidence(champion)
+        )
+    return len(chall_map) >= 2 and set(chall_map) == set(champ_map)
+
+
+def _has_confirmation_evidence(entry: LedgerEntry) -> bool:
+    """Distinguish an absent legacy window from unusable confirmation data."""
+    if (
+        _entry_version(entry) == 9
+        and getattr(entry, "v9_confirmation", None) is not None
+    ):
+        return False
+    return any(
+        bool(getattr(entry, name, None))
+        for name in (
+            "confirmation_history",
+            "confirmation_composites",
+            "confirmation_seeds",
+        )
+    )
 
 
 def _beats(
@@ -1589,9 +1619,8 @@ def _beats(
     in the served confirmation window. A crown decided on a subset of the
     window is not apples-to-apples: the band was sized for the full sample, so
     a partial-seed dethrone can flip on evidence the remaining seeds then
-    contradict and never revisit. Under the gate a partial pairing falls back
-    to the unpaired comparison, which partial confirmations cannot win while
-    any unshared seed is still outstanding."""
+    contradict and never revisit. Under the gate incomplete coverage defers
+    both paired and unpaired decisions until the served windows match."""
     observed_score, required_score = _dethrone_scores(
         challenger,
         champion,

@@ -1587,6 +1587,15 @@ class PublicDethroneDecision(BaseModel):
     required_score: float
     score_ceiling: Annotated[float, Field(gt=0.0)]
     ceiling_deadlocked: bool
+    seed_coverage_complete: bool | None = Field(
+        default=None,
+        description=(
+            "Whether both entries cover the served confirmation window under "
+            "the full-set gate. False defers the crown decision; required_score "
+            "then reports the challenger's ceiling, not a statistical threshold. "
+            "Null when the gate is inactive."
+        ),
+    )
     paired_standard_error: Annotated[
         float | None,
         Field(

@@ -4479,6 +4479,8 @@ async def _current_koth_entries(
                     if confirmations is not None
                     else None
                 ),
+                confirmation_evidence_present=bool(merged),
+                confirmation_receipt_authority=row.bench_version == 9 and v9_confirmed,
                 efficiency_bonus=efficiency_bonuses.get(row.agent_id),
                 efficiency_factor=efficiency_factors.get(row.agent_id),
                 efficiency_curve_version=efficiency_curve_versions.get(row.agent_id),

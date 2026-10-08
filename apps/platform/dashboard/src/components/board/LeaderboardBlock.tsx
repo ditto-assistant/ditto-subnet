@@ -402,7 +402,17 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                               {" is still champion."}
                             </b>
                           </div>
-                          <Show when={heldContest()}>
+                          <Show
+                            when={heldContest()}
+                            fallback={
+                              <Show when={current().decision.seed_coverage_complete === false}>
+                                <p>
+                                  Confirmation incomplete. The incumbent keeps the crown until both
+                                  agents cover the same confirmation seeds.
+                                </p>
+                              </Show>
+                            }
+                          >
                             {(held) => (
                               <>
                                 <dl class="koth-standing-metrics">
@@ -606,6 +616,9 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
       ? " Recipients whose exact effective scores tie, or whose paired shared-seed evidence remains statistically indistinguishable, pool only the ranked shares of the slots they occupy. Missing paired evidence cannot widen a group."
       : "";
     const decision = e.raw_leader_decision;
+    if (decision?.seed_coverage_complete === false) {
+      return "Confirmation incomplete. The incumbent keeps the crown until both agents cover the same confirmation seeds.";
+    }
     if (decision && rawLeader) {
       const method =
         decision.method === "paired"
