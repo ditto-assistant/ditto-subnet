@@ -1203,7 +1203,6 @@ async def _require_statistical_cap_requester(
                 session,
                 ledger.treasury_pin,
                 validator_hotkey,
-                now=now,
                 app_state=app_state,
             )
         except ValueError as error:

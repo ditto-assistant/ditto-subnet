@@ -119,11 +119,11 @@ def treasury_fleet_members(
 async def read_treasury_fleet(
     session: AsyncSession,
     *,
-    now: datetime,
     policy_digest: str,
     collector_digest: str,
     required_hotkeys: tuple[str, ...] = (),
 ) -> tuple[TreasuryFleetMember, ...]:
+    """Validate the completed heartbeat inventory against its read-time clock."""
     if not required_hotkeys or len(set(required_hotkeys)) != len(required_hotkeys):
         raise ValueError("managed weight-setting roster is empty or ambiguous")
     rows = list(
@@ -133,8 +133,15 @@ async def read_treasury_fleet(
             )
         )
     )
+    # A server-stamped heartbeat may arrive while earlier chain/DB work is
+    # awaited. Request or pin start time would misclassify it as future; it
+    # could also accept evidence that expired while the read was in progress.
+    checked_at = datetime.now(UTC)
     fleet = treasury_fleet_members(
-        rows, now=now, policy_digest=policy_digest, collector_digest=collector_digest
+        rows,
+        now=checked_at,
+        policy_digest=policy_digest,
+        collector_digest=collector_digest,
     )
     if not set(required_hotkeys).issubset(
         {member.validator_hotkey for member in fleet}
@@ -149,7 +156,6 @@ async def enforcing_pin_from_observation(
     shadow: TreasuryLedgerPin,
     schedule: Any,
     *,
-    now: datetime,
     runtime: Any = None,
 ) -> EnforcingTreasuryPin:
     config = runtime if runtime is not None else app_state.config
@@ -179,7 +185,6 @@ async def enforcing_pin_from_observation(
         raise ValueError("managed weight setter lacks current chain permission")
     fleet = await read_treasury_fleet(
         session,
-        now=now,
         policy_digest=policy.digest,
         collector_digest=policy.collector_policy_digest,
         required_hotkeys=required_hotkeys,
@@ -202,7 +207,6 @@ async def require_enforcing_requester(
     pin: EnforcingTreasuryPin,
     hotkey: str,
     *,
-    now: datetime,
     app_state: Any,
 ) -> None:
     from ditto.api_server.treasury_runtime import treasury_runtime
@@ -220,7 +224,6 @@ async def require_enforcing_requester(
         raise ValueError("managed roster differs from immutable pin")
     fleet = await read_treasury_fleet(
         session,
-        now=now,
         policy_digest=pin.policy_digest,
         collector_digest=pin.policy.collector_policy_digest,
         required_hotkeys=tuple(member.validator_hotkey for member in pin.fleet),
@@ -233,13 +236,14 @@ async def require_enforcing_requester(
         # Independent validators consume this same signed pin without needing
         # our deployment's approval file or joining our managed roster.
         row = await session.get(ValidatorHeartbeat, hotkey)
+        checked_at = datetime.now(UTC)
         seen_at = row.seen_at if row is not None else None
         if seen_at is not None and seen_at.tzinfo is None:
             seen_at = seen_at.replace(tzinfo=UTC)
         if (
             row is None
             or seen_at is None
-            or not now - TREASURY_FLEET_FRESHNESS <= seen_at <= now
+            or not checked_at - TREASURY_FLEET_FRESHNESS <= seen_at <= checked_at
             or row.protocol_version < TREASURY_WEIGHT_PROTOCOL
         ):
             raise ValueError("treasury follower requires a fresh protocol 30 heartbeat")

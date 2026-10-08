@@ -589,7 +589,7 @@ class LedgerPinMaterializer:
                 raise ValueError("enforcing treasury requires finalized observation")
             async with session_maker() as session:
                 treasury = await enforcing_pin_from_observation(
-                    app_state, session, treasury, schedule, now=now, runtime=runtime
+                    app_state, session, treasury, schedule, runtime=runtime
                 )
         if treasury is not None:
             # Preserve the shared snapshot cache; this observation belongs only

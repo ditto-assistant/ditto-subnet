@@ -123,8 +123,6 @@ async def get_treasury_ledger_readiness(
         )
     if readiness.configured_proposal is None:
         return readiness
-    from datetime import UTC, datetime
-
     from ditto.api_server.treasury_weights import (
         current_managed_dispatch_observation,
         read_treasury_fleet,
@@ -133,7 +131,6 @@ async def get_treasury_ledger_readiness(
     try:
         fleet = await read_treasury_fleet(
             session,
-            now=datetime.now(UTC),
             policy_digest=readiness.configured_proposal.digest,
             collector_digest=readiness.configured_proposal.collector_policy_digest,
             required_hotkeys=config.treasury_managed_validator_hotkeys,
