@@ -33,6 +33,7 @@ from ditto.chain.models import (
     NeuronInfo,
 )
 from ditto.chain.treasury_read_trace import TreasuryReadTrace
+from ditto.chain.treasury_runtime_cache import TreasuryRuntimeCache
 from ditto_screening_protocol.treasury import TreasuryEmissionPolicy, TreasuryLedgerPin
 from ditto_screening_protocol.treasury_identity import read_finalized_collector_pin
 
@@ -90,7 +91,9 @@ _PENDING_EPOCH_AT_STORAGE = "PendingEpochAt"
 _SUBNET_EPOCH_INDEX_STORAGE = "SubnetEpochIndex"
 
 
-def _treasury_substrate(url: str) -> Any:
+def _treasury_substrate(
+    url: str, *, runtime_cache: TreasuryRuntimeCache | None = None
+) -> Any:
     """Bind SDK startup metadata and treasury reads to one finalized snapshot.
 
     The SDK otherwise starts metadata initialization at the best head before
@@ -112,6 +115,34 @@ def _treasury_substrate(url: str) -> Any:
             if self._treasury_finalized_head is None:
                 self._treasury_finalized_head = await super().get_chain_finalised_head()
             return self._treasury_finalized_head
+
+        async def get_runtime_for_version(
+            self, runtime_version: int, block_hash: str | None = None
+        ) -> Any:
+            if runtime_cache is None:
+                return await super().get_runtime_for_version(
+                    runtime_version, block_hash
+                )
+            # init_runtime has freshly resolved the applicable specVersion at
+            # this connection's finalized snapshot, using the SDK's parent-state
+            # upgrade boundary. Genesis is also read on this new connection.
+            genesis = await self.get_block_hash(0)
+            if not isinstance(genesis, str) or not genesis:
+                raise ValueError("treasury runtime genesis unavailable")
+            load = super().get_runtime_for_version
+            runtime = await runtime_cache.get(
+                url,
+                genesis,
+                runtime_version,
+                lambda: load(runtime_version, block_hash),
+            )
+            # The SDK's block mappings and last_used remain connection-local.
+            self.runtime_cache.add_item(
+                runtime=runtime,
+                block_hash=block_hash,
+                runtime_version=runtime_version,
+            )
+            return runtime
 
     return FinalizedTreasurySubstrate()
 
@@ -156,6 +187,12 @@ class ChainClient:
         self._recent_neurons_cache: dict[int, tuple[float, tuple[NeuronInfo, ...]]] = {}
         self._recent_neurons_flights: dict[int, asyncio.Task[list[NeuronInfo]]] = {}
         self._clock = time.monotonic
+
+    def _new_treasury_substrate(self) -> Any:
+        cache = getattr(self, "_treasury_runtime_cache", None)
+        if cache is None:
+            cache = self._treasury_runtime_cache = TreasuryRuntimeCache()
+        return _treasury_substrate(self._substrate_url(), runtime_cache=cache)
 
     async def __aenter__(self) -> ChainClient:
         """Open the underlying Pylon client connection."""
@@ -377,7 +414,7 @@ class ChainClient:
         try:
             async with (
                 asyncio.timeout(8),
-                _treasury_substrate(self._substrate_url()) as substrate,
+                self._new_treasury_substrate() as substrate,
             ):
                 trace.client = substrate
                 yield trace
@@ -487,7 +524,7 @@ class ChainClient:
         try:
             async with (
                 asyncio.timeout(8) as deadline,
-                _treasury_substrate(self._substrate_url()) as substrate,
+                self._new_treasury_substrate() as substrate,
             ):
                 trace.client = substrate
                 observed = await read_treasury_dispatch_observation(trace, policy)
@@ -1152,7 +1189,7 @@ class ChainClient:
         from ditto.chain.weight_diagnostics import predict_next_epoch_block
 
         try:
-            async with _treasury_substrate(self._substrate_url()) as substrate:
+            async with self._new_treasury_substrate() as substrate:
                 block_hash = await substrate.get_chain_finalised_head()
                 header = await substrate.get_block_header(block_hash=block_hash)
                 block = _block_number_from_header(header)
