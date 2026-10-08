@@ -488,20 +488,25 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                               </>
                             )}
                           </Show>
-                          <details class="fold koth-standing-fold">
-                            <summary>Why the Score column is not the crown test</summary>
-                            <div class="koth-standing-detail">
-                              <Show when={heldContest()}>
-                                {(held) => (
-                                  <>
-                                    {crownScaleNote(current().leader, held(), store.settledView()) +
-                                      " "}
-                                  </>
-                                )}
-                              </Show>
-                              {crownComparisonNote(current().decision.method)}
-                            </div>
-                          </details>
+                          <Show when={current().decision.seed_coverage_complete !== false}>
+                            <details class="fold koth-standing-fold">
+                              <summary>Why the Score column is not the crown test</summary>
+                              <div class="koth-standing-detail">
+                                <Show when={heldContest()}>
+                                  {(held) => (
+                                    <>
+                                      {crownScaleNote(
+                                        current().leader,
+                                        held(),
+                                        store.settledView(),
+                                      ) + " "}
+                                    </>
+                                  )}
+                                </Show>
+                                {crownComparisonNote(current().decision.method)}
+                              </div>
+                            </details>
+                          </Show>
                         </>
                       );
                     }}

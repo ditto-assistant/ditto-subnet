@@ -1539,6 +1539,7 @@ describe("held-crown standing clarity", () => {
       expect(el("koth-standing-copy").textContent).toContain("Confirmation incomplete"),
     );
     expect(el("koth-standing-copy").textContent).not.toContain("Needed to take crown");
+    expect(el("koth-standing-copy").textContent).not.toContain("unpaired uncertainty band");
     const note = document.querySelector("tr.above-champion .above-champion-note");
     expect(note?.textContent).toBe("#1 · confirmation pending");
     expect(note?.getAttribute("data-tooltip")).toContain("Confirmation incomplete");
