@@ -24,14 +24,18 @@ from sqlalchemy import (
     Float,
     and_,
     case,
+    column,
     func,
     literal,
     null,
     or_,
     select,
+    true,
+    tuple_,
     union,
 )
 from sqlalchemy import cast as sql_cast
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm.util import AliasedClass
 
@@ -2887,10 +2891,34 @@ async def quorum_ledger_proof_rows(
         "base_evidence_sha256",
         "v9_base",
     )
+    # Every independent JSONB key lookup detoasts the whole per-case document.
+    # Expand the four evidence fields together so authority reads do not pay
+    # that cost four times per score. Non-object details retain the previous
+    # all-null evidence projection rather than making jsonb_to_record raise.
+    evidence = (
+        func.jsonb_to_record(
+            case(
+                (func.jsonb_typeof(Score.details) == "object", Score.details),
+                else_=literal({}, type_=JSONB),
+            )
+        )
+        .table_valued(*(column(key, JSONB) for key in details_keys))
+        .render_derived(with_types=True)
+        .lateral("evidence")
+    )
     pairs: list[ColumnElement[Any]] = []
     for key in details_keys:
-        pairs.extend((literal(key), Score.details[key]))
+        pairs.extend((literal(key), evidence.c[key]))
     projected_details = func.jsonb_build_object(*pairs).label("details")
+    # Filter exact agent/version pairs before touching the large document;
+    # the former cross-product predicate discarded mismatches only in Python.
+    requested = [
+        (agent_id, bench_versions[agent_id])
+        for agent_id in dict.fromkeys(agent_ids)
+        if agent_id in bench_versions
+    ]
+    if not requested:
+        return {}
     result = await session.execute(
         select(
             Score.agent_id,
@@ -2902,10 +2930,9 @@ async def quorum_ledger_proof_rows(
             Score.signature,
             projected_details,
         )
-        .where(
-            Score.agent_id.in_(agent_ids),
-            Score.bench_version.in_(set(bench_versions.values())),
-        )
+        .select_from(Score)
+        .join(evidence, true())
+        .where(tuple_(Score.agent_id, Score.bench_version).in_(requested))
         .order_by(Score.agent_id, Score.composite, Score.validator_hotkey)
     )
     out: dict[UUID, list[LedgerScoreProofRow]] = {}
