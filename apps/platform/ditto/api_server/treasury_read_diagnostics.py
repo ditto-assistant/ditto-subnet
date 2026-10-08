@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from socket import gaierror
 from typing import Any, Literal
 
+from pydantic import ValidationError
+
 from ditto.api_models.treasury_readiness import TreasuryChainReadDiagnostic
 from ditto.chain.errors import ChainConnectionError, ChainTimeoutError, TreasuryReadStep
 
@@ -18,7 +20,9 @@ def treasury_read_failure_kind(
         return "timeout"
     if isinstance(cause, (ChainConnectionError, ConnectionError, gaierror)):
         return "connection"
-    if isinstance(cause, ValueError):
+    # Pydantic identifies a rejected wire schema. A reader's arbitrary
+    # ValueError may instead be a decoder/application defect; retain its 500.
+    if isinstance(cause, ValidationError):
         return "invalid_evidence"
     return "unavailable"
 

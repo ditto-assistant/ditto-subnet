@@ -14,6 +14,7 @@ from ditto.api_server.treasury_weights import (
     require_enforcing_requester,
     treasury_fleet_members,
 )
+from ditto.chain.errors import ChainTreasuryActivationReadError
 from ditto.db.models import ValidatorHeartbeat
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
@@ -417,8 +418,14 @@ async def test_requester_revalidates_current_chain_and_every_pinned_member(
             p.policy, block_hash=observation.finalized_block_hash
         )
     else:
-        with pytest.raises((ValueError, TimeoutError)):
+        expected = (
+            ChainTreasuryActivationReadError if fault == "rpc_failure" else ValueError
+        )
+        with pytest.raises(expected) as rejected:
             await require_enforcing_requester(session, p, hotkey, app_state=state)
+        if fault == "rpc_failure":
+            assert rejected.value.read_stage == "identity"
+            assert isinstance(rejected.value.read_error, TimeoutError)
 
 
 @pytest.mark.parametrize(

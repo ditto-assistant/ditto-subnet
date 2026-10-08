@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from ditto.api_server import treasury_weights
 from ditto.api_server.endpoints import scoring
@@ -20,6 +21,15 @@ from ditto.chain.errors import (
     ChainTreasuryReadTimeoutError,
 )
 from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
+from ditto_screening_protocol.treasury_identity import TreasuryDispatchObservation
+
+
+def invalid_wire_evidence():
+    try:
+        TreasuryDispatchObservation.model_validate({})
+    except ValidationError as error:
+        return error
+    raise AssertionError("invalid fixture unexpectedly validated")
 
 
 @pytest.mark.asyncio
@@ -58,7 +68,8 @@ async def test_schedule_failure_remains_visible_after_success(caplog):
         ("setter_roster", ChainTreasuryReadTimeoutError("permit_vector"), 503),
         ("identity", ChainConnectionError("PRIVATE provider"), 503),
         ("identity", ConnectionResetError("PRIVATE reset"), 503),
-        ("identity", ValueError("PRIVATE invalid evidence"), 428),
+        ("identity", invalid_wire_evidence(), 428),
+        ("identity", ValueError("PRIVATE decoder defect"), None),
         ("identity", FileNotFoundError("PRIVATE missing file"), None),
     ],
 )
@@ -205,3 +216,51 @@ def test_direct_call_without_app_state_still_logs_safely(monkeypatch):
     record_treasury_read(None, "epoch_schedule", elapsed=0.1)
     log.assert_called_once()
     assert log.call_args.args[1:3] == ("epoch_schedule", "success")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["identity", "setter_roster"])
+async def test_legacy_reader_timeout_records_stage_and_returns_retryable_503(
+    monkeypatch, stage
+):
+    p, state = _setup_producer(monkeypatch)
+    observed = TreasuryDispatchObservation(
+        identity=p.identity,
+        epoch_index=p.epoch_index,
+        first_block=p.first_block,
+        finalized_block=p.identity.finalized_block,
+        finalized_block_hash=p.identity.finalized_block_hash,
+    )
+    state.chain = SimpleNamespace(
+        get_treasury_dispatch_observation=AsyncMock(return_value=observed),
+        get_treasury_weight_setters=AsyncMock(
+            return_value=tuple(m.validator_hotkey for m in p.fleet)
+        ),
+    )
+    reader = (
+        state.chain.get_treasury_dispatch_observation
+        if stage == "identity"
+        else state.chain.get_treasury_weight_setters
+    )
+    reader.side_effect = ChainTimeoutError("PRIVATE transport failure")
+    monkeypatch.setattr(
+        scoring,
+        "_gamma_runtime_or_503",
+        AsyncMock(return_value=SimpleNamespace(treasury_weight_enforcement=True)),
+    )
+    ledger = SimpleNamespace(treasury_pin=p, stale=False, statistical_band_mode="off")
+    with pytest.raises(HTTPException) as rejected:
+        await scoring._require_statistical_cap_requester(
+            None,
+            p.fleet[0].validator_hotkey,
+            ledger,
+            now=datetime.now(UTC),
+            app_state=state,
+        )
+    assert rejected.value.status_code == 503
+    assert rejected.value.headers == {"Retry-After": "5"}
+    diagnostic = state.treasury_chain_read_diagnostics["requester_activation"]
+    assert (diagnostic.attempts, diagnostic.failures) == (1, 1)
+    assert diagnostic.last_failure_stage == stage
+    assert diagnostic.last_failure_kind == "timeout"
+    assert "PRIVATE" not in diagnostic.model_dump_json()

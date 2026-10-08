@@ -78,15 +78,26 @@ async def current_managed_dispatch_observation(
         ) != set(managed_hotkeys):
             raise ValueError("managed permission proof differs from dispatch scope")
     else:
-        observed = TreasuryDispatchObservation.model_validate(
-            await chain.get_treasury_dispatch_observation(policy)
-        )
-        required = await current_managed_weight_setters(
-            chain,
-            policy,
-            block_hash=observed.finalized_block_hash,
-            managed_hotkeys=managed_hotkeys,
-        )
+        try:
+            observed = TreasuryDispatchObservation.model_validate(
+                await chain.get_treasury_dispatch_observation(policy)
+            )
+        except ValueError:
+            # Preserve the legacy reader's explicit authority/evidence rejection.
+            raise
+        except Exception as error:
+            raise ChainTreasuryActivationReadError("identity", error) from error
+        try:
+            required = await current_managed_weight_setters(
+                chain,
+                policy,
+                block_hash=observed.finalized_block_hash,
+                managed_hotkeys=managed_hotkeys,
+            )
+        except ValueError:
+            raise
+        except Exception as error:
+            raise ChainTreasuryActivationReadError("setter_roster", error) from error
         if not required or not set(managed_hotkeys).issubset(required):
             raise ValueError("managed weight setter lacks current chain permission")
     return observed
