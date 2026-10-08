@@ -119,6 +119,15 @@ host before extrapolating a peer-host measurement.
 
 ## Comparison loop
 
+Platform database connections disable JIT at asyncpg startup. Complex admission
+plans can have high estimated cost while their actual executor work is short;
+compiling LLVM code then dominates latency and holds claim transactions open.
+The PostgreSQL server default remains unchanged. For a read-only comparison,
+run the same captured SELECT through `explain_analyze_prod_db.sh`, then repeat
+with `DITTO_DB_DISABLE_JIT=1`. Report JIT compilation, executor and planning
+times separately; remove `FOR UPDATE` only for this read-only plan measurement
+and validate real claim concurrency independently.
+
 1. Capture a representative profile while the target route is under normal or
    reproduced load, recording the exact process commit.
 2. Tie the hot stack to request counts/latency, successful versus failed status,

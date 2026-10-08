@@ -12,6 +12,8 @@ usage() {
     cat >&2 <<'EOF'
 Usage: query_prod_db.sh <sql-or-file|->
 
+DITTO_DB_DISABLE_JIT=1 disables JIT only for this read-only connection.
+
 Examples:
   query_prod_db.sh 'SELECT count(*) FROM agents'
   query_prod_db.sh ./query.sql
@@ -28,6 +30,13 @@ if [[ ! "$timeout_ms" =~ ^[0-9]+$ ]] || (( timeout_ms < 1 || timeout_ms > 120000
     echo "error: DITTO_DB_STATEMENT_TIMEOUT_MS must be an integer from 1 through 120000" >&2
     exit 2
 fi
+
+jit_option=""
+case "${DITTO_DB_DISABLE_JIT:-0}" in
+    0) ;;
+    1) jit_option=" -c jit=off" ;;
+    *) echo "error: DITTO_DB_DISABLE_JIT must be 0 or 1" >&2; exit 2 ;;
+esac
 
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/ditto-platform-db-readonly.XXXXXX")"
 query_file="$tmpdir/query.sql"
@@ -113,7 +122,7 @@ PY
     printf '\n;\n%s\n' 'ROLLBACK;'
 } > "$wrapper_file"
 
-remote_command="sudo -n -u deploy bash -lc 'set -euo pipefail; set -a; source ${REMOTE_ENV}; set +a; export PGPASSWORD=\"\$POSTGRES_PASSWORD\"; export PGOPTIONS=\"-c default_transaction_read_only=on -c statement_timeout=${timeout_ms} -c lock_timeout=5000\"; exec psql --no-password --host=\"\$POSTGRES_HOST\" --port=\"\$POSTGRES_PORT\" --username=\"\$POSTGRES_USER\" --dbname=\"\$POSTGRES_DB\" --file=-'"
+remote_command="sudo -n -u deploy bash -lc 'set -euo pipefail; set -a; source ${REMOTE_ENV}; set +a; export PGPASSWORD=\"\$POSTGRES_PASSWORD\"; export PGOPTIONS=\"-c default_transaction_read_only=on -c statement_timeout=${timeout_ms} -c lock_timeout=5000${jit_option}\"; exec psql --no-password --host=\"\$POSTGRES_HOST\" --port=\"\$POSTGRES_PORT\" --username=\"\$POSTGRES_USER\" --dbname=\"\$POSTGRES_DB\" --file=-'"
 
 gcloud compute ssh "$INSTANCE" \
     --project="$PROJECT" \
