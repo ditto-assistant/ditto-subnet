@@ -859,11 +859,21 @@ def test_timeout_sigterm_during_drain_restores_signed_workers(
             assert time.monotonic() < deadline, "drain never started"
             time.sleep(0.05)
         process.send_signal(signal.SIGTERM)
-        process.communicate(timeout=30)
+        stdout, stderr = process.communicate(timeout=30)
     finally:
         if process.poll() is None:
             process.kill()
-    assert process.returncode == 143
+    drain_status = state / "updater/drain-status.env"
+    drain_tail = (
+        drain_status.read_text()[-2000:] if drain_status.exists() else "missing"
+    )
+    assert process.returncode == 143, (
+        f"SIGTERM drain exit={process.returncode}\n"
+        f"stdout tail:\n{stdout[-4000:]}\n"
+        f"stderr tail:\n{stderr[-4000:]}\n"
+        f"drain status tail:\n{drain_tail}\n"
+        f"service actions tail:\n{log.read_text()[-2000:]}"
+    )
     recorded = log.read_text().splitlines()
     assert "start --no-block ditto-screener-fleet-agent.service" not in recorded
     assert "interrupted-review" not in log.read_text()
