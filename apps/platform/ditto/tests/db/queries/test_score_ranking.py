@@ -1527,6 +1527,99 @@ class TestContinuationFloor:
         assert set(details) == {"composite_stderr", "confirmation_seeds"}
         assert details["confirmation_seeds"] is None
 
+    @pytest.mark.parametrize(
+        "document",
+        [None, {}, [], [{"composite_stderr": 99}], 8, "text", True],
+    )
+    async def test_partial_details_preserves_non_object_and_missing_key_semantics(
+        self, session_maker: async_sessionmaker[AsyncSession], document
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "P" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        async with session_maker() as session, session.begin():
+            for score in await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            ):
+                score.details = document
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                bench_version=_BENCH,
+                include_fingerprints=False,
+                details_keys=("composite_stderr", "confirmation_seeds", "missing"),
+            )
+        assert len(rows) == 1
+        assert rows[0].details == {
+            "composite_stderr": None,
+            "confirmation_seeds": None,
+            "missing": None,
+        }
+
+    @pytest.mark.parametrize("family_members", [False, True])
+    async def test_partial_details_preserves_signed_median_and_arbitrary_keys(
+        self, session_maker: async_sessionmaker[AsyncSession], family_members: bool
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "Q" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        async with session_maker() as session, session.begin():
+            for score in await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            ):
+                score.details = {
+                    "composite_stderr": score.composite / 100,
+                    'odd".key': {"signed_row": score.validator_hotkey},
+                    "explicit_null": None,
+                    "audit_payload": "large irrelevant telemetry" * 5000,
+                }
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                bench_version=_BENCH,
+                include_fingerprints=False,
+                include_family_members=family_members,
+                details_keys=(
+                    "composite_stderr",
+                    'odd".key',
+                    "explicit_null",
+                    'odd".key',
+                ),
+            )
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.composite == 0.8
+        assert row.validator_hotkey == _VALIDATORS[0]
+        assert row.details == {
+            "composite_stderr": 0.008,
+            'odd".key': {"signed_row": _VALIDATORS[0]},
+            "explicit_null": None,
+        }
+        assert row.stored_composite_stderr == 0.008
+
+    @pytest.mark.parametrize("keys", [(), ("bench_version",), ("bench_version",) * 2])
+    async def test_partial_details_empty_and_single_key_projection(
+        self, session_maker: async_sessionmaker[AsyncSession], keys: tuple[str, ...]
+    ) -> None:
+        await _seed(
+            session_maker,
+            hotkey="5" + "R" * 47,
+            composites=(0.9,) * 3,
+            created_at=_BASE,
+        )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session, bench_version=_BENCH, details_keys=keys
+            )
+        assert len(rows) == 1
+        assert rows[0].details == ({"bench_version": _BENCH} if keys else {})
+
     @pytest.mark.parametrize("family_members", [False, True])
     async def test_scalar_stderr_stays_bound_to_the_signed_median_row(
         self, session_maker: async_sessionmaker[AsyncSession], family_members: bool

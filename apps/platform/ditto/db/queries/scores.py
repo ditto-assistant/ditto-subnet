@@ -36,7 +36,7 @@ from sqlalchemy import (
     union,
 )
 from sqlalchemy import cast as sql_cast
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, JSONPATH
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm.util import AliasedClass
 
@@ -2352,15 +2352,37 @@ async def list_eligible_ledger(
         )
     winners = winner_select.cte("ledger_winners")
 
+    details_evidence = None
     if details_keys is not None:
         # Narrow projection: build an object holding ONLY the requested keys, so
         # Postgres never ships (and asyncpg never decodes) the rest of the blob.
         # A key the row does not have arrives as SQL NULL -> Python None, which
         # every reader of these keys already treats as absent.
+        keys = tuple(dict.fromkeys(details_keys))
+        if len(keys) > 1:
+            # Each independent key lookup detoasts the whole audit document.
+            # A strict root-object filter preserves all-null projections for
+            # non-object documents, without detoasting once for a type guard
+            # and again for the record. Never unwrap array/object decoys.
+            details_evidence = (
+                func.jsonb_to_record(
+                    func.jsonb_path_query_first(
+                        Score.details,
+                        literal('strict $ ? (@.type() == "object")', type_=JSONPATH),
+                    )
+                )
+                .table_valued(*(column(key, JSONB) for key in keys))
+                .render_derived(with_types=True)
+                .lateral("ledger_details")
+            )
         pairs: list[ColumnElement[Any]] = []
-        for key in details_keys:
+        for key in keys:
             pairs.append(literal(key))
-            pairs.append(Score.details[key])
+            pairs.append(
+                details_evidence.c[key]
+                if details_evidence is not None
+                else Score.details[key]
+            )
         details_column = func.jsonb_build_object(*pairs).label("details")
     elif include_details:
         details_column = Score.details.label("details")
@@ -2593,6 +2615,8 @@ async def list_eligible_ledger(
         )
         .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
     )
+    if details_evidence is not None:
+        stmt = stmt.join(details_evidence, true())
     if stderr_evidence is not None:
         stmt = stmt.join(
             stderr_evidence,
