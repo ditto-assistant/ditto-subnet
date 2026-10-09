@@ -235,6 +235,7 @@ async def test_pin_and_fold_provenance_preserves_fresh_chain_evidence(
     [
         {"entries": [{"agent_id": "private-invalid-id"}]},
         {"context": {"served": {"treasury_pin": {"version": 2, "mode": "enforce"}}}},
+        {"context": ["private-invalid-id"]},
     ],
 )
 async def test_invalid_stored_pin_keeps_fresh_chain_evidence(
@@ -268,8 +269,9 @@ async def test_invalid_stored_pin_keeps_fresh_chain_evidence(
     assert "private-invalid-id" not in caplog.text
 
 
-async def test_missing_stored_burn_share_keeps_fresh_chain_evidence(
-    app, client, session_maker, monkeypatch, caplog
+@pytest.mark.parametrize("burn_share", ["missing", "null"])
+async def test_invalid_stored_burn_share_keeps_fresh_chain_evidence(
+    app, client, session_maker, monkeypatch, caplog, burn_share
 ):
     app.state.config = replace(app.state.config, admin_api_token=TOKEN)
     app.state.session_maker = session_maker
@@ -300,12 +302,14 @@ async def test_missing_stored_burn_share_keeps_fresh_chain_evidence(
         )
         treasury["identity"]["finalized_block"] = pin.pinned_block
         served = {"crown_mode": None, "treasury_pin": treasury}
+        if burn_share == "null":
+            served["burn_share"] = None
         pin.context = {"served": served}
         pin.ledger_digest = ledger_digest(
             canonical_entries(LedgerPin.from_row(pin).entries), served
         )
-        # Exercise the real projection's missing-key path, not a mock exception.
-        with pytest.raises(KeyError, match="burn_share"):
+        # Exercise real stored JSON failures, not mock exceptions.
+        with pytest.raises(KeyError if burn_share == "missing" else TypeError):
             pin_expected_shares(pin)
     monkeypatch.setattr(
         endpoint, "read_weight_diagnostics", AsyncMock(return_value=fixture())

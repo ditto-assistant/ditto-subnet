@@ -831,7 +831,7 @@ def _decorate_vectors_with_pins(
             return None, False
         try:
             return pin_expected_shares(pin), False
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
             if not ignore_invalid_pins:
                 raise
             logger.warning(
