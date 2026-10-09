@@ -9,10 +9,12 @@ from uuid import uuid4
 import pytest
 
 from ditto.tests.validator.test_treasury_weights import fixture
-from ditto.tests.validator.test_weight_receipts import finalized
+from ditto.tests.validator.test_weight_receipts import envelope, finalized
 from ditto.validator.weight_receipts import WeightReceiptRelay
 from ditto_screening_protocol.weight_receipt import (
     FinalizedWeightReceipt,
+    SubmitWeightReceiptResponse,
+    weight_receipt_digest,
     weight_receipt_signing_message,
     weight_vector_digest,
 )
@@ -123,8 +125,12 @@ def v2_claim():
     return raw
 
 
-def test_v2_claim_no_champion_and_versioned_signature_domain():
-    claim = FinalizedWeightReceipt.model_validate(v2_claim())
+@pytest.mark.parametrize("managed", [True, False])
+def test_v2_claim_no_champion_and_versioned_signature_domain(managed):
+    raw = v2_claim()
+    if not managed:
+        raw["validator_hotkey"] = "independent-follower"
+    claim = FinalizedWeightReceipt.model_validate(raw)
     assert weight_receipt_signing_message(claim, 123).startswith(
         b"ditto-validator-weight-receipt:v2:"
     )
@@ -136,11 +142,54 @@ def test_v2_claim_no_champion_and_versioned_signature_domain():
 
 
 @pytest.mark.parametrize(
+    "managed,wrong_identity", [(True, False), (False, False), (False, True)]
+)
+async def test_enforcing_recovery_authenticates_and_forwards_policy_followers(
+    managed, wrong_identity
+):
+    raw = v2_claim()
+    if not managed:
+        raw["validator_hotkey"] = "independent-follower"
+    claim = FinalizedWeightReceipt.model_validate(raw)
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(return_value={"receipts": [envelope(claim)]}),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(
+            return_value=SubmitWeightReceiptResponse(
+                request_id=claim.request_id,
+                attempt_id=claim.attempt.attempt_id,
+                receipt_digest=weight_receipt_digest(claim),
+                stored=True,
+            )
+        ),
+    )
+    relay = WeightReceiptRelay(
+        setter,
+        platform,
+        "wrong-identity" if wrong_identity else claim.validator_hotkey,
+        claim.netuid,
+    )
+    await relay.recover()
+    assert relay.diagnostics.page_forwarded == (0 if wrong_identity else 1)
+    assert relay.diagnostics.page_deferred == (1 if wrong_identity else 0)
+    if wrong_identity:
+        setter.acknowledge_weight_receipt.assert_not_awaited()
+        platform.submit_weight_receipt.assert_not_awaited()
+    else:
+        setter.acknowledge_weight_receipt.assert_awaited_once()
+        platform.submit_weight_receipt.assert_awaited_once_with(claim)
+
+
+@pytest.mark.parametrize(
     "fault",
     [
         "missing_pin",
         "wrong_epoch",
-        "wrong_validator",
+        "wrong_netuid",
+        "empty_weights",
+        "wrong_digest",
         "before_pin",
         "unpaired_champion",
         "legacy_no_champion",
@@ -150,12 +199,17 @@ def test_v2_claim_no_champion_and_versioned_signature_domain():
 )
 def test_v2_shape_refuses_incomplete_or_rebound_authority(fault):
     raw = v2_claim()
+    raw["validator_hotkey"] = "independent-follower"
     if fault == "missing_pin":
         raw.pop("treasury_pin")
     elif fault == "wrong_epoch":
         raw["provenance"]["epoch_index"] += 1
-    elif fault == "wrong_validator":
-        raw["validator_hotkey"] = "outsider"
+    elif fault == "wrong_netuid":
+        raw["netuid"] += 1
+    elif fault == "empty_weights":
+        raw["attempt"]["normalized_weights"] = [[0, 0], [1, 0]]
+    elif fault == "wrong_digest":
+        raw["request_digest"] = "0" * 64
     elif fault == "before_pin":
         raw["attempt"]["commit_block"] = 101
     elif fault == "unpaired_champion":

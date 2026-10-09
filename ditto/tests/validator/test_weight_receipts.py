@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
 import pytest
-from pydantic import ValidationError
 
 from ditto.api_models.weight_receipt import (
     FinalizedWeightReceipt,
@@ -86,91 +84,6 @@ def envelope(claim):
         "status": "finalized",
         "attempts": [{**attempt, "status": "finalized"}],
     }
-
-
-def enforcing_finalized(*, managed=False):
-    raw = finalized().model_dump(mode="json")
-    pin = json.loads(
-        (
-            Path(__file__).resolve().parents[3]
-            / "packages/ditto-screening-protocol/tests/fixtures"
-            / "treasury_enforcing_pin_v2.json"
-        ).read_text()
-    )
-    pin["epoch_index"] = raw["provenance"]["epoch_index"]
-    raw["validator_hotkey"] = (
-        pin["fleet"][0]["validator_hotkey"] if managed else "independent-follower"
-    )
-    raw["schema_version"] = 2
-    raw["treasury_pin"] = pin
-    raw["attempt"]["commit_block"] = pin["pinned_block"] + 1
-    raw["weights"] = {pin["policy"]["collector_hotkey"]: 0.1, "miner": 0.9}
-    raw["provenance"]["vector_digest"] = weight_vector_digest(raw["weights"])
-    body = {
-        name: raw[name]
-        for name in (
-            "schema_version",
-            "mechanism_id",
-            "weights",
-            "provenance",
-            "treasury_pin",
-        )
-    }
-    raw["request_digest"] = hashlib.sha256(
-        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    return raw
-
-
-@pytest.mark.parametrize("managed", [True, False])
-async def test_enforcing_receipt_recovery_forwards_managed_and_independent_followers(
-    managed,
-):
-    claim = FinalizedWeightReceipt.model_validate(enforcing_finalized(managed=managed))
-    setter = SimpleNamespace(
-        list_weight_receipts=AsyncMock(return_value={"receipts": [envelope(claim)]}),
-        acknowledge_weight_receipt=AsyncMock(),
-    )
-    platform = SimpleNamespace(
-        submit_weight_receipt=AsyncMock(
-            return_value=SubmitWeightReceiptResponse(
-                request_id=claim.request_id,
-                attempt_id=claim.attempt.attempt_id,
-                receipt_digest=weight_receipt_digest(claim),
-                stored=True,
-            )
-        ),
-    )
-    relay = WeightReceiptRelay(setter, platform, claim.validator_hotkey, claim.netuid)
-    await relay.recover()
-    assert relay.diagnostics.page_forwarded == 1
-    assert relay.diagnostics.page_deferred == 0
-    setter.acknowledge_weight_receipt.assert_awaited_once()
-    platform.submit_weight_receipt.assert_awaited_once_with(claim)
-
-
-@pytest.mark.parametrize(
-    "fault", ["epoch", "netuid", "commit", "empty_weights", "allocation", "digest"]
-)
-def test_independent_receipt_keeps_authority_vector_and_commit_guards(fault):
-    raw = enforcing_finalized()
-    if fault == "epoch":
-        raw["provenance"]["epoch_index"] += 1
-    elif fault == "netuid":
-        raw["netuid"] += 1
-    elif fault == "commit":
-        raw["attempt"]["commit_block"] = raw["treasury_pin"]["pinned_block"]
-    elif fault == "empty_weights":
-        raw["attempt"]["normalized_weights"] = [[0, 0], [1, 0]]
-    elif fault == "allocation":
-        raw["weights"] = {
-            raw["treasury_pin"]["policy"]["collector_hotkey"]: 0.2,
-            "miner": 0.8,
-        }
-    else:
-        raw["request_digest"] = "0" * 64
-    with pytest.raises(ValidationError):
-        FinalizedWeightReceipt.model_validate(raw)
 
 
 async def test_restart_retry_uses_same_id_but_identical_vector_new_artifact_does_not():

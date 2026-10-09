@@ -525,6 +525,13 @@ async def test_enforcing_receipt_binds_exact_frozen_pin_and_allows_empty_competi
     replay = await _post(client, _signed(raw))
     assert replay.status_code == 200, replay.text
     assert replay.json() == first.json()
+    forged = _signed(raw)
+    forged["signature"] = "00" * 64
+    assert (await _post(client, forged)).status_code == 401
+    raw["validator_hotkey"] = bittensor.Keypair.create_from_uri(
+        "//Charlie"
+    ).ss58_address
+    assert (await _post(client, _signed(raw))).status_code == 401
 
 
 @pytest.mark.parametrize(
