@@ -2,6 +2,7 @@
 """Exercise low-space refusal, encryption failure, and exact retention scopes."""
 
 import importlib.util
+import io
 import os
 import subprocess
 import tempfile
@@ -219,6 +220,18 @@ class BackupTest(unittest.TestCase):
                     self.assertIn("abort_multipart_upload", operations)
                     self.assertNotIn("complete_multipart_upload", operations)
                 self.assertEqual(operations.count("upload_part"), 10000)
+
+    def test_restore_errors_expose_only_fixed_categories(self):
+        # Sensitive SQL split across reads must not enter the public result.
+        sensitive = b"ALTER ROLE private PASSWORD 'secret-hash'; signed-url-token "
+        result = set()
+        drill.classify_restore_errors(
+            io.BytesIO(sensitive + b"No space left on device"), result
+        )
+        self.assertEqual(result, {"disk-full"})
+        result = set()
+        drill.classify_restore_errors(io.BytesIO(sensitive), result)
+        self.assertEqual(result, set())
 
     def manifest(self):
         return {

@@ -5,8 +5,10 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -74,6 +76,31 @@ def compare_counts(expected, actual):
             raise ValueError("restored core table count differs")
 
 
+def report(stage):
+    # Constant stage names and aggregate disk bytes only; never exception text.
+    print(f"Restore stage: {stage}", flush=True)
+
+
+def classify_restore_errors(stream, result):
+    # Drain stderr concurrently to prevent pipe backpressure. Retain no SQL,
+    # role hashes, identifiers or provider URLs; return only fixed categories.
+    patterns = {
+        "disk-full": b"No space left on device",
+        "extension-unavailable": b"extension is not available",
+        "role-conflict": b"already exists",
+        "permission-denied": b"Permission denied",
+        "archive-version": b"unsupported version",
+    }
+    tail = b""
+    while chunk := stream.read(4096):
+        window = tail + chunk
+        for label, pattern in patterns.items():
+            if pattern in window:
+                result.add(label)
+        tail = window[-128:]
+    stream.close()
+
+
 def stream_restore(source, identity, container, command):
     decrypt = subprocess.Popen(
         ["age", "-d", "-i", str(identity), str(source)],
@@ -85,12 +112,24 @@ def stream_restore(source, identity, container, command):
             ["docker", "exec", "-i", container, *command],
             stdin=decrypt.stdout,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
+        categories = set()
+        drain = threading.Thread(
+            target=classify_restore_errors, args=(restore.stderr, categories)
+        )
+        drain.start()
         decrypt.stdout.close()
         restore_result = restore.wait()
         decrypt_result = decrypt.wait()
+        drain.join()
         if restore_result or decrypt_result:
+            print(
+                f"Restore process failed: decrypt_exit={decrypt_result} "
+                f"restore_exit={restore_result} "
+                f"categories={','.join(sorted(categories)) or 'other'}",
+                flush=True,
+            )
             raise RuntimeError("decryption or restore failed")
     finally:
         if decrypt.poll() is None:
@@ -100,6 +139,8 @@ def stream_restore(source, identity, container, command):
 
 def drill(directory):
     os.umask(0o077)
+    report("list-backups")
+    print(f"Runner free disk bytes: {shutil.disk_usage(directory).free}", flush=True)
     s3 = backup.S3(directory)
     identity = backup.protected_file(directory, "age-identity")
     objects = s3.list("daily/")
@@ -113,14 +154,21 @@ def drill(directory):
     instant, newest = max(candidates, key=lambda row: row[0])
     stamp = instant.strftime("%Y%m%dT%H%M%SZ")
     manifest_file = directory / "manifest.json"
+    report("validate-manifest")
     s3.download(newest["key"], manifest_file, max_bytes=65536)
     manifest = json.loads(manifest_file.read_text())
     major = validate_manifest(manifest, stamp, datetime.now(UTC))
     prefix = newest["key"].rsplit("/", 1)[0] + "/"
     paths = {}
     for item in manifest["objects"]:
+        report(
+            "download-globals"
+            if item["name"].startswith("globals-")
+            else "download-database"
+        )
         destination = directory / item["name"]
         s3.download(prefix + item["name"], destination, max_bytes=item["size"])
+        report("verify-encrypted-object")
         if (
             destination.stat().st_size != item["size"]
             or backup.sha256(destination) != item["sha256"]
@@ -137,6 +185,10 @@ def drill(directory):
     container = f"ditto-pg-drill-{run}-{attempt}"
     role = "ditto_backup_drill_superuser"
     try:
+        report("start-isolated-database")
+        print(
+            f"Runner free disk bytes: {shutil.disk_usage(directory).free}", flush=True
+        )
         (directory / "pgdata").mkdir()
         # No ports, no network, no persistent named volume. Every DB byte lives
         # under the workflow's private staging directory and is shredded later.
@@ -165,6 +217,7 @@ def drill(directory):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        report("wait-for-database")
         for _ in range(60):
             ready = subprocess.run(
                 [
@@ -184,6 +237,7 @@ def drill(directory):
             time.sleep(1)
         else:
             raise RuntimeError("restore database did not become ready")
+        report("verify-database-version")
         version = subprocess.check_output(
             [
                 "docker",
@@ -203,12 +257,14 @@ def drill(directory):
         )
         if int(version.strip()) // 10000 != major:
             raise RuntimeError("restore database major version differs")
+        report("restore-globals")
         stream_restore(
             paths[f"globals-{stamp}.sql.age"],
             identity,
             container,
             ["psql", "-Xq", "-v", "ON_ERROR_STOP=1", "-U", role, "-d", "restore_drill"],
         )
+        report("restore-database")
         stream_restore(
             paths[f"ditto_platform_prod-{stamp}.dump.age"],
             identity,
@@ -224,6 +280,7 @@ def drill(directory):
                 "restore_drill",
             ],
         )
+        report("verify-schema-and-counts")
         query = (
             "SELECT json_build_object('alembic_version', "
             "(SELECT version_num FROM alembic_version), "
@@ -262,6 +319,7 @@ def drill(directory):
             "Platform PostgreSQL restore drill passed: schema and 3 core counts match"
         )
     finally:
+        report("remove-isolated-database")
         subprocess.run(
             ["docker", "rm", "-f", container],
             stdout=subprocess.DEVNULL,
