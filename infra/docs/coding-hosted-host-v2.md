@@ -38,6 +38,13 @@ the native launcher's socket checks to make the old role fit.
   need existing approved discovery permissions. Existing broader project/org
   grants must also be audited before approval; this module does not revoke
   inherited access.
+- Optionally, exactly one protected-workflow service account
+  (`workflow_operator`) with the same instance-scoped OS Login,
+  destination-scoped IAP SSH and actAs grants. It is never a custodian: service
+  accounts remain rejected from `operators`, and the stack only sets it when
+  `enable_coding_hosted_operate_workflow` is true. That identity is root-capable
+  on this host, so every job using it requires an independently approved
+  protected environment; see `ci-bootstrap.md`.
 
 The project-level IAP binding uses `destination.ip` from the host module's primary
 private address and `destination.port == 22`, following
