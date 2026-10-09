@@ -4,7 +4,7 @@ import {
   BACKROOM_READ_SCOPE,
   BACKROOM_WRITE_SCOPE,
   TOOL_SCOPE_REQUIREMENTS,
-} from './mcp.server'
+} from './mcp-contract.server'
 
 export function insufficientScopeResponse(request: Request, scope: string) {
   const origin = new URL(request.url).origin

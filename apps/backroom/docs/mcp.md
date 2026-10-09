@@ -304,6 +304,18 @@ Beyond the console's own secrets (`docs/oauth.md`), the MCP needs:
 
 ## Adding a tool
 
+Keep scope constants, grant types and the tool scope map in
+`mcp-contract.server.ts`. OAuth, discovery and request authorization import this
+small contract; the MCP SDK and tool registry load only after live session,
+account and scope checks pass. Add a new write/artifact tool to that map along
+with its registration and retain the tool's own entitlement check.
+
+The release job profiles the exact built Worker locally with `wrangler check
+startup` and retains `backroom-startup-<commit>-<attempt>` even if deployment
+fails. The profile identifies initialization work; its timing does not reproduce
+Cloudflare's deployment CPU limit. Locally, run `pnpm build` followed by
+`pnpm exec wrangler check startup --outfile /var/tmp/backroom-startup.cpuprofile`.
+
 Tools wrap `admin.service.ts`, the same layer the console's server functions
 call, so a new capability is one `registerTool` entry:
 
