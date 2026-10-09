@@ -29227,6 +29227,7 @@ export interface components {
              * @default 0
              */
             conflicts_dropped: number;
+            last_validation?: components["schemas"]["ReceiptValidationDiagnostic"] | null;
             /**
              * Page Deferred
              * @default 0
@@ -29270,9 +29271,9 @@ export interface components {
             /**
              * Schema Version
              * @default 1
-             * @constant
+             * @enum {integer}
              */
-            schema_version: 1;
+            schema_version: 1 | 2;
             /** Timestamp */
             timestamp: number;
             /** Validator Hotkey */
@@ -29288,6 +29289,16 @@ export interface components {
             report: components["schemas"]["ReceiptDiagnosticReport"];
             /** Stale */
             stale: boolean;
+        };
+        /**
+         * ReceiptValidationDiagnostic
+         * @description Last invalid claim's bounded codes, never the rejected claim's values.
+         */
+        ReceiptValidationDiagnostic: {
+            /** Error Count */
+            error_count: number;
+            /** Fields */
+            fields: string[];
         };
         /**
          * RelayFailure

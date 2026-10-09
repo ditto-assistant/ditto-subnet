@@ -1202,7 +1202,7 @@ export const sourceReleaseGateSchema = z.object({
   pending_receipt_count: z.number().optional(),
   receipt_diagnostics: z.array(z.object({
     report: z.object({
-      schema_version: z.literal(1),
+      schema_version: z.union([z.literal(1), z.literal(2)]),
       validator_hotkey: z.string().max(128),
       netuid: z.number().int().nonnegative(),
       timestamp: z.number().int().nonnegative(),
@@ -1216,7 +1216,14 @@ export const sourceReleaseGateSchema = z.object({
         page_forwarded: z.number().int().nonnegative(),
         page_deferred: z.number().int().nonnegative(),
         conflicts_dropped: z.number().int().nonnegative().optional(),
+        last_validation: z.object({
+          error_count: z.number().int().nonnegative().max(2147483647),
+          fields: z.array(z.string().max(512).regex(/^[a-z0-9_.*]+:[a-z_]+(:[a-z_]+)?$/)).max(5),
+        }).nullable().optional(),
       }),
+    }).refine((report) => report.schema_version === 2 || report.observation.last_validation == null, {
+      message: 'Validation diagnostic requires schema version 2',
+      path: ['observation', 'last_validation'],
     }),
     received_at: z.string(),
     stale: z.boolean(),

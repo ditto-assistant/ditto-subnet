@@ -5,10 +5,30 @@ from __future__ import annotations
 import json
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Counter = Annotated[int, Field(ge=0, le=2147483647, strict=True)]
 Timestamp = Annotated[int, Field(ge=0, strict=True)]
+
+
+class ReceiptValidationDiagnostic(BaseModel):
+    """Last invalid claim's bounded codes, never the rejected claim's values."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    error_count: Counter
+    fields: Annotated[
+        list[
+            Annotated[
+                str,
+                Field(
+                    strict=True,
+                    max_length=512,
+                    pattern=r"^[a-z0-9_.*]+:[a-z_]+(:[a-z_]+)?$",
+                ),
+            ]
+        ],
+        Field(max_length=5),
+    ]
 
 
 class ReceiptDiagnosticObservation(BaseModel):
@@ -43,23 +63,40 @@ class ReceiptDiagnosticObservation(BaseModel):
     page_forwarded: Counter = 0
     page_deferred: Counter = 0
     conflicts_dropped: Counter = 0
+    last_validation: ReceiptValidationDiagnostic | None = None
 
 
 class ReceiptDiagnosticReport(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     validator_hotkey: Annotated[str, Field(min_length=1, max_length=128)]
     netuid: Annotated[int, Field(ge=0, le=65535, strict=True)]
     timestamp: Timestamp
     observation: ReceiptDiagnosticObservation
 
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def integer_schema_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("diagnostic version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def validation_codes_require_v2(self) -> ReceiptDiagnosticReport:
+        if self.schema_version == 1 and self.observation.last_validation is not None:
+            raise ValueError("validation diagnostic requires schema version 2")
+        return self
+
 
 def diagnostic_signing_message(report: ReceiptDiagnosticReport) -> bytes:
+    body = report.model_dump(mode="json")
+    if report.schema_version == 1:
+        # Freeze the original signing bytes for existing validators. V1 rejects
+        # non-null validation codes; only V2 can authenticate the new field.
+        body["observation"].pop("last_validation")
     return (
-        b"ditto-receipt-diagnostics:v1:"
-        + json.dumps(
-            report.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-        ).encode()
+        f"ditto-receipt-diagnostics:v{report.schema_version}:".encode()
+        + json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
     )
 
 

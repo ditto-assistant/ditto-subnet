@@ -311,7 +311,10 @@ async def test_a_provisional_entry_without_the_crown_marker_names_no_champion(
     assert response.json()["message"].startswith("artifact_pin_mismatch: ")
 
 
-async def test_relay_diagnostics_authenticated_latest_only(app, client, session_maker):
+@pytest.mark.parametrize("schema_version", [1, 2])
+async def test_relay_diagnostics_authenticated_latest_only(
+    app, client, session_maker, schema_version
+):
     from ditto.api_models.receipt_diagnostics import (
         ReceiptDiagnosticObservation,
         ReceiptDiagnosticReport,
@@ -325,13 +328,22 @@ async def test_relay_diagnostics_authenticated_latest_only(app, client, session_
 
     def signed(timestamp, status="uncertain"):
         report = ReceiptDiagnosticReport(
+            schema_version=schema_version,
             validator_hotkey=_HOTKEY,
             netuid=app.state.config.chain.netuid,
             timestamp=timestamp,
             observation=ReceiptDiagnosticObservation(
                 submission_status=status,
                 submission_observed_at=timestamp,
-                recovery_status="page_complete",
+                recovery_status="validating_claim_failed",
+                last_validation=(
+                    {
+                        "error_count": 1,
+                        "fields": ["root:value_error:service_allocation"],
+                    }
+                    if schema_version == 2
+                    else None
+                ),
             ),
         )
         return SubmitReceiptDiagnostics(
@@ -350,6 +362,12 @@ async def test_relay_diagnostics_authenticated_latest_only(app, client, session_
     body["report"]["observation"]["submission_status"] = "accepted"
     assert (await post(body)).status_code == 401
     assert (await post(signed(1))).status_code == 401
+    if schema_version == 2:
+        tampered = signed(now)
+        tampered["report"]["observation"]["last_validation"]["fields"] = [
+            "root:value_error:vector_digest"
+        ]
+        assert (await post(tampered)).status_code == 401
     result = await post(signed(now))
     assert result.status_code == 200, result.text
     assert (await post(signed(now - 1, "accepted"))).status_code == 200
@@ -379,6 +397,12 @@ async def test_relay_diagnostics_authenticated_latest_only(app, client, session_
     observation = status.json()["release_gate"]["receipt_diagnostics"][0]
     assert observation["report"]["validator_hotkey"] == _HOTKEY
     assert observation["stale"] is False
+    assert observation["report"]["schema_version"] == schema_version
+    assert observation["report"]["observation"]["last_validation"] == (
+        {"error_count": 1, "fields": ["root:value_error:service_allocation"]}
+        if schema_version == 2
+        else None
+    )
     assert status.json()["release_gate"]["confirmed_kings"] == 0
 
 
