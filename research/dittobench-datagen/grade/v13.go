@@ -48,6 +48,12 @@ const declarativeAckQuestionType = DeclarativeAckQuestionType
 const declarativeAckCredit = 0.25
 
 func memoryV13(mc protocol.MemoryCase, resp protocol.RunResponse, policy gradingPolicy) Verdict {
+	if policy.foldTypographicHyphens {
+		resp = foldReplyHyphens(resp)
+	}
+	if policy.hyphenJoinedValues {
+		resp = joinHyphenatedValuesV14(mc, resp)
+	}
 	slot := strings.TrimSpace(resp.Answer)
 	full := slot + "\n" + resp.FinalText
 	qt := strings.ToLower(mc.QuestionType)
@@ -132,6 +138,30 @@ var v13AbstainableKinds = map[string]bool{
 // claimOutcome carries the disqualifier note for one scalar claim, if any.
 type claimOutcome struct {
 	zeroNote string // set when a disqualifier fired
+}
+
+// typographicHyphens maps the two hyphen code points the v14 policy folds
+// (foldTypographicHyphens) to ASCII. FIGURE DASH and the en and em dashes are
+// left alone: they separate clauses rather than join the parts of a value.
+var typographicHyphens = strings.NewReplacer("\u2010", "-", "\u2011", "-")
+
+// foldReplyHyphens folds the typographic hyphens in the graded reply text: the
+// answer slot and final_text. Hidden case values are never rewritten.
+func foldReplyHyphens(resp protocol.RunResponse) protocol.RunResponse {
+	resp.Answer = typographicHyphens.Replace(resp.Answer)
+	resp.FinalText = typographicHyphens.Replace(resp.FinalText)
+	return resp
+}
+
+// FoldReplyHyphens returns resp with its typographic hyphens folded when the
+// grading policy governing benchVersion folds them (v14+), and resp unchanged
+// otherwise. The scorer applies it to the text-graded tool cases (restraint,
+// effect reads) so the tool and memory axes read one reply the same way.
+func FoldReplyHyphens(benchVersion int, resp protocol.RunResponse) protocol.RunResponse {
+	if !gradingPolicyForVersion(benchVersion).foldTypographicHyphens {
+		return resp
+	}
+	return foldReplyHyphens(resp)
 }
 
 func gradeClaimV13(mc protocol.MemoryCase, resp protocol.RunResponse, kind string, an analysis, lex claimLexicon, policy gradingPolicy) Verdict {

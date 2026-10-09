@@ -31,6 +31,13 @@ func gradeClaimSetV13(mc protocol.MemoryCase, resp protocol.RunResponse, an anal
 		}
 		claimLex := lex
 		claimLex.setMembership = claim.Kind == protocol.ClaimKindSetMember
+		claimLex.setRemovalPlace = claimLex.setMembership && policy.setRemovalPlace
+		if policy.progressiveActions && claim.Kind == protocol.ClaimKindAction {
+			// v14: "We are pausing it" states the action "pause it"; a distractor
+			// action in the -ing form is caught the same way (#2734).
+			cm.AcceptAny = append(append([]string(nil), cm.AcceptAny...), progressiveFormsV14(append([]string{claim.Expected}, claim.Accept...))...)
+			cm.DistractorAnswers = append(append([]string(nil), cm.DistractorAnswers...), progressiveFormsV14(cm.DistractorAnswers)...)
+		}
 		// Negation intrinsic to a reviewed semantic value ("do not agree",
 		// "not happening") is not rejection of that value. An outer "not"
 		// still opens a rejected segment.
@@ -41,7 +48,11 @@ func gradeClaimSetV13(mc protocol.MemoryCase, resp protocol.RunResponse, an anal
 		// entity/channel claims as historical. Protect semantic vocabulary,
 		// not the outer rejection/correction applying to that vocabulary.
 		for _, sibling := range mc.Claims {
-			for _, value := range append([]string{sibling.Expected}, sibling.Accept...) {
+			values := append([]string{sibling.Expected}, sibling.Accept...)
+			if policy.progressiveActions && sibling.Kind == protocol.ClaimKindAction {
+				values = append(values, progressiveFormsV14(values)...)
+			}
+			for _, value := range values {
 				folded := foldV13(value)
 				claimLex.protected = append(claimLex.protected, folded)
 				claimLex.semanticValues = append(claimLex.semanticValues, folded)

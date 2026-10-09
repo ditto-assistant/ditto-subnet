@@ -53,6 +53,7 @@ import (
 // of the case's question language (multilingual.For). Every list is folded.
 type claimLexicon struct {
 	setMembership                 bool // Completed removal is nonmembership only for set claims.
+	setRemovalPlace               bool // v14: that removal may end in a short place phrase ("from the list").
 	rejection, contrast, boundary []string
 	pastStrong, pastWeak, current []string
 	correction, hedge, enumerator []string
@@ -414,6 +415,9 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 					if strings.HasSuffix(context, suffix) && !anyBounded(context, lex.hedge) {
 						seg.past = true
 					}
+				}
+				if lex.setRemovalPlace && !seg.past && removedThenPlaceV14(context) && !anyBounded(context, lex.hedge) {
+					seg.past = true
 				}
 			}
 			seg.weakPast = !seg.past && anyBounded(context, lex.pastWeak)
