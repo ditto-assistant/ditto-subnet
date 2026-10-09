@@ -82,7 +82,7 @@ async def current_managed_dispatch_observation(
             observed = TreasuryDispatchObservation.model_validate(
                 await chain.get_treasury_dispatch_observation(policy)
             )
-        except ValueError:
+        except (ValueError, ChainTreasuryActivationReadError):
             # Preserve the legacy reader's explicit authority/evidence rejection.
             raise
         except Exception as error:
@@ -94,7 +94,7 @@ async def current_managed_dispatch_observation(
                 block_hash=observed.finalized_block_hash,
                 managed_hotkeys=managed_hotkeys,
             )
-        except ValueError:
+        except (ValueError, ChainTreasuryActivationReadError):
             raise
         except Exception as error:
             raise ChainTreasuryActivationReadError("setter_roster", error) from error
