@@ -4641,6 +4641,16 @@ class Score(Base):
     details: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     """Optional per-case breakdown ``{"per_case": [...]}`` for audit."""
 
+    stderr_projection: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Database-derived JSON stderr, preserving its original type and null.
+
+    A trigger derives this from details on inserts and relevant updates,
+    including old application writers. SQL NULL means not yet backfilled;
+    the ledger falls back to details only for those rows. Never wire authority.
+    """
+
     gate_evidence: Mapped[dict | None] = mapped_column(
         _NULLABLE_JSON_VARIANT, nullable=True
     )

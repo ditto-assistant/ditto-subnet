@@ -2403,7 +2403,10 @@ async def list_eligible_ledger(
                 winners.c.agent_id,
                 winners.c.bench_version,
                 winners.c.validator_hotkey,
-                Score.details["composite_stderr"].label("value"),
+                func.coalesce(
+                    Score.stderr_projection["composite_stderr"],
+                    Score.details["composite_stderr"],
+                ).label("value"),
             )
             .select_from(winners)
             .join(

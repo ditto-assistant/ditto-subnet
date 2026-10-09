@@ -1021,6 +1021,21 @@ CREATE FUNCTION public.reject_verification_replay_receipt_change() RETURNS trigg
 
 
 --
+-- Name: scores_stderr_projection_refresh(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.scores_stderr_projection_refresh() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+                BEGIN
+                    NEW.stderr_projection := jsonb_build_object(
+                        'composite_stderr', NEW.details->'composite_stderr');
+                    RETURN NEW;
+                END
+                $$;
+
+
+--
 -- Name: stamp_review_deadline_activation_created_at(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -3964,6 +3979,7 @@ CREATE TABLE public.scores (
     model_prompt_tokens bigint,
     model_completion_tokens bigint,
     gate_evidence jsonb,
+    stderr_projection jsonb,
     CONSTRAINT ck_scores_scores_bench_version_positive CHECK ((bench_version > 0)),
     CONSTRAINT ck_scores_scores_gate_evidence_bench_floor CHECK (((gate_evidence IS NULL) OR (bench_version >= 13))),
     CONSTRAINT scores_composite_check CHECK (((composite >= (0)::double precision) AND (composite <= (1)::double precision))),
@@ -10294,6 +10310,13 @@ CREATE TRIGGER review_window_immutable BEFORE DELETE OR UPDATE ON public.screeni
 --
 
 CREATE TRIGGER scores_reject_benchmark_canary BEFORE INSERT OR UPDATE ON public.scores FOR EACH ROW EXECUTE FUNCTION public.reject_benchmark_canary_score();
+
+
+--
+-- Name: scores scores_stderr_projection_refresh; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER scores_stderr_projection_refresh BEFORE INSERT OR UPDATE OF details, stderr_projection ON public.scores FOR EACH ROW EXECUTE FUNCTION public.scores_stderr_projection_refresh();
 
 
 --
