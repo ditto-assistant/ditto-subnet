@@ -778,6 +778,8 @@ def _public_weights_fold(row: ValidatorHeartbeat) -> PublicWeightsFold | None:
 
 async def _pin_decorations(
     request: Request,
+    *,
+    max_epoch_index: int | None = None,
 ) -> tuple[list[LedgerEpochSnapshot], dict[str, PublicWeightsFold]]:
     """The two newest pins and every validator's reported fold, fail-soft.
 
@@ -791,7 +793,14 @@ async def _pin_decorations(
         return [], {}
     try:
         async with session_maker() as session:
-            pins = list(await list_pins(session, netuid=config.chain.netuid, limit=2))
+            pins = list(
+                await list_pins(
+                    session,
+                    netuid=config.chain.netuid,
+                    limit=2,
+                    max_epoch_index=max_epoch_index,
+                )
+            )
             rows = (await session.scalars(select(ValidatorHeartbeat))).all()
     except SQLAlchemyError:
         logger.warning("pin agreement decoration unavailable", exc_info=True)
@@ -810,11 +819,29 @@ def _decorate_vectors_with_pins(
     pins: list[LedgerEpochSnapshot],
     folds: dict[str, PublicWeightsFold],
     burn_hotkey: str | None,
+    ignore_invalid_pins: bool = False,
 ) -> tuple[list[PublicValidatorWeightVector], PublicPinAgreement | None]:
     current = pins[0] if pins else None
     previous = pins[1] if len(pins) > 1 else None
-    expected_current = pin_expected_shares(current) if current is not None else None
-    expected_previous = pin_expected_shares(previous) if previous is not None else None
+
+    def expected(
+        pin: LedgerEpochSnapshot | None,
+    ) -> tuple[dict[str, float] | None, bool]:
+        if pin is None:
+            return None, False
+        try:
+            return pin_expected_shares(pin), False
+        except (ValueError, KeyError):
+            if not ignore_invalid_pins:
+                raise
+            logger.warning(
+                "validator pin provenance unavailable kind=invalid_stored_pin epoch=%d",
+                pin.epoch_index,
+            )
+            return None, True
+
+    expected_current, invalid_current = expected(current)
+    expected_previous, invalid_previous = expected(previous)
     decorated: list[PublicValidatorWeightVector] = []
     matching = 0
     for vector in vectors:
@@ -824,6 +851,10 @@ def _decorate_vectors_with_pins(
             expected_previous=expected_previous,
             burn_hotkey=burn_hotkey,
         )
+        if invalid_current or invalid_previous and verdict != "current":
+            # A valid current match is independently meaningful. A failed
+            # previous comparison cannot establish divergence from both pins.
+            verdict = "unknown"
         matching += verdict == "current"
         decorated.append(
             vector.model_copy(
@@ -840,7 +871,7 @@ def _decorate_vectors_with_pins(
             matching=matching,
             total=len(decorated),
         )
-        if current is not None
+        if current is not None and not invalid_current
         else None
     )
     return decorated, agreement
