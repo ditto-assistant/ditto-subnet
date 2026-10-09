@@ -6,15 +6,17 @@ import asyncio
 import hashlib
 import json
 import logging
+from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from time import monotonic, time
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import ValidationError
 
 from ditto.api_models.receipt_diagnostics import (
     ReceiptDiagnosticObservation,
+    ReceiptFailureContext,
     ReceiptValidationDiagnostic,
 )
 from ditto.api_models.weight_receipt import (
@@ -65,6 +67,30 @@ _RECEIPT_VALIDATION_RULES = {
         "Value error, Pylon request digest does not match immutable request"
     ): "request_digest",
 }
+
+
+def _receipt_failure_context(
+    envelope: dict[str, Any], attempt: dict[str, Any]
+) -> ReceiptFailureContext:
+    """Pick known claim coordinates only; malformed values become unknown."""
+
+    def integer(value: object, low: int, high: int) -> int | None:
+        return value if type(value) is int and low <= value <= high else None
+
+    provenance = envelope.get("provenance")
+    epoch = provenance.get("epoch_index") if isinstance(provenance, dict) else None
+    attempt_id = attempt.get("attempt_id")
+    parsed_id = None
+    if isinstance(attempt_id, str) and len(attempt_id) == 36:
+        with suppress(ValueError):
+            parsed_id = UUID(attempt_id)
+    return ReceiptFailureContext(
+        claimed_schema_version=integer(envelope.get("schema_version"), 1, 2),
+        task_id=integer(envelope.get("task_id"), 1, 2147483647),
+        claimed_epoch_index=integer(epoch, 0, 2147483647),
+        claimed_commit_block=integer(attempt.get("commit_block"), 1, 4294967295),
+        attempt_id=parsed_id,
+    )
 
 
 def _receipt_validation_fields(exc: ValidationError) -> str:
@@ -135,6 +161,7 @@ class ReceiptRelayDiagnostics:
     page_deferred: int = 0
     conflicts_dropped: int = 0
     last_validation: ReceiptValidationDiagnostic | None = None
+    failure_context: ReceiptFailureContext | None = None
 
 
 class WeightReceiptRelay:
@@ -206,7 +233,9 @@ class WeightReceiptRelay:
 
     async def _recover(self) -> None:
         """Bounded recovery includes old jobs after a stateless worker restart."""
-        self.diagnostics = replace(self.diagnostics, last_validation=None)
+        self.diagnostics = replace(
+            self.diagnostics, last_validation=None, failure_context=None
+        )
         read = getattr(self.setter, "list_weight_receipts", None)
         report = getattr(self.platform, "submit_weight_receipt", None)
         acknowledge = getattr(self.setter, "acknowledge_weight_receipt", None)
@@ -302,6 +331,9 @@ class WeightReceiptRelay:
                                 last_validation=ReceiptValidationDiagnostic(
                                     error_count=exc.error_count(),
                                     fields=_receipt_validation_fields(exc).split(","),
+                                ),
+                                failure_context=_receipt_failure_context(
+                                    envelope, attempt
                                 ),
                             )
                         logger.warning(

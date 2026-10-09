@@ -570,11 +570,13 @@ async def test_diagnostic_transport_is_signed_and_allows_old_platform(status):
         assert signed == [diagnostic_signing_message(report)]
         assert report.validator_hotkey == "validator"
         assert report.netuid == 118
-        assert report.schema_version == 2
+        assert report.schema_version == 3
         assert report.observation.last_validation is not None
         assert report.observation.last_validation.fields == [
             "provenance.champion_artifact_sha256:string_pattern_mismatch"
         ]
+        assert report.observation.failure_context is not None
+        assert report.observation.failure_context.claimed_commit_block == 9029300
         assert body["signature"] == "0x" + "00" * 64
         assert request.url.path == "/api/v1/validator/receipt-diagnostics"
         return httpx.Response(status, json={"accepted": True})
@@ -598,6 +600,12 @@ async def test_diagnostic_transport_is_signed_and_allows_old_platform(status):
                     "fields": [
                         "provenance.champion_artifact_sha256:string_pattern_mismatch"
                     ],
+                },
+                failure_context={
+                    "claimed_schema_version": 1,
+                    "task_id": 12,
+                    "claimed_epoch_index": 25017,
+                    "claimed_commit_block": 9029300,
                 },
             )
         )
@@ -639,6 +647,16 @@ async def test_receipt_validation_logs_safe_field_and_stage(
     assert relay.diagnostics.last_validation.error_count == 1
     sent = platform.submit_receipt_diagnostics.call_args.args[0]
     assert sent.last_validation == relay.diagnostics.last_validation
+    assert sent.failure_context is not None
+    assert sent.failure_context.model_dump(mode="json") == {
+        "claimed_schema_version": 1,
+        "task_id": raw["task_id"],
+        "claimed_epoch_index": raw["provenance"]["epoch_index"],
+        "claimed_commit_block": None
+        if field == "commit_block"
+        else raw["attempts"][0]["commit_block"],
+        "attempt_id": raw["attempts"][0]["attempt_id"],
+    }
     for private in (
         "private-input",
         raw["request_id"],
@@ -664,6 +682,7 @@ async def test_receipt_validation_logs_bound_errors_and_redact_dict_keys(caplog)
     assert "validation_error_count=12" in caplog.text
     assert "private-key" not in caplog.text
     assert relay.diagnostics.last_validation is not None
+    assert relay.diagnostics.failure_context is not None
     assert relay.diagnostics.last_validation.error_count == 12
     assert (
         relay.diagnostics.last_validation.fields == ["weights.*:greater_than_equal"] * 5
@@ -736,8 +755,31 @@ async def test_new_recovery_page_clears_old_validation_codes():
     setter.list_weight_receipts.return_value = {"receipts": []}
     await relay.recover()
     assert relay.diagnostics.last_validation is None
+    assert relay.diagnostics.failure_context is None
     assert platform.submit_receipt_diagnostics.call_args.args[0].last_validation is None
     assert relay.diagnostics.page_deferred == 0
+
+
+async def test_invalid_claim_coordinates_are_unknown_and_never_echoed():
+    raw = envelope(finalized())
+    raw.update(schema_version=True, task_id="private-task")
+    raw["provenance"]["epoch_index"] = "private-epoch"
+    raw["attempts"][0].update(commit_block="private-block", attempt_id="private-id")
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(return_value={"receipts": [raw]}),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(), submit_receipt_diagnostics=AsyncMock()
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    await relay.recover()
+    diagnostic = platform.submit_receipt_diagnostics.call_args.args[0]
+    assert diagnostic.failure_context is not None
+    assert set(diagnostic.failure_context.model_dump().values()) == {None}
+    assert "private-" not in diagnostic.model_dump_json()
+    platform.submit_weight_receipt.assert_not_awaited()
+    setter.acknowledge_weight_receipt.assert_not_awaited()
     assert (
         WeightReceiptRelay(
             setter, platform, "validator", 118
