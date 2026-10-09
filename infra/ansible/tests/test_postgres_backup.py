@@ -233,6 +233,13 @@ class BackupTest(unittest.TestCase):
         drill.classify_restore_errors(io.BytesIO(sensitive), result)
         self.assertEqual(result, set())
 
+    def test_sqlstate_diagnostics_ignore_error_text_and_split_prefixes(self):
+        # Force a SQLSTATE prefix across the 4096-byte stream boundary.
+        private = b"private-row-value PASSWORD 'secret-hash' signed-url-token"
+        log = b"x" * 4085 + b"restore-sqlstate:23505 " + private
+        log += b"\nrestore-sqlstate:00000 startup\nrestore-sqlstate:58P01 " + private
+        self.assertEqual(drill.sqlstates_from_log(io.BytesIO(log)), ["23505", "58P01"])
+
     def manifest(self):
         return {
             "format_version": 1,

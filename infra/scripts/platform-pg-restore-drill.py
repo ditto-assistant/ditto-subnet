@@ -87,7 +87,20 @@ def classify_restore_errors(stream, result):
     patterns = {
         "disk-full": b"No space left on device",
         "extension-unavailable": b"extension is not available",
-        "role-conflict": b"already exists",
+        "object-conflict": b"already exists",
+        "missing-control-file": b"could not open extension control file",
+        "missing-library": b"could not access file",
+        "unique-violation": b"violates unique constraint",
+        "check-violation": b"violates check constraint",
+        "foreign-key-violation": b"violates foreign key constraint",
+        "invalid-input": b"invalid input syntax",
+        "unknown-parameter": b"unrecognized configuration parameter",
+        "out-of-memory": b"out of memory",
+        "maintenance-memory": b"maintenance_work_mem",
+        "shared-memory": b"shared memory",
+        "archive-read": b"could not read from input file",
+        "invalid-allocation": b"invalid memory alloc",
+        "server-disconnected": b"server closed the connection",
         "permission-denied": b"Permission denied",
         "archive-version": b"unsupported version",
     }
@@ -101,7 +114,36 @@ def classify_restore_errors(stream, result):
     stream.close()
 
 
+def sqlstates_from_log(stream):
+    # Read only error prefixes, not error messages or SQL. The server suppresses
+    # error statements and CONTEXT/DETAIL and labels severity with its SQLSTATE.
+    codes = set()
+    tail = b""
+    while chunk := stream.read(4096):
+        window = tail + chunk
+        codes.update(
+            match.decode("ascii")
+            for match in re.findall(rb"restore-sqlstate:([0-9A-Z]{5}) ", window)
+            if match != b"00000"
+        )
+        tail = window[-64:]
+    return sorted(codes)
+
+
+def report_server_sqlstates(container, since):
+    logs = subprocess.Popen(
+        ["docker", "logs", "--since", since, container],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    codes = sqlstates_from_log(logs.stdout)
+    logs.stdout.close()
+    logs.wait()
+    print(f"Restore server SQLSTATE: {','.join(codes) or 'none'}", flush=True)
+
+
 def stream_restore(source, identity, container, command):
+    since = datetime.now(UTC).isoformat()
     decrypt = subprocess.Popen(
         ["age", "-d", "-i", str(identity), str(source)],
         stdout=subprocess.PIPE,
@@ -124,6 +166,7 @@ def stream_restore(source, identity, container, command):
         decrypt_result = decrypt.wait()
         drain.join()
         if restore_result or decrypt_result:
+            report_server_sqlstates(container, since)
             print(
                 f"Restore process failed: decrypt_exit={decrypt_result} "
                 f"restore_exit={restore_result} "
@@ -212,6 +255,15 @@ def drill(directory):
                 "--mount",
                 f"type=bind,src={directory / 'pgdata'},dst=/var/lib/postgresql/data",
                 f"pgvector/pgvector:pg{major}",
+                "postgres",
+                "-c",
+                "log_min_error_statement=panic",
+                "-c",
+                "log_error_verbosity=terse",
+                "-c",
+                "log_min_messages=error",
+                "-c",
+                "log_line_prefix=restore-sqlstate:%e ",
             ],
             check=True,
             stdout=subprocess.DEVNULL,
