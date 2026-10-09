@@ -6,6 +6,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ditto.chain.errors import ChainConnectionError
+
 
 @dataclass
 class _RuntimeLoad:
@@ -48,7 +50,9 @@ class TreasuryRuntimeCache:
                     return self._values[key]
                 runtime = await load()
                 if runtime.runtime_version != version:
-                    raise ValueError("treasury runtime metadata version mismatch")
+                    raise ChainConnectionError(
+                        "treasury runtime metadata version mismatch"
+                    )
                 self._values[key] = runtime
                 if len(self._values) > 4:
                     self._values.popitem(last=False)

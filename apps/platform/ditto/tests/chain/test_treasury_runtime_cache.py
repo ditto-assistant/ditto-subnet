@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from ditto.api_server.treasury_read_diagnostics import treasury_read_failure_kind
 from ditto.chain.client import _treasury_substrate
 from ditto.chain.errors import ChainConnectionError
 from ditto.chain.treasury_runtime_cache import TreasuryRuntimeCache
@@ -125,8 +126,10 @@ async def test_failed_or_cancelled_metadata_does_not_poison_next_read(fault):
             await task
         assert cancelled.is_set()
     else:
-        with pytest.raises(ConnectionError if fault == "failure" else ValueError):
+        expected = ConnectionError if fault == "failure" else ChainConnectionError
+        with pytest.raises(expected) as rejected:
             await cache.get("a", "g", 1, decode)
+        assert treasury_read_failure_kind(rejected.value) == "connection"
     load = AsyncMock(return_value=SimpleNamespace(runtime_version=1))
     assert (await cache.get("a", "g", 1, load)).runtime_version == 1
     load.assert_awaited_once()
