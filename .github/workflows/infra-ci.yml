@@ -91,6 +91,12 @@ jobs:
           terraform -chdir=infra/terraform/modules/coding-hosted-host init -backend=false -input=false -lockfile=readonly
           terraform -chdir=infra/terraform/modules/coding-hosted-host test
 
+      - name: Test shared compute deletion protection with mocked provider
+        if: matrix.root == 'infra/terraform/stacks/gcp-platform'
+        run: |
+          terraform -chdir=infra/terraform/modules/compute/gcp init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/terraform/modules/compute/gcp test
+
       - name: Test optional compute snapshot attachments with mocked provider
         if: matrix.root == 'infra/terraform/stacks/gcp-platform'
         run: |

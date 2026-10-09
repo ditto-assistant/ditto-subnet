@@ -139,6 +139,7 @@ module "host" {
   network_tags                = [local.name]
   assign_public_ip            = false
   boot_disk_gb                = var.boot_disk_gb
+  deletion_protection         = var.deletion_protection
   service_account_email       = google_service_account.host[0].email
   enable_os_login             = true
   enable_secure_boot          = true
