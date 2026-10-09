@@ -1,12 +1,12 @@
 # Platform-owned native-v2 qualification host
 
 This is a qualification-host foundation, not a deployed worker or an approved
-private execution environment. The reusable variable default remains
-`enable_coding_hosted_host = false`, which creates no native-v2 VM, network, NAT,
-service account, or operator grant. Production intent proposes one host with
-`coding_hosted_operators = ["user:peyton@omniaura.ai"]`; this is not evidence that
-the protected apply has run. The legacy `coding_executor_host_count = 0`, native
-`enable_coding_hosted_postgres = false`, and all execution gates remain unchanged.
+private execution environment. The reusable module's `enabled` input remains
+false by default. The production root no longer invokes that module or accepts
+its former activation inputs: a reviewed retirement plan removes its native-v2
+VM, boot disk, network, NAT, service account and operator grants. The legacy
+`coding_executor_host_count = 0` and all execution gates remain unchanged.
+The cold snapshot is outside Terraform and must be preserved.
 
 The infrastructure operator designation is not approval of any artifact, key
 operation, infrastructure plan or private execution. Artifact approval must
@@ -33,7 +33,7 @@ the native launcher's socket checks to make the old role fit.
 - Explicit `user:email` Platform custodians through instance-scoped OS Login
   and destination-IP-scoped IAP SSH (port 22 only), plus actAs on this
   otherwise-empty runtime identity.
-  `coding_hosted_operators` defaults empty and enabling without it fails. No
+  The module's `operators` input defaults empty and enabling without it fails. No
   project-wide compute viewer or unconditional tunnel grant is added; operators
   need existing approved discovery permissions. Existing broader project/org
   grants must also be audited before approval; this module does not revoke
@@ -120,6 +120,32 @@ Restore its original boot attachment/auto-delete setting after the drill,
 and delete the disposable restore disk only after the retained original and
 snapshot are rechecked. The full recovery ticket remains open for its
 independent corpus and curator-media criteria.
+
+Phase one was applied through protected workflow run
+[`37975185695`](https://github.com/ditto-assistant/ditto-subnet/actions/runs/37975185695)
+at main `b9ffad6fbe51d0f4e9e7e91468927df6b1856301`. The reviewed saved plan
+contained exactly one in-place deletion-protection update; GCP subsequently
+reported the host still stopped with deletion protection false.
+
+The removal change implements phase two by removing the entire root invocation
+with null host/access outputs (omitted from Terraform state). Use the protected
+workflow with `targets=module.coding_hosted_host`, then inspect every planned
+action: only deletion of resources under that exact module is permitted. The
+200 GiB boot disk is an auto-delete attachment of the VM and is removed with it.
+The retained snapshot, Platform PostgreSQL VM/disks, Platform VPC and unrelated
+root drift must not be changed. The full root plan currently includes unrelated
+screener, IAM and secret changes and is not approved for this retirement.
+
+The PostgreSQL guest admission flag is disabled for future convergence. Terraform
+removes both peerings and the exact-host cloud firewall exception. This retirement
+does not converge or restart PostgreSQL: any old guest UFW/HBA row remains a
+separate exact-rule cleanup, with no live network path from the retired host.
+
+After apply, verify the module has no resources in state; the VM, original boot
+disk and dedicated network/IAM resources are absent; and the snapshot is READY.
+Compare PostgreSQL instance and disk identities with their pre-apply inventory.
+Recovery requires restoring a new disk from the retained snapshot and a new
+reviewed host/network/custody plan; reverting source alone does not restore data.
 
 ## Required next layers
 

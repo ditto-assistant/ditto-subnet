@@ -32,7 +32,9 @@ base_ssh_set_allow_users: false
 # Separate reviewed guest admission after the native host's private route and
 # candidate network boundary are qualified. The exact IP comes from Terraform's
 # coding_hosted_postgres_access output; never admit the whole Coding subnet.
-coding_hosted_postgres_enabled: true
+# Native host retired under SN-138. This prevents future guest admission.
+# Existing guest UFW/HBA cleanup is separate from Terraform network teardown.
+coding_hosted_postgres_enabled: false
 coding_hosted_postgres_client_ip: "10.33.0.2"
 
 # UFW is additive: disabling this flag is not an automatic rule deletion. Follow
