@@ -2708,12 +2708,13 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('retains process-local conversation admission diagnostics in the read tool', async () => {
+  it.each(['both', 'elapsed', 'completed', 'neither'] as const)('retains admission diagnostics with %s timestamps in the read tool', async (timestamps) => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const diagnostics = {
       scope: 'process', in_flight: true, attempts: 9, busy_skips: 15,
-      last_outcome: 'idle', last_elapsed_ms: 1740,
-      last_completed_at: '2026-10-09T03:00:00Z',
+      last_outcome: 'idle',
+      ...(timestamps === 'both' || timestamps === 'elapsed' ? { last_elapsed_ms: 1740 } : {}),
+      ...(timestamps === 'both' || timestamps === 'completed' ? { last_completed_at: '2026-10-09T03:00:00Z' } : {}),
     }
     const fetchMock = vi.fn().mockResolvedValue(Response.json({
       mode: 'shadow', instrument: 'conversational-continuity-v1', judge_model: 'gpt-6-astra',
