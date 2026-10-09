@@ -464,7 +464,10 @@ async def test_high_frequency_heartbeats_schedule_at_most_one_recovery_per_30s(
     assert relay.recover.await_count == 2
 
 
-async def test_diagnostics_distinguish_failure_stages_without_secret_material():
+@pytest.mark.parametrize("invalid_ack", [False, True])
+async def test_diagnostics_distinguish_failure_stages_without_secret_material(
+    invalid_ack,
+):
     from dataclasses import asdict
 
     ledger, champion = context()
@@ -487,12 +490,22 @@ async def test_diagnostics_distinguish_failure_stages_without_secret_material():
         "receipts": [envelope(claim)],
         "next_after_task_id": None,
     }
-    platform.submit_weight_receipt.side_effect = TimeoutError("secret-token")
+    failure = TimeoutError("secret-token")
+    if invalid_ack:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as invalid:
+            SubmitWeightReceiptResponse.model_validate(
+                {"receipt_digest": "secret-token"}
+            )
+        failure = invalid.value
+    platform.submit_weight_receipt.side_effect = failure
     await relay.recover()
     assert relay.diagnostics.recovery_status == "forwarding_platform_failed"
     assert relay.diagnostics.page_finalized == 1
     assert relay.diagnostics.page_deferred == 1
     assert relay.diagnostics.page_forwarded == 0
+    assert relay.diagnostics.last_validation is None
     setter.acknowledge_weight_receipt.assert_not_awaited()
     assert "secret-token" not in json.dumps(asdict(relay.diagnostics))
 
@@ -557,6 +570,11 @@ async def test_diagnostic_transport_is_signed_and_allows_old_platform(status):
         assert signed == [diagnostic_signing_message(report)]
         assert report.validator_hotkey == "validator"
         assert report.netuid == 118
+        assert report.schema_version == 2
+        assert report.observation.last_validation is not None
+        assert report.observation.last_validation.fields == [
+            "provenance.champion_artifact_sha256:string_pattern_mismatch"
+        ]
         assert body["signature"] == "0x" + "00" * 64
         assert request.url.path == "/api/v1/validator/receipt-diagnostics"
         return httpx.Response(status, json={"accepted": True})
@@ -574,7 +592,13 @@ async def test_diagnostic_transport_is_signed_and_allows_old_platform(status):
         await platform.submit_receipt_diagnostics(
             ReceiptDiagnosticObservation(
                 submission_status="uncertain",
-                recovery_status="reading_pylon_failed",
+                recovery_status="validating_claim_failed",
+                last_validation={
+                    "error_count": 1,
+                    "fields": [
+                        "provenance.champion_artifact_sha256:string_pattern_mismatch"
+                    ],
+                },
             )
         )
 
@@ -595,7 +619,9 @@ async def test_receipt_validation_logs_safe_field_and_stage(
         list_weight_receipts=AsyncMock(return_value={"receipts": [raw]}),
         acknowledge_weight_receipt=AsyncMock(),
     )
-    platform = SimpleNamespace(submit_weight_receipt=AsyncMock())
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(), submit_receipt_diagnostics=AsyncMock()
+    )
     relay = WeightReceiptRelay(setter, platform, "validator", 118)
     await relay.recover()
     assert "stage=validating_claim" in caplog.text
@@ -608,6 +634,17 @@ async def test_receipt_validation_logs_safe_field_and_stage(
     ):
         assert private not in caplog.text
     assert relay.diagnostics.recovery_status == "validating_claim_failed"
+    assert relay.diagnostics.last_validation is not None
+    assert relay.diagnostics.last_validation.fields == [expected]
+    assert relay.diagnostics.last_validation.error_count == 1
+    sent = platform.submit_receipt_diagnostics.call_args.args[0]
+    assert sent.last_validation == relay.diagnostics.last_validation
+    for private in (
+        "private-input",
+        raw["request_id"],
+        raw["attempts"][0]["ciphertext_hex"],
+    ):
+        assert private not in sent.model_dump_json()
     assert relay.diagnostics.page_deferred == 1
     platform.submit_weight_receipt.assert_not_awaited()
     setter.acknowledge_weight_receipt.assert_not_awaited()
@@ -626,7 +663,84 @@ async def test_receipt_validation_logs_bound_errors_and_redact_dict_keys(caplog)
     assert caplog.text.count("weights.*:greater_than_equal") == 5
     assert "validation_error_count=12" in caplog.text
     assert "private-key" not in caplog.text
+    assert relay.diagnostics.last_validation is not None
+    assert relay.diagnostics.last_validation.error_count == 12
+    assert (
+        relay.diagnostics.last_validation.fields == ["weights.*:greater_than_equal"] * 5
+    )
     assert "input_value" not in caplog.text
     assert relay.diagnostics.page_deferred == 1
     platform.submit_weight_receipt.assert_not_awaited()
     setter.acknowledge_weight_receipt.assert_not_awaited()
+
+
+async def test_sha256_validation_code_does_not_block_page_progress(caplog):
+    invalid = envelope(finalized())
+    invalid["provenance"]["champion_artifact_sha256"] = "x" * 64
+    valid = finalized().model_copy(update={"task_id": 2})
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(
+            return_value={
+                "receipts": [invalid, envelope(valid)],
+                "next_after_task_id": 2,
+            }
+        ),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(
+            return_value=SubmitWeightReceiptResponse(
+                request_id=valid.request_id,
+                attempt_id=valid.attempt.attempt_id,
+                receipt_digest=weight_receipt_digest(valid),
+            )
+        ),
+        submit_receipt_diagnostics=AsyncMock(),
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    await relay.recover()
+    assert relay.cursor == 2
+    assert relay.diagnostics.page_deferred == 1
+    assert relay.diagnostics.page_forwarded == 1
+    assert relay.diagnostics.last_validation is not None
+    assert relay.diagnostics.last_validation.fields == [
+        "provenance.champion_artifact_sha256:string_pattern_mismatch"
+    ]
+    platform.submit_weight_receipt.assert_awaited_once()
+    assert setter.acknowledge_weight_receipt.await_count == 1
+    assert setter.acknowledge_weight_receipt.call_args.args[0] == str(valid.request_id)
+    diagnostic = platform.submit_receipt_diagnostics.call_args.args[0]
+    assert diagnostic.last_validation == relay.diagnostics.last_validation
+    for private in (
+        "x" * 64,
+        invalid["request_id"],
+        invalid["attempts"][0]["ciphertext_hex"],
+    ):
+        assert private not in diagnostic.model_dump_json()
+        assert private not in caplog.text
+
+
+async def test_new_recovery_page_clears_old_validation_codes():
+    raw = envelope(finalized())
+    raw["attempts"][0]["commit_block"] = "private-input"
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(return_value={"receipts": [raw]}),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(), submit_receipt_diagnostics=AsyncMock()
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    await relay.recover()
+    assert relay.diagnostics.last_validation is not None
+    setter.list_weight_receipts.return_value = {"receipts": []}
+    await relay.recover()
+    assert relay.diagnostics.last_validation is None
+    assert platform.submit_receipt_diagnostics.call_args.args[0].last_validation is None
+    assert relay.diagnostics.page_deferred == 0
+    assert (
+        WeightReceiptRelay(
+            setter, platform, "validator", 118
+        ).diagnostics.last_validation
+        is None
+    )

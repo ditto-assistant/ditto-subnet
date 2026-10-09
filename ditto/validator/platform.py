@@ -327,6 +327,7 @@ class PlatformClient:
         self, observation: ReceiptDiagnosticObservation
     ) -> None:
         report = ReceiptDiagnosticReport(
+            schema_version=2,
             validator_hotkey=self._config.validator_hotkey,
             netuid=self._config.netuid,
             timestamp=int(datetime.now(UTC).timestamp()),

@@ -13,7 +13,10 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import ValidationError
 
-from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticObservation
+from ditto.api_models.receipt_diagnostics import (
+    ReceiptDiagnosticObservation,
+    ReceiptValidationDiagnostic,
+)
 from ditto.api_models.weight_receipt import (
     FinalizedWeightAttempt,
     FinalizedWeightReceipt,
@@ -131,6 +134,7 @@ class ReceiptRelayDiagnostics:
     page_forwarded: int = 0
     page_deferred: int = 0
     conflicts_dropped: int = 0
+    last_validation: ReceiptValidationDiagnostic | None = None
 
 
 class WeightReceiptRelay:
@@ -202,6 +206,7 @@ class WeightReceiptRelay:
 
     async def _recover(self) -> None:
         """Bounded recovery includes old jobs after a stateless worker restart."""
+        self.diagnostics = replace(self.diagnostics, last_validation=None)
         read = getattr(self.setter, "list_weight_receipts", None)
         report = getattr(self.platform, "submit_weight_receipt", None)
         acknowledge = getattr(self.setter, "acknowledge_weight_receipt", None)
@@ -289,6 +294,16 @@ class WeightReceiptRelay:
                         reason = type(exc).__name__
                         if isinstance(exc, WeightReceiptConflictError):
                             reason += f"({exc.code})"
+                        if stage == "validating_claim" and isinstance(
+                            exc, ValidationError
+                        ):
+                            self.diagnostics = replace(
+                                self.diagnostics,
+                                last_validation=ReceiptValidationDiagnostic(
+                                    error_count=exc.error_count(),
+                                    fields=_receipt_validation_fields(exc).split(","),
+                                ),
+                            )
                         logger.warning(
                             "individual weight receipt deferred: %s stage=%s "
                             "validation_fields=%s validation_error_count=%d",
