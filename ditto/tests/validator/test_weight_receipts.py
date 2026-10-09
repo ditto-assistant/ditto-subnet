@@ -577,3 +577,56 @@ async def test_diagnostic_transport_is_signed_and_allows_old_platform(status):
                 recovery_status="reading_pylon_failed",
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("commit_block", "private-input", "attempt.commit_block:int_type"),
+        ("ciphertext_hash", "a" * 64, "attempt:value_error:ciphertext_digest"),
+    ],
+)
+async def test_receipt_validation_logs_safe_field_and_stage(
+    caplog, field, value, expected
+):
+    raw = envelope(finalized())
+    raw["attempts"][0][field] = value
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(return_value={"receipts": [raw]}),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(submit_weight_receipt=AsyncMock())
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    await relay.recover()
+    assert "stage=validating_claim" in caplog.text
+    assert expected in caplog.text
+    assert "validation_error_count=1" in caplog.text
+    for private in (
+        "private-input",
+        raw["request_id"],
+        raw["attempts"][0]["ciphertext_hex"],
+    ):
+        assert private not in caplog.text
+    assert relay.diagnostics.recovery_status == "validating_claim_failed"
+    assert relay.diagnostics.page_deferred == 1
+    platform.submit_weight_receipt.assert_not_awaited()
+    setter.acknowledge_weight_receipt.assert_not_awaited()
+
+
+async def test_receipt_validation_logs_bound_errors_and_redact_dict_keys(caplog):
+    raw = envelope(finalized())
+    raw["weights"] = {f"private-key-{i}": -1 for i in range(12)}
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(return_value={"receipts": [raw]}),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(submit_weight_receipt=AsyncMock())
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    await relay.recover()
+    assert caplog.text.count("weights.*:greater_than_equal") == 5
+    assert "validation_error_count=12" in caplog.text
+    assert "private-key" not in caplog.text
+    assert "input_value" not in caplog.text
+    assert relay.diagnostics.page_deferred == 1
+    platform.submit_weight_receipt.assert_not_awaited()
+    setter.acknowledge_weight_receipt.assert_not_awaited()

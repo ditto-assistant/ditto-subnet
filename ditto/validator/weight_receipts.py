@@ -11,8 +11,11 @@ from time import monotonic, time
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+from pydantic import ValidationError
+
 from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticObservation
 from ditto.api_models.weight_receipt import (
+    FinalizedWeightAttempt,
     FinalizedWeightReceipt,
     WeightProvenance,
     weight_receipt_digest,
@@ -33,6 +36,81 @@ forever floods the platform with 409s (issue #2712) and rides in front of
 genuine late-arriving receipts. The dropped count rides the relay diagnostics
 so the drop is observable without retaining any receipt content.
 """
+
+_RECEIPT_DIAGNOSTIC_FIELDS = frozenset(
+    FinalizedWeightReceipt.model_fields
+    | FinalizedWeightAttempt.model_fields
+    | WeightProvenance.model_fields
+    | EnforcingTreasuryPin.model_fields
+)
+_RECEIPT_VALIDATION_RULES = {
+    "Value error, champion identity and artifact must be paired": "champion_pair",
+    "Value error, normalized weights contain duplicate UIDs": "duplicate_uids",
+    "Value error, normalized weights have no positive value": "empty_weights",
+    "Value error, ciphertext hash does not match ciphertext": "ciphertext_digest",
+    (
+        "Value error, legacy receipt requires champion and no enforcing pin"
+    ): "legacy_authority",
+    (
+        "Value error, enforcing receipt differs from pinned treasury authority"
+    ): "pinned_authority",
+    (
+        "Value error, enforcing receipt does not conserve service allocation"
+    ): "service_allocation",
+    "Value error, weight vector digest does not match request weights": "vector_digest",
+    (
+        "Value error, Pylon request digest does not match immutable request"
+    ): "request_digest",
+}
+
+
+def _receipt_validation_fields(exc: ValidationError) -> str:
+    """Only schema-owned names; dict keys, values and messages stay private."""
+    fields = []
+    for error in exc.errors(
+        include_url=False, include_context=False, include_input=False
+    )[:5]:
+        location = (
+            ".".join(
+                part
+                if isinstance(part, str) and part in _RECEIPT_DIAGNOSTIC_FIELDS
+                else "*"
+                for part in error["loc"][:8]
+            )
+            or "root"
+        )
+        # Pydantic's built-in validation types are fixed by the receipt model.
+        # Unknown/custom types must not become a channel for arbitrary text.
+        kind = error["type"]
+        if kind not in {
+            "missing",
+            "int_type",
+            "int_parsing",
+            "float_type",
+            "float_parsing",
+            "finite_number",
+            "greater_than",
+            "greater_than_equal",
+            "less_than_equal",
+            "string_type",
+            "string_too_short",
+            "string_too_long",
+            "string_pattern_mismatch",
+            "uuid_parsing",
+            "uuid_type",
+            "list_type",
+            "tuple_type",
+            "dict_type",
+            "model_type",
+            "literal_error",
+            "too_short",
+            "too_long",
+            "value_error",
+        }:
+            kind = "other"
+        rule = _RECEIPT_VALIDATION_RULES.get(error["msg"])
+        fields.append(f"{location}:{kind}" + (f":{rule}" if rule else ""))
+    return ",".join(fields)
 
 
 @dataclass(frozen=True)
@@ -211,7 +289,18 @@ class WeightReceiptRelay:
                         reason = type(exc).__name__
                         if isinstance(exc, WeightReceiptConflictError):
                             reason += f"({exc.code})"
-                        logger.warning("individual weight receipt deferred: %s", reason)
+                        logger.warning(
+                            "individual weight receipt deferred: %s stage=%s "
+                            "validation_fields=%s validation_error_count=%d",
+                            reason,
+                            stage,
+                            _receipt_validation_fields(exc)
+                            if isinstance(exc, ValidationError)
+                            else "none",
+                            exc.error_count()
+                            if isinstance(exc, ValidationError)
+                            else 0,
+                        )
                         if stage == "forwarding_platform" and isinstance(
                             exc, WeightReceiptConflictError
                         ):
