@@ -2359,6 +2359,29 @@ async def list_eligible_ledger(
         # A key the row does not have arrives as SQL NULL -> Python None, which
         # every reader of these keys already treats as absent.
         keys = tuple(dict.fromkeys(details_keys))
+        cached_keys = {
+            "composite_stderr",
+            "confirmation_seeds",
+            "confirmation_composites",
+        }
+        cached_details = None
+        if keys and set(keys) <= cached_keys:
+            # The trigger derives exact JSON from this physical score row.
+            # A partial/old projection is not proof of absent fields: fall back
+            # during interrupted backfills and rolling application rollback.
+            cached_details = case(
+                (
+                    and_(
+                        func.jsonb_typeof(Score.stderr_projection) == "object",
+                        *(Score.stderr_projection.bool_op("?")(key) for key in keys),
+                    ),
+                    Score.stderr_projection,
+                ),
+                else_=func.jsonb_path_query_first(
+                    Score.details,
+                    sql_cast(literal('strict $ ? (@.type() == "object")'), JSONPATH),
+                ),
+            )
         if len(keys) > 1:
             # Each independent key lookup detoasts the whole audit document.
             # A strict root-object filter preserves all-null projections for
@@ -2366,7 +2389,9 @@ async def list_eligible_ledger(
             # and again for the record. Never unwrap array/object decoys.
             details_evidence = (
                 func.jsonb_to_record(
-                    func.jsonb_path_query_first(
+                    cached_details
+                    if cached_details is not None
+                    else func.jsonb_path_query_first(
                         Score.details,
                         sql_cast(
                             literal('strict $ ? (@.type() == "object")'), JSONPATH
@@ -2383,6 +2408,8 @@ async def list_eligible_ledger(
             pairs.append(
                 details_evidence.c[key]
                 if details_evidence is not None
+                else cached_details[key]
+                if cached_details is not None
                 else Score.details[key]
             )
         details_column = func.jsonb_build_object(*pairs).label("details")

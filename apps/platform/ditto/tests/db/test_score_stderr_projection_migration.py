@@ -13,15 +13,22 @@ from sqlalchemy import Connection, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 
-def _probe(connection: Connection) -> None:
-    path = (
-        Path(__file__).parents[3]
-        / "alembic/versions/2026_10_09_add_score_stderr_projection.py"
-    )
+def _load_migration(name: str) -> Any:
+    path = Path(__file__).parents[3] / "alembic/versions" / name
     spec = importlib.util.spec_from_file_location("stderr_projection_migration", path)
     assert spec is not None and spec.loader is not None
     migration = cast(Any, importlib.util.module_from_spec(spec))
     spec.loader.exec_module(migration)
+    return migration
+
+
+def _probe(connection: Connection, *, fold: bool = False) -> None:
+    legacy = _load_migration("2026_10_09_add_score_stderr_projection.py")
+    migration = (
+        _load_migration("2026_10_09_extend_score_fold_projection.py")
+        if fold
+        else legacy
+    )
     schema = "stderr_probe_" + uuid4().hex
     connection.exec_driver_sql(f"CREATE SCHEMA {schema}")
     connection.exec_driver_sql(f"SET search_path TO {schema}, public")
@@ -39,6 +46,12 @@ def _probe(connection: Connection) -> None:
         {"composite_stderr": 0.125},
         {"composite_stderr": 2},
         {"composite_stderr": 10**310},
+        {
+            "composite_stderr": 0.1,
+            "confirmation_seeds": [1, 2],
+            "confirmation_composites": [0.5, 0.9],
+        },
+        {"confirmation_seeds": "invalid", "confirmation_composites": {"x": True}},
     ]
     try:
         for index, document in enumerate(documents):
@@ -58,14 +71,23 @@ def _probe(connection: Connection) -> None:
             "SELECT id, details::text FROM scores ORDER BY id"
         ).all()
         connection.rollback()
+        if fold:
+            with Operations.context(MigrationContext.configure(connection)):
+                legacy.upgrade()
+            connection.rollback()
         for _ in range(2):
             with Operations.context(MigrationContext.configure(connection)):
                 migration.upgrade()
+            projection = "'composite_stderr', details->'composite_stderr'"
+            if fold:
+                projection += (
+                    ", 'confirmation_seeds', details->'confirmation_seeds', "
+                    "'confirmation_composites', details->'confirmation_composites'"
+                )
             mismatch = connection.exec_driver_sql(
                 "SELECT count(*) FROM scores WHERE bench_version >= 7 "
                 "AND stderr_projection "
-                "IS DISTINCT FROM jsonb_build_object("
-                "'composite_stderr', details->'composite_stderr')"
+                f"IS DISTINCT FROM jsonb_build_object({projection})"
             ).scalar_one()
             assert mismatch == 0
             assert (
@@ -104,18 +126,27 @@ def _probe(connection: Connection) -> None:
         connection.commit()
         with Operations.context(MigrationContext.configure(connection)):
             migration.downgrade()
-        assert (
-            connection.execute(
-                text(
-                    "SELECT count(*) FROM information_schema.columns WHERE "
-                    "table_schema=:schema AND table_name='scores' "
-                    "AND column_name='stderr_projection'"
-                ),
-                {"schema": schema},
-            ).scalar_one()
-            == 0
-        )
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM information_schema.columns WHERE "
+                "table_schema=:schema AND table_name='scores' "
+                "AND column_name='stderr_projection'"
+            ),
+            {"schema": schema},
+        ).scalar_one() == (1 if fold else 0)
         connection.rollback()
+        if fold:
+            connection.exec_driver_sql("UPDATE scores SET details=details WHERE id=99")
+            # Old trigger writes are valid for old readers and force the new
+            # partial reader's canonical fallback until upgrade/replay fills it.
+            assert (
+                connection.exec_driver_sql(
+                    "SELECT stderr_projection ? 'confirmation_seeds' "
+                    "FROM scores WHERE id=99"
+                ).scalar_one()
+                is False
+            )
+            connection.commit()
         with Operations.context(MigrationContext.configure(connection)):
             migration.upgrade()
         assert (
@@ -132,7 +163,10 @@ def _probe(connection: Connection) -> None:
 
 
 @pytest.mark.asyncio
-async def test_score_stderr_projection_migration(engine: AsyncEngine) -> None:
+@pytest.mark.parametrize("fold", [False, True])
+async def test_score_stderr_projection_migration(
+    engine: AsyncEngine, fold: bool
+) -> None:
     assert engine.dialect.name == "postgresql"
     async with engine.connect() as connection:
-        await connection.run_sync(_probe)
+        await connection.run_sync(lambda sync: _probe(sync, fold=fold))

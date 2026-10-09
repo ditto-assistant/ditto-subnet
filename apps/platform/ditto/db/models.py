@@ -4644,7 +4644,7 @@ class Score(Base):
     stderr_projection: Mapped[dict | None] = mapped_column(
         _NULLABLE_JSON_VARIANT, nullable=True
     )
-    """Database-derived JSON stderr, preserving its original type and null.
+    """Database-derived JSON fold fields, preserving original types and nulls.
 
     A trigger derives this from details on inserts and relevant updates,
     including old application writers. SQL NULL means not yet backfilled;

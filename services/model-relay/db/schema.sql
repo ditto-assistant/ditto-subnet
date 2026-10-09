@@ -1029,7 +1029,10 @@ CREATE FUNCTION public.scores_stderr_projection_refresh() RETURNS trigger
     AS $$
                 BEGIN
                     NEW.stderr_projection := jsonb_build_object(
-                        'composite_stderr', NEW.details->'composite_stderr');
+                        'composite_stderr', NEW.details->'composite_stderr',
+                        'confirmation_seeds', NEW.details->'confirmation_seeds',
+                        'confirmation_composites',
+                        NEW.details->'confirmation_composites');
                     RETURN NEW;
                 END
                 $$;

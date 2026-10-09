@@ -21,6 +21,7 @@ Three things are pinned here:
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -31,7 +32,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -1602,6 +1603,71 @@ class TestContinuationFloor:
             "explicit_null": None,
         }
         assert row.stored_composite_stderr == 0.008
+
+    @pytest.mark.parametrize("cache_mode", ["current", "null", "legacy", "array_decoy"])
+    async def test_fold_projection_keeps_exact_median_and_legacy_fallback(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        cache_mode: str,
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "S" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        keys = ("composite_stderr", "confirmation_seeds", "confirmation_composites")
+        async with session_maker() as session, session.begin():
+            for score in await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            ):
+                score.details = {
+                    "composite_stderr": score.composite / 100,
+                    "confirmation_seeds": [11, 22],
+                    "confirmation_composites": [score.composite, 0.95],
+                    "audit_payload": "irrelevant audit telemetry" * 5000,
+                }
+        if cache_mode != "current":
+            trigger = "scores_stderr_projection_refresh"
+            # Simulate interrupted migration/rollback and a malformed internal
+            # cache. Production writes cannot supply one: the trigger derives it.
+            async with session_maker() as session, session.begin():
+                await session.execute(
+                    text(f"ALTER TABLE scores DISABLE TRIGGER {trigger}")
+                )
+                projection = {
+                    "null": None,
+                    "legacy": {"composite_stderr": 99},
+                    "array_decoy": list(keys),
+                }[cache_mode]
+                await session.execute(
+                    text(
+                        "UPDATE scores SET "
+                        "stderr_projection=CAST(:projection AS jsonb) "
+                        "WHERE agent_id=:agent_id"
+                    ),
+                    {
+                        "projection": None
+                        if projection is None
+                        else json.dumps(projection),
+                        "agent_id": agent_id,
+                    },
+                )
+                await session.execute(
+                    text(f"ALTER TABLE scores ENABLE TRIGGER {trigger}")
+                )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session, bench_version=_BENCH, details_keys=keys
+            )
+        assert len(rows) == 1
+        assert rows[0].validator_hotkey == _VALIDATORS[0]
+        assert rows[0].details == {
+            "composite_stderr": 0.008,
+            "confirmation_seeds": [11, 22],
+            "confirmation_composites": [0.8, 0.95],
+        }
+        assert rows[0].stored_composite_stderr == 0.008
 
     @pytest.mark.parametrize("keys", [(), ("bench_version",), ("bench_version",) * 2])
     async def test_partial_details_empty_and_single_key_projection(
