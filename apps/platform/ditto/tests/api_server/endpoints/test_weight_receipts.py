@@ -419,7 +419,7 @@ async def test_validator_prefixed_receipt_signature_is_accepted(
     assert (await _post(client, body)).status_code == 401
 
 
-async def _setup_enforcing(app, maker, *, empty=True):
+async def _setup_enforcing(app, maker, *, empty=True, follower=False):
     from pathlib import Path
 
     from ditto_screening_protocol.treasury_approval import (
@@ -456,7 +456,11 @@ async def _setup_enforcing(app, maker, *, empty=True):
                 "fleet": (
                     pin.fleet[0].model_copy(
                         update={
-                            "validator_hotkey": _HOTKEY,
+                            "validator_hotkey": (
+                                bittensor.Keypair.create_from_uri("//Bob").ss58_address
+                                if follower
+                                else _HOTKEY
+                            ),
                             "approved_policy_digest": policy.digest,
                         }
                     ),
@@ -507,10 +511,15 @@ async def _setup_enforcing(app, maker, *, empty=True):
 
 
 @pytest.mark.parametrize("empty", [True, False])
+@pytest.mark.parametrize("follower", [True, False])
 async def test_enforcing_receipt_binds_exact_frozen_pin_and_allows_empty_competition(
-    app, client, session_maker, empty
+    app, client, session_maker, empty, follower
 ):
-    raw = await _setup_enforcing(app, session_maker, empty=empty)
+    raw = await _setup_enforcing(app, session_maker, empty=empty, follower=follower)
+    assert (
+        raw["validator_hotkey"]
+        in [member["validator_hotkey"] for member in raw["treasury_pin"]["fleet"]]
+    ) is not follower
     first = await _post(client, _signed(raw))
     assert first.status_code == 200, first.text
     replay = await _post(client, _signed(raw))
@@ -527,12 +536,13 @@ async def test_enforcing_receipt_binds_exact_frozen_pin_and_allows_empty_competi
         "legacy_receipt",
     ],
 )
+@pytest.mark.parametrize("follower", [True, False])
 async def test_enforcing_receipt_rejects_unbound_or_legacy_contract(
-    app, client, session_maker, fault
+    app, client, session_maker, fault, follower
 ):
     from uuid import UUID
 
-    raw = await _setup_enforcing(app, session_maker, empty=False)
+    raw = await _setup_enforcing(app, session_maker, empty=False, follower=follower)
     if fault == "legacy_receipt":
         raw.update(schema_version=1)
         raw.pop("treasury_pin")
