@@ -12,6 +12,12 @@ variable "coding_hosted_operators" {
   default     = []
 }
 
+variable "coding_hosted_deletion_protection" {
+  description = "First retirement phase only: disable GCE protection after a verified cold restore, retaining Terraform prevent_destroy until a separate removal plan."
+  type        = bool
+  default     = true
+}
+
 variable "enable_coding_hosted_postgres" {
   description = "Add the separately reviewed private native-host TCP 5432 path; no worker, credentials or guest database admission is enabled."
   type        = bool
@@ -24,12 +30,13 @@ variable "enable_coding_hosted_postgres" {
 }
 
 module "coding_hosted_host" {
-  source    = "../../modules/coding-hosted-host"
-  enabled   = var.enable_coding_hosted_host
-  project   = var.project
-  region    = var.region
-  zone      = var.zone
-  operators = var.coding_hosted_operators
+  source              = "../../modules/coding-hosted-host"
+  enabled             = var.enable_coding_hosted_host
+  project             = var.project
+  region              = var.region
+  zone                = var.zone
+  operators           = var.coding_hosted_operators
+  deletion_protection = var.coding_hosted_deletion_protection
   postgres_peer = var.enable_coding_hosted_postgres ? {
     network_self_link = module.network.network_self_link
     private_ip        = module.pg_vm.internal_ip

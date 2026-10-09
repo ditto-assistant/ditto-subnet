@@ -22,6 +22,9 @@ coding_executor_host_count = 0
 enable_coding_hosted_host     = true
 coding_hosted_operators       = ["user:peyton@omniaura.ai"]
 enable_coding_hosted_postgres = true
+# SN-138: cold snapshot restored and boot/RSA recovery verified. Preparation
+# only: keep the VM and Terraform prevent_destroy until a separate removal plan.
+coding_hosted_deletion_protection = false
 # The generator VM must never become persistent production intent. The
 # protected plan workflow overrides this only for a supervised bootstrap/armed
 # window, then seals a teardown plan returning it to absent.

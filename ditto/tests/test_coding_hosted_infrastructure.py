@@ -14,7 +14,7 @@ DOC = (ROOT / "infra/docs/coding-hosted-host-v2.md").read_text()
 def test_native_foundation_is_independent_and_default_off() -> None:
     entry = (STACK / "coding-hosted.tf").read_text()
     prod = (STACK / "prod.auto.tfvars").read_text()
-    assert 'source    = "../../modules/coding-hosted-host"' in entry
+    assert re.search(r'source\s*=\s*"../../modules/coding-hosted-host"', entry)
     assert 'variable "enable_coding_hosted_host"' in entry
     assert "default     = false" in entry
     assert "coding_executor_host_count = 0" in prod
@@ -46,6 +46,20 @@ def test_all_native_resources_are_conditional() -> None:
             r"for_each\s*= var.enabled \? toset\(|for_each\s*= local.operators)",
             block,
         ), block.splitlines()[0]
+
+
+def test_retirement_prepares_only_native_host_protection() -> None:
+    entry = (STACK / "coding-hosted.tf").read_text()
+    prod = (STACK / "prod.auto.tfvars").read_text()
+    assert re.search(r"(?m)^coding_hosted_deletion_protection\s*=\s*false\s*$", prod)
+    assert re.search(
+        r"deletion_protection\s*=\s*var.coding_hosted_deletion_protection", entry
+    )
+    assert re.search(r"deletion_protection\s*=\s*var.deletion_protection", SOURCE)
+    assert re.search(
+        r'variable "deletion_protection"\s*\{[^}]*default\s*=\s*true',
+        VARIABLES,
+    )
 
 
 def test_runtime_identity_cannot_access_private_data() -> None:
@@ -87,7 +101,14 @@ def test_vm_uses_existing_protected_compute_module() -> None:
         SOURCE,
     )
     compute = (ROOT / "infra/terraform/modules/compute/gcp/main.tf").read_text()
-    assert "deletion_protection = true" in compute
+    assert "deletion_protection = var.deletion_protection" in compute
+    compute_variables = (
+        ROOT / "infra/terraform/modules/compute/gcp/variables.tf"
+    ).read_text()
+    assert re.search(
+        r'variable "deletion_protection"\s*\{[^}]*default\s*=\s*true',
+        compute_variables,
+    )
     assert "prevent_destroy = true" in compute
     for rule in ("deny_private", "host_web", "deny_other_egress"):
         assert f"google_compute_firewall.{rule}," in SOURCE

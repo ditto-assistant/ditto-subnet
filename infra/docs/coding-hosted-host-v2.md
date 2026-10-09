@@ -83,6 +83,44 @@ reconcile retained material, plan a separately authorized decommission, and
 preserve private tombstones/evidence. Do not disable deletion protection or
 remove state as an automatic recovery step.
 
+## October 2026 retirement preparation (SN-138)
+
+The idle host was stopped and a regional encrypted cold snapshot retained.
+Snapshot `ditto-coding-hosted-v2-cold-20261009` (ID
+`5016213937203751656`) was restored to a temporary 200 GiB disk and booted on
+the same trusted VM with its existing IAP, network and Shielded VM settings.
+The restored RSA-3072 key matched the public SPKI fingerprint and receipt,
+passed an in-place OAEP-SHA256 round trip, and rejected tampered ciphertext.
+No private PEM was exported. No worker, custody instance or coding container
+was running. This demonstrates restored boot and synthetic RSA recovery;
+historical Hippius corpus decryption and offline curator-media recovery remain
+unverified. The evidence belongs in
+[the recovery report](https://omniaura-team.atlassian.net/wiki/spaces/INFRA/pages/15728641)
+and [SN-138](https://omniaura-team.atlassian.net/browse/SN-138), not in Git.
+
+Retirement has two separately reviewed protected plan/apply phases:
+
+1. Production intent sets `coding_hosted_deletion_protection = false`.
+   All other compute callers retain the default `true`. The host module,
+   its networking, IAM, boot disk and Terraform `prevent_destroy` remain.
+   Review the saved plan for an in-place protection update only; do not apply
+   unrelated drift, a replacement, or a VM start.
+2. After that apply is verified, remove the entire root host module invocation
+   in a separate change and saved plan. Explicitly destroy only its retained
+   host resources, private PostgreSQL path and dedicated networking/IAM;
+   preserve the cold snapshot and unrelated PostgreSQL VM/data. Removing the
+   module configuration also removes its lifecycle destruction guard, so
+   setting an enable flag to false is not a substitute for this review.
+
+The first-phase source change is inactive until its exact saved plan is
+approved and applied through `infra-plan-apply.yml`. A subsequent unrelated
+apply of this root will also see the protection change: review that coupling.
+Keep the original disk attached and stopped until the destruction phase.
+Restore its original boot attachment/auto-delete setting after the drill,
+and delete the disposable restore disk only after the retained original and
+snapshot are rechecked. The full recovery ticket remains open for its
+independent corpus and curator-media criteria.
+
 ## Required next layers
 
 1. The separate [native-v2 daemon role](coding-hosted-daemon-v2.md), targeting
