@@ -81,7 +81,7 @@ def report(stage):
     print(f"Restore stage: {stage}", flush=True)
 
 
-def classify_restore_errors(stream, result):
+def classify_restore_errors(stream, result, checks=None):
     # Drain stderr concurrently to prevent pipe backpressure. Retain no SQL,
     # role hashes, identifiers or provider URLs; return only fixed categories.
     patterns = {
@@ -110,7 +110,27 @@ def classify_restore_errors(stream, result):
         for label, pattern in patterns.items():
             if pattern in window:
                 result.add(label)
-        tail = window[-128:]
+        if checks is not None:
+            identifier = rb"([A-Za-z_][A-Za-z_0-9]{0,62})"
+            for table, constraint in re.findall(
+                rb'new row for relation "'
+                + identifier
+                + rb'" violates check constraint "'
+                + identifier
+                + rb'"',
+                window,
+            ):
+                checks.add((table.decode("ascii"), constraint.decode("ascii")))
+            for constraint, table in re.findall(
+                rb'check constraint "'
+                + identifier
+                + rb'" of relation "'
+                + identifier
+                + rb'" is violated by some row',
+                window,
+            ):
+                checks.add((table.decode("ascii"), constraint.decode("ascii")))
+        tail = window[-512:]
     stream.close()
 
 
@@ -142,6 +162,39 @@ def report_server_sqlstates(container, since):
     print(f"Restore server SQLSTATE: {','.join(codes) or 'none'}", flush=True)
 
 
+def report_check_names(container, role, checks):
+    # Only report identifiers that exist in the restored public catalog. This
+    # prevents error DETAIL/row content from fabricating an identifier to print.
+    query = (
+        "SELECT coalesce(json_agg(json_build_array(r.relname,c.conname)),'[]') "
+        "FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid "
+        "WHERE c.contype='c' AND c.connamespace='public'::regnamespace;"
+    )
+    known = json.loads(
+        subprocess.check_output(
+            [
+                "docker",
+                "exec",
+                container,
+                "psql",
+                "-XAtq",
+                "-U",
+                role,
+                "-d",
+                "restore_drill",
+                "-c",
+                query,
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    )
+    if len(known) > 10000:
+        raise RuntimeError("restored constraint catalog exceeds bound")
+    selected = sorted(checks & {tuple(row) for row in known})
+    print("Restore CHECK identifiers: " + json.dumps(selected), flush=True)
+
+
 def stream_restore(source, identity, container, command):
     since = datetime.now(UTC).isoformat()
     decrypt = subprocess.Popen(
@@ -157,8 +210,9 @@ def stream_restore(source, identity, container, command):
             stderr=subprocess.PIPE,
         )
         categories = set()
+        checks = set()
         drain = threading.Thread(
-            target=classify_restore_errors, args=(restore.stderr, categories)
+            target=classify_restore_errors, args=(restore.stderr, categories, checks)
         )
         drain.start()
         decrypt.stdout.close()
@@ -167,6 +221,8 @@ def stream_restore(source, identity, container, command):
         drain.join()
         if restore_result or decrypt_result:
             report_server_sqlstates(container, since)
+            if checks:
+                report_check_names(container, command[command.index("-U") + 1], checks)
             print(
                 f"Restore process failed: decrypt_exit={decrypt_result} "
                 f"restore_exit={restore_result} "

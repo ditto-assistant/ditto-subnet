@@ -7,7 +7,7 @@ import os
 import subprocess
 import tempfile
 import unittest
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stdout
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -239,6 +239,41 @@ class BackupTest(unittest.TestCase):
         log = b"x" * 4085 + b"restore-sqlstate:23505 " + private
         log += b"\nrestore-sqlstate:00000 startup\nrestore-sqlstate:58P01 " + private
         self.assertEqual(drill.sqlstates_from_log(io.BytesIO(log)), ["23505", "58P01"])
+
+    def test_check_failure_extracts_identifiers_without_row_values(self):
+        errors = (
+            b'new row for relation "scores" violates check constraint '
+            b'"scores_bench_version_floor"\nDETAIL: secret-row-value signed-url-token\n'
+            b'check constraint "other_check" of relation "other_table" '
+            b"is violated by some row"
+        )
+        categories, checks = set(), set()
+        drill.classify_restore_errors(io.BytesIO(errors), categories, checks)
+        self.assertEqual(
+            checks,
+            {("scores", "scores_bench_version_floor"), ("other_table", "other_check")},
+        )
+        self.assertEqual(categories, {"check-violation"})
+
+    def test_check_report_rejects_identifiers_fabricated_by_row_content(self):
+        output = io.StringIO()
+        with (
+            patch.object(
+                drill.subprocess,
+                "check_output",
+                return_value='[["scores","known_check"]]',
+            ),
+            redirect_stdout(output),
+        ):
+            drill.report_check_names(
+                "container",
+                "role",
+                {("scores", "known_check"), ("private_row_token", "secret_value")},
+            )
+        self.assertEqual(
+            output.getvalue(),
+            'Restore CHECK identifiers: [["scores", "known_check"]]\n',
+        )
 
     def manifest(self):
         return {
