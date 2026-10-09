@@ -1076,6 +1076,7 @@ async def execute_ath_rulings_batch(
                 "index": index,
                 "action": ruling.action,
                 "rulings_sha256": digest,
+                "expected_sha256": ruling.expected_sha256,
                 "upload_key": key,
                 "source": document.source,
                 "evidence_references": list(ruling.evidence_references),

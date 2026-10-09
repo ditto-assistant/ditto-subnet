@@ -287,6 +287,28 @@ clearance may permit a high-risk static lead to continue to the build boundary.
 An unresolved lead remains retryable, inconclusive, or quarantined and never
 becomes a terminal automatic rejection.
 
+Full source reviews also receive hashes of cited source windows from up to three
+earlier, still-rejected submissions linked by the same hotkey or the exact
+submission payment coldkey. Platform verifies each original archive digest and
+the rejection's artifact binding before producing up to 32 windows of at most
+five lines.
+The worker searches at most 512 current files / 2 MiB in one archive pass;
+spacing changes and moving code between files retain a match, while quoted
+literal contents remain significant.
+
+A match adds `rejected-ancestor-mechanism` locations to the existing inert
+reviewer. It never certifies a violation or a clearance, and a remediated
+submission can still pass. Missing or corrupt historical source is reported as
+`rejected-ancestor-source-unavailable` evidence on audited verdicts without
+blocking the current source fetch. Each historical fetch/parse has a 10-second
+deadline, with at most three ancestors. Platform records lookup availability for
+every source fetch, including passing jobs. Backroom's read-scoped
+`get_screening_submission` exposes the latest artifact-bound lookup: `partial`
+lists missing ancestor UUIDs, `available` means lookup completed (not policy
+clearance), `mechanical_only` means it was skipped, and null means not recorded.
+Mechanical-only work skips this supplemental review path. Older
+Platform/worker versions ignore the additive metadata during rolling upgrades.
+
 Source-review requests follow OpenRouter's app-attribution contract with
 `HTTP-Referer: https://heyditto.ai` and `X-OpenRouter-Title: Ditto`.
 
