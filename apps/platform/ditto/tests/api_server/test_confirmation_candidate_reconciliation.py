@@ -8,6 +8,7 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -25,6 +26,8 @@ from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.validator import V9BaseEvidence
 from ditto.api_server.confirmation_candidate_reconciliation import (
     ConfirmationReconciliation,
+    _base_proof_from_score,
+    _quorum_median_rows,
     lower_median_base_proof,
     reconcile_confirmation_candidates,
 )
@@ -39,6 +42,7 @@ from ditto.db.models import (
     Score,
 )
 from ditto.db.queries.confirmation_bundles import (
+    ConfirmationBundlePersistenceError,
     complete_confirmation_bundle,
     insert_confirmation_bundle_settings_revision,
     issue_confirmation_bundle_ticket,
@@ -216,6 +220,150 @@ async def _agent_with_quorum(
 def _registry() -> dict[tuple[str, str], object]:
     profile = verification_profile()
     return {(profile.revision, profile.checksum()): profile}
+
+
+@pytest.mark.parametrize(
+    "composites",
+    [
+        (600_000, 700_000, 800_000),
+        (600_000, 700_000, 800_000, 900_000),
+        (700_000, 700_000, 700_000, 700_000),
+    ],
+)
+async def test_median_projection_retains_physical_proof_without_audit_payload(
+    session_maker: async_sessionmaker[AsyncSession], composites: tuple[int, ...]
+) -> None:
+    async with session_maker() as session:
+        agent, scores = await _agent_with_quorum(
+            session, index=90, composites=composites
+        )
+        for score in scores:
+            assert isinstance(score.details, dict)
+            score.details = {**score.details, "unused_cases": "x" * 250_000}
+        await session.flush()
+        projected = (
+            await _quorum_median_rows(
+                session, [agent.agent_id], bench_versions={agent.agent_id: 9}
+            )
+        )[agent.agent_id]
+        winner = sorted(scores, key=lambda row: (row.composite, row.validator_hotkey))[
+            (len(scores) - 1) // 2
+        ]
+        assert projected.n == winner.n
+        assert projected.composite == winner.composite
+        assert isinstance(winner.details, dict)
+        assert projected.details == {
+            key: winner.details[key] for key in ("v9_base", "base_evidence_sha256")
+        }
+        assert len(json.dumps(projected.details)) < 10_000
+        assert _base_proof_from_score(
+            projected, artifact_sha256=agent.sha256, bench_version=9
+        ) == lower_median_base_proof(
+            scores, artifact_sha256=agent.sha256, bench_version=9
+        )
+
+
+async def test_median_projection_keeps_each_agents_requested_benchmark(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_maker() as session:
+        first, _ = await _agent_with_quorum(
+            session, index=91, composites=(600_000, 700_000, 800_000), bench_version=9
+        )
+        second, _ = await _agent_with_quorum(
+            session, index=92, composites=(700_000, 800_000, 900_000), bench_version=13
+        )
+        for agent, version in [(first, 13), (second, 9)]:
+            session.add_all(
+                [
+                    _score(
+                        agent.agent_id,
+                        artifact_sha256=agent.sha256,
+                        composite_micros=500_000,
+                        stderr_micros=10_000,
+                        validator_index=i,
+                        bench_version=version,
+                    )
+                    for i in range(3)
+                ]
+            )
+        await session.flush()
+        projected = await _quorum_median_rows(
+            session,
+            [first.agent_id, second.agent_id],
+            bench_versions={first.agent_id: 9, second.agent_id: 13},
+        )
+        assert projected[first.agent_id].composite == 0.7
+        assert projected[second.agent_id].composite == 0.8
+        for agent, version in [(first, 9), (second, 13)]:
+            _base_proof_from_score(
+                projected[agent.agent_id],
+                artifact_sha256=agent.sha256,
+                bench_version=version,
+            )
+
+
+@pytest.mark.parametrize("details", [None, 3, ["decoy"], {}, {"v9_base": 3}])
+async def test_median_projection_preserves_fail_closed_missing_proof(
+    session_maker: async_sessionmaker[AsyncSession],
+    details: Any,
+) -> None:
+    async with session_maker() as session:
+        agent, scores = await _agent_with_quorum(
+            session, index=93, composites=(600_000, 700_000, 800_000)
+        )
+        for score in scores:
+            score.details = details
+        await session.flush()
+        projected = (
+            await _quorum_median_rows(
+                session, [agent.agent_id], bench_versions={agent.agent_id: 9}
+            )
+        )[agent.agent_id]
+        for carrier in (scores[1], projected):
+            with pytest.raises(
+                ConfirmationBundlePersistenceError, match="lacks signature-bound"
+            ):
+                _base_proof_from_score(
+                    carrier, artifact_sha256=agent.sha256, bench_version=9
+                )
+
+
+@pytest.mark.parametrize("mismatch", ["digest", "artifact", "version", "composite"])
+async def test_median_projection_keeps_proof_consistency_rejections(
+    session_maker: async_sessionmaker[AsyncSession], mismatch: str
+) -> None:
+    async with session_maker() as session:
+        agent, scores = await _agent_with_quorum(
+            session, index=94, composites=(600_000, 700_000, 800_000)
+        )
+        for score in scores:
+            details = copy.deepcopy(score.details)
+            assert isinstance(details, dict)
+            if mismatch == "digest":
+                details["base_evidence_sha256"] = "0" * 64
+            elif mismatch == "artifact":
+                details["v9_base"]["artifact_sha256"] = "0" * 64
+            elif mismatch == "version":
+                details["v9_base"]["bench_version"] = 10
+            else:
+                score.composite += 0.001
+            score.details = details
+        await session.flush()
+        projected = (
+            await _quorum_median_rows(
+                session, [agent.agent_id], bench_versions={agent.agent_id: 9}
+            )
+        )[agent.agent_id]
+        with pytest.raises(ConfirmationBundlePersistenceError) as original:
+            _base_proof_from_score(
+                scores[1], artifact_sha256=agent.sha256, bench_version=9
+            )
+        with pytest.raises(ConfirmationBundlePersistenceError) as narrowed:
+            _base_proof_from_score(
+                projected, artifact_sha256=agent.sha256, bench_version=9
+            )
+        assert str(narrowed.value) == str(original.value)
 
 
 async def test_no_settings_persists_physical_lower_median_base_proof_only(

@@ -19,7 +19,8 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, cast, column, func, literal, select, true
+from sqlalchemy.dialects.postgresql import JSONB, JSONPATH
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.confirmation_bundles import (
@@ -84,6 +85,14 @@ class ConfirmationReconciliation:
     issuance_active: bool = False
 
 
+@dataclass(frozen=True)
+class _ConfirmationMedianScore:
+    agent_id: UUID
+    n: int
+    composite: float
+    details: dict[str, Any]
+
+
 def lower_median_base_proof(
     scores: Sequence[Score], *, artifact_sha256: str, bench_version: int
 ) -> ConfirmationBaseProof:
@@ -110,13 +119,13 @@ async def _quorum_median_rows(
     agent_ids: Sequence[UUID],
     *,
     bench_versions: dict[UUID, int],
-) -> dict[UUID, Score]:
-    """The lower-median score row per agent, with its details loaded.
+) -> dict[UUID, _ConfirmationMedianScore]:
+    """The lower-median score's bounded base proof per agent.
 
     Mirrors :func:`lower_median_base_proof`'s selection over the exact
     canonical ordering but reads only the scalars needed to pick it, then
-    fetches the winner's JSON evidence once per agent instead of
-    loading every quorum row's per-case audit blob.
+    fetches only the winner's two base-proof fields. Per-case audit telemetry
+    and gate_evidence never cross this fallback's database boundary.
     """
     if not agent_ids:
         return {}
@@ -155,8 +164,26 @@ async def _quorum_median_rows(
         )
         .subquery()
     )
+    evidence = (
+        func.jsonb_to_record(
+            func.jsonb_path_query_first(
+                Score.details,
+                cast(literal('strict $ ? (@.type() == "object")'), JSONPATH),
+            )
+        )
+        .table_valued(column("v9_base", JSONB), column("base_evidence_sha256", JSONB))
+        .render_derived(with_types=True)
+        .lateral("median_base_evidence")
+    )
+    projected_details = func.jsonb_build_object(
+        literal("v9_base"),
+        evidence.c.v9_base,
+        literal("base_evidence_sha256"),
+        evidence.c.base_evidence_sha256,
+    ).label("details")
     rows = await session.execute(
-        select(Score).join(
+        select(Score.agent_id, Score.n, Score.composite, projected_details)
+        .join(
             median_keys,
             and_(
                 median_keys.c.agent_id == Score.agent_id,
@@ -177,8 +204,9 @@ async def _quorum_median_rows(
                 == Score.bench_version,
             ),
         )
+        .join(evidence, true())
     )
-    return {row.agent_id: row for row in rows.scalars()}
+    return {row.agent_id: _ConfirmationMedianScore(*row) for row in rows.all()}
 
 
 def _base_proof_from_score(
@@ -443,7 +471,7 @@ async def reconcile_confirmation_candidates(
         # This fallback needs only the median row's signature-bound base
         # evidence. Scalar aggregates select the representative without
         # dragging every quorum row's per-case audit blob across the wire;
-        # the median's details are fetched in the exact second pass.
+        # the median's two base-proof fields are fetched in the exact second pass.
         missing_agent_ids = [agent.agent_id for _, agent, _ in missing_rows]
         medians = await _quorum_median_rows(
             session,
