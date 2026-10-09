@@ -61,6 +61,54 @@ async def test_schedule_failure_remains_visible_after_success(caplog):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("combined", [False, True])
+@pytest.mark.parametrize("stage", ["identity", "setter_roster"])
+async def test_malformed_reader_payload_records_stage_and_returns_428(
+    monkeypatch, combined, stage
+):
+    p, state = _setup_producer(monkeypatch)
+    observed = TreasuryDispatchObservation(
+        identity=p.identity,
+        epoch_index=p.epoch_index,
+        first_block=p.first_block,
+        finalized_block=p.identity.finalized_block,
+        finalized_block_hash=p.identity.finalized_block_hash,
+    )
+    if combined:
+        state.chain = SimpleNamespace(
+            get_treasury_managed_activation_observation=AsyncMock(
+                return_value=({} if stage == "identity" else observed, {})
+            )
+        )
+    else:
+        state.chain = SimpleNamespace(
+            get_treasury_dispatch_observation=AsyncMock(
+                return_value={} if stage == "identity" else observed
+            ),
+            get_treasury_managed_weight_setters=AsyncMock(return_value={}),
+        )
+    monkeypatch.setattr(
+        scoring,
+        "_gamma_runtime_or_503",
+        AsyncMock(return_value=SimpleNamespace(treasury_weight_enforcement=True)),
+    )
+    ledger = SimpleNamespace(treasury_pin=p, stale=False, statistical_band_mode="off")
+    with pytest.raises(HTTPException) as rejected:
+        await scoring._require_statistical_cap_requester(
+            None,
+            p.fleet[0].validator_hotkey,
+            ledger,
+            now=datetime.now(UTC),
+            app_state=state,
+        )
+    assert rejected.value.status_code == 428
+    diagnostic = state.treasury_chain_read_diagnostics["requester_activation"]
+    assert (diagnostic.attempts, diagnostic.failures) == (1, 1)
+    assert diagnostic.last_failure_stage == stage
+    assert diagnostic.last_failure_kind == "invalid_evidence"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "stage, cause, status",
     [

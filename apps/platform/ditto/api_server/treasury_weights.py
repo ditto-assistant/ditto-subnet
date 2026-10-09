@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,8 +72,14 @@ async def current_managed_dispatch_observation(
     combined = getattr(chain, "get_treasury_managed_activation_observation", None)
     if callable(combined):
         observed, raw_proof = await combined(policy, managed_hotkeys=managed_hotkeys)
-        observed = TreasuryDispatchObservation.model_validate(observed)
-        proof = TreasuryManagedSetterObservation.model_validate(raw_proof)
+        try:
+            observed = TreasuryDispatchObservation.model_validate(observed)
+        except ValidationError as error:
+            raise ChainTreasuryActivationReadError("identity", error) from error
+        try:
+            proof = TreasuryManagedSetterObservation.model_validate(raw_proof)
+        except ValidationError as error:
+            raise ChainTreasuryActivationReadError("setter_roster", error) from error
         if proof.block_hash != observed.finalized_block_hash or set(
             proof.hotkeys
         ) != set(managed_hotkeys):
@@ -82,6 +89,8 @@ async def current_managed_dispatch_observation(
             observed = TreasuryDispatchObservation.model_validate(
                 await chain.get_treasury_dispatch_observation(policy)
             )
+        except ValidationError as error:
+            raise ChainTreasuryActivationReadError("identity", error) from error
         except (ValueError, ChainTreasuryActivationReadError):
             # Preserve the legacy reader's explicit authority/evidence rejection.
             raise
@@ -94,6 +103,8 @@ async def current_managed_dispatch_observation(
                 block_hash=observed.finalized_block_hash,
                 managed_hotkeys=managed_hotkeys,
             )
+        except ValidationError as error:
+            raise ChainTreasuryActivationReadError("setter_roster", error) from error
         except (ValueError, ChainTreasuryActivationReadError):
             raise
         except Exception as error:
