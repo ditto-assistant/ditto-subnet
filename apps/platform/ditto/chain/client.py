@@ -19,6 +19,7 @@ from ditto.chain.errors import (
     ChainTreasuryReadTimeoutError,
     ExtrinsicNotFoundError,
 )
+from ditto.chain.header_rpc import header_substrate
 from ditto.chain.models import (
     BlockInfo,
     ChainConfig,
@@ -391,10 +392,8 @@ class ChainClient:
         number while historical events and storage are read by hash. Callers
         must bind the pair before combining those two data sources.
         """
-        from async_substrate_interface import AsyncSubstrateInterface
-
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with header_substrate(self._substrate_url()) as substrate:
                 block_hash = await substrate.get_block_hash(block_number)
         except TimeoutError as e:
             raise ChainTimeoutError(f"get_block_hash({block_number}) timed out") from e
@@ -631,10 +630,8 @@ class ChainClient:
     async def get_finalized_block(self) -> BlockInfo:
         """Return the current finalized chain block from Substrate."""
 
-        from async_substrate_interface import AsyncSubstrateInterface
-
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with header_substrate(self._substrate_url()) as substrate:
                 block_hash = await substrate.get_chain_finalised_head()
                 block_number = await substrate.get_block_number(block_hash)
         except TimeoutError as e:
@@ -654,10 +651,8 @@ class ChainClient:
             raise ExtrinsicNotFoundError(
                 f"finalized block number {block_number} is invalid"
             )
-        from async_substrate_interface import AsyncSubstrateInterface
-
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with header_substrate(self._substrate_url()) as substrate:
                 finalized_hash = await substrate.get_chain_finalised_head()
                 finalized_number = await substrate.get_block_number(finalized_hash)
                 if finalized_number is None or block_number > int(finalized_number):
