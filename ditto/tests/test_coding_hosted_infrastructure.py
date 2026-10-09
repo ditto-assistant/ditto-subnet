@@ -14,9 +14,8 @@ DOC = (ROOT / "infra/docs/coding-hosted-host-v2.md").read_text()
 def test_native_foundation_is_independent_and_default_off() -> None:
     entry = (STACK / "coding-hosted.tf").read_text()
     prod = (STACK / "prod.auto.tfvars").read_text()
-    assert re.search(r'source\s*=\s*"../../modules/coding-hosted-host"', entry)
-    assert 'variable "enable_coding_hosted_host"' in entry
-    assert "default     = false" in entry
+    assert 'module "coding_hosted_host"' not in entry
+    assert re.search(r'variable "enabled"\s*\{[^}]*default\s*=\s*false', VARIABLES)
     assert "coding_executor_host_count = 0" in prod
     assert "var.coding_executor" not in entry + SOURCE + VARIABLES
     assert 'role    = "coding_hosted"' in SOURCE
@@ -24,14 +23,15 @@ def test_native_foundation_is_independent_and_default_off() -> None:
     assert "var.enabled ? var.operators : toset([])" in SOURCE
 
 
-def test_production_intent_names_one_custodian_with_database_path() -> None:
+def test_retired_production_intent_has_no_native_host_activation() -> None:
     prod = (STACK / "prod.auto.tfvars").read_text()
-    assert re.search(r"(?m)^enable_coding_hosted_host\s*=\s*true\s*$", prod)
-    assert re.search(
-        r'(?m)^coding_hosted_operators\s*=\s*\["user:peyton@omniaura\.ai"\]\s*$',
-        prod,
-    )
-    assert re.search(r"(?m)^enable_coding_hosted_postgres\s*=\s*true\s*$", prod)
+    for retired_input in (
+        "enable_coding_hosted_host",
+        "coding_hosted_operators",
+        "enable_coding_hosted_postgres",
+        "coding_hosted_deletion_protection",
+    ):
+        assert not re.search(rf"(?m)^{retired_input}\s*=", prod)
     assert "coding_executor_host_count = 0" in prod
     # The reusable module still refuses activation without an explicit override.
     assert re.search(r'variable "enabled"\s*\{[^}]*default\s*=\s*false', VARIABLES)
@@ -48,13 +48,13 @@ def test_all_native_resources_are_conditional() -> None:
         ), block.splitlines()[0]
 
 
-def test_retirement_prepares_only_native_host_protection() -> None:
+def test_retirement_removes_native_module_and_preserves_shared_protection() -> None:
     entry = (STACK / "coding-hosted.tf").read_text()
-    prod = (STACK / "prod.auto.tfvars").read_text()
-    assert re.search(r"(?m)^coding_hosted_deletion_protection\s*=\s*false\s*$", prod)
-    assert re.search(
-        r"deletion_protection\s*=\s*var.coding_hosted_deletion_protection", entry
-    )
+    root = "\n".join(file.read_text() for file in STACK.glob("*.tf"))
+    assert not re.search(r'module\s+"coding_hosted_host"\s*\{', root)
+    assert 'output "coding_hosted_host"' in entry
+    assert 'output "coding_hosted_postgres_access"' in entry
+    assert len(re.findall(r"value\s*=\s*null", entry)) == 2
     assert re.search(r"deletion_protection\s*=\s*var.deletion_protection", SOURCE)
     assert re.search(
         r'variable "deletion_protection"\s*\{[^}]*default\s*=\s*true',
