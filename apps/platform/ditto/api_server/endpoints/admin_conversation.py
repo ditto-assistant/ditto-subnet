@@ -278,7 +278,9 @@ async def claim_assessment(
     # approximation of fifth place. Imported lazily to avoid router cycles.
     from ditto.api_server.endpoints.public import build_public_leaderboard
 
-    board = await build_public_leaderboard(request, Response(), session)
+    board = await build_public_leaderboard(
+        request, Response(), session, admission_only=True
+    )
     candidates = sorted(
         (
             entry

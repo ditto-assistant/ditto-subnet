@@ -2664,7 +2664,142 @@ class TestPublicBenchmarkTimeline:
         assert min(versions) >= public_endpoint._TIMELINE_MIN_BENCH_VERSION
 
 
+def _check_finalized_admission_parity(monkeypatch):
+    """Reuse public-board scenarios to check the admission contract fields."""
+    original = public_endpoint.build_public_leaderboard
+
+    async def checked(*args, **kwargs):
+        full = await original(*args, **kwargs)
+        # Admission consumes only the default live board; historical callers
+        # keep their existing query-count contract and are outside this mode.
+        if kwargs.get("bench_version") is not None or (
+            len(args) > 3 and args[3] is not None
+        ):
+            return full
+        compact = await original(*args, **kwargs, admission_only=True)
+
+        def admission_rows(board):
+            return [
+                (
+                    entry.rank,
+                    entry.agent_id,
+                    entry.bench_version,
+                    entry.official_composite,
+                )
+                for entry in board.entries
+                if entry.finalized
+            ]
+
+        assert admission_rows(compact) == admission_rows(full)
+        return full
+
+    monkeypatch.setattr(public_endpoint, "build_public_leaderboard", checked)
+
+
+async def test_admission_keeps_full_confirmation_authority_and_skips_display(
+    app, session_maker, record_property
+):
+    from fastapi import Request, Response
+    from sqlalchemy import event
+
+    from ditto.tests.api_server.endpoints.test_admin_confirmation_bundles import (
+        activate_bench_version,
+        seed_completed_bundle,
+    )
+
+    confirmed, _ = await seed_completed_bundle(session_maker)
+    unconfirmed = await _seed_k3(
+        session_maker,
+        miner=_MINER_B,
+        composites=[0.99] * 3,
+        details={"bench_version": 9},
+    )
+    unconfirmed = UUID(unconfirmed)
+    base_only = UUID(
+        await _seed_k3(
+            session_maker,
+            miner="5" + "F" * 47,
+            composites=[0.97] * 3,
+            details={"bench_version": 9},
+        )
+    )
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        agent = await session.get(Agent, confirmed)
+        assert agent is not None
+        agent.miner_hotkey = _MINER_A
+        for index in range(3):
+            session.add(
+                Score(
+                    agent_id=confirmed,
+                    validator_hotkey=f"validator-{index}",
+                    bench_version=9,
+                    run_id=f"confirmed-{index}",
+                    seed=index,
+                    composite=0.75,
+                    tool_mean=0.75,
+                    memory_mean=0.75,
+                    median_ms=500,
+                    n=114,
+                    generated_at=now,
+                )
+            )
+    for index, (agent_id, hotkey) in enumerate(
+        ((confirmed, _MINER_A), (unconfirmed, _MINER_B))
+    ):
+        await _seed_payment(
+            session_maker,
+            agent_id=str(agent_id),
+            miner_hotkey=hotkey,
+            miner_coldkey="5SharedConfirmationOwner",
+            index=index,
+        )
+    await activate_bench_version(session_maker, 9)
+    _install_db(app, session_maker)
+    app.state.session_maker = session_maker
+    request = Request({"type": "http", "app": app})
+    counts = []
+    for admission_only in (False, True):
+        statements = []
+        async with session_maker() as session:
+            bind = session.get_bind()
+
+            def before_execute(*args, observed=statements):
+                observed.append(args[2])
+
+            event.listen(bind, "before_cursor_execute", before_execute)
+            try:
+                board = await public_endpoint.build_public_leaderboard(
+                    request,
+                    Response(),
+                    session,
+                    admission_only=admission_only,
+                )
+            finally:
+                event.remove(bind, "before_cursor_execute", before_execute)
+        counts.append(len(statements))
+        finalized = [entry for entry in board.entries if entry.finalized]
+        assert [
+            (entry.rank, entry.agent_id, entry.bench_version) for entry in finalized
+        ] == [(1, confirmed, 9)]
+        assert finalized[0].official_composite == pytest.approx(0.65)
+        assert all(entry.agent_id != unconfirmed for entry in board.entries)
+        if not admission_only:
+            assert any(
+                entry.agent_id == base_only and not entry.finalized
+                for entry in board.entries
+            )
+        else:
+            assert len(board.entries) == 1
+    record_property("admission_statement_counts", counts)
+    assert counts[1] < counts[0]
+
+
 class TestPublicLeaderboard:
+    @pytest.fixture(autouse=True)
+    def admission_parity(self, monkeypatch):
+        _check_finalized_admission_parity(monkeypatch)
+
     async def test_leaderboard_publishes_confirmation_policy_mode(
         self,
         app: FastAPI,

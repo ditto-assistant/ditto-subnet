@@ -43,6 +43,9 @@ from ditto.db.models import (
 )
 from ditto.db.queries.scores import upsert_score
 from ditto.tests.api_server.conftest import make_api_server_config
+from ditto.tests.api_server.endpoints.test_public import (
+    _check_finalized_admission_parity,
+)
 from ditto.tests.legacy_era import retired_era_writes_allowed
 
 _VALIDATORS = [
@@ -205,6 +208,10 @@ def _entry(payload: dict, agent_id: UUID) -> dict:
 
 
 class TestLeaderboardBonusExposure:
+    @pytest.fixture(autouse=True)
+    def admission_parity(self, monkeypatch):
+        _check_finalized_admission_parity(monkeypatch)
+
     async def test_composed_board_preserves_caller_transaction_and_frozen_bonus(
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:

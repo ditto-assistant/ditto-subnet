@@ -3303,6 +3303,7 @@ async def build_public_leaderboard(
     bench_version: int | None = None,
     *,
     strike_colliding_names: bool = True,
+    admission_only: bool = False,
 ) -> PublicLeaderboardResponse:
     """Best score per payment-time coldkey, with registration eligibility.
 
@@ -3310,6 +3311,9 @@ async def build_public_leaderboard(
     Legacy rows without payment provenance fall back to one position per hotkey.
     ``strike_colliding_names`` hides reserved-handle collisions on the public
     board; the admin projection keeps stored ``agents.name``.
+    ``admission_only`` is an internal projection of finalized ranks, IDs,
+    versions and official scores; it skips public display/emissions reads.
+    Public routes never expose this option.
     """
     now = datetime.now(UTC)
     from ditto.db.queries.benchmark_rollout import open_rollout
@@ -3372,7 +3376,11 @@ async def build_public_leaderboard(
     # for public visibility: these rows are appended only to the provisional
     # section below, so they cannot rank, appear finalized, or earn emissions.
     v9_display_rows: list[LedgerRow] = []
-    if supports_confirmation(display_version) and v9_confirmation_mode == "enforce":
+    if (
+        not admission_only
+        and supports_confirmation(display_version)
+        and v9_confirmation_mode == "enforce"
+    ):
         authoritative_ids = {row.agent_id for row in ledger_rows}
         v9_display_rows = [
             replace(row, eligible=False)
@@ -3631,6 +3639,47 @@ async def build_public_leaderboard(
             set(registered_uids) if registered_uids is not None else None
         ),
     )
+    if admission_only:
+        # Finalized rank is fixed here, before family/provisional/UI enrichment.
+        # Share the authoritative calculation above rather than approximate its
+        # confirmation, continual, efficiency, registration or owner semantics.
+        metadata = {
+            agent_id: (name, version)
+            for agent_id, name, version in (
+                await session.execute(
+                    select(Agent.agent_id, Agent.name, Agent.version).where(
+                        Agent.agent_id.in_([row.agent_id for row in finalized_rows])
+                    )
+                )
+            ).tuples()
+        }
+        return PublicLeaderboardResponse(
+            generated_at=now,
+            count=len(finalized_rows),
+            current_bench_version=display_version,
+            scoring_bench_version=display_version,
+            emission_bench_version=active_version,
+            active_bench_version=active_version,
+            desired_bench_version=desired_version,
+            available_bench_versions=[],
+            selection_mode="historical"
+            if bench_version is not None
+            else "authoritative",
+            v9_confirmation_mode=v9_confirmation_mode,
+            registration_stale=registration_stale,
+            entries=[
+                _public_entry(
+                    rank,
+                    row,
+                    *metadata[row.agent_id],
+                    score_count=score_counts.get(row.agent_id, SCORING_QUORUM),
+                    official_composite=board_official_composites.get(
+                        row.agent_id, row.composite
+                    ),
+                )
+                for rank, row in enumerate(finalized_rows, start=1)
+            ],
+        )
     if finalized_rows:
         family_groups = await list_submission_family_members(
             session,
