@@ -311,7 +311,7 @@ async def test_a_provisional_entry_without_the_crown_marker_names_no_champion(
     assert response.json()["message"].startswith("artifact_pin_mismatch: ")
 
 
-@pytest.mark.parametrize("schema_version", [1, 2])
+@pytest.mark.parametrize("schema_version", [1, 2, 3])
 async def test_relay_diagnostics_authenticated_latest_only(
     app, client, session_maker, schema_version
 ):
@@ -341,7 +341,18 @@ async def test_relay_diagnostics_authenticated_latest_only(
                         "error_count": 1,
                         "fields": ["root:value_error:service_allocation"],
                     }
-                    if schema_version == 2
+                    if schema_version >= 2
+                    else None
+                ),
+                failure_context=(
+                    {
+                        "claimed_schema_version": 1,
+                        "task_id": 12,
+                        "claimed_epoch_index": 123,
+                        "claimed_commit_block": 110,
+                        "attempt_id": "11111111-1111-4111-8111-111111111111",
+                    }
+                    if schema_version == 3
                     else None
                 ),
             ),
@@ -362,11 +373,15 @@ async def test_relay_diagnostics_authenticated_latest_only(
     body["report"]["observation"]["submission_status"] = "accepted"
     assert (await post(body)).status_code == 401
     assert (await post(signed(1))).status_code == 401
-    if schema_version == 2:
+    if schema_version >= 2:
         tampered = signed(now)
         tampered["report"]["observation"]["last_validation"]["fields"] = [
             "root:value_error:vector_digest"
         ]
+        assert (await post(tampered)).status_code == 401
+    if schema_version == 3:
+        tampered = signed(now)
+        tampered["report"]["observation"]["failure_context"]["task_id"] += 1
         assert (await post(tampered)).status_code == 401
     result = await post(signed(now))
     assert result.status_code == 200, result.text
@@ -400,7 +415,18 @@ async def test_relay_diagnostics_authenticated_latest_only(
     assert observation["report"]["schema_version"] == schema_version
     assert observation["report"]["observation"]["last_validation"] == (
         {"error_count": 1, "fields": ["root:value_error:service_allocation"]}
-        if schema_version == 2
+        if schema_version >= 2
+        else None
+    )
+    assert observation["report"]["observation"].get("failure_context") == (
+        {
+            "claimed_schema_version": 1,
+            "task_id": 12,
+            "claimed_epoch_index": 123,
+            "claimed_commit_block": 110,
+            "attempt_id": "11111111-1111-4111-8111-111111111111",
+        }
+        if schema_version == 3
         else None
     )
     assert status.json()["release_gate"]["confirmed_kings"] == 0

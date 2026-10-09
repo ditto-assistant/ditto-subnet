@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from ditto_screening_protocol.receipt_diagnostics import (
     ReceiptDiagnosticObservation,
     ReceiptDiagnosticReport,
+    ReceiptFailureContext,
     ReceiptValidationDiagnostic,
     diagnostic_signing_message,
 )
@@ -23,7 +24,7 @@ def report(**updates):
             page_deferred=1,
         ),
     }
-    return ReceiptDiagnosticReport(**(values | updates))
+    return ReceiptDiagnosticReport.model_validate(values | updates)
 
 
 def test_original_v1_signing_bytes_remain_frozen():
@@ -35,6 +36,70 @@ def test_original_v1_signing_bytes_remain_frozen():
         b'"schema_version":1,"timestamp":123,"validator_hotkey":"validator"}'
     )
     assert diagnostic_signing_message(report()) == expected
+
+
+def test_original_v2_signing_bytes_remain_frozen():
+    expected = (
+        b'ditto-receipt-diagnostics:v2:{"netuid":118,"observation":{"conflicts_dropped":0,'
+        b'"last_validation":null,"page_deferred":1,"page_finalized":0,"page_forwarded":0,'
+        b'"page_receipts":0,"recovery_observed_at":122,"recovery_status":"validating_claim_failed",'
+        b'"submission_observed_at":null,"submission_status":"not_attempted"},'
+        b'"schema_version":2,"timestamp":123,"validator_hotkey":"validator"}'
+    )
+    assert diagnostic_signing_message(report(schema_version=2)) == expected
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_only_v3_binds_safe_unverified_claim_context(version):
+    raw = report(schema_version=version).model_dump(mode="json")
+    raw["observation"]["failure_context"] = {
+        "claimed_schema_version": 1,
+        "task_id": 12,
+        "claimed_epoch_index": 25017,
+        "claimed_commit_block": 9029300,
+        "attempt_id": "11111111-1111-4111-8111-111111111111",
+    }
+    if version < 3:
+        with pytest.raises(ValidationError, match="requires schema version 3"):
+            ReceiptDiagnosticReport.model_validate(raw)
+        return
+    message = diagnostic_signing_message(ReceiptDiagnosticReport.model_validate(raw))
+    assert message.startswith(b"ditto-receipt-diagnostics:v3:")
+    assert (
+        json.loads(message.split(b":", 2)[2])["observation"]["failure_context"]
+        == raw["observation"]["failure_context"]
+    )
+    raw["observation"]["failure_context"]["ciphertext"] = "private-payload"
+    assert (
+        diagnostic_signing_message(ReceiptDiagnosticReport.model_validate(raw))
+        == message
+    )
+    raw["observation"]["failure_context"]["claimed_commit_block"] += 1
+    assert (
+        diagnostic_signing_message(ReceiptDiagnosticReport.model_validate(raw))
+        != message
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("claimed_schema_version", True),
+        ("claimed_schema_version", "1"),
+        ("claimed_schema_version", 3),
+        ("task_id", 0),
+        ("task_id", 2147483648),
+        ("claimed_epoch_index", -1),
+        ("claimed_epoch_index", 2147483648),
+        ("claimed_commit_block", 0),
+        ("claimed_commit_block", 4294967296),
+        ("claimed_commit_block", 1.5),
+        ("attempt_id", "private-invalid-id"),
+    ],
+)
+def test_claim_context_is_strict_and_bounded(field, value):
+    with pytest.raises(ValidationError):
+        ReceiptFailureContext.model_validate({field: value})
 
 
 @pytest.mark.parametrize("version", [True, "1", 1.0])

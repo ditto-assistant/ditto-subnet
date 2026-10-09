@@ -1202,7 +1202,7 @@ export const sourceReleaseGateSchema = z.object({
   pending_receipt_count: z.number().optional(),
   receipt_diagnostics: z.array(z.object({
     report: z.object({
-      schema_version: z.union([z.literal(1), z.literal(2)]),
+      schema_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
       validator_hotkey: z.string().max(128),
       netuid: z.number().int().nonnegative(),
       timestamp: z.number().int().nonnegative(),
@@ -1220,10 +1220,20 @@ export const sourceReleaseGateSchema = z.object({
           error_count: z.number().int().nonnegative().max(2147483647),
           fields: z.array(z.string().max(512).regex(/^[a-z0-9_.*]+:[a-z_]+(:[a-z_]+)?$/)).max(5),
         }).nullable().optional(),
+        failure_context: z.object({
+          claimed_schema_version: z.number().int().min(1).max(2).nullable().optional(),
+          task_id: z.number().int().min(1).max(2147483647).nullable().optional(),
+          claimed_epoch_index: z.number().int().nonnegative().max(2147483647).nullable().optional(),
+          claimed_commit_block: z.number().int().min(1).max(4294967295).nullable().optional(),
+          attempt_id: z.string().uuid().nullable().optional(),
+        }).nullable().optional(),
       }),
-    }).refine((report) => report.schema_version === 2 || report.observation.last_validation == null, {
+    }).refine((report) => report.schema_version >= 2 || report.observation.last_validation == null, {
       message: 'Validation diagnostic requires schema version 2',
       path: ['observation', 'last_validation'],
+    }).refine((report) => report.schema_version === 3 || report.observation.failure_context == null, {
+      message: 'Receipt failure context requires schema version 3',
+      path: ['observation', 'failure_context'],
     }),
     received_at: z.string(),
     stale: z.boolean(),

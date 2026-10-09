@@ -4,11 +4,25 @@ from __future__ import annotations
 
 import json
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Counter = Annotated[int, Field(ge=0, le=2147483647, strict=True)]
 Timestamp = Annotated[int, Field(ge=0, strict=True)]
+
+
+class ReceiptFailureContext(BaseModel):
+    """Bounded unverified claim coordinates, never payout authority or payload."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    claimed_schema_version: Annotated[int, Field(ge=1, le=2, strict=True)] | None = None
+    task_id: Annotated[int, Field(ge=1, le=2147483647, strict=True)] | None = None
+    claimed_epoch_index: Counter | None = None
+    claimed_commit_block: (
+        Annotated[int, Field(ge=1, le=4294967295, strict=True)] | None
+    ) = None
+    attempt_id: UUID | None = None
 
 
 class ReceiptValidationDiagnostic(BaseModel):
@@ -64,11 +78,14 @@ class ReceiptDiagnosticObservation(BaseModel):
     page_deferred: Counter = 0
     conflicts_dropped: Counter = 0
     last_validation: ReceiptValidationDiagnostic | None = None
+    failure_context: ReceiptFailureContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class ReceiptDiagnosticReport(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
-    schema_version: Literal[1, 2] = 1
+    schema_version: Literal[1, 2, 3] = 1
     validator_hotkey: Annotated[str, Field(min_length=1, max_length=128)]
     netuid: Annotated[int, Field(ge=0, le=65535, strict=True)]
     timestamp: Timestamp
@@ -85,11 +102,15 @@ class ReceiptDiagnosticReport(BaseModel):
     def validation_codes_require_v2(self) -> ReceiptDiagnosticReport:
         if self.schema_version == 1 and self.observation.last_validation is not None:
             raise ValueError("validation diagnostic requires schema version 2")
+        if self.schema_version < 3 and self.observation.failure_context is not None:
+            raise ValueError("receipt failure context requires schema version 3")
         return self
 
 
 def diagnostic_signing_message(report: ReceiptDiagnosticReport) -> bytes:
     body = report.model_dump(mode="json")
+    if report.schema_version < 3:
+        body["observation"].pop("failure_context", None)
     if report.schema_version == 1:
         # Freeze the original signing bytes for existing validators. V1 rejects
         # non-null validation codes; only V2 can authenticate the new field.

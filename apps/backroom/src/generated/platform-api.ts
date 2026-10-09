@@ -29262,6 +29262,7 @@ export interface components {
              * @default 0
              */
             conflicts_dropped: number;
+            failure_context?: components["schemas"]["ReceiptFailureContext"] | null;
             last_validation?: components["schemas"]["ReceiptValidationDiagnostic"] | null;
             /**
              * Page Deferred
@@ -29308,7 +29309,7 @@ export interface components {
              * @default 1
              * @enum {integer}
              */
-            schema_version: 1 | 2;
+            schema_version: 1 | 2 | 3;
             /** Timestamp */
             timestamp: number;
             /** Validator Hotkey */
@@ -29324,6 +29325,22 @@ export interface components {
             report: components["schemas"]["ReceiptDiagnosticReport"];
             /** Stale */
             stale: boolean;
+        };
+        /**
+         * ReceiptFailureContext
+         * @description Bounded unverified claim coordinates, never payout authority or payload.
+         */
+        ReceiptFailureContext: {
+            /** Attempt Id */
+            attempt_id?: string | null;
+            /** Claimed Commit Block */
+            claimed_commit_block?: number | null;
+            /** Claimed Epoch Index */
+            claimed_epoch_index?: number | null;
+            /** Claimed Schema Version */
+            claimed_schema_version?: number | null;
+            /** Task Id */
+            task_id?: number | null;
         };
         /**
          * ReceiptValidationDiagnostic
