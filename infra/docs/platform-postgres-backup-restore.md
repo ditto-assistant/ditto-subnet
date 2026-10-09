@@ -119,9 +119,10 @@ authorization does not authorize IAM changes, a merge, or production convergence
    `platform_database_backup_reader_enabled=true` in its separately authorized
    host configuration. Use `gcp-platform-backup-reader.yml`, limited to
    `ditto-platform-prod`, to write only the two reader entries into the existing
-   app environment and preserve a protected timestamped rollback copy. It
+   app environment and create an exclusive protected temporary rollback copy. It
    verifies unrelated environment lines stay identical and restores the original
-   file on a failed update. Apply the normal reviewed app deployment (or an
+   file on a failed update, retaining the copy for recovery on failure and
+   removing it after a verified successful update. Apply the normal reviewed app deployment (or an
    authorized API-only reload) afterward to load the pair.
    Platform receives only the reader pair, never the writer or
    private age identity. Verify served API/Backroom SHA and authenticated
