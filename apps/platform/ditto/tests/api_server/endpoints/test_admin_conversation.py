@@ -201,6 +201,9 @@ async def test_concurrent_claims_only_admit_top_five_once(
     assert all(r.status_code == 200 for r in responses), [r.text for r in responses]
     claims = [r.json() for r in responses if r.json()]
     assert len(claims) == 1  # Global paid concurrency is one, even across workers.
+    from ditto.api_server.endpoints.public import build_public_leaderboard
+
+    assert build_public_leaderboard.await_count == 1
     for _ in range(4):
         current = claims[-1]
         response = await client.post(
@@ -215,6 +218,87 @@ async def test_concurrent_claims_only_admit_top_five_once(
     listing = (await client.get(BASE, headers=HEADERS)).json()
     assert listing["reserved_last_day_microusd"] == 150_000_000
     assert sum(i["proposed_quality_micros"] is None for i in listing["items"]) == 1
+
+
+async def test_overlapping_idle_polls_build_one_board_and_expose_diagnostics(
+    app, client, session_maker, monkeypatch
+):
+    await install(app, session_maker, monkeypatch)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def board(*_args, **_kwargs):
+        entered.set()
+        await release.wait()
+        return SimpleNamespace(entries=[])
+
+    reader = AsyncMock(side_effect=board)
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.public.build_public_leaderboard", reader
+    )
+    first = asyncio.create_task(client.post(BASE + "/claim", headers=HEADERS))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        responses = await asyncio.wait_for(
+            asyncio.gather(
+                *[client.post(BASE + "/claim", headers=HEADERS) for _ in range(15)]
+            ),
+            timeout=5,
+        )
+        assert all(r.status_code == 200 and r.json() is None for r in responses)
+        assert reader.await_count == 1
+        live = (await client.get(BASE, headers=HEADERS)).json()
+        assert live["admission_diagnostics"]["in_flight"] is True
+        assert live["admission_diagnostics"]["busy_skips"] == 15
+    finally:
+        release.set()
+        await first
+    # Sequential reads are fresh; neither ranks nor a no-work decision are cached.
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    assert reader.await_count == 2
+    final = (await client.get(BASE, headers=HEADERS)).json()["admission_diagnostics"]
+    assert final["scope"] == "process"
+    assert final["in_flight"] is False
+    assert final["attempts"] == 2
+    assert final["last_outcome"] == "idle"
+    assert final["last_elapsed_ms"] >= 0
+    assert final["last_completed_at"] is not None
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_admission_gate_releases_after_failure_or_cancellation(
+    app, monkeypatch, cancelled
+):
+    from ditto.api_server.endpoints import admin_conversation as module
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def failed(*_args):
+        entered.set()
+        await release.wait()
+        raise ValueError("private failure value")
+
+    monkeypatch.setattr(module, "_claim_assessment", failed)
+    request = Request({"type": "http", "app": app})
+    task = asyncio.create_task(module.claim_assessment(request, None))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    if cancelled:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        release.set()
+        with pytest.raises(ValueError):
+            await task
+    state = module._admission_gate(request)
+    assert not state.lock.locked()
+    assert state.diagnostics.last_outcome == ("cancelled" if cancelled else "failed")
+    assert "private failure value" not in state.diagnostics.model_dump_json()
+    next_attempt = AsyncMock(return_value=None)
+    monkeypatch.setattr(module, "_claim_assessment", next_attempt)
+    assert await module.claim_assessment(request, None) is None
+    next_attempt.assert_awaited_once()
 
 
 async def test_bound_immutable_report_projects_quality_without_writing_scores(

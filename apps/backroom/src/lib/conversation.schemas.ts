@@ -6,6 +6,15 @@ export const conversationAssessmentInputSchema = z.object({
 })
 
 export const conversationObservationsSchema = z.object({
+  admission_diagnostics: z.object({
+    scope: z.literal('process'),
+    in_flight: z.boolean(),
+    attempts: z.number().int().nonnegative(),
+    busy_skips: z.number().int().nonnegative(),
+    last_outcome: z.enum(['not_attempted', 'claimed', 'idle', 'failed', 'cancelled']),
+    last_elapsed_ms: z.number().int().nonnegative().nullable(),
+    last_completed_at: z.string().nullable(),
+  }).nullable().optional(),
   settings_revision: z.number().int().nonnegative().default(0),
   settings_actor: z.string().nullable().optional(),
   settings_reason: z.string().nullable().optional(),

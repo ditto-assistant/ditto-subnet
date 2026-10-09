@@ -18887,6 +18887,40 @@ export interface components {
             scope: string;
             settings: components["schemas"]["ContinualRetestSettings"];
         };
+        /** ConversationAdmissionDiagnostics */
+        ConversationAdmissionDiagnostics: {
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts: number;
+            /**
+             * Busy Skips
+             * @default 0
+             */
+            busy_skips: number;
+            /**
+             * In Flight
+             * @default false
+             */
+            in_flight: boolean;
+            /** Last Completed At */
+            last_completed_at?: string | null;
+            /** Last Elapsed Ms */
+            last_elapsed_ms?: number | null;
+            /**
+             * Last Outcome
+             * @default not_attempted
+             * @enum {string}
+             */
+            last_outcome: "not_attempted" | "claimed" | "idle" | "failed" | "cancelled";
+            /**
+             * Scope
+             * @default process
+             * @constant
+             */
+            scope: "process";
+        };
         /** ConversationClaim */
         ConversationClaim: {
             /**
@@ -19035,6 +19069,7 @@ export interface components {
         };
         /** ConversationObservations */
         ConversationObservations: {
+            admission_diagnostics?: components["schemas"]["ConversationAdmissionDiagnostics"] | null;
             /** Current Submission Fee Rao */
             current_submission_fee_rao: number;
             /** Daily Budget Microusd */

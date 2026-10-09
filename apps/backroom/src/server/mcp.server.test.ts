@@ -2708,6 +2708,37 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('retains process-local conversation admission diagnostics in the read tool', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const diagnostics = {
+      scope: 'process', in_flight: true, attempts: 9, busy_skips: 15,
+      last_outcome: 'idle', last_elapsed_ms: 1740,
+      last_completed_at: '2026-10-09T03:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      mode: 'shadow', instrument: 'conversational-continuity-v1', judge_model: 'gpt-6-astra',
+      daily_budget_microusd: 180000000, reserved_last_day_microusd: 0,
+      proposed_submission_fee_rao: 200000000, current_submission_fee_rao: 40000000,
+      fee_change_request: { expected_revision: 0, cooldown_seconds: 3600, fee_amount_rao: 200000000,
+        reason: 'Fund conversation assessment', actor: 'conversation-rollout', confirmation: 'example' },
+      items: [], admission_diagnostics: diagnostics,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_conversation_assessments', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({ admission_diagnostics: diagnostics })
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://platform-api.heyditto.ai/api/v1/admin/conversation-assessments?limit=50',
+        expect.any(Object),
+      )
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('reads private conversation evidence through a read-only tool', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const assessmentId = '11111111-1111-4111-8111-111111111111'

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import secrets
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -12,6 +16,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.conversation import (
+    ConversationAdmissionDiagnostics,
     ConversationClaim,
     ConversationObservation,
     ConversationObservations,
@@ -44,6 +49,23 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 DAILY_BUDGET_MICROUSD = 180_000_000
 RUN_RESERVATION_MICROUSD = 30_000_000
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _AdmissionGate:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    diagnostics: ConversationAdmissionDiagnostics = field(
+        default_factory=ConversationAdmissionDiagnostics
+    )
+
+
+def _admission_gate(request: Request) -> _AdmissionGate:
+    gate = getattr(request.app.state, "conversation_admission_gate", None)
+    if gate is None:
+        gate = _AdmissionGate()
+        request.app.state.conversation_admission_gate = gate
+    return gate
 
 
 async def _settings(session: AsyncSession) -> ConversationSettingsRevision | None:
@@ -212,6 +234,9 @@ async def observations(
         settings_actor=settings.actor if settings else None,
         settings_reason=settings.reason if settings else None,
         settings_updated_at=settings.created_at if settings else None,
+        admission_diagnostics=_admission_gate(request).diagnostics.model_copy(
+            update={"in_flight": _admission_gate(request).lock.locked()}
+        ),
     )
 
 
@@ -270,6 +295,43 @@ async def claim(
 
 
 async def claim_assessment(
+    request: Request, session: AsyncSession, worker_hotkey: str | None = None
+) -> ConversationClaim | None:
+    # Workers already retry no-work responses. Avoid rebuilding the same board
+    # concurrently: only one attempt per process, without caching ranks or
+    # leases. The database lock below still fences cost across processes.
+    gate = _admission_gate(request)
+    if gate.lock.locked():
+        gate.diagnostics.busy_skips += 1
+        return None
+    # No await occurs between the locked check and acquiring an unlocked lock.
+    async with gate.lock:
+        gate.diagnostics.attempts += 1
+        started = monotonic()
+        try:
+            result = await _claim_assessment(request, session, worker_hotkey)
+            gate.diagnostics.last_outcome = "claimed" if result is not None else "idle"
+            return result
+        except asyncio.CancelledError:
+            gate.diagnostics.last_outcome = "cancelled"
+            raise
+        except Exception:
+            gate.diagnostics.last_outcome = "failed"
+            raise
+        finally:
+            gate.diagnostics.last_elapsed_ms = max(
+                0, round((monotonic() - started) * 1000)
+            )
+            gate.diagnostics.last_completed_at = datetime.now(UTC)
+            logger.info(
+                "conversation_admission outcome=%s elapsed_ms=%d busy_skips=%d",
+                gate.diagnostics.last_outcome,
+                gate.diagnostics.last_elapsed_ms,
+                gate.diagnostics.busy_skips,
+            )
+
+
+async def _claim_assessment(
     request: Request, session: AsyncSession, worker_hotkey: str | None = None
 ) -> ConversationClaim | None:
     if not await _enabled(request, session):
