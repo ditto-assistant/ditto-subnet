@@ -131,3 +131,7 @@ postgres_log_gc_max_total_mb: 6144
 # Enable by setting this true (and, for a first mount of the unformatted disk,
 # passing -e postgres_data_disk_allow_format=true once).
 postgres_data_disk_enabled: false
+
+# SN-49: isolated recovery custody and single-bucket credentials are qualified.
+# Converge with gcp-platform-pg-backup.yml to leave the database service alone.
+postgres_backup_enabled: true

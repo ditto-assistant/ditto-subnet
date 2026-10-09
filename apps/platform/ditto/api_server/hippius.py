@@ -15,6 +15,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import unquote
 
 import httpx
 
@@ -439,6 +440,10 @@ def _parse_list_objects(body: bytes) -> tuple[list[ObjectSummary], str | None]:
     def local(tag: str) -> str:
         return tag.rsplit("}", 1)[-1]
 
+    url_encoded = any(
+        local(element.tag) == "EncodingType" and element.text == "url"
+        for element in root
+    )
     objects: list[ObjectSummary] = []
     next_token: str | None = None
     truncated = False
@@ -448,7 +453,11 @@ def _parse_list_objects(body: bytes) -> tuple[list[ObjectSummary], str | None]:
             fields = {local(child.tag): (child.text or "") for child in element}
             objects.append(
                 ObjectSummary(
-                    key=fields.get("Key", ""),
+                    key=(
+                        unquote(fields.get("Key", ""))
+                        if url_encoded
+                        else fields.get("Key", "")
+                    ),
                     size=int(fields.get("Size", "0") or 0),
                     last_modified=fields.get("LastModified", ""),
                     etag=fields.get("ETag", "").strip('"'),

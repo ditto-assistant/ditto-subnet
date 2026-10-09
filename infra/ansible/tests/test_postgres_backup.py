@@ -36,6 +36,43 @@ def keys(prefix, instant):
 
 
 class BackupTest(unittest.TestCase):
+    def test_listing_decodes_url_keys_once_and_preserves_opaque_cursor(self):
+        for encoding, encoded, expected in (
+            (
+                "url",
+                "daily%2F2026%2F10%2F09%2Fmanifest.json",
+                "daily/2026/10/09/manifest.json",
+            ),
+            ("url", "literal%252Fplus%2Bname", "literal%2Fplus+name"),
+            ("", "literal%2Fplus+name", "literal%2Fplus+name"),
+        ):
+            with self.subTest(encoding=encoding, encoded=encoded):
+                body = (
+                    '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+                    f"<Contents><Key>{encoded}</Key><Size>248</Size>"
+                    "<LastModified>2026-10-09T01:26:50Z</LastModified></Contents>"
+                    f"<EncodingType>{encoding}</EncodingType>"
+                    "<IsTruncated>true</IsTruncated>"
+                    "<NextContinuationToken>opaque%2Fcursor+value</NextContinuationToken>"
+                    "</ListBucketResult>"
+                ).encode()
+                final = (
+                    b"<ListBucketResult><IsTruncated>false</IsTruncated>"
+                    b"</ListBucketResult>"
+                )
+                client = object.__new__(backup.S3)
+                client.request = unittest.mock.Mock(
+                    side_effect=[
+                        nullcontext(SimpleNamespace(content=body)),
+                        nullcontext(SimpleNamespace(content=final)),
+                    ]
+                )
+                self.assertEqual(client.list("daily/")[0]["key"], expected)
+                self.assertEqual(
+                    client.request.call_args_list[1].args[2]["ContinuationToken"],
+                    "opaque%2Fcursor+value",
+                )
+
     def test_real_df_stub_refuses_before_any_export(self):
         with tempfile.TemporaryDirectory() as directory:
             staging = Path(directory)

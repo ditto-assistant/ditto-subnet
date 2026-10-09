@@ -13,6 +13,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import unquote
 
 BUCKET = "ditto-platform-pg-backups"
 ENDPOINT = "https://s3.hippius.com"
@@ -171,12 +172,13 @@ class S3:
             with self.request("list_objects_v2", "GET", params) as response:
                 root = ET.fromstring(response.content)
             fields = {child.tag.rsplit("}", 1)[-1]: child.text for child in root}
+            url_encoded = fields.get("EncodingType") == "url"
             for child in root:
                 if child.tag.rsplit("}", 1)[-1] == "Contents":
                     item = {field.tag.rsplit("}", 1)[-1]: field.text for field in child}
                     objects.append(
                         {
-                            "key": item["Key"],
+                            "key": unquote(item["Key"]) if url_encoded else item["Key"],
                             "size": int(item["Size"]),
                             "last_modified": item["LastModified"],
                         }
