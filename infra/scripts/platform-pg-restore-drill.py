@@ -21,6 +21,35 @@ spec = importlib.util.spec_from_file_location("pg_backup", MODULE)
 backup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(backup)
 
+DATABASE_LOCALE = {
+    "encoding": "UTF8",
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+}
+POSTGRES_INITDB_ARGS = "--locale=C.UTF-8 --encoding=UTF8"
+# First production backup predates locale metadata. Its source locale was
+# independently queried; permit only these exact encrypted objects as legacy.
+LEGACY_STAMP = "20261009T021522Z"
+LEGACY_DIGESTS = {
+    f"ditto_platform_prod-{LEGACY_STAMP}.dump.age": (
+        "e28b3b1f2b4d743d36efb8d447e75e4061575eb40a0ab91c4fc471877619bc62"
+    ),
+    f"globals-{LEGACY_STAMP}.sql.age": (
+        "a9a50b4440e1efabb35db9e7c78031fb099a99d936520b8aac1f8f1429f2b1fd"
+    ),
+}
+
+
+def validate_database_locale(manifest, stamp):
+    if "database_locale" not in manifest:
+        digests = {item["name"]: item["sha256"] for item in manifest["objects"]}
+        if stamp == LEGACY_STAMP and digests == LEGACY_DIGESTS:
+            return
+        raise ValueError("backup database locale is missing")
+    if manifest["database_locale"] != DATABASE_LOCALE:
+        raise ValueError("unsupported backup database locale")
+
 
 def validate_manifest(manifest, stamp, now):
     if (
@@ -65,6 +94,7 @@ def validate_manifest(manifest, stamp, now):
         raise ValueError("manifest core tables must be nonempty")
     if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", manifest["alembic_version"]):
         raise ValueError("invalid migration marker")
+    validate_database_locale(manifest, stamp)
     return major
 
 
@@ -307,6 +337,8 @@ def drill(directory):
                 "-e",
                 "POSTGRES_DB=restore_drill",
                 "-e",
+                f"POSTGRES_INITDB_ARGS={POSTGRES_INITDB_ARGS}",
+                "-e",
                 "PGDATA=/var/lib/postgresql/data",
                 "--mount",
                 f"type=bind,src={directory / 'pgdata'},dst=/var/lib/postgresql/data",
@@ -365,6 +397,26 @@ def drill(directory):
         )
         if int(version.strip()) // 10000 != major:
             raise RuntimeError("restore database major version differs")
+        report("verify-database-locale")
+        locale = subprocess.check_output(
+            [
+                "docker",
+                "exec",
+                container,
+                "psql",
+                "-XAtq",
+                "-U",
+                role,
+                "-d",
+                "restore_drill",
+                "-c",
+                backup.DATABASE_LOCALE_SQL,
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        if json.loads(locale) != DATABASE_LOCALE:
+            raise RuntimeError("restore database locale differs")
         report("restore-globals")
         stream_restore(
             paths[f"globals-{stamp}.sql.age"],

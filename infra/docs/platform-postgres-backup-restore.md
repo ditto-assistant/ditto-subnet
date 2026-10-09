@@ -204,6 +204,18 @@ commit marker; never select a dump without its matching encrypted globals and
 manifest. Check backup age, both encrypted SHA-256 values and sizes before
 decrypting. Use the matching PostgreSQL major plus pgvector/extensions.
 
+Database collation must also match. Production uses libc (`locale_provider=c`),
+`UTF8` encoding and `C.UTF-8` for both `collate` and `ctype`; the recovery image's
+default `en_US.utf8` reverses some canonical hotkey comparisons and rejects valid
+rows at the `owner_attestations` CHECK. The drill initializes with
+`POSTGRES_INITDB_ARGS=--locale=C.UTF-8 --encoding=UTF8` and verifies the resulting
+database profile before restoring globals or data. New manifests record
+`database_locale` from the source database. Other declared profiles fail closed.
+Only the first backup, `20261009T021522Z`, may omit that field: the drill pins
+its two encrypted object digests and uses the independently verified source
+profile above. Later backups must declare their locale. Retain all constraints;
+never bypass a CHECK or alter production rows to make a rehearsal pass.
+
 For an authorized human recovery, download only encrypted objects into a private
 mode-0700 directory, consume the separately protected identity with
 `age -d -i <identity-file> <encrypted-file>`, and pipe directly into

@@ -282,6 +282,7 @@ class BackupTest(unittest.TestCase):
             "started_at": "2026-10-04T06:30:00+00:00",
             "completed_at": "2026-10-04T06:40:00+00:00",
             "server_version_num": 170004,
+            "database_locale": dict(drill.DATABASE_LOCALE),
             "alembic_version": "abcdef",
             "row_counts": dict.fromkeys(backup.TABLES, 100),
             "objects": [
@@ -314,6 +315,37 @@ class BackupTest(unittest.TestCase):
         for actual in ({"agents": 106}, {"agents": 0}, {"unknown": 100}):
             with self.assertRaises(ValueError):
                 drill.compare_counts({"agents": 100}, actual)
+
+    def test_drill_requires_exact_source_locale(self):
+        for key, value in (
+            ("encoding", "LATIN1"),
+            ("collate", "en_US.utf8"),
+            ("ctype", "en_US.utf8"),
+            ("locale_provider", "i"),
+        ):
+            manifest = self.manifest()
+            manifest["database_locale"][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                drill.validate_database_locale(manifest, "20261004T063000Z")
+        for value in (None, {}, "C.UTF-8"):
+            manifest = self.manifest()
+            manifest["database_locale"] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                drill.validate_database_locale(manifest, "20261004T063000Z")
+
+    def test_only_exact_first_backup_can_omit_locale(self):
+        manifest = self.manifest()
+        del manifest["database_locale"]
+        manifest["objects"] = [
+            {"name": name, "sha256": digest}
+            for name, digest in drill.LEGACY_DIGESTS.items()
+        ]
+        drill.validate_database_locale(manifest, drill.LEGACY_STAMP)
+        with self.assertRaises(ValueError):
+            drill.validate_database_locale(manifest, "20261004T063000Z")
+        manifest["objects"][0]["sha256"] = "a" * 64
+        with self.assertRaises(ValueError):
+            drill.validate_database_locale(manifest, drill.LEGACY_STAMP)
 
     def test_drill_allows_five_minutes_of_clock_skew_but_no_more(self):
         data = self.manifest()

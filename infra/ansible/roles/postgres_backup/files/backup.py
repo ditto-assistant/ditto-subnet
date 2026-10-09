@@ -19,6 +19,11 @@ BUCKET = "ditto-platform-pg-backups"
 ENDPOINT = "https://s3.hippius.com"
 DATABASE = "ditto_platform_prod"
 TABLES = ("agents", "screening_attempts", "scores")
+DATABASE_LOCALE_SQL = (
+    "SELECT json_build_object('encoding', pg_encoding_to_char(encoding), "
+    "'collate', datcollate, 'ctype', datctype, 'locale_provider', datlocprovider) "
+    "FROM pg_database WHERE datname = current_database()"
+)
 KEY_RE = re.compile(
     r"^(daily|monthly)/(\d{4})/(\d{2})/(\d{2})/"
     r"(ditto_platform_prod|globals|manifest)-(\d{8}T\d{6}Z)\.(dump\.age|sql\.age|json)$"
@@ -336,6 +341,7 @@ def backup(
             "'snapshot', pg_export_snapshot(), 'server_version', version(), "
             "'server_version_num', current_setting('server_version_num')::integer, "
             "'database_bytes', pg_database_size(current_database()), "
+            "'database_locale', (" + DATABASE_LOCALE_SQL + "), "
             "'alembic_version', (SELECT version_num FROM alembic_version), "
             "'row_counts', json_build_object("
             + ", ".join(
