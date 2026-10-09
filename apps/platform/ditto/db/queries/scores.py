@@ -2368,7 +2368,9 @@ async def list_eligible_ledger(
                 func.jsonb_to_record(
                     func.jsonb_path_query_first(
                         Score.details,
-                        literal('strict $ ? (@.type() == "object")', type_=JSONPATH),
+                        sql_cast(
+                            literal('strict $ ? (@.type() == "object")'), JSONPATH
+                        ),
                     )
                 )
                 .table_valued(*(column(key, JSONB) for key in keys))
