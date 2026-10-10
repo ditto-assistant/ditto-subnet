@@ -1104,8 +1104,15 @@ V14 counts those cases in the memory over-call denominator and exempts only
 reads and no-call baselines remain unpenalized. Unrelated and mixed actions
 count once per case. Legacy lifecycle-write cases stay excluded at all versions.
 
-The generated surface, question-family identifiers, envelope, grader policy,
-v13 gate postures, LongMem instrument, and public harness wire version (9) carry
+V14 also owns grading policy floor 14 with one claim-set correction. A sentence
+that is wholly one of the case's own claim values no longer retracts the
+sentence before it when that value is also a correction cue: the published
+`world-story-lesson-claims` answer `safe; sorry` scores 0.5 at v13 and 1 at v14.
+A cue sentence carrying anything beyond the value is still a correction. The v14
+audit bank (`v14-1`) extends `v13-1` with one negative and two positives for it.
+
+The generated surface, question-family identifiers, envelope, grader policy
+(apart from the claim-set correction above), v13 gate postures, LongMem instrument, and public harness wire version (9) carry
 forward. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
 version. It introduces no deferred private surface research or screening-policy
 activation. `CurrentBenchVersion` stays at its existing value (8).

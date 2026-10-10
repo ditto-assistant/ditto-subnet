@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/ditto-assistant/dittobench-datagen/internal/multilingual"
 )
@@ -53,6 +54,7 @@ import (
 // of the case's question language (multilingual.For). Every list is folded.
 type claimLexicon struct {
 	setMembership                 bool // Completed removal is nonmembership only for set claims.
+	protectedCorrection           bool
 	rejection, contrast, boundary []string
 	pastStrong, pastWeak, current []string
 	correction, hedge, enumerator []string
@@ -323,7 +325,8 @@ func analyzeV13(slot, finalText string, lex claimLexicon) analysis {
 	sentences := splitSentencesV13(an.prose)
 	an.sentences = sentences
 	for si, sent := range sentences {
-		if si > 0 && startsWithPhrase(sent.text, lex.correction) {
+		if si > 0 && startsWithPhrase(sent.text, lex.correction) &&
+			!(lex.protectedCorrection && isClaimValueSentence(sent.text, lex.semanticValues)) {
 			for i := range an.segments {
 				if an.segments[i].sentence == si-1 {
 					an.segments[i].rejected = true
@@ -508,6 +511,16 @@ func matchPhraseAt(words []string, i int, phrases []string) int {
 		}
 	}
 	return 0
+}
+
+func isClaimValueSentence(text string, values []string) bool {
+	bare := strings.TrimFunc(text, func(r rune) bool { return unicode.IsPunct(r) || unicode.IsSpace(r) })
+	for _, value := range values {
+		if bare != "" && bare == value {
+			return true
+		}
+	}
+	return false
 }
 
 func startsWithPhrase(text string, phrases []string) bool {
