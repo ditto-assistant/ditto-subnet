@@ -32,6 +32,9 @@ from ditto.api_server.endpoints.admin_coding_control_plane import (
 from ditto.api_server.endpoints.admin_coding_evaluations import (
     router as admin_coding_evaluations_router,
 )
+from ditto.api_server.endpoints.admin_coding_hosted_assignments import (
+    router as admin_coding_hosted_assignments_router,
+)
 from ditto.api_server.endpoints.admin_coding_private_v2_releases import (
     router as admin_coding_private_v2_releases_router,
 )
@@ -262,6 +265,7 @@ __all__ = [
     "admin_coding_control_plane_router",
     "admin_claim_provenance_router",
     "admin_coding_catalog_router",
+    "admin_coding_hosted_assignments_router",
     "admin_coding_private_v2_releases_router",
     "admin_coding_evaluations_router",
     "admin_coding_reconciliation_router",
