@@ -80,6 +80,7 @@ async def test_defaults_are_safe_and_revision_is_audited(
         "aggregate_mode": "fleet_ready",
         "tie_weighting_mode": "disabled",
         "statistical_band_mode": "disabled",
+        "dethrone_seed_mode": "disabled",
         "ledger_pin_mode": "epoch",
         "crown_incumbent_mode": "disabled",
         "idle_retests_enabled": False,

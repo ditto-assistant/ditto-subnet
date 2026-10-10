@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
+from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.validator import LedgerEntry
 from ditto.api_server.efficiency import (
     CURVE_VERSION_BOUNDED_FACTOR,
@@ -71,6 +72,8 @@ class KothEntry:
     completed_wave_composites: tuple[float, ...] | None = None
     confirmation_composites: tuple[float, ...] | None = None
     confirmation_seeds: tuple[int, ...] | None = None
+    confirmation_evidence_present: bool = False
+    confirmation_receipt_authority: bool = False
     efficiency_bonus: float | None = None
     efficiency_factor: float | None = None
     efficiency_curve_version: int | None = None
@@ -93,7 +96,7 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
     lifted: list[KothEntry] = []
     for entry in entries:
         receipt = entry.v9_confirmation
-        history = _confirmation_history(entry)
+        history = _confirmation_history(entry) if receipt is None else None
         confirmations = (
             tuple(history.values())
             if history is not None
@@ -105,7 +108,8 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
         paired_composites: tuple[float, ...] | None = None
         paired_seeds: tuple[int, ...] | None = None
         if (
-            confirmations is not None
+            receipt is None
+            and confirmations is not None
             and seeds is not None
             and len(confirmations) == len(seeds)
             and len(confirmations) >= 2
@@ -146,6 +150,16 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
                 ),
                 confirmation_composites=paired_composites,
                 confirmation_seeds=paired_seeds,
+                confirmation_evidence_present=receipt is None
+                and bool(
+                    entry.confirmation_history
+                    or entry.confirmation_composites
+                    or entry.confirmation_seeds
+                ),
+                confirmation_receipt_authority=supports_confirmation(
+                    entry.bench_version
+                )
+                and receipt is not None,
                 efficiency_bonus=entry.efficiency_bonus,
                 efficiency_factor=entry.efficiency_factor,
                 efficiency_curve_version=entry.efficiency_curve_version,
@@ -202,6 +216,7 @@ class DethroneDecision:
     paired_standard_error: float | None = None
     shared_seed_count: int | None = None
     seed_differences: tuple[float, ...] | None = None
+    seed_coverage_complete: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -317,6 +332,7 @@ def emission_allocation(
     tie_pooling: bool = False,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> EmissionAllocation:
     """Return the exact validator payout mode, membership, and shares.
 
@@ -334,6 +350,7 @@ def emission_allocation(
             projection,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            dethrone_seed_full_set=dethrone_seed_full_set,
         )
         if ceiling_cohort:
             share = 1.0 / len(ceiling_cohort)
@@ -359,6 +376,7 @@ def _score_ceiling_cohort(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> tuple[KothEntry, ...]:
     # Curve-v3 protocol 21 has no continuous adjusted-score ceiling: quality is
     # the primary order and efficiency only breaks an exact quality tie.
@@ -380,6 +398,7 @@ def _score_ceiling_cohort(
         projection.champion,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
     )
     if not decision.ceiling_deadlocked:
         return ()
@@ -399,6 +418,7 @@ def champion_defense(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> DethroneDecision | None:
     """What the best rival miner currently needs to take the crown.
 
@@ -431,6 +451,7 @@ def champion_defense(
         projection.champion,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
     )
 
 
@@ -698,6 +719,7 @@ def project_koth(
     distinct_hotkeys: bool = False,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
     incumbent_agent_id: UUID | None = None,
 ) -> KothProjection | None:
     """Return the champion and participation tail for an eligible score pool.
@@ -744,6 +766,7 @@ def project_koth(
             champion,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            dethrone_seed_full_set=dethrone_seed_full_set,
         ).dethrones:
             champion = challenger
 
@@ -772,6 +795,7 @@ def project_koth(
             champion,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            dethrone_seed_full_set=dethrone_seed_full_set,
         )
     )
     return KothProjection(
@@ -996,6 +1020,39 @@ def _seed_composites(entry: KothEntry) -> dict[int, float] | None:
     return out
 
 
+def _seed_coverage_complete(
+    challenger: KothEntry, champion: KothEntry, *, full_set: bool
+) -> bool:
+    """Mirror the validator's protocol-31 paired-coverage gate.
+
+    Byte-for-byte aligned with ``ditto-subnet`` ``weights._seed_coverage_complete``:
+    when ``full_set`` is active the paired statistic may decide the crown only
+    when the two seed maps' intersection equals their union — neither entry
+    holds a window seed the other has not been scored on. Only two entries
+    with no confirmation evidence retain the historical unpaired comparison.
+    """
+    if not full_set:
+        return True
+    if any(entry.confirmation_receipt_authority for entry in (challenger, champion)):
+        return True
+    challenger_by_seed = _seed_composites(challenger)
+    champion_by_seed = _seed_composites(champion)
+    if challenger_by_seed is None or champion_by_seed is None:
+        return (
+            challenger_by_seed is None
+            and champion_by_seed is None
+            and not any(
+                entry.confirmation_evidence_present
+                or entry.confirmation_composites
+                or entry.confirmation_seeds
+                for entry in (challenger, champion)
+            )
+        )
+    return len(challenger_by_seed) >= 2 and set(challenger_by_seed) == set(
+        champion_by_seed
+    )
+
+
 def _paired_statistic(
     challenger: KothEntry, champion: KothEntry
 ) -> PairedStatistic | None:
@@ -1060,9 +1117,35 @@ def _dethrone_decision(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> DethroneDecision:
     quality_primary = _quality_primary_efficiency_active((challenger, champion))
     score_ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
+    coverage_complete = _seed_coverage_complete(
+        challenger, champion, full_set=dethrone_seed_full_set
+    )
+    if not coverage_complete:
+        # Protocol 31: the two windows do not span each other, so neither the
+        # paired nor the unpaired branch may decide the crown — a partial draw
+        # would decide on evidence the outstanding seeds can contradict. The
+        # requirement becomes the challenger's unreachable ceiling, deferring
+        # the decision until the window completes and the lane re-decides it.
+        champion_score = _dethrone_composite(champion, quality_primary=quality_primary)
+        challenger_score = _dethrone_composite(
+            challenger, quality_primary=quality_primary
+        )
+        return DethroneDecision(
+            challenger_lead=challenger_score - champion_score,
+            required_lead=max(0.0, score_ceiling - champion_score),
+            margin_lead=KOTH_MARGIN,
+            statistical_lead=None,
+            method="unpaired",
+            dethrones=False,
+            required_score=score_ceiling,
+            score_ceiling=score_ceiling,
+            ceiling_deadlocked=False,
+            seed_coverage_complete=False,
+        )
     paired = _paired_statistic(challenger, champion)
     if paired is not None:
         margin_lead = KOTH_MARGIN
@@ -1096,6 +1179,9 @@ def _dethrone_decision(
             paired_standard_error=paired.standard_error,
             shared_seed_count=len(paired.differences),
             seed_differences=paired.differences,
+            seed_coverage_complete=coverage_complete
+            if dethrone_seed_full_set
+            else None,
         )
 
     challenger_composite = _dethrone_composite(
@@ -1140,4 +1226,5 @@ def _dethrone_decision(
         required_score=required_score,
         score_ceiling=score_ceiling,
         ceiling_deadlocked=(not dethrones and required_score >= score_ceiling),
+        seed_coverage_complete=coverage_complete if dethrone_seed_full_set else None,
     )

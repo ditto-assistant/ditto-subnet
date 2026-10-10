@@ -1958,6 +1958,20 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = None
+    dethrone_seed_mode: Annotated[
+        Literal["full_set"] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-31 consensus marker. When full_set, a paired dethrone "
+                "comparison may decide the crown only when the two entries' "
+                "shared confirmation seeds cover the whole confirmation window. "
+                "A partial pairing falls back to the unpaired rule. Absent "
+                "preserves the legacy fold."
+            ),
+        ),
+    ] = None
     count: Annotated[int, Field(ge=0, description="Number of entries returned.")]
     generated_at: Annotated[
         datetime | None,

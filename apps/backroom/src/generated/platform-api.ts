@@ -18810,6 +18810,12 @@ export interface components {
              */
             crown_incumbent_mode: "disabled" | "fleet_ready";
             /**
+             * Dethrone Seed Mode
+             * @default disabled
+             * @enum {string}
+             */
+            dethrone_seed_mode: "disabled" | "fleet_ready";
+            /**
              * Idle Retests Enabled
              * @default false
              */
@@ -19770,6 +19776,21 @@ export interface components {
              * @default 27
              */
             crown_incumbent_required_protocol: number;
+            /**
+             * Dethrone Seed Active
+             * @default false
+             */
+            dethrone_seed_active: boolean;
+            /**
+             * Dethrone Seed Fleet Ready
+             * @default false
+             */
+            dethrone_seed_fleet_ready: boolean;
+            /**
+             * Dethrone Seed Required Protocol
+             * @default 31
+             */
+            dethrone_seed_required_protocol: number;
             /** Eligible Agent Count */
             eligible_agent_count?: number | null;
             /**
@@ -22552,6 +22573,11 @@ export interface components {
              * @description Consensus activation marker for the ceiling-aware dethrone band. When set to headroom_capped, the KOTH indifference band is capped at a fixed share of the score the challenger can still gain, so a near-perfect incumbent can never require more than the benchmark can deliver. Absent keeps the uncapped decayed band.
              */
             dethrone_band_mode?: "headroom_capped" | null;
+            /**
+             * Dethrone Seed Mode
+             * @description Protocol-31 consensus marker. When full_set, a paired dethrone comparison may decide the crown only when the two entries' shared confirmation seeds cover the whole confirmation window — neither entry holds a window seed the other has not been scored on. A partial pairing falls back to the unpaired rule, which pending seeds cannot win. Absent preserves the legacy fold where a quorum of finished seeds may dethrone at once.
+             */
+            dethrone_seed_mode?: "full_set" | null;
             /**
              * Entries
              * @description Best eligible score per payment-time coldkey, highest composite first; the selected generation's hotkey is the weight destination.
@@ -25784,6 +25810,11 @@ export interface components {
             /** Score Ceiling */
             score_ceiling: number;
             /**
+             * Seed Coverage Complete
+             * @description Whether both entries cover the served confirmation window under the full-set gate. False defers the crown decision; required_score then reports the challenger's ceiling, not a statistical threshold. Null when the gate is inactive.
+             */
+            seed_coverage_complete?: boolean | null;
+            /**
              * Seed Differences
              * @description Per-seed challenger minus champion composites, sorted by seed id. These are score differences, not case answers. Null when the fold is not a paired comparison.
              */
@@ -26330,6 +26361,18 @@ export interface components {
              * @default 27
              */
             crown_incumbent_required_protocol: number;
+            /**
+             * Dethrone Seed Full Set Active
+             * @description Whether a paired dethrone comparison must cover the whole confirmation seed window before it may decide the crown (protocol 31, ``dethrone_seed_mode: full_set``). Under it a crown decided on a partial seed window cannot stand: the comparison falls back to the unpaired rule, which pending seeds cannot win.
+             * @default false
+             */
+            dethrone_seed_full_set_active: boolean;
+            /**
+             * Dethrone Seed Full Set Required Protocol
+             * @description Minimum fleet heartbeat protocol for the full-seed-set dethrone gate.
+             * @default 31
+             */
+            dethrone_seed_full_set_required_protocol: number;
             /** Dethrone Z */
             dethrone_z: number;
             /** @description The epoch-pinned ledger validators are folding right now. The board above is live and can move within an epoch; weights only move at the next pin, so this is the snapshot any on-chain vector should be read against. Null while pinning is switched off or before the first pin was taken. */

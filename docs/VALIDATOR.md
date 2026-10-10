@@ -718,6 +718,54 @@ a capped pin remains active receives HTTP 428 instead of folding that pin with
 the older rule. There is no force override and no production setting change
 from merging the code.
 
+### Full-seed-set dethrone gate (protocol 31)
+
+A paired dethrone decision is only apples-to-apples when the sample it was
+sized for is complete. Under the legacy fold a challenger may take the crown
+on whichever shared confirmation seeds have finished, and the decision stands
+even when the remaining seeds later reverse the paired lead — the paired band
+was computed over a partial draw. Miner-reported case: a challenger cleared
+the required band on 13 of 15 finished seeds; with all 15 the lead dropped
+below the requirement and the crown reverted, but only after the flip had
+already happened.
+
+Protocol 31 (`dethrone_seed_mode: full_set`) closes that window. The paired
+comparison may decide the crown only when the two entries' shared seeds cover
+the whole confirmation window — neither entry holds a window seed the other
+has not been scored on. A partial pairing defers the decision entirely
+(neither the paired nor the unpaired branch may dethrone); the lane re-decides
+the crown on its normal cadence, so the decision lands automatically once the
+outstanding seeds finish. Tie pooling and the score-ceiling cohort are
+untouched: they measure evidence-tied *grouping*, not the crown decision, and
+exact ties still pool.
+
+One-sided, single-observation, or malformed confirmation evidence also defers
+the decision; it must not fall through to an unpaired win. Two entries without
+confirmation evidence retain the legacy comparison. This gate covers the
+**served** seed windows, not future seeds the adaptive lane has yet to request.
+The authoritative continual-retest cohort retains the incumbent and admits the
+challenger so its missing seeds can finish on the normal leased path.
+Signed full-confirmation receipts retain their separate score authority;
+they do not wait for legacy continual windows or use unbound legacy seed evidence.
+
+Public decisions expose `seed_coverage_complete: false` while deferred, `true`
+when the gate is satisfied, and `null` when disabled. Deferred diagnostics use
+finite numbers: `required_score` is the challenger's ceiling, not a statistical
+threshold. A score lead on the board does not by itself explain a crown change:
+the paired statistic uses shared-seed differences, while official scores also
+include the initial quorum. The base margin remains 0.007; the computed band
+depends on statistical uncertainty, versioned high-score decay, and the optional
+headroom clamp. No fixed 0.01 rule is introduced.
+
+The shipped `dethrone_seed_mode: disabled` policy preserves the pre-31 fold
+exactly. An operator may select `fleet_ready`; Platform serves the additive
+`dethrone_seed_mode: full_set` ledger marker only after every recently-live
+weight-setting validator reports protocol 31. The epoch pin freezes the marker
+for every reader until the next pin. A protocol-30 validator that rejoins
+while a full_set pin remains active receives HTTP 428 instead of folding that
+pin with the older rule. There is no force override and no production setting
+change from merging the code.
+
 ### Epoch-pinned ledger
 
 `GET /scoring/scores` used to be a time-based read. Validators poll it once per

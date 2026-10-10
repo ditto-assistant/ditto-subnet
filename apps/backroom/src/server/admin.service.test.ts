@@ -2146,6 +2146,7 @@ describe('continual retest administration', () => {
   const readDefaults = {
     tie_weighting_mode: 'disabled' as const,
     statistical_band_mode: 'disabled' as const,
+    dethrone_seed_mode: 'disabled' as const,
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'disabled' as const,
     wave_membership: 'participants',
@@ -2182,6 +2183,9 @@ describe('continual retest administration', () => {
       statistical_band_fleet_ready: false,
       statistical_band_active: false,
       statistical_band_required_protocol: 29,
+      dethrone_seed_fleet_ready: false,
+      dethrone_seed_active: false,
+      dethrone_seed_required_protocol: 31,
       crown_incumbent_fleet_ready: false,
       crown_incumbent_active: false,
       crown_incumbent_required_protocol: 27,
@@ -2199,6 +2203,7 @@ describe('continual retest administration', () => {
   const supportFor = (carried: boolean) => ({
     tie_weighting_mode: carried,
     statistical_band_mode: carried,
+    dethrone_seed_mode: carried,
     ledger_pin_mode: carried,
     crown_incumbent_mode: carried,
     retest_cohort_size: carried,
@@ -2220,6 +2225,7 @@ describe('continual retest administration', () => {
       aggregate_mode: 'enabled',
       tie_weighting_mode: 'disabled' as const,
       statistical_band_mode: 'disabled' as const,
+      dethrone_seed_mode: 'disabled' as const,
       ledger_pin_mode: 'epoch' as const,
       crown_incumbent_mode: 'disabled' as const,
       idle_retests_enabled: true,

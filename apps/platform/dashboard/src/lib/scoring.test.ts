@@ -327,6 +327,18 @@ describe("dethroneFloor", () => {
     expect(crownDifferenceText(contest!)).toBe("Difference +0.046535");
   });
 
+  it("does not present a deferred ceiling sentinel as a crown threshold", () => {
+    expect(
+      crownContest({
+        method: "unpaired",
+        challenger_lead: 0.1,
+        required_lead: 0.2,
+        required_score: 1,
+        seed_coverage_complete: false,
+      }),
+    ).toBeNull();
+  });
+
   it("prints the paired composites as challenger minus champion equals the lead", () => {
     const contest = crownContest({
       method: "paired",

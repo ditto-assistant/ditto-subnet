@@ -70,6 +70,8 @@ export interface RawLeaderDecision {
   score_ceiling?: number;
   /** Required score has passed the top of the score domain: nothing can win. */
   ceiling_deadlocked?: boolean;
+  /** False defers the crown decision until the served seed windows match. */
+  seed_coverage_complete?: boolean | null;
   dethrones?: boolean;
   /** SEM of per-seed challenger-minus-champion diffs. Paired only. */
   paired_standard_error?: number | null;

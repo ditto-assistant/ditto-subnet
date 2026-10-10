@@ -226,6 +226,7 @@ from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
     crown_incumbent_is_active,
+    dethrone_seed_full_set_is_active,
     statistical_band_cap_is_active,
     tie_weighting_is_active,
 )
@@ -582,6 +583,7 @@ _TIE_WEIGHTING_PROTOCOL = 20
 # can still gain, so a saturated benchmark cannot freeze the crown.
 _DETHRONE_BAND_CLAMP_PROTOCOL = 24
 _STATISTICAL_BAND_CAP_PROTOCOL = 29
+_DETHRONE_SEED_FULL_SET_PROTOCOL = 31
 # Grace after a lease is issued before the validator is expected to report (in a
 # heartbeat) that it has picked the agent up. Within this window an assigned-but-
 # not-yet-reported validator reads as "assigning" rather than a mismatch, so the
@@ -2886,6 +2888,7 @@ def _public_koth_emissions(
     tie_weighting_active: bool = False,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
     ledger_pin: PublicLedgerPin | None = None,
     crown_incumbent_active: bool = False,
     reward_eligibility: dict | None = None,
@@ -2978,6 +2981,9 @@ def _public_koth_emissions(
                     if confirmations is not None
                     else None
                 ),
+                confirmation_evidence_present=not v9_confirmed
+                and bool(by_seed.get(row.agent_id)),
+                confirmation_receipt_authority=v9_confirmed,
                 efficiency_bonus=bonus_values.get(row.agent_id),
                 efficiency_factor=factor_values.get(row.agent_id),
                 efficiency_curve_version=curve_values.get(row.agent_id),
@@ -2994,6 +3000,7 @@ def _public_koth_emissions(
         distinct_hotkeys=tie_weighting_active,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
         incumbent_agent_id=incumbent_id,
     )
     if projection is None:
@@ -3004,6 +3011,7 @@ def _public_koth_emissions(
         tie_pooling=tie_weighting_active,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
     )
     share_total = sum(allocation.shares)
     normalized_shares = tuple(share / share_total for share in allocation.shares)
@@ -3043,6 +3051,7 @@ def _public_koth_emissions(
         projection,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
     )
     return PublicKothEmissions(
         margin=KOTH_MARGIN,
@@ -3057,6 +3066,8 @@ def _public_koth_emissions(
         ceiling_headroom_share=KOTH_CEILING_HEADROOM_SHARE,
         ceiling_band_clamp_active=ceiling_band_clamp,
         ceiling_band_clamp_required_protocol=_DETHRONE_BAND_CLAMP_PROTOCOL,
+        dethrone_seed_full_set_active=dethrone_seed_full_set,
+        dethrone_seed_full_set_required_protocol=_DETHRONE_SEED_FULL_SET_PROTOCOL,
         allocation_mode=allocation.mode,
         score_ceiling_pool_size=(
             len(allocation.members) if allocation.mode == "score_ceiling_pool" else 0
@@ -3090,6 +3101,7 @@ def _public_koth_emissions(
                 paired_standard_error=decision.paired_standard_error,
                 shared_seed_count=decision.shared_seed_count,
                 seed_differences=decision.seed_differences,
+                seed_coverage_complete=decision.seed_coverage_complete,
             )
             if decision is not None
             else None
@@ -3108,6 +3120,7 @@ def _public_koth_emissions(
                 paired_standard_error=defense.paired_standard_error,
                 shared_seed_count=defense.shared_seed_count,
                 seed_differences=defense.seed_differences,
+                seed_coverage_complete=defense.seed_coverage_complete,
             )
             if defense is not None
             else None
@@ -3504,6 +3517,18 @@ async def build_public_leaderboard(
             fleet_protocol_ready=await live_weight_setter_fleet_supports_protocol(
                 session,
                 minimum_protocol=_STATISTICAL_BAND_CAP_PROTOCOL,
+                now=now,
+                freshness=_VALIDATOR_STALE_WINDOW,
+            ),
+        )
+    )
+    dethrone_seed_full_set_active = (
+        bench_version is None
+        and dethrone_seed_full_set_is_active(
+            continual_settings,
+            fleet_protocol_ready=await live_weight_setter_fleet_supports_protocol(
+                session,
+                minimum_protocol=_DETHRONE_SEED_FULL_SET_PROTOCOL,
                 now=now,
                 freshness=_VALIDATOR_STALE_WINDOW,
             ),
@@ -4313,6 +4338,7 @@ async def build_public_leaderboard(
                 tie_weighting_active=tie_weighting_active,
                 ceiling_band_clamp=ceiling_band_clamp_active,
                 statistical_band_cap=statistical_band_cap_active,
+                dethrone_seed_full_set=dethrone_seed_full_set_active,
                 ledger_pin=ledger_pin,
                 crown_incumbent_active=crown_incumbent_active,
                 reward_eligibility=projected_reward_eligibility,

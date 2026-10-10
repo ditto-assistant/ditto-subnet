@@ -658,9 +658,11 @@ describe('Backroom MCP tools', () => {
     // Four canonical starter fixture controls bring the measured catalog to
     // 179,468 bytes before the optional review-posture pin, node cap and
     // expected-value canary guard inputs. Keep operational tutorials in help
-    // and retain the existing catalog budget as these inputs evolve.
+    // and retain the existing catalog budget as these inputs evolve. The
+    // protocol-31 dethrone_seed_mode consensus field in the continual-retest
+    // write schema adds 94 bytes (enum + required entry); measured 180,051.
     // Measure the serialized UTF-8 catalog, including guarded Gamma controls.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(180_000)
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(180_100)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -751,6 +753,7 @@ describe('Backroom MCP tools', () => {
         'aggregate_mode',
         'tie_weighting_mode',
         'statistical_band_mode',
+        'dethrone_seed_mode',
         'idle_retests_enabled',
         'wave_membership',
         'retest_cohort_size',
