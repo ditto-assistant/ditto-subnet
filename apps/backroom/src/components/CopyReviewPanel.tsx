@@ -1,7 +1,13 @@
 import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, Gavel, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { AthReviewKind, CopyReviewConsoleItem, CopyReviewGeneration, CopyReviewResolution } from '../lib/admin.schemas'
+import type {
+  AthReviewKind,
+  CopyReviewConsoleItem,
+  CopyReviewGeneration,
+  CopyReviewLanguageInventory,
+  CopyReviewResolution,
+} from '../lib/admin.schemas'
 import { decideCopyReview, listCopyReviews, openAthReview } from '../server/admin.functions'
 import { CopyReviewSourceDiff } from './CopyReviewSourceDiff'
 import { Modal } from './Modal'
@@ -20,6 +26,38 @@ function formatDate(value: string) {
 
 function formatSimilarity(value: number | null | undefined) {
   return typeof value === 'number' ? value.toFixed(3) : '—'
+}
+
+function rankedLanguages(inventory: CopyReviewLanguageInventory) {
+  return Object.entries(inventory.bytes)
+    .filter(([, bytes]) => bytes > 0)
+    .sort(([a, left], [b, right]) => right - left || a.localeCompare(b))
+}
+
+function formatLanguageMix(inventory: CopyReviewLanguageInventory | null | undefined) {
+  if (!inventory) return 'not recorded'
+  const ranked = rankedLanguages(inventory)
+  const total = ranked.reduce((sum, [, bytes]) => sum + bytes, 0)
+  if (total === 0) return 'no authored files'
+  const shown = ranked
+    .slice(0, 3)
+    .map(([language, bytes]) => `${language} ${Math.round((bytes / total) * 100)}%`)
+  const more = ranked.length > 3 ? ` +${ranked.length - 3} more` : ''
+  const files = Object.values(inventory.files).reduce((sum, count) => sum + count, 0)
+  return `${shown.join(' · ')}${more} (${files} file${files === 1 ? '' : 's'})`
+}
+
+// The normalized-source and prompt channels canonicalize Rust/C-style syntax.
+// Flag a comparison where either side is mostly another language so a miss on
+// those channels is not read as exculpatory.
+function mostlyNonRust(
+  ...inventories: Array<CopyReviewLanguageInventory | null | undefined>
+) {
+  return inventories.some((inventory) => {
+    if (!inventory) return false
+    const [top] = rankedLanguages(inventory)
+    return top !== undefined && top[0] !== 'rust'
+  })
 }
 
 function comparisonLabel(item: CopyReviewConsoleItem) {
@@ -703,6 +741,21 @@ export function CopyReviewPanel({
                       <span>structural {formatSimilarity(selected.current_comparison.structural?.jaccard)} / {formatSimilarity(selected.current_comparison.structural?.containment)}</span>
                       <span>prompt {formatSimilarity(selected.current_comparison.prompt?.jaccard)} / {formatSimilarity(selected.current_comparison.prompt?.containment)}</span>
                     </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[var(--muted)]">Languages (authored bytes)</dt>
+                    <dd className="mt-1 space-y-1 font-mono">
+                      <p>candidate {formatLanguageMix(selected.current_comparison.candidate_languages)}</p>
+                      <p>reference {formatLanguageMix(selected.current_comparison.reference_languages)}</p>
+                    </dd>
+                    {mostlyNonRust(
+                      selected.current_comparison.candidate_languages,
+                      selected.current_comparison.reference_languages,
+                    ) ? (
+                      <p className="mt-1 text-[var(--amber)]">
+                        Mostly non-Rust source: normalized-source and prompt canonicalization is Rust-shaped, so a miss there is not exculpatory.
+                      </p>
+                    ) : null}
                   </div>
                 </dl>
               )}

@@ -97,6 +97,8 @@ function item(overrides: Partial<CopyReviewConsoleItem> = {}): CopyReviewConsole
       triggered: false,
       triggered_signal: null,
       current_decision: 'clear',
+      candidate_languages: null,
+      reference_languages: null,
     },
     ...overrides,
   }
@@ -200,6 +202,36 @@ describe('CopyReviewPanel', () => {
     expect(screen.getByRole('heading', { name: 'Review evidence' })).toBeDefined()
     expect(screen.getByText('Current calibrated comparison')).toBeDefined()
     expect(screen.getByText('line 0.214 / 0.310')).toBeDefined()
+  })
+
+  it('shows each side\'s language mix and flags mostly non-Rust source', () => {
+    const comparison = eligible.current_comparison
+    if (comparison.availability !== 'available') throw new Error('fixture unavailable')
+    const python = item({
+      current_comparison: {
+        ...comparison,
+        candidate_languages: {
+          version: 'lang1',
+          files: { python: 3, markdown: 1, toml: 1, json: 1, rust: 1 },
+          bytes: { python: 8000, markdown: 1000, toml: 500, json: 400, rust: 100 },
+          excluded_files: 2,
+          excluded_bytes: 4000,
+        },
+        reference_languages: null,
+      },
+    })
+    render(<CopyReviewPanel {...panelProps} initialItems={[python]} initialBulkEligibleCount={1} readOnly={false} />)
+    fireEvent.click(screen.getByText(/held-agent/))
+    expect(screen.getByText('candidate python 80% · markdown 10% · toml 5% +2 more (7 files)')).toBeDefined()
+    expect(screen.getByText('reference not recorded')).toBeDefined()
+    expect(screen.getByText(/Mostly non-Rust source/)).toBeDefined()
+  })
+
+  it('does not flag a Rust comparison or an unrecorded inventory', () => {
+    render(<CopyReviewPanel {...panelProps} initialItems={[eligible]} initialBulkEligibleCount={1} readOnly={false} />)
+    fireEvent.click(screen.getByText(/held-agent/))
+    expect(screen.getByText('candidate not recorded')).toBeDefined()
+    expect(screen.queryByText(/Mostly non-Rust source/)).toBeNull()
   })
 
   it('labels a rotated-hotkey match as same-owner lineage', () => {

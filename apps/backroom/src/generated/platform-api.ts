@@ -9578,6 +9578,35 @@ export interface components {
             /** History */
             history: components["schemas"]["CopyCourtSettingsRevision"][];
         };
+        /**
+         * AdminCopyLanguageInventory
+         * @description Private per-artifact language mix of the fingerprinted members.
+         *
+         *     Counts are keyed by a fixed language label (``rust``, ``python``,
+         *     ``typescript``, ``go``, ``unknown``, ...) detected from file extension,
+         *     file name, or a ``#!`` line; never a path or any content. Members dropped
+         *     as stock starter-kit content or generated lockfiles are counted only in
+         *     ``excluded_*``. The normalized-source and prompt channels canonicalize
+         *     Rust/C-style syntax, so an artifact that is mostly another language gets
+         *     weaker evidence from them: a miss there is not exculpatory. Provenance
+         *     only; it never changes a decision.
+         */
+        AdminCopyLanguageInventory: {
+            /** Bytes */
+            bytes: {
+                [key: string]: number;
+            };
+            /** Excluded Bytes */
+            excluded_bytes?: number | null;
+            /** Excluded Files */
+            excluded_files?: number | null;
+            /** Files */
+            files: {
+                [key: string]: number;
+            };
+            /** Version */
+            version: string;
+        };
         /** AdminCopyReviewAction */
         AdminCopyReviewAction: {
             /**
@@ -9653,6 +9682,7 @@ export interface components {
             availability: "available";
             /** Bulk Eligible */
             bulk_eligible: boolean;
+            candidate_languages?: components["schemas"]["AdminCopyLanguageInventory"] | null;
             /** Canonical Reference Revision */
             canonical_reference_revision: string;
             /** Chronology Direction */
@@ -9682,6 +9712,7 @@ export interface components {
             reference_corpus_id: string;
             /** Reference Exclusion Mode */
             reference_exclusion_mode: string;
+            reference_languages?: components["schemas"]["AdminCopyLanguageInventory"] | null;
             /** Same Miner Excluded */
             same_miner_excluded: boolean;
             structural: components["schemas"]["AdminCopySimilarityEvidence"];
