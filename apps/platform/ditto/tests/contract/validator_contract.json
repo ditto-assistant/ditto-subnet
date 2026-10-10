@@ -4482,7 +4482,7 @@
       "TreasuryEmissionBucket": {
         "properties": {
           "allocation_bps": {
-            "maximum": 1000,
+            "maximum": 10000,
             "minimum": 0,
             "type": "integer"
           },
