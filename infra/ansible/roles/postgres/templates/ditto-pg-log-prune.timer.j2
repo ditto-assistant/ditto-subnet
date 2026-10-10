@@ -1,0 +1,11 @@
+# Managed by infra/ansible/roles/postgres.
+[Unit]
+Description=Daily PostgreSQL collector-log retention
+
+[Timer]
+OnCalendar={{ postgres_log_prune_on_calendar }}
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target
