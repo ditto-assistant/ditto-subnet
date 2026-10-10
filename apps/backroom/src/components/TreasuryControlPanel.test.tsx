@@ -46,7 +46,7 @@ it.each([25, 75, 100])('records a %s percent Gamma proposal in basis points', as
   save.mockResolvedValue(control)
   render(<TreasuryControlPanel initialState={control} readOnly={false} />)
   const allocation = screen.getByLabelText('Allocation (% of miner emissions)') as HTMLInputElement
-  expect(allocation.max).toBe('100')
+  expect(allocation.inputMode).toBe('decimal')
   fireEvent.change(allocation, { target: { value: String(percent) } })
   expect(screen.getByText(`Proposed split: Gamma ${percent}% · Miners ${100 - percent}% before burn · Revision 3`)).toBeTruthy()
   fireEvent.change(screen.getByLabelText('Reason for change'), { target: { value: 'operator requested emission split' } })
@@ -61,9 +61,45 @@ it('refuses an over-100 percent proposal and clears confirmation after allocatio
   fireEvent.change(screen.getByLabelText('Reason for change'), { target: { value: 'operator requested emission split' } })
   fireEvent.change(screen.getByLabelText('Type RECORD TREASURY SHADOW POLICY'), { target: { value: 'RECORD TREASURY SHADOW POLICY' } })
   fireEvent.change(screen.getByLabelText('Allocation (% of miner emissions)'), { target: { value: '101' } })
-  expect(screen.getByRole('alert').textContent).toBe('Combined Gamma allocation must be 100% or less.')
+  expect(screen.getByText('Combined Gamma allocation must be 100% or less.')).toBeTruthy()
   expect((screen.getByRole('button', { name: 'Record wallet policy' }) as HTMLButtonElement).disabled).toBe(true)
   expect((screen.getByLabelText('Type RECORD TREASURY SHADOW POLICY') as HTMLInputElement).value).toBe('')
+})
+
+it.each([['12.', '12.3', 1230], ['0.', '0.5', 50]])('keeps decimal draft %s editable', async (intermediate, value, bps) => {
+  save.mockResolvedValue(control)
+  render(<TreasuryControlPanel initialState={control} readOnly={false} />)
+  const allocation = screen.getByLabelText('Allocation (% of miner emissions)') as HTMLInputElement
+  fireEvent.change(allocation, { target: { value: intermediate } })
+  expect(allocation.value).toBe(intermediate)
+  fireEvent.change(allocation, { target: { value } })
+  expect(allocation.value).toBe(value)
+  fireEvent.change(screen.getByLabelText('Reason for change'), { target: { value: 'operator requested fractional allocation' } })
+  fireEvent.change(screen.getByLabelText('Type RECORD TREASURY SHADOW POLICY'), { target: { value: 'RECORD TREASURY SHADOW POLICY' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Record wallet policy' }))
+  await waitFor(() => expect(save).toHaveBeenCalledOnce())
+  expect(save.mock.calls[0][0].data.settings.service_buckets[0].allocation_bps).toBe(bps)
+  await waitFor(() => expect(allocation.value).toBe('10'))
+})
+
+it('blocks invalid decimal drafts and resets them when refreshed', async () => {
+  render(<TreasuryControlPanel initialState={control} readOnly={false} />)
+  const allocation = screen.getByLabelText('Allocation (% of miner emissions)') as HTMLInputElement
+  fireEvent.change(allocation, { target: { value: '12.345' } })
+  fireEvent.change(screen.getByLabelText('Reason for change'), { target: { value: 'operator requested allocation' } })
+  fireEvent.change(screen.getByLabelText('Type RECORD TREASURY SHADOW POLICY'), { target: { value: 'RECORD TREASURY SHADOW POLICY' } })
+  expect((screen.getByRole('button', { name: 'Record wallet policy' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByRole('alert').textContent).toContain('two decimal places')
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh policy' }))
+  await waitFor(() => expect(allocation.value).toBe('10'))
+})
+
+it('keeps other schema errors visible alongside an over-limit total', () => {
+  render(<TreasuryControlPanel initialState={control} readOnly={false} />)
+  fireEvent.change(screen.getByLabelText('Collector hotkey'), { target: { value: 'invalid-address' } })
+  fireEvent.change(screen.getByLabelText('Allocation (% of miner emissions)'), { target: { value: '101' } })
+  expect(screen.getByText('Combined Gamma allocation must be 100% or less.')).toBeTruthy()
+  expect(screen.getByText('v2 wallets must be public SS58 address strings')).toBeTruthy()
 })
 
 it('records a wallet policy with CAS, reason and exact confirmation, without claiming funding', async () => {

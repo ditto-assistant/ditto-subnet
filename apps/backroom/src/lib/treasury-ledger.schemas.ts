@@ -19,6 +19,8 @@ const policy = z.object({
     allocation_bps: z.number().int().min(0).max(10000),
     holding_coldkey: address,
   })).min(1).max(20),
+}).refine((value) => value.buckets.reduce((total, bucket) => total + bucket.allocation_bps, 0) <= 10000, {
+  path: ['buckets'], message: 'combined service allocation exceeds 10000 bps',
 }) satisfies z.ZodType<components['schemas']['TreasuryEmissionPolicy']>
 
 const identity = z.object({
