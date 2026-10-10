@@ -24714,6 +24714,24 @@ export interface components {
             validator_hotkey?: string | null;
         };
         /**
+         * PublicAuditPairCounts
+         * @description One run's reproduce-under-transform audit outcome counts (public).
+         *
+         *     Sufficient statistics: a reader sums them across runs and validators. The
+         *     discordant direction (``base_only`` vs ``transform_only``) is what the
+         *     transform-audit gate factor charges.
+         */
+        PublicAuditPairCounts: {
+            /** Base Only */
+            base_only: number;
+            /** Both Correct */
+            both_correct: number;
+            /** Both Wrong */
+            both_wrong: number;
+            /** Transform Only */
+            transform_only: number;
+        };
+        /**
          * PublicAuditResponse
          * @description A page of the public audit feed, oldest first, with the chain root.
          *
@@ -29017,6 +29035,8 @@ export interface components {
              * @description How many audit pairs backed ``transform_robustness``, so a value backed by many pairs is distinguishable from one backed by two.
              */
             audit_case_count?: number | null;
+            /** @description This run's transform-audit outcome counts. The direction of the discordant pairs (``base_only`` vs ``transform_only``) is what the transform-audit gate charges, so these counts are what make its multiplier reconstructable. Null for a run that carried no audit pairs or predates the counts. */
+            audit_pairs?: components["schemas"]["PublicAuditPairCounts"] | null;
             /**
              * Bench Version
              * @description DittoBench version this validator's run was scored under. A re-scored agent carries rows from more than one version, and composites compare only within a version. Null for a legacy score recorded before benchmark versioning.
@@ -29033,6 +29053,11 @@ export interface components {
              */
             composite: number;
             composite_breakdown?: components["schemas"]["PublicCompositeBreakdown"] | null;
+            /**
+             * Conversational Sanity
+             * @description Weakest-link pass rate across the conversational-sanity slices, the input to the conversational-sanity gate factor. Null when no conversational case ran.
+             */
+            conversational_sanity?: number | null;
             /** @description Bench v13+ gate verdict for this run: posture, composite with and without the gates, the gate-induced loss and per-gate counts. Aggregates only -- the per-case notes are owner-only (``GET /me/agents/{agent_id}/gate-notes``). Null below v13 and for a scorer that emitted no gate telemetry. */
             gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             /**
@@ -29051,6 +29076,16 @@ export interface components {
              * @description Mean memory recall in [0,1].
              */
             memory_mean: number;
+            /**
+             * Memory Over Call
+             * @description Memory over-call multiplier exactly as the scorer applied it to this run's composite gate. Null for a run scored before the scorer recorded it, or under a contract without a gate.
+             */
+            memory_over_call?: number | null;
+            /**
+             * Metamorphic Consistency
+             * @description Fraction of invariance twin groups answered consistently, the input to the metamorphic-consistency gate factor. Null when no twin group ran.
+             */
+            metamorphic_consistency?: number | null;
             model_use?: components["schemas"]["PublicModelUse"] | null;
             /**
              * N
@@ -29084,6 +29119,11 @@ export interface components {
             ticket_deadline?: string | null;
             token_efficiency?: components["schemas"]["PublicTokenEfficiency"] | null;
             token_usage?: components["schemas"]["PublicTokenUsage"] | null;
+            /**
+             * Tool Efficiency
+             * @description Observed tool-efficiency factor the scorer folded into this run's composite gate. Null when the scorer did not record it.
+             */
+            tool_efficiency?: number | null;
             /**
              * Tool Mean
              * @description Mean tool accuracy in [0,1].

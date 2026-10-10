@@ -8903,6 +8903,15 @@ export const publicGateEvidenceSchema = z.object({
   gate_counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
 })
 
+// One run's transform-audit outcome counts; the discordant direction is what
+// the transform-audit gate factor charges.
+export const publicAuditPairCountsSchema = z.object({
+  both_correct: z.number().int().nonnegative(),
+  base_only: z.number().int().nonnegative(),
+  transform_only: z.number().int().nonnegative(),
+  both_wrong: z.number().int().nonnegative(),
+})
+
 export const publicValidatorScoreSchema = z.object({
   validator_hotkey: z.string(),
   composite: z.number().min(0).max(1),
@@ -8920,6 +8929,13 @@ export const publicValidatorScoreSchema = z.object({
   generated_at: z.string(),
   transform_robustness: z.number().min(0).max(1).nullable().optional(),
   audit_case_count: z.number().int().nonnegative().nullable().optional(),
+  // Per-run composite gate factors the scorer recorded (issue #533), so a
+  // disputed multiplier decomposes from the record. Null when not recorded.
+  audit_pairs: publicAuditPairCountsSchema.nullable().optional(),
+  tool_efficiency: z.number().min(0).max(1).nullable().optional(),
+  metamorphic_consistency: z.number().min(0).max(1).nullable().optional(),
+  memory_over_call: z.number().min(0).max(1).nullable().optional(),
+  conversational_sanity: z.number().min(0).max(1).nullable().optional(),
   transcript_sha256: z.string().nullable().optional(),
   // Null below bench v13 and for a scorer that emitted no gate telemetry.
   gate_evidence: publicGateEvidenceSchema.nullable().optional(),

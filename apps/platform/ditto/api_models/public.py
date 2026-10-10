@@ -369,6 +369,22 @@ class PublicTokenEfficiency(BaseModel):
         return self
 
 
+class PublicAuditPairCounts(BaseModel):
+    """One run's reproduce-under-transform audit outcome counts (public).
+
+    Sufficient statistics: a reader sums them across runs and validators. The
+    discordant direction (``base_only`` vs ``transform_only``) is what the
+    transform-audit gate factor charges.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    both_correct: Annotated[int, Field(ge=0)]
+    base_only: Annotated[int, Field(ge=0)]
+    transform_only: Annotated[int, Field(ge=0)]
+    both_wrong: Annotated[int, Field(ge=0)]
+
+
 class PublicBenchmarkQualityFactor(BaseModel):
     """One public-safe input to the scorer-owned benchmark quality multiplier."""
 
@@ -2813,6 +2829,70 @@ class PublicValidatorScore(BaseModel):
             description=(
                 "How many audit pairs backed ``transform_robustness``, so a value "
                 "backed by many pairs is distinguishable from one backed by two."
+            ),
+        ),
+    ]
+    audit_pairs: Annotated[
+        PublicAuditPairCounts | None,
+        Field(
+            default=None,
+            description=(
+                "This run's transform-audit outcome counts. The direction of the "
+                "discordant pairs (``base_only`` vs ``transform_only``) is what "
+                "the transform-audit gate charges, so these counts are what make "
+                "its multiplier reconstructable. Null for a run that carried no "
+                "audit pairs or predates the counts."
+            ),
+        ),
+    ]
+    tool_efficiency: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Observed tool-efficiency factor the scorer folded into this "
+                "run's composite gate. Null when the scorer did not record it."
+            ),
+        ),
+    ]
+    metamorphic_consistency: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Fraction of invariance twin groups answered consistently, the "
+                "input to the metamorphic-consistency gate factor. Null when no "
+                "twin group ran."
+            ),
+        ),
+    ]
+    memory_over_call: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Memory over-call multiplier exactly as the scorer applied it to "
+                "this run's composite gate. Null for a run scored before the "
+                "scorer recorded it, or under a contract without a gate."
+            ),
+        ),
+    ]
+    conversational_sanity: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Weakest-link pass rate across the conversational-sanity slices, "
+                "the input to the conversational-sanity gate factor. Null when no "
+                "conversational case ran."
             ),
         ),
     ]

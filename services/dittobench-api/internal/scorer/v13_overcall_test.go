@@ -98,3 +98,36 @@ func TestCompositeGateV13ExemptionIsWiredThrough(t *testing.T) {
 		t.Fatal("pre-v7 gate is not stable")
 	}
 }
+
+// TestMemoryOverCallFactorForVersionIsTheAppliedFactor pins the issue #533
+// publication: the value RunDetails.memory_over_call carries is exactly the
+// factor the composite gate folds in, at every gated contract, and is absent
+// for the ungated v2 contract.
+func TestMemoryOverCallFactorForVersionIsTheAppliedFactor(t *testing.T) {
+	// Only memory over-call bites: one of two observed recall cases takes an
+	// external action. Every other gate factor is neutral on this population
+	// and the bounded product stays above every contract's floor.
+	in := []protocol.CaseScore{
+		memCase("single-session-recall", "set_theme"),
+		memCase("single-session-recall", "search_memories"),
+	}
+	if _, ok := MemoryOverCallFactorForVersion(in, protocol.BenchVersionV2); ok {
+		t.Fatal("v2 carries no composite gate, so it must publish no memory over-call factor")
+	}
+	for version := protocol.BenchVersionV3; version <= protocol.BenchVersionV14; version++ {
+		factor, ok := MemoryOverCallFactorForVersion(in, version)
+		if !ok {
+			t.Fatalf("v%d: gated contract published no memory over-call factor", version)
+		}
+		if factor >= 1.0 {
+			t.Fatalf("v%d: fixture must exercise the penalty, got %.6f", version, factor)
+		}
+		if gate := CompositeGateForVersion(in, version); gate != round6(factor) {
+			t.Fatalf("v%d: published factor %.6f does not decompose the applied gate %.6f", version, factor, gate)
+		}
+	}
+	clean := []protocol.CaseScore{memCase("single-session-recall", "search_memories")}
+	if factor, ok := MemoryOverCallFactorForVersion(clean, protocol.BenchVersionV14); !ok || factor != 1.0 {
+		t.Fatalf("a clean run must publish a neutral 1.0, got %.6f ok=%v", factor, ok)
+	}
+}

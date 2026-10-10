@@ -185,6 +185,23 @@ func memoryOverCallFactorWith(perCase []protocol.CaseScore, maxPenalty float64, 
 	return round6(1.0 - maxPenalty*rate)
 }
 
+// MemoryOverCallFactorForVersion is the memory over-call multiplier exactly as
+// the composite gate for benchVersion applies it: the v7 contract's penalty and
+// category scope from bench_version 7, the historical v3 factor for 3..6. The
+// composite gate itself calls this, so the value published in RunDetails can
+// never drift from the one folded into the composite. ok is false before
+// bench_version 3, whose composite carries no gate at all.
+func MemoryOverCallFactorForVersion(perCase []protocol.CaseScore, benchVersion int) (factor float64, ok bool) {
+	switch {
+	case benchVersion >= protocol.BenchVersionV7:
+		return memoryOverCallFactorWith(perCase, v7MemoryOverCallMaxPenalty, benchVersion), true
+	case benchVersion >= protocol.BenchVersionV3:
+		return MemoryOverCallFactor(perCase), true
+	default:
+		return 1.0, false
+	}
+}
+
 // metamorphicConsistencyFactorWith is MetamorphicConsistencyFactor with an
 // explicit max penalty.
 func metamorphicConsistencyFactorWith(perCase []protocol.CaseScore, maxPenalty float64) float64 {
@@ -249,9 +266,10 @@ func transformAuditFactorWith(perCase []protocol.CaseScore, enforced bool, maxPe
 // than an operator flag; the factor stays a pure function of (dataset,
 // transcript) and any third party reproduces it.
 func compositeGateV7(perCase []protocol.CaseScore, benchVersion int) float64 {
+	memoryOverCall, _ := MemoryOverCallFactorForVersion(perCase, benchVersion)
 	bounded := toolEfficiencyFactorWith(perCase, v7EffParams) *
 		metamorphicConsistencyFactorWith(perCase, v7MetamorphicMaxPenalty) *
-		memoryOverCallFactorWith(perCase, v7MemoryOverCallMaxPenalty, benchVersion)
+		memoryOverCall
 	if bounded < v7BoundedGateFloor {
 		bounded = v7BoundedGateFloor
 	}

@@ -67,6 +67,7 @@ from ditto.api_models import (
     PublicArtifactDownload,
     PublicArtifactRelease,
     PublicAuditEntry,
+    PublicAuditPairCounts,
     PublicAuditResponse,
     PublicBenchConfigResponse,
     PublicBenchCorpusEntry,
@@ -1667,6 +1668,27 @@ def _safe_transform_robustness(details: dict) -> tuple[float | None, int | None]
     return value, pairs
 
 
+def _safe_audit_pairs(details: dict) -> PublicAuditPairCounts | None:
+    """Pull this run's own transform-audit counts, tolerating bad blobs.
+
+    Reads the scorer's per-run ``audit_pairs`` only, never the validator's
+    ``audit_pairs_pooled`` (which sums several confirmation runs), so the
+    published counts match the run whose gate they explain.
+    """
+    raw = details.get("audit_pairs")
+    if not isinstance(raw, dict):
+        return None
+    counts: dict[str, int] = {}
+    for key in ("both_correct", "base_only", "transform_only", "both_wrong"):
+        value = raw.get(key, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        counts[key] = value
+    if sum(counts.values()) == 0:
+        return None
+    return PublicAuditPairCounts(**counts)
+
+
 def _safe_categories(details: dict) -> list[PublicCategoryStat] | None:
     """Pull the per-category breakdown, dropping any malformed entries."""
     raw = details.get("per_category")
@@ -2091,6 +2113,9 @@ _QUALITY_FACTOR_SPECS = (
 )
 
 
+_APPLIED_FACTOR_KEYS = frozenset({"tool_efficiency", "memory_over_call"})
+
+
 def _unit_float(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -2113,9 +2138,10 @@ def _safe_quality_factors(
         multiplier = _unit_float(explicit.get(key))
         if multiplier is None:
             multiplier = _unit_float(details.get(multiplier_key))
-        # This field has always represented the exact applied factor; the other
-        # observed metrics are not assumed to equal their versioned curves.
-        if key == "tool_efficiency" and multiplier is None:
+        # These fields record the exact applied factor (memory_over_call since
+        # issue #533); the other observed metrics are not assumed to equal their
+        # versioned curves.
+        if key in _APPLIED_FACTOR_KEYS and multiplier is None:
             multiplier = metric
         if metric is None and multiplier is None:
             continue
@@ -5772,6 +5798,11 @@ def _public_validator_score(s) -> PublicValidatorScore:
         transcript_sha256=_safe_transcript_sha256(details),
         transform_robustness=robustness,
         audit_case_count=audit_pairs,
+        audit_pairs=_safe_audit_pairs(details),
+        tool_efficiency=_unit_float(details.get("tool_efficiency")),
+        metamorphic_consistency=_unit_float(details.get("metamorphic_consistency")),
+        memory_over_call=_unit_float(details.get("memory_over_call")),
+        conversational_sanity=_unit_float(details.get("conversational_sanity")),
     )
 
 
