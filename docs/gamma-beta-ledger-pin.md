@@ -14,7 +14,7 @@ OpenAPI contract carries the same known fields.
 The policy digest covers canonical known fields, including the policy revision,
 genesis hash, netuid 118, collector hotkey/coldkey, public collector-policy digest,
 and bucket IDs, holding coldkeys and basis-point allocations. Combined service
-allocation is at most 1000 bps. Duplicate destinations and a collector holding
+allocation is at most 10000 bps. Duplicate destinations and a collector holding
 destination are refused. Unknown JSON fields are ignored and cannot add authority
 or alter the policy digest.
 

@@ -31,11 +31,25 @@ For the confirmed combined service pool (`S = 0.10`):
 These percentages are of the full miner emission vector. They are forecasts,
 not current routing: the active validator still sends all emission to burn.
 
-The confirmed service pool is **1,000 bps total**, split between GM, Bitsec,
-Bitcast and later buckets. The exact initial split and public wallet addresses
-await Peyton's inputs. The schema permits a smaller pool for a guarded first
-activation, but never more than 1,000 bps combined. No service bucket may borrow
+The configurable service pool is **0–10,000 bps total**, split between GM, Bitsec,
+Bitcast and later buckets. The earlier 1,000 bps pool is retained as an example,
+not a ceiling. Backroom accepts percentages with 0.01% precision and displays
+the proposed Gamma share and miner remainder. No service bucket may borrow
 another bucket's allocation. The collector cannot also compete for miner payout.
+
+For 75% Gamma and 25% eligible miners, set `gm.allocation_bps = 7500`, other
+service buckets to zero, and `burn_share = 0`. A 25% burn with the same Gamma
+allocation instead yields 75% Gamma, 18.75% miners and 6.25% burn. A 100% Gamma
+allocation leaves no miner or burn remainder, including with an empty miner pool.
+
+Saving a shadow proposal changes no live weights. The new emission policy needs
+its own coldkey approval and matching immutable digests on Platform and managed
+validator/Pylon guards before a future epoch can activate it. Deploy consumers
+that accept the wider range first; old consumers refuse the new policy. Historical
+10% signatures and epoch pins remain unchanged. Collector distribution policy,
+journal transition and transfers remain separately controlled; do not reset a
+signer journal or enable recurrence to change emissions. The existing journal
+migrator supports custody/runtime transitions only, not allocation changes.
 
 ## Wallet identity and custody
 

@@ -3,12 +3,12 @@ import { AlertTriangle } from 'lucide-react'
 import { PageHeader } from '../../components/PageHeader'
 import { TreasuryControlPanel } from '../../components/TreasuryControlPanel'
 import { TreasuryManualTransferPanel } from '../../components/TreasuryManualTransferPanel'
-import { getTreasurySettings } from '../../server/treasury.functions'
+import { getTreasuryRuntime, getTreasurySettings } from '../../server/treasury.functions'
 import { getManualTransfers } from '../../server/treasury-manual.functions'
 
 export const Route = createFileRoute('/_authenticated/gamma')({
   loader: async () => {
-    const [treasury, manual] = await Promise.all([
+    const [treasury, manual, runtime] = await Promise.all([
       getTreasurySettings().then(
         (state) => ({ state, error: null }),
         () => ({ state: null, error: 'Treasury policy is unavailable. Refresh to try again.' }),
@@ -17,8 +17,12 @@ export const Route = createFileRoute('/_authenticated/gamma')({
         (state) => ({ state, error: null }),
         () => ({ state: null, error: 'Manual transfer controls are unavailable. Refresh to try again.' }),
       ),
+      getTreasuryRuntime().then(
+        (state) => ({ state, error: null }),
+        () => ({ state: null, error: 'Signed emission policy is unavailable. Refresh to try again.' }),
+      ),
     ])
-    return { treasury, manual }
+    return { treasury, manual, runtime }
   },
   pendingComponent: Pending,
   errorComponent: ErrorState,
@@ -26,26 +30,41 @@ export const Route = createFileRoute('/_authenticated/gamma')({
 })
 
 function GammaPage() {
-  const { treasury, manual } = Route.useLoaderData()
+  const { treasury, manual, runtime } = Route.useLoaderData()
   const { user } = Route.useRouteContext()
   const readOnly = user.accessLevel === 'read'
+  const signed = runtime.state?.latest?.settings
+  const signedGammaPercent = (signed?.approval.policy.buckets.reduce((sum, bucket) => sum + bucket.allocation_bps, 0) ?? 0) / 100
   return (
     <div>
       <PageHeader
         label="SN118 service funding"
         title="Gamma & transfers"
-        description="Transfer collector alpha to approved service wallets, track transfer requests, and manage service wallet policy. A finalized wallet transfer does not confirm purchased GM credits."
+        description="Set the proposed Gamma and miner split, review the signed emission policy, and transfer collector alpha to approved service wallets."
       />
       <div className="mt-6 space-y-6">
-        {manual.state ? (
-          <TreasuryManualTransferPanel initialState={manual.state} readOnly={readOnly} />
-        ) : (
-          <p className="text-sm text-[var(--red)]" role="alert">{manual.error}</p>
-        )}
+        {runtime.state ? (
+          <section aria-label="Signed Gamma emission policy" className="space-y-2">
+            <h2 className="text-lg font-semibold">Signed emission policy</h2>
+            {signed ? <>
+                <p>Gamma {signedGammaPercent}% · Miners {100 - signedGammaPercent}% before burn · {signed.mode}</p>
+                <p className="text-sm text-[var(--muted-strong)]">
+                  Signed policy revision {signed.approval.policy.revision}. This is the recorded runtime
+                  configuration; finalized weights must be verified separately. Saving a proposal below
+                  does not replace this signed policy.
+                </p>
+              </> : <p>No signed emission policy is recorded.</p>}
+          </section>
+        ) : <p role="alert" className="text-sm text-[var(--red)]">{runtime.error}</p>}
         {treasury.state ? (
           <TreasuryControlPanel initialState={treasury.state} readOnly={readOnly} />
         ) : (
           <p className="text-sm text-[var(--red)]" role="alert">{treasury.error}</p>
+        )}
+        {manual.state ? (
+          <TreasuryManualTransferPanel initialState={manual.state} readOnly={readOnly} />
+        ) : (
+          <p className="text-sm text-[var(--red)]" role="alert">{manual.error}</p>
         )}
       </div>
     </div>

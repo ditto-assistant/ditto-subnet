@@ -16,7 +16,7 @@ const policy = z.object({
   collector_policy_digest: digest,
   buckets: z.array(z.object({
     bucket_id: z.string().regex(/^[a-z][a-z0-9_]{1,47}$/),
-    allocation_bps: z.number().int().min(0).max(1000),
+    allocation_bps: z.number().int().min(0).max(10000),
     holding_coldkey: address,
   })).min(1).max(20),
 }) satisfies z.ZodType<components['schemas']['TreasuryEmissionPolicy']>

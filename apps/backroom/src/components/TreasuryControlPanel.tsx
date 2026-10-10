@@ -92,7 +92,7 @@ export function TreasuryControlPanel({
           },
         }),
       )
-      setMessage('Wallet policy recorded. Funding, distribution, and payment observation remain inactive.')
+      setMessage('Wallet policy recorded. Live emissions still require a matching signed policy and activation. Transfers are controlled separately.')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to record treasury policy')
     } finally {
@@ -104,16 +104,17 @@ export function TreasuryControlPanel({
       className="mt-8 space-y-5 border-t border-[var(--line)] pt-6"
       aria-label="Service treasury wallets"
     >
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
         <div>
           <h2 className="text-lg font-semibold">Service treasury wallets</h2>
           <p className="mt-2 max-w-[70ch] text-sm text-[var(--muted-strong)]">
-            One collector, a shared 1,000 bps service pool, and separately controlled holding wallets. Burn
-            applies only to the miner remainder after service allocation. This policy is shadow only.
+            Allocate up to 100% of miner emissions to Gamma service wallets. The remainder goes to
+            miners before burn. Recording this proposal does not change live emissions; a matching
+            signed policy and activation are required.
           </p>
         </div>
         <button
-          className={inputClass}
+          className="shrink-0 rounded border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-sm"
           disabled={busy}
           onClick={async () => {
             setBusy(true)
@@ -131,9 +132,18 @@ export function TreasuryControlPanel({
           Refresh policy
         </button>
       </div>
-      <p className="text-sm">
-        Revision {state.revision} · Configured pool {total} / 1,000 bps · Effective funding 0% · No active
-        sweep
+      <p className="text-sm" aria-live="polite">
+        {total >= 0 && total <= 10000
+          ? `Proposed split: Gamma ${total / 100}% · Miners ${(10000 - total) / 100}% before burn`
+          : 'Proposed split is outside the allowed range'}
+        {' · '}Revision {state.revision}
+      </p>
+      {total > 10000 && <p role="alert">Combined Gamma allocation must be 100% or less.</p>}
+      {total === 10000 && <p className="text-sm">This proposal leaves 0% for miners.</p>}
+      <p className="text-sm text-[var(--muted-strong)]">
+        Burn reduces only the miner remainder; it does not fund Gamma. For a 75% Gamma / 25% miner
+        split, allocate 75% here and use 0% burn.{' '}
+        <a href="/burn" className="underline">Review burn settings</a>
       </p>
       {error && (
         <p role="alert" className="text-[var(--red)]">
@@ -215,16 +225,17 @@ export function TreasuryControlPanel({
                 />
               </label>
               <label>
-                Allocation (bps of full miner emissions)
+                Allocation (% of miner emissions)
                 <input
                   className={inputClass}
                   type="number"
                   min="0"
-                  max="1000"
-                  value={bucket.allocation_bps}
+                  max="100"
+                  step="0.01"
+                  value={bucket.allocation_bps / 100}
                   onChange={(event) =>
                     updateBucket(index, {
-                      allocation_bps: Number(event.target.value),
+                      allocation_bps: Math.round(Number(event.target.value) * 100),
                     })
                   }
                 />
@@ -391,7 +402,7 @@ export function TreasuryControlPanel({
           GM credits. Wallets, allocations, and rule changes appear in public admin activity; service account
           references stay private.
         </p>
-        {!parsed.success && <p role="alert">{parsed.error.issues[0]?.message}</p>}
+        {!parsed.success && total <= 10000 && <p role="alert">{parsed.error.issues[0]?.message}</p>}
         <label className="block">
           Reason for change
           <textarea

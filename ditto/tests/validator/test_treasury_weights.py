@@ -101,6 +101,21 @@ def test_independent_follower_uses_same_signed_service_allocation():
     assert fold_treasury_weights({"miner": 1}, **args) == expected
 
 
+@pytest.mark.parametrize("allocation", [2500, 7500, 10000])
+def test_larger_allocation_cannot_reuse_previous_policy_signature(allocation):
+    previous, _ = fixture()
+    pin, args = fixture(service_bps=allocation)
+    args["pin"] = pin.model_copy(
+        update={
+            "approval": pin.approval.model_copy(
+                update={"signature": previous.approval.signature}
+            )
+        }
+    )
+    with pytest.raises(ValueError):
+        fold_treasury_weights({"miner": 1}, **args)
+
+
 @pytest.mark.parametrize("burn", [0, 0.2, 0.5, 1])
 @pytest.mark.parametrize("paid", [0, 0.3, 1])
 def test_service_reserved_before_burn_and_unpaid_remainder(burn, paid):
@@ -115,14 +130,14 @@ def test_service_reserved_before_burn_and_unpaid_remainder(burn, paid):
         assert result[args["burn_hotkey"]] == 0.9
 
 
-@pytest.mark.parametrize("service_bps", [0, 1000])
+@pytest.mark.parametrize("service_bps", [0, 1000, 2500, 7500, 10000])
 def test_collector_is_excluded_from_competition_even_with_zero_pool(service_bps):
     pin, args = fixture(service_bps=service_bps)
     result = fold_treasury_weights(
         {"miner": 1, pin.policy.collector_hotkey: 10**100}, **args
     )
     assert result.get(pin.policy.collector_hotkey, 0) == service_bps / 10_000
-    assert result["miner"] == pytest.approx(1 - service_bps / 10_000)
+    assert result.get("miner", 0) == pytest.approx(1 - service_bps / 10_000)
 
 
 def test_empty_miner_vector_does_not_enlarge_service_pool():
