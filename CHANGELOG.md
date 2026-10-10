@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.357.0 (2026-10-10)
+
+### Chores
+
+- **infra**: Prepare recovered coding host retirement
+  ([#2841](https://github.com/ditto-assistant/ditto-subnet/pull/2841),
+  [`b9ffad6`](https://github.com/ditto-assistant/ditto-subnet/commit/b9ffad6fbe51d0f4e9e7e91468927df6b1856301))
+
+- **infra**: Retire recovered native coding host
+  ([#2842](https://github.com/ditto-assistant/ditto-subnet/pull/2842),
+  [`447f33c`](https://github.com/ditto-assistant/ditto-subnet/commit/447f33c4d2a8726dbf857b6c5066bca600cace11))
+
+### Features
+
+- **gamma**: Allow service allocations up to 100 percent
+  ([#2845](https://github.com/ditto-assistant/ditto-subnet/pull/2845),
+  [`fe22d27`](https://github.com/ditto-assistant/ditto-subnet/commit/fe22d27fe55983414d6092ed30f941cb29f41924))
+
+
 ## v0.356.17 (2026-10-09)
 
 ### Bug Fixes
