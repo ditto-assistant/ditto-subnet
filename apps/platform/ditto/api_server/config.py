@@ -86,6 +86,12 @@ def _http_origin(value: str) -> tuple[str, str, int] | None:
 DEFAULT_CAPACITY_EVENT_RETENTION_DAYS = 30
 # Floor for a non-zero window so a typo cannot erase incident-review history.
 MIN_CAPACITY_EVENT_RETENTION_DAYS = 7
+# Transport cap on a request body with no tighter route cap. 32 MiB matches the
+# largest body any endpoint accepts today (a validator's transcript) and clears
+# the 16 MiB canonical private-v2 publication receipt an admin registers. The
+# floor keeps a typo from refusing every ordinary JSON request.
+DEFAULT_REQUEST_BODY_MAX_BYTES = 32 << 20
+MIN_REQUEST_BODY_MAX_BYTES = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -508,6 +514,11 @@ class ApiServerConfig:
     ``0``, the default, installs no limiter. See
     :mod:`ditto.api_server.middleware.public_rate_limit`."""
 
+    request_body_max_bytes: int = DEFAULT_REQUEST_BODY_MAX_BYTES
+    """Byte cap on any request body without a tighter route cap
+    (``DITTO_REQUEST_BODY_MAX_BYTES``). See
+    :mod:`ditto.api_server.middleware.request_body_limit`."""
+
 
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
@@ -861,6 +872,22 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             "DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE must be non-negative (0 disables)"
         )
 
+    try:
+        request_body_max_bytes = int(
+            os.environ.get(
+                "DITTO_REQUEST_BODY_MAX_BYTES", str(DEFAULT_REQUEST_BODY_MAX_BYTES)
+            )
+        )
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "DITTO_REQUEST_BODY_MAX_BYTES must be an integer"
+        ) from error
+    if request_body_max_bytes < MIN_REQUEST_BODY_MAX_BYTES:
+        raise ApiServerConfigError(
+            "DITTO_REQUEST_BODY_MAX_BYTES must be at least "
+            f"{MIN_REQUEST_BODY_MAX_BYTES}"
+        )
+
     treasury_policy = parse_treasury_shadow_policy()
     treasury_approval, treasury_approved_digest, collector_policy_digest = (
         parse_treasury_shadow_approval(treasury_policy)
@@ -942,6 +969,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         efficiency_bonus=efficiency_bonus,
         source_review_queue_slo=parse_source_review_queue_slo_config_from_env(),
         public_rate_limit_per_minute=public_rate_limit_per_minute,
+        request_body_max_bytes=request_body_max_bytes,
     )
 
 

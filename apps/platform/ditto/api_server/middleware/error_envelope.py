@@ -68,6 +68,10 @@ ERROR_CODE_HTTP_EXCEPTION = 3002
 # 429 + Retry-After from the opt-in per-client-IP limit on unauthenticated
 # routes (middleware/public_rate_limit.py). Retryable once the wait elapses.
 ERROR_CODE_RATE_LIMITED = 3003
+# 413 from the transport-level body cap (middleware/request_body_limit.py),
+# answered before the endpoint parses or authenticates the request. Endpoint
+# caps tighter than the transport cap keep answering 413 with 3002.
+ERROR_CODE_REQUEST_TOO_LARGE = 3004
 ERROR_CODE_PRICING = 3100
 ERROR_CODE_ORACLE_UNREACHABLE = 3101
 ERROR_CODE_MALFORMED_PRICE = 3102

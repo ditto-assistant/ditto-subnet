@@ -380,7 +380,7 @@ _SOURCE_REVIEW_PROGRESS_STAGES = frozenset(
 # legitimately follow a source-review stage within one job.
 _POST_PREFLIGHT_PROGRESS_STAGES = frozenset({"building", "starting", "health_check"})
 _HEARTBEAT_MAX_SKEW_SECONDS = 300
-_HEARTBEAT_MAX_BYTES = 4096
+HEARTBEAT_MAX_BYTES = 4096
 _INSTANCE_ID_PATTERN = r"^[a-zA-Z0-9._-]{1,63}$"
 
 
@@ -3153,8 +3153,8 @@ async def heartbeat(
     except ValueError as error:
         raise HTTPException(status_code=400, detail="invalid Content-Length") from error
     if (
-        claimed_bytes > _HEARTBEAT_MAX_BYTES
-        or len(await request.body()) > _HEARTBEAT_MAX_BYTES
+        claimed_bytes > HEARTBEAT_MAX_BYTES
+        or len(await request.body()) > HEARTBEAT_MAX_BYTES
     ):
         raise HTTPException(status_code=413, detail="heartbeat payload too large")
     if request_body.screener_hotkey != screener_hotkey:

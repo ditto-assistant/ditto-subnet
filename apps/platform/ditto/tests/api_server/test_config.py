@@ -191,6 +191,36 @@ class TestParseApiServerConfigFromEnv:
         with pytest.raises(ApiServerConfigError):
             parse_api_server_config_from_env(commit_hash="abc")
 
+    def test_request_body_cap_defaults_to_32_mib(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.delenv("DITTO_REQUEST_BODY_MAX_BYTES", raising=False)
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert config.request_body_max_bytes == 32 << 20
+
+    def test_request_body_cap_env_picked_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_REQUEST_BODY_MAX_BYTES", str(8 << 20))
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert config.request_body_max_bytes == 8 << 20
+
+    @pytest.mark.parametrize("raw", ["0", "1048575", "lots", ""])
+    def test_request_body_cap_rejects_invalid_values(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_REQUEST_BODY_MAX_BYTES", raw)
+
+        with pytest.raises(ApiServerConfigError):
+            parse_api_server_config_from_env(commit_hash="abc")
+
     def test_private_coding_catalog_config_is_optional_and_separate(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
