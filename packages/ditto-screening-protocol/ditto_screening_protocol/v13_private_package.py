@@ -35,7 +35,7 @@ class V13PrivateProfile(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    revision: Literal["v13-private-metamorphic-v1"] = "v13-private-metamorphic-v1"
+    revision: Literal["v13-private-metamorphic-v2"] = "v13-private-metamorphic-v2"
     policy_version: Literal[13] = 13
     pairs_per_class_per_seed: Literal[10] = 10
     pairs_per_class_total: Literal[20] = 20
@@ -44,7 +44,12 @@ class V13PrivateProfile(BaseModel):
     confidence_lower_bound_bps: Literal[500] = 500
     clean_control_max_degradation_bps: Literal[500] = 500
     confidence_level_bps: Literal[9500] = 9500
+    # Exploratory class comparisons only. The primary is one pooled test.
     multiple_comparison_method: Literal["holm-bonferroni"] = "holm-bonferroni"
+    primary_hypothesis: Literal["pooled-paired-ternary-mean"] = (
+        "pooled-paired-ternary-mean"
+    )
+    primary_interval: Literal["one-sided-student-t"] = "one-sided-student-t"
 
     def checksum(self) -> Sha256:
         return hashlib.sha256(
