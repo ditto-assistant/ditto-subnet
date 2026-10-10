@@ -209,7 +209,7 @@ Three scopes, in ascending sensitivity:
 | Scope | Grants |
 |---|---|
 | `backroom:read` | Every read. Required for any connection. |
-| `backroom:artifact:read` | Miner-submitted source and sensitive diagnostics: tarball URLs, file listings, source search, copy/baseline diffs, and sanitized private screening failure details. |
+| `backroom:artifact:read` | Miner-submitted source and sensitive diagnostics: tarball URLs, file listings, source search, copy/lineage/baseline diffs, and sanitized private screening failure details. |
 | `backroom:write` | Mutations, including `set_burn_settings`, which moves TAO. |
 
 Two independent gates apply to every privileged call. The grant must carry the
@@ -486,3 +486,29 @@ hitting its own match cap, and the manifest returns whole by default so no path
 hides behind an offset. `opaque_skipped` counts the members no search can
 reach — a `.onnx` or `.bin` weights file is never searched, and a search that
 never opened one cannot clear it.
+
+## Diffing two submissions
+
+`get_copy_review_source_diff` pairs a held agent only with the reference its
+copy review names, and `get_screening_baseline_diff` only with the starter kit.
+To check whether a resubmission really removed a rejected mechanism, diff it
+against the rejected ancestor directly with
+`get_lineage_source_diff(agentId, referenceAgentId, path?)`. It works for any
+two stored agents, reference -> agent, with no hold on either:
+
+- Without `path` it returns the per-file manifest in the copy-review shape:
+  `added` / `removed` / `modified` / `identical` / `renamed` (with `from_path` /
+  `to_path`), line counts, `normalized_identical`, and `omitted_paths` the
+  bounded read skipped (not compared, so never read as a removal).
+- With `path` (taken from that manifest) it returns that one file's bounded
+  unified diff instead.
+
+One tool covers both modes to keep the catalog inside its byte budget. It needs
+`backroom:artifact:read`, and the two ids must differ. Platform writes one
+artifact-fetch audit row per agent read (`admin.get_lineage_source_diff` or
+`admin.get_lineage_source_diff_file`, each tagged candidate or reference), so
+"who read this source" answers for the ancestor too.
+
+The source readers publish their agent ids as plain `format: uuid` rather than
+zod's long uuid regex, also for the byte budget. Each service function still
+parses its input with the strict uuid schema before calling Platform.

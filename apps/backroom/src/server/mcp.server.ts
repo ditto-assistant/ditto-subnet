@@ -168,6 +168,8 @@ import {
 import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
+  fetchLineageSourceDiff,
+  fetchLineageSourceDiffFile,
   fetchAthReview,
   fetchAthPrecedents,
   fetchQuarantineBaselineDiff,
@@ -498,6 +500,9 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // so they gate on the same dedicated artifact scope.
   ['get_copy_review_source_diff', BACKROOM_ARTIFACT_SCOPE],
   ['read_copy_review_source_diff_file', BACKROOM_ARTIFACT_SCOPE],
+  // Lineage diffs render the same two-submission source for any operator-named
+  // pair, so they gate identically.
+  ['get_lineage_source_diff', BACKROOM_ARTIFACT_SCOPE],
   // Baseline diffs render miner source against the starter kit, so they gate on
   // the same dedicated artifact scope.
   ['get_screening_baseline_diff', BACKROOM_ARTIFACT_SCOPE],
@@ -663,6 +668,13 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
   }
 }
 
+// Agent ids on the artifact-scope source readers publish as plain
+// `format: uuid`, without zod's ~170-byte uuid regex, to hold the catalog byte
+// budget. Each tool's service function parses its input with the strict
+// `z.string().uuid()` schema before any Platform request, so validation is
+// unchanged; only the advertised JSON Schema is shorter.
+const sourceAgentId = () => z.string().meta({ format: 'uuid' })
+
 // Tool descriptions are injected into model context before any tool is used.
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
@@ -671,6 +683,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   refresh_benchmark_contract: 'Rescreen exact contract with guards; expire tickets, preserve scores/owner. Write scope; see help.',
   get_copy_review_source_diff:
     'Per-file held/reference source diff with rename and normalized identity. Artifact scope; bodies via file reader.',
+  get_lineage_source_diff: 'Any two agents, reference->agent. Artifact scope; see help.',
   apply_copy_court_settings:
     'Write complete copy-court posture with expected revision and exact confirmation. Inert or complete signal semantics; see tool help.',
   expand_benchmark_rollout_cohort:
@@ -1167,7 +1180,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         '`count` is the number of readable file rows the platform made available to page and `file_count` remains the platform\'s total archive-file count, so read `returned` for the rows in this response and `has_more` for whether a later offset holds paths this response does not. `has_more` is the only field that reports MCP paging: `truncated` means the platform omitted paths before MCP paging, so no later offset can recover them. Never treat a manifest with `has_more` or `truncated` set as the complete inventory of a submission. ' +
         'Unreadable binary or oversized `opaque_blobs` metadata remains whole on every page because it is separate review evidence. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
       inputSchema: {
-        agentId: z.string().uuid(),
+        agentId: sourceAgentId(),
         ...MCP_SOURCE_MANIFEST_PAGINATION_INPUT,
       },
       annotations: toolAnnotations('read'),
@@ -1196,7 +1209,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       description:
         'Read a bounded line range (max 400 lines) from one file inside a quarantined submission tarball. Pair with the flagged path:line evidence from get_screening_quarantine_context to inspect exactly the suspicious code. When you do not have a line number yet, do NOT bisect with successive 400-line windows — call search_screening_source, which scans the whole artifact in one request and returns the path:line to read here. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
       inputSchema: {
-        agentId: z.string().uuid(),
+        agentId: sourceAgentId(),
         path: z.string().min(1).max(240),
         startLine: z.number().int().min(1).default(1),
         endLine: z.number().int().min(1).default(400),
@@ -1332,7 +1345,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       title: 'Get copy-review source diff',
       description:
         'Return a per-file diff manifest between a held (ath_pending_review) agent and the agent it was matched against: every path classified as added, removed, modified, identical, or renamed (from_path → to_path) with added/removed line counts and a normalized-identical flag (true when the code matches once comments and whitespace are canonicalized — a reformatted copy). Use it to see at a glance which files were copied verbatim before reading individual diffs. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
-      inputSchema: { agentId: z.string().uuid() },
+      inputSchema: { agentId: sourceAgentId() },
       annotations: toolAnnotations('read'),
     },
     async (input) =>
@@ -1350,7 +1363,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       description:
         'Return the bounded unified diff (reference -> candidate) for one file between a held agent and the agent it copied. Pair with get_copy_review_source_diff to pick a modified file, then read its exact line-level changes. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
       inputSchema: {
-        agentId: z.string().uuid(),
+        agentId: sourceAgentId(),
         path: z.string().min(1).max(240),
       },
       annotations: toolAnnotations('read'),
@@ -1360,12 +1373,34 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_lineage_source_diff',
+    {
+      description:
+        'Diff the source of ANY two stored agents, reference -> agent, with no copy review required: typically a resubmission (agentId) against the rejected ancestor it claims to have fixed (referenceAgentId), to check whether a rejected mechanism was really removed. Without path it returns the per-file manifest in the get_copy_review_source_diff shape: every path added, removed, modified, identical, or renamed (from_path → to_path), line counts, a normalized-identical flag, and omitted_paths the bounded read skipped (not compared, never a removal). With path (from that manifest) it returns that one file\'s bounded unified diff instead. The two ids must differ. Platform audits the source read of both agents. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
+      inputSchema: {
+        agentId: sourceAgentId(),
+        referenceAgentId: sourceAgentId(),
+        path: z.string().min(1).max(240).optional(),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ path, ...pair }) =>
+      artifact(async () =>
+        path === undefined
+          ? compacted(await fetchLineageSourceDiff(pair, props.session.email), {
+              files: { pin: ['path'] },
+            })
+          : fetchLineageSourceDiffFile({ ...pair, path }, props.session.email),
+      ),
+  )
+
+  registerTool(
     'get_screening_baseline_diff',
     {
       title: 'Get starter-kit baseline diff',
       description:
         "Return a per-file diff manifest between one submission and the official starter kit every miner begins from. Each path is classified added, removed, modified, or identical, and carries a stock_kit flag that is true when the content is kit code at ANY revision in the pinned lineage — not merely identical to the tip — so a miner who forked an older commit is not credited with authoring it. The headline custom_added_lines counts only lines that are neither baseline nor kit code, i.e. the surface the miner actually wrote, summed over every compared file. When custom_added_lines_complete is false that total is a lower bound: the files in omitted_paths (omitted_file_count in all) were past the platform's bounded source read and were NOT compared, so they appear in no row or count; read them with read_screening_source_file. Start a quarantine review here: it turns reading a whole crate into reading a small delta, and it distinguishes a real custom harness from a kit variant with a few lines changed. Pair with read_screening_baseline_diff_file for line-level changes. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.",
-      inputSchema: { agentId: z.string().uuid() },
+      inputSchema: { agentId: sourceAgentId() },
       annotations: toolAnnotations('read'),
     },
     async (input) =>
@@ -1379,7 +1414,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       description:
         'Return the bounded unified diff (starter kit -> submission) for one file in a submission. Pair with get_screening_baseline_diff to pick a non-stock file, then read exactly what the miner changed or added relative to the kit. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
       inputSchema: {
-        agentId: z.string().uuid(),
+        agentId: sourceAgentId(),
         path: z.string().min(1).max(240),
       },
       annotations: toolAnnotations('read'),

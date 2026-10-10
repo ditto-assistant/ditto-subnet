@@ -439,6 +439,7 @@ describe('Backroom MCP tools', () => {
         'set_confirmation_bundle_settings',
         'authorize_confirmation_bundle_retest',
         'read_copy_review_source_diff_file',
+        'get_lineage_source_diff',
         'get_screening_baseline_diff',
         'read_screening_baseline_diff_file',
         'get_screening_quarantine_context',
@@ -659,6 +660,10 @@ describe('Backroom MCP tools', () => {
     // 179,468 bytes before the optional review-posture pin, node cap and
     // expected-value canary guard inputs. Keep operational tutorials in help
     // and retain the existing catalog budget as these inputs evolve.
+    // Main measured 179,967 bytes. The one-tool any-pair lineage source diff
+    // (#2673, manifest or one file by optional path) is paid for by publishing
+    // the artifact-scope source readers' agent ids as plain `format: uuid`
+    // (the services still parse them strictly): measured 179,446 bytes.
     // Measure the serialized UTF-8 catalog, including guarded Gamma controls.
     expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(180_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
@@ -1413,6 +1418,7 @@ describe('Backroom MCP tools', () => {
       })
       for (const [name, fragment, scope, readOnly] of [
         ['get_copy_review_source_diff', 'per-file diff manifest', BACKROOM_ARTIFACT_SCOPE, true],
+        ['get_lineage_source_diff', 'rejected ancestor', BACKROOM_ARTIFACT_SCOPE, true],
         ['apply_copy_court_settings', 'complete', BACKROOM_WRITE_SCOPE, false],
         ['expand_benchmark_rollout_cohort', 'exact next ranked suffix', BACKROOM_WRITE_SCOPE, false],
         ['get_ath_review', 'ath_pending_review', undefined, true],
@@ -8827,6 +8833,149 @@ describe('Backroom MCP tools', () => {
     )
     await granted.client.close()
     await granted.server.close()
+  })
+
+  it('diffs any two agents for lineage review only with artifact scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '6c1f0d2e-6c0a-4f0e-9a51-3f3b6a1d2c11'
+    const referenceAgentId = 'b2d4c9a8-1e7f-4b3a-8c2d-5e6f7a8b9c0d'
+    const manifest = {
+      agent_id: agentId,
+      reference_agent_id: referenceAgentId,
+      candidate_sha256: 'a'.repeat(64),
+      reference_sha256: 'b'.repeat(64),
+      files: [
+        {
+          path: 'src/mechanism.rs',
+          status: 'removed',
+          candidate_lines: 0,
+          reference_lines: 4,
+          added_lines: 0,
+          removed_lines: 4,
+          similarity: 0,
+          normalized_identical: false,
+        },
+        {
+          path: 'src/solver.rs',
+          status: 'renamed',
+          candidate_lines: 9,
+          reference_lines: 9,
+          added_lines: 0,
+          removed_lines: 0,
+          similarity: 1,
+          normalized_identical: true,
+          from_path: 'src/old_solver.rs',
+          to_path: 'src/solver.rs',
+        },
+      ],
+      file_count: 2,
+      identical_count: 0,
+      modified_count: 0,
+      added_count: 0,
+      removed_count: 1,
+      renamed_count: 1,
+      truncated: false,
+      omitted_file_count: 0,
+      omitted_paths: [],
+    }
+    const detail = {
+      agent_id: agentId,
+      reference_agent_id: referenceAgentId,
+      path: 'src/mechanism.rs',
+      candidate_present: false,
+      reference_present: true,
+      identical: false,
+      diff_lines: ['--- reference/src/mechanism.rs', '+++ candidate/src/mechanism.rs', '-fn hack() {}'],
+      truncated: false,
+    }
+    const fetchMock = vi.fn().mockImplementation(async (url: string) =>
+      Response.json(String(url).includes('/file?') ? detail : manifest),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const refusedGrant = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    for (const [name, args] of [
+      ['get_lineage_source_diff', { agentId, referenceAgentId }],
+      ['get_lineage_source_diff', { agentId, referenceAgentId, path: 'src/mechanism.rs' }],
+    ] as const) {
+      const refused = await refusedGrant.client.callTool({ name, arguments: args })
+      expect(refused.isError).toBe(true)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+    await refusedGrant.client.close()
+    await refusedGrant.server.close()
+
+    const granted = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const same = await granted.client.callTool({
+        name: 'get_lineage_source_diff',
+        arguments: { agentId, referenceAgentId: agentId.toUpperCase() },
+      })
+      expect(same.isError).toBe(true)
+      // Ids publish as plain `format: uuid`; the service still parses them
+      // strictly, so a malformed id never reaches the Platform.
+      for (const [name, args] of [
+        ['get_lineage_source_diff', { agentId: 'not-a-uuid', referenceAgentId }],
+        ['get_lineage_source_diff', { agentId, referenceAgentId: 'not-a-uuid', path: 'a.rs' }],
+        ['get_copy_review_source_diff', { agentId: 'not-a-uuid' }],
+        ['read_screening_baseline_diff_file', { agentId: 'not-a-uuid', path: 'a.rs' }],
+        ['list_screening_source_files', { agentId: 'not-a-uuid' }],
+      ] as const) {
+        const malformed = await granted.client.callTool({ name, arguments: args })
+        expect(malformed.isError, name).toBe(true)
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+      const tool = (await granted.client.listTools()).tools.find(
+        (entry) => entry.name === 'get_lineage_source_diff',
+      )
+      expect(tool?.inputSchema.required).toEqual(['agentId', 'referenceAgentId'])
+      expect(tool?.inputSchema.properties?.referenceAgentId).toEqual({
+        type: 'string',
+        format: 'uuid',
+      })
+
+      const listed = await granted.client.callTool({
+        name: 'get_lineage_source_diff',
+        arguments: { agentId, referenceAgentId },
+      })
+      expect(listed.isError).not.toBe(true)
+      expect(readJsonResult(listed)).toMatchObject({
+        agent_id: agentId,
+        reference_agent_id: referenceAgentId,
+        removed_count: 1,
+        renamed_count: 1,
+        files: [
+          { path: 'src/mechanism.rs', status: 'removed' },
+          { path: 'src/solver.rs', status: 'renamed', from_path: 'src/old_solver.rs' },
+        ],
+      })
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/lineage-source-diff?reference_agent_id=${referenceAgentId}`,
+        expect.objectContaining({
+          headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        }),
+      )
+
+      const file = await granted.client.callTool({
+        name: 'get_lineage_source_diff',
+        arguments: { agentId, referenceAgentId, path: 'src/mechanism.rs' },
+      })
+      expect(file.isError).not.toBe(true)
+      expect(readJsonResult(file)).toMatchObject({
+        path: 'src/mechanism.rs',
+        candidate_present: false,
+        reference_present: true,
+      })
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/lineage-source-diff/file?reference_agent_id=${referenceAgentId}&path=src%2Fmechanism.rs`,
+        expect.objectContaining({
+          headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        }),
+      )
+    } finally {
+      await granted.client.close()
+      await granted.server.close()
+    }
   })
 
   it('issues an audited artifact URL only with explicit artifact scope', async () => {

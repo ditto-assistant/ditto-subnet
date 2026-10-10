@@ -67,6 +67,8 @@ ENDPOINT_ADMIN_SOURCE_FILE = "admin.read_screening_source_file"
 ENDPOINT_ADMIN_SOURCE_SEARCH = "admin.search_screening_source"
 ENDPOINT_ADMIN_COPY_REVIEW_DIFF = "admin.get_copy_review_source_diff"
 ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE = "admin.get_copy_review_source_diff_file"
+ENDPOINT_ADMIN_LINEAGE_DIFF = "admin.get_lineage_source_diff"
+ENDPOINT_ADMIN_LINEAGE_DIFF_FILE = "admin.get_lineage_source_diff_file"
 
 
 async def record_artifact_fetch(

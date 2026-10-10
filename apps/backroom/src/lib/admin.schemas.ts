@@ -8183,6 +8183,30 @@ export const sourceDiffFileInputSchema = z.object({
   path: z.string().min(1).max(240),
 })
 
+// Lineage diff: the same manifest and per-file shapes for ANY two stored
+// agents (reference -> agent), typically a resubmission against the rejected
+// ancestor it claims to have fixed. No copy review is needed on either side.
+const lineagePairShape = {
+  agentId: z.string().uuid(),
+  referenceAgentId: z.string().uuid(),
+}
+
+const distinctLineagePair = (input: { agentId: string; referenceAgentId: string }) =>
+  input.agentId.toLowerCase() !== input.referenceAgentId.toLowerCase()
+
+const distinctLineagePairError = {
+  message: 'referenceAgentId must differ from agentId',
+  path: ['referenceAgentId'],
+}
+
+export const lineageSourceDiffInputSchema = z
+  .object(lineagePairShape)
+  .refine(distinctLineagePair, distinctLineagePairError)
+
+export const lineageSourceDiffFileInputSchema = z
+  .object({ ...lineagePairShape, path: z.string().min(1).max(240) })
+  .refine(distinctLineagePair, distinctLineagePairError)
+
 export const sourceDiffFileDetailSchema = z.object({
   agent_id: z.string().uuid(),
   reference_agent_id: z.string().uuid(),
