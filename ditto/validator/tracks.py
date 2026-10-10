@@ -80,6 +80,7 @@ class MemoryFoldParams:
     tie_pooling: bool = False
     ceiling_band_clamp: bool = False
     statistical_band_cap: bool = False
+    dethrone_seed_full_set: bool = False
     incumbent_agent_id: UUID | None = None
     unpaid_agent_id: UUID | None = None
 
@@ -119,6 +120,7 @@ def memory_fold(inputs: TrackFoldInputs) -> dict[str, float]:
         tie_pooling=params.tie_pooling,
         ceiling_band_clamp=params.ceiling_band_clamp,
         statistical_band_cap=params.statistical_band_cap,
+        dethrone_seed_full_set=params.dethrone_seed_full_set,
         incumbent_agent_id=params.incumbent_agent_id,
         unpaid_agent_id=params.unpaid_agent_id,
     )
