@@ -10,13 +10,16 @@ from fastapi import FastAPI
 
 from ditto.api_server import create_api_server
 from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
+from ditto.api_server.endpoints.upload import MAX_TARBALL_SIZE_BYTES
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
 from ditto.api_server.middleware import (
     PublicCacheMiddleware,
     PublicRateLimitMiddleware,
+    RequestBodyLimitMiddleware,
     RequestIDMiddleware,
 )
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_RATE_LIMITED
+from ditto.api_server.middleware.request_body_limit import request_body_limit_bytes
 from ditto.tests.api_server.conftest import make_api_server_config
 
 
@@ -42,6 +45,10 @@ class TestCreateApiServer:
         app = create_api_server(make_api_server_config())
         classes = [m.cls for m in app.user_middleware]
         assert classes[0] is RequestIDMiddleware
+        assert classes[1] is RequestBodyLimitMiddleware
+        assert app.user_middleware[1].kwargs["max_bytes"] == request_body_limit_bytes(
+            MAX_TARBALL_SIZE_BYTES
+        )
 
     def test_public_rate_limit_is_absent_by_default(self):
         app = create_api_server(make_api_server_config())

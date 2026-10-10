@@ -101,6 +101,12 @@ platform_upload_admission_relay_enabled: false
 # Deliberate operator activation only, after sizing for legitimate shared IPs.
 platform_public_rate_limit_per_minute: 0
 
+# Hard cap on a request body before Caddy proxies it. 32 MiB is the transcript
+# cap and covers the default 20 MiB upload tarball. Raise this together with
+# DITTO_MAX_TARBALL_SIZE_BYTES when that cap, plus multipart framing, exceeds
+# 32 MiB. The API enforces the same ceiling before it spools a file part.
+platform_request_body_max_size: 32MiB
+
 # Additional public hostnames served by the same Caddy vhost. Keep aliases in
 # host_vars so each environment explicitly owns its certificate/SNI surface.
 platform_alias_domains: []
