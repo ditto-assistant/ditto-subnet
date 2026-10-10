@@ -14,6 +14,12 @@ func checkedOptions(opts Options) (Options, error) {
 	if opts.RouterSeeds < 0 {
 		return opts, fmt.Errorf("router seed count must not be negative")
 	}
+	if opts.RouterWorkers == 0 {
+		opts.RouterWorkers = 1
+	}
+	if opts.RouterWorkers < 1 || opts.RouterWorkers > 16 {
+		return opts, fmt.Errorf("router workers must be between 1 and 16")
+	}
 	var heldOut []int64
 	var first, last int64
 	if len(opts.Artifacts) == 0 {
