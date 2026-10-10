@@ -11980,6 +11980,135 @@ class TestSubmitResult:
             assert release is not None
             assert release.state == "terminal"
 
+    async def test_v13_policy_only_rescreen_pass_records_its_review_event(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A scored agent's clean v13 rescreen leaves an auditable review row.
+
+        The policy-only lane reuses the retained image but reruns source review,
+        so its pass is a reviewed clearance. It must snapshot the attempt's
+        receipts like any other screen, exactly once across verdict replays
+        (#2672).
+        """
+        target_policy = 13
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            screening_policy_version=target_policy - 1,
+        )
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            activation = ScreenerPolicyActivation(
+                parent_revision=0,
+                target_policy_version=target_policy,
+                activate_at=now - timedelta(minutes=1),
+                rescreen_scored=True,
+                canary_only=True,
+                reason="rescreen one scored agent under policy v13",
+                actor="test",
+            )
+            session.add(activation)
+            agent = await session.get(Agent, agent_id, with_for_update=True)
+            assert agent is not None
+            agent.screened_image_sha256 = "12" * 32
+            agent.screened_image_size_bytes = 123
+            agent.screened_image_id = "sha256:" + "34" * 32
+            agent.screened_image_ref = f"ditto-screen/{agent_id}:retained"
+            agent.screened_image_upload_id = uuid4()
+            agent.screened_image_verified_at = now - timedelta(days=1)
+            await session.flush()
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    artifact_sha256=_SHA256,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=target_policy,
+                    status="running",
+                    started_at=now - timedelta(minutes=1),
+                    deadline=now + timedelta(minutes=44),
+                    reason_code=POLICY_ONLY_RESCREEN_REASON,
+                    public_reason=None,
+                )
+            )
+            await session.flush()
+            session.add(
+                ScoredPolicyRescreenRelease(
+                    release_id=uuid4(),
+                    activation_revision=activation.revision,
+                    target_policy_version=target_policy,
+                    agent_id=agent_id,
+                    position=1,
+                    state="running",
+                    attempt_id=attempt_id,
+                    actor="test",
+                    reason="rescreen one scored agent under policy v13",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.screener_policy_activation.invalidate()
+
+        # The policy-only lane validates the archive before source review and
+        # records that receipt while its lease is running.
+        receipt = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/verification-receipts",
+            json={
+                "attempt_id": str(attempt_id),
+                "artifact_sha256": _SHA256,
+                "policy_version": target_policy,
+                "check_code": "archive_sha",
+                "evidence_sha256": mechanical_evidence_sha256(
+                    check_code="archive_sha", artifact_sha256=_SHA256
+                ),
+            },
+        )
+        assert receipt.status_code == 204, receipt.text
+        payload = _result_payload(
+            agent_id,
+            attempt_id=attempt_id,
+            policy_version=target_policy,
+            passed=True,
+            policy_only=True,
+        )
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        replay = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+
+        assert response.status_code == 200, response.text
+        assert replay.status_code == 200, replay.text
+        assert response.json()["status"] == AgentStatus.SCORED
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert attempt is not None
+            assert attempt.status == "passed"
+            events = (
+                await session.scalars(
+                    select(ScreeningReviewEvent).where(
+                        ScreeningReviewEvent.attempt_id == attempt_id
+                    )
+                )
+            ).all()
+            assert len(events) == 1
+            event = events[0]
+            assert event.event_kind == "automated"
+            assert event.policy_version == target_policy
+            assert event.outcome == "pass"
+            assert event.effective_decision == "pass"
+            assert event.prior_agent_status == AgentStatus.SCORED.value
+            assert event.next_agent_status == AgentStatus.SCORED.value
+            assert event.actor == f"screener:{_SCREENER_HOTKEY}"
+            assert [
+                row["check_code"] for row in event.evidence["verification_receipts"]
+            ] == ["archive_sha"]
+
     async def test_infrastructure_failure_is_parked_not_rejected(
         self,
         app: FastAPI,

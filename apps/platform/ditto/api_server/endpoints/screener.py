@@ -517,6 +517,31 @@ def _completes_static_review(payload: ScreenResultRequest) -> bool:
     )
 
 
+def _appends_automated_review_event(
+    *,
+    records_review_evidence: bool,
+    deferred_deep_hold: bool,
+    outcome_value: str | None,
+    build_only: bool,
+) -> bool:
+    """Whether an accepted verdict appends its immutable automated review event.
+
+    Outcomes that carry review evidence and deferred deep reviews that keep the
+    reward hold always record one. A clean ``pass`` records one whenever its
+    attempt ran source review. That includes a policy-only rescreen, which
+    reuses the retained image but reruns L1/L2 source review under the new
+    policy. Without its event, a scored agent cleared by a v13 rescreen and
+    later rejected on the ATH board left no trace of which review passed it
+    (#2672). Only the mechanical build-only lane skips the event: it runs no
+    source review, so there is nothing to snapshot.
+    """
+    return (
+        records_review_evidence
+        or deferred_deep_hold
+        or (outcome_value == "pass" and not build_only)
+    )
+
+
 def _fresh_dataset_seed() -> int:
     """Fallback local-CSPRNG seed, used only when chain derivation is unavailable.
 
@@ -6148,16 +6173,13 @@ async def submit_result(
                 agent.dataset_run_size = dataset_run_size
                 agent.dataset_seed_block = seed_block
                 agent.dataset_seed_block_hash = seed_block_hash
-        if attempt is not None and (
-            records_review_evidence
-            or (
+        if attempt is not None and _appends_automated_review_event(
+            records_review_evidence=records_review_evidence,
+            deferred_deep_hold=(
                 deferred_deep_attempt and agent.status == AgentStatus.ATH_PENDING_REVIEW
-            )
-            or (
-                outcome_value == "pass"
-                and not attempt.build_only
-                and not payload.policy_only
-            )
+            ),
+            outcome_value=outcome_value,
+            build_only=attempt.build_only,
         ):
             review_quarantine = await session.scalar(
                 select(ScreeningQuarantine).where(
