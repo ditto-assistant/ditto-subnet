@@ -51,6 +51,7 @@ class ProducerConfig:
     validator_model: str
     validator_provider: str
     api_key: str = field(repr=False)
+    rewrite_mode: str = ""
     rewrite_reasoning: str = ""
     validator_reasoning: str = ""
     concurrency: int = 4
@@ -58,7 +59,10 @@ class ProducerConfig:
     timeout_seconds: float = 7200
 
     def arguments(self) -> list[str]:
-        return [
+        # Omit the new option for the legacy mode, including when inspecting
+        # an older approved producer binary that does not recognize it.
+        mode = ["-rewrite-mode", self.rewrite_mode] if self.rewrite_mode else []
+        return mode + [
             "-rewrite-model",
             self.rewrite_model,
             "-rewrite-provider",
@@ -114,6 +118,7 @@ def _check_config(config: ProducerConfig) -> None:
             not re.fullmatch(r"[0-9a-f]{64}", config.executable_sha256)
             or not re.fullmatch(r"[0-9a-f]{64}", config.profile_sha256)
             or not 1 <= config.concurrency <= 16
+            or config.rewrite_mode not in {"", "literal-text-v1"}
             or not math.isfinite(config.max_cost_usd)
             or not 0 < config.max_cost_usd <= 1000
             or not 0 < config.timeout_seconds <= 7200
@@ -278,6 +283,7 @@ def config_from_env() -> ProducerConfig:
             validator_model=os.environ[prefix + "VALIDATOR_MODEL"],
             validator_provider=os.environ[prefix + "VALIDATOR_PROVIDER"],
             api_key=os.environ["OPENROUTER_API_KEY"],
+            rewrite_mode=os.environ.get(prefix + "REWRITE_MODE", ""),
             rewrite_reasoning=os.environ.get(prefix + "REWRITE_REASONING", ""),
             validator_reasoning=os.environ.get(prefix + "VALIDATOR_REASONING", ""),
             concurrency=int(os.environ.get(prefix + "CONCURRENCY", "4")),
