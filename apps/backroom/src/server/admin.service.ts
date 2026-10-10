@@ -399,6 +399,7 @@ import {
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
   sourceReviewQueueSloSchema,
+  athReviewQueueSloSchema,
   validatorCapacitySummarySchema,
   outlierEscalationDryRunInputSchema,
   outlierEscalationDryRunSchema,
@@ -1728,6 +1729,13 @@ const SOURCE_REVIEW_QUEUE_SLO_PATH = '/api/v1/admin/source-review-queue-slo'
 export async function fetchSourceReviewQueueSlo() {
   const payload = await platformAdminRequest(SOURCE_REVIEW_QUEUE_SLO_PATH)
   return sourceReviewQueueSloSchema.parse(payload)
+}
+
+const ATH_REVIEW_QUEUE_SLO_PATH = '/api/v1/admin/ath-review-queue-slo'
+
+export async function fetchAthReviewQueueSlo() {
+  const payload = await platformAdminRequest(ATH_REVIEW_QUEUE_SLO_PATH)
+  return athReviewQueueSloSchema.parse(payload)
 }
 
 export async function fetchOutlierEscalation(rawInput: unknown = {}) {

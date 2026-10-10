@@ -305,6 +305,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/ath-review-queue-slo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Ath Review Queue Slo
+         * @description ATH and copy-review queue age, throughput, overdue counts, and ghosts.
+         */
+        get: operations["get_ath_review_queue_slo_api_v1_admin_ath_review_queue_slo_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/ath-rulings/batch-execute": {
         parameters: {
             query?: never;
@@ -14394,6 +14414,122 @@ export interface components {
             sha256: string;
         };
         /**
+         * AthReviewQueueSlo
+         * @description ATH-hold queue age against SLO: the aggregate, each class, and ghosts.
+         *
+         *     Read-only. It enforces nothing: there is no alert and no operator
+         *     escalation action. Both are ditto-subnet#2042 follow-ups.
+         */
+        AthReviewQueueSlo: {
+            /** @description Every pending ATH hold: the ATH review clock. */
+            ath: components["schemas"]["AthReviewQueueStats"];
+            /**
+             * Classes
+             * @description One entry per queue class, always all present.
+             */
+            classes: components["schemas"]["AthReviewQueueStats"][];
+            /** @description The copy-review clock (review_kind=copy, including legacy holds with no kind). The same entry appears in classes. */
+            copy_review: components["schemas"]["AthReviewQueueStats"];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Ghost Count
+             * @description Sum of the three reconciliation counts above.
+             */
+            ghost_count: number;
+            /**
+             * Held Without Review Ghost Count
+             * @description ath_pending_review agents with no pending review row.
+             */
+            held_without_review_ghost_count: number;
+            /**
+             * Stranded Hold Ghost Count
+             * @description Pending reviews whose agent moved to another non-held status. Needs unsticking; resolving it through the API answers 409.
+             */
+            stranded_hold_ghost_count: number;
+            /**
+             * Stranded Terminal Ghost Count
+             * @description Pending reviews whose agent is already banned or rejected. Terminal history, never backlog.
+             */
+            stranded_terminal_ghost_count: number;
+        };
+        /**
+         * AthReviewQueueStats
+         * @description p50, p95, and oldest age, throughput, and overdue count for one clock.
+         *
+         *     Every age and threshold field is in seconds. ``overdue_count`` and
+         *     ``p95_exceeds_threshold`` are ``null`` whenever their threshold is
+         *     unset, never ``0`` and never a computed "healthy" default.
+         */
+        AthReviewQueueStats: {
+            /** Active Work Count */
+            active_work_count: number;
+            /**
+             * Backlog Count
+             * @description Pending holds whose agent is still ath_pending_review. Stranded holds are reported separately as ghosts.
+             */
+            backlog_count: number;
+            /** Capacity Wait Count */
+            capacity_wait_count: number;
+            /**
+             * Escalation Count
+             * @description Holds waiting on an operator decision.
+             */
+            escalation_count: number;
+            /** Infrastructure Backoff Count */
+            infrastructure_backoff_count: number;
+            /**
+             * Max Actionable Age Threshold Seconds
+             * @description Configured overdue threshold, or null when unset.
+             */
+            max_actionable_age_threshold_seconds?: number | null;
+            /** Oldest Age Seconds */
+            oldest_age_seconds?: number | null;
+            /**
+             * Oldest Agent Id
+             * @description Agent behind the oldest actionable hold (operator-only).
+             */
+            oldest_agent_id?: string | null;
+            /** Oldest Reason */
+            oldest_reason?: ("active_work" | "capacity_wait" | "infrastructure_backoff" | "escalation") | null;
+            /**
+             * Overdue Count
+             * @description Actionable holds older than the threshold; null when unset.
+             */
+            overdue_count?: number | null;
+            /**
+             * P50 Age Seconds
+             * @description Median age since the hold last became pending (COALESCE(reopened_at, opened_at)). Null only when the backlog is empty.
+             */
+            p50_age_seconds?: number | null;
+            /** P95 Age Seconds */
+            p95_age_seconds?: number | null;
+            /** P95 Age Threshold Seconds */
+            p95_age_threshold_seconds?: number | null;
+            /**
+             * P95 Exceeds Threshold
+             * @description Null unless a p95 threshold is configured.
+             */
+            p95_exceeds_threshold?: boolean | null;
+            /**
+             * Queue Class
+             * @description Null for the aggregate over every pending ATH hold. integrity_double_check is the top-five deferred_source_review hold; filter the copy-review queue with review_kind=deferred_source_review to list it.
+             */
+            queue_class: ("copy" | "benchmark_overfit" | "deferred_source_review" | "integrity_double_check" | "anomalous_score") | null;
+            /**
+             * Throughput Completed Count
+             * @description Reviews of this class resolved (clear or reject) within the window. Counted by the review's latest resolved_at.
+             */
+            throughput_completed_count: number;
+            /** Throughput Per Hour */
+            throughput_per_hour: number;
+            /** Throughput Window Hours */
+            throughput_window_hours: number;
+        };
+        /**
          * BenchDatasetConfig
          * @description How datasets are generated and pinned.
          */
@@ -24654,6 +24790,34 @@ export interface components {
             weight_confirmed_at?: string | null;
         };
         /**
+         * PublicAthReview
+         * @description Source-safe ATH-hold clock (ditto-subnet#2042, slice 2).
+         *
+         *     Tells a miner whether their held submission is waiting for a deep-review
+         *     screener, being worked, parked after an infrastructure failure, or waiting
+         *     for an operator, and for how long. It carries no hold evidence, no
+         *     queue class, no reason codes, and no other miner's data.
+         *     ``typical_p50_seconds`` and ``typical_p95_seconds`` cover every pending
+         *     ATH hold across the subnet. They are not a promise about this
+         *     submission.
+         */
+        PublicAthReview: {
+            /**
+             * Age Seconds
+             * @description Time since this hold last became pending. A deep-review retry does not reset it. Only a reopen after a resolution does.
+             */
+            age_seconds: number;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "active_work" | "capacity_wait" | "infrastructure_backoff" | "escalation";
+            /** Typical P50 Seconds */
+            typical_p50_seconds?: number | null;
+            /** Typical P95 Seconds */
+            typical_p95_seconds?: number | null;
+        };
+        /**
          * PublicAuditEntry
          * @description One entry of the append-only, hash-chained public score audit log.
          *
@@ -28044,6 +28208,8 @@ export interface components {
              */
             agent_id: string;
             artifact_release: components["schemas"]["PublicArtifactRelease"];
+            /** @description ATH-hold clock and reason while the submission is held for review after scoring; null when it is not held. */
+            ath_review?: components["schemas"]["PublicAthReview"] | null;
             /**
              * Confirmation Sample Composites
              * @description Per-seed retest medians for this agent and active benchmark, sorted by composite without exposing reusable seed identifiers. These are display-only; cohort fold eligibility is authoritative only in the leaderboard.
@@ -37548,6 +37714,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArtifactReleaseSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ath_review_queue_slo_api_v1_admin_ath_review_queue_slo_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AthReviewQueueSlo"];
                 };
             };
             /** @description Validation Error */

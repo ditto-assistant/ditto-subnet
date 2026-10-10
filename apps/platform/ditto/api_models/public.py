@@ -3697,6 +3697,35 @@ class PublicOrdinaryReview(BaseModel):
     typical_p95_seconds: Annotated[float | None, Field(default=None, ge=0)]
 
 
+class PublicAthReview(BaseModel):
+    """Source-safe ATH-hold clock (ditto-subnet#2042, slice 2).
+
+    Tells a miner whether their held submission is waiting for a deep-review
+    screener, being worked, parked after an infrastructure failure, or waiting
+    for an operator, and for how long. It carries no hold evidence, no
+    queue class, no reason codes, and no other miner's data.
+    ``typical_p50_seconds`` and ``typical_p95_seconds`` cover every pending
+    ATH hold across the subnet. They are not a promise about this
+    submission.
+    """
+
+    reason: Literal[
+        "active_work", "capacity_wait", "infrastructure_backoff", "escalation"
+    ]
+    age_seconds: Annotated[
+        float,
+        Field(
+            ge=0,
+            description=(
+                "Time since this hold last became pending. A deep-review retry "
+                "does not reset it. Only a reopen after a resolution does."
+            ),
+        ),
+    ]
+    typical_p50_seconds: Annotated[float | None, Field(default=None, ge=0)]
+    typical_p95_seconds: Annotated[float | None, Field(default=None, ge=0)]
+
+
 class PublicScreeningDispute(BaseModel):
     """Public-safe appeal state; the miner's private message is never exposed."""
 
@@ -4195,6 +4224,13 @@ class PublicSubmissionPipeline(BaseModel):
             "Ordinary source-review clock and reason while the submission is "
             "in the pre-score screening pipeline; null once it leaves that "
             "pipeline (whichever way)."
+        ),
+    )
+    ath_review: PublicAthReview | None = Field(
+        default=None,
+        description=(
+            "ATH-hold clock and reason while the submission is held for "
+            "review after scoring; null when it is not held."
         ),
     )
     submission_family: PublicSubmissionFamily | None = Field(

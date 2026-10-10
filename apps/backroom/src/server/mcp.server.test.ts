@@ -4189,31 +4189,73 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('reads the ordinary source-review queue-age SLO', async () => {
+  const ordinaryQueueSloPayload = () => ({
+    generated_at: '2026-09-23T00:00:00Z',
+    backlog_count: 4,
+    active_work_count: 1,
+    capacity_wait_count: 1,
+    infrastructure_backoff_count: 1,
+    escalation_count: 1,
+    p50_age_seconds: 300,
+    p95_age_seconds: 900,
+    oldest_age_seconds: 950,
+    throughput_window_hours: 24,
+    throughput_completed_count: 12,
+    throughput_per_hour: 0.5,
+    stale_running_ghost_count: 1,
+    resolved_quarantine_ghost_count: 0,
+    attempt_status_drift_ghost_count: 0,
+    ghost_count: 1,
+    max_actionable_age_threshold_seconds: null,
+    overdue_count: null,
+    p95_age_threshold_seconds: null,
+    p95_exceeds_threshold: null,
+  })
+
+  const athQueueStats = (queueClass: string | null, backlog: number) => ({
+    queue_class: queueClass,
+    backlog_count: backlog,
+    active_work_count: 0,
+    capacity_wait_count: 0,
+    infrastructure_backoff_count: 0,
+    escalation_count: backlog,
+    p50_age_seconds: backlog > 0 ? 3600 : null,
+    p95_age_seconds: backlog > 0 ? 7200 : null,
+    oldest_age_seconds: backlog > 0 ? 7500 : null,
+    oldest_agent_id: backlog > 0 ? '00000000-0000-4000-8000-000000000001' : null,
+    oldest_reason: backlog > 0 ? 'escalation' : null,
+    throughput_window_hours: 24,
+    throughput_completed_count: 2,
+    throughput_per_hour: 2 / 24,
+    max_actionable_age_threshold_seconds: queueClass === 'copy' ? 3600 : null,
+    overdue_count: queueClass === 'copy' ? 1 : null,
+    p95_age_threshold_seconds: null,
+    p95_exceeds_threshold: null,
+  })
+
+  const athQueueSloPayload = () => ({
+    generated_at: '2026-09-23T00:00:00Z',
+    ath: athQueueStats(null, 2),
+    copy_review: athQueueStats('copy', 2),
+    classes: [
+      athQueueStats('copy', 2),
+      athQueueStats('benchmark_overfit', 0),
+      athQueueStats('deferred_source_review', 0),
+      athQueueStats('integrity_double_check', 0),
+      athQueueStats('anomalous_score', 0),
+    ],
+    stranded_terminal_ghost_count: 1,
+    stranded_hold_ghost_count: 0,
+    held_without_review_ghost_count: 0,
+    ghost_count: 1,
+  })
+
+  it('reads the ordinary and ATH source-review queue-age SLOs', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const fetchMock = vi.fn().mockResolvedValueOnce(
-      Response.json({
-        generated_at: '2026-09-23T00:00:00Z',
-        backlog_count: 4,
-        active_work_count: 1,
-        capacity_wait_count: 1,
-        infrastructure_backoff_count: 1,
-        escalation_count: 1,
-        p50_age_seconds: 300,
-        p95_age_seconds: 900,
-        oldest_age_seconds: 950,
-        throughput_window_hours: 24,
-        throughput_completed_count: 12,
-        throughput_per_hour: 0.5,
-        stale_running_ghost_count: 1,
-        resolved_quarantine_ghost_count: 0,
-        attempt_status_drift_ghost_count: 0,
-        ghost_count: 1,
-        max_actionable_age_threshold_seconds: null,
-        overdue_count: null,
-        p95_age_threshold_seconds: null,
-        p95_exceeds_threshold: null,
-      }),
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input instanceof Request ? input.url : input).includes('/admin/ath-review-queue-slo')
+        ? Response.json(athQueueSloPayload())
+        : Response.json(ordinaryQueueSloPayload()),
     )
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
@@ -4224,13 +4266,46 @@ describe('Backroom MCP tools', () => {
     })
 
     expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toMatchObject({
+    const body = readJsonResult(response)
+    // The ordinary snapshot keeps its existing top-level shape.
+    expect(body).toMatchObject({
       backlog_count: 4,
       escalation_count: 1,
       stale_running_ghost_count: 1,
       overdue_count: null,
       p95_exceeds_threshold: null,
+      ath_review: {
+        ath: { backlog_count: 2, queue_class: null },
+        copy_review: { queue_class: 'copy', overdue_count: 1 },
+        stranded_terminal_ghost_count: 1,
+      },
     })
+    expect(body).not.toHaveProperty('ath_review_error')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    await client.close()
+    await server.close()
+  })
+
+  it('keeps the ordinary queue-age SLO when the ATH read fails', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input instanceof Request ? input.url : input).includes('/admin/ath-review-queue-slo')
+        ? Response.json({ detail: 'Not Found' }, { status: 404 })
+        : Response.json(ordinaryQueueSloPayload()),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_source_review_queue_slo',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    const body = readJsonResult(response)
+    expect(body).toMatchObject({ backlog_count: 4, ath_review: null })
+    expect(body).toHaveProperty('ath_review_error')
 
     await client.close()
     await server.close()

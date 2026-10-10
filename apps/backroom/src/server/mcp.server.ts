@@ -267,6 +267,7 @@ import {
   fetchScoringLeaseSettings,
   fetchInferenceRuntimeMetrics,
   fetchSourceReviewQueueSlo,
+  fetchAthReviewQueueSlo,
   fetchOutlierEscalation,
   fetchClaimProvenanceCases,
   fetchOutlierEscalationDryRun,
@@ -811,7 +812,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_inference_runtime_metrics:
     'Read inference load and relay health.',
   get_source_review_queue_slo:
-    'Read ordinary source-review queue age, throughput, and reconciliation ghosts.',
+    'Read ordinary source-review and ATH/copy-review queue age, throughput, and ghosts.',
   get_claim_provenance_cases:
     'Read exact-artifact V13 provenance evidence.',
   get_outlier_escalation:
@@ -3263,10 +3264,29 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get source-review queue-age SLO',
       description:
-        'Read the ordinary (pre-score) source-review queue-age SLO: p50/p95/oldest actionable age in seconds, throughput (completions per hour over a fixed window), and the current backlog broken out by reason -- active_work (a screener is claimed and running), capacity_wait (uploaded, no screener has claimed it yet), infrastructure_backoff (the last attempt ended retryable_infra/inconclusive and is fail-closed parked for an operator-authorized retry), and escalation (an active anti-cheat quarantine hold, which wins regardless of what the underlying attempt itself reports, e.g. a rescreen that then failed). Age is the stable queue-entry clock (the submission\'s own upload time); a retry never resets it, so a long-overdue item stays overdue through every rescreen. Also reports four reconciliation counts that are visible but NEVER folded into the metrics above: stale_running_ghost_count (a screening attempt still looks running though its agent already reached a terminal or later status), resolved_quarantine_ghost_count (an agent stuck at quarantined status with no active quarantine row), terminal_quarantine_ghost_count (an active quarantine whose agent is already banned or rejected; close it with a fenced batch reject), and attempt_status_drift_ghost_count (the latest attempt reports a status this SLO\'s reason classification does not cover, e.g. a terminal verdict on an agent whose own status never advanced). overdue_count and p95_exceeds_threshold are null until an operator configures a threshold (there is no shipped default); this tool enforces nothing -- no alert, no operator escalation action. Covers ORDINARY screening review only: stronger top-agent review, copy review, ATH review, and human escalation are separate review classes with their own clocks, not yet built. Requires backroom:read and changes nothing.',
+        'Read the ordinary (pre-score) source-review queue-age SLO: p50/p95/oldest actionable age in seconds, throughput (completions per hour over a fixed window), and the current backlog broken out by reason -- active_work (a screener is claimed and running), capacity_wait (uploaded, no screener has claimed it yet), infrastructure_backoff (the last attempt ended retryable_infra/inconclusive and is fail-closed parked for an operator-authorized retry), and escalation (an active anti-cheat quarantine hold, which wins regardless of what the underlying attempt itself reports, e.g. a rescreen that then failed). Age is the stable queue-entry clock (the submission\'s own upload time); a retry never resets it, so a long-overdue item stays overdue through every rescreen. Also reports four reconciliation counts that are visible but NEVER folded into the metrics above: stale_running_ghost_count (a screening attempt still looks running though its agent already reached a terminal or later status), resolved_quarantine_ghost_count (an agent stuck at quarantined status with no active quarantine row), terminal_quarantine_ghost_count (an active quarantine whose agent is already banned or rejected; close it with a fenced batch reject), and attempt_status_drift_ghost_count (the latest attempt reports a status this SLO\'s reason classification does not cover, e.g. a terminal verdict on an agent whose own status never advanced). overdue_count and p95_exceeds_threshold are null until an operator configures a threshold (there is no shipped default); this tool enforces nothing -- no alert, no operator escalation action. The top level covers ORDINARY screening review only. ath_review is the post-score ATH-hold queue (every pending ath_reviews hold; null with ath_review_error if that read failed): ath aggregates all holds, copy_review is the copy clock (legacy holds with no review_kind included), and classes gives one entry each for copy, benchmark_overfit, deferred_source_review, integrity_double_check (the top-five deep review), and anomalous_score, with the same reasons, oldest_agent_id/oldest_reason, resolved-review throughput, and null-until-configured thresholds. Its clock is COALESCE(reopened_at, opened_at): a deep-review retry never resets it, a reopen does. Copy, overfit, and anomalous-score holds are always escalation; deferred and double-check holds follow the newest screening attempt since the clock started until that pass concludes. Pending reviews whose agent is no longer ath_pending_review are stranded_terminal_ghost_count (banned/rejected) or stranded_hold_ghost_count (needs unsticking; resolving 409s), and held_without_review_ghost_count counts held agents with no pending row; none is backlog. Human escalation has no clock yet. Requires backroom:read and changes nothing.',
       annotations: toolAnnotations('read'),
     },
-    async () => result(await fetchSourceReviewQueueSlo()),
+    async () => {
+      // The ordinary snapshot keeps its top-level shape; the ATH/copy-review
+      // snapshot rides beside it so one catalog entry serves both clocks. A
+      // Platform without the ATH endpoint must not break the ordinary read.
+      const [ordinary, ath] = await Promise.all([
+        fetchSourceReviewQueueSlo(),
+        fetchAthReviewQueueSlo().then(
+          (value) => ({ value, error: null }),
+          (error: unknown) => ({
+            value: null,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+      ])
+      return result({
+        ...ordinary,
+        ath_review: ath.value,
+        ...(ath.error === null ? {} : { ath_review_error: ath.error }),
+      })
+    },
   )
 
   registerTool(

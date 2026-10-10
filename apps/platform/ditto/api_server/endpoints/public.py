@@ -66,6 +66,7 @@ from ditto.api_models import (
     PublicAgentSummary,
     PublicArtifactDownload,
     PublicArtifactRelease,
+    PublicAthReview,
     PublicAuditEntry,
     PublicAuditResponse,
     PublicBenchConfigResponse,
@@ -340,6 +341,10 @@ from ditto.db.queries.artifact_release import (
 from ditto.db.queries.artifact_release_settings import (
     ArtifactReleasePolicy,
     artifact_release_policy,
+)
+from ditto.db.queries.ath_review_queue_slo import (
+    load_agent_ath_review_state,
+    load_ath_review_queue_slo_snapshot,
 )
 from ditto.db.queries.audit import GENESIS_HASH, list_audit_entries
 from ditto.db.queries.benchmark_admission import (
@@ -7838,6 +7843,22 @@ async def agent_pipeline(
                 typical_p50_seconds=typical.p50_age_seconds,
                 typical_p95_seconds=typical.p95_age_seconds,
             )
+    ath_review: PublicAthReview | None = None
+    if agent.status == AgentStatus.ATH_PENDING_REVIEW:
+        # The operator snapshot's own statement, filtered to this agent, so
+        # the public reason can never drift from the operator one. A
+        # stranded-hold ghost reads as None here too.
+        ath_state = await load_agent_ath_review_state(session, agent_id=agent_id)
+        if ath_state is not None:
+            # Subnet-wide typical durations over every pending ATH hold. The
+            # queue is small, and the 10s response cache above bounds this.
+            ath_typical = (await load_ath_review_queue_slo_snapshot(session)).ath
+            ath_review = PublicAthReview(
+                reason=ath_state.reason,
+                age_seconds=ath_state.age_seconds,
+                typical_p50_seconds=ath_typical.p50_age_seconds,
+                typical_p95_seconds=ath_typical.p95_age_seconds,
+            )
     quarantines_by_attempt = {
         quarantine.attempt_id: quarantine for quarantine in quarantines
     }
@@ -8125,6 +8146,7 @@ async def agent_pipeline(
         admission_retry=admission_retry,
         validator_retry=validator_retry,
         ordinary_review=ordinary_review,
+        ath_review=ath_review,
         artifact_release=(
             await _artifact_release_snapshot(
                 session,

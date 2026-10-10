@@ -9476,8 +9476,8 @@ export type ConfirmationSeedAnchorList = z.infer<
 // Ordinary (pre-score) source-review queue-age SLO, ditto-subnet#2042 slice 1.
 // Read-only observability: overdue_count and p95_exceeds_threshold are null
 // until an operator configures a threshold, and this board enforces nothing.
-// Top-agent, copy, ATH, and human-escalation review are separate, later
-// clocks -- not covered here.
+// Copy, ATH, and top-five double-check review report through
+// athReviewQueueSloSchema below; human escalation is a later clock.
 export const sourceReviewQueueSloSchema = z.object({
   generated_at: z.string(),
   backlog_count: z.number().int().nonnegative(),
@@ -9504,6 +9504,61 @@ export const sourceReviewQueueSloSchema = z.object({
 })
 
 export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
+
+// ATH-hold queue-age SLO, ditto-subnet#2042 slice 2: every pending ath_reviews
+// hold, one clock per class (copy review included), and stranded-hold ghosts.
+// Read-only; thresholds report null until an operator configures them.
+type GeneratedAthReviewQueueStats = PlatformComponents['schemas']['AthReviewQueueStats']
+type GeneratedAthReviewQueueSlo = PlatformComponents['schemas']['AthReviewQueueSlo']
+
+const athReviewHoldReasonSchema = z.enum([
+  'active_work',
+  'capacity_wait',
+  'infrastructure_backoff',
+  'escalation',
+])
+
+const athReviewQueueStatsSchema = z.object({
+  queue_class: z
+    .enum([
+      'copy',
+      'benchmark_overfit',
+      'deferred_source_review',
+      'integrity_double_check',
+      'anomalous_score',
+    ])
+    .nullable(),
+  backlog_count: z.number().int().nonnegative(),
+  active_work_count: z.number().int().nonnegative(),
+  capacity_wait_count: z.number().int().nonnegative(),
+  infrastructure_backoff_count: z.number().int().nonnegative(),
+  escalation_count: z.number().int().nonnegative(),
+  p50_age_seconds: z.number().nonnegative().nullable(),
+  p95_age_seconds: z.number().nonnegative().nullable(),
+  oldest_age_seconds: z.number().nonnegative().nullable(),
+  oldest_agent_id: z.string().uuid().nullable(),
+  oldest_reason: athReviewHoldReasonSchema.nullable(),
+  throughput_window_hours: z.number().int().positive(),
+  throughput_completed_count: z.number().int().nonnegative(),
+  throughput_per_hour: z.number().nonnegative(),
+  max_actionable_age_threshold_seconds: z.number().int().positive().nullable(),
+  overdue_count: z.number().int().nonnegative().nullable(),
+  p95_age_threshold_seconds: z.number().int().positive().nullable(),
+  p95_exceeds_threshold: z.boolean().nullable(),
+} satisfies PlatformResponseShape<GeneratedAthReviewQueueStats>)
+
+export const athReviewQueueSloSchema = z.object({
+  generated_at: z.string(),
+  ath: athReviewQueueStatsSchema,
+  copy_review: athReviewQueueStatsSchema,
+  classes: z.array(athReviewQueueStatsSchema),
+  stranded_terminal_ghost_count: z.number().int().nonnegative(),
+  stranded_hold_ghost_count: z.number().int().nonnegative(),
+  held_without_review_ghost_count: z.number().int().nonnegative(),
+  ghost_count: z.number().int().nonnegative(),
+} satisfies PlatformResponseShape<GeneratedAthReviewQueueSlo>)
+
+export type AthReviewQueueSlo = z.infer<typeof athReviewQueueSloSchema>
 
 // Fleet validator capacity, ditto-subnet#2036 telemetry slice. Read-only:
 // progress rates and remaining slot-minutes are estimates, null when unknown.

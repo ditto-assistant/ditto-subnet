@@ -22,6 +22,10 @@ from ditto.api_models.inference_concurrency_settings import (
     MAX_CHAT_TOKEN_BUDGET,
     MAX_EMBEDDING_GLOBAL_CONCURRENCY,
 )
+from ditto.api_server.ath_review_queue_slo_config import (
+    AthReviewQueueSloConfig,
+    parse_ath_review_queue_slo_config_from_env,
+)
 from ditto.api_server.coding_hosted_signer_config import (
     HostedControlSignerConfig,
     check_hosted_signer_config,
@@ -499,6 +503,12 @@ class ApiServerConfig:
     """Observability-only overdue thresholds for the ordinary source-review
     queue-age SLO (ditto-subnet#2042). Both thresholds default unset."""
 
+    ath_review_queue_slo: AthReviewQueueSloConfig = field(
+        default_factory=AthReviewQueueSloConfig
+    )
+    """Observability-only overdue thresholds for the ATH-hold and copy-review
+    queue-age SLO (ditto-subnet#2042, slice 2). Every threshold defaults unset."""
+
     source_emission_confirmation_enabled: bool = True
     """Allow verified payout attribution to arm the embargo; collection stays on."""
 
@@ -941,6 +951,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         top5_backoff_cap=top5_backoff_cap,
         efficiency_bonus=efficiency_bonus,
         source_review_queue_slo=parse_source_review_queue_slo_config_from_env(),
+        ath_review_queue_slo=parse_ath_review_queue_slo_config_from_env(),
         public_rate_limit_per_minute=public_rate_limit_per_minute,
     )
 
