@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 # Fires whenever a *signed, authenticated* heartbeat kept its liveness columns
 # (``seen_at`` / ``reported_at``) but had its work payload dropped because the
@@ -137,4 +137,23 @@ PUBLIC_RATE_LIMITED = Counter(
     "ditto_public_rate_limited_total",
     "Unauthenticated requests refused by the per-client-IP rate limit, by router.",
     ("route",),
+)
+
+# Source-emission collector health, refreshed after every collector sweep in the
+# process that runs the collector (``DITTO_ROLE=platform``). The collector is
+# fail-closed by design -- an unaudited subtensor runtime fingerprint stops it
+# until a human audits the new runtime -- but twice (#2231, #2703) that stop sat
+# unnoticed for days while crowned kings stayed embargoed. ``stalled`` is 1 when
+# the cursor has a recorded blocked reason AND has not advanced for longer than
+# ``SOURCE_EMISSION_COLLECTOR_STALL_SECONDS``: page on it. ``lag_seconds`` is the
+# age of the last durable cursor advance whether or not a reason was recorded,
+# for a softer staleness alert. Processes that do not run the collector export
+# the zero default, so aggregate with ``max``.
+SOURCE_EMISSION_COLLECTOR_STALLED = Gauge(
+    "ditto_source_emission_collector_stalled",
+    "1 while the source-emission collector is blocked and its cursor is stale.",
+)
+SOURCE_EMISSION_COLLECTOR_CURSOR_LAG_SECONDS = Gauge(
+    "ditto_source_emission_collector_cursor_lag_seconds",
+    "Seconds since the source-emission collector cursor last advanced.",
 )

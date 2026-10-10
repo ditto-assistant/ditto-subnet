@@ -32368,8 +32368,19 @@ export interface components {
             collector_cursor_block?: number | null;
             /** Collector Cursor Hash */
             collector_cursor_hash?: string | null;
+            /** Collector Cursor Updated At */
+            collector_cursor_updated_at?: string | null;
+            /** Collector Lag Seconds */
+            collector_lag_seconds?: number | null;
             /** Collector Runtime Code Hash */
             collector_runtime_code_hash?: string | null;
+            /** Collector Stall Threshold Seconds */
+            collector_stall_threshold_seconds?: number | null;
+            /**
+             * Collector Stalled
+             * @default false
+             */
+            collector_stalled: boolean;
             /** Confirmed Kings */
             confirmed_kings: number;
             /**

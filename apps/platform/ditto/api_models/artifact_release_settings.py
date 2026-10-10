@@ -60,6 +60,23 @@ class SourceReleaseGateStatus(BaseModel):
     collector_cursor_hash: str | None = None
     collector_runtime_code_hash: str | None = None
     collector_blocked_reason: str | None = None
+    collector_cursor_updated_at: datetime | None = None
+    """When the durable collector cursor last advanced; null before bootstrap."""
+
+    collector_lag_seconds: Annotated[int | None, Field(ge=0)] = None
+    """Seconds since the cursor last advanced. A healthy collector advances
+    every sweep, so this stays near the sweep interval."""
+
+    collector_stall_threshold_seconds: Annotated[int | None, Field(ge=1)] = None
+    """Lag past which a cursor with ``collector_blocked_reason`` is stalled."""
+
+    collector_stalled: bool = False
+    """``collector_blocked_reason`` is set and ``collector_lag_seconds``
+    exceeds ``collector_stall_threshold_seconds``: the collector is stopped
+    (e.g. an unaudited runtime fingerprint), not merely between sweeps. While
+    true no new winner emission is confirmed and public source release is
+    paused. False when the cursor is current or does not exist yet."""
+
     last_payout_block: int | None = None
     last_payout_blocked_reason: str | None = None
     last_payout_attributed: bool = False
