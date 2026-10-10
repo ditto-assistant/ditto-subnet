@@ -178,8 +178,32 @@ def semantic_top_k(prompt: str, catalog: list[dict[str, Any]], k: int) -> list[s
 # (services/dittobench-api/internal/scoregates/text_provenance.go and
 # causal_dependence.go). The Go side stores value-token HASHES; this port keeps
 # the canonical token strings, which is the same set under HashToken. The Go
-# vectors (text_provenance_test.go, audit_v13_bank.go) are replayed against this
-# module in test_local_rehearsal.py so the two cannot drift.
+# side pins its output for a shared input list in
+# scoregates/testdata/v13_span_normaliser_vectors.json, and test_local_rehearsal.py
+# replays that file (plus the audit_v13_bank.go vectors) against this module so
+# the two cannot drift.
+#
+# Go and Python disagree on several Unicode defaults, so each one is spelled
+# out rather than borrowed from Python:
+#
+# * RE2 ``\d`` and ``\s`` are ASCII-only (``\s`` is ``[\t\n\f\r ]``, no ``\v``).
+# * RE2 ``(?i)`` folds through Go's simple-fold orbits (``s`` also matches
+#   ``ſ``); Python's IGNORECASE adds its own equivalences (``ı``/``İ`` match
+#   ``i``), so the label words are written as explicit Go-orbit classes.
+# * Go's ``unicode.IsLetter``/``IsDigit``/``\p{L}``/``\p{N}`` are Unicode
+#   general categories, and the "pure digit run" skip is ASCII-only; Python's
+#   ``str.isdigit`` also accepts other scripts' digits and superscripts, so it
+#   is never used here.
+# * Go lowercases with the SIMPLE per-rune mapping; Python's ``str.lower`` uses
+#   the full mapping (``"İ".lower()`` is two code points).
+# * Go measures ``MaxValueTokenLen`` in UTF-8 BYTES and ``MinStringTokenLen``
+#   in RUNES.
+#
+# The only residual difference is the Unicode database version: Go 1.27 and
+# golang.org/x/text ship Unicode 17 tables, Python's ``unicodedata`` ships the
+# interpreter's own (15.0 on 3.12). Code points assigned after the
+# interpreter's version can normalise differently; every published vector uses
+# long-assigned characters.
 
 # RE2 `\d` and `\s` are ASCII-only; spell them out so Python matches Go.
 _D = r"[0-9]"
@@ -187,18 +211,53 @@ _WS = r"[\t\n\f\r ]"
 # numberPattern: optional sign, optional '$', digits with grouping commas,
 # optional fractional part.
 NUMBER_RE = re.compile(rf"-?\$?{_D}[{_D[1:-1]},]*(?:\.{_D}+)?")
-# alnumTokenPattern over already-lowercased text.
-ALNUM_RE = re.compile(r"[a-z0-9]+")
-# labelPrefixPattern: a leading answer label on a line ("ANSWER:", "Final
-# answer -", "A:", "Result:"), optionally wrapped in markdown emphasis.
+
+# Go's unicode.SimpleFold orbits for the letters of the answer labels. After
+# NFKC no long s survives (it folds to "s"), but the class mirrors RE2 exactly.
+_GO_FOLD_ORBITS = {"s": "sſS"}
+
+
+def _go_case_insensitive(word: str) -> str:
+    """An RE2 ``(?i)`` literal as an explicit class per letter."""
+    parts = []
+    for ch in word:
+        if ch.isalpha():
+            orbit = _GO_FOLD_ORBITS.get(ch, ch + ch.upper())
+            parts.append("[" + orbit + "]")
+        else:
+            parts.append(re.escape(ch))
+    return "".join(parts)
+
+
+# labelPrefixPattern (`(?im)`): a leading answer label on a line ("ANSWER:",
+# "Final answer -", "A:", "Result:"), optionally wrapped in markdown emphasis.
+_LABEL_WORDS = "|".join(
+    [
+        _go_case_insensitive("final") + rf"{_WS}+" + _go_case_insensitive("answer"),
+        *(
+            _go_case_insensitive(word)
+            for word in ("answer", "result", "response", "output", "a")
+        ),
+    ]
+)
 _LABEL_PREFIX_RE = re.compile(
-    rf"(?im)^[{_WS[1:-1]}*_#>\-]*(?:final{_WS}+answer|answer|result|response|output|a){_WS}*[:\-–—]{_WS}*"
+    rf"(?m)^[{_WS[1:-1]}*_#>\-]*(?:{_LABEL_WORDS}){_WS}*[:\-–—]{_WS}*"
 )
 # listMarkerPattern: markdown bullets and ordered-list ordinals at line start.
 _LIST_MARKER_RE = re.compile(rf"(?m)^{_WS}*(?:[-*+•]|{_D}{{1,3}}[.)]){_WS}+")
-# Value-token capture bounds (scoregates.MinStringTokenLen / MaxValueTokenLen).
+# Value-token capture bounds (scoregates.MinStringTokenLen / MaxValueTokenLen /
+# MaxValueTokensPerSide). MinStringTokenLen counts RUNES, MaxValueTokenLen
+# counts UTF-8 BYTES.
 MIN_STRING_TOKEN_LEN = 4
 MAX_VALUE_TOKEN_LEN = 64
+MAX_VALUE_TOKENS_PER_SIDE = 262144
+# Go's unicode.IsSpace, which strings.TrimSpace uses (Python's str.strip also
+# trims U+001C..U+001F).
+_GO_SPACE = (
+    "\t\n\v\f\r \x85\xa0\u1680"
+    + "".join(chr(cp) for cp in range(0x2000, 0x200B))
+    + "\u2028\u2029\u202f\u205f\u3000"
+)
 # Punctuation that carries numeric meaning inside a number; NormalizeSpan keeps
 # it and CanonicalNumber decides what it means.
 _NUMERIC_PUNCT = frozenset("$.,-")
@@ -238,7 +297,7 @@ def canonical_number(raw: str) -> str:
     """Port of ``scoregates.CanonicalNumber``: strip ``$`` and grouping
     commas, drop an insignificant fraction and trailing zeros, drop leading
     zeros, collapse ``-0``. Empty when not a number."""
-    value = raw.strip()
+    value = raw.strip(_GO_SPACE)
     negative = value.startswith("-")
     value = value.removeprefix("-").replace("$", "").replace(",", "")
     if not value:
@@ -254,20 +313,49 @@ def canonical_number(raw: str) -> str:
     return out
 
 
+def _is_go_letter(ch: str) -> bool:
+    """``unicode.IsLetter`` / ``\\p{L}``: general category L*."""
+    return unicodedata.category(ch)[0] == "L"
+
+
+def _is_go_digit(ch: str) -> bool:
+    """``unicode.IsDigit``: general category Nd (any script)."""
+    return unicodedata.category(ch) == "Nd"
+
+
+def _go_to_lower(ch: str) -> str:
+    """``unicode.ToLower`` on one rune: the SIMPLE lowercase mapping. Python's
+    ``str.lower`` applies the full mapping, whose only unconditional
+    multi-rune lowercase is U+0130 -> "i" + U+0307; its simple form is the
+    first rune."""
+    lowered = ch.lower()
+    return lowered if len(lowered) == 1 else lowered[0]
+
+
+def _strip_combining_marks(text: str) -> str:
+    """``stripCombiningMarks``: drop every non-spacing mark (\\p{Mn}) from an
+    NFD-decomposed string, which folds a base letter's diacritics away."""
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+
+
 def normalize_span(text: str) -> str:
     """Port of ``scoregates.NormalizeSpan``, the PUBLISHED request-independent
     normaliser both sides of the claim-span gate apply before tokenizing:
-    Unicode NFKC, label and list-marker stripping, letters lowercased, digits
-    kept, ``$ . , -`` kept (numeric meaning), every other rune folded to one
+    Unicode NFD with every combining mark (\\p{Mn}) dropped, then NFKC (so
+    "José" -> "jose" and fullwidth digits fold to ASCII), label and
+    list-marker stripping, letters of every script lowercased, digits kept,
+    ``$ . , -`` kept (numeric meaning), every other rune folded to one
     separator, whitespace collapsed. Deterministic, total, idempotent."""
-    folded = unicodedata.normalize("NFKC", text)
+    folded = unicodedata.normalize(
+        "NFKC", _strip_combining_marks(unicodedata.normalize("NFD", text))
+    )
     folded = _LABEL_PREFIX_RE.sub("", folded)
     folded = _LIST_MARKER_RE.sub("", folded)
     out: list[str] = []
     prev_space = True
     for ch in folded:
-        if ch.isalpha() or unicodedata.category(ch) == "Nd":
-            out.append(ch.lower())
+        if _is_go_letter(ch) or _is_go_digit(ch):
+            out.append(_go_to_lower(ch))
             prev_space = False
         elif ch in _NUMERIC_PUNCT:
             out.append(ch)
@@ -275,31 +363,74 @@ def normalize_span(text: str) -> str:
         elif not prev_space:
             out.append(" ")
             prev_space = True
-    return "".join(out).strip()
+    # The builder only ever emits single ASCII spaces, so strings.TrimSpace
+    # and str.strip(" ") agree here.
+    return "".join(out).strip(" ")
 
 
 # The slot rule (`slot_not_in_prose`) folds text through the same normaliser.
 fold_text = normalize_span
 
 
-def value_tokens(text: str) -> set[str]:
-    """Port of ``scoregates.SpanTokens`` (``ValueTokenHashes`` over
-    ``NormalizeSpan``): every canonical number plus every lowercase
-    alphanumeric token of at least ``MIN_STRING_TOKEN_LEN`` that is not a pure
-    digit run, each at most ``MAX_VALUE_TOKEN_LEN`` long."""
+def _span_token_runs(normalized: str) -> list[str]:
+    """``spanTokenPattern`` (``[\\p{L}\\p{N}]+``) over normalized text: every
+    maximal run of letters and numbers in ANY script."""
+    runs: list[str] = []
+    current: list[str] = []
+    for ch in normalized:
+        if unicodedata.category(ch)[0] in "LN":
+            current.append(ch)
+        elif current:
+            runs.append("".join(current))
+            current = []
+    if current:
+        runs.append("".join(current))
+    return runs
+
+
+def _is_ascii_digit_run(token: str) -> bool:
+    return all("0" <= ch <= "9" for ch in token)
+
+
+def span_tokens(text: str) -> tuple[set[str], bool]:
+    """Port of ``scoregates.SpanTokens``: :func:`normalize_span`, then every
+    canonical number plus every letter/digit run (any script) of at least
+    ``MIN_STRING_TOKEN_LEN`` RUNES that is not a pure ASCII digit run. A token
+    longer than ``MAX_VALUE_TOKEN_LEN`` UTF-8 BYTES is dropped, and at most
+    ``MAX_VALUE_TOKENS_PER_SIDE`` distinct tokens are kept (``truncated``
+    reports that the ceiling was hit)."""
     normalized = normalize_span(text)
     tokens: set[str] = set()
+    truncated = False
+
+    def add(token: str) -> None:
+        nonlocal truncated
+        if not token or len(token.encode("utf-8")) > MAX_VALUE_TOKEN_LEN:
+            return
+        if token in tokens:
+            return
+        if len(tokens) >= MAX_VALUE_TOKENS_PER_SIDE:
+            truncated = True
+            return
+        tokens.add(token)
+
     for match in NUMBER_RE.findall(normalized):
-        canonical = canonical_number(match)
-        if canonical and len(canonical) <= MAX_VALUE_TOKEN_LEN:
-            tokens.add(canonical)
-    for token in ALNUM_RE.findall(normalized.lower()):
-        if (
-            MIN_STRING_TOKEN_LEN <= len(token) <= MAX_VALUE_TOKEN_LEN
-            and not token.isdigit()
-        ):
-            tokens.add(token)
-    return tokens
+        add(canonical_number(match))
+    for token in _span_token_runs(normalized):
+        if len(token) < MIN_STRING_TOKEN_LEN:
+            continue
+        # Pure ASCII digit runs are already covered by the number pass in
+        # canonical form.
+        if _is_ascii_digit_run(token):
+            continue
+        add(token)
+    return tokens, truncated
+
+
+def value_tokens(text: str) -> set[str]:
+    """The v13 claim-span token set of ``text`` (:func:`span_tokens` without
+    the truncation flag)."""
+    return span_tokens(text)[0]
 
 
 def _grade_normalize(value: str) -> str:

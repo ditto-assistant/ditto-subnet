@@ -310,12 +310,25 @@ slot is that line, copied verbatim.
   seed and arrive in waves 1–2; the questions that need them are dispatched the
   moment your `/seed` returns 2xx. Return 2xx only once every pair in the
   request is embedded and queryable.
-- **Point-in-time anchors live inside `user_input`.** "As of 12 March, who
-  owned the handoff?" names a date that exists in no seeded record; the answer
-  is the state in force on that date (the superseded value, with the current
-  value planted as its distractor). These arrive as `as_of_twin` pairs; an
-  index that only knows the current state scores exactly one half. Answer the
-  question in front of you, at the time it names.
+- **Same-turn corrections: point-in-time anchors live inside `user_input`.**
+  Waves are realism, not the point-in-time signal: you re-index after every
+  `/seed`, so nothing a wave delivers defeats an index compiled at ingest time.
+  The signal is an `as of <date>` anchor in the question itself (`As of March
+  14, 2026, what work email did I have on file for <name>, …?`); the date
+  exists in no seeded record. The question walks one correction chain from the
+  seed — a contact's work email, a project's invoice total, or the days planned
+  for one trip leg — whose original record and later correction each carry
+  their own seed `timestamp`, and asks for the value in force on that date.
+  Every chain yields an `as_of_twin` pair whose halves are never adjacent in
+  the run: the before-half's date falls strictly between the two records
+  (answer: the superseded value), the after-half's date falls after the
+  correction (answer: the current value), and each half plants the other
+  half's answer as its distractor. Keep superseded records with their
+  timestamps and choose the one in force on the named date: an index that only
+  knows the current state scores exactly one half
+  (`TestV13PointInTimeTwinsDefeatAStaticStateIndex` (#1844)), and the same
+  answer on both halves is `twin_concordant`. Answer the question in front of
+  you, at the time it names.
 - **Some cases expect a clarifying question, some expect a grounded decline.**
   On an ask-half restraint case the value is absent from the records: make no
   non-memory tool call and ask a question that names the missing slot ("which
@@ -347,11 +360,28 @@ marked incomplete, which always fails **open**.
 | --- | --- | --- | --- |
 | Catalog-present | the model was never offered a choosable non-memory catalog on a no-tool case (restraint you decided, not the model — `tool_choice: "none"` and a memory-only catalog count as no offer), or the expected tool was never offered; waived when your retained set holds the top-3 of the published TF-IDF embedding (`v13::semantic_top_k` in this kit, `scorer.CatalogSemanticTopK` in the validator) or is merely non-empty on a chit-chat/declarative/decline case (the negation family excepted) | `restraint_without_offer`, `expected_tool_not_offered` | shadow (`DITTOBENCH_V13_CATALOG_GATE_POSTURE`) |
 | Swallowed model call | the model emitted a non-memory call on a no-tool case and you did not execute it through `tool_endpoint` | `swallowed_model_call` | shadow |
-| Claim-span provenance | the graded value tokens in the credited span (`answer`, else `final_text`) are not contained in any completion of the case after the public normaliser `scoregates.NormalizeSpan` (`/100` rescale, direction map, draft replacement); a credited value with no completion at all | `served_text_not_model_emitted`, `no_model_completion` | shadow (`DITTOBENCH_V13_CLAIM_PROVENANCE_POSTURE`, shared with the causal gate) |
+| Claim-span provenance | the graded value tokens in the credited span (`answer`, else `final_text`) are not contained in the union of the case's completions after the claim-span normaliser (below) — a `/100` rescale, direction map, or draft replacement; a credited value with no completion at all | `served_text_not_model_emitted`, `no_model_completion` | shadow (`DITTOBENCH_V13_CLAIM_PROVENANCE_POSTURE`, shared with the causal gate) |
 | Slot tie-break | the `answer` slot alone would pass but no typed-equivalent value is asserted in `final_text` | `slot_not_in_prose` | grading rule |
 | Causal model dependence | the graded value appears in a prompt span you authored (system prompt, template, prefill, tool-role message) before any completion produced it, and in no `/seed` record, served tool result, the case's `user_input` or the validator's system prompt | `answer_in_prompt` | shadow (same switch) |
 | Twin / pair post-pass | you gave the same decision or the same answer to both halves of a `decision_twin` / `as_of_twin`, or the counterfactual member got the base member's answer | `twin_concordant`, `counterfactual_insensitive` | observe |
 | Inference cost | output tokens of successful completions exceed the published per-class budget (3 completion-equivalents of 512 tokens on memory / single-tool cases, 5 on chains); floor 0.6 at twice the budget | `per_case[].inference_cost` | shadow, reported only |
+
+**The claim-span normaliser.** Claim-span provenance compares value tokens,
+not bytes. The span you served and every completion attributed to the case
+pass through the same published `scoregates.NormalizeSpan`: diacritics dropped
+and Unicode NFKC applied (`José` → `jose`, fullwidth `４１１０.６７` →
+`4110.67`), lowercased, a line-leading `Answer:` / `Final answer —` /
+`Result:`-style label and markdown list markers removed, and every other
+punctuation or whitespace run folded to one space except `$ . , -`, which carry
+numeric meaning. `scoregates.SpanTokens` then keeps every canonical number
+(`$` and grouping commas stripped, trailing fractional zeros and leading zeros
+dropped) and every letter/digit run of at least 4 characters in any script.
+`$4,110.67`, `4110.67 dollars`, `**Answer:** $4110.67`,
+`{"answer": "4110.67"}` and `USD 4110.670` all yield the one claim token
+`4110.67`; `411067`, `411067 cents` and `$41,106.70` do not. A uniform
+formatter passes; a rescale does not. A list ordinal (`1. Lisbon`) is layout,
+not a value (`TestNormalizeSpanVectors`,
+`TestSpanTokensFoldEveryHonestRenderingToOneClaimToken` (#1849)).
 
 Shadow and observe mean recorded, not applied: your composite does not move,
 the notes appear on your per-score detail on the Platform (#1852), and the

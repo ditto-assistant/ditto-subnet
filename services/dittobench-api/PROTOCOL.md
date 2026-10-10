@@ -1032,13 +1032,14 @@ marked incomplete (`TestClaimSpanCaptureBooksHarnessAndCompletionSpans`
 (#1849), `TestClaimSpanCaptureBoundsCompletionsPerCase` (#1849)).
 
 **The published normaliser.** Both sides pass every span through
-`scoregates.NormalizeSpan` — Unicode NFKC, casefold, markdown/label stripping
+`scoregates.NormalizeSpan` — combining marks dropped and Unicode NFKC
+(`José` → `jose`), casefold, markdown/label stripping
 (emphasis, code fences, headings, list markers, `ANSWER:`-style labels),
 punctuation folded to spaces except `$ . , -` inside numbers, whitespace
-collapsed — then tokenize with the Bench v12 value-token rule
-(`scoregates.ValueTokenHashes`): every `CanonicalNumber` (strip `$` and
+collapsed — then tokenize with `scoregates.SpanTokens`, the Bench v12
+value-token rule widened to every script: every `CanonicalNumber` (strip `$` and
 grouping commas, drop trailing fractional zeros and leading zeros) plus every
-lowercase alphanumeric token of at least 4 characters. `$4,110.67`,
+lowercase letter/digit run of at least 4 characters. `$4,110.67`,
 `4110.67 dollars`, `**Answer:** $4110.67`, `{"answer":"4110.67"}` and
 `４１１０.６７` all yield the single claim token `4110.67`; `411067` does not.
 Miners run the same functions locally; the vectors are published in
