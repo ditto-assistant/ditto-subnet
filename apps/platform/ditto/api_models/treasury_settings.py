@@ -2,7 +2,7 @@
 
 Neither policy version changes validator weights or authorizes a transfer.
 Version 1 keeps its original 500 bps ceiling; version 2 describes one
-collector and isolated service holding coldkeys under a 1,000 bps
+collector and isolated service holding coldkeys under a 10,000 bps
 aggregate ceiling.
 """
 
@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_TREASURY_BPS = 500
-MAX_SERVICE_BPS = 1_000
+MAX_SERVICE_BPS = 10_000
 PUBLIC_ADDRESS_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 
 
@@ -144,7 +144,7 @@ class TreasurySettings(BaseModel):
                 sum(bucket.allocation_bps for bucket in self.service_buckets)
                 > MAX_SERVICE_BPS
             ):
-                raise ValueError("combined service allocation exceeds 1000 bps")
+                raise ValueError("combined service allocation exceeds 10000 bps")
             if (
                 self.max_daily_outflow_rao
                 or self.max_single_topup_rao

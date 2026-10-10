@@ -138,7 +138,7 @@ async def test_external_worker_without_managed_config_verifies_pin_and_transport
 
 @pytest.mark.parametrize("empty", [False, True])
 @pytest.mark.parametrize("burn", [0, 0.5, 1])
-@pytest.mark.parametrize("service_bps", [0, 1000])
+@pytest.mark.parametrize("service_bps", [0, 1000, 2500, 7500, 10000])
 async def test_worker_service_precedes_burn_and_collector_never_competes(
     tmp_path,
     monkeypatch,

@@ -97,8 +97,8 @@ class CollectorPolicy:
             raise ValueError("distinct dedicated GCP signer principals required")
         if self.fee_reserve_rao < self.max_fee_rao:
             raise ValueError("fee reserve must cover maximum fee")
-        if sum(d.allocation_bps for d in self.destinations) != 1000:
-            raise ValueError("combined service pool must be exactly 1000 bps")
+        if not 0 < sum(d.allocation_bps for d in self.destinations) <= 10000:
+            raise ValueError("combined service pool must be between 1 and 10000 bps")
         plan_service_distribution(
             attributed_alpha_rao=1,
             available_alpha_rao=1,

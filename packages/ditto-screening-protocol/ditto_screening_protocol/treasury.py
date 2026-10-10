@@ -25,7 +25,7 @@ class TreasuryEmissionBucket(BaseModel):
     )
 
     bucket_id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{1,47}$")]
-    allocation_bps: Annotated[int, Field(ge=0, le=1000)]
+    allocation_bps: Annotated[int, Field(ge=0, le=10000)]
     holding_coldkey: Address
 
 
@@ -71,8 +71,8 @@ class TreasuryEmissionPolicy(BaseModel):
             self.collector_coldkey,
         }.intersection(wallets):
             raise ValueError("holding coldkeys must be distinct from collector")
-        if self.service_bps > 1000:
-            raise ValueError("combined service allocation exceeds 1000 bps")
+        if self.service_bps > 10000:
+            raise ValueError("combined service allocation exceeds 10000 bps")
         return self
 
     @property

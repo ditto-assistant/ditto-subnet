@@ -5,7 +5,7 @@ periodic distribution of finalized **liquid SN118 alpha** to the configured
 holding coldkeys, on the same collector hotkey. Vendor purchases remain manual.
 It does not buy GM credits, convert alpha to TAO, register extra collectors, or
 alter validator weights. The #2602 Backroom controls/Gamma projection remain
-shadow; enabling this runner alone does not enable the 10% weight route.
+shadow; enabling this runner alone does not enable the configured service weight route.
 
 Release does not install or enable either timer. No activation files, keys,
 grants, host identities, policy signatures or chain transactions are included.
@@ -92,7 +92,7 @@ Current alpha availability uses the audited StakeInfo runtime API, specific
 Neither is used as a spendable amount. Locked funds are conservatively retained.
 
 The existing service split planner conserves each earned batch using integer
-rounding. Buckets total exactly 1,000 bps and have distinct holding coldkeys.
+rounding. Buckets total between 1 and 10,000 bps and have distinct holding coldkeys.
 Only bounded same-subnet `transfer_stake` to those coldkeys is permitted; the
 move-all sentinel, arbitrary calls, other netuids and other hotkeys are refused.
 Each bucket is durably reserved and finalized once. Failed/expired distribution

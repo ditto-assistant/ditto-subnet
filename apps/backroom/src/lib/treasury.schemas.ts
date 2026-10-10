@@ -13,7 +13,7 @@ export const treasurySettingsSchema = z
         z.object({
           bucket_id: z.string().regex(/^[a-z][a-z0-9_]{1,47}$/),
           purpose: z.string().min(8).max(160),
-          allocation_bps: z.number().int().min(0).max(1000).default(0),
+          allocation_bps: z.number().int().min(0).max(10000).default(0),
           holding_coldkey: z.string().nullable().default(null),
           service_account_ref: z.string().nullable().default(null),
           publish_payments: z.boolean().default(true),
@@ -112,10 +112,10 @@ export const treasurySettingsSchema = z
           message: 'nonzero service allocation requires collector keys',
         })
       }
-      if (value.service_buckets.reduce((total, bucket) => total + bucket.allocation_bps, 0) > 1000) {
+      if (value.service_buckets.reduce((total, bucket) => total + bucket.allocation_bps, 0) > 10000) {
         context.addIssue({
           code: 'custom',
-          message: 'combined service allocation exceeds 1000 bps',
+          message: 'combined service allocation exceeds 10000 bps',
         })
       }
       for (const bucket of value.service_buckets) {
@@ -189,7 +189,7 @@ export const treasuryRevisionSchema = z.object({
 export const treasuryControlSchema = z.object({
   effective: treasurySettingsSchema,
   revision: z.number().int().nonnegative(),
-  miner_bps: z.number().int().min(9000).max(10000),
+  miner_bps: z.number().int().min(0).max(10000),
   history: z.array(treasuryRevisionSchema),
   weight_effect: z.literal('none'),
 })

@@ -3457,7 +3457,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_treasury_settings',
     {
       title: 'Get SN118 treasury shadow policy',
-      description: 'Read shadow-only treasury proposals and revision history. Optional revision returns only that immutable raw settings/checksum row; missing or invalid history refuses without defaults. V1 preserves separate GM/maintenance shares and the 500 bps combined limit. V2 describes one collector and configurable holding wallets under a combined 1000 bps pool, reserved before miner-remainder burn. Includes distribution interval, exact payee rules and publication controls; private billing references are available only in authenticated settings. Weight effect is none; funding, signing and payment observation are not activated. Requires backroom:read.',
+      description: 'Read shadow-only treasury proposals and revision history. Optional revision returns only that immutable raw settings/checksum row; missing or invalid history refuses without defaults. V1 preserves separate GM/maintenance shares and the 500 bps combined limit. V2 describes one collector and configurable holding wallets under a combined 10000 bps pool, reserved before miner-remainder burn. Includes distribution interval, exact payee rules and publication controls; private billing references are available only in authenticated settings. Weight effect is none; funding, signing and payment observation are not activated. Requires backroom:read.',
       annotations: toolAnnotations('read'),
       inputSchema: { revision: z.number().int().min(1).max(2_147_483_647).optional() },
     },
@@ -3524,7 +3524,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'record_treasury_settings',
     {
       title: 'Record SN118 treasury shadow policy',
-      description: 'Append a shadow treasury proposal with expectedRevision, reason and exact confirmation RECORD TREASURY SHADOW POLICY. V1 retains its 500 bps cap and released-miner-share denominator. V2 uses one collector and distinct holding wallets under a combined 1000 bps service pool reserved before burn; billing references are optional for manual purchases. Wallet/rule changes enter public admin activity, excluding private billing references. Public addresses only; never provide seeds. Recording settings cannot change weights, sign transfers or activate observation. Requires backroom:write.',
+      description: 'Append a shadow treasury proposal with expectedRevision, reason and exact confirmation RECORD TREASURY SHADOW POLICY. V1 retains its 500 bps cap and released-miner-share denominator. V2 uses one collector and distinct holding wallets under a combined 10000 bps service pool reserved before burn; billing references are optional for manual purchases. Wallet/rule changes enter public admin activity, excluding private billing references. Public addresses only; never provide seeds. Recording settings cannot change weights, sign transfers or activate observation. Requires backroom:write.',
       inputSchema: recordTreasurySettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },

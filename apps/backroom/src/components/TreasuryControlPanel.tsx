@@ -8,6 +8,7 @@ type Settings = z.infer<typeof treasurySettingsSchema>
 type Bucket = Settings['service_buckets'][number]
 type Control = z.infer<typeof treasuryControlSchema>
 const inputClass = 'w-full rounded border border-[var(--line)] bg-[var(--panel)] p-2 text-sm'
+const validAllocationText = (value: string) => /^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/.test(value)
 const blankBucket = (bucket_id: string, purpose: string): Bucket => ({
   bucket_id,
   purpose,
@@ -48,6 +49,9 @@ export function TreasuryControlPanel({
   const save = useServerFn(saveTreasurySettings)
   const [state, setState] = useState(initialState)
   const [settings, setSettings] = useState(() => editable(initialState.effective))
+  const [allocationDrafts, setAllocationDrafts] = useState(() =>
+    editable(initialState.effective).service_buckets.map((bucket) => String(bucket.allocation_bps / 100)),
+  )
   const [reason, setReason] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [busy, setBusy] = useState(false)
@@ -55,6 +59,7 @@ export function TreasuryControlPanel({
   const [error, setError] = useState('')
   const total = settings.service_buckets.reduce((sum, bucket) => sum + bucket.allocation_bps, 0)
   const parsed = treasurySettingsSchema.safeParse(settings)
+  const validDrafts = allocationDrafts.every(validAllocationText)
   const updateBucket = (index: number, change: Partial<Bucket>) => {
     setSettings((current) => ({
       ...current,
@@ -67,12 +72,14 @@ export function TreasuryControlPanel({
   const load = (next: Control) => {
     setState(next)
     setSettings(editable(next.effective))
+    setAllocationDrafts(editable(next.effective).service_buckets.map((bucket) => String(bucket.allocation_bps / 100)))
     setConfirmation('')
     setReason('')
   }
   const submit = async () => {
     if (
       readOnly ||
+      !validDrafts ||
       !parsed.success ||
       reason.trim().length < 8 ||
       confirmation !== 'RECORD TREASURY SHADOW POLICY'
@@ -92,7 +99,7 @@ export function TreasuryControlPanel({
           },
         }),
       )
-      setMessage('Wallet policy recorded. Funding, distribution, and payment observation remain inactive.')
+      setMessage('Wallet policy recorded. Live emissions still require a matching signed policy and activation. Transfers are controlled separately.')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to record treasury policy')
     } finally {
@@ -104,16 +111,17 @@ export function TreasuryControlPanel({
       className="mt-8 space-y-5 border-t border-[var(--line)] pt-6"
       aria-label="Service treasury wallets"
     >
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
         <div>
           <h2 className="text-lg font-semibold">Service treasury wallets</h2>
           <p className="mt-2 max-w-[70ch] text-sm text-[var(--muted-strong)]">
-            One collector, a shared 1,000 bps service pool, and separately controlled holding wallets. Burn
-            applies only to the miner remainder after service allocation. This policy is shadow only.
+            Allocate up to 100% of miner emissions to Gamma service wallets. The remainder goes to
+            miners before burn. Recording this proposal does not change live emissions; a matching
+            signed policy and activation are required.
           </p>
         </div>
         <button
-          className={inputClass}
+          className="shrink-0 rounded border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-sm"
           disabled={busy}
           onClick={async () => {
             setBusy(true)
@@ -131,9 +139,18 @@ export function TreasuryControlPanel({
           Refresh policy
         </button>
       </div>
-      <p className="text-sm">
-        Revision {state.revision} · Configured pool {total} / 1,000 bps · Effective funding 0% · No active
-        sweep
+      <p className="text-sm" aria-live="polite">
+        {validDrafts && total >= 0 && total <= 10000
+          ? `Proposed split: Gamma ${total / 100}% · Miners ${(10000 - total) / 100}% before burn`
+          : 'Enter valid allocations to preview the proposed split'}
+        {' · '}Revision {state.revision}
+      </p>
+      {total > 10000 && <p role="alert">Combined Gamma allocation must be 100% or less.</p>}
+      {total === 10000 && <p className="text-sm">This proposal leaves 0% for miners.</p>}
+      <p className="text-sm text-[var(--muted-strong)]">
+        Burn reduces only the miner remainder; it does not fund Gamma. For a 75% Gamma / 25% miner
+        split, allocate 75% here and use 0% burn.{' '}
+        <a href="/burn" className="underline">Review burn settings</a>
       </p>
       {error && (
         <p role="alert" className="text-[var(--red)]">
@@ -215,18 +232,20 @@ export function TreasuryControlPanel({
                 />
               </label>
               <label>
-                Allocation (bps of full miner emissions)
+                Allocation (% of miner emissions)
                 <input
                   className={inputClass}
-                  type="number"
-                  min="0"
-                  max="1000"
-                  value={bucket.allocation_bps}
-                  onChange={(event) =>
-                    updateBucket(index, {
-                      allocation_bps: Number(event.target.value),
-                    })
-                  }
+                  type="text"
+                  inputMode="decimal"
+                  value={allocationDrafts[index]}
+                  onChange={(event) => {
+                    const value = event.target.value
+                    setAllocationDrafts((current) => current.map((draft, i) => i === index ? value : draft))
+                    setConfirmation('')
+                    if (validAllocationText(value)) {
+                      updateBucket(index, { allocation_bps: Math.round(Number(value) * 100) })
+                    }
+                  }}
                 />
               </label>
               <label>
@@ -381,6 +400,7 @@ export function TreasuryControlPanel({
               ...settings,
               service_buckets: [...settings.service_buckets, blankBucket('', '')],
             })
+            setAllocationDrafts((current) => [...current, '0'])
             setConfirmation('')
           }}
         >
@@ -391,7 +411,10 @@ export function TreasuryControlPanel({
           GM credits. Wallets, allocations, and rule changes appear in public admin activity; service account
           references stay private.
         </p>
-        {!parsed.success && <p role="alert">{parsed.error.issues[0]?.message}</p>}
+        {!validDrafts && <p role="alert">Enter an allocation from 0 to 100 with up to two decimal places.</p>}
+        {!parsed.success && [...new Set(parsed.error.issues.map((issue) => issue.message))].map((message) => (
+          <p role="alert" key={message}>{message}</p>
+        ))}
         <label className="block">
           Reason for change
           <textarea
@@ -411,7 +434,7 @@ export function TreasuryControlPanel({
         <button
           className={inputClass}
           disabled={
-            !parsed.success || reason.trim().length < 8 || confirmation !== 'RECORD TREASURY SHADOW POLICY'
+            !validDrafts || !parsed.success || reason.trim().length < 8 || confirmation !== 'RECORD TREASURY SHADOW POLICY'
           }
           onClick={submit}
         >

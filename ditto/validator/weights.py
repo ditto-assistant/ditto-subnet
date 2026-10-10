@@ -172,7 +172,7 @@ def owner_burn_destination_required(
         or not 0.0 <= miner_share <= 1.0
         or not 0.0 <= paid_miner_fraction <= 1.0
         or type(service_bps) is not int
-        or not 0 <= service_bps <= 1000
+        or not 0 <= service_bps <= 10000
     ):
         return True
     positive = any(

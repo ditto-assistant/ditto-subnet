@@ -42,6 +42,66 @@ afterEach(() => {
   save.mockReset()
 })
 
+it.each([25, 75, 100])('records a %s percent Gamma proposal in basis points', async (percent) => {
+  save.mockResolvedValue(control)
+  render(<TreasuryControlPanel initialState={control} readOnly={false} />)
+  const allocation = screen.getByLabelText('Allocation (% of miner emissions)') as HTMLInputElement
+  expect(allocation.inputMode).toBe('decimal')
+  fireEvent.change(allocation, { target: { value: String(percent) } })
+  expect(screen.getByText(`Proposed split: Gamma ${percent}% · Miners ${100 - percent}% before burn · Revision 3`)).toBeTruthy()
+  fireEvent.change(screen.getByLabelText('Reason for change'), { target: { value: 'operator requested emission split' } })
+  fireEvent.change(screen.getByLabelText('Type RECORD TREASURY SHADOW POLICY'), { target: { value: 'RECORD TREASURY SHADOW POLICY' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Record wallet policy' }))
+  await waitFor(() => expect(save).toHaveBeenCalledOnce())
+  expect(save.mock.calls[0][0].data.settings.service_buckets[0].allocation_bps).toBe(percent * 100)
+})
+
+it('refuses an over-100 percent proposal and clears confirmation after allocation changes', () => {
+  render(<TreasuryControlPanel initialState={control} readOnly={false} />)
+  fireEvent.change(screen.getByLabelText('Reason for change'), { target: { value: 'operator requested emission split' } })
+  fireEvent.change(screen.getByLabelText('Type RECORD TREASURY SHADOW POLICY'), { target: { value: 'RECORD TREASURY SHADOW POLICY' } })
+  fireEvent.change(screen.getByLabelText('Allocation (% of miner emissions)'), { target: { value: '101' } })
+  expect(screen.getByText('Combined Gamma allocation must be 100% or less.')).toBeTruthy()
+  expect((screen.getByRole('button', { name: 'Record wallet policy' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByLabelText('Type RECORD TREASURY SHADOW POLICY') as HTMLInputElement).value).toBe('')
+})
+
+it.each([['12.', '12.3', 1230], ['0.', '0.5', 50]])('keeps decimal draft %s editable', async (intermediate, value, bps) => {
+  save.mockResolvedValue(control)
+  render(<TreasuryControlPanel initialState={control} readOnly={false} />)
+  const allocation = screen.getByLabelText('Allocation (% of miner emissions)') as HTMLInputElement
+  fireEvent.change(allocation, { target: { value: intermediate } })
+  expect(allocation.value).toBe(intermediate)
+  fireEvent.change(allocation, { target: { value } })
+  expect(allocation.value).toBe(value)
+  fireEvent.change(screen.getByLabelText('Reason for change'), { target: { value: 'operator requested fractional allocation' } })
+  fireEvent.change(screen.getByLabelText('Type RECORD TREASURY SHADOW POLICY'), { target: { value: 'RECORD TREASURY SHADOW POLICY' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Record wallet policy' }))
+  await waitFor(() => expect(save).toHaveBeenCalledOnce())
+  expect(save.mock.calls[0][0].data.settings.service_buckets[0].allocation_bps).toBe(bps)
+  await waitFor(() => expect(allocation.value).toBe('10'))
+})
+
+it('blocks invalid decimal drafts and resets them when refreshed', async () => {
+  render(<TreasuryControlPanel initialState={control} readOnly={false} />)
+  const allocation = screen.getByLabelText('Allocation (% of miner emissions)') as HTMLInputElement
+  fireEvent.change(allocation, { target: { value: '12.345' } })
+  fireEvent.change(screen.getByLabelText('Reason for change'), { target: { value: 'operator requested allocation' } })
+  fireEvent.change(screen.getByLabelText('Type RECORD TREASURY SHADOW POLICY'), { target: { value: 'RECORD TREASURY SHADOW POLICY' } })
+  expect((screen.getByRole('button', { name: 'Record wallet policy' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByRole('alert').textContent).toContain('two decimal places')
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh policy' }))
+  await waitFor(() => expect(allocation.value).toBe('10'))
+})
+
+it('keeps other schema errors visible alongside an over-limit total', () => {
+  render(<TreasuryControlPanel initialState={control} readOnly={false} />)
+  fireEvent.change(screen.getByLabelText('Collector hotkey'), { target: { value: 'invalid-address' } })
+  fireEvent.change(screen.getByLabelText('Allocation (% of miner emissions)'), { target: { value: '101' } })
+  expect(screen.getByText('Combined Gamma allocation must be 100% or less.')).toBeTruthy()
+  expect(screen.getByText('v2 wallets must be public SS58 address strings')).toBeTruthy()
+})
+
 it('records a wallet policy with CAS, reason and exact confirmation, without claiming funding', async () => {
   save.mockResolvedValue({ ...control, revision: 4 })
   render(<TreasuryControlPanel initialState={control} readOnly={false} />)
@@ -57,7 +117,7 @@ it('records a wallet policy with CAS, reason and exact confirmation, without cla
   await waitFor(() => expect(save).toHaveBeenCalledOnce())
   expect(save.mock.calls[0]?.[0].data.expectedRevision).toBe(3)
   expect(save.mock.calls[0]?.[0].data.settings.mode).toBe('shadow')
-  await screen.findByText(/Funding, distribution, and payment observation remain inactive/)
+  await screen.findByText(/Live emissions still require a matching signed policy and activation/)
 })
 
 it('blocks changed wallet data until confirmation is entered again', () => {

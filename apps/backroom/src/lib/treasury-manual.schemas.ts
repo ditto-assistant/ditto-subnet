@@ -47,7 +47,7 @@ export const manualControlSchema = z.object({
       bucket_id: bucket, holding_coldkey: address, alpha_rao: integer,
     })).max(20) })).max(100),
   }).nullable(),
-  destinations: z.array(z.object({ bucket_id: bucket, holding_coldkey: address, allocation_bps: z.number().int().min(0).max(1000) })).max(20),
+  destinations: z.array(z.object({ bucket_id: bucket, holding_coldkey: address, allocation_bps: z.number().int().min(0).max(10000) })).max(20),
   requests: z.array(manualTransferSchema).max(20),
 })
 
