@@ -627,6 +627,12 @@ type inferenceBroker struct {
 	sleep                 func(context.Context, time.Duration) error
 	relayWait             func(string, bool)
 	terminalAgentFailure  func(string)
+
+	// controlAuthMode mirrors the control plane's DITTOBENCH_CONTROL_AUTH_MODE
+	// so the broker's own check and controlAuth.wrap agree on whether the
+	// published Compose default token still counts as a credential.
+	controlAuthMode       controlAuthMode
+	publicDefaultTokenLog sync.Once
 }
 
 // embeddingBackpressureGate is a validator-wide circuit breaker for the
@@ -1360,6 +1366,7 @@ func newInferenceBroker(maxSessions int, embeddingCapacity ...int) *inferenceBro
 		maxSessions:      maxSessions * 2,
 		embeddingSlots:   make(chan struct{}, capacity),
 		controlToken:     strings.TrimSpace(os.Getenv("DITTOBENCH_BROKER_CONTROL_TOKEN")),
+		controlAuthMode:  controlAuthModeFromEnv(os.Getenv("DITTOBENCH_CONTROL_AUTH_MODE")),
 		platformProxyURL: platformProxyURL,
 		platformTransportURL: configuredPlatformTransportURL(
 			os.Getenv("DITTOBENCH_PLATFORM_INFERENCE_TRANSPORT_URL"), platformProxyURL,
@@ -1460,6 +1467,20 @@ func configuredPlatformTransportURL(raw, canonical string) string {
 	return configuredPlatformProxyURL(raw)
 }
 
+// controlAuthorized admits a caller of the inference-session control routes
+// (prepare, activate, activate-confirmation, cancel).
+//
+// Loopback admission is unchanged here: those peers share the scorer's own
+// network namespace, while the validator always arrives from the Compose
+// bridge and must present the bearer. Retiring source-IP trust is a separate
+// rollout decision (see verifyControlCredential in control_auth.go).
+//
+// The published Compose default (insecureDefaultControlToken) is a literal in
+// a public repository, so it is not a secret. It follows the same staged
+// rollout as the control plane: under shadow it is still accepted, because
+// every validator that never set DITTOBENCH_BROKER_CONTROL_TOKEN depends on it,
+// and the first acceptance is logged as a would-reject; under enforce it is
+// treated as "no token configured" and every non-loopback call is refused.
 func (b *inferenceBroker) controlAuthorized(r *http.Request) bool {
 	ip := net.ParseIP(sourceIP(r.RemoteAddr))
 	if ip != nil && ip.IsLoopback() {
@@ -1469,7 +1490,34 @@ func (b *inferenceBroker) controlAuthorized(r *http.Request) bool {
 		return false
 	}
 	provided, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	return ok && subtle.ConstantTimeCompare([]byte(provided), []byte(b.controlToken)) == 1
+	if !ok || subtle.ConstantTimeCompare([]byte(provided), []byte(b.controlToken)) != 1 {
+		return false
+	}
+	if b.controlToken != insecureDefaultControlToken {
+		return true
+	}
+	if b.controlAuthMode == controlAuthEnforce {
+		log.Printf(
+			"inference control auth rejected: %s %s from %s: the published Compose "+
+				"default token is not a credential; set DITTOBENCH_BROKER_CONTROL_TOKEN "+
+				"to a per-host secret",
+			r.Method, r.URL.Path, clientIP(r),
+		)
+		return false
+	}
+	// Once per process: in shadow, controlAuth.wrap already logs every
+	// would-reject verdict for these routes (it treats this same literal as no
+	// credential), so repeating it per request here would only double the noise.
+	b.publicDefaultTokenLog.Do(func() {
+		log.Printf(
+			"inference control auth (shadow, would reject): %s %s from %s: the "+
+				"published Compose default token is not a credential; set "+
+				"DITTOBENCH_BROKER_CONTROL_TOKEN to a per-host secret before "+
+				"DITTOBENCH_CONTROL_AUTH_MODE=enforce",
+			r.Method, r.URL.Path, clientIP(r),
+		)
+	})
+	return true
 }
 
 func (b *inferenceBroker) requireControl(w http.ResponseWriter, r *http.Request) bool {

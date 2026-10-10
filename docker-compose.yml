@@ -222,6 +222,12 @@ services:
       # /health). Same anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the
       # validator.
       DITTOBENCH_BROKER_CONTROL_TOKEN: *broker-control-token
+      # Control-plane auth posture: `shadow` (default) logs what enforcement
+      # would reject and serves the call; `enforce` returns 401 instead. Under
+      # enforce the published default token above counts as unset, so set a
+      # per-host DITTOBENCH_BROKER_CONTROL_TOKEN first or the scorer refuses to
+      # start.
+      DITTOBENCH_CONTROL_AUTH_MODE: ${DITTOBENCH_CONTROL_AUTH_MODE:-shadow}
       # The broker refuses an activation whose proxy_url does not byte-match
       # this value, and treats an unset/malformed value as "refuse everything"
       # (configuredPlatformProxyURL returns "" -> activate always 401s). It

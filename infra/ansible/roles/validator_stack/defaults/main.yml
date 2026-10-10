@@ -29,6 +29,10 @@ validator_stack_subtensor_network: finney
 validator_stack_disk_percent_ceiling: 90
 validator_stack_memory_percent_ceiling: 90
 validator_stack_cpu_percent_ceiling: 0
+# Scorer control-plane auth posture (shadow | enforce). This role always renders
+# a per-host broker token, so enforce is safe here once the shadow
+# would-reject logs are quiet; shadow keeps today's behavior.
+validator_stack_control_auth_mode: shadow
 
 # Dedicated coding execution remains independently double-gated. Identity
 # staging verifies only pre-positioned root-owned files; Ansible never copies
