@@ -1,0 +1,21 @@
+---
+- name: Select one synthetic invalid input
+  ansible.builtin.set_fact:
+    coding_hosted_prerequisites_confirmation: "{{ invalid.confirmation if 'confirmation' in invalid else valid.confirmation }}"
+    coding_hosted_prerequisites_source_revision: "{{ invalid.revision if 'revision' in invalid else valid.revision }}"
+    coding_hosted_prerequisites_host_address: "{{ invalid.address if 'address' in invalid else valid.address }}"
+    ansible_facts: "{{ valid.facts | combine(invalid.facts | default({})) }}"
+
+- name: Require rejection by the real guard
+  block:
+    - name: Run the guard with the invalid input
+      ansible.builtin.include_tasks: ../roles/coding_hosted_prerequisites/tasks/guard.yml
+
+    - name: Fail if the invalid input was accepted
+      ansible.builtin.fail:
+        msg: Invalid synthetic input passed the guard.
+  rescue:
+    - name: Verify the intended guard refused before any convergence
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == 'Require the exact host, source, address and operator confirmation'

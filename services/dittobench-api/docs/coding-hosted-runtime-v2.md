@@ -49,7 +49,7 @@ same-UID/root compromise is outside these file-permission checks.
 | `state_root` | New pre-provisioned mode-0700 persistent directory dedicated to this invocation; never recycle it for recovery |
 | `docker_executable`, `docker_socket` | Protected absolute executable named `docker`; explicit owner-only local Unix socket in a private directory |
 | `router_listen` | Explicit private IPv4 host-gateway address and port 1024–65535; wildcard, loopback and public binds fail |
-| `egress_network`, `egress_proxy` | Provisioned restricted Docker network and credential-free `http://<private-IP>:<port>` allowlisting proxy |
+| `egress_network`, `egress_proxy` | Nonempty identifier that enables a fresh ICC-disabled `ditto-job-<id>` bridge per start (the name itself is not attached), and a credential-free `http://<private-IP>:<port>` proxy |
 | `executor_repository` | Approved repository used with each profile's immutable image digest |
 | `candidate_uid`, `candidate_gid` | Explicit nonzero executor identity |
 | `seccomp_profile`, `apparmor_profile` | Optional approved policy; `unconfined` is refused. Empty seccomp retains Docker's built-in policy |
@@ -97,7 +97,9 @@ port 8080, and resource caps from the approved authoring profile. No private-URL
 fetch bypass, repository credential, provider shim or host socket mount is
 enabled. The existing executor verifies pinned production images and rejects
 certification fixtures when commands/grading run. The operator must provision
-the daemon's network/firewall/proxy and shared workspace visibility beforehand.
+the daemon's network/firewall/proxy and shared workspace visibility beforehand;
+the fixed host values are set by the
+[host prerequisites role](../../../infra/docs/coding-hosted-prerequisites-v2.md).
 
 ## Single use, cancellation and failure
 

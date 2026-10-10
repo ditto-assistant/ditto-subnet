@@ -1,0 +1,31 @@
+---
+# Shared by the pre-write refusal (coding_hosted_prerequisites_require_installed
+# false: a missing file passes) and the post-install check (true: every file
+# must exist). An existing file must always match exactly.
+- name: Inspect prerequisite files without following links
+  ansible.builtin.stat:
+    path: "{{ item.value.path }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  loop: "{{ coding_hosted_prerequisites_files | dict2items }}"
+  loop_control:
+    label: "{{ item.value.path }}"
+  register: coding_hosted_prerequisites_file_state
+
+- name: Require each prerequisite file to be absent before install or exact
+  ansible.builtin.assert:
+    that:
+      - >-
+        (not item.stat.exists and not coding_hosted_prerequisites_require_installed) or
+        (item.stat.isreg | default(false) and item.stat.uid == 0 and item.stat.nlink == 1 and
+         item.stat.mode == item.item.value.mode and
+         item.stat.checksum == item.item.value.content | hash('sha256'))
+    fail_msg: >-
+      {{ 'An installed prerequisite file does not match this revision.'
+      if coding_hosted_prerequisites_require_installed else
+      'Existing prerequisite state differs from this revision; reconcile or remove it explicitly first.' }}
+    quiet: true
+  loop: "{{ coding_hosted_prerequisites_file_state.results }}"
+  loop_control:
+    label: "{{ item.item.value.path }}"

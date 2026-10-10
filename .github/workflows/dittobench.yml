@@ -21,6 +21,9 @@ on:
       - scripts/test-coding-go-driver.sh
       - scripts/test-coding-node-driver.sh
       - scripts/test-coding-node-confinement.sh
+      # internal/codinghostedruntime/prerequisites_test.go renders these.
+      - infra/ansible/roles/coding_hosted_prerequisites/templates/host-prerequisites.json.j2
+      - infra/ansible/roles/coding_hosted_prerequisites/vars/main.yml
       - .github/workflows/dittobench.yml
 
 concurrency:
