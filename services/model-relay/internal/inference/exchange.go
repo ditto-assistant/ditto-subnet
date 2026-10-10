@@ -305,7 +305,7 @@ func (d *Deps) activateInferenceGrant(ctx context.Context, q *postgres.Queries,
 		return nil, "", nil
 	}
 	var ticket *postgres.ValidatorTicket
-	ticketRow, err := q.GetValidatorTicketForUpdate(ctx, postgres.GetValidatorTicketForUpdateParams{
+	ticketRow, err := q.GetValidatorTicketForShare(ctx, postgres.GetValidatorTicketForShareParams{
 		AgentID:         snapshot.AgentID,
 		BenchVersion:    snapshot.BenchVersion,
 		ValidatorHotkey: snapshot.ValidatorHotkey,

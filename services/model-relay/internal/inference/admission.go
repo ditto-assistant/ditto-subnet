@@ -131,7 +131,7 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	// Step 3: ticket FOR UPDATE (lock rank 1). A missing ticket is legal
 	// here; the liveness gate below fails closed.
 	var ticket *postgres.ValidatorTicket
-	ticketRow, err := q.GetValidatorTicketForUpdate(ctx, postgres.GetValidatorTicketForUpdateParams{
+	ticketRow, err := q.GetValidatorTicketForShare(ctx, postgres.GetValidatorTicketForShareParams{
 		AgentID:         snapshot.AgentID,
 		BenchVersion:    snapshot.BenchVersion,
 		ValidatorHotkey: snapshot.ValidatorHotkey,
