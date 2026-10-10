@@ -14,9 +14,11 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import uuid4
 
+import httpx
 import pytest
+from fastapi import FastAPI
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.endpoints import validator as v
@@ -25,15 +27,26 @@ from ditto.api_server.endpoints.validator import (
     _outlier_escalation_settings_from_env,
 )
 from ditto.api_server.outlier_escalation import (
+    OUTLIER_ALGORITHM_VERSION,
+    OUTLIER_AXIS_EVIDENCE_KIND,
     OUTLIER_REVIEW_KIND,
     OUTLIER_REVIEW_REASON,
+    AxisObservation,
     OutlierEscalationSettings,
     evaluate_score_outlier,
+    load_outlier_escalation_settings,
+    public_audit_evidence,
 )
-from ditto.db.models import Agent, AthReview, ScoreAuditEntry
+from ditto.db.models import Agent, AthReview, Score, ScoreAuditEntry
+from ditto.db.queries.audit import EVENT_AUDIT
 
 # A cohort with real spread (median 0.60, MAD 0.01), for the modified-z path.
 _SPREAD_COHORT = [0.58, 0.59, 0.60, 0.61, 0.62, 0.60, 0.60, 0.61]
+# The same spread shifted to 0.50 (median 0.50, MAD 0.01): an axis cohort.
+_AXIS_COHORT = [round(value - 0.10, 2) for value in _SPREAD_COHORT]
+# A composite cohort sitting just above the 0.90 floor (median 0.91, MAD 0.01),
+# so an in-band composite can still be ranks-threatening.
+_HIGH_COHORT = [round(value + 0.31, 2) for value in _SPREAD_COHORT]
 
 
 def _enforce(**overrides: object) -> OutlierEscalationSettings:
@@ -393,3 +406,519 @@ async def test_existing_pending_review_is_not_duplicated(
     assert len(reviews) == 1
     assert reviews[0].algorithm_provenance["review_kind"] == "copy"
     assert agent.status == AgentStatus.ATH_PENDING_REVIEW
+
+
+# ---------------------------------------------------------------------------
+# Per-axis evidence (outlier-escalation-v2)
+# ---------------------------------------------------------------------------
+
+_PER_AXIS_KEYS = ("per_axis", "per_axis_outlier_axes", "per_axis_enforce", "trigger")
+# What the public audit chain records for a memory-only outlier.
+_NEUTRAL_AXES = [
+    {"axis": "tool_mean", "outlier": False},
+    {"axis": "memory_mean", "outlier": True},
+]
+
+
+def _axes(
+    tool: float,
+    memory: float,
+    *,
+    tool_cohort: list[float] | None = None,
+    memory_cohort: list[float] | None = None,
+) -> dict[str, AxisObservation]:
+    return {
+        "tool_mean": AxisObservation(
+            value=tool,
+            cohort=_SPREAD_COHORT if tool_cohort is None else tool_cohort,
+        ),
+        "memory_mean": AxisObservation(
+            value=memory,
+            cohort=_AXIS_COHORT if memory_cohort is None else memory_cohort,
+        ),
+    }
+
+
+def _axis(decision_evidence: dict[str, object], name: str) -> dict[str, object]:
+    entries = cast(list[dict[str, object]], decision_evidence["per_axis"])
+    [entry] = [entry for entry in entries if entry["axis"] == name]
+    return entry
+
+
+def test_single_axis_outlier_is_evidence_only_by_default() -> None:
+    """Memory far out of band while the composite is in band: recorded, not held."""
+    decision = evaluate_score_outlier(
+        composite=0.615,
+        cohort=_SPREAD_COHORT,
+        settings=_enforce(),
+        axes=_axes(0.61, 0.95),
+    )
+    assert decision.held is False
+    assert decision.reason is None
+    assert decision.axis_outliers == ("memory_mean",)
+    evidence = decision.evidence
+    assert evidence["algorithm_version"] == OUTLIER_ALGORITHM_VERSION
+    assert evidence["per_axis_outlier_axes"] == ["memory_mean"]
+    assert evidence["per_axis_enforce"] is False
+    assert evidence["trigger"] is None
+    memory = _axis(evidence, "memory_mean")
+    assert memory["value"] == pytest.approx(0.95)
+    assert memory["cohort_size"] == len(_AXIS_COHORT)
+    assert memory["cohort_median"] == pytest.approx(0.50, abs=1e-9)
+    assert memory["cohort_mad"] == pytest.approx(0.01, abs=1e-9)
+    assert cast(float, memory["modified_z"]) > 6.0
+    assert memory["upward"] is True
+    assert memory["outlier"] is True
+    assert memory["anomaly_unavailable"] is None
+    tool = _axis(evidence, "tool_mean")
+    assert tool["outlier"] is False
+    assert cast(float, tool["modified_z"]) < 6.0
+
+
+@pytest.mark.parametrize(
+    ("composite", "cohort"),
+    [
+        (0.99, _SPREAD_COHORT),
+        (0.615, _SPREAD_COHORT),
+        (0.01, _SPREAD_COHORT),
+        (0.30, [0.08, 0.09, 0.10, 0.11, 0.12, 0.10, 0.10, 0.11]),
+        (0.99, [0.50] * 10),
+        (0.55, [0.50] * 10),
+        (0.99, [0.50, 0.51, 0.52]),
+    ],
+)
+def test_composite_verdict_and_evidence_are_unchanged_by_axes(
+    composite: float, cohort: list[float]
+) -> None:
+    """Per-axis evidence only ADDS keys: the composite verdict, reason and every
+    composite evidence value are identical with or without axes, even when an
+    axis is wildly out of band."""
+    bare = evaluate_score_outlier(
+        composite=composite, cohort=cohort, settings=_enforce()
+    )
+    with_axes = evaluate_score_outlier(
+        composite=composite,
+        cohort=cohort,
+        settings=_enforce(),
+        axes=_axes(0.99, 0.99),
+    )
+    assert with_axes.held is bare.held
+    assert with_axes.reason == bare.reason
+    assert bare.axis_outliers == ()
+    assert not any(key in bare.evidence for key in _PER_AXIS_KEYS)
+    stripped = {
+        key: value
+        for key, value in with_axes.evidence.items()
+        if key not in _PER_AXIS_KEYS
+    }
+    assert stripped == bare.evidence
+    assert list(stripped) == list(bare.evidence)
+
+
+def test_composite_hold_carries_per_axis_evidence_and_trigger() -> None:
+    decision = evaluate_score_outlier(
+        composite=0.99,
+        cohort=_SPREAD_COHORT,
+        settings=_enforce(),
+        axes=_axes(0.99, 0.99),
+    )
+    assert decision.held is True
+    assert decision.evidence["trigger"] == "composite"
+    assert decision.axis_outliers == ("tool_mean", "memory_mean")
+    assert [entry["axis"] for entry in cast(list, decision.evidence["per_axis"])] == [
+        "tool_mean",
+        "memory_mean",
+    ]
+
+
+def test_per_axis_enforce_holds_single_axis_outlier_above_the_floor() -> None:
+    """Opt-in: a single-axis outlier holds when the composite is in band but at
+    or above the floor. Off (the default), the same row is evidence only."""
+    axes = _axes(0.91, 0.95, tool_cohort=_HIGH_COHORT)
+    off = evaluate_score_outlier(
+        composite=0.92, cohort=_HIGH_COHORT, settings=_enforce(), axes=axes
+    )
+    assert off.held is False
+    assert off.evidence["above_floor"] is True
+    assert cast(float, off.evidence["modified_z"]) < 6.0
+    assert off.axis_outliers == ("memory_mean",)
+
+    on = evaluate_score_outlier(
+        composite=0.92,
+        cohort=_HIGH_COHORT,
+        settings=_enforce(per_axis_enforce=True),
+        axes=axes,
+    )
+    assert on.held is True
+    assert on.reason == OUTLIER_REVIEW_REASON
+    assert on.evidence["trigger"] == "per_axis"
+    assert on.evidence["per_axis_enforce"] is True
+    # The neutral reason never names the axis or its statistics.
+    assert "memory" not in (on.reason or "")
+
+
+def test_per_axis_enforce_never_holds_below_the_composite_floor() -> None:
+    decision = evaluate_score_outlier(
+        composite=0.615,
+        cohort=_SPREAD_COHORT,
+        settings=_enforce(per_axis_enforce=True),
+        axes=_axes(0.61, 0.95),
+    )
+    assert decision.evidence["above_floor"] is False
+    assert decision.axis_outliers == ("memory_mean",)
+    assert decision.held is False
+    assert decision.evidence["trigger"] is None
+
+
+def test_small_axis_cohort_fails_closed() -> None:
+    decision = evaluate_score_outlier(
+        composite=0.615,
+        cohort=_SPREAD_COHORT,
+        settings=_enforce(per_axis_enforce=True),
+        axes=_axes(0.99, 0.99, tool_cohort=[0.5, 0.51], memory_cohort=[0.5]),
+    )
+    assert decision.held is False
+    assert decision.axis_outliers == ()
+    for name in ("tool_mean", "memory_mean"):
+        entry = _axis(decision.evidence, name)
+        assert entry["anomaly_unavailable"] == "cohort_too_small"
+        assert entry["outlier"] is False
+        assert entry["cohort_median"] is None
+        assert entry["modified_z"] is None
+
+
+def test_small_composite_cohort_never_holds_on_an_axis() -> None:
+    """Fail closed: a thin composite cohort records the condition and holds
+    nothing, whatever a (larger) axis cohort says."""
+    decision = evaluate_score_outlier(
+        composite=0.99,
+        cohort=[0.90, 0.91, 0.92],
+        settings=_enforce(per_axis_enforce=True),
+        axes=_axes(0.99, 0.99),
+    )
+    assert decision.evidence["anomaly_unavailable"] == "cohort_too_small"
+    assert decision.axis_outliers == ("tool_mean", "memory_mean")
+    assert decision.held is False
+    assert decision.evidence["trigger"] is None
+
+
+def test_downward_and_degenerate_axis_cohorts() -> None:
+    decision = evaluate_score_outlier(
+        composite=0.615,
+        cohort=_SPREAD_COHORT,
+        settings=_enforce(),
+        axes=_axes(0.01, 0.51, memory_cohort=[0.50] * 10),
+    )
+    tool = _axis(decision.evidence, "tool_mean")
+    assert tool["upward"] is False
+    assert tool["outlier"] is False
+    # Zero-MAD axis cohort: no division by zero, any upward value is out of band.
+    memory = _axis(decision.evidence, "memory_mean")
+    assert memory["cohort_mad"] == 0.0
+    assert memory["modified_z"] is None
+    assert memory["outlier"] is True
+    assert decision.axis_outliers == ("memory_mean",)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "source"),
+    [
+        (None, False, "default"),
+        ("true", True, "env"),
+        (" ON ", True, "env"),
+        ("1", True, "env"),
+        ("false", False, "env"),
+        ("off", False, "env"),
+        ("", False, "default_invalid_env"),
+        ("enforce", False, "default_invalid_env"),
+    ],
+)
+def test_per_axis_enforce_env_parsing(
+    raw: str | None, expected: bool, source: str
+) -> None:
+    environ = {} if raw is None else {"DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE": raw}
+    loaded = load_outlier_escalation_settings(environ)
+    assert loaded.settings.per_axis_enforce is expected
+    assert loaded.sources.per_axis_enforce == source
+    assert OutlierEscalationSettings().per_axis_enforce is False
+
+
+async def _run(
+    session: AsyncSession,
+    *,
+    composite: float,
+    cohort: list[float],
+    settings: OutlierEscalationSettings,
+    axes: dict[str, AxisObservation],
+) -> tuple[Agent, AthReview | None, list[ScoreAuditEntry]]:
+    agent = _agent()
+    async with session.begin():
+        session.add(agent)
+    async with session.begin():
+        await _evaluate_and_record_outlier_escalation(
+            session,
+            agent=agent,
+            bench_version=12,
+            composite=composite,
+            cohort=cohort,
+            settings=settings,
+            now=datetime.now(UTC),
+            axes=axes,
+        )
+    review = await session.scalar(
+        select(AthReview).where(AthReview.agent_id == agent.agent_id)
+    )
+    audits = list(
+        (
+            await session.scalars(
+                select(ScoreAuditEntry).where(
+                    ScoreAuditEntry.agent_id == agent.agent_id
+                )
+            )
+        ).all()
+    )
+    return agent, review, audits
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["observe", "enforce"])
+async def test_single_axis_outlier_records_evidence_without_holding(
+    session: AsyncSession, mode: str
+) -> None:
+    agent, review, audits = await _run(
+        session,
+        composite=0.615,
+        cohort=_SPREAD_COHORT,
+        settings=_enforce(mode=mode),
+        axes=_axes(0.61, 0.95),
+    )
+    assert agent.status == AgentStatus.SCORED
+    assert agent.review_reason is None
+    assert review is None
+    [audit] = audits
+    # Its own kind: never counted as a would-be hold or a hold.
+    assert audit.payload["audit_kind"] == OUTLIER_AXIS_EVIDENCE_KIND
+    assert audit.payload["enforced"] is False
+    assert audit.payload["qualified"] is False
+    assert audit.payload["bench_version"] == 12
+    evidence = audit.payload["evidence"]
+    # The chain is public: per-axis material is only the axis and its flag.
+    assert evidence["per_axis"] == _NEUTRAL_AXES
+    assert "per_axis_outlier_axes" not in evidence
+    assert "per_axis_enforce" not in evidence
+    assert evidence["trigger"] is None
+    assert evidence["algorithm_version"] == OUTLIER_ALGORITHM_VERSION
+
+
+@pytest.mark.asyncio
+async def test_in_band_axes_and_composite_record_nothing(
+    session: AsyncSession,
+) -> None:
+    agent, review, audits = await _run(
+        session,
+        composite=0.615,
+        cohort=_SPREAD_COHORT,
+        settings=_enforce(),
+        axes=_axes(0.61, 0.51),
+    )
+    assert agent.status == AgentStatus.SCORED
+    assert review is None
+    assert audits == []
+
+
+@pytest.mark.asyncio
+async def test_per_axis_enforce_opens_the_normal_ath_hold(
+    session: AsyncSession,
+) -> None:
+    agent, review, audits = await _run(
+        session,
+        composite=0.92,
+        cohort=_HIGH_COHORT,
+        settings=_enforce(per_axis_enforce=True),
+        axes=_axes(0.91, 0.95, tool_cohort=_HIGH_COHORT),
+    )
+    assert agent.status == AgentStatus.ATH_PENDING_REVIEW
+    assert agent.review_reason == OUTLIER_REVIEW_REASON
+    assert review is not None and review.status == "pending"
+    assert review.algorithm_provenance["review_kind"] == OUTLIER_REVIEW_KIND
+    assert review.algorithm_provenance["algorithm_version"] == OUTLIER_ALGORITHM_VERSION
+    assert review.original_evidence["trigger"] == "per_axis"
+    assert review.original_evidence["per_axis_outlier_axes"] == ["memory_mean"]
+    [audit] = audits
+    assert audit.payload["audit_kind"] == OUTLIER_REVIEW_KIND
+    assert audit.payload["enforced"] is True
+
+
+@pytest.mark.asyncio
+async def test_per_axis_enforce_in_observe_mode_only_records_a_would_be_hold(
+    session: AsyncSession,
+) -> None:
+    agent, review, audits = await _run(
+        session,
+        composite=0.92,
+        cohort=_HIGH_COHORT,
+        settings=_enforce(mode="observe", per_axis_enforce=True),
+        axes=_axes(0.91, 0.95, tool_cohort=_HIGH_COHORT),
+    )
+    assert agent.status == AgentStatus.SCORED
+    assert review is None
+    [audit] = audits
+    assert audit.payload["audit_kind"] == OUTLIER_REVIEW_KIND
+    assert audit.payload["enforced"] is False
+    assert audit.payload["evidence"]["trigger"] == "per_axis"
+
+
+@pytest.mark.asyncio
+async def test_composite_hold_snapshot_includes_per_axis_evidence(
+    session: AsyncSession,
+) -> None:
+    agent, review, audits = await _run(
+        session,
+        composite=0.99,
+        cohort=_SPREAD_COHORT,
+        settings=_enforce(),
+        axes=_axes(0.61, 0.95),
+    )
+    assert agent.status == AgentStatus.ATH_PENDING_REVIEW
+    assert review is not None
+    assert review.original_evidence["trigger"] == "composite"
+    assert review.original_evidence["per_axis_outlier_axes"] == ["memory_mean"]
+    # The private review snapshot keeps the full per-axis statistics ...
+    private_memory = _axis(review.original_evidence, "memory_mean")
+    assert private_memory["cohort_median"] == pytest.approx(0.50, abs=1e-9)
+    assert cast(float, private_memory["modified_z"]) > 6.0
+    # One entry: the hold, not a second evidence-only axis entry.
+    [audit] = audits
+    assert audit.payload["audit_kind"] == OUTLIER_REVIEW_KIND
+    # ... while the public chain gets the neutral projection, and the composite
+    # fields exactly as before.
+    public = audit.payload["evidence"]
+    assert public["per_axis"] == _NEUTRAL_AXES
+    assert {
+        key: value for key, value in public.items() if key not in _PER_AXIS_KEYS
+    } == {
+        key: value
+        for key, value in review.original_evidence.items()
+        if key not in _PER_AXIS_KEYS
+    }
+
+
+@pytest.mark.asyncio
+async def test_finalization_records_single_axis_evidence_end_to_end(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real score endpoint feeds each axis's quorum median and the eligible
+    ledger's axes into the gate: an in-band composite with the memory axis far
+    out of band finalizes SCORED and leaves one evidence-only axis entry."""
+    from ditto.tests.api_server.endpoints.test_validator import (
+        _BENCH_VERSION,
+        _install_chain,
+        _install_db,
+        _score_to_quorum,
+        _seed_agent,
+    )
+
+    monkeypatch.setattr(
+        v,
+        "OUTLIER_ESCALATION_SETTINGS",
+        OutlierEscalationSettings(mode="observe", min_bench_version=_BENCH_VERSION),
+    )
+    for composite, peer_memory in zip(_SPREAD_COHORT, _AXIS_COHORT, strict=True):
+        peer = Agent(
+            agent_id=uuid4(),
+            miner_hotkey=f"miner-{uuid4().hex[:8]}",
+            name="cohort-agent",
+            sha256=uuid4().hex * 2,
+            status=AgentStatus.SCORED,
+            screening_policy_version=9,
+        )
+        async with session_maker() as s, s.begin():
+            s.add(peer)
+            await s.flush()
+            s.add(
+                Score(
+                    agent_id=peer.agent_id,
+                    validator_hotkey="validator-0",
+                    bench_version=_BENCH_VERSION,
+                    run_id=f"run-{peer.agent_id.hex[:8]}",
+                    signature=None,
+                    seed=7,
+                    composite=composite,
+                    tool_mean=composite,
+                    memory_mean=peer_memory,
+                    median_ms=100,
+                    n=30,
+                    details={},
+                    generated_at=datetime.now(UTC),
+                )
+            )
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    _install_db(app, session_maker)
+    _install_chain(app)
+
+    await _score_to_quorum(
+        client,
+        agent_id,
+        maker=session_maker,
+        composite=0.605,
+        tool_mean=0.61,
+        memory_mean=0.95,
+    )
+
+    async with session_maker() as s:
+        agent = await s.get(Agent, agent_id)
+        audits = (
+            await s.scalars(
+                select(ScoreAuditEntry).where(
+                    ScoreAuditEntry.agent_id == agent_id,
+                    ScoreAuditEntry.event == EVENT_AUDIT,
+                )
+            )
+        ).all()
+    assert agent is not None and agent.status == AgentStatus.SCORED
+    [audit] = [
+        entry
+        for entry in audits
+        if entry.payload.get("audit_kind")
+        in {OUTLIER_REVIEW_KIND, OUTLIER_AXIS_EVIDENCE_KIND}
+    ]
+    assert audit.payload["audit_kind"] == OUTLIER_AXIS_EVIDENCE_KIND
+    evidence = audit.payload["evidence"]
+    assert evidence["composite"] == pytest.approx(0.605)
+    assert evidence["cohort_size"] == len(_SPREAD_COHORT)
+    assert evidence["per_axis"] == _NEUTRAL_AXES
+
+
+def test_public_audit_evidence_keeps_only_neutral_axis_fields() -> None:
+    decision = evaluate_score_outlier(
+        composite=0.92,
+        cohort=_HIGH_COHORT,
+        settings=_enforce(per_axis_enforce=True),
+        axes=_axes(0.91, 0.95, tool_cohort=_HIGH_COHORT),
+    )
+    public = public_audit_evidence(decision.evidence)
+    assert public["per_axis"] == _NEUTRAL_AXES
+    assert public["trigger"] == "per_axis"
+    assert "per_axis_enforce" not in public
+    assert "per_axis_outlier_axes" not in public
+    # The private decision itself is untouched.
+    assert "cohort_median" in _axis(decision.evidence, "memory_mean")
+
+
+@pytest.mark.parametrize(
+    ("composite", "cohort"),
+    [(0.99, _SPREAD_COHORT), (0.615, _SPREAD_COHORT), (0.99, [0.5, 0.51])],
+)
+def test_public_audit_evidence_is_identity_without_axes(
+    composite: float, cohort: list[float]
+) -> None:
+    """Composite-only evidence publishes exactly what it always has."""
+    evidence = evaluate_score_outlier(
+        composite=composite, cohort=cohort, settings=_enforce()
+    ).evidence
+    public = public_audit_evidence(evidence)
+    assert public == evidence
+    assert list(public) == list(evidence)

@@ -21,7 +21,7 @@ parameter:
 | `copy` | the anti-copy gate at quorum, or a manual operator hold |
 | `benchmark_overfit` | the transform audit |
 | `deferred_source_review` | the score-qualified source review, in enforce mode, or the top-five integrity double-check (`algorithm_provenance.trigger = integrity_double_check`) |
-| `anomalous_score` | the out-of-band composite escalation at finalization (bench v12+), in enforce mode |
+| `anomalous_score` | the out-of-band composite escalation at finalization (bench v12+), in enforce mode; or, only with `DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE` on, a single-axis (`tool_mean` / `memory_mean`) outlier whose composite clears the floor (`original_evidence.trigger = per_axis`). A per-axis outlier that does not hold is recorded as evidence only, on audit kind `anomalous_score_axis`. The audit chain is public, so its per-axis evidence is only the axis name and outlier flag; per-axis statistics live on the hold's `original_evidence` and in the admin dry-run |
 
 `review_kind` postdates the holds it describes, so the oldest rows carry no key
 at all and both the projection and the filter treat a missing or unrecognized

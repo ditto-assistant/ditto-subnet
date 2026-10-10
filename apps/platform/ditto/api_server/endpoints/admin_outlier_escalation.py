@@ -37,12 +37,16 @@ from ditto.api_server.outlier_escalation import (
     OUTLIER_ALGORITHM_VERSION,
     OUTLIER_ESCALATION_ENV_VARS,
     OUTLIER_REVIEW_KIND,
+    AxisObservation,
     OutlierEscalationSettings,
     evaluate_score_outlier,
     median_mad,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version
-from ditto.db.queries.outlier_escalation import load_outlier_escalation_activity
+from ditto.db.queries.outlier_escalation import (
+    OutlierEscalationEntry,
+    load_outlier_escalation_activity,
+)
 from ditto.db.queries.scores import list_eligible_ledger
 
 router = APIRouter(tags=["admin"])
@@ -70,6 +74,19 @@ def _settings_view(
         min_cohort_size=settings.min_cohort_size,
         modified_z_threshold=_finite(settings.modified_z_threshold),
         min_composite_floor=_finite(settings.min_composite_floor),
+        per_axis_enforce=settings.per_axis_enforce,
+    )
+
+
+def _entry_view(entry: OutlierEscalationEntry) -> OutlierEscalationEntryView:
+    return OutlierEscalationEntryView(
+        seq=entry.seq,
+        agent_id=entry.agent_id,
+        recorded_at=entry.recorded_at,
+        enforced=entry.enforced,
+        bench_version=entry.bench_version,
+        algorithm_version=entry.algorithm_version,
+        evidence=OutlierEscalationEvidence.model_validate(entry.evidence),
     )
 
 
@@ -117,21 +134,16 @@ async def get_outlier_escalation(
             enforced_total=activity.enforced_total,
             observed_in_window=activity.observed_in_window,
             enforced_in_window=activity.enforced_in_window,
+            axis_evidence_total=activity.axis_evidence_total,
+            axis_evidence_in_window=activity.axis_evidence_in_window,
             latest_recorded_at=activity.latest_recorded_at,
             recent_limit=activity.recent_limit,
-            recent=[
-                OutlierEscalationEntryView(
-                    seq=entry.seq,
-                    agent_id=entry.agent_id,
-                    recorded_at=entry.recorded_at,
-                    enforced=entry.enforced,
-                    bench_version=entry.bench_version,
-                    algorithm_version=entry.algorithm_version,
-                    evidence=OutlierEscalationEvidence.model_validate(entry.evidence),
-                )
-                for entry in activity.recent
-            ],
+            recent=[_entry_view(entry) for entry in activity.recent],
             recent_truncated=activity.recent_truncated,
+            recent_axis_evidence=[
+                _entry_view(entry) for entry in activity.recent_axis_evidence
+            ],
+            recent_axis_evidence_truncated=activity.recent_axis_evidence_truncated,
         ),
     )
 
@@ -147,6 +159,7 @@ async def get_outlier_escalation_dry_run(
     min_cohort_size: Annotated[int | None, Query(ge=1, le=1000)] = None,
     modified_z_threshold: Annotated[float | None, Query(gt=0, le=1000)] = None,
     min_composite_floor: Annotated[float | None, Query(ge=0, le=1)] = None,
+    per_axis_enforce: Annotated[bool | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_RECENT_LIMIT)] = DEFAULT_RECENT_LIMIT,
 ) -> AdminOutlierEscalationDryRunResponse:
     """Which current ledger rows the escalation would hold, whatever the mode.
@@ -164,12 +177,20 @@ async def get_outlier_escalation_dry_run(
     finalization; and the candidate composite is the median score row, equal
     to the finalization ``statistics.median`` for an odd score count such as
     the three-validator quorum.
+
+    Per-axis evidence is replayed the same way from the ledger row's
+    ``tool_mean`` / ``memory_mean`` against the other rows' axes. Those are
+    the representative score row's axes, while finalization takes each axis's
+    own quorum median, so a row whose validators disagree per axis can differ.
+    Rows with a per-axis outlier the replayed policy would not hold are listed
+    under ``axis_evidence`` -- what the live gate records as evidence only.
     """
     effective = validator_endpoints.OUTLIER_ESCALATION_SETTINGS
     overrides: dict[OutlierSettingField, Any] = {
         "min_cohort_size": min_cohort_size,
         "modified_z_threshold": modified_z_threshold,
         "min_composite_floor": min_composite_floor,
+        "per_axis_enforce": per_axis_enforce,
     }
     settings = replace(
         effective,
@@ -181,7 +202,7 @@ async def get_outlier_escalation_dry_run(
         else await active_bench_version(session)
     )
     # The same selection scoring uses; the sketch and details columns are only
-    # dropped because the replay reads nothing but composites.
+    # dropped because the replay reads nothing but composites and axes.
     ledger = await list_eligible_ledger(
         session,
         bench_version=version,
@@ -189,16 +210,38 @@ async def get_outlier_escalation_dry_run(
         include_details=False,
     )
     composites = [row.composite for row in ledger]
+    tool_means = [row.tool_mean for row in ledger]
+    memory_means = [row.memory_mean for row in ledger]
+
+    def _others(values: list[float], index: int) -> list[float]:
+        return values[:index] + values[index + 1 :]
+
     held = []
+    axis_only = []
     for index, row in enumerate(ledger):
         decision = evaluate_score_outlier(
             composite=row.composite,
-            cohort=composites[:index] + composites[index + 1 :],
+            cohort=_others(composites, index),
             settings=settings,
+            axes={
+                "tool_mean": AxisObservation(
+                    value=row.tool_mean, cohort=_others(tool_means, index)
+                ),
+                "memory_mean": AxisObservation(
+                    value=row.memory_mean, cohort=_others(memory_means, index)
+                ),
+            },
         )
         if decision.held:
             held.append((row, decision.evidence))
-    held.sort(key=lambda item: (-item[0].composite, str(item[0].agent_id)))
+        elif decision.axis_outliers:
+            axis_only.append((row, decision.evidence))
+
+    def _order(item: tuple[Any, dict[str, object]]) -> tuple[float, str]:
+        return (-item[0].composite, str(item[0].agent_id))
+
+    held.sort(key=_order)
+    axis_only.sort(key=_order)
     ledger_median, ledger_mad = median_mad(composites) if composites else (None, None)
     cohort_size = max(len(ledger) - 1, 0)
     return AdminOutlierEscalationDryRunResponse(
@@ -225,4 +268,14 @@ async def get_outlier_escalation_dry_run(
             for row, evidence in held[:limit]
         ],
         truncated=len(held) > limit,
+        axis_evidence_count=len(axis_only),
+        axis_evidence=[
+            OutlierEscalationDryRunEntryView(
+                agent_id=row.agent_id,
+                miner_hotkey=row.miner_hotkey,
+                evidence=OutlierEscalationEvidence.model_validate(evidence),
+            )
+            for row, evidence in axis_only[:limit]
+        ],
+        axis_evidence_truncated=len(axis_only) > limit,
     )

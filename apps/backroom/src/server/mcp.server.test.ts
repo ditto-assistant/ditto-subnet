@@ -4245,6 +4245,7 @@ describe('Backroom MCP tools', () => {
       min_cohort_size: 10,
       modified_z_threshold: 6.0,
       min_composite_floor: 0.9,
+      per_axis_enforce: false,
     },
     defaults: {
       mode: 'off',
@@ -4259,11 +4260,12 @@ describe('Backroom MCP tools', () => {
       min_cohort_size: 'env',
       modified_z_threshold: 'default',
       min_composite_floor: 'default',
+      per_axis_enforce: 'default_invalid_env',
     },
     env_vars: { mode: 'DITTO_OUTLIER_ESCALATION_MODE' },
-    invalid_env_fields: ['mode'],
+    invalid_env_fields: ['mode', 'per_axis_enforce'],
     review_kind: 'anomalous_score',
-    algorithm_version: 'outlier-escalation-v1',
+    algorithm_version: 'outlier-escalation-v2',
     pending_review_count: 1,
     activity: {
       window_hours: 168,
@@ -4299,6 +4301,29 @@ describe('Backroom MCP tools', () => {
         },
       ],
       recent_truncated: true,
+      axis_evidence_total: 3,
+      axis_evidence_in_window: 1,
+      recent_axis_evidence: [
+        {
+          seq: 913,
+          agent_id: '22222222-2222-4222-8222-222222222222',
+          recorded_at: '2026-09-25T11:30:00Z',
+          enforced: false,
+          bench_version: 12,
+          algorithm_version: 'outlier-escalation-v2',
+          evidence: {
+            composite: 0.62,
+            cohort_size: 12,
+            trigger: null,
+            per_axis_outlier_axes: ['memory_mean'],
+            per_axis: [
+              { axis: 'tool_mean', outlier: false, raw_axis_cohort: [0.5] },
+              { axis: 'memory_mean', outlier: true },
+            ],
+          },
+        },
+      ],
+      recent_axis_evidence_truncated: false,
     },
   })
 
@@ -4315,12 +4340,21 @@ describe('Backroom MCP tools', () => {
       expect(body).toMatchObject({
         settings: { mode: 'off', min_cohort_size: 10 },
         sources: { mode: 'default_invalid_env', min_cohort_size: 'env' },
-        invalid_env_fields: ['mode'],
         pending_review_count: 1,
         activity: { observed_total: 4, enforced_total: 1, recent_truncated: true },
       })
       expect(body.activity.recent[0]).toMatchObject({ enforced: true, bench_version: 12 })
       expect(body.activity.recent[0].evidence.modified_z).toBe(26.3)
+      expect(body.invalid_env_fields).toEqual(['mode', 'per_axis_enforce'])
+      expect(body.activity).toMatchObject({ axis_evidence_total: 3, axis_evidence_in_window: 1 })
+      expect(body.activity.recent_axis_evidence[0].evidence).toMatchObject({
+        per_axis_outlier_axes: ['memory_mean'],
+        per_axis: [
+          { axis: 'tool_mean', outlier: false },
+          { axis: 'memory_mean', outlier: true },
+        ],
+      })
+      expect(JSON.stringify(body)).not.toContain('raw_axis_cohort')
       // Unknown fields, nested ones included, are stripped by the schema.
       expect(JSON.stringify(body)).not.toContain('must-not-escape')
       expect(JSON.stringify(body)).not.toContain('raw_cohort')
@@ -4416,6 +4450,31 @@ describe('Backroom MCP tools', () => {
       },
     ],
     truncated: true,
+    axis_evidence_count: 1,
+    axis_evidence: [
+      {
+        agent_id: '22222222-2222-4222-8222-222222222222',
+        miner_hotkey: '5Axis',
+        evidence: {
+          composite: 0.62,
+          trigger: null,
+          per_axis: [
+            {
+              axis: 'memory_mean',
+              value: 0.95,
+              cohort_size: 39,
+              cohort_median: 0.5,
+              cohort_mad: 0.01,
+              modified_z: 30.4,
+              upward: true,
+              outlier: true,
+              anomaly_unavailable: null,
+            },
+          ],
+        },
+      },
+    ],
+    axis_evidence_truncated: false,
   })
 
   it('dry-runs the outlier escalation with overrides and bounded rows', async () => {
@@ -4441,6 +4500,12 @@ describe('Backroom MCP tools', () => {
         truncated: true,
       })
       expect(body.would_trigger[0].evidence.modified_z).toBe(12.8)
+      expect(body.axis_evidence_count).toBe(1)
+      expect(body.axis_evidence[0].evidence.per_axis?.[0]).toMatchObject({
+        axis: 'memory_mean',
+        modified_z: 30.4,
+        outlier: true,
+      })
       expect(JSON.stringify(body)).not.toContain('must-not-escape')
       expect(JSON.stringify(body)).not.toContain('raw_cohort')
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
