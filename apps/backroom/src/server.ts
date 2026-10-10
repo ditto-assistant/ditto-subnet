@@ -6,7 +6,7 @@ import {
   BACKROOM_READ_SCOPE,
   BACKROOM_WRITE_SCOPE,
   type BackroomEnv,
-} from './server/mcp.server'
+} from './server/mcp-contract.server'
 import { BackroomMcpHandler } from './server/mcp-handler.server'
 import {
   beginMcpAuthorization,
