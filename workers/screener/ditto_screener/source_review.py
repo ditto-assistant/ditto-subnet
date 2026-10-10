@@ -3506,6 +3506,37 @@ class TarSourceRepository:
             return None
         return self._read_text(normalized)
 
+    def attention_texts(self, paths: Sequence[str]) -> dict[str, str]:
+        """Read at most 2 MiB / 512 selected files in one decompression pass."""
+        self._assert_archive_unchanged()
+        selected: set[str] = set()
+        budget = 2 * 1024 * 1024
+        for path in sorted(set(paths), key=source_path_priority)[:512]:
+            info = self._members.get(path)
+            if info is not None and info.size <= budget:
+                selected.add(path)
+                budget -= info.size
+        texts: dict[str, str] = {}
+        with tarfile.open(self._archive_path, mode="r|gz") as archive:
+            for member in archive:
+                path = member.name.removeprefix("./")
+                if (
+                    path not in selected
+                    or not member.isfile()
+                    or self._members[path].archive_name != member.name
+                ):
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    continue
+                raw = extracted.read(self._members[path].size + 1)
+                try:
+                    texts[path] = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+        self._assert_archive_unchanged()
+        return texts
+
     def list_files(self, prefix: str = "") -> str:
         prefix = prefix.removeprefix("./")
         paths = sorted(path for path in self._members if path.startswith(prefix))

@@ -11420,6 +11420,28 @@ export interface components {
              */
             idempotent: boolean;
         };
+        /**
+         * AdminRejectedAncestorLookup
+         * @description Observed window lookup, not a policy finding or evidence of clearance.
+         */
+        AdminRejectedAncestorLookup: {
+            /** Attempt Id */
+            attempt_id: string | null;
+            /**
+             * Fetched At
+             * Format: date-time
+             */
+            fetched_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "partial" | "mechanical_only";
+            /** Unavailable */
+            unavailable: string[];
+            /** Window Count */
+            window_count: number;
+        };
         /** AdminRetireCodingCatalogRequest */
         AdminRetireCodingCatalogRequest: {
             /**
@@ -12424,6 +12446,7 @@ export interface components {
             miner_coldkey?: string | null;
             /** Miner Hotkey */
             miner_hotkey: string;
+            rejected_ancestor_lookup?: components["schemas"]["AdminRejectedAncestorLookup"] | null;
             /** Screening Policy Version */
             screening_policy_version: number;
             /** Screening Reason */
@@ -14337,61 +14360,6 @@ export interface components {
             reason: string;
             /** Revision */
             revision: number;
-        };
-        /**
-         * ArtifactResponse
-         * @description Returned by ``GET /validator/agent/{agent_id}/artifact``.
-         *
-         *     ``download_url`` is a short-lived pre-signed object-store URL the
-         *     daemon GETs to stream the tarball. ``sha256`` lets the daemon verify
-         *     the bytes it pulls against what the miner registered.
-         * @example {
-         *       "agent_id": "550e8400-e29b-41d4-a716-446655440000",
-         *       "download_url": "https://minio.local/ditto-agents/550e8400-e29b-41d4-a716-446655440000.tar.gz?X-Amz-...",
-         *       "expires_at": "2026-06-08T12:05:00Z",
-         *       "sha256": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-         *     }
-         */
-        ArtifactResponse: {
-            /**
-             * Agent Id
-             * Format: uuid
-             * @description Echoes the path-param id.
-             */
-            agent_id: string;
-            /** Bench Version */
-            bench_version?: number | null;
-            /**
-             * Download Url
-             * @description Pre-signed URL to GET the tarball bytes.
-             */
-            download_url: string;
-            /**
-             * Expires At
-             * Format: date-time
-             * @description When ``download_url`` stops being valid (UTC).
-             */
-            expires_at: string;
-            /** Screened Image Id */
-            screened_image_id?: string | null;
-            /** Screened Image Ref */
-            screened_image_ref?: string | null;
-            /** Screened Image Sha256 */
-            screened_image_sha256?: string | null;
-            /** Screened Image Size Bytes */
-            screened_image_size_bytes?: number | null;
-            /**
-             * Screened Image Url
-             * @description Pre-signed Docker image archive URL when screening built one.
-             */
-            screened_image_url?: string | null;
-            /** Screening Policy Version */
-            screening_policy_version?: number | null;
-            /**
-             * Sha256
-             * @description Expected SHA-256 of the tarball, lowercase hex.
-             */
-            sha256: string;
         };
         /**
          * BenchDatasetConfig
@@ -29353,6 +29321,31 @@ export interface components {
             fields: string[];
         };
         /**
+         * RejectedAncestorWindow
+         * @description A cited window from an exact, rejected artifact; never policy proof.
+         */
+        RejectedAncestorWindow: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** End Line */
+            end_line: number;
+            /** Path */
+            path: string;
+            /** Rolling Hash */
+            rolling_hash: string;
+            /** Sha256 */
+            sha256: string;
+            /** Start Line */
+            start_line: number;
+            /** Token Count */
+            token_count: number;
+        };
+        /**
          * RelayFailure
          * @description Private first-failure metadata; no prompts, headers or exception text.
          */
@@ -37077,6 +37070,93 @@ export interface components {
              */
             vector_digest: string;
         };
+        /**
+         * ArtifactResponse
+         * @description Returned by ``GET /validator/agent/{agent_id}/artifact``.
+         *
+         *     ``download_url`` is a short-lived pre-signed object-store URL the
+         *     daemon GETs to stream the tarball. ``sha256`` lets the daemon verify
+         *     the bytes it pulls against what the miner registered.
+         * @example {
+         *       "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+         *       "download_url": "https://minio.local/ditto-agents/550e8400-e29b-41d4-a716-446655440000.tar.gz?X-Amz-...",
+         *       "expires_at": "2026-06-08T12:05:00Z",
+         *       "sha256": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+         *     }
+         */
+        ditto__api_models__validator__ArtifactResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             * @description Echoes the path-param id.
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version?: number | null;
+            /**
+             * Download Url
+             * @description Pre-signed URL to GET the tarball bytes.
+             */
+            download_url: string;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description When ``download_url`` stops being valid (UTC).
+             */
+            expires_at: string;
+            /** Screened Image Id */
+            screened_image_id?: string | null;
+            /** Screened Image Ref */
+            screened_image_ref?: string | null;
+            /** Screened Image Sha256 */
+            screened_image_sha256?: string | null;
+            /** Screened Image Size Bytes */
+            screened_image_size_bytes?: number | null;
+            /**
+             * Screened Image Url
+             * @description Pre-signed Docker image archive URL when screening built one.
+             */
+            screened_image_url?: string | null;
+            /** Screening Policy Version */
+            screening_policy_version?: number | null;
+            /**
+             * Sha256
+             * @description Expected SHA-256 of the tarball, lowercase hex.
+             */
+            sha256: string;
+        };
+        /**
+         * ArtifactResponse
+         * @description Short-lived artifact metadata returned to a screening worker.
+         */
+        ditto_screening_protocol__models__ArtifactResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             * @description Echoes the path-param id.
+             */
+            agent_id: string;
+            /**
+             * Download Url
+             * @description Pre-signed URL used to download the tarball.
+             */
+            download_url: string;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description When the download URL expires (UTC).
+             */
+            expires_at: string;
+            /** Rejected Ancestor Unavailable */
+            rejected_ancestor_unavailable?: string[];
+            /** Rejected Ancestor Windows */
+            rejected_ancestor_windows?: components["schemas"]["RejectedAncestorWindow"][];
+            /**
+             * Sha256
+             * @description Expected SHA-256 of the tarball, lowercase hex.
+             */
+            sha256: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -42175,7 +42255,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ArtifactResponse"];
+                    "application/json": components["schemas"]["ditto__api_models__validator__ArtifactResponse"];
                 };
             };
             /** @description Validation Error */
@@ -47593,7 +47673,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ArtifactResponse"];
+                    "application/json": components["schemas"]["ditto_screening_protocol__models__ArtifactResponse"];
                 };
             };
             /** @description Missing/invalid screener auth. */
@@ -49649,7 +49729,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ArtifactResponse"];
+                    "application/json": components["schemas"]["ditto__api_models__validator__ArtifactResponse"];
                 };
             };
             /** @description Missing/invalid validator auth. */
@@ -51253,7 +51333,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ArtifactResponse"];
+                    "application/json": components["schemas"]["ditto__api_models__validator__ArtifactResponse"];
                 };
             };
             /** @description Validation Error */

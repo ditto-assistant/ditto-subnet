@@ -7373,6 +7373,13 @@ describe('Backroom MCP tools', () => {
       screening_reason: null,
       screening_reason_code: null,
       submitted_at: '2026-07-19T12:00:00Z',
+      rejected_ancestor_lookup: {
+        fetched_at: '2026-07-19T12:01:05Z',
+        attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        status: 'partial',
+        window_count: 8,
+        unavailable: ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'],
+      },
       attempts: [
         {
           attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',

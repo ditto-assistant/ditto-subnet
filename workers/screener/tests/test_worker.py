@@ -596,6 +596,52 @@ async def test_screen_one_pass_posts_signed_pass_verdict(
     assert platform.heartbeats[-1].progress is None
 
 
+@pytest.mark.parametrize(
+    "outcome", [ScreeningOutcome.PASS, ScreeningOutcome.QUARANTINE]
+)
+async def test_missing_ancestor_source_does_not_change_the_verdict_or_finding_anchor(
+    make_config: Callable[..., ScreenerConfig],
+    outcome: ScreeningOutcome,
+) -> None:
+    missing = uuid4()
+
+    class PartialHistoryPlatform(_FakePlatform):
+        async def get_artifact(
+            self, agent_id: UUID, *, attempt_id: UUID | None = None
+        ) -> ArtifactResponse:
+            artifact = await super().get_artifact(agent_id, attempt_id=attempt_id)
+            return artifact.model_copy(
+                update={"rejected_ancestor_unavailable": [missing]}
+            )
+
+    platform = PartialHistoryPlatform([])
+    decision = replace(
+        _decision(outcome),
+        evidence=(
+            PolicyEvidence("source-review", "test", "original evidence", "ab" * 32),
+        ),
+    )
+    gate = _FakeGate(decision)
+    worker = _worker(make_config(), platform, gate)
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+    verdict = platform.verdicts[0]
+    assert verdict["outcome"].value == outcome.value
+    assert verdict["passed"] is (outcome == ScreeningOutcome.PASS)
+    if outcome == ScreeningOutcome.PASS:
+        # Passing jobs retain lookup availability in Platform's artifact audit,
+        # rather than adding a policy finding to an otherwise clean verdict.
+        assert verdict["evidence"] is None
+        return
+    evidence = verdict["evidence"]
+    warning = next(
+        item for item in evidence if item.code == "rejected-ancestor-source-unavailable"
+    )
+    assert str(missing) in warning.summary
+    assert warning.digest is None
+    assert verdict["finding_digest"] == decision.evidence[-1].digest
+    assert all(item.code != warning.code for item in decision.evidence)
+
+
 async def test_attempt_bound_review_override_is_applied_then_restored(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

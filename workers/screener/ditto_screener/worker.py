@@ -21,6 +21,7 @@ import re
 import socket
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -827,6 +828,7 @@ class ScreenerWorker:
                 applied_canary_settings = True
             screened_image: BuiltImageArtifact | None = None
             screened_image_upload_id: UUID | None = None
+            ancestor_unavailable: list[UUID] = []
 
             async def record_mechanical_verification(
                 check_code: str, *, image_sha256: str | None = None
@@ -955,6 +957,7 @@ class ScreenerWorker:
                     artifact = await self._platform.get_artifact(
                         agent_id, attempt_id=attempt_id
                     )
+                    ancestor_unavailable = artifact.rejected_ancestor_unavailable
 
                     result = await self._gate.screen(
                         agent_id=agent_id,
@@ -981,7 +984,22 @@ class ScreenerWorker:
                         policy_version=policy_version,
                         scored_runtime_evidence=item.scored_runtime_evidence,
                         scored_runtime_evidence_received_at=received_at,
+                        rejected_ancestor_windows=artifact.rejected_ancestor_windows,
                     )
+            if ancestor_unavailable:
+                missing = ", ".join(str(value) for value in ancestor_unavailable)
+                result = replace(
+                    result,
+                    evidence=(
+                        *result.evidence,
+                        PolicyEvidence(
+                            "source-review",
+                            "rejected-ancestor-source-unavailable",
+                            f"Historical rejection source unavailable: {missing}. "
+                            "No match or clearance inferred.",
+                        ),
+                    ),
+                )
             if result.policy_version != policy_version:
                 raise PlatformError(
                     "screening decision policy version does not match the claim"
