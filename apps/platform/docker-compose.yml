@@ -24,7 +24,11 @@ services:
       retries: 5
 
   pylon:
-    image: backenddevelopersltd/bittensor-pylon:latest
+    # Digest-pinned (2.3.3 multi-arch index): `docker compose up` on a deployed
+    # host never re-pulls a cached floating tag, so `:latest` meant "whatever
+    # was first pulled". Keep in step with validator_pylon_image in
+    # infra/ansible/roles/validator_pylon/defaults/main.yml.
+    image: docker.io/backenddevelopersltd/bittensor-pylon:2.3.3@sha256:162a2c56b1183b1420d1c86dad135334380aeadb78e609ded4f52fd6d169efc5
     # amd64-only image; run under emulation on Apple Silicon (colima qemu).
     platform: linux/amd64
     # No profile: Pylon is the one sidecar that runs everywhere (local + deployed).
@@ -129,7 +133,7 @@ services:
   # DITTO_COMPOSE_SERVICES on a deployed host. The platform stays disabled until
   # CODE_EMBEDDER_URL is set, so a host that does not run this service is unaffected.
   embedder:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7.2
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7.2@sha256:bbdbd7793b70e0329abcb55a6fb96cf7ee68e459305da95dfa79fb643f086317
     profiles: ["embedder"]
     # amd64-only image; run under emulation on Apple Silicon (colima qemu).
     platform: linux/amd64
