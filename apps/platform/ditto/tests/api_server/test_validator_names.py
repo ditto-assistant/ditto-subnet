@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -223,3 +224,26 @@ def test_disabled_source_never_constructs_or_requires_network_client() -> None:
     assert snapshot.status == "disabled"
     assert snapshot.names == {}
     assert snapshot.stake_weights == {}
+
+
+async def test_standby_hydrates_durable_snapshot_without_starting_refresh() -> None:
+    session = MagicMock()
+    sessions = MagicMock()
+    sessions.return_value.__aenter__.return_value = session
+    async with _client(
+        httpx.MockTransport(lambda _request: httpx.Response(503))
+    ) as client:
+        cache = TaostatsValidatorNames(_config(), client)
+        with patch(
+            "ditto.api_server.validator_names.load_validator_name_cache",
+            new_callable=AsyncMock,
+            return_value=({_ALICE: "Rizzo"}, {_ALICE: 30.0}, _NOW),
+        ) as load:
+            await cache.hydrate(sessions)
+        snapshot = cache.snapshot([_ALICE], now=_NOW)
+        assert cache._task is None
+        await cache.aclose()
+
+    load.assert_awaited_once_with(session)
+    assert snapshot.names == {_ALICE: "Rizzo"}
+    assert snapshot.stake_weights == {_ALICE: 30.0}

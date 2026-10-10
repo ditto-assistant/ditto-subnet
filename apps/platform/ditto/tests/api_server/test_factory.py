@@ -257,11 +257,14 @@ class TestRouteDiscoveryIsSingleton:
                 )
             )
             app.state.validator_names.start = AsyncMock()
+            app.state.validator_names.hydrate = AsyncMock()
             app.state.validator_names.aclose = AsyncMock()
             async with app.router.lifespan_context(app):
                 observed_source = app.state.coding_private_catalog_source
                 observed_evidence = app.state.coding_hippius_evidence_runtime
+                validator_names = app.state.validator_names
         evidence_factory.observed_runtime = observed_evidence
+        evidence_factory.validator_names = validator_names
         return refresher, catalog_factory, observed_source, evidence_factory
 
     @pytest.mark.parametrize(
@@ -294,6 +297,30 @@ class TestRouteDiscoveryIsSingleton:
         # Still constructed and still registered for cleanup, so shutdown is
         # symmetric with the platform role.
         refresher.aclose.assert_awaited_once()
+
+    async def test_standby_keeps_platform_access_without_singleton_loops(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("DITTO_PLATFORM_BACKGROUND_TASKS", "false")
+        janitor = MagicMock()
+        janitor.start = AsyncMock()
+        janitor.aclose = AsyncMock()
+        refresher, _factory, _source, _evidence = await self._refresher_for_role(
+            "platform", monkeypatch, capacity_event_janitor=janitor
+        )
+        refresher.start.assert_not_awaited()
+        janitor.start.assert_not_awaited()
+        refresher.aclose.assert_awaited_once()
+        janitor.aclose.assert_awaited_once()
+        _evidence.validator_names.hydrate.assert_awaited_once()
+        _evidence.validator_names.start.assert_not_awaited()
+
+        # The standby is an identical HTTP server, including admin routes.
+        app = create_api_server(make_api_server_config())
+        assert any(
+            getattr(route, "path", None) == "/api/v1/upload/agent"
+            for route in app.routes
+        )
 
     @pytest.mark.parametrize("role", [None, "platform"])
     async def test_platform_role_still_starts_route_discovery(
