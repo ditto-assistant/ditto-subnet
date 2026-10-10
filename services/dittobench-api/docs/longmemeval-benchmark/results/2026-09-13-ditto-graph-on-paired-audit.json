@@ -1,0 +1,282 @@
+{
+  "answer_provider_turns": {
+    "OpenAI": 1312
+  },
+  "backend_provenance": {
+    "condition_sha256": "dc4e358e5b60b1bddb4c9194bccd0a31eb6bbf097e184b8f520d7a6c44ac080c",
+    "finished_at": "2026-09-13T07:23:50.602083Z",
+    "git_sha": "1b5755609b3ea95660fdba289e6a747adb8c5dae",
+    "lme_cases_sha256": "babd4424e8cd09f6bd395e4c2b4774b35bbe712227a90e93d6735a72a2174306",
+    "lme_id_blinding_scheme": "lme-opaque-sha256-v1",
+    "lme_manifest_sha256": "a232c2b7ee77f06597535416682c00187f9c44bb2a324de7ccd5dce3fa13ccef",
+    "lme_prepared_snapshot_after_sha256": "01c6a7070cba4e1455894c6da07132dcbba1b5cbc37c2c58c9f26db4adb3d055",
+    "lme_prepared_snapshot_sha256": "01c6a7070cba4e1455894c6da07132dcbba1b5cbc37c2c58c9f26db4adb3d055",
+    "lme_prepared_snapshot_unchanged": "true",
+    "lme_source_evidence": "clean-go-build-vcs-and-git-startup",
+    "prompt_sha": "a00ace7f5bba60937aacf569bef66bc4726fc22752abef1873f3f59575419f3a",
+    "run_id": "20260913-055526-1b5755609b3ea95660fdba289e6a747adb8c5dae",
+    "started_at": "2026-09-13T05:55:26.872729Z",
+    "tools_sha": "867c50f4437bc034a74ed10137b14dfed3eb2d3148db64db3d7da7d4fbe87a94",
+    "weights_sha": "learned:46d34091333706c841b6e0f6b35b2bf9f5f89ac0fca692720ce9c22cc795138c"
+  },
+  "by_question_type": {
+    "knowledge-update": {
+      "correct": 63,
+      "count": 78,
+      "empty_answers": 0,
+      "qa_accuracy": 0.8076923076923077,
+      "wilson_95_interval": [
+        0.7066518728093648,
+        0.8798479365985158
+      ]
+    },
+    "multi-session": {
+      "correct": 84,
+      "count": 133,
+      "empty_answers": 0,
+      "qa_accuracy": 0.631578947368421,
+      "wilson_95_interval": [
+        0.5469796589850541,
+        0.7087907800444008
+      ]
+    },
+    "single-session-assistant": {
+      "correct": 48,
+      "count": 56,
+      "empty_answers": 0,
+      "qa_accuracy": 0.8571428571428571,
+      "wilson_95_interval": [
+        0.7426407877129466,
+        0.9257921146307937
+      ]
+    },
+    "single-session-preference": {
+      "correct": 21,
+      "count": 30,
+      "empty_answers": 0,
+      "qa_accuracy": 0.7,
+      "wilson_95_interval": [
+        0.5212421254128504,
+        0.8333525173175619
+      ]
+    },
+    "single-session-user": {
+      "correct": 63,
+      "count": 70,
+      "empty_answers": 0,
+      "qa_accuracy": 0.9,
+      "wilson_95_interval": [
+        0.807670851514326,
+        0.9507106985574605
+      ]
+    },
+    "temporal-reasoning": {
+      "correct": 83,
+      "count": 133,
+      "empty_answers": 0,
+      "qa_accuracy": 0.6240601503759399,
+      "wilson_95_interval": [
+        0.5393484782274185,
+        0.7018065071432105
+      ]
+    }
+  },
+  "condition": {
+    "answer_model": "openai/gpt-5.6-luna",
+    "answer_provider": "OpenAI",
+    "graph_retrieval": true,
+    "judge_model": "google/gemini-3.1-flash-lite",
+    "label": "full-memory-luna-medium-opaque-graph-on",
+    "prompt_clock": "question-date",
+    "reasoning_effort": "medium",
+    "require_graph": true
+  },
+  "cost_reporting": {
+    "backend_estimate_invalid_reason": "unknown_answer_model_price",
+    "backend_estimate_valid": false,
+    "policy": "No monetary amounts exported. Invalid/missing model prices must not be quoted as spend; provider billing is separate."
+  },
+  "dataset": {
+    "questions": 500,
+    "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
+  },
+  "evidence_sha256": "859a118af975b219de3b73809efd648832291dadae590fbaf129e0f172028c18",
+  "isolated_fixture_users": 500,
+  "limitations": [
+    "Research only; not a production DittoBench score or a held-out leaderboard claim.",
+    "Observed answer-provider identities do not attest judge or dreaming provider identities.",
+    "Requires separate fixture completeness, dreaming stage, and trained-retriever provenance evidence.",
+    "Wilson interval assumes independent Bernoulli cases; not a model stochasticity interval."
+  ],
+  "operational_diagnostics": {
+    "graph_utilization": {
+      "cases_with_graph_seed_ids": 6,
+      "cases_with_neighbor_tool_traces": 0,
+      "discovered_candidate_occurrences_not_unique": 350,
+      "discovery_calls": 3751,
+      "discovery_counters_available": true,
+      "discovery_failure_fallback_rate": 0.9893361770194615,
+      "discovery_failures": 3711,
+      "discovery_total_ms": 7504920,
+      "graph_seed_id_occurrences": 39,
+      "graph_seed_recorded_cases": 500,
+      "neighbor_tool_trace_calls": 0,
+      "neighbor_tool_traces_with_truncated_text": 0,
+      "scope": "Discovery counters cover this invocation only, including seed-context preparation; not necessarily all resumed reader attempts. Candidate counts are occurrences, not globally unique IDs. Explicit neighbor-tool traces are separate and are not included in discovery counters. Graph seed IDs may also be found by stock retrieval, not graph-only additions. Enabled does not mean effective graph coverage.",
+      "tool_trace_recorded_cases": 500
+    },
+    "metric_scope": "Recomputed from all recorded selected per-case observations, never resumed Standard/Speed aggregates. QueryCase latency starts after seed-context preparation, so it excludes serial graph seed discovery. Also excludes failed attempts, separate judge/preparation calls and seed-context re-preparation; sums are not campaign wall time or monetary spend. Compare whole invocation intervals separately.",
+    "successful_per_case_metrics": {
+      "latency_ms": {
+        "complete_case_coverage": true,
+        "mean": 12505.774,
+        "median": 6498.5,
+        "p95_nearest_rank": 49508,
+        "recorded_cases": 500,
+        "sum": 6252887
+      },
+      "output_tokens": {
+        "complete_case_coverage": true,
+        "mean": 293.33,
+        "median": 191.0,
+        "p95_nearest_rank": 910,
+        "recorded_cases": 500,
+        "sum": 146665
+      },
+      "prompt_tokens": {
+        "complete_case_coverage": true,
+        "mean": 26344.974,
+        "median": 13980.5,
+        "p95_nearest_rank": 102079,
+        "recorded_cases": 500,
+        "sum": 13172487
+      }
+    }
+  },
+  "overall": {
+    "correct": 362,
+    "count": 500,
+    "empty_answers": 0,
+    "qa_accuracy": 0.724,
+    "wilson_95_interval": [
+      0.6832224284166226,
+      0.761361867056602
+    ]
+  },
+  "paired_comparison": {
+    "both_correct": 319,
+    "both_incorrect": 121,
+    "count": 500,
+    "exact_mcnemar_two_sided_p": 0.0010657657791434353,
+    "graph_seed_comparison": {
+      "all_seed_sets_compared_cases": 500,
+      "cases_with_different_seed_id_sets": 62,
+      "cases_with_graph_marked_seeds": 6,
+      "cases_with_graph_marked_seeds_absent_from_off_seed": 3,
+      "compared_cases": 500,
+      "graph_marked_seed_cases_both_correct": 4,
+      "graph_marked_seed_cases_both_incorrect": 2,
+      "graph_marked_seed_cases_with_verdict_change": 0,
+      "graph_marked_seed_occurrences": 39,
+      "graph_marked_seed_occurrences_absent_from_off_seed": 4,
+      "graph_marked_seed_occurrences_also_in_off_seed": 35,
+      "interpretation": "Per-case ON graph-marked IDs minus corresponding OFF seed IDs, plus full seed-set comparison ignoring order. This is observed seed-set novelty, not causal attribution or proof that stock retrieval could never find the same memory. A frozen database does not establish identical rendered seed prompts or identify why seed sets differ.",
+      "unavailable_cases": 0
+    },
+    "interpretation": "paired descriptive evidence; no repeated-run variance or causal guarantee",
+    "left_only_correct": 43,
+    "provenance_validation": {
+      "fixture_snapshot_verified": true,
+      "limitation": "Missing snapshot evidence is not equivalence; graph attribution still requires a frozen prepared-fixture audit.",
+      "matched_provenance_fields": [
+        "weights_sha",
+        "prompt_sha",
+        "judge_model",
+        "lme_manifest_sha256",
+        "lme_cases_sha256",
+        "lme_prepared_snapshot_sha256",
+        "lme_refinement_receipts_sha256"
+      ],
+      "unavailable_provenance_fields": [
+        "lme_dataset_sha256"
+      ]
+    },
+    "right_condition": {
+      "answer_model": "openai/gpt-5.6-luna",
+      "answer_provider": "OpenAI",
+      "graph_retrieval": false,
+      "judge_model": "google/gemini-3.1-flash-lite",
+      "label": "paired-opposite-graph-retrieval",
+      "prompt_clock": "question-date",
+      "reasoning_effort": "medium",
+      "require_graph": true
+    },
+    "right_evidence_sha256": "5d91be369a14a40c4a4fc6bde7cbc139d874695c7cec9772bb804651a0cc26c1",
+    "right_minus_left_accuracy": -0.052,
+    "right_only_correct": 17,
+    "right_operational_diagnostics": {
+      "graph_utilization": {
+        "cases_with_graph_seed_ids": 0,
+        "cases_with_neighbor_tool_traces": 0,
+        "discovered_candidate_occurrences_not_unique": null,
+        "discovery_calls": null,
+        "discovery_counters_available": false,
+        "discovery_failure_fallback_rate": null,
+        "discovery_failures": null,
+        "discovery_total_ms": null,
+        "graph_seed_id_occurrences": 0,
+        "graph_seed_recorded_cases": 500,
+        "neighbor_tool_trace_calls": 0,
+        "neighbor_tool_traces_with_truncated_text": 0,
+        "scope": "Discovery counters cover this invocation only, including seed-context preparation; not necessarily all resumed reader attempts. Candidate counts are occurrences, not globally unique IDs. Explicit neighbor-tool traces are separate and are not included in discovery counters. Graph seed IDs may also be found by stock retrieval, not graph-only additions. Enabled does not mean effective graph coverage.",
+        "tool_trace_recorded_cases": 500
+      },
+      "metric_scope": "Recomputed from all recorded selected per-case observations, never resumed Standard/Speed aggregates. QueryCase latency starts after seed-context preparation, so it excludes serial graph seed discovery. Also excludes failed attempts, separate judge/preparation calls and seed-context re-preparation; sums are not campaign wall time or monetary spend. Compare whole invocation intervals separately.",
+      "successful_per_case_metrics": {
+        "latency_ms": {
+          "complete_case_coverage": true,
+          "mean": 11015.972,
+          "median": 4661.0,
+          "p95_nearest_rank": 24231,
+          "recorded_cases": 500,
+          "sum": 5507986
+        },
+        "output_tokens": {
+          "complete_case_coverage": true,
+          "mean": 802.414,
+          "median": 179.0,
+          "p95_nearest_rank": 883,
+          "recorded_cases": 500,
+          "sum": 401207
+        },
+        "prompt_tokens": {
+          "complete_case_coverage": true,
+          "mean": 25655.066,
+          "median": 13639.0,
+          "p95_nearest_rank": 89152,
+          "recorded_cases": 500,
+          "sum": 12827533
+        }
+      }
+    }
+  },
+  "refinement_completion": {
+    "accepted_refinement_receipts": 0,
+    "evidence_boundary": "Backend matches native-save receipts to current scoped semantic content; offline counts do not independently query the database.",
+    "raw_pending_refinement": 0,
+    "receipt_version": "native-semantic-save-v1",
+    "receipts_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "remaining_pending_refinement": 0
+  },
+  "status": "complete_audited",
+  "tool_call_counts": {
+    "aggregate_memories": 21,
+    "fetch_memories": 208,
+    "search_memories": 591,
+    "search_memories_in_subjects": 101,
+    "search_subjects": 41,
+    "search_web": 8
+  },
+  "unique_answer_provider_response_ids": 1312
+}
