@@ -7,7 +7,9 @@ alter emissions, or change a production setting.
 
 ## Immutable boundary
 
-V14 changes only the declarative memory over-call rule and benchmark identity.
+V14 changes the declarative memory over-call rule, folds the typographic
+hyphens U+2010/U+2011 in graded reply text to ASCII (#2734), and changes
+benchmark identity.
 V13 keeps its whole-case exclusion. V2–v12 keep their existing rules. Lifecycle
 write cases remain excluded at every version. V14 counts each observed
 declarative-ack case and permits save/update/delete memory actions on that case;
@@ -23,7 +25,7 @@ unrelated actions count once even when mixed with permitted writes.
 These are over-call factors. Other existing composite gates still apply.
 The v14 full/public vector at seed 123456789 is
 `8a08dfe713fd6df2d67ece92148118a3fbd64b5d0f6a90f78dccb9853e329d50`,
-with epoch `2027-06-01T00:00:00Z`. The surface, grader, v13 gate postures,
+with epoch `2027-06-01T00:00:00Z`. The surface, grader (apart from the hyphen fold), v13 gate postures,
 LongMem instrument and public harness wire (9) carry forward. There is no private
 surface expansion or screening policy v14 activation in this change.
 

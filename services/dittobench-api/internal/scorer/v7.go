@@ -33,6 +33,7 @@ package scorer
 
 import (
 	"github.com/ditto-assistant/dittobench-datagen/gen"
+	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -387,8 +388,9 @@ func ScoreToolCaseObservedForVersion(c protocol.ToolCase, resp protocol.RunRespo
 	if benchVersion >= protocol.BenchVersionV13 {
 		// v13: claim-aware arguments, alternative outcomes, effect-graded memory
 		// reads, text-graded restraint, forbidden tools (v13.go). The v7..v12
-		// path below is unchanged.
-		return scoreToolCaseV13(c, resp, ok, observed)
+		// path below is unchanged. From v14 the reply's typographic hyphens are
+		// folded under the memory grader's rule (#2734).
+		return scoreToolCaseV13(c, grade.FoldReplyHyphens(benchVersion, resp), ok, observed)
 	}
 	strict := benchVersion >= protocol.BenchVersionV7
 	if !strict {
