@@ -18,6 +18,7 @@
           - "'..' not in coding_hosted_worker_python.split('/')"
           - "'..' not in coding_hosted_worker_config.split('/')"
           - coding_hosted_worker_mode in ['single', 'rollout']
+          - coding_hosted_router_namespace in ['host', 'rootless-netns']
           - coding_hosted_worker_mode != 'rollout' or coding_hosted_rollout_approval_sha256 is match('^[0-9a-f]{64}$')
           - coding_hosted_worker_mode != 'rollout' or coding_hosted_rollout_connectivity_sha256 is match('^[0-9a-f]{64}$')
           - coding_hosted_worker_mode != 'rollout' or coding_hosted_connectivity_profile.get('schema') == 'dittobench-coding-hosted-connectivity-v3'
@@ -76,6 +77,48 @@
           - coding_hosted_config_stat.stat.uid == coding_hosted_uid | int
           - coding_hosted_config_stat.stat.mode == '0600'
           - coding_hosted_config_stat.stat.nlink == 1
+
+    - name: Read the private rollout approval's attempt list without logging it
+      ansible.builtin.slurp:
+        path: "{{ coding_hosted_worker_config }}"
+      register: coding_hosted_approval_body
+      no_log: true
+      when: coding_hosted_worker_mode == 'rollout'
+
+    - name: Bind the attempt configurations this unit will run
+      ansible.builtin.set_fact:
+        coding_hosted_attempt_configs: >-
+          {{ [coding_hosted_worker_config] if coding_hosted_worker_mode == 'single'
+          else (coding_hosted_approval_body.content | b64decode | from_json).attempts | map(attribute='config_file') | list }}
+
+    - name: Require protected attempt configuration paths
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_attempt_configs | length >= 1
+          - item is match('^/var/lib/ditto-coding-hosted/[A-Za-z0-9_./-]+[.]json$')
+          - "'..' not in item.split('/')"
+      loop: "{{ coding_hosted_attempt_configs }}"
+
+    - name: Inspect each attempt configuration without following links
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop: "{{ coding_hosted_attempt_configs }}"
+      register: coding_hosted_attempt_stats
+
+    - name: Require worker-owned private attempt configurations
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg | default(false)
+          - item.stat.uid == coding_hosted_uid | int
+          - item.stat.mode == '0600'
+          - item.stat.nlink == 1
+      loop: "{{ coding_hosted_attempt_stats.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Refuse a router namespace, expiry or grant that differs from the attempts
+      ansible.builtin.include_tasks: router-namespace.yml
 
     - name: Create the root-only public network-policy directory
       ansible.builtin.file:
