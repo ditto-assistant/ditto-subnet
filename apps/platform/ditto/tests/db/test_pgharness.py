@@ -11,10 +11,20 @@ import asyncio
 
 import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ditto.db.models import Base
+from ditto.tests.pgharness import truncate_test_tables
+
+
+async def test_legacy_truncate_restores_append_only_guard(session_maker) -> None:
+    async with session_maker() as session, session.begin():
+        await truncate_test_tables(session, "agents")
+    async with session_maker() as session:
+        with pytest.raises(DBAPIError, match="append-only"):
+            await session.execute(text("TRUNCATE agent_cla_bindings"))
+        await session.rollback()
 
 
 async def test_tests_run_on_postgres_not_sqlite(session: AsyncSession) -> None:

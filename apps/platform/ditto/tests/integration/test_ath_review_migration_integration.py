@@ -17,6 +17,7 @@ from ditto.api_models.admin_copy_review import AdminCopyReviewResolveRequest
 from ditto.api_server.endpoints.admin_copy_review import resolve_copy_review
 from ditto.db import create_db_engine
 from ditto.db.models import Agent, AgentStatus, AthReview
+from ditto.tests.pgharness import truncate_test_tables
 
 pytestmark = pytest.mark.integration
 
@@ -41,7 +42,7 @@ async def test_upgrade_backfills_timestamp_provenance_and_is_idempotent() -> Non
     _alembic("upgrade", "c53fa6d2b194")
     engine = create_db_engine()
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE TABLE agents CASCADE"))
+        await truncate_test_tables(conn, "agents")
         for agent_id, created in (
             (_AUDIT, datetime(2026, 7, 16, 10, tzinfo=UTC)),
             (_SCORE, datetime(2026, 7, 16, 10, 10, tzinfo=UTC)),
@@ -141,7 +142,7 @@ async def test_conflicting_concurrent_resolution_has_one_winner() -> None:
     original_id = UUID("00000000-0000-0000-0000-000000000201")
     held_id = UUID("00000000-0000-0000-0000-000000000202")
     async with maker() as session, session.begin():
-        await session.execute(text("TRUNCATE TABLE agents CASCADE"))
+        await truncate_test_tables(session, "agents")
         session.add_all(
             [
                 Agent(

@@ -45,15 +45,24 @@ async def evaluate_cla_gate(
     )
     if settings.mode not in ("off", "shadow", "enforce"):
         raise RuntimeError("invalid CLA mode")
-    message = (
-        f"Contributor agreement v{version.version} is required; run `ditto cla "
-        f"sign` before submitting."
-        if version
-        else (
+    if settings.mode != "enforce":
+        message = (
+            f"Contributor agreement v{version.version} is published. "
+            if version
+            else "No effective contributor agreement is published. "
+        ) + f"Uploads are accepted while the CLA gate is {settings.mode}."
+    elif signature is not None:
+        message = "The current contributor agreement is signed."
+    elif version is not None:
+        message = (
+            f"Contributor agreement v{version.version} is required; run `ditto cla "
+            f"sign` before submitting."
+        )
+    else:
+        message = (
             "No effective contributor agreement is published; contact the "
             "operator before submitting."
         )
-    )
     return ClaGateDecision(
         mode=settings.mode,
         allowed=settings.mode != "enforce" or signature is not None,

@@ -47348,7 +47348,9 @@ export interface operations {
     my_link_api_v1_me_github_link_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -47363,12 +47365,23 @@ export interface operations {
                     "application/json": components["schemas"]["GithubLinkStatus"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     attempt_status_api_v1_me_github_link_attempts__attempt_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 attempt_id: string;
             };
@@ -47399,7 +47412,9 @@ export interface operations {
     confirm_api_v1_me_github_link_confirm_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -47432,7 +47447,9 @@ export interface operations {
     start_link_api_v1_me_github_link_start_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -47447,12 +47464,23 @@ export interface operations {
                     "application/json": components["schemas"]["GithubLinkStart"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     unlink_api_v1_me_github_link_unlink_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

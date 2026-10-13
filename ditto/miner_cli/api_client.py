@@ -165,7 +165,14 @@ class ApiClient:
 
     # ---- transport-level wrapper ----------------------------------------
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        max_body_bytes: int | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
         """Issue an HTTP request, translating transport faults to typed errors.
 
         ``httpx.ConnectError``, ``httpx.TimeoutException``, and any other
@@ -176,6 +183,30 @@ class ApiClient:
         mapped here; each caller maps them based on endpoint semantics.
         """
         try:
+            if max_body_bytes is not None:
+                request = self._client.build_request(method, path, **kwargs)
+                response = self._client.send(request, stream=True)
+                try:
+                    content = bytearray()
+                    for chunk in response.iter_bytes(chunk_size=8192):
+                        if len(content) + len(chunk) > max_body_bytes:
+                            raise ApiResponseError(
+                                "API response exceeds the size limit"
+                            )
+                        content.extend(chunk)
+                    headers = httpx.Headers(response.headers)
+                    # iter_bytes yields decoded content; do not decode it twice.
+                    for header in ("content-encoding", "content-length"):
+                        headers.pop(header, None)
+                    return httpx.Response(
+                        response.status_code,
+                        headers=headers,
+                        content=bytes(content),
+                        request=response.request,
+                        extensions=response.extensions,
+                    )
+                finally:
+                    response.close()
             return self._client.request(method, path, **kwargs)
         except httpx.ConnectError as e:
             raise TransientApiError(
@@ -521,14 +552,20 @@ class ApiClient:
             raise self._ditto_link_error(response)
 
     def _contributor_response(
-        self, method: str, path: str, *, token: str | None = None, body: Any = None
+        self,
+        method: str,
+        path: str,
+        *,
+        token: str | None = None,
+        body: Any = None,
+        max_body_bytes: int | None = None,
     ) -> httpx.Response:
         kwargs: dict[str, Any] = {}
         if token is not None:
             kwargs["headers"] = {"authorization": f"Bearer {token}"}
         if body is not None:
             kwargs["json"] = body.model_dump(mode="json")
-        response = self._request(method, path, **kwargs)
+        response = self._request(method, path, max_body_bytes=max_body_bytes, **kwargs)
         if not response.is_success:
             if response.status_code == 401 and token is not None:
                 raise LoginRequiredError(
@@ -593,10 +630,10 @@ class ApiClient:
 
     def get_cla_text(self, *, version: int) -> bytes:
         response = self._contributor_response(
-            "GET", f"/api/v1/public/cla/versions/{version}/text"
+            "GET",
+            f"/api/v1/public/cla/versions/{version}/text",
+            max_body_bytes=262144,
         )
-        if len(response.content) > 262144:
-            raise ApiResponseError("CLA document exceeds the size limit")
         return response.content
 
     def sign_cla(self, body: ClaSignRequest) -> ClaSignatureView:

@@ -34,7 +34,9 @@ signs. Only then is the link recorded. Cancelling either side records no link.
 An SN118 UID is not required. `Owner(hotkey)` must resolve to a nonzero coldkey
 at a finalized block. Coldkey proofs must use that owner, not a payment record
 or a client-supplied coldkey. Each hotkey and each GitHub id has at most one
-active link, enforced by partial unique database indexes. Re-linking appends a
+active link globally, including across netuids, enforced by partial unique
+database indexes. A netuid binds the signed proof; it does not permit another
+active identity mapping. Re-linking appends a
 new proof and revokes the previous link. Signed unlinking names the exact active
 link; it preserves all proof/history rows. Proof fields cannot be edited, and
 revocation cannot be undone.

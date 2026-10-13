@@ -8,7 +8,16 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -49,6 +58,9 @@ from ditto.db.queries.contributor_identity import (
 )
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
+# Private handlers declare Authorization for OpenAPI; resolve_miner_session
+# validates that same Request header inside their transaction.
 
 
 def no_store(response: Response) -> None:
@@ -118,7 +130,11 @@ def _has_binding(request: Request, attempt: MinerGithubLinkAttempt) -> bool:
 
 
 @router.get("/me/github-link", response_model=GithubLinkStatus)
-async def my_link(request: Request, session: SessionDep) -> GithubLinkStatus:
+async def my_link(
+    request: Request,
+    session: SessionDep,
+    _authorization: Annotated[str | None, Header(alias="authorization")] = None,
+) -> GithubLinkStatus:
     async with session.begin():
         miner, _ = await resolve_miner_session(request, session)
         require_scope(miner, "read")
@@ -165,7 +181,11 @@ async def account_link(
 
 
 @router.post("/me/github-link/start", response_model=GithubLinkStart)
-async def start_link(request: Request, session: SessionDep) -> GithubLinkStart:
+async def start_link(
+    request: Request,
+    session: SessionDep,
+    _authorization: Annotated[str | None, Header(alias="authorization")] = None,
+) -> GithubLinkStart:
     client = _client(request)
     launch = secrets.token_urlsafe(32)
     now = datetime.now(UTC)
@@ -436,7 +456,10 @@ async def accept(
     "/me/github-link/attempts/{attempt_id}", response_model=GithubLinkAttemptStatus
 )
 async def attempt_status(
-    attempt_id: UUID, request: Request, session: SessionDep
+    attempt_id: UUID,
+    request: Request,
+    session: SessionDep,
+    _authorization: Annotated[str | None, Header(alias="authorization")] = None,
 ) -> GithubLinkAttemptStatus:
     async with session.begin():
         miner, _ = await resolve_miner_session(request, session)
@@ -459,7 +482,10 @@ async def attempt_status(
 
 @router.post("/me/github-link/confirm", response_model=GithubLinkView)
 async def confirm(
-    body: GithubLinkRequest, request: Request, session: SessionDep
+    body: GithubLinkRequest,
+    request: Request,
+    session: SessionDep,
+    _authorization: Annotated[str | None, Header(alias="authorization")] = None,
 ) -> GithubLinkView:
     now = datetime.now(UTC)
     try:
@@ -574,7 +600,10 @@ async def confirm(
 
 @router.post("/me/github-link/unlink", status_code=204)
 async def unlink(
-    body: GithubUnlinkRequest, request: Request, session: SessionDep
+    body: GithubUnlinkRequest,
+    request: Request,
+    session: SessionDep,
+    _authorization: Annotated[str | None, Header(alias="authorization")] = None,
 ) -> None:
     now = datetime.now(UTC)
     try:

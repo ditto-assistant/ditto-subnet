@@ -20,7 +20,7 @@ from ditto.api_models.contributor_identity import (
     GithubLinkStart,
     cla_message,
 )
-from ditto.miner_cli.__main__ import _build_parser
+from ditto.miner_cli.__main__ import _build_parser, main
 from ditto.miner_cli.commands import cla, link_github
 
 TEXT = b"TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.\n"
@@ -244,6 +244,34 @@ def test_malformed_successful_cla_responses_fail_cleanly(tmp_path, capsys, stage
             == 1
         )
     assert "malformed fixture response" in capsys.readouterr().err
+
+
+def test_cla_confirmation_interrupt_exits_130_without_signing(tmp_path, capsys):
+    api = client()
+    handle, live = wallet()
+    with (
+        patch.object(cla, "ApiClient", return_value=api),
+        patch.object(cla, "load_wallet", return_value=(handle, live)),
+        patch("builtins.input", side_effect=KeyboardInterrupt),
+    ):
+        assert (
+            main(
+                [
+                    "cla",
+                    "sign",
+                    "--coldkey",
+                    "fixture",
+                    "--hotkey",
+                    "fixture",
+                    "--output",
+                    str(tmp_path / "CLA.md"),
+                ]
+            )
+            == 130
+        )
+    api.sign_cla.assert_not_called()
+    live.hotkey.sign.assert_not_called()
+    assert "interrupted" in capsys.readouterr().err
 
 
 def test_github_link_completed_by_another_client_returns_without_signing():

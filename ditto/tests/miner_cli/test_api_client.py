@@ -16,6 +16,7 @@ Invariants pinned:
 
 from __future__ import annotations
 
+import gzip
 import io
 import json
 from datetime import UTC, datetime
@@ -102,6 +103,63 @@ class TestContributorAuthenticationErrors:
             pytest.raises(LoginRequiredError, match="ditto login"),
         ):
             client.get_github_link(token="fixture-token")
+
+
+class TestClaTextStreaming:
+    @pytest.mark.parametrize("status", [200, 503])
+    def test_oversized_response_stops_transfer_and_closes(self, status):
+        class Chunks(httpx.SyncByteStream):
+            consumed = 0
+            closed = False
+
+            def __iter__(self):
+                for _ in range(1000):
+                    self.consumed += 1
+                    yield b"x" * 8192
+
+            def close(self):
+                self.closed = True
+
+        stream = Chunks()
+        with (
+            make_client(lambda _: httpx.Response(status, stream=stream)) as client,
+            pytest.raises(ApiResponseError, match="size limit"),
+        ):
+            client.get_cla_text(version=1)
+        assert stream.consumed == 33
+        assert stream.closed
+
+    def test_gzip_text_is_decoded_once(self):
+        document = "TEST FIXTURE ONLY. No legal terms. é\n".encode()
+        with make_client(
+            lambda _: httpx.Response(
+                200,
+                headers={"content-encoding": "gzip"},
+                stream=httpx.ByteStream(gzip.compress(document)),
+            )
+        ) as client:
+            assert client.get_cla_text(version=1) == document
+
+    def test_small_error_response_keeps_endpoint_message(self):
+        with (
+            make_client(
+                lambda _: httpx.Response(403, json={"detail": "fixture refusal"})
+            ) as client,
+            pytest.raises(ApiResponseError, match="fixture refusal"),
+        ):
+            client.get_cla_text(version=1)
+
+    def test_stream_timeout_keeps_transport_error(self):
+        class Timeout(httpx.SyncByteStream):
+            def __iter__(self):
+                yield b"fixture"
+                raise httpx.ReadTimeout("fixture timeout")
+
+        with (
+            make_client(lambda _: httpx.Response(200, stream=Timeout())) as client,
+            pytest.raises(TransientApiError, match="timed out"),
+        ):
+            client.get_cla_text(version=1)
 
 
 class TestEvalPricing:

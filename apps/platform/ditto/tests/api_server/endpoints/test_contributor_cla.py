@@ -282,6 +282,13 @@ async def test_upload_check_modes_require_current_consent_before_payment(
     assert response.status_code == 200, response.text
     assert response.json()["ok"] is allowed
     assert (1106 in response.json()["error_codes"]) is (not allowed)
+    async with session_maker() as session:
+        decision = await evaluate_cla_gate(
+            session, netuid=118, hotkey=alice.ss58_address
+        )
+        assert ("is required" in decision.message) is (not allowed)
+        if allowed:
+            assert "Uploads are accepted" in decision.message
     if not allowed:
         assert response.json()["payment_required"] is False
     assert (

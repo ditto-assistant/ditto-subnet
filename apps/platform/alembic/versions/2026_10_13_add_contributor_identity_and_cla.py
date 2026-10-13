@@ -86,6 +86,8 @@ def upgrade() -> None:
         sa.CheckConstraint("github_user_id > 0", name="github_id"),
         sa.CheckConstraint("key_kind IN ('hotkey','coldkey')", name="key_kind"),
     )
+    # Identity is globally one-to-one. A netuid binds the proof, not a second
+    # active identity mapping for the same hotkey or GitHub account.
     for field in ("hotkey", "github_user_id"):
         name = "hotkey" if field == "hotkey" else "github"
         op.create_index(

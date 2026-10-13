@@ -342,6 +342,47 @@ async def test_browser_binding_consent_and_session_binding_are_required(
     ).status_code == 400
 
 
+@pytest.mark.parametrize("same_hotkey", [True, False])
+async def test_active_identity_is_globally_one_to_one_across_netuids(
+    app, client, session_maker, same_hotkey
+):
+    provider = setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    bob = bittensor.Keypair.create_from_uri("//Bob")
+    alice_token = await _sign_in(client, alice)
+    bob_token = await _sign_in(client, bob)
+    first, _, _ = await browser_flow(client, alice_token)
+    response = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers={"authorization": f"Bearer {alice_token}"},
+        json=signed_link(alice, first["attempt_id"]),
+    )
+    assert response.status_code == 200, response.text
+    app.state.config = replace(
+        app.state.config, chain=replace(app.state.config.chain, netuid=119)
+    )
+    key, token = (alice, alice_token) if same_hotkey else (bob, bob_token)
+    if same_hotkey:
+        provider.user_id, provider.login = 101, "second-fixture"
+    other, _, _ = await browser_flow(client, token)
+    refused = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers={"authorization": f"Bearer {token}"},
+        json=signed_link(
+            key,
+            other["attempt_id"],
+            netuid=119,
+            user_id=provider.user_id,
+            login=provider.login,
+        ),
+    )
+    assert refused.status_code == 409, refused.text
+    async with session_maker() as session:
+        assert (
+            await session.scalar(select(func.count()).select_from(MinerGithubLink)) == 1
+        )
+
+
 async def test_unique_account_relink_rename_nonce_replay_and_signed_unlink(
     app, client, session_maker
 ):

@@ -182,6 +182,6 @@ def run(args: argparse.Namespace) -> int:
                     f"{result.signed_at.isoformat()}"
                 )
             return 0
-    except (MinerCliError, ValueError, EOFError, KeyboardInterrupt, OSError) as exc:
+    except (MinerCliError, ValueError, EOFError, OSError) as exc:
         print(str(exc) or "CLA signing cancelled", file=sys.stderr)
         return 1

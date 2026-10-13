@@ -51,16 +51,18 @@ import os
 import subprocess
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import asyncpg
+from sqlalchemy import text
 
 if TYPE_CHECKING:
     from alembic.config import Config
+    from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 # ─── Ambient container ───────────────────────────────────────────────────────
 
@@ -539,6 +541,71 @@ SCHEMA_TABLE = "alembic_version"
 """Never truncated: it records which schema the database is on."""
 
 
+_TRUNCATE_GUARDS_SQL = (
+    "SELECT c.relname AS table_name, t.tgname AS trigger_name "
+    "FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = 'public' AND NOT t.tgisinternal "
+    "AND t.tgenabled = 'O' AND (t.tgtype & 32) != 0 "
+    "ORDER BY c.relname, t.tgname"
+)
+
+
+def _truncate_fixture_body(
+    tables: Sequence[str],
+    guards: Sequence[tuple[str, str]],
+    *,
+    restart_identity: bool = False,
+) -> list[str]:
+    def quoted(value: str) -> str:
+        return '"' + value.replace('"', '""') + '"'
+
+    body = [
+        f"  ALTER TABLE public.{quoted(table)} DISABLE TRIGGER {quoted(trigger)};"
+        for table, trigger in guards
+    ]
+    restart = " RESTART IDENTITY" if restart_identity else ""
+    body.append(
+        "  TRUNCATE "
+        + ", ".join(f"public.{quoted(name)}" for name in tables)
+        + restart
+        + " CASCADE;"
+    )
+    body += [
+        f"  ALTER TABLE public.{quoted(table)} ENABLE TRIGGER {quoted(trigger)};"
+        for table, trigger in guards
+    ]
+    return body
+
+
+async def truncate_test_tables(
+    conn: AsyncConnection | AsyncSession, *tables: str
+) -> None:
+    """Reset legacy integration fixtures without weakening runtime guards.
+
+    CASCADE can reach append-only artifact history. Bypass only enabled
+    statement guards, restoring them atomically, on a private worker clone.
+    """
+    database = await conn.scalar(text("SELECT current_database()"))
+    if (
+        not isinstance(database, str)
+        or not database.startswith(DB_PREFIX)
+        or database == TEMPLATE_DB
+    ):
+        raise PostgresUnavailable("fixture truncate requires a private test database")
+    if not tables or any(
+        not table.isascii() or not table.isidentifier() or table == SCHEMA_TABLE
+        for table in tables
+    ):
+        raise ValueError("invalid fixture table names")
+    rows = (await conn.execute(text(_TRUNCATE_GUARDS_SQL))).all()
+    guards = [(row[0], row[1]) for row in rows]
+    body = _truncate_fixture_body(tables, guards)
+    await conn.execute(
+        text("DO $ditto_reset$\nBEGIN\n" + "\n".join(body) + "\nEND\n$ditto_reset$")
+    )
+
+
 async def _build_reset_sql(conn: asyncpg.Connection) -> str:
     """Compose the one statement that restores a pristine, post-migration DB.
 
@@ -577,29 +644,12 @@ async def _build_reset_sql(conn: asyncpg.Connection) -> str:
     # Owner-only fixture resets bypass enabled statement TRUNCATE guards on
     # this isolated clone, then restore them in the same atomic DO block.
     # Normal tests retain every production history guard.
-    guards = await conn.fetch(
-        "SELECT c.relname AS table_name, t.tgname AS trigger_name "
-        "FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
-        "JOIN pg_namespace n ON n.oid = c.relnamespace "
-        "WHERE n.nspname = 'public' AND NOT t.tgisinternal "
-        "AND t.tgenabled = 'O' AND (t.tgtype & 32) != 0 "
-        "ORDER BY c.relname, t.tgname"
+    guards = await conn.fetch(_TRUNCATE_GUARDS_SQL)
+    body = _truncate_fixture_body(
+        tables,
+        [(g["table_name"], g["trigger_name"]) for g in guards],
+        restart_identity=True,
     )
-    body = [
-        f'  ALTER TABLE public."{g["table_name"]}" '
-        f'DISABLE TRIGGER "{g["trigger_name"]}";'
-        for g in guards
-    ]
-    body += [
-        "  TRUNCATE "
-        + ", ".join(f'public."{name}"' for name in tables)
-        + " RESTART IDENTITY CASCADE;"
-    ]
-    body += [
-        f'  ALTER TABLE public."{g["table_name"]}" '
-        f'ENABLE TRIGGER "{g["trigger_name"]}";'
-        for g in guards
-    ]
     for name in tables:
         seed = await conn.fetchval(
             f'SELECT json_agg(t)::text FROM public."{name}" t'  # noqa: S608
