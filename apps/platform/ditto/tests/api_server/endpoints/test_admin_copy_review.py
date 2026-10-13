@@ -1747,6 +1747,291 @@ async def test_source_diff_digest_mismatch_is_502(
     assert response.status_code == 502
 
 
+async def _seed_lineage_pair(
+    maker: async_sessionmaker[AsyncSession],
+    candidate_files: dict[str, str],
+    ancestor_files: dict[str, str],
+) -> tuple[UUID, UUID, dict[str, bytes]]:
+    """Seed a resubmission and its rejected ancestor with NO copy review.
+
+    The lineage diff is artifact-scoped: neither agent needs an ``AthReview``
+    row or a ``duplicate_of`` link for the pair to be diffable.
+    """
+    candidate_tar = _tarball(candidate_files)
+    ancestor_tar = _tarball(ancestor_files)
+    ancestor_id, candidate_id = uuid4(), uuid4()
+    objects = {
+        f"{candidate_id}/agent.tar.gz": candidate_tar,
+        f"{ancestor_id}/agent.tar.gz": ancestor_tar,
+    }
+    async with maker() as session, session.begin():
+        session.add_all(
+            [
+                Agent(
+                    agent_id=ancestor_id,
+                    miner_hotkey="5Lineage",
+                    name="lineage-v6",
+                    sha256=hashlib.sha256(ancestor_tar).hexdigest(),
+                    status=AgentStatus.REJECTED,
+                    created_at=_T0 - timedelta(days=2),
+                ),
+                Agent(
+                    agent_id=candidate_id,
+                    miner_hotkey="5Lineage",
+                    name="lineage-v8",
+                    sha256=hashlib.sha256(candidate_tar).hexdigest(),
+                    status=AgentStatus.SCORED,
+                    created_at=_T0,
+                ),
+            ]
+        )
+    return candidate_id, ancestor_id, objects
+
+
+def _lineage_url(agent_id: UUID, *, file: bool = False) -> str:
+    suffix = "/file" if file else ""
+    return f"/api/v1/admin/agents/{agent_id}/lineage-source-diff{suffix}"
+
+
+async def test_lineage_diff_manifest_pairs_any_two_agents_without_a_review(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    candidate_id, ancestor_id, objects = await _seed_lineage_pair(
+        maker,
+        candidate_files={
+            "src/main.rs": "fn main() {}\n",
+            "src/util.rs": "fn util() -> i32 { 1 }\n",
+            "src/renamed.rs": "fn kept() -> i32 {\n    41 + 1\n}\n",
+        },
+        ancestor_files={
+            "src/main.rs": "fn main() {}\n",
+            "src/util.rs": "fn util() -> i32 { 2 }\n",
+            "src/original.rs": "fn kept() -> i32 {\n    41 + 1\n}\n",
+            "src/mechanism.rs": "fn rejected_mechanism() {}\n",
+        },
+    )
+    _install(app, maker)
+    _install_storage(app, objects)
+
+    response = await client.get(
+        _lineage_url(candidate_id),
+        params={"reference_agent_id": str(ancestor_id)},
+        headers=_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_id"] == str(candidate_id)
+    assert body["reference_agent_id"] == str(ancestor_id)
+    by_path = {entry["path"]: entry for entry in body["files"]}
+    assert by_path["src/main.rs"]["status"] == "identical"
+    assert by_path["src/util.rs"]["status"] == "modified"
+    assert by_path["src/mechanism.rs"]["status"] == "removed"
+    renamed = by_path["src/renamed.rs"]
+    assert renamed["status"] == "renamed"
+    assert renamed["from_path"] == "src/original.rs"
+    assert (body["removed_count"], body["renamed_count"]) == (1, 1)
+
+
+async def test_lineage_diff_matches_copy_review_manifest_for_the_same_pair(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Same pair, same manifest: the lineage route is the generalised diff."""
+    candidate_id, reference_id, objects = await _seed_diff_pair(
+        maker,
+        candidate_files={"a.rs": "x\n", "b.rs": "new\n"},
+        reference_files={"a.rs": "y\n", "c.rs": "gone\n"},
+    )
+    _install(app, maker)
+    _install_storage(app, objects)
+
+    copy_review = await client.get(
+        f"/api/v1/admin/copy-reviews/{candidate_id}/source-diff", headers=_HEADERS
+    )
+    lineage = await client.get(
+        _lineage_url(candidate_id),
+        params={"reference_agent_id": str(reference_id)},
+        headers=_HEADERS,
+    )
+
+    assert copy_review.status_code == lineage.status_code == 200
+    assert lineage.json() == copy_review.json()
+
+
+async def test_lineage_diff_audits_both_agents_under_its_own_endpoint(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    candidate_id, ancestor_id, objects = await _seed_lineage_pair(
+        maker, {"src/main.rs": "fn main() {}\n"}, {"src/main.rs": "fn main() {}\n"}
+    )
+    _install(app, maker)
+    _install_storage(app, objects)
+
+    response = await client.get(
+        _lineage_url(candidate_id),
+        params={"reference_agent_id": str(ancestor_id)},
+        headers=_HEADERS,
+    )
+
+    assert response.status_code == 200
+    async with maker() as s:
+        rows = (await s.scalars(select(ArtifactFetchAudit))).all()
+    assert {row.agent_id for row in rows} == {candidate_id, ancestor_id}
+    assert all(row.endpoint == "admin.get_lineage_source_diff" for row in rows)
+    assert all(row.requester_kind == "admin" for row in rows)
+    assert all(row.requester_id == "operator" for row in rows)
+    by_agent = {row.agent_id: row for row in rows}
+    assert (by_agent[candidate_id].detail or {}).get("role") == "candidate"
+    assert (by_agent[ancestor_id].detail or {}).get("role") == "reference"
+    assert (by_agent[ancestor_id].detail or {}).get("counterpart_agent_id") == str(
+        candidate_id
+    )
+
+
+async def test_lineage_diff_file_returns_unified_body_and_audits_the_path(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    candidate_id, ancestor_id, objects = await _seed_lineage_pair(
+        maker,
+        {"src/util.rs": "fn util() -> i32 { 1 }\n"},
+        {"src/util.rs": "fn util() -> i32 { 2 }\n"},
+    )
+    _install(app, maker)
+    _install_storage(app, objects)
+
+    response = await client.get(
+        _lineage_url(candidate_id, file=True),
+        params={"reference_agent_id": str(ancestor_id), "path": "./src/util.rs"},
+        headers=_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["path"] == "src/util.rs"
+    assert body["candidate_present"] and body["reference_present"]
+    joined = "\n".join(body["diff_lines"])
+    assert "{ 2 }" in joined and "{ 1 }" in joined
+    async with maker() as s:
+        rows = (await s.scalars(select(ArtifactFetchAudit))).all()
+    assert len(rows) == 2
+    assert all(row.endpoint == "admin.get_lineage_source_diff_file" for row in rows)
+    assert all((row.detail or {}).get("path") == "src/util.rs" for row in rows)
+
+
+async def test_lineage_diff_rejects_a_pair_of_one_agent(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    candidate_id, _ancestor_id, objects = await _seed_lineage_pair(
+        maker, {"a.rs": "x\n"}, {"a.rs": "y\n"}
+    )
+    _install(app, maker)
+    _install_storage(app, objects)
+
+    for url, params in (
+        (_lineage_url(candidate_id), {}),
+        (_lineage_url(candidate_id, file=True), {"path": "a.rs"}),
+    ):
+        response = await client.get(
+            url,
+            params={"reference_agent_id": str(candidate_id), **params},
+            headers=_HEADERS,
+        )
+        assert response.status_code == 400
+    async with maker() as s:
+        assert (await s.scalars(select(ArtifactFetchAudit))).all() == []
+
+
+async def test_lineage_diff_missing_agent_or_reference_is_404(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    candidate_id, ancestor_id, objects = await _seed_lineage_pair(
+        maker, {"a.rs": "x\n"}, {"a.rs": "y\n"}
+    )
+    _install(app, maker)
+    _install_storage(app, objects)
+
+    missing_agent = await client.get(
+        _lineage_url(uuid4()),
+        params={"reference_agent_id": str(ancestor_id)},
+        headers=_HEADERS,
+    )
+    missing_reference = await client.get(
+        _lineage_url(candidate_id),
+        params={"reference_agent_id": str(uuid4())},
+        headers=_HEADERS,
+    )
+    missing_file = await client.get(
+        _lineage_url(candidate_id, file=True),
+        params={"reference_agent_id": str(ancestor_id), "path": "ghost.rs"},
+        headers=_HEADERS,
+    )
+
+    assert missing_agent.status_code == 404
+    assert missing_reference.status_code == 404
+    assert missing_file.status_code == 404
+    async with maker() as s:
+        assert (await s.scalars(select(ArtifactFetchAudit))).all() == []
+
+
+async def test_lineage_diff_requires_admin_and_actor_and_reference(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    candidate_id, ancestor_id, objects = await _seed_lineage_pair(
+        maker, {"a.rs": "x\n"}, {"a.rs": "y\n"}
+    )
+    _install(app, maker)
+    _install_storage(app, objects)
+    params = {"reference_agent_id": str(ancestor_id)}
+
+    no_token = await client.get(
+        _lineage_url(candidate_id),
+        params=params,
+        headers={"X-Admin-Actor": "operator"},
+    )
+    no_actor = await client.get(
+        _lineage_url(candidate_id),
+        params=params,
+        headers={"Authorization": f"Bearer {_TOKEN}"},
+    )
+    no_reference = await client.get(_lineage_url(candidate_id), headers=_HEADERS)
+
+    assert no_token.status_code == 401
+    assert no_actor.status_code == 422
+    assert no_reference.status_code == 422
+    async with maker() as s:
+        assert (await s.scalars(select(ArtifactFetchAudit))).all() == []
+
+
+async def test_lineage_diff_missing_or_tampered_artifact_is_502(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    candidate_id, ancestor_id, objects = await _seed_lineage_pair(
+        maker, {"a.rs": "x\n"}, {"a.rs": "y\n"}
+    )
+    _install(app, maker)
+    tampered = {
+        **objects,
+        f"{candidate_id}/agent.tar.gz": _tarball({"a.rs": "tampered\n"}),
+    }
+    _install_storage(app, tampered)
+    mismatch = await client.get(
+        _lineage_url(candidate_id),
+        params={"reference_agent_id": str(ancestor_id)},
+        headers=_HEADERS,
+    )
+    _install_storage(
+        app, {f"{candidate_id}/agent.tar.gz": objects[f"{candidate_id}/agent.tar.gz"]}
+    )
+    absent = await client.get(
+        _lineage_url(candidate_id),
+        params={"reference_agent_id": str(ancestor_id)},
+        headers=_HEADERS,
+    )
+
+    assert mismatch.status_code == 502
+    assert absent.status_code == 502
+
+
 async def _seed_precedent(
     maker: async_sessionmaker[AsyncSession],
     *,

@@ -1202,7 +1202,7 @@ export const sourceReleaseGateSchema = z.object({
   pending_receipt_count: z.number().optional(),
   receipt_diagnostics: z.array(z.object({
     report: z.object({
-      schema_version: z.literal(1),
+      schema_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
       validator_hotkey: z.string().max(128),
       netuid: z.number().int().nonnegative(),
       timestamp: z.number().int().nonnegative(),
@@ -1216,7 +1216,24 @@ export const sourceReleaseGateSchema = z.object({
         page_forwarded: z.number().int().nonnegative(),
         page_deferred: z.number().int().nonnegative(),
         conflicts_dropped: z.number().int().nonnegative().optional(),
+        last_validation: z.object({
+          error_count: z.number().int().nonnegative().max(2147483647),
+          fields: z.array(z.string().max(512).regex(/^[a-z0-9_.*]+:[a-z_]+(:[a-z_]+)?$/)).max(5),
+        }).nullable().optional(),
+        failure_context: z.object({
+          claimed_schema_version: z.number().int().min(1).max(2).nullable().optional(),
+          task_id: z.number().int().min(1).max(2147483647).nullable().optional(),
+          claimed_epoch_index: z.number().int().nonnegative().max(2147483647).nullable().optional(),
+          claimed_commit_block: z.number().int().min(1).max(4294967295).nullable().optional(),
+          attempt_id: z.string().uuid().nullable().optional(),
+        }).nullable().optional(),
       }),
+    }).refine((report) => report.schema_version >= 2 || report.observation.last_validation == null, {
+      message: 'Validation diagnostic requires schema version 2',
+      path: ['observation', 'last_validation'],
+    }).refine((report) => report.schema_version === 3 || report.observation.failure_context == null, {
+      message: 'Receipt failure context requires schema version 3',
+      path: ['observation', 'failure_context'],
     }),
     received_at: z.string(),
     stale: z.boolean(),
@@ -5636,20 +5653,28 @@ export const screeningQuarantineBatchDecisionSchema = z.object({
   reason: auditReasonSchema(3),
 })
 
+const screeningQuarantineBatchDecisionsSchema = z
+  .array(screeningQuarantineBatchDecisionSchema)
+  .min(1)
+  .max(50)
+
+function uniqueQuarantineDecisions(
+  value: { decisions: Array<{ quarantineId: string }> },
+  context: z.RefinementCtx,
+) {
+  const ids = value.decisions.map((decision) => decision.quarantineId)
+  if (new Set(ids).size !== ids.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['decisions'],
+      message: 'Each quarantine can appear only once',
+    })
+  }
+}
+
 export const screeningQuarantineBatchPreviewInputSchema = z
-  .object({
-    decisions: z.array(screeningQuarantineBatchDecisionSchema).min(1).max(50),
-  })
-  .superRefine((value, context) => {
-    const ids = value.decisions.map((decision) => decision.quarantineId)
-    if (new Set(ids).size !== ids.length) {
-      context.addIssue({
-        code: 'custom',
-        path: ['decisions'],
-        message: 'Each quarantine can appear only once',
-      })
-    }
-  })
+  .object({ decisions: screeningQuarantineBatchDecisionsSchema })
+  .superRefine(uniqueQuarantineDecisions)
 
 // The exact ruling holding a quarantine's agent terminal (ditto-subnet#2038).
 // The preview token signs it and execution re-derives it under lock.
@@ -5688,13 +5713,16 @@ export const screeningQuarantineBatchPreviewResponseSchema = z.object({
   blocked_count: z.number().int().nonnegative(),
 })
 
-export const screeningQuarantineBatchExecuteInputSchema =
-  screeningQuarantineBatchPreviewInputSchema.and(
-    z.object({
-      previewToken: z.string().min(32).max(256),
-      confirmed: z.literal(true),
-    }),
-  )
+// A plain object, never an intersection: the MCP server publishes an
+// intersection as an empty input schema, and clients then send decisions and
+// confirmed as strings that this schema rejects.
+export const screeningQuarantineBatchExecuteInputSchema = z
+  .object({
+    decisions: screeningQuarantineBatchDecisionsSchema,
+    previewToken: z.string().min(32).max(256),
+    confirmed: z.literal(true),
+  })
+  .superRefine(uniqueQuarantineDecisions)
 
 export const screeningQuarantineBatchExecuteItemSchema = z.object({
   quarantine_id: z.string().uuid(),
@@ -8166,6 +8194,30 @@ export const sourceDiffFileInputSchema = z.object({
   path: z.string().min(1).max(240),
 })
 
+// Lineage diff: the same manifest and per-file shapes for ANY two stored
+// agents (reference -> agent), typically a resubmission against the rejected
+// ancestor it claims to have fixed. No copy review is needed on either side.
+const lineagePairShape = {
+  agentId: z.string().uuid(),
+  referenceAgentId: z.string().uuid(),
+}
+
+const distinctLineagePair = (input: { agentId: string; referenceAgentId: string }) =>
+  input.agentId.toLowerCase() !== input.referenceAgentId.toLowerCase()
+
+const distinctLineagePairError = {
+  message: 'referenceAgentId must differ from agentId',
+  path: ['referenceAgentId'],
+}
+
+export const lineageSourceDiffInputSchema = z
+  .object(lineagePairShape)
+  .refine(distinctLineagePair, distinctLineagePairError)
+
+export const lineageSourceDiffFileInputSchema = z
+  .object({ ...lineagePairShape, path: z.string().min(1).max(240) })
+  .refine(distinctLineagePair, distinctLineagePairError)
+
 export const sourceDiffFileDetailSchema = z.object({
   agent_id: z.string().uuid(),
   reference_agent_id: z.string().uuid(),
@@ -8886,6 +8938,15 @@ export const publicGateEvidenceSchema = z.object({
   gate_counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
 })
 
+// One run's transform-audit outcome counts; the discordant direction is what
+// the transform-audit gate factor charges.
+export const publicAuditPairCountsSchema = z.object({
+  both_correct: z.number().int().nonnegative(),
+  base_only: z.number().int().nonnegative(),
+  transform_only: z.number().int().nonnegative(),
+  both_wrong: z.number().int().nonnegative(),
+})
+
 export const publicValidatorScoreSchema = z.object({
   validator_hotkey: z.string(),
   composite: z.number().min(0).max(1),
@@ -8903,6 +8964,13 @@ export const publicValidatorScoreSchema = z.object({
   generated_at: z.string(),
   transform_robustness: z.number().min(0).max(1).nullable().optional(),
   audit_case_count: z.number().int().nonnegative().nullable().optional(),
+  // Per-run composite gate factors the scorer recorded (issue #533), so a
+  // disputed multiplier decomposes from the record. Null when not recorded.
+  audit_pairs: publicAuditPairCountsSchema.nullable().optional(),
+  tool_efficiency: z.number().min(0).max(1).nullable().optional(),
+  metamorphic_consistency: z.number().min(0).max(1).nullable().optional(),
+  memory_over_call: z.number().min(0).max(1).nullable().optional(),
+  conversational_sanity: z.number().min(0).max(1).nullable().optional(),
   transcript_sha256: z.string().nullable().optional(),
   // Null below bench v13 and for a scorer that emitted no gate telemetry.
   gate_evidence: publicGateEvidenceSchema.nullable().optional(),
@@ -9459,8 +9527,8 @@ export type ConfirmationSeedAnchorList = z.infer<
 // Ordinary (pre-score) source-review queue-age SLO, ditto-subnet#2042 slice 1.
 // Read-only observability: overdue_count and p95_exceeds_threshold are null
 // until an operator configures a threshold, and this board enforces nothing.
-// Top-agent, copy, ATH, and human-escalation review are separate, later
-// clocks -- not covered here.
+// Copy, ATH, and top-five double-check review report through
+// athReviewQueueSloSchema below; human escalation is a later clock.
 export const sourceReviewQueueSloSchema = z.object({
   generated_at: z.string(),
   backlog_count: z.number().int().nonnegative(),
@@ -9487,6 +9555,61 @@ export const sourceReviewQueueSloSchema = z.object({
 })
 
 export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
+
+// ATH-hold queue-age SLO, ditto-subnet#2042 slice 2: every pending ath_reviews
+// hold, one clock per class (copy review included), and stranded-hold ghosts.
+// Read-only; thresholds report null until an operator configures them.
+type GeneratedAthReviewQueueStats = PlatformComponents['schemas']['AthReviewQueueStats']
+type GeneratedAthReviewQueueSlo = PlatformComponents['schemas']['AthReviewQueueSlo']
+
+const athReviewHoldReasonSchema = z.enum([
+  'active_work',
+  'capacity_wait',
+  'infrastructure_backoff',
+  'escalation',
+])
+
+const athReviewQueueStatsSchema = z.object({
+  queue_class: z
+    .enum([
+      'copy',
+      'benchmark_overfit',
+      'deferred_source_review',
+      'integrity_double_check',
+      'anomalous_score',
+    ])
+    .nullable(),
+  backlog_count: z.number().int().nonnegative(),
+  active_work_count: z.number().int().nonnegative(),
+  capacity_wait_count: z.number().int().nonnegative(),
+  infrastructure_backoff_count: z.number().int().nonnegative(),
+  escalation_count: z.number().int().nonnegative(),
+  p50_age_seconds: z.number().nonnegative().nullable(),
+  p95_age_seconds: z.number().nonnegative().nullable(),
+  oldest_age_seconds: z.number().nonnegative().nullable(),
+  oldest_agent_id: z.string().uuid().nullable(),
+  oldest_reason: athReviewHoldReasonSchema.nullable(),
+  throughput_window_hours: z.number().int().positive(),
+  throughput_completed_count: z.number().int().nonnegative(),
+  throughput_per_hour: z.number().nonnegative(),
+  max_actionable_age_threshold_seconds: z.number().int().positive().nullable(),
+  overdue_count: z.number().int().nonnegative().nullable(),
+  p95_age_threshold_seconds: z.number().int().positive().nullable(),
+  p95_exceeds_threshold: z.boolean().nullable(),
+} satisfies PlatformResponseShape<GeneratedAthReviewQueueStats>)
+
+export const athReviewQueueSloSchema = z.object({
+  generated_at: z.string(),
+  ath: athReviewQueueStatsSchema,
+  copy_review: athReviewQueueStatsSchema,
+  classes: z.array(athReviewQueueStatsSchema),
+  stranded_terminal_ghost_count: z.number().int().nonnegative(),
+  stranded_hold_ghost_count: z.number().int().nonnegative(),
+  held_without_review_ghost_count: z.number().int().nonnegative(),
+  ghost_count: z.number().int().nonnegative(),
+} satisfies PlatformResponseShape<GeneratedAthReviewQueueSlo>)
+
+export type AthReviewQueueSlo = z.infer<typeof athReviewQueueSloSchema>
 
 // Fleet validator capacity, ditto-subnet#2036 telemetry slice. Read-only:
 // progress rates and remaining slot-minutes are estimates, null when unknown.

@@ -49,6 +49,19 @@ def policy(**changes):
     return CollectorPolicy(**(values | changes))
 
 
+@pytest.mark.parametrize("allocation", [1, 1000, 2500, 7500, 10000])
+def test_collector_policy_supports_variable_service_pool(allocation):
+    p = policy(destinations=(ServiceDestination("gm", allocation, "gm"),))
+    assert p.destinations[0].allocation_bps == allocation
+    assert p.digest != policy().digest
+
+
+@pytest.mark.parametrize("allocation", [0, -1, 10001, True, 7500.0])
+def test_collector_policy_refuses_invalid_service_pool(allocation):
+    with pytest.raises(ValueError):
+        policy(destinations=(ServiceDestination("gm", allocation, "gm"),))
+
+
 class Chain:
     def __init__(self):
         self.observation = Observation(100, "0x" + "a" * 64, None, 50, 2000, 200, 1000)

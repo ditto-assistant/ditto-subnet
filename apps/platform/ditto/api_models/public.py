@@ -369,6 +369,22 @@ class PublicTokenEfficiency(BaseModel):
         return self
 
 
+class PublicAuditPairCounts(BaseModel):
+    """One run's reproduce-under-transform audit outcome counts (public).
+
+    Sufficient statistics: a reader sums them across runs and validators. The
+    discordant direction (``base_only`` vs ``transform_only``) is what the
+    transform-audit gate factor charges.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    both_correct: Annotated[int, Field(ge=0)]
+    base_only: Annotated[int, Field(ge=0)]
+    transform_only: Annotated[int, Field(ge=0)]
+    both_wrong: Annotated[int, Field(ge=0)]
+
+
 class PublicBenchmarkQualityFactor(BaseModel):
     """One public-safe input to the scorer-owned benchmark quality multiplier."""
 
@@ -2816,6 +2832,70 @@ class PublicValidatorScore(BaseModel):
             ),
         ),
     ]
+    audit_pairs: Annotated[
+        PublicAuditPairCounts | None,
+        Field(
+            default=None,
+            description=(
+                "This run's transform-audit outcome counts. The direction of the "
+                "discordant pairs (``base_only`` vs ``transform_only``) is what "
+                "the transform-audit gate charges, so these counts are what make "
+                "its multiplier reconstructable. Null for a run that carried no "
+                "audit pairs or predates the counts."
+            ),
+        ),
+    ]
+    tool_efficiency: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Observed tool-efficiency factor the scorer folded into this "
+                "run's composite gate. Null when the scorer did not record it."
+            ),
+        ),
+    ]
+    metamorphic_consistency: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Fraction of invariance twin groups answered consistently, the "
+                "input to the metamorphic-consistency gate factor. Null when no "
+                "twin group ran."
+            ),
+        ),
+    ]
+    memory_over_call: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Memory over-call multiplier exactly as the scorer applied it to "
+                "this run's composite gate. Null for a run scored before the "
+                "scorer recorded it, or under a contract without a gate."
+            ),
+        ),
+    ]
+    conversational_sanity: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Weakest-link pass rate across the conversational-sanity slices, "
+                "the input to the conversational-sanity gate factor. Null when no "
+                "conversational case ran."
+            ),
+        ),
+    ]
     case_results: Annotated[
         list[PublicCaseResult] | None,
         Field(
@@ -3697,6 +3777,35 @@ class PublicOrdinaryReview(BaseModel):
     typical_p95_seconds: Annotated[float | None, Field(default=None, ge=0)]
 
 
+class PublicAthReview(BaseModel):
+    """Source-safe ATH-hold clock (ditto-subnet#2042, slice 2).
+
+    Tells a miner whether their held submission is waiting for a deep-review
+    screener, being worked, parked after an infrastructure failure, or waiting
+    for an operator, and for how long. It carries no hold evidence, no
+    queue class, no reason codes, and no other miner's data.
+    ``typical_p50_seconds`` and ``typical_p95_seconds`` cover every pending
+    ATH hold across the subnet. They are not a promise about this
+    submission.
+    """
+
+    reason: Literal[
+        "active_work", "capacity_wait", "infrastructure_backoff", "escalation"
+    ]
+    age_seconds: Annotated[
+        float,
+        Field(
+            ge=0,
+            description=(
+                "Time since this hold last became pending. A deep-review retry "
+                "does not reset it. Only a reopen after a resolution does."
+            ),
+        ),
+    ]
+    typical_p50_seconds: Annotated[float | None, Field(default=None, ge=0)]
+    typical_p95_seconds: Annotated[float | None, Field(default=None, ge=0)]
+
+
 class PublicScreeningDispute(BaseModel):
     """Public-safe appeal state; the miner's private message is never exposed."""
 
@@ -4195,6 +4304,13 @@ class PublicSubmissionPipeline(BaseModel):
             "Ordinary source-review clock and reason while the submission is "
             "in the pre-score screening pipeline; null once it leaves that "
             "pipeline (whichever way)."
+        ),
+    )
+    ath_review: PublicAthReview | None = Field(
+        default=None,
+        description=(
+            "ATH-hold clock and reason while the submission is held for "
+            "review after scoring; null when it is not held."
         ),
     )
     submission_family: PublicSubmissionFamily | None = Field(

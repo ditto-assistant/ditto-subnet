@@ -111,6 +111,12 @@ async def state(session, config, *, enabled):
     }
 
 
+def _fundable(bucket: dict) -> bool:
+    # A ranged bucket may receive emission whenever its signed ceiling is
+    # positive, even if today's in-range Gamma % (or its default) is zero.
+    return bucket.get("max_allocation_bps", bucket["allocation_bps"]) > 0
+
+
 async def validate_envelope(session, config, envelope, *, enabled):
     view = await state(session, config, enabled=enabled)
     if view["blocked_reason"]:
@@ -120,7 +126,7 @@ async def validate_envelope(session, config, envelope, *, enabled):
     destinations = view["destinations"]
     if envelope.collector_policy_digest != readiness.policy or not any(
         b["bucket_id"] == req.bucket_id
-        and b["allocation_bps"] > 0
+        and _fundable(b)
         and b["holding_coldkey"] == envelope.destination
         for b in destinations
     ):
@@ -157,7 +163,7 @@ async def preview(session, config, payload, *, enabled):
     approved = {
         (b["bucket_id"], b["holding_coldkey"])
         for b in view["destinations"]
-        if b["allocation_bps"] > 0
+        if _fundable(b)
     }
     matches = [
         (s.source_block, p.holding_coldkey)

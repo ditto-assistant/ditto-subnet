@@ -168,6 +168,8 @@ import {
 import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
+  fetchLineageSourceDiff,
+  fetchLineageSourceDiffFile,
   fetchAthReview,
   fetchAthPrecedents,
   fetchQuarantineBaselineDiff,
@@ -267,6 +269,7 @@ import {
   fetchScoringLeaseSettings,
   fetchInferenceRuntimeMetrics,
   fetchSourceReviewQueueSlo,
+  fetchAthReviewQueueSlo,
   fetchOutlierEscalation,
   fetchClaimProvenanceCases,
   fetchOutlierEscalationDryRun,
@@ -498,6 +501,9 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // so they gate on the same dedicated artifact scope.
   ['get_copy_review_source_diff', BACKROOM_ARTIFACT_SCOPE],
   ['read_copy_review_source_diff_file', BACKROOM_ARTIFACT_SCOPE],
+  // Lineage diffs render the same two-submission source for any operator-named
+  // pair, so they gate identically.
+  ['get_lineage_source_diff', BACKROOM_ARTIFACT_SCOPE],
   // Baseline diffs render miner source against the starter kit, so they gate on
   // the same dedicated artifact scope.
   ['get_screening_baseline_diff', BACKROOM_ARTIFACT_SCOPE],
@@ -663,6 +669,13 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
   }
 }
 
+// Agent ids on the artifact-scope source readers publish as plain
+// `format: uuid`, without zod's ~170-byte uuid regex, to hold the catalog byte
+// budget. Each tool's service function parses its input with the strict
+// `z.string().uuid()` schema before any Platform request, so validation is
+// unchanged; only the advertised JSON Schema is shorter.
+const sourceAgentId = () => z.string().meta({ format: 'uuid' })
+
 // Tool descriptions are injected into model context before any tool is used.
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
@@ -671,6 +684,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   refresh_benchmark_contract: 'Rescreen exact contract with guards; expire tickets, preserve scores/owner. Write scope; see help.',
   get_copy_review_source_diff:
     'Per-file held/reference source diff with rename and normalized identity. Artifact scope; bodies via file reader.',
+  get_lineage_source_diff: 'Any two agents, reference->agent. Artifact scope; see help.',
   apply_copy_court_settings:
     'Write complete copy-court posture with expected revision and exact confirmation. Inert or complete signal semantics; see tool help.',
   expand_benchmark_rollout_cohort:
@@ -811,7 +825,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_inference_runtime_metrics:
     'Read inference load and relay health.',
   get_source_review_queue_slo:
-    'Read ordinary source-review queue age, throughput, and reconciliation ghosts.',
+    'Read ordinary source-review and ATH/copy-review queue age, throughput, and ghosts.',
   get_claim_provenance_cases:
     'Read exact-artifact V13 provenance evidence.',
   get_outlier_escalation:
@@ -916,7 +930,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_treasury_runtime: 'Read durable Gamma control; not dispatch proof.',
   record_treasury_runtime: 'Control Gamma with CAS, policy and managed roster; no transfers. See tool help.',
   get_treasury_ledger_readiness: 'Read epoch/policy readiness; no activation.',
-  record_treasury_settings: 'Record shadow buckets with CAS/confirmation; no weights or funds.',
+  record_treasury_settings: 'Record buckets with CAS; in-range Gamma % under signed range moves next epoch.',
   get_treasury_receipts: 'Read treasury receipt history/publication.',
   get_treasury_manual_transfers: 'Read manual custody readiness, requests and public receipts; no funds.',
   get_treasury_receipt_preflight: 'Read exact receipt readiness/archive checkpoint; no writes.',
@@ -1167,7 +1181,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         '`count` is the number of readable file rows the platform made available to page and `file_count` remains the platform\'s total archive-file count, so read `returned` for the rows in this response and `has_more` for whether a later offset holds paths this response does not. `has_more` is the only field that reports MCP paging: `truncated` means the platform omitted paths before MCP paging, so no later offset can recover them. Never treat a manifest with `has_more` or `truncated` set as the complete inventory of a submission. ' +
         'Unreadable binary or oversized `opaque_blobs` metadata remains whole on every page because it is separate review evidence. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
       inputSchema: {
-        agentId: z.string().uuid(),
+        agentId: sourceAgentId(),
         ...MCP_SOURCE_MANIFEST_PAGINATION_INPUT,
       },
       annotations: toolAnnotations('read'),
@@ -1196,7 +1210,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       description:
         'Read a bounded line range (max 400 lines) from one file inside a quarantined submission tarball. Pair with the flagged path:line evidence from get_screening_quarantine_context to inspect exactly the suspicious code. When you do not have a line number yet, do NOT bisect with successive 400-line windows — call search_screening_source, which scans the whole artifact in one request and returns the path:line to read here. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
       inputSchema: {
-        agentId: z.string().uuid(),
+        agentId: sourceAgentId(),
         path: z.string().min(1).max(240),
         startLine: z.number().int().min(1).default(1),
         endLine: z.number().int().min(1).default(400),
@@ -1332,7 +1346,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       title: 'Get copy-review source diff',
       description:
         'Return a per-file diff manifest between a held (ath_pending_review) agent and the agent it was matched against: every path classified as added, removed, modified, identical, or renamed (from_path → to_path) with added/removed line counts and a normalized-identical flag (true when the code matches once comments and whitespace are canonicalized — a reformatted copy). Use it to see at a glance which files were copied verbatim before reading individual diffs. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
-      inputSchema: { agentId: z.string().uuid() },
+      inputSchema: { agentId: sourceAgentId() },
       annotations: toolAnnotations('read'),
     },
     async (input) =>
@@ -1350,7 +1364,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       description:
         'Return the bounded unified diff (reference -> candidate) for one file between a held agent and the agent it copied. Pair with get_copy_review_source_diff to pick a modified file, then read its exact line-level changes. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
       inputSchema: {
-        agentId: z.string().uuid(),
+        agentId: sourceAgentId(),
         path: z.string().min(1).max(240),
       },
       annotations: toolAnnotations('read'),
@@ -1360,12 +1374,34 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_lineage_source_diff',
+    {
+      description:
+        'Diff the source of ANY two stored agents, reference -> agent, with no copy review required: typically a resubmission (agentId) against the rejected ancestor it claims to have fixed (referenceAgentId), to check whether a rejected mechanism was really removed. Without path it returns the per-file manifest in the get_copy_review_source_diff shape: every path added, removed, modified, identical, or renamed (from_path → to_path), line counts, a normalized-identical flag, and omitted_paths the bounded read skipped (not compared, never a removal). With path (from that manifest) it returns that one file\'s bounded unified diff instead. The two ids must differ. Platform audits the source read of both agents. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
+      inputSchema: {
+        agentId: sourceAgentId(),
+        referenceAgentId: sourceAgentId(),
+        path: z.string().min(1).max(240).optional(),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ path, ...pair }) =>
+      artifact(async () =>
+        path === undefined
+          ? compacted(await fetchLineageSourceDiff(pair, props.session.email), {
+              files: { pin: ['path'] },
+            })
+          : fetchLineageSourceDiffFile({ ...pair, path }, props.session.email),
+      ),
+  )
+
+  registerTool(
     'get_screening_baseline_diff',
     {
       title: 'Get starter-kit baseline diff',
       description:
         "Return a per-file diff manifest between one submission and the official starter kit every miner begins from. Each path is classified added, removed, modified, or identical, and carries a stock_kit flag that is true when the content is kit code at ANY revision in the pinned lineage — not merely identical to the tip — so a miner who forked an older commit is not credited with authoring it. The headline custom_added_lines counts only lines that are neither baseline nor kit code, i.e. the surface the miner actually wrote, summed over every compared file. When custom_added_lines_complete is false that total is a lower bound: the files in omitted_paths (omitted_file_count in all) were past the platform's bounded source read and were NOT compared, so they appear in no row or count; read them with read_screening_source_file. Start a quarantine review here: it turns reading a whole crate into reading a small delta, and it distinguishes a real custom harness from a kit variant with a few lines changed. Pair with read_screening_baseline_diff_file for line-level changes. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.",
-      inputSchema: { agentId: z.string().uuid() },
+      inputSchema: { agentId: sourceAgentId() },
       annotations: toolAnnotations('read'),
     },
     async (input) =>
@@ -1379,7 +1415,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       description:
         'Return the bounded unified diff (starter kit -> submission) for one file in a submission. Pair with get_screening_baseline_diff to pick a non-stock file, then read exactly what the miner changed or added relative to the kit. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
       inputSchema: {
-        agentId: z.string().uuid(),
+        agentId: sourceAgentId(),
         path: z.string().min(1).max(240),
       },
       annotations: toolAnnotations('read'),
@@ -2243,7 +2279,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get public source-release policy',
       description:
-        "Read the subnet-wide policy governing whether miners' submitted source is ever published, and how soon: disclosure ('public' — source enters the normal release path — or 'never' — no source is published at all), embargo_hours (the window measured from completed winner-emission confirmation, 6 to 8760, retained but inert while disclosure is 'never'), the current append-only revision, and the history with the actor and reason behind every change. Uniform for every submission: there is no per-miner or per-submission setting, so this one value describes the whole subnet. Release is king-only regardless — only the exact submission that held the crown and earned winner emissions in a completed tempo is ever eligible — so a 'public' policy does not mean every submission is published. The release_gate field, when present, reports the served gate version, automatic_confirmation_enabled, the durable collector cursor and runtime hash, last payout attribution or blocking reason, pending receipt and unresolved payout counts, pending and confirmed king counts, and up to 25 exact-agent payout receipt summaries (confirmed first, then newest crowns); rows_has_more signals truncation. The receipt_diagnostics list contains up to 64 latest signed validator relay observations with received_at and stale; receipt_diagnostics_has_more signals truncation. These are self-reported diagnostic stages, never payout evidence; missing observations mean unknown, not healthy. Missing release_gate means this response cannot prove the new gate is deployed. Positive revealed weights alone are not earnings proof. Requires backroom:read and changes nothing.",
+        "Read the subnet-wide policy governing whether miners' submitted source is ever published, and how soon: disclosure ('public' — source enters the normal release path — or 'never' — no source is published at all), embargo_hours (the window measured from completed winner-emission confirmation, 6 to 8760, retained but inert while disclosure is 'never'), the current append-only revision, and the history with the actor and reason behind every change. Uniform for every submission: there is no per-miner or per-submission setting, so this one value describes the whole subnet. Release is king-only regardless — only the exact submission that held the crown and earned winner emissions in a completed tempo is ever eligible — so a 'public' policy does not mean every submission is published. The release_gate field, when present, reports the served gate version, automatic_confirmation_enabled, the durable collector cursor and runtime hash, last payout attribution or blocking reason, pending receipt and unresolved payout counts, pending and confirmed king counts, and up to 25 exact-agent payout receipt summaries (confirmed first, then newest crowns); rows_has_more signals truncation. The receipt_diagnostics list contains up to 64 latest signed validator relay observations with received_at and stale; receipt_diagnostics_has_more signals truncation. Schema-v2 last_validation contains only bounded field/type/rule codes and the error count of the last invalid claim in the latest recovery page; a new page clears it, and absence on v1 means unknown. These are self-reported diagnostic stages, never payout evidence; missing observations mean unknown, not healthy. Missing release_gate means this response cannot prove the new gate is deployed. Positive revealed weights alone are not earnings proof. Requires backroom:read and changes nothing.",
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
     },
@@ -2505,7 +2541,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_conversation_assessments',
     {
       title: 'Get conversational continuity assessments',
-      description: 'Read top-five Astra conversation assessment state, cost reservations and proposed quality. Pass assessment_id to inspect the private transcript and rubric evidence. Shadow results never change rewards or screening decisions. Requires backroom:read.',
+      description: 'Read top-five Astra conversation assessment state, cost reservations, proposed quality and process-local admission diagnostics (in-flight, attempts, overlapping polls skipped, last outcome and duration). Counters reset on Platform process restart and are not fleet totals. Pass assessment_id to inspect the private transcript and rubric evidence. Shadow results never change rewards or screening decisions. Requires backroom:read.',
       inputSchema: conversationAssessmentInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -3263,10 +3299,29 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get source-review queue-age SLO',
       description:
-        'Read the ordinary (pre-score) source-review queue-age SLO: p50/p95/oldest actionable age in seconds, throughput (completions per hour over a fixed window), and the current backlog broken out by reason -- active_work (a screener is claimed and running), capacity_wait (uploaded, no screener has claimed it yet), infrastructure_backoff (the last attempt ended retryable_infra/inconclusive and is fail-closed parked for an operator-authorized retry), and escalation (an active anti-cheat quarantine hold, which wins regardless of what the underlying attempt itself reports, e.g. a rescreen that then failed). Age is the stable queue-entry clock (the submission\'s own upload time); a retry never resets it, so a long-overdue item stays overdue through every rescreen. Also reports four reconciliation counts that are visible but NEVER folded into the metrics above: stale_running_ghost_count (a screening attempt still looks running though its agent already reached a terminal or later status), resolved_quarantine_ghost_count (an agent stuck at quarantined status with no active quarantine row), terminal_quarantine_ghost_count (an active quarantine whose agent is already banned or rejected; close it with a fenced batch reject), and attempt_status_drift_ghost_count (the latest attempt reports a status this SLO\'s reason classification does not cover, e.g. a terminal verdict on an agent whose own status never advanced). overdue_count and p95_exceeds_threshold are null until an operator configures a threshold (there is no shipped default); this tool enforces nothing -- no alert, no operator escalation action. Covers ORDINARY screening review only: stronger top-agent review, copy review, ATH review, and human escalation are separate review classes with their own clocks, not yet built. Requires backroom:read and changes nothing.',
+        'Read the ordinary (pre-score) source-review queue-age SLO: p50/p95/oldest actionable age in seconds, throughput (completions per hour over a fixed window), and the current backlog broken out by reason -- active_work (a screener is claimed and running), capacity_wait (uploaded, no screener has claimed it yet), infrastructure_backoff (the last attempt ended retryable_infra/inconclusive and is fail-closed parked for an operator-authorized retry), and escalation (an active anti-cheat quarantine hold, which wins regardless of what the underlying attempt itself reports, e.g. a rescreen that then failed). Age is the stable queue-entry clock (the submission\'s own upload time); a retry never resets it, so a long-overdue item stays overdue through every rescreen. Also reports four reconciliation counts that are visible but NEVER folded into the metrics above: stale_running_ghost_count (a screening attempt still looks running though its agent already reached a terminal or later status), resolved_quarantine_ghost_count (an agent stuck at quarantined status with no active quarantine row), terminal_quarantine_ghost_count (an active quarantine whose agent is already banned or rejected; close it with a fenced batch reject), and attempt_status_drift_ghost_count (the latest attempt reports a status this SLO\'s reason classification does not cover, e.g. a terminal verdict on an agent whose own status never advanced). overdue_count and p95_exceeds_threshold are null until an operator configures a threshold (there is no shipped default); this tool enforces nothing -- no alert, no operator escalation action. The top level covers ORDINARY screening review only. ath_review is the post-score ATH-hold queue (every pending ath_reviews hold; null with ath_review_error if that read failed): ath aggregates all holds, copy_review is the copy clock (legacy holds with no review_kind included), and classes gives one entry each for copy, benchmark_overfit, deferred_source_review, integrity_double_check (the top-five deep review), and anomalous_score, with the same reasons, oldest_agent_id/oldest_reason, resolved-review throughput, and null-until-configured thresholds. Its clock is COALESCE(reopened_at, opened_at): a deep-review retry never resets it, a reopen does. Copy, overfit, and anomalous-score holds are always escalation; deferred and double-check holds follow the newest screening attempt since the clock started until that pass concludes. Pending reviews whose agent is no longer ath_pending_review are stranded_terminal_ghost_count (banned/rejected) or stranded_hold_ghost_count (needs unsticking; resolving 409s), and held_without_review_ghost_count counts held agents with no pending row; none is backlog. Human escalation has no clock yet. Requires backroom:read and changes nothing.',
       annotations: toolAnnotations('read'),
     },
-    async () => result(await fetchSourceReviewQueueSlo()),
+    async () => {
+      // The ordinary snapshot keeps its top-level shape; the ATH/copy-review
+      // snapshot rides beside it so one catalog entry serves both clocks. A
+      // Platform without the ATH endpoint must not break the ordinary read.
+      const [ordinary, ath] = await Promise.all([
+        fetchSourceReviewQueueSlo(),
+        fetchAthReviewQueueSlo().then(
+          (value) => ({ value, error: null }),
+          (error: unknown) => ({
+            value: null,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+      ])
+      return result({
+        ...ordinary,
+        ath_review: ath.value,
+        ...(ath.error === null ? {} : { ath_review_error: ath.error }),
+      })
+    },
   )
 
   registerTool(
@@ -3457,7 +3512,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_treasury_settings',
     {
       title: 'Get SN118 treasury shadow policy',
-      description: 'Read shadow-only treasury proposals and revision history. Optional revision returns only that immutable raw settings/checksum row; missing or invalid history refuses without defaults. V1 preserves separate GM/maintenance shares and the 500 bps combined limit. V2 describes one collector and configurable holding wallets under a combined 1000 bps pool, reserved before miner-remainder burn. Includes distribution interval, exact payee rules and publication controls; private billing references are available only in authenticated settings. Weight effect is none; funding, signing and payment observation are not activated. Requires backroom:read.',
+      description: 'Read shadow-only treasury proposals and revision history. Optional revision returns only that immutable raw settings/checksum row; missing or invalid history refuses without defaults. V1 preserves separate GM/maintenance shares and the 500 bps combined limit. V2 describes one collector and configurable holding wallets under a combined 10000 bps pool, reserved before miner-remainder burn. Includes distribution interval, exact payee rules and publication controls; private billing references are available only in authenticated settings. Weight effect is none; funding, signing and payment observation are not activated. Requires backroom:read.',
       annotations: toolAnnotations('read'),
       inputSchema: { revision: z.number().int().min(1).max(2_147_483_647).optional() },
     },
@@ -3524,7 +3579,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'record_treasury_settings',
     {
       title: 'Record SN118 treasury shadow policy',
-      description: 'Append a shadow treasury proposal with expectedRevision, reason and exact confirmation RECORD TREASURY SHADOW POLICY. V1 retains its 500 bps cap and released-miner-share denominator. V2 uses one collector and distinct holding wallets under a combined 1000 bps service pool reserved before burn; billing references are optional for manual purchases. Wallet/rule changes enter public admin activity, excluding private billing references. Public addresses only; never provide seeds. Recording settings cannot change weights, sign transfers or activate observation. Requires backroom:write.',
+      description: 'Append a shadow treasury proposal with expectedRevision, reason and exact confirmation RECORD TREASURY SHADOW POLICY. V1 retains its 500 bps cap and released-miner-share denominator. V2 uses one collector and distinct holding wallets under a combined 10000 bps service pool reserved before burn; billing references are optional for manual purchases. Wallet/rule changes enter public admin activity, excluding private billing references. Public addresses only; never provide seeds. While Gamma enforces a coldkey-signed range, an in-range Gamma % change applies from the next epoch (weight_effect next_epoch); settings never sign transfers or activate observation. Requires backroom:write.',
       inputSchema: recordTreasurySettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },

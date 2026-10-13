@@ -10,7 +10,15 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from .treasury import (
     Address,
@@ -18,6 +26,7 @@ from .treasury import (
     Digest,
     Hash,
     TreasuryCollectorIdentity,
+    TreasuryEmissionBucket,
     TreasuryEmissionPolicy,
     TreasuryLedgerPin,
 )
@@ -76,6 +85,17 @@ def treasury_follower_capability(
     )
 
 
+class TreasuryBucketAllocation(BaseModel):
+    """One epoch's operator-chosen allocation inside a signed bucket range."""
+
+    model_config = ConfigDict(
+        extra="ignore", frozen=True, strict=True, revalidate_instances="always"
+    )
+
+    bucket_id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{1,47}$")]
+    allocation_bps: Annotated[int, Field(ge=0, le=10000)]
+
+
 class EnforcingTreasuryPin(BaseModel):
     model_config = ConfigDict(
         extra="ignore", frozen=True, strict=True, revalidate_instances="always"
@@ -94,6 +114,14 @@ class EnforcingTreasuryPin(BaseModel):
     fleet: Annotated[
         tuple[TreasuryFleetMember, ...], Field(min_length=1, max_length=4096)
     ]
+    # Present exactly when the signed policy carries a range: the allocation
+    # this epoch folds, chosen without the coldkey but bounded by its signature.
+    allocations: (
+        Annotated[
+            tuple[TreasuryBucketAllocation, ...], Field(min_length=1, max_length=20)
+        ]
+        | None
+    ) = None
 
     @field_validator("version", mode="before")
     @classmethod
@@ -102,10 +130,38 @@ class EnforcingTreasuryPin(BaseModel):
             raise ValueError("treasury pin version must be an integer")
         return value
 
-    @field_validator("fleet", mode="before")
+    @field_validator("fleet", "allocations", mode="before")
     @classmethod
     def immutable_fleet(cls, value: object) -> object:
         return tuple(value) if isinstance(value, list) else value
+
+    @model_serializer(mode="wrap")
+    def omit_fixed_allocations(self, handler: SerializerFunctionWrapHandler):
+        # No return annotation: it would replace the published OpenAPI schema.
+        # Fixed-policy pins keep their pre-range served bytes and ledger digest.
+        data = handler(self)
+        if self.allocations is None:
+            data.pop("allocations", None)
+        return data
+
+    @property
+    def service_bps(self) -> int:
+        """The service share this epoch folds; never the signed default alone."""
+        return sum(bucket.allocation_bps for bucket in self.effective_buckets)
+
+    @property
+    def effective_buckets(self) -> tuple[TreasuryEmissionBucket, ...]:
+        if self.allocations is None:
+            return self.policy.buckets
+        chosen = {a.bucket_id: a.allocation_bps for a in self.allocations}
+        return tuple(
+            TreasuryEmissionBucket(
+                bucket_id=b.bucket_id,
+                allocation_bps=chosen[b.bucket_id],
+                holding_coldkey=b.holding_coldkey,
+            )
+            for b in self.policy.buckets
+        )
 
     @model_validator(mode="after")
     def coherent_frozen_evidence(self) -> EnforcingTreasuryPin:
@@ -114,6 +170,14 @@ class EnforcingTreasuryPin(BaseModel):
             or self.approval.policy != self.policy
         ):
             raise ValueError("enforcing policy differs from approval or digest")
+        if self.policy.ranged != (self.allocations is not None):
+            raise ValueError("pinned allocation must match the signed policy shape")
+        if self.allocations is not None:
+            keys = tuple(a.bucket_id for a in self.allocations)
+            if keys != tuple(sorted(set(keys))) or not self.policy.admits(
+                {a.bucket_id: a.allocation_bps for a in self.allocations}
+            ):
+                raise ValueError("pinned allocation is outside the signed range")
         expected = (
             self.policy.genesis_hash,
             self.policy.netuid,

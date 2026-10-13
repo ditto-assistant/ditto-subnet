@@ -9,12 +9,22 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.validator_capabilities import ValidatorCapabilities
+from ditto.api_server.treasury_read_diagnostics import (
+    record_treasury_read,
+    treasury_read_failure_kind,
+)
+from ditto.chain.errors import (
+    ChainTreasuryActivationReadError,
+    ChainTreasuryReadTimeoutError,
+)
 from ditto.db.models import ValidatorHeartbeat
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_approval import (
@@ -62,22 +72,43 @@ async def current_managed_dispatch_observation(
     combined = getattr(chain, "get_treasury_managed_activation_observation", None)
     if callable(combined):
         observed, raw_proof = await combined(policy, managed_hotkeys=managed_hotkeys)
-        observed = TreasuryDispatchObservation.model_validate(observed)
-        proof = TreasuryManagedSetterObservation.model_validate(raw_proof)
+        try:
+            observed = TreasuryDispatchObservation.model_validate(observed)
+        except ValidationError as error:
+            raise ChainTreasuryActivationReadError("identity", error) from error
+        try:
+            proof = TreasuryManagedSetterObservation.model_validate(raw_proof)
+        except ValidationError as error:
+            raise ChainTreasuryActivationReadError("setter_roster", error) from error
         if proof.block_hash != observed.finalized_block_hash or set(
             proof.hotkeys
         ) != set(managed_hotkeys):
             raise ValueError("managed permission proof differs from dispatch scope")
     else:
-        observed = TreasuryDispatchObservation.model_validate(
-            await chain.get_treasury_dispatch_observation(policy)
-        )
-        required = await current_managed_weight_setters(
-            chain,
-            policy,
-            block_hash=observed.finalized_block_hash,
-            managed_hotkeys=managed_hotkeys,
-        )
+        try:
+            observed = TreasuryDispatchObservation.model_validate(
+                await chain.get_treasury_dispatch_observation(policy)
+            )
+        except ValidationError as error:
+            raise ChainTreasuryActivationReadError("identity", error) from error
+        except (ValueError, ChainTreasuryActivationReadError):
+            # Preserve the legacy reader's explicit authority/evidence rejection.
+            raise
+        except Exception as error:
+            raise ChainTreasuryActivationReadError("identity", error) from error
+        try:
+            required = await current_managed_weight_setters(
+                chain,
+                policy,
+                block_hash=observed.finalized_block_hash,
+                managed_hotkeys=managed_hotkeys,
+            )
+        except ValidationError as error:
+            raise ChainTreasuryActivationReadError("setter_roster", error) from error
+        except (ValueError, ChainTreasuryActivationReadError):
+            raise
+        except Exception as error:
+            raise ChainTreasuryActivationReadError("setter_roster", error) from error
         if not required or not set(managed_hotkeys).issubset(required):
             raise ValueError("managed weight setter lacks current chain permission")
     return observed
@@ -119,11 +150,11 @@ def treasury_fleet_members(
 async def read_treasury_fleet(
     session: AsyncSession,
     *,
-    now: datetime,
     policy_digest: str,
     collector_digest: str,
     required_hotkeys: tuple[str, ...] = (),
 ) -> tuple[TreasuryFleetMember, ...]:
+    """Validate the completed heartbeat inventory against its read-time clock."""
     if not required_hotkeys or len(set(required_hotkeys)) != len(required_hotkeys):
         raise ValueError("managed weight-setting roster is empty or ambiguous")
     rows = list(
@@ -133,8 +164,15 @@ async def read_treasury_fleet(
             )
         )
     )
+    # A server-stamped heartbeat may arrive while earlier chain/DB work is
+    # awaited. Request or pin start time would misclassify it as future; it
+    # could also accept evidence that expired while the read was in progress.
+    checked_at = datetime.now(UTC)
     fleet = treasury_fleet_members(
-        rows, now=now, policy_digest=policy_digest, collector_digest=collector_digest
+        rows,
+        now=checked_at,
+        policy_digest=policy_digest,
+        collector_digest=collector_digest,
     )
     if not set(required_hotkeys).issubset(
         {member.validator_hotkey for member in fleet}
@@ -149,7 +187,6 @@ async def enforcing_pin_from_observation(
     shadow: TreasuryLedgerPin,
     schedule: Any,
     *,
-    now: datetime,
     runtime: Any = None,
 ) -> EnforcingTreasuryPin:
     config = runtime if runtime is not None else app_state.config
@@ -179,11 +216,12 @@ async def enforcing_pin_from_observation(
         raise ValueError("managed weight setter lacks current chain permission")
     fleet = await read_treasury_fleet(
         session,
-        now=now,
         policy_digest=policy.digest,
         collector_digest=policy.collector_policy_digest,
         required_hotkeys=required_hotkeys,
     )
+    from ditto.api_server.treasury_runtime import pinned_allocations
+
     return EnforcingTreasuryPin(
         epoch_index=schedule.subnet_epoch_index,
         first_block=schedule.last_epoch_block,
@@ -194,6 +232,7 @@ async def enforcing_pin_from_observation(
         identity=shadow.identity,
         approval=approval,
         fleet=fleet,
+        allocations=await pinned_allocations(session, policy),
     )
 
 
@@ -202,7 +241,6 @@ async def require_enforcing_requester(
     pin: EnforcingTreasuryPin,
     hotkey: str,
     *,
-    now: datetime,
     app_state: Any,
 ) -> None:
     from ditto.api_server.treasury_runtime import treasury_runtime
@@ -220,7 +258,6 @@ async def require_enforcing_requester(
         raise ValueError("managed roster differs from immutable pin")
     fleet = await read_treasury_fleet(
         session,
-        now=now,
         policy_digest=pin.policy_digest,
         collector_digest=pin.policy.collector_policy_digest,
         required_hotkeys=tuple(member.validator_hotkey for member in pin.fleet),
@@ -233,24 +270,43 @@ async def require_enforcing_requester(
         # Independent validators consume this same signed pin without needing
         # our deployment's approval file or joining our managed roster.
         row = await session.get(ValidatorHeartbeat, hotkey)
+        checked_at = datetime.now(UTC)
         seen_at = row.seen_at if row is not None else None
         if seen_at is not None and seen_at.tzinfo is None:
             seen_at = seen_at.replace(tzinfo=UTC)
         if (
             row is None
             or seen_at is None
-            or not now - TREASURY_FLEET_FRESHNESS <= seen_at <= now
+            or not checked_at - TREASURY_FLEET_FRESHNESS <= seen_at <= checked_at
             or row.protocol_version < TREASURY_WEIGHT_PROTOCOL
         ):
             raise ValueError("treasury follower requires a fresh protocol 30 heartbeat")
         member = treasury_follower_capability(
             pin, validator_hotkey=hotkey, protocol_version=row.protocol_version
         )
-    observed = await current_managed_dispatch_observation(
-        app_state.chain,
-        pin.policy,
-        managed_hotkeys=managed,
-    )
+    started = monotonic()
+    try:
+        observed = await current_managed_dispatch_observation(
+            app_state.chain,
+            pin.policy,
+            managed_hotkeys=managed,
+        )
+    except ChainTreasuryActivationReadError as error:
+        record_treasury_read(
+            app_state,
+            "requester_activation",
+            elapsed=monotonic() - started,
+            failure_kind=treasury_read_failure_kind(error.read_error),
+            failure_stage=error.read_stage,
+            failure_step=error.read_error.read_step
+            if isinstance(error.read_error, ChainTreasuryReadTimeoutError)
+            else None,
+        )
+        raise
+    else:
+        record_treasury_read(
+            app_state, "requester_activation", elapsed=monotonic() - started
+        )
     require_treasury_weight_authority(
         pin,
         expected_policy_digest=config.treasury_approved_policy_digest,

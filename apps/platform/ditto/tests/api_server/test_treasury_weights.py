@@ -14,6 +14,7 @@ from ditto.api_server.treasury_weights import (
     require_enforcing_requester,
     treasury_fleet_members,
 )
+from ditto.chain.errors import ChainTreasuryActivationReadError
 from ditto.db.models import ValidatorHeartbeat
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
@@ -124,7 +125,6 @@ async def test_stale_or_absent_chain_permitted_weight_setter_blocks_real_pg_flee
     await session.flush()
     p = pin()
     args = {
-        "now": now,
         "policy_digest": p.policy_digest,
         "collector_digest": p.policy.collector_policy_digest,
     }
@@ -247,14 +247,16 @@ async def test_independent_requester_reads_same_pin_without_managed_capability(
         session.add(row)
     await session.flush()
     if fault is None:
-        await require_enforcing_requester(session, p, hotkey, now=now, app_state=state)
+        await require_enforcing_requester(session, p, hotkey, app_state=state)
         assert tuple(m.validator_hotkey for m in p.fleet) == (managed.validator_hotkey,)
         state.chain.get_treasury_dispatch_observation.assert_awaited_once()
     else:
-        with pytest.raises(ValueError):
-            await require_enforcing_requester(
-                session, p, hotkey, now=now, app_state=state
-            )
+        rejection = ChainTreasuryActivationReadError if fault == "owner" else ValueError
+        with pytest.raises(rejection) as rejected:
+            await require_enforcing_requester(session, p, hotkey, app_state=state)
+        if fault == "owner":
+            assert rejected.value.read_stage == "identity"
+            assert isinstance(rejected.value.read_error, ValueError)
 
 
 async def test_producer_binds_real_approval_complete_roster_and_epoch(session):
@@ -271,23 +273,17 @@ async def test_producer_binds_real_approval_complete_roster_and_epoch(session):
         block=p.pinned_block,
         block_hash=p.pinned_block_hash,
     )
-    assert (
-        await enforcing_pin_from_observation(state, session, shadow, schedule, now=now)
-        == p
-    )
+    assert await enforcing_pin_from_observation(state, session, shadow, schedule) == p
     state.chain.get_treasury_weight_setters.assert_awaited_once_with(
         p.policy, block_hash=p.identity.finalized_block_hash
     )
     # Independent permitted setters do not block our managed activation.
     state.chain.get_treasury_weight_setters.return_value += (p.policy.collector_hotkey,)
-    assert (
-        await enforcing_pin_from_observation(state, session, shadow, schedule, now=now)
-        == p
-    )
+    assert await enforcing_pin_from_observation(state, session, shadow, schedule) == p
     # A missing managed member still blocks; membership never shrinks on staleness.
     state.config.treasury_managed_validator_hotkeys += (p.policy.collector_hotkey,)
     with pytest.raises(ValueError, match="no fresh proof"):
-        await enforcing_pin_from_observation(state, session, shadow, schedule, now=now)
+        await enforcing_pin_from_observation(state, session, shadow, schedule)
 
 
 @pytest.mark.parametrize(
@@ -330,16 +326,13 @@ async def test_producer_and_dispatch_use_fresh_exact_managed_permission_scope(
     )
 
     async def producer():
-        return await enforcing_pin_from_observation(
-            state, session, shadow, schedule, now=now
-        )
+        return await enforcing_pin_from_observation(state, session, shadow, schedule)
 
     async def dispatch():
         await require_enforcing_requester(
             session,
             p,
             p.fleet[0].validator_hotkey,
-            now=now,
             app_state=state,
         )
 
@@ -347,8 +340,13 @@ async def test_producer_and_dispatch_use_fresh_exact_managed_permission_scope(
         if fault == "none":
             await action()
         else:
-            with pytest.raises(ValueError):
+            wrapped = fault == "partial" and action is dispatch
+            rejection = ChainTreasuryActivationReadError if wrapped else ValueError
+            with pytest.raises(rejection) as rejected:
                 await action()
+            if wrapped:
+                assert rejected.value.read_stage == "setter_roster"
+                assert isinstance(rejected.value.read_error, ValueError)
     assert scoped.await_count == 2
     for call in scoped.await_args_list:
         assert call.kwargs == {
@@ -424,15 +422,19 @@ async def test_requester_revalidates_current_chain_and_every_pinned_member(
         state.chain.get_treasury_dispatch_observation.side_effect = TimeoutError()
     await session.flush()
     if fault in {"none", "new_setter"}:
-        await require_enforcing_requester(session, p, hotkey, now=now, app_state=state)
+        await require_enforcing_requester(session, p, hotkey, app_state=state)
         state.chain.get_treasury_weight_setters.assert_awaited_once_with(
             p.policy, block_hash=observation.finalized_block_hash
         )
     else:
-        with pytest.raises((ValueError, TimeoutError)):
-            await require_enforcing_requester(
-                session, p, hotkey, now=now, app_state=state
-            )
+        expected = (
+            ChainTreasuryActivationReadError if fault == "rpc_failure" else ValueError
+        )
+        with pytest.raises(expected) as rejected:
+            await require_enforcing_requester(session, p, hotkey, app_state=state)
+        if fault == "rpc_failure":
+            assert rejected.value.read_stage == "identity"
+            assert isinstance(rejected.value.read_error, TimeoutError)
 
 
 @pytest.mark.parametrize(
@@ -484,13 +486,13 @@ async def test_dispatch_combined_reader_is_fresh_and_never_falls_back(session, f
     if fault == "none":
         for _ in range(2):
             await require_enforcing_requester(
-                session, p, row.validator_hotkey, now=now, app_state=state
+                session, p, row.validator_hotkey, app_state=state
             )
         assert combined.await_count == 2
     else:
         with pytest.raises((ValueError, ChainTreasuryActivationReadError)):
             await require_enforcing_requester(
-                session, p, row.validator_hotkey, now=now, app_state=state
+                session, p, row.validator_hotkey, app_state=state
             )
     combined.assert_awaited_with(
         p.policy, managed_hotkeys=state.config.treasury_managed_validator_hotkeys

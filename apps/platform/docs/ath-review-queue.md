@@ -277,3 +277,40 @@ a copy hold opened at upload has no scores at all, and a hold that survived a
 benchmark rollout has none at the new active version. Both are still waiting for
 an operator. The MCP queue tool pins `generation=all` and does not expose the
 parameter.
+
+## Queue age against SLO
+
+`GET /api/v1/admin/ath-review-queue-slo` reports the age of this queue
+(ditto-subnet#2042, slice 2; the ordinary pre-score queue is
+`/admin/source-review-queue-slo`). The definitions live in
+`ditto/db/queries/ath_review_queue_slo.py`:
+
+- **Clock.** `COALESCE(reopened_at, opened_at)`, the same expression the queue
+  orders by. A deep-review retry does not move it; only a reopen restarts it.
+- **Classes.** `ath` aggregates every pending hold. `classes` breaks it down
+  into `copy` (including legacy holds with no `review_kind`),
+  `benchmark_overfit`, `deferred_source_review`, `integrity_double_check` (the
+  top-five `deferred_source_review` hold, by `trigger`), and `anomalous_score`.
+  `copy_review` repeats the copy entry.
+- **Reasons.** Copy, overfit, and anomalous-score holds are always
+  `escalation`, because only an operator exits them. Deferred and double-check
+  holds report `capacity_wait`, `active_work`, or `infrastructure_backoff` from
+  the newest screening attempt since the clock started. Once that pass
+  concludes they report `escalation`.
+- **Ghosts.** A pending review whose agent is no longer `ath_pending_review` is
+  a ghost, never backlog. `stranded_terminal_ghost_count` counts the agents
+  already banned or rejected. `stranded_hold_ghost_count` counts the rest,
+  which are the stranded holds described above.
+  `held_without_review_ghost_count` counts `ath_pending_review` agents that
+  have no pending row.
+- **Thresholds.** All are unset by default, so `overdue_count` and
+  `p95_exceeds_threshold` are null. Set them with
+  `DITTO_ATH_REVIEW_QUEUE_{MAX_AGE,P95_AGE}_THRESHOLD_SECONDS` for the
+  aggregate and `DITTO_COPY_REVIEW_QUEUE_{MAX_AGE,P95_AGE}_THRESHOLD_SECONDS`
+  for copy review. The endpoint only reports: it raises no alerts and takes no
+  escalation action.
+
+The public pipeline (`/public/agent/{id}/pipeline`) carries `ath_review` for a
+held submission. It includes the reason, the hold age, and the subnet-wide
+typical p50 and p95 across all pending ATH holds. It leaves out the queue
+class, the evidence, and every other agent.

@@ -27,6 +27,11 @@ printf '%s\n' 'SELECT now()' | .agents/skills/gcloud-ditto-readonly/scripts/quer
 
 Target is project `ditto-app-dev`, zone `us-central1-a`, instance `ditto-platform-prod`, env `/opt/ditto-platform/.env`. Connect through IAP. Default statement timeout 30s; `DITTO_DB_STATEMENT_TIMEOUT_MS` at most 120000.
 
+To isolate JIT compilation overhead, prefix an otherwise identical read with
+`DITTO_DB_DISABLE_JIT=1`. This sets `jit=off` for that read-only connection only;
+it does not change the server, application pool or admission settings. Preserve
+both plans and report the executor and JIT times separately.
+
 JSON `null` is not SQL NULL: `col IS NOT NULL` is true for a stored JSON
 `null`, so presence checks on jsonb payloads (for example
 `observation->'review_audit'`) must compare against `'null'::jsonb` or the

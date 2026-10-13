@@ -2,11 +2,12 @@
 """Exercise low-space refusal, encryption failure, and exact retention scopes."""
 
 import importlib.util
+import io
 import os
 import subprocess
 import tempfile
 import unittest
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stdout
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,6 +37,43 @@ def keys(prefix, instant):
 
 
 class BackupTest(unittest.TestCase):
+    def test_listing_decodes_url_keys_once_and_preserves_opaque_cursor(self):
+        for encoding, encoded, expected in (
+            (
+                "url",
+                "daily%2F2026%2F10%2F09%2Fmanifest.json",
+                "daily/2026/10/09/manifest.json",
+            ),
+            ("url", "literal%252Fplus%2Bname", "literal%2Fplus+name"),
+            ("", "literal%2Fplus+name", "literal%2Fplus+name"),
+        ):
+            with self.subTest(encoding=encoding, encoded=encoded):
+                body = (
+                    '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+                    f"<Contents><Key>{encoded}</Key><Size>248</Size>"
+                    "<LastModified>2026-10-09T01:26:50Z</LastModified></Contents>"
+                    f"<EncodingType>{encoding}</EncodingType>"
+                    "<IsTruncated>true</IsTruncated>"
+                    "<NextContinuationToken>opaque%2Fcursor+value</NextContinuationToken>"
+                    "</ListBucketResult>"
+                ).encode()
+                final = (
+                    b"<ListBucketResult><IsTruncated>false</IsTruncated>"
+                    b"</ListBucketResult>"
+                )
+                client = object.__new__(backup.S3)
+                client.request = unittest.mock.Mock(
+                    side_effect=[
+                        nullcontext(SimpleNamespace(content=body)),
+                        nullcontext(SimpleNamespace(content=final)),
+                    ]
+                )
+                self.assertEqual(client.list("daily/")[0]["key"], expected)
+                self.assertEqual(
+                    client.request.call_args_list[1].args[2]["ContinuationToken"],
+                    "opaque%2Fcursor+value",
+                )
+
     def test_real_df_stub_refuses_before_any_export(self):
         with tempfile.TemporaryDirectory() as directory:
             staging = Path(directory)
@@ -183,6 +221,60 @@ class BackupTest(unittest.TestCase):
                     self.assertNotIn("complete_multipart_upload", operations)
                 self.assertEqual(operations.count("upload_part"), 10000)
 
+    def test_restore_errors_expose_only_fixed_categories(self):
+        # Sensitive SQL split across reads must not enter the public result.
+        sensitive = b"ALTER ROLE private PASSWORD 'secret-hash'; signed-url-token "
+        result = set()
+        drill.classify_restore_errors(
+            io.BytesIO(sensitive + b"No space left on device"), result
+        )
+        self.assertEqual(result, {"disk-full"})
+        result = set()
+        drill.classify_restore_errors(io.BytesIO(sensitive), result)
+        self.assertEqual(result, set())
+
+    def test_sqlstate_diagnostics_ignore_error_text_and_split_prefixes(self):
+        # Force a SQLSTATE prefix across the 4096-byte stream boundary.
+        private = b"private-row-value PASSWORD 'secret-hash' signed-url-token"
+        log = b"x" * 4085 + b"restore-sqlstate:23505 " + private
+        log += b"\nrestore-sqlstate:00000 startup\nrestore-sqlstate:58P01 " + private
+        self.assertEqual(drill.sqlstates_from_log(io.BytesIO(log)), ["23505", "58P01"])
+
+    def test_check_failure_extracts_identifiers_without_row_values(self):
+        errors = (
+            b'new row for relation "scores" violates check constraint '
+            b'"scores_bench_version_floor"\nDETAIL: secret-row-value signed-url-token\n'
+            b'check constraint "other_check" of relation "other_table" '
+            b"is violated by some row"
+        )
+        categories, checks = set(), set()
+        drill.classify_restore_errors(io.BytesIO(errors), categories, checks)
+        self.assertEqual(
+            checks,
+            {("scores", "scores_bench_version_floor"), ("other_table", "other_check")},
+        )
+        self.assertEqual(categories, {"check-violation"})
+
+    def test_check_report_rejects_identifiers_fabricated_by_row_content(self):
+        output = io.StringIO()
+        with (
+            patch.object(
+                drill.subprocess,
+                "check_output",
+                return_value='[["scores","known_check"]]',
+            ),
+            redirect_stdout(output),
+        ):
+            drill.report_check_names(
+                "container",
+                "role",
+                {("scores", "known_check"), ("private_row_token", "secret_value")},
+            )
+        self.assertEqual(
+            output.getvalue(),
+            'Restore CHECK identifiers: [["scores", "known_check"]]\n',
+        )
+
     def manifest(self):
         return {
             "format_version": 1,
@@ -190,6 +282,7 @@ class BackupTest(unittest.TestCase):
             "started_at": "2026-10-04T06:30:00+00:00",
             "completed_at": "2026-10-04T06:40:00+00:00",
             "server_version_num": 170004,
+            "database_locale": dict(drill.DATABASE_LOCALE),
             "alembic_version": "abcdef",
             "row_counts": dict.fromkeys(backup.TABLES, 100),
             "objects": [
@@ -222,6 +315,37 @@ class BackupTest(unittest.TestCase):
         for actual in ({"agents": 106}, {"agents": 0}, {"unknown": 100}):
             with self.assertRaises(ValueError):
                 drill.compare_counts({"agents": 100}, actual)
+
+    def test_drill_requires_exact_source_locale(self):
+        for key, value in (
+            ("encoding", "LATIN1"),
+            ("collate", "en_US.utf8"),
+            ("ctype", "en_US.utf8"),
+            ("locale_provider", "i"),
+        ):
+            manifest = self.manifest()
+            manifest["database_locale"][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                drill.validate_database_locale(manifest, "20261004T063000Z")
+        for value in (None, {}, "C.UTF-8"):
+            manifest = self.manifest()
+            manifest["database_locale"] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                drill.validate_database_locale(manifest, "20261004T063000Z")
+
+    def test_only_exact_first_backup_can_omit_locale(self):
+        manifest = self.manifest()
+        del manifest["database_locale"]
+        manifest["objects"] = [
+            {"name": name, "sha256": digest}
+            for name, digest in drill.LEGACY_DIGESTS.items()
+        ]
+        drill.validate_database_locale(manifest, drill.LEGACY_STAMP)
+        with self.assertRaises(ValueError):
+            drill.validate_database_locale(manifest, "20261004T063000Z")
+        manifest["objects"][0]["sha256"] = "a" * 64
+        with self.assertRaises(ValueError):
+            drill.validate_database_locale(manifest, drill.LEGACY_STAMP)
 
     def test_drill_allows_five_minutes_of_clock_skew_but_no_more(self):
         data = self.manifest()

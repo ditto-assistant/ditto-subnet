@@ -1,5 +1,6 @@
 """Commit identity, effective-stake bounds and completed payout controls."""
 
+from collections import Counter
 from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -10,6 +11,7 @@ import pytest
 from ditto.chain.models import ChainMinerEarning, ChainMinerEmissionReceipt
 from ditto.chain.source_emission_verifier import (
     AUDITED_RUNTIME_CODE_HASHES,
+    SourceEmissionReadCache,
     VotingStake,
     WinnerBacking,
     evaluate_winner_payout,
@@ -192,6 +194,66 @@ def chain(request: pytest.FixtureRequest) -> tuple[AsyncMock, dict]:
 
     substrate.query_map.side_effect = mapping
     return substrate, state
+
+
+async def test_shared_cache_reads_each_parent_state_once(chain: tuple) -> None:
+    """A scan reads block N's post-state once, not again as N+1's parent.
+
+    The rate-limited archives meter exactly these reads, so a scan that
+    re-fetched them could not keep pace with the chain.
+    """
+    substrate, _ = chain
+    uncached = [
+        await read_source_emission_block(substrate, netuid=118, block=n)
+        for n in (100, 101)
+    ]
+    substrate.reset_mock()
+    cache = SourceEmissionReadCache()
+    cached = [
+        await read_source_emission_block(
+            substrate, netuid=118, block=n, finalized_block=120, cache=cache
+        )
+        for n in (100, 101)
+    ]
+
+    assert cached == uncached
+    substrate.get_chain_finalised_head.assert_not_called()
+    substrate.get_block_header.assert_not_called()
+    assert Counter(c.args[0] for c in substrate.get_block_hash.call_args_list) == {
+        99: 1,
+        100: 1,
+        101: 1,
+    }
+    assert Counter(c.args[1][-1] for c in substrate.rpc_request.call_args_list) == {
+        "h99": 1,
+        "h100": 1,
+        "h101": 1,
+    }
+    keys = Counter(
+        c.kwargs["block_hash"]
+        for c in substrate.query_map.call_args_list
+        if c.kwargs["storage_function"] == "Keys"
+    )
+    assert keys == {"h99": 1, "h100": 1, "h101": 1}
+    controls = Counter(
+        (c.kwargs["storage_function"], c.kwargs["block_hash"])
+        for c in substrate.query.call_args_list
+        if c.kwargs["storage_function"]
+        in ("MechanismCountCurrent", "CommitRevealWeightsEnabled")
+    )
+    assert set(controls.values()) == {1}
+    assert len(controls) == 6
+
+
+async def test_finalized_block_from_the_scanner_still_bounds_the_read(
+    chain: tuple,
+) -> None:
+    substrate, _ = chain
+    with pytest.raises(ValueError, match="not finalized"):
+        await read_source_emission_block(
+            substrate, netuid=118, block=100, finalized_block=99
+        )
+    substrate.get_chain_finalised_head.assert_not_called()
 
 
 async def test_successful_singleton_reveal_binds_exact_ciphertext(chain: tuple) -> None:

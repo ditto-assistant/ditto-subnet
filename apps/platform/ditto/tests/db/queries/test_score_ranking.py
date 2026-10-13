@@ -21,6 +21,7 @@ Three things are pinned here:
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -31,6 +32,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -1525,6 +1527,198 @@ class TestContinuationFloor:
         assert isinstance(details, dict)
         assert set(details) == {"composite_stderr", "confirmation_seeds"}
         assert details["confirmation_seeds"] is None
+
+    @pytest.mark.parametrize(
+        "document",
+        [None, {}, [], [{"composite_stderr": 99}], 8, "text", True],
+    )
+    async def test_partial_details_preserves_non_object_and_missing_key_semantics(
+        self, session_maker: async_sessionmaker[AsyncSession], document
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "P" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        async with session_maker() as session, session.begin():
+            for score in await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            ):
+                score.details = document
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                bench_version=_BENCH,
+                include_fingerprints=False,
+                details_keys=("composite_stderr", "confirmation_seeds", "missing"),
+            )
+        assert len(rows) == 1
+        assert rows[0].details == {
+            "composite_stderr": None,
+            "confirmation_seeds": None,
+            "missing": None,
+        }
+
+    @pytest.mark.parametrize("family_members", [False, True])
+    async def test_partial_details_preserves_signed_median_and_arbitrary_keys(
+        self, session_maker: async_sessionmaker[AsyncSession], family_members: bool
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "Q" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        async with session_maker() as session, session.begin():
+            for score in await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            ):
+                score.details = {
+                    "composite_stderr": score.composite / 100,
+                    'odd".key': {"signed_row": score.validator_hotkey},
+                    "explicit_null": None,
+                    "audit_payload": "large irrelevant telemetry" * 5000,
+                }
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                bench_version=_BENCH,
+                include_fingerprints=False,
+                include_family_members=family_members,
+                details_keys=(
+                    "composite_stderr",
+                    'odd".key',
+                    "explicit_null",
+                    'odd".key',
+                ),
+            )
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.composite == 0.8
+        assert row.validator_hotkey == _VALIDATORS[0]
+        assert row.details == {
+            "composite_stderr": 0.008,
+            'odd".key': {"signed_row": _VALIDATORS[0]},
+            "explicit_null": None,
+        }
+        assert row.stored_composite_stderr == 0.008
+
+    @pytest.mark.parametrize("cache_mode", ["current", "null", "legacy", "array_decoy"])
+    async def test_fold_projection_keeps_exact_median_and_legacy_fallback(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        cache_mode: str,
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "S" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        keys = ("composite_stderr", "confirmation_seeds", "confirmation_composites")
+        async with session_maker() as session, session.begin():
+            for score in await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            ):
+                score.details = {
+                    "composite_stderr": score.composite / 100,
+                    "confirmation_seeds": [11, 22],
+                    "confirmation_composites": [score.composite, 0.95],
+                    "audit_payload": "irrelevant audit telemetry" * 5000,
+                }
+        if cache_mode != "current":
+            trigger = "scores_stderr_projection_refresh"
+            # Simulate interrupted migration/rollback and a malformed internal
+            # cache. Production writes cannot supply one: the trigger derives it.
+            async with session_maker() as session, session.begin():
+                await session.execute(
+                    text(f"ALTER TABLE scores DISABLE TRIGGER {trigger}")
+                )
+                projection = {
+                    "null": None,
+                    "legacy": {"composite_stderr": 99},
+                    "array_decoy": list(keys),
+                }[cache_mode]
+                await session.execute(
+                    text(
+                        "UPDATE scores SET "
+                        "stderr_projection=CAST(:projection AS jsonb) "
+                        "WHERE agent_id=:agent_id"
+                    ),
+                    {
+                        "projection": None
+                        if projection is None
+                        else json.dumps(projection),
+                        "agent_id": agent_id,
+                    },
+                )
+                await session.execute(
+                    text(f"ALTER TABLE scores ENABLE TRIGGER {trigger}")
+                )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session, bench_version=_BENCH, details_keys=keys
+            )
+        assert len(rows) == 1
+        assert rows[0].validator_hotkey == _VALIDATORS[0]
+        assert rows[0].details == {
+            "composite_stderr": 0.008,
+            "confirmation_seeds": [11, 22],
+            "confirmation_composites": [0.8, 0.95],
+        }
+        assert rows[0].stored_composite_stderr == 0.008
+
+    @pytest.mark.parametrize("keys", [(), ("bench_version",), ("bench_version",) * 2])
+    async def test_partial_details_empty_and_single_key_projection(
+        self, session_maker: async_sessionmaker[AsyncSession], keys: tuple[str, ...]
+    ) -> None:
+        await _seed(
+            session_maker,
+            hotkey="5" + "R" * 47,
+            composites=(0.9,) * 3,
+            created_at=_BASE,
+        )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session, bench_version=_BENCH, details_keys=keys
+            )
+        assert len(rows) == 1
+        assert rows[0].details == ({"bench_version": _BENCH} if keys else {})
+
+    @pytest.mark.parametrize("family_members", [False, True])
+    async def test_scalar_stderr_stays_bound_to_the_signed_median_row(
+        self, session_maker: async_sessionmaker[AsyncSession], family_members: bool
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "M" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        async with session_maker() as session, session.begin():
+            scores = await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            )
+            for score in scores:
+                score.details = {
+                    "composite_stderr": score.composite / 100,
+                    "audit_payload": "large unused telemetry" * 5000,
+                }
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                bench_version=_BENCH,
+                include_details=False,
+                include_fingerprints=False,
+                include_family_members=family_members,
+            )
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.composite == 0.8
+        assert row.validator_hotkey == _VALIDATORS[0]
+        assert row.stored_composite_stderr == 0.008
+        assert row.details is None
 
     async def test_scalar_stderr_degrades_to_none_on_malformed_values(
         self, session_maker: async_sessionmaker[AsyncSession]

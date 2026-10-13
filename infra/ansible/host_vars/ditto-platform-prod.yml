@@ -80,3 +80,6 @@ platform_treasury_manual_enabled: true
 platform_treasury_manual_project: sn118-gamma-custody
 platform_treasury_manual_request_topic: sn118-manual-requests
 platform_treasury_manual_report_subscription: sn118-manual-reports
+
+# SN-49: separate read-only backup credentials; dev retains the disabled default.
+platform_database_backup_reader_enabled: true

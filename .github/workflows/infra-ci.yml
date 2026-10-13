@@ -91,6 +91,12 @@ jobs:
           terraform -chdir=infra/terraform/modules/coding-hosted-host init -backend=false -input=false -lockfile=readonly
           terraform -chdir=infra/terraform/modules/coding-hosted-host test
 
+      - name: Test shared compute deletion protection with mocked provider
+        if: matrix.root == 'infra/terraform/stacks/gcp-platform'
+        run: |
+          terraform -chdir=infra/terraform/modules/compute/gcp init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/terraform/modules/compute/gcp test
+
       - name: Test optional compute snapshot attachments with mocked provider
         if: matrix.root == 'infra/terraform/stacks/gcp-platform'
         run: |
@@ -114,7 +120,7 @@ jobs:
 
       - name: Syntax-check subnet playbooks
         run: |
-          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml; do
+          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-pg-backup.yml playbooks/gcp-platform-app.yml playbooks/gcp-platform-backup-reader.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml; do
             uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml "$playbook"
           done
 
@@ -146,6 +152,9 @@ jobs:
 
       - name: Check backup restore workflow
         run: python3 ../scripts/test-platform-pg-backup-workflow.py
+
+      - name: Prove recovery collation preserves canonical key order
+        run: python3 ../scripts/test-platform-pg-restore-locale.py
 
       - name: Check native PostgreSQL admission rendering without host mutations
         run: >-

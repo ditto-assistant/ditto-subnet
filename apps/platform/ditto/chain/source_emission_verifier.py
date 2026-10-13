@@ -13,8 +13,10 @@ Every other WeightsSet invalidates prior provenance even if weights are equal.
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -215,12 +217,39 @@ def _ciphertext_hash(value: Any) -> str:
     return "0x" + hashlib.blake2b(data, digest_size=32).hexdigest()
 
 
+class SourceEmissionReadCache:
+    """Finalized state that consecutive blocks of one scan both read.
+
+    Block N's post-state is block N+1's parent state, and state at a finalized
+    block hash never changes, so a cached read is the same fact as a re-read.
+    Sharing it halves the archive work per scanned block, which is what the
+    rate-limited archives meter. Bounded so a long scan cannot grow it.
+    """
+
+    def __init__(self, limit: int = 64) -> None:
+        self._values: dict[tuple[Any, ...], Any] = {}
+        self._limit = limit
+
+    async def get(
+        self, key: tuple[Any, ...], load: Callable[[], Awaitable[Any]]
+    ) -> Any:
+        if key in self._values:
+            return self._values[key]
+        value = await load()
+        if len(self._values) >= self._limit:
+            self._values.pop(next(iter(self._values)))
+        self._values[key] = value
+        return value
+
+
 async def read_source_emission_block(
     substrate: Any,
     *,
     netuid: int,
     block: int,
     expected_runtime_code_hash: str | None = None,
+    finalized_block: int | None = None,
+    cache: SourceEmissionReadCache | None = None,
 ) -> SourceEmissionBlock:
     """Read a finalized block; unsupported runtime/shape raises, never advances.
 
@@ -228,6 +257,10 @@ async def read_source_emission_block(
     same-block payout may consume post-block vectors only when every write has
     one attributable initialization reveal before the unique emission event.
     All other same-block writes remain ambiguous and fail closed.
+
+    A scanner that already read the finalized head passes ``finalized_block``,
+    and one ``cache`` across consecutive blocks so each parent state is read
+    once. Neither changes what is verified, only how often it is fetched.
     """
     if block < 1:
         raise ValueError("positive block required")
@@ -236,22 +269,39 @@ async def read_source_emission_block(
         and expected_runtime_code_hash not in AUDITED_RUNTIME_CODE_HASHES
     ):
         raise ValueError("configured runtime fingerprint is not audited")
-    finalized_hash = await substrate.get_chain_finalised_head()
-    header = await substrate.get_block_header(block_hash=finalized_hash)
-    raw_number = header.get("header", header).get("number")
-    finalized = (
-        int(raw_number, 16) if isinstance(raw_number, str) else _uint(raw_number)
-    )
+    if cache is None:
+        cache = SourceEmissionReadCache()
+    if finalized_block is None:
+        finalized_hash = await substrate.get_chain_finalised_head()
+        header = await substrate.get_block_header(block_hash=finalized_hash)
+        raw_number = header.get("header", header).get("number")
+        finalized = (
+            int(raw_number, 16) if isinstance(raw_number, str) else _uint(raw_number)
+        )
+    else:
+        finalized = finalized_block
     if block > finalized:
         raise ValueError("block is not finalized")
-    block_hash, parent_hash = await asyncio.gather(
-        substrate.get_block_hash(block), substrate.get_block_hash(block - 1)
-    )
+
+    async def hash_at(number: int) -> Any:
+        return await cache.get(
+            ("block_hash", number),
+            functools.partial(substrate.get_block_hash, number),
+        )
+
+    block_hash, parent_hash = await asyncio.gather(hash_at(block), hash_at(block - 1))
     if not block_hash or not parent_hash:
         raise ValueError("missing historical block")
     code_hashes = await asyncio.gather(
         *(
-            substrate.rpc_request("state_getStorageHash", ["0x3a636f6465", at])
+            cache.get(
+                ("code", at),
+                functools.partial(
+                    substrate.rpc_request,
+                    "state_getStorageHash",
+                    ["0x3a636f6465", at],
+                ),
+            )
             for at in (parent_hash, block_hash)
         )
     )
@@ -298,7 +348,7 @@ async def read_source_emission_block(
 
     controls = await asyncio.gather(
         *(
-            read(name, at, [netuid])
+            cache.get((netuid, name, at), functools.partial(read, name, at, [netuid]))
             for at in (parent_hash, block_hash)
             for name in ("MechanismCountCurrent", "CommitRevealWeightsEnabled")
         )
@@ -308,7 +358,10 @@ async def read_source_emission_block(
     if controls[1] is not True or controls[3] is not True:
         raise ValueError("unsupported direct/manual weights mode")
     key_maps = await asyncio.gather(
-        mapping("Keys", parent_hash), mapping("Keys", block_hash)
+        *(
+            cache.get((netuid, "Keys", at), functools.partial(mapping, "Keys", at))
+            for at in (parent_hash, block_hash)
+        )
     )
     keys = dict(key_maps[0])
     if (

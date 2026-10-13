@@ -311,7 +311,10 @@ async def test_a_provisional_entry_without_the_crown_marker_names_no_champion(
     assert response.json()["message"].startswith("artifact_pin_mismatch: ")
 
 
-async def test_relay_diagnostics_authenticated_latest_only(app, client, session_maker):
+@pytest.mark.parametrize("schema_version", [1, 2, 3])
+async def test_relay_diagnostics_authenticated_latest_only(
+    app, client, session_maker, schema_version
+):
     from ditto.api_models.receipt_diagnostics import (
         ReceiptDiagnosticObservation,
         ReceiptDiagnosticReport,
@@ -325,13 +328,33 @@ async def test_relay_diagnostics_authenticated_latest_only(app, client, session_
 
     def signed(timestamp, status="uncertain"):
         report = ReceiptDiagnosticReport(
+            schema_version=schema_version,
             validator_hotkey=_HOTKEY,
             netuid=app.state.config.chain.netuid,
             timestamp=timestamp,
             observation=ReceiptDiagnosticObservation(
                 submission_status=status,
                 submission_observed_at=timestamp,
-                recovery_status="page_complete",
+                recovery_status="validating_claim_failed",
+                last_validation=(
+                    {
+                        "error_count": 1,
+                        "fields": ["root:value_error:service_allocation"],
+                    }
+                    if schema_version >= 2
+                    else None
+                ),
+                failure_context=(
+                    {
+                        "claimed_schema_version": 1,
+                        "task_id": 12,
+                        "claimed_epoch_index": 123,
+                        "claimed_commit_block": 110,
+                        "attempt_id": "11111111-1111-4111-8111-111111111111",
+                    }
+                    if schema_version == 3
+                    else None
+                ),
             ),
         )
         return SubmitReceiptDiagnostics(
@@ -350,6 +373,16 @@ async def test_relay_diagnostics_authenticated_latest_only(app, client, session_
     body["report"]["observation"]["submission_status"] = "accepted"
     assert (await post(body)).status_code == 401
     assert (await post(signed(1))).status_code == 401
+    if schema_version >= 2:
+        tampered = signed(now)
+        tampered["report"]["observation"]["last_validation"]["fields"] = [
+            "root:value_error:vector_digest"
+        ]
+        assert (await post(tampered)).status_code == 401
+    if schema_version == 3:
+        tampered = signed(now)
+        tampered["report"]["observation"]["failure_context"]["task_id"] += 1
+        assert (await post(tampered)).status_code == 401
     result = await post(signed(now))
     assert result.status_code == 200, result.text
     assert (await post(signed(now - 1, "accepted"))).status_code == 200
@@ -379,6 +412,23 @@ async def test_relay_diagnostics_authenticated_latest_only(app, client, session_
     observation = status.json()["release_gate"]["receipt_diagnostics"][0]
     assert observation["report"]["validator_hotkey"] == _HOTKEY
     assert observation["stale"] is False
+    assert observation["report"]["schema_version"] == schema_version
+    assert observation["report"]["observation"]["last_validation"] == (
+        {"error_count": 1, "fields": ["root:value_error:service_allocation"]}
+        if schema_version >= 2
+        else None
+    )
+    assert observation["report"]["observation"].get("failure_context") == (
+        {
+            "claimed_schema_version": 1,
+            "task_id": 12,
+            "claimed_epoch_index": 123,
+            "claimed_commit_block": 110,
+            "attempt_id": "11111111-1111-4111-8111-111111111111",
+        }
+        if schema_version == 3
+        else None
+    )
     assert status.json()["release_gate"]["confirmed_kings"] == 0
 
 
@@ -395,7 +445,7 @@ async def test_validator_prefixed_receipt_signature_is_accepted(
     assert (await _post(client, body)).status_code == 401
 
 
-async def _setup_enforcing(app, maker, *, empty=True):
+async def _setup_enforcing(app, maker, *, empty=True, follower=False):
     from pathlib import Path
 
     from ditto_screening_protocol.treasury_approval import (
@@ -432,7 +482,11 @@ async def _setup_enforcing(app, maker, *, empty=True):
                 "fleet": (
                     pin.fleet[0].model_copy(
                         update={
-                            "validator_hotkey": _HOTKEY,
+                            "validator_hotkey": (
+                                bittensor.Keypair.create_from_uri("//Bob").ss58_address
+                                if follower
+                                else _HOTKEY
+                            ),
                             "approved_policy_digest": policy.digest,
                         }
                     ),
@@ -483,15 +537,27 @@ async def _setup_enforcing(app, maker, *, empty=True):
 
 
 @pytest.mark.parametrize("empty", [True, False])
+@pytest.mark.parametrize("follower", [True, False])
 async def test_enforcing_receipt_binds_exact_frozen_pin_and_allows_empty_competition(
-    app, client, session_maker, empty
+    app, client, session_maker, empty, follower
 ):
-    raw = await _setup_enforcing(app, session_maker, empty=empty)
+    raw = await _setup_enforcing(app, session_maker, empty=empty, follower=follower)
+    assert (
+        raw["validator_hotkey"]
+        in [member["validator_hotkey"] for member in raw["treasury_pin"]["fleet"]]
+    ) is not follower
     first = await _post(client, _signed(raw))
     assert first.status_code == 200, first.text
     replay = await _post(client, _signed(raw))
     assert replay.status_code == 200, replay.text
     assert replay.json() == first.json()
+    forged = _signed(raw)
+    forged["signature"] = "00" * 64
+    assert (await _post(client, forged)).status_code == 401
+    raw["validator_hotkey"] = bittensor.Keypair.create_from_uri(
+        "//Charlie"
+    ).ss58_address
+    assert (await _post(client, _signed(raw))).status_code == 401
 
 
 @pytest.mark.parametrize(
@@ -503,12 +569,13 @@ async def test_enforcing_receipt_binds_exact_frozen_pin_and_allows_empty_competi
         "legacy_receipt",
     ],
 )
+@pytest.mark.parametrize("follower", [True, False])
 async def test_enforcing_receipt_rejects_unbound_or_legacy_contract(
-    app, client, session_maker, fault
+    app, client, session_maker, fault, follower
 ):
     from uuid import UUID
 
-    raw = await _setup_enforcing(app, session_maker, empty=False)
+    raw = await _setup_enforcing(app, session_maker, empty=False, follower=follower)
     if fault == "legacy_receipt":
         raw.update(schema_version=1)
         raw.pop("treasury_pin")

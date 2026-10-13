@@ -66,7 +66,9 @@ from ditto.api_models import (
     PublicAgentSummary,
     PublicArtifactDownload,
     PublicArtifactRelease,
+    PublicAthReview,
     PublicAuditEntry,
+    PublicAuditPairCounts,
     PublicAuditResponse,
     PublicBenchConfigResponse,
     PublicBenchCorpusEntry,
@@ -340,6 +342,10 @@ from ditto.db.queries.artifact_release import (
 from ditto.db.queries.artifact_release_settings import (
     ArtifactReleasePolicy,
     artifact_release_policy,
+)
+from ditto.db.queries.ath_review_queue_slo import (
+    load_agent_ath_review_state,
+    load_ath_review_queue_slo_snapshot,
 )
 from ditto.db.queries.audit import GENESIS_HASH, list_audit_entries
 from ditto.db.queries.benchmark_admission import (
@@ -778,6 +784,8 @@ def _public_weights_fold(row: ValidatorHeartbeat) -> PublicWeightsFold | None:
 
 async def _pin_decorations(
     request: Request,
+    *,
+    max_epoch_index: int | None = None,
 ) -> tuple[list[LedgerEpochSnapshot], dict[str, PublicWeightsFold]]:
     """The two newest pins and every validator's reported fold, fail-soft.
 
@@ -791,7 +799,14 @@ async def _pin_decorations(
         return [], {}
     try:
         async with session_maker() as session:
-            pins = list(await list_pins(session, netuid=config.chain.netuid, limit=2))
+            pins = list(
+                await list_pins(
+                    session,
+                    netuid=config.chain.netuid,
+                    limit=2,
+                    max_epoch_index=max_epoch_index,
+                )
+            )
             rows = (await session.scalars(select(ValidatorHeartbeat))).all()
     except SQLAlchemyError:
         logger.warning("pin agreement decoration unavailable", exc_info=True)
@@ -810,11 +825,29 @@ def _decorate_vectors_with_pins(
     pins: list[LedgerEpochSnapshot],
     folds: dict[str, PublicWeightsFold],
     burn_hotkey: str | None,
+    ignore_invalid_pins: bool = False,
 ) -> tuple[list[PublicValidatorWeightVector], PublicPinAgreement | None]:
     current = pins[0] if pins else None
     previous = pins[1] if len(pins) > 1 else None
-    expected_current = pin_expected_shares(current) if current is not None else None
-    expected_previous = pin_expected_shares(previous) if previous is not None else None
+
+    def expected(
+        pin: LedgerEpochSnapshot | None,
+    ) -> tuple[dict[str, float] | None, bool]:
+        if pin is None:
+            return None, False
+        try:
+            return pin_expected_shares(pin), False
+        except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
+            if not ignore_invalid_pins:
+                raise
+            logger.warning(
+                "validator pin provenance unavailable kind=invalid_stored_pin epoch=%d",
+                pin.epoch_index,
+            )
+            return None, True
+
+    expected_current, invalid_current = expected(current)
+    expected_previous, invalid_previous = expected(previous)
     decorated: list[PublicValidatorWeightVector] = []
     matching = 0
     for vector in vectors:
@@ -824,6 +857,10 @@ def _decorate_vectors_with_pins(
             expected_previous=expected_previous,
             burn_hotkey=burn_hotkey,
         )
+        if invalid_current or invalid_previous and verdict != "current":
+            # A valid current match is independently meaningful. A failed
+            # previous comparison cannot establish divergence from both pins.
+            verdict = "unknown"
         matching += verdict == "current"
         decorated.append(
             vector.model_copy(
@@ -840,7 +877,7 @@ def _decorate_vectors_with_pins(
             matching=matching,
             total=len(decorated),
         )
-        if current is not None
+        if current is not None and not invalid_current
         else None
     )
     return decorated, agreement
@@ -1636,6 +1673,27 @@ def _safe_transform_robustness(details: dict) -> tuple[float | None, int | None]
     return value, pairs
 
 
+def _safe_audit_pairs(details: dict) -> PublicAuditPairCounts | None:
+    """Pull this run's own transform-audit counts, tolerating bad blobs.
+
+    Reads the scorer's per-run ``audit_pairs`` only, never the validator's
+    ``audit_pairs_pooled`` (which sums several confirmation runs), so the
+    published counts match the run whose gate they explain.
+    """
+    raw = details.get("audit_pairs")
+    if not isinstance(raw, dict):
+        return None
+    counts: dict[str, int] = {}
+    for key in ("both_correct", "base_only", "transform_only", "both_wrong"):
+        value = raw.get(key, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        counts[key] = value
+    if sum(counts.values()) == 0:
+        return None
+    return PublicAuditPairCounts(**counts)
+
+
 def _safe_categories(details: dict) -> list[PublicCategoryStat] | None:
     """Pull the per-category breakdown, dropping any malformed entries."""
     raw = details.get("per_category")
@@ -2060,6 +2118,9 @@ _QUALITY_FACTOR_SPECS = (
 )
 
 
+_APPLIED_FACTOR_KEYS = frozenset({"tool_efficiency", "memory_over_call"})
+
+
 def _unit_float(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -2082,9 +2143,10 @@ def _safe_quality_factors(
         multiplier = _unit_float(explicit.get(key))
         if multiplier is None:
             multiplier = _unit_float(details.get(multiplier_key))
-        # This field has always represented the exact applied factor; the other
-        # observed metrics are not assumed to equal their versioned curves.
-        if key == "tool_efficiency" and multiplier is None:
+        # These fields record the exact applied factor (memory_over_call since
+        # issue #533); the other observed metrics are not assumed to equal their
+        # versioned curves.
+        if key in _APPLIED_FACTOR_KEYS and multiplier is None:
             multiplier = metric
         if metric is None and multiplier is None:
             continue
@@ -3303,6 +3365,7 @@ async def build_public_leaderboard(
     bench_version: int | None = None,
     *,
     strike_colliding_names: bool = True,
+    admission_only: bool = False,
 ) -> PublicLeaderboardResponse:
     """Best score per payment-time coldkey, with registration eligibility.
 
@@ -3310,23 +3373,25 @@ async def build_public_leaderboard(
     Legacy rows without payment provenance fall back to one position per hotkey.
     ``strike_colliding_names`` hides reserved-handle collisions on the public
     board; the admin projection keeps stored ``agents.name``.
+    ``admission_only`` is an internal projection of finalized ranks, IDs,
+    versions and official scores; it skips public display/emissions reads.
+    Public routes never expose this option.
     """
     now = datetime.now(UTC)
     from ditto.db.queries.benchmark_rollout import open_rollout
 
     # Resolve the hot-swappable efficiency-bonus policy (latest append-only
-    # revision overlaid on the env seed, short TTL) BEFORE ensure_efficiency_state
-    # opens its own transaction on this session — the resolver reads on an
-    # independent session so the request session stays pristine for that begin().
+    # revision overlaid on the env seed, short TTL). Both the resolver and
+    # materializer use independent sessions; composed endpoints can already
+    # have opened a transaction on the request session.
     # A backroom flip therefore lands on the next leaderboard read with no restart.
     efficiency_config = await request.app.state.efficiency_settings.resolve(
         getattr(request.app.state, "session_maker", None)
     )
     if efficiency_config.enabled and bench_version is None:
         # Materialize the current efficiency epoch (frozen cohort snapshot +
-        # insert-once bonus rows) before any other read opens a transaction on
-        # this session. A no-op below bench_version 7 and after the first call
-        # of an epoch; failure degrades to serving the board without bonuses.
+        # insert-once bonus rows). A no-op below bench_version 7 and after the
+        # first call of an epoch; failure serves the board without bonuses.
         try:
             await ensure_current_efficiency_state(
                 request.app.state,
@@ -3373,7 +3438,11 @@ async def build_public_leaderboard(
     # for public visibility: these rows are appended only to the provisional
     # section below, so they cannot rank, appear finalized, or earn emissions.
     v9_display_rows: list[LedgerRow] = []
-    if supports_confirmation(display_version) and v9_confirmation_mode == "enforce":
+    if (
+        not admission_only
+        and supports_confirmation(display_version)
+        and v9_confirmation_mode == "enforce"
+    ):
         authoritative_ids = {row.agent_id for row in ledger_rows}
         v9_display_rows = [
             replace(row, eligible=False)
@@ -3632,6 +3701,47 @@ async def build_public_leaderboard(
             set(registered_uids) if registered_uids is not None else None
         ),
     )
+    if admission_only:
+        # Finalized rank is fixed here, before family/provisional/UI enrichment.
+        # Share the authoritative calculation above rather than approximate its
+        # confirmation, continual, efficiency, registration or owner semantics.
+        metadata = {
+            agent_id: (name, version)
+            for agent_id, name, version in (
+                await session.execute(
+                    select(Agent.agent_id, Agent.name, Agent.version).where(
+                        Agent.agent_id.in_([row.agent_id for row in finalized_rows])
+                    )
+                )
+            ).tuples()
+        }
+        return PublicLeaderboardResponse(
+            generated_at=now,
+            count=len(finalized_rows),
+            current_bench_version=display_version,
+            scoring_bench_version=display_version,
+            emission_bench_version=active_version,
+            active_bench_version=active_version,
+            desired_bench_version=desired_version,
+            available_bench_versions=[],
+            selection_mode="historical"
+            if bench_version is not None
+            else "authoritative",
+            v9_confirmation_mode=v9_confirmation_mode,
+            registration_stale=registration_stale,
+            entries=[
+                _public_entry(
+                    rank,
+                    row,
+                    *metadata[row.agent_id],
+                    score_count=score_counts.get(row.agent_id, SCORING_QUORUM),
+                    official_composite=board_official_composites.get(
+                        row.agent_id, row.composite
+                    ),
+                )
+                for rank, row in enumerate(finalized_rows, start=1)
+            ],
+        )
     if finalized_rows:
         family_groups = await list_submission_family_members(
             session,
@@ -5693,6 +5803,11 @@ def _public_validator_score(s) -> PublicValidatorScore:
         transcript_sha256=_safe_transcript_sha256(details),
         transform_robustness=robustness,
         audit_case_count=audit_pairs,
+        audit_pairs=_safe_audit_pairs(details),
+        tool_efficiency=_unit_float(details.get("tool_efficiency")),
+        metamorphic_consistency=_unit_float(details.get("metamorphic_consistency")),
+        memory_over_call=_unit_float(details.get("memory_over_call")),
+        conversational_sanity=_unit_float(details.get("conversational_sanity")),
     )
 
 
@@ -7759,6 +7874,22 @@ async def agent_pipeline(
                 typical_p50_seconds=typical.p50_age_seconds,
                 typical_p95_seconds=typical.p95_age_seconds,
             )
+    ath_review: PublicAthReview | None = None
+    if agent.status == AgentStatus.ATH_PENDING_REVIEW:
+        # The operator snapshot's own statement, filtered to this agent, so
+        # the public reason can never drift from the operator one. A
+        # stranded-hold ghost reads as None here too.
+        ath_state = await load_agent_ath_review_state(session, agent_id=agent_id)
+        if ath_state is not None:
+            # Subnet-wide typical durations over every pending ATH hold. The
+            # queue is small, and the 10s response cache above bounds this.
+            ath_typical = (await load_ath_review_queue_slo_snapshot(session)).ath
+            ath_review = PublicAthReview(
+                reason=ath_state.reason,
+                age_seconds=ath_state.age_seconds,
+                typical_p50_seconds=ath_typical.p50_age_seconds,
+                typical_p95_seconds=ath_typical.p95_age_seconds,
+            )
     quarantines_by_attempt = {
         quarantine.attempt_id: quarantine for quarantine in quarantines
     }
@@ -8046,6 +8177,7 @@ async def agent_pipeline(
         admission_retry=admission_retry,
         validator_retry=validator_retry,
         ordinary_review=ordinary_review,
+        ath_review=ath_review,
         artifact_release=(
             await _artifact_release_snapshot(
                 session,

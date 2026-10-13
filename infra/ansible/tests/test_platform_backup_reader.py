@@ -1,5 +1,8 @@
 """Render actual Platform configuration for every reader/avatar combination."""
 
+import base64
+import copy
+import os
 import subprocess
 import tempfile
 import unittest
@@ -46,6 +49,168 @@ def render_case(reader_enabled, avatars_enabled):
 
 
 class ReaderEnvironmentTest(unittest.TestCase):
+    def test_temporary_rollback_is_exclusive_and_cleaned_only_after_success(self):
+        tasks = yaml.safe_load(
+            (
+                ROOT / "infra/ansible/playbooks/gcp-platform-backup-reader.yml"
+            ).read_text()
+        )[1]["tasks"]
+        start = next(i for i, task in enumerate(tasks) if "rollback" in task["name"])
+        original = "POSTGRES_HOST=synthetic-db\n"
+        for failed in (False, True):
+            with (
+                self.subTest(failed=failed),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                (root / ".env").write_text(original)
+                fixture_tasks = copy.deepcopy(tasks[start:])
+                fixture_tasks[0]["ansible.builtin.tempfile"]["prefix"] = (
+                    ".env.sn49-fixed-"
+                )
+                # Exercise exclusive allocation twice under the same timestamp.
+                allocate_again = copy.deepcopy(fixture_tasks[0])
+                allocate_again["register"] = "other_rollback"
+                fixture_tasks[1:1] = [
+                    allocate_again,
+                    {
+                        "ansible.builtin.assert": {
+                            "that": [
+                                "backup_reader_rollback.path != other_rollback.path"
+                            ]
+                        }
+                    },
+                    {
+                        "ansible.builtin.file": {
+                            "path": "{{ other_rollback.path }}",
+                            "state": "absent",
+                        }
+                    },
+                ]
+                preserve = next(
+                    task for task in fixture_tasks if "ansible.builtin.copy" in task
+                )
+                preserve["ansible.builtin.copy"].update(
+                    owner=os.getuid(), group=os.getgid()
+                )
+                if failed:
+                    update = next(task for task in fixture_tasks if "block" in task)
+                    update["block"].append(
+                        {"ansible.builtin.fail": {"msg": "synthetic update failure"}}
+                    )
+                fixture = [
+                    {
+                        "hosts": "localhost",
+                        "connection": "local",
+                        "gather_facts": False,
+                        "vars": {
+                            "platform_root": str(root),
+                            "backup_reader_env_stat": {
+                                "stat": {
+                                    "uid": os.getuid(),
+                                    "gid": os.getgid(),
+                                    "mode": "0640",
+                                }
+                            },
+                            "backup_reader_original": {
+                                "content": base64.b64encode(original.encode()).decode()
+                            },
+                            "backup_reader_pair": {
+                                "results": [
+                                    {"stdout": "hip_synthetic_reader"},
+                                    {"stdout": "synthetic_reader_secret"},
+                                ]
+                            },
+                        },
+                        "tasks": fixture_tasks,
+                    }
+                ]
+                fixture_file = root / "rollback.yml"
+                fixture_file.write_text(yaml.safe_dump(fixture))
+                result = subprocess.run(
+                    ["ansible-playbook", "-i", "localhost,", str(fixture_file)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(
+                    result.returncode == 0, not failed, result.stdout + result.stderr
+                )
+                copies = list(root.glob(".env.sn49-*"))
+                self.assertEqual(len(copies), int(failed))
+                if failed:
+                    self.assertEqual((root / ".env").read_text(), original)
+                    self.assertEqual(copies[0].read_text(), original)
+                    self.assertEqual(copies[0].stat().st_mode & 0o777, 0o600)
+                else:
+                    self.assertIn(
+                        "DATABASE_BACKUP_READER_ACCESS_KEY_ID=hip_synthetic_reader",
+                        (root / ".env").read_text(),
+                    )
+
+    def test_focused_reader_rejects_credential_reuse_and_unrelated_env_changes(self):
+        tasks = yaml.safe_load(
+            (
+                ROOT / "infra/ansible/playbooks/gcp-platform-backup-reader.yml"
+            ).read_text()
+        )[1]["tasks"]
+        checks = [
+            task
+            for task in tasks
+            if task["name"]
+            == "Validate the pair and reject reuse of avatar or trace credentials"
+        ] + [next(task for task in tasks if "block" in task)["block"][-1]]
+        original = "HIPPIUS_ACCESS_KEY_ID=hip_avatar\nPOSTGRES_HOST=10.30.0.4\n"
+        for case in ("valid", "reuse", "empty", "unrelated_change"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                updated = original + (
+                    "DATABASE_BACKUP_READER_ACCESS_KEY_ID=hip_reader\n"
+                    "DATABASE_BACKUP_READER_SECRET_ACCESS_KEY=synthetic_reader_secret\n"
+                )
+                if case == "unrelated_change":
+                    updated = updated.replace("10.30.0.4", "wrong-db")
+                fixture = [
+                    {
+                        "hosts": "localhost",
+                        "connection": "local",
+                        "gather_facts": False,
+                        "vars": {
+                            "backup_reader_pair": {
+                                "results": [
+                                    {
+                                        "stdout": "hip_avatar"
+                                        if case == "reuse"
+                                        else "hip_reader"
+                                    },
+                                    {
+                                        "stdout": ""
+                                        if case == "empty"
+                                        else "synthetic_reader_secret"
+                                    },
+                                ]
+                            },
+                            "backup_reader_original": {
+                                "content": base64.b64encode(original.encode()).decode()
+                            },
+                            "backup_reader_updated": {
+                                "content": base64.b64encode(updated.encode()).decode()
+                            },
+                        },
+                        "tasks": checks,
+                    }
+                ]
+                fixture_file = Path(temporary) / "reader-check.yml"
+                fixture_file.write_text(yaml.safe_dump(fixture))
+                result = subprocess.run(
+                    ["ansible-playbook", "-i", "localhost,", str(fixture_file)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(
+                    result.returncode == 0,
+                    case == "valid",
+                    result.stdout + result.stderr,
+                )
+
     def test_enabled_reader_rejects_empty_or_missing_fetch_results(self):
         tasks = yaml.safe_load(
             (ROOT / "infra/ansible/roles/platform_app/tasks/main.yml").read_text()

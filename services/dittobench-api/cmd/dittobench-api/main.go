@@ -2392,6 +2392,12 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// details blob so it survives the platform wire alongside the other factors).
 	report.Details.ConversationalSanity = report.ConversationalSanity
 	report.Details.MetamorphicConsistency = scorer.MetamorphicConsistency(perCase)
+	// The memory over-call multiplier the composite gate applied (issue #533):
+	// the same function AggregateForVersion folds in, so a published composite
+	// decomposes into its factors from the record alone.
+	if factor, ok := scorer.MemoryOverCallFactorForVersion(perCase, req.BenchVersion); ok {
+		report.Details.MemoryOverCall = &factor
+	}
 	if tr, pairs := scorer.TransformRobustness(perCase); tr != nil {
 		report.Details.TransformRobustness = tr
 		report.Details.AuditCaseCount = pairs

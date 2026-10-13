@@ -98,6 +98,78 @@ async def test_metadata_freshness_and_separate_reader(
     assert "reader-secret-fixture" not in result.model_dump_json()
 
 
+async def test_snapshot_reader_paginates_filtered_results_without_server_sort(
+    monkeypatch,
+):
+    seen = []
+    real_client = httpx.AsyncClient
+
+    def respond(request):
+        if request.url.host == "metadata.google.internal":
+            return httpx.Response(200, json={"access_token": "synthetic-token"})
+        seen.append(request)
+        if "orderBy" in request.url.params:
+            return httpx.Response(400, json={"error": "filter plus sort unsupported"})
+        assert request.url.params["filter"] == f'sourceDisk = "{service._DISK}"'
+        assert request.url.params["maxResults"] == "100"
+        assert "nextPageToken" in request.url.params["fields"]
+        if "pageToken" not in request.url.params:
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "name": "older",
+                            "creationTimestamp": "2026-10-06T23:23:12-07:00",
+                            "status": "READY",
+                            "diskSizeGb": "100",
+                        }
+                    ],
+                    "nextPageToken": "opaque/cursor+value",
+                },
+            )
+        assert request.url.params["pageToken"] == "opaque/cursor+value"
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "name": "newest",
+                        "creationTimestamp": "2026-10-07T23:23:12-07:00",
+                        "status": "READY",
+                        "diskSizeGb": "100",
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        service.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    result = await service.newest_snapshot()
+    assert result is not None and result.name == "newest"
+    assert len(seen) == 2
+
+
+async def test_snapshot_reader_rejects_repeated_pagination_token(monkeypatch):
+    real_client = httpx.AsyncClient
+
+    def respond(request):
+        if request.url.host == "metadata.google.internal":
+            return httpx.Response(200, json={"access_token": "synthetic-token"})
+        return httpx.Response(200, json={"items": [], "nextPageToken": "repeated"})
+
+    monkeypatch.setattr(
+        service.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    with pytest.raises(ValueError, match="pagination incomplete"):
+        await service.newest_snapshot()
+
+
 async def test_partial_commit_never_reports_fresh(monkeypatch):
     now = datetime(2026, 10, 4, 12, tzinfo=UTC)
     source = now - timedelta(hours=2)

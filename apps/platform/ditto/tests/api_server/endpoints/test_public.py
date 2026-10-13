@@ -46,6 +46,7 @@ from ditto.api_models.public import (
     PublicSubmissionPipeline,
     PublicSystemMetrics,
     PublicV9BaseEvidence,
+    PublicValidatorScore,
     public_validation_failure_code,
 )
 from ditto.api_models.screener import (
@@ -429,6 +430,115 @@ def test_composite_breakdown_exposes_public_safe_quality_factor_telemetry() -> N
     assert factors["transform_robustness"].audit_count == 12
     assert "other_quality_effects" not in factors
     assert "expected" not in breakdown.model_dump_json()
+
+
+def test_composite_breakdown_treats_memory_over_call_as_applied_factor() -> None:
+    # Issue #533: the scorer records memory_over_call as the exact multiplier
+    # it applied, so the breakdown can fold it rather than leaving it in the
+    # unexplained remainder.
+    breakdown = public_endpoint._composite_breakdown(
+        tool_mean=1.0,
+        memory_mean=1.0,
+        final_composite=0.875,
+        details={
+            "raw_composite": 0.875,
+            "tool_efficiency": 1.0,
+            "memory_over_call": 0.875,
+        },
+    )
+
+    assert breakdown is not None
+    factors = {factor.key: factor for factor in breakdown.quality_factors}
+    assert factors["memory_over_call"].metric == pytest.approx(0.875)
+    assert factors["memory_over_call"].multiplier == pytest.approx(0.875)
+    assert "other_quality_effects" not in factors
+
+
+def _gate_factor_score(details: dict) -> PublicValidatorScore:
+    return public_endpoint._public_validator_score(
+        SimpleNamespace(
+            validator_hotkey=_VALIDATOR_C,
+            composite=0.8,
+            tool_mean=0.9,
+            memory_mean=0.8,
+            median_ms=500,
+            n=120,
+            seed=42,
+            run_id="run-gate-factors",
+            signature="ab" * 64,
+            generated_at=datetime(2026, 10, 9, tzinfo=UTC),
+            details=details,
+        )
+    )
+
+
+def test_public_validator_score_publishes_every_stored_gate_factor() -> None:
+    score = _gate_factor_score(
+        {
+            "bench_version": 14,
+            "tool_efficiency": 0.995152,
+            "metamorphic_consistency": 0.961538,
+            "memory_over_call": 0.984615,
+            "conversational_sanity": 1,
+            "transform_robustness": 0.888889,
+            "audit_case_count": 9,
+            "audit_pairs": {
+                "both_correct": 7,
+                "base_only": 1,
+                "transform_only": 0,
+                "both_wrong": 1,
+            },
+            "audit_pairs_pooled": {
+                "both_correct": 20,
+                "base_only": 3,
+                "transform_only": 1,
+                "both_wrong": 2,
+            },
+        }
+    )
+
+    published = score.model_dump(mode="json")
+    assert published["tool_efficiency"] == pytest.approx(0.995152)
+    assert published["metamorphic_consistency"] == pytest.approx(0.961538)
+    assert published["memory_over_call"] == pytest.approx(0.984615)
+    assert published["conversational_sanity"] == 1.0
+    assert published["transform_robustness"] == pytest.approx(0.888889)
+    assert published["audit_case_count"] == 9
+    # Per-run counts, never the validator's cross-run pool.
+    assert published["audit_pairs"] == {
+        "both_correct": 7,
+        "base_only": 1,
+        "transform_only": 0,
+        "both_wrong": 1,
+    }
+
+
+def test_public_validator_score_gate_factors_are_optional_and_fail_closed() -> None:
+    legacy = _gate_factor_score({"bench_version": 8}).model_dump(mode="json")
+    for key in (
+        "audit_pairs",
+        "tool_efficiency",
+        "metamorphic_consistency",
+        "memory_over_call",
+        "conversational_sanity",
+    ):
+        assert legacy[key] is None
+
+    malformed = _gate_factor_score(
+        {
+            "tool_efficiency": True,
+            "metamorphic_consistency": 1.5,
+            "memory_over_call": "0.9",
+            "conversational_sanity": float("nan"),
+            "audit_pairs": {"both_correct": 3, "base_only": -1},
+        }
+    )
+    assert malformed.tool_efficiency is None
+    assert malformed.metamorphic_consistency is None
+    assert malformed.memory_over_call is None
+    assert malformed.conversational_sanity is None
+    assert malformed.audit_pairs is None
+    assert _gate_factor_score({"audit_pairs": {}}).audit_pairs is None
 
 
 def test_composite_breakdown_shows_no_token_penalty_when_within_budget() -> None:
@@ -2664,7 +2774,142 @@ class TestPublicBenchmarkTimeline:
         assert min(versions) >= public_endpoint._TIMELINE_MIN_BENCH_VERSION
 
 
+def _check_finalized_admission_parity(monkeypatch):
+    """Reuse public-board scenarios to check the admission contract fields."""
+    original = public_endpoint.build_public_leaderboard
+
+    async def checked(*args, **kwargs):
+        full = await original(*args, **kwargs)
+        # Admission consumes only the default live board; historical callers
+        # keep their existing query-count contract and are outside this mode.
+        if kwargs.get("bench_version") is not None or (
+            len(args) > 3 and args[3] is not None
+        ):
+            return full
+        compact = await original(*args, **kwargs, admission_only=True)
+
+        def admission_rows(board):
+            return [
+                (
+                    entry.rank,
+                    entry.agent_id,
+                    entry.bench_version,
+                    entry.official_composite,
+                )
+                for entry in board.entries
+                if entry.finalized
+            ]
+
+        assert admission_rows(compact) == admission_rows(full)
+        return full
+
+    monkeypatch.setattr(public_endpoint, "build_public_leaderboard", checked)
+
+
+async def test_admission_keeps_full_confirmation_authority_and_skips_display(
+    app, session_maker, record_property
+):
+    from fastapi import Request, Response
+    from sqlalchemy import event
+
+    from ditto.tests.api_server.endpoints.test_admin_confirmation_bundles import (
+        activate_bench_version,
+        seed_completed_bundle,
+    )
+
+    confirmed, _ = await seed_completed_bundle(session_maker)
+    unconfirmed = await _seed_k3(
+        session_maker,
+        miner=_MINER_B,
+        composites=[0.99] * 3,
+        details={"bench_version": 9},
+    )
+    unconfirmed = UUID(unconfirmed)
+    base_only = UUID(
+        await _seed_k3(
+            session_maker,
+            miner="5" + "F" * 47,
+            composites=[0.97] * 3,
+            details={"bench_version": 9},
+        )
+    )
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        agent = await session.get(Agent, confirmed)
+        assert agent is not None
+        agent.miner_hotkey = _MINER_A
+        for index in range(3):
+            session.add(
+                Score(
+                    agent_id=confirmed,
+                    validator_hotkey=f"validator-{index}",
+                    bench_version=9,
+                    run_id=f"confirmed-{index}",
+                    seed=index,
+                    composite=0.75,
+                    tool_mean=0.75,
+                    memory_mean=0.75,
+                    median_ms=500,
+                    n=114,
+                    generated_at=now,
+                )
+            )
+    for index, (agent_id, hotkey) in enumerate(
+        ((confirmed, _MINER_A), (unconfirmed, _MINER_B))
+    ):
+        await _seed_payment(
+            session_maker,
+            agent_id=str(agent_id),
+            miner_hotkey=hotkey,
+            miner_coldkey="5SharedConfirmationOwner",
+            index=index,
+        )
+    await activate_bench_version(session_maker, 9)
+    _install_db(app, session_maker)
+    app.state.session_maker = session_maker
+    request = Request({"type": "http", "app": app})
+    counts = []
+    for admission_only in (False, True):
+        statements = []
+        async with session_maker() as session:
+            bind = session.get_bind()
+
+            def before_execute(*args, observed=statements):
+                observed.append(args[2])
+
+            event.listen(bind, "before_cursor_execute", before_execute)
+            try:
+                board = await public_endpoint.build_public_leaderboard(
+                    request,
+                    Response(),
+                    session,
+                    admission_only=admission_only,
+                )
+            finally:
+                event.remove(bind, "before_cursor_execute", before_execute)
+        counts.append(len(statements))
+        finalized = [entry for entry in board.entries if entry.finalized]
+        assert [
+            (entry.rank, entry.agent_id, entry.bench_version) for entry in finalized
+        ] == [(1, confirmed, 9)]
+        assert finalized[0].official_composite == pytest.approx(0.65)
+        assert all(entry.agent_id != unconfirmed for entry in board.entries)
+        if not admission_only:
+            assert any(
+                entry.agent_id == base_only and not entry.finalized
+                for entry in board.entries
+            )
+        else:
+            assert len(board.entries) == 1
+    record_property("admission_statement_counts", counts)
+    assert counts[1] < counts[0]
+
+
 class TestPublicLeaderboard:
+    @pytest.fixture(autouse=True)
+    def admission_parity(self, monkeypatch):
+        _check_finalized_admission_parity(monkeypatch)
+
     async def test_leaderboard_publishes_confirmation_policy_mode(
         self,
         app: FastAPI,

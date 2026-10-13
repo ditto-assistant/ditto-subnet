@@ -1,141 +1,131 @@
-"""Cap an HTTP body before the application can spool it.
+"""Bound every request body before any endpoint parses or authenticates it.
 
-Starlette writes a multipart file part to a spooled temporary file as the
-bytes arrive, and the upload signature is checked only after that parse. A
-declared ``Content-Length`` above the cap is refused without calling the
-application. A chunked body is cut off at the same cap, so the spool cannot
-grow past the largest body the API actually accepts.
+Endpoints enforce their own size caps, but only after the body has been read:
+Starlette spools a multipart upload to disk in full before ``/upload/agent``
+sees a byte, and the validator and screener routes call ``request.body()``
+ahead of their header-only auth. Nothing upstream bounds the body either
+(ditto-subnet#2770), so one unauthenticated request could fill a disk or the
+event loop's memory.
+
+This is a pure ASGI middleware, so it sees the raw ``receive`` channel rather
+than a re-buffered copy. Each request gets one cap: the first route pattern
+that fully matches the path, else the default. A declared ``Content-Length``
+over the cap is answered ``413`` before anything reads the body. Otherwise
+``receive`` is wrapped to count the bytes actually streamed, which also covers
+chunked bodies with no ``Content-Length``; once the running total passes the
+cap the read fails, whatever the app was about to answer is dropped, and the
+client gets the same ``413`` envelope.
+
+The caps bound the transport, not the endpoint contract. A route cap is the
+endpoint's own limit (plus multipart framing where a file part is checked), so
+the endpoint's check stays in place behind it; the factory builds that table.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-from collections.abc import Awaitable, Callable, MutableMapping
-from typing import Any
+import re
+from collections.abc import Iterable
 
-from ditto.api_server.middleware.request_id import REQUEST_ID_HEADER, request_id_var
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-# A published transcript is the largest body a route accepts. The default
-# upload tarball is 20 MiB and fits inside this. One extra MiB covers
-# multipart framing when an operator raises the tarball cap above 32 MiB.
-_TRANSCRIPT_MAX_BYTES = 32 << 20
-_MULTIPART_FRAMING_BYTES = 1 << 20
-
-# Same code the HTTP exception handler stamps on a route-level 413.
-_ERROR_CODE_HTTP_EXCEPTION = 3002
-_TOO_LARGE_MESSAGE = "request body is too large"
+from ditto.api_server.middleware.error_envelope import (
+    ERROR_CODE_REQUEST_TOO_LARGE,
+    envelope_response,
+)
 
 logger = logging.getLogger(__name__)
 
-Scope = MutableMapping[str, Any]
-Message = MutableMapping[str, Any]
-Receive = Callable[[], Awaitable[Message]]
-Send = Callable[[Message], Awaitable[None]]
-ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
+class RequestBodyTooLarge(Exception):
+    """Raised from ``receive`` once the streamed body passes its cap.
 
-def request_body_limit_bytes(tarball_max_bytes: int) -> int:
-    """Bytes the edge and the application may accept for one request."""
-    if type(tarball_max_bytes) is not int or tarball_max_bytes < 1:
-        raise ValueError("tarball_max_bytes must be a positive int")
-    return max(
-        _TRANSCRIPT_MAX_BYTES, tarball_max_bytes + _MULTIPART_FRAMING_BYTES
-    )
+    Deliberately not a ``ValueError``: body parsers that swallow decode errors
+    (``request.json()`` callers) must not mistake it for a malformed body.
+    """
 
 
 class RequestBodyLimitMiddleware:
-    """Refuse a body larger than ``max_bytes`` before it is parsed."""
+    """Answer ``413`` once a request body exceeds its route's byte cap."""
 
-    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
-        if type(max_bytes) is not int or max_bytes < 1:
-            raise ValueError("max_bytes must be a positive int")
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        default_max_bytes: int,
+        route_max_bytes: Iterable[tuple[str, int]] = (),
+    ) -> None:
         self.app = app
-        self.max_bytes = max_bytes
+        self._default_max_bytes = default_max_bytes
+        self._route_max_bytes = [
+            (re.compile(pattern), limit) for pattern, limit in route_max_bytes
+        ]
+
+    def max_bytes_for(self, path: str) -> int:
+        """The cap for ``path``: the first matching route pattern, else default."""
+        for pattern, limit in self._route_max_bytes:
+            if pattern.fullmatch(path):
+                return limit
+        return self._default_max_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        claimed = _content_length(scope)
-        if claimed is not None and claimed > self.max_bytes:
-            await _send_too_large(send)
+        limit = self.max_bytes_for(scope["path"])
+        declared = Headers(scope=scope).get("content-length", "")
+        if declared.isdigit() and int(declared) > limit:
+            await self._reject(scope, receive, send, limit)
             return
 
         received = 0
-        rejected = False
-        started = False
-
-        async def guarded_send(message: Message) -> None:
-            nonlocal started
-            if rejected:
-                return
-            if message["type"] == "http.response.start":
-                started = True
-            await send(message)
+        exceeded = False
+        response_started = False
 
         async def limited_receive() -> Message:
-            nonlocal received, rejected, started
-            if rejected:
-                return {"type": "http.disconnect"}
+            nonlocal received, exceeded
+            if exceeded:
+                raise RequestBodyTooLarge
             message = await receive()
-            if message["type"] != "http.request":
-                return message
-            chunk = message.get("body", b"") or b""
-            if received + len(chunk) > self.max_bytes:
-                rejected = True
-                if not started:
-                    await _send_too_large(send)
-                    started = True
-                return {"type": "http.disconnect"}
-            received += len(chunk)
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    exceeded = True
+                    raise RequestBodyTooLarge
             return message
+
+        async def guarded_send(message: Message) -> None:
+            nonlocal response_started
+            # After an overflow the app can only be answering for the aborted
+            # read (FastAPI turns it into a 400); the 413 below replaces it.
+            if exceeded:
+                return
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
 
         try:
             await self.app(scope, limited_receive, guarded_send)
         except Exception:
-            if not rejected:
+            if not exceeded:
                 raise
-            logger.exception("application failed after the request body was refused")
+        if exceeded:
+            if response_started:
+                logger.warning(
+                    f"request body over {limit} bytes on {scope['path']} "
+                    "after the response started; connection dropped"
+                )
+                return
+            await self._reject(scope, receive, send, limit)
 
-
-def _content_length(scope: Scope) -> int | None:
-    for name, value in scope.get("headers", ()):
-        if name.lower() == b"content-length":
-            try:
-                claimed = int(value)
-            except (TypeError, ValueError):
-                return None
-            if claimed < 0:
-                return None
-            return claimed
-    return None
-
-
-def _too_large_body() -> bytes:
-    request_id = request_id_var.get()
-    return json.dumps(
-        {
-            "error_code": _ERROR_CODE_HTTP_EXCEPTION,
-            "message": _TOO_LARGE_MESSAGE,
-            "request_id": request_id,
-        },
-        separators=(",", ":"),
-    ).encode("utf-8")
-
-
-async def _send_too_large(send: Send) -> None:
-    body = _too_large_body()
-    request_id = request_id_var.get().encode("ascii", "replace")
-    await send(
-        {
-            "type": "http.response.start",
-            "status": 413,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode("ascii")),
-                (REQUEST_ID_HEADER.lower().encode("ascii"), request_id),
-            ],
-        }
-    )
-    await send({"type": "http.response.body", "body": body})
+    @staticmethod
+    async def _reject(scope: Scope, receive: Receive, send: Send, limit: int) -> None:
+        logger.warning(f"request body over {limit} bytes on {scope['path']} refused")
+        response = envelope_response(
+            413,
+            ERROR_CODE_REQUEST_TOO_LARGE,
+            f"request body exceeds {limit} bytes",
+            headers={"Connection": "close"},
+        )
+        await response(scope, receive, send)

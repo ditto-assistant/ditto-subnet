@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
@@ -51,6 +52,37 @@ class TestCreateDbEngine:
         assert engine.url.username == "custom"
         assert engine.url.database == "other"
         assert engine.sync_engine.hide_parameters is True
+
+    async def test_control_plane_connections_disable_jit_without_server_change(
+        self, engine: AsyncEngine
+    ):
+        # Use the production factory against the same real test database,
+        # retaining the fixture connection as an unchanged server-default control.
+        config = make_postgres_config(
+            host=engine.url.host,
+            port=engine.url.port,
+            user=engine.url.username,
+            password=engine.url.password,
+            database=engine.url.database,
+        )
+        app_engine = create_db_engine(config)
+        try:
+            async with engine.connect() as reference:
+                default_jit = await reference.scalar(text("SHOW jit"))
+                async with (
+                    app_engine.connect() as first,
+                    app_engine.connect() as second,
+                ):
+                    assert await first.scalar(text("SHOW jit")) == "off"
+                    assert await second.scalar(text("SHOW jit")) == "off"
+                    await first.rollback()
+                    assert await first.scalar(text("SHOW jit")) == "off"
+                await app_engine.dispose()
+                async with app_engine.connect() as fresh:
+                    assert await fresh.scalar(text("SHOW jit")) == "off"
+                assert await reference.scalar(text("SHOW jit")) == default_jit
+        finally:
+            await app_engine.dispose()
 
     def test_wraps_sqlalchemy_error_in_database_connection_error(
         self, monkeypatch: pytest.MonkeyPatch

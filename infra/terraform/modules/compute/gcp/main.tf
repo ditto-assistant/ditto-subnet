@@ -74,7 +74,7 @@ resource "google_compute_instance" "this" {
     enable_integrity_monitoring = var.enable_integrity_monitoring
   }
 
-  deletion_protection = true
+  deletion_protection = var.deletion_protection
 
   lifecycle {
     # The PG VM carries irreplaceable state (Postgres data disk, River worker).

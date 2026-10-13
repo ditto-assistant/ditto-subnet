@@ -30,6 +30,16 @@ presence. These govern over the historical examples below:
 - W5/W6 permit qualifying calculators and model-authored programs, including
   explicit semantic delegation. I5 needs a proven benchmark-shaped semantic
   mechanism; formulas, labels, or prescriptive prose alone are insufficient.
+- Before calling a rule grader-shaped, read the v13 grader itself. Since #1872
+  (2026-09-15), `v13ArgSatisfied` routes any argument with a
+  `RequiredArgClaims` entry to `argClaimSatisfied`. That includes the
+  `update_memory` handoff content (`v13FactUpdateClaim`, the `fact_update`
+  kind). That kind accepts paraphrase: `v13FactCarried` needs only the slot
+  word plus the value. A "subject + copula" wording rule alone is therefore not
+  fitted to the v13 grader. Charge only independent grounds, such as a W10
+  merge into host schema descriptions, deleting existing content, or a semantic
+  retry. The exact-phrase `argValueEqual` path applies only to arguments with no
+  claim.
 - I4/W8 govern finalized fields and protocol-defined overflow. Historical
   references to slot-length caps do not authorize arbitrary field deletion,
   relocation, rescaling, or vocabulary mapping.

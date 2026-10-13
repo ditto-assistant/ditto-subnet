@@ -295,6 +295,8 @@ import {
   sourceDiffFileInputSchema,
   sourceDiffInputSchema,
   sourceDiffManifestSchema,
+  lineageSourceDiffInputSchema,
+  lineageSourceDiffFileInputSchema,
   sourceExcerptInputSchema,
   sourceExcerptSchema,
   sourceListingInputSchema,
@@ -399,6 +401,7 @@ import {
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
   sourceReviewQueueSloSchema,
+  athReviewQueueSloSchema,
   validatorCapacitySummarySchema,
   outlierEscalationDryRunInputSchema,
   outlierEscalationDryRunSchema,
@@ -1728,6 +1731,13 @@ const SOURCE_REVIEW_QUEUE_SLO_PATH = '/api/v1/admin/source-review-queue-slo'
 export async function fetchSourceReviewQueueSlo() {
   const payload = await platformAdminRequest(SOURCE_REVIEW_QUEUE_SLO_PATH)
   return sourceReviewQueueSloSchema.parse(payload)
+}
+
+const ATH_REVIEW_QUEUE_SLO_PATH = '/api/v1/admin/ath-review-queue-slo'
+
+export async function fetchAthReviewQueueSlo() {
+  const payload = await platformAdminRequest(ATH_REVIEW_QUEUE_SLO_PATH)
+  return athReviewQueueSloSchema.parse(payload)
 }
 
 export async function fetchOutlierEscalation(rawInput: unknown = {}) {
@@ -3672,6 +3682,29 @@ export async function fetchCopyReviewSourceDiffFile(rawInput: unknown, actor: st
   const query = new URLSearchParams({ path: input.path })
   const payload = await platformAdminRequest(
     `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/source-diff/file?${query.toString()}`,
+    { actor },
+  )
+  return sourceDiffFileDetailSchema.parse(payload)
+}
+
+export async function fetchLineageSourceDiff(rawInput: unknown, actor: string) {
+  const input = lineageSourceDiffInputSchema.parse(rawInput)
+  const query = new URLSearchParams({ reference_agent_id: input.referenceAgentId })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/lineage-source-diff?${query.toString()}`,
+    { actor },
+  )
+  return sourceDiffManifestSchema.parse(payload)
+}
+
+export async function fetchLineageSourceDiffFile(rawInput: unknown, actor: string) {
+  const input = lineageSourceDiffFileInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    reference_agent_id: input.referenceAgentId,
+    path: input.path,
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/lineage-source-diff/file?${query.toString()}`,
     { actor },
   )
   return sourceDiffFileDetailSchema.parse(payload)

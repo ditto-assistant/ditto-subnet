@@ -12,6 +12,8 @@ usage() {
     cat >&2 <<'EOF'
 Usage: query_prod_db.sh <sql-or-file|->
 
+DITTO_DB_DISABLE_JIT=1 disables JIT only for this read-only connection.
+
 Examples:
   query_prod_db.sh 'SELECT count(*) FROM agents'
   query_prod_db.sh ./query.sql
@@ -28,6 +30,13 @@ if [[ ! "$timeout_ms" =~ ^[0-9]+$ ]] || (( timeout_ms < 1 || timeout_ms > 120000
     echo "error: DITTO_DB_STATEMENT_TIMEOUT_MS must be an integer from 1 through 120000" >&2
     exit 2
 fi
+
+jit_option=""
+case "${DITTO_DB_DISABLE_JIT:-0}" in
+    0) ;;
+    1) jit_option=" -c jit=off" ;;
+    *) echo "error: DITTO_DB_DISABLE_JIT must be 0 or 1" >&2; exit 2 ;;
+esac
 
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/ditto-platform-db-readonly.XXXXXX")"
 query_file="$tmpdir/query.sql"
@@ -72,13 +81,37 @@ if not re.match(r"^\s*(select|with|table|values|explain|show)\b", without_commen
 blocked = re.compile(
     r"\b(insert|update|delete|merge|create|alter|drop|truncate|grant|revoke|"
     r"comment|copy|call|do|vacuum|cluster|reindex|refresh|set|reset|"
-    r"begin|start|commit|rollback|end|prepare|execute|deallocate|discard|lock|"
+    r"begin|start|commit|rollback|prepare|execute|deallocate|discard|lock|"
     r"listen|unlisten|notify|security\s+label)\b",
     re.I,
 )
 match = blocked.search(without_comments)
 if match:
     raise SystemExit(f"error: blocked SQL keyword: {match.group(0)}")
+
+# END closes both CASE expressions and transactions. Permit only the former,
+# without letting a quoted CASE or an unfinished expression cross a statement
+# boundary and hide a transaction escape. Keep all other conservative gates.
+syntax = re.sub(
+    r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|"
+    r"(?P<dollar>\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$).*?(?P=dollar)|"
+    r"/\*.*?\*/|--[^\n]*",
+    " ",
+    text,
+    flags=re.S,
+)
+case_depth = 0
+for token in re.findall(r"\bCASE\b|\bEND\b|;", syntax, re.I):
+    if token.upper() == "CASE":
+        case_depth += 1
+    elif token.upper() == "END":
+        if case_depth == 0:
+            raise SystemExit("error: blocked SQL keyword: END")
+        case_depth -= 1
+    elif case_depth:
+        raise SystemExit("error: CASE cannot cross a statement boundary")
+if case_depth:
+    raise SystemExit("error: unterminated CASE expression")
 PY
 
 {
@@ -89,7 +122,7 @@ PY
     printf '\n;\n%s\n' 'ROLLBACK;'
 } > "$wrapper_file"
 
-remote_command="sudo -n -u deploy bash -lc 'set -euo pipefail; set -a; source ${REMOTE_ENV}; set +a; export PGPASSWORD=\"\$POSTGRES_PASSWORD\"; export PGOPTIONS=\"-c default_transaction_read_only=on -c statement_timeout=${timeout_ms} -c lock_timeout=5000\"; exec psql --no-password --host=\"\$POSTGRES_HOST\" --port=\"\$POSTGRES_PORT\" --username=\"\$POSTGRES_USER\" --dbname=\"\$POSTGRES_DB\" --file=-'"
+remote_command="sudo -n -u deploy bash -lc 'set -euo pipefail; set -a; source ${REMOTE_ENV}; set +a; export PGPASSWORD=\"\$POSTGRES_PASSWORD\"; export PGOPTIONS=\"-c default_transaction_read_only=on -c statement_timeout=${timeout_ms} -c lock_timeout=5000${jit_option}\"; exec psql --no-password --host=\"\$POSTGRES_HOST\" --port=\"\$POSTGRES_PORT\" --username=\"\$POSTGRES_USER\" --dbname=\"\$POSTGRES_DB\" --file=-'"
 
 gcloud compute ssh "$INSTANCE" \
     --project="$PROJECT" \

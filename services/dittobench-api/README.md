@@ -192,7 +192,10 @@ Before switching a deployment to `enforce`, watch for
 — those are the calls that will start failing. Under `enforce` the process
 refuses to start without a credential rather than 401ing every caller, and the
 published Compose default token is treated as unset, so enforcement requires a
-real per-host secret.
+real per-host secret. The inference-session broker follows the same mode: it
+still admits the published default under `shadow` (logging one would-reject
+line), and refuses it under `enforce`. In ditto-subnet's Compose stack, set
+`DITTOBENCH_CONTROL_AUTH_MODE` in `.env` and recreate `dittobench-api`.
 
 ## Endpoints
 

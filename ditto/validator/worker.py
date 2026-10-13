@@ -2324,8 +2324,8 @@ class ValidatorWorker:
         # failed lookup must not skip the epoch. A previous owner hotkey is
         # not reused: the key rotates, and a stale target can pay the wrong one.
         if enforcing:
-            assert treasury_pin is not None
-            service_bps = treasury_pin.policy.service_bps
+            assert isinstance(treasury_pin, EnforcingTreasuryPin)
+            service_bps = treasury_pin.service_bps
         else:
             service_bps = 0
         if self._config.burn_hotkey is not None or owner_burn_destination_required(

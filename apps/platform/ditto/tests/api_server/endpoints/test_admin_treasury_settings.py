@@ -194,6 +194,39 @@ async def test_requires_admin(
     assert (await client.get(_URL)).status_code in {401, 403}
 
 
+@pytest.mark.parametrize("allocation", [2500, 7500, 10000])
+async def test_full_range_proposal_persists_without_changing_weights(
+    app, client, session_maker, allocation
+):
+    _install(app, session_maker)
+    payload = {
+        "expected_revision": 0,
+        "settings": {
+            "allocation_version": 2,
+            "treasury_hotkey": "5" + "a" * 47,
+            "treasury_coldkey": "5" + "b" * 47,
+            "service_buckets": [
+                {
+                    "bucket_id": "gm",
+                    "purpose": "GM inference credits",
+                    "allocation_bps": allocation,
+                    "holding_coldkey": "5" + "c" * 47,
+                }
+            ],
+        },
+        "reason": "operator requested Gamma emission split",
+        "confirmation": "RECORD TREASURY SHADOW POLICY",
+    }
+    created = await client.post(_URL, headers=_HEADERS, json=payload)
+    assert created.status_code == 200, created.text
+    current = (await client.get(_URL, headers=_HEADERS)).json()
+    assert current["miner_bps"] == 10000 - allocation
+    assert current["effective"]["service_buckets"][0]["allocation_bps"] == allocation
+    assert current["weight_effect"] == "none"
+    stale = await client.post(_URL, headers=_HEADERS, json=payload)
+    assert stale.status_code == 409
+
+
 async def test_v2_service_wallets_are_shadow_only_and_v1_history_is_preserved(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -246,7 +279,7 @@ async def test_v2_service_wallets_are_shadow_only_and_v1_history_is_preserved(
         {"service_buckets": [settings["service_buckets"][0]] * 2},
         {
             "service_buckets": [
-                settings["service_buckets"][0],
+                {**settings["service_buckets"][0], "allocation_bps": 10000},
                 {
                     **settings["service_buckets"][1],
                     "allocation_bps": 1,
@@ -391,6 +424,9 @@ async def test_readiness_proves_current_managed_permission_without_peer_bindings
     result = await get_treasury_ledger_readiness(request, None, session)
     state.chain.read_epoch_schedule.assert_awaited_once_with(118)
     state.ledger_pin_materializer._load_or_build.assert_not_awaited()
+    assert result.producer is not None
+    assert result.producer.epoch_index is None
+    assert result.producer.in_progress is False
     assert "provider secret" not in result.model_dump_json()
     assert state.ledger_pin_materializer.newest_known is None
     if schedule_fault in {"none", "next_epoch"}:

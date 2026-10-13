@@ -95,6 +95,16 @@ async def get_treasury_ledger_readiness(
     row = await latest_pin(session, netuid=state.config.chain.netuid)
     readiness = shadow_readiness(state, row, runtime=config)
     materializer = getattr(state, "ledger_pin_materializer", None)
+    loop = getattr(state, "ledger_pin_loop", None)
+    readiness = readiness.model_copy(
+        update={
+            "producer": materializer.diagnostic() if materializer is not None else None,
+            "producer_loop": loop.diagnostic() if loop is not None else None,
+            "chain_reads": list(
+                getattr(state, "treasury_chain_read_diagnostics", {}).values()
+            ),
+        }
+    )
     if readiness.enforcement_configured and materializer is not None:
         probe = await materializer.inspect_schedule(state)
         schedule = probe.schedule
@@ -123,8 +133,6 @@ async def get_treasury_ledger_readiness(
         )
     if readiness.configured_proposal is None:
         return readiness
-    from datetime import UTC, datetime
-
     from ditto.api_server.treasury_weights import (
         current_managed_dispatch_observation,
         read_treasury_fleet,
@@ -133,7 +141,6 @@ async def get_treasury_ledger_readiness(
     try:
         fleet = await read_treasury_fleet(
             session,
-            now=datetime.now(UTC),
             policy_digest=readiness.configured_proposal.digest,
             collector_digest=readiness.configured_proposal.collector_policy_digest,
             required_hotkeys=config.treasury_managed_validator_hotkeys,
@@ -296,7 +303,22 @@ async def get_treasury_settings(
         revision=latest.revision if latest else 0,
         miner_bps=effective.miner_bps,
         history=[_revision(row) for row in history],
+        weight_effect="next_epoch" if await _gamma_is_live_knob(session) else "none",
     )
+
+
+async def _gamma_is_live_knob(session: AsyncSession) -> bool:
+    from ditto.api_server.treasury_runtime import latest_runtime_row, runtime_revision
+
+    row = await latest_runtime_row(session)
+    if row is None:
+        return False
+    try:
+        settings = runtime_revision(row).settings
+    except ValueError:
+        # The save path refuses this state too; never report it as inert.
+        raise HTTPException(409, "Gamma runtime control is invalid") from None
+    return settings.mode == "enforce" and settings.approval.policy.ranged
 
 
 @router.post("", response_model=TreasurySettingsRevision)
@@ -306,24 +328,41 @@ async def record_treasury_settings(
     session: SessionDep,
 ) -> TreasurySettingsRevision:
     from ditto.api_server.treasury_runtime import (
+        gamma_only_change,
         latest_runtime_row,
         lock_runtime,
         runtime_revision,
+        settings_match_policy,
     )
 
     await lock_runtime(session)
     runtime_row = await latest_runtime_row(session)
+    runtime = None
     if runtime_row is not None:
         try:
             runtime = runtime_revision(runtime_row)
         except ValueError:
             raise HTTPException(409, "Gamma runtime control is invalid") from None
-        if runtime.settings.mode == "enforce":
-            raise HTTPException(409, "Pause Gamma before changing treasury settings")
     latest = await _latest(session)
     current = latest.revision if latest else 0
     if payload.expected_revision != current:
         raise HTTPException(status_code=409, detail="treasury policy changed; refresh")
+    if runtime is not None and runtime.settings.mode == "enforce":
+        # Enforcing epochs fold this allocation, like burn: only the Gamma %
+        # may move, and only inside the range the collector coldkey signed.
+        policy = runtime.settings.approval.policy
+        if (
+            latest is None
+            or not policy.ranged
+            or not gamma_only_change(
+                TreasurySettings.model_validate(latest.settings), payload.settings
+            )
+        ):
+            raise HTTPException(409, "Pause Gamma before changing treasury settings")
+        if not settings_match_policy(payload.settings, policy):
+            raise HTTPException(
+                409, "Gamma allocation is outside the signed policy range"
+            )
     canonical = json.dumps(
         payload.settings.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
     )

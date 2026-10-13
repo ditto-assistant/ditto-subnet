@@ -394,7 +394,6 @@ async def test_enforce_then_pause_retains_approval_and_refuses_pinned_dispatch(
                 s,
                 pin(),
                 pin().fleet[0].validator_hotkey,
-                now=datetime.now(UTC),
                 app_state=app.state,
             )
 

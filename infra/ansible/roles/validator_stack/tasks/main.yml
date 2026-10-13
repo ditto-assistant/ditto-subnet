@@ -12,6 +12,7 @@
       - validator_stack_longmem_capacity | int >= 0
       - validator_stack_longmem_capacity | int <= 4
       - validator_stack_longmem_capacity | int <= ((validator_stack_benchmark_capacity | int) + 1) // 2
+      - validator_stack_control_auth_mode in ['shadow', 'enforce']
       - not ((validator_stack_coding_executor_remote_enabled | bool) or (validator_stack_coding_executor_connectivity_canary_enabled | bool)) or validator_stack_coding_executor_identity_enabled | bool
       - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_enabled | bool
       - not (validator_stack_coding_executor_connectivity_canary_enabled | bool) or not (validator_stack_coding_executor_remote_enabled | bool)

@@ -64,6 +64,7 @@ from ditto.api_server.embedding import create_embedder
 from ditto.api_server.emission_eligibility import EmissionEligibilityResolver
 from ditto.api_server.endpoints import (
     admin_artifact_release_settings_router,
+    admin_ath_review_queue_slo_router,
     admin_ath_rulings_router,
     admin_attestation_router,
     admin_benchmark_rollout_router,
@@ -151,6 +152,9 @@ from ditto.api_server.endpoints import (
     validator_private_dataset,
     validator_router,
 )
+from ditto.api_server.endpoints import screener as screener_endpoints
+from ditto.api_server.endpoints import upload as upload_endpoints
+from ditto.api_server.endpoints import validator as validator_endpoints
 from ditto.api_server.endpoints.admin_benchmark_canary import (
     router as admin_benchmark_canary_router,
 )
@@ -160,7 +164,6 @@ from ditto.api_server.endpoints.admin_conversation import (
 from ditto.api_server.endpoints.screener_conversation import (
     router as screener_conversation_router,
 )
-from ditto.api_server.endpoints.upload import MAX_TARBALL_SIZE_BYTES
 from ditto.api_server.endpoints.validator_coding_hosted import HostedCodingControl
 from ditto.api_server.endpoints.validator_coding_hosted import (
     router as validator_coding_hosted_router,
@@ -189,7 +192,7 @@ from ditto.api_server.middleware import (
     register_exception_handlers,
 )
 from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
-from ditto.api_server.middleware.request_body_limit import request_body_limit_bytes
+from ditto.api_server.miner_avatar import MAX_AVATAR_BYTES
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
@@ -251,6 +254,44 @@ def _process_role() -> str:
             f"DITTO_ROLE must be {PLATFORM_ROLE!r} or {RELAY_ROLE!r}, got {role!r}"
         )
     return role
+
+
+# Multipart framing around a file part: boundaries, part headers, and the small
+# signed form fields that travel beside the tarball or avatar.
+_UPLOAD_FORM_OVERHEAD_BYTES = 1 << 20
+_AVATAR_FORM_OVERHEAD_BYTES = 64 << 10
+
+
+def _request_body_route_limits() -> tuple[tuple[str, int], ...]:
+    """Per-route body caps, each derived from the endpoint's own check.
+
+    Every other route gets ``config.request_body_max_bytes``. A route listed
+    here reads no more before it authenticates than its contract allows; the
+    multipart routes leave room for framing so the endpoint's exact file-size
+    check still answers a file just over its cap.
+    """
+    return (
+        (
+            r"/api/v1/upload/agent",
+            upload_endpoints.MAX_TARBALL_SIZE_BYTES + _UPLOAD_FORM_OVERHEAD_BYTES,
+        ),
+        (r"/api/v1/miner-avatars", MAX_AVATAR_BYTES + _AVATAR_FORM_OVERHEAD_BYTES),
+        (r"/api/v1/me/avatar", MAX_AVATAR_BYTES + _AVATAR_FORM_OVERHEAD_BYTES),
+        (
+            r"/api/v1/validator/agent/[^/]+/transcript/[^/]+",
+            validator_endpoints.TRANSCRIPT_MAX_BYTES,
+        ),
+        (r"/api/v1/validator/heartbeat", validator_endpoints.HEARTBEAT_MAX_BYTES),
+        (
+            r"/api/v1/validator/receipt-diagnostics",
+            validator_endpoints.RECEIPT_DIAGNOSTICS_MAX_BYTES,
+        ),
+        (
+            r"/api/v1/validator/weight-submission-receipt",
+            validator_endpoints.WEIGHT_RECEIPT_MAX_BYTES,
+        ),
+        (r"/api/v1/screener/heartbeat", screener_endpoints.HEARTBEAT_MAX_BYTES),
+    )
 
 
 def _efficiency_settings_ttl_seconds() -> float:
@@ -621,13 +662,13 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     from ditto.api_server.admin_activity import AdminActivityMiddleware
 
     app.add_middleware(AdminActivityMiddleware)
-    # Inside the request id, and outside every route. A multipart file is
-    # spooled as it arrives, before the upload signature is checked, so an
-    # oversized body has to be refused here. The public rate limiter stays
-    # opt-in; this cap is what bounds the spool when that limiter is off.
+    # Bodies are bounded before anything reads them -- the admin audit, the
+    # multipart spool, an endpoint's own check -- and just inside the request
+    # id so a 413 still carries its correlation id (ditto-subnet#2770).
     app.add_middleware(
         RequestBodyLimitMiddleware,
-        max_bytes=request_body_limit_bytes(MAX_TARBALL_SIZE_BYTES),
+        default_max_bytes=config.request_body_max_bytes,
+        route_max_bytes=_request_body_route_limits(),
     )
     app.add_middleware(RequestIDMiddleware)
 
@@ -721,6 +762,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_database_backup_router, prefix="/api/v1")
     app.include_router(admin_screening_infra_retry_router, prefix="/api/v1")
     app.include_router(admin_source_review_queue_slo_router, prefix="/api/v1")
+    app.include_router(admin_ath_review_queue_slo_router, prefix="/api/v1")
     app.include_router(admin_outlier_escalation_router, prefix="/api/v1")
     app.include_router(admin_submission_settings_router, prefix="/api/v1")
     app.include_router(admin_submission_deposit_address_router, prefix="/api/v1")

@@ -2,6 +2,286 @@
 
 <!-- version list -->
 
+## v0.358.2 (2026-10-13)
+
+### Bug Fixes
+
+- **backroom**: Publish the quarantine batch execute input schema
+  ([#2865](https://github.com/ditto-assistant/ditto-subnet/pull/2865),
+  [`7ffb648`](https://github.com/ditto-assistant/ditto-subnet/commit/7ffb64851bb0cf903c66889c92cd293606da6214))
+
+
+## v0.358.1 (2026-10-13)
+
+### Bug Fixes
+
+- **dittobench**: Stop charging stale request timestamps to the agent
+  ([#2866](https://github.com/ditto-assistant/ditto-subnet/pull/2866),
+  [`8875f2c`](https://github.com/ditto-assistant/ditto-subnet/commit/8875f2ce76655b33d26e674ef2cf28a94b077bb6))
+
+
+## v0.358.0 (2026-10-13)
+
+### Documentation
+
+- **backroom-review**: Correct clear-v42 precedent for the v13 claim grader
+  ([#2859](https://github.com/ditto-assistant/ditto-subnet/pull/2859),
+  [`4e5bbf8`](https://github.com/ditto-assistant/ditto-subnet/commit/4e5bbf8167bcea4bb25eb23644cb253e3547cf35))
+
+### Features
+
+- **treasury**: Let the coldkey sign a Gamma range adjustable from Backroom
+  ([#2861](https://github.com/ditto-assistant/ditto-subnet/pull/2861),
+  [`7431ce9`](https://github.com/ditto-assistant/ditto-subnet/commit/7431ce9cee9f21752491c06434e0ac133cfc0504))
+
+
+## v0.357.2 (2026-10-13)
+
+### Bug Fixes
+
+- **miner-cli**: Let ditto practice reject options it cannot honour
+  ([#2640](https://github.com/ditto-assistant/ditto-subnet/pull/2640),
+  [`f736eed`](https://github.com/ditto-assistant/ditto-subnet/commit/f736eed0e1b8c42161ec85420159a0d97623d06e))
+
+- **relay**: Apply Backroom requests-per-minute limits at admission
+  ([#2625](https://github.com/ditto-assistant/ditto-subnet/pull/2625),
+  [`1ec030e`](https://github.com/ditto-assistant/ditto-subnet/commit/1ec030eb031dbec01e39272e79b752877dad9563))
+
+
+## v0.357.1 (2026-10-13)
+
+### Bug Fixes
+
+- **platform**: Let the source-emission collector outpace the chain
+  ([#2852](https://github.com/ditto-assistant/ditto-subnet/pull/2852),
+  [`1a7bb89`](https://github.com/ditto-assistant/ditto-subnet/commit/1a7bb89ad0eaf6cf5e00c3b082d67e143c661f26))
+
+
+## v0.357.0 (2026-10-10)
+
+### Chores
+
+- **infra**: Prepare recovered coding host retirement
+  ([#2841](https://github.com/ditto-assistant/ditto-subnet/pull/2841),
+  [`b9ffad6`](https://github.com/ditto-assistant/ditto-subnet/commit/b9ffad6fbe51d0f4e9e7e91468927df6b1856301))
+
+- **infra**: Retire recovered native coding host
+  ([#2842](https://github.com/ditto-assistant/ditto-subnet/pull/2842),
+  [`447f33c`](https://github.com/ditto-assistant/ditto-subnet/commit/447f33c4d2a8726dbf857b6c5066bca600cace11))
+
+### Features
+
+- **gamma**: Allow service allocations up to 100 percent
+  ([#2845](https://github.com/ditto-assistant/ditto-subnet/pull/2845),
+  [`fe22d27`](https://github.com/ditto-assistant/ditto-subnet/commit/fe22d27fe55983414d6092ed30f941cb29f41924))
+
+
+## v0.356.17 (2026-10-09)
+
+### Bug Fixes
+
+- **chain**: Skip metadata startup for header-only RPC reads
+  ([#2822](https://github.com/ditto-assistant/ditto-subnet/pull/2822),
+  [`dbc3296`](https://github.com/ditto-assistant/ditto-subnet/commit/dbc32964452a701b5554f8fc912234ca6f0e9e45))
+
+- **ledger**: Project confirmation fold fields beside score audit JSON
+  ([#2824](https://github.com/ditto-assistant/ditto-subnet/pull/2824),
+  [`696611a`](https://github.com/ditto-assistant/ditto-subnet/commit/696611a873ae856ed1f8275f7ac6c957b294f30b))
+
+- **validator**: Report safe receipt failure coordinates
+  ([#2820](https://github.com/ditto-assistant/ditto-subnet/pull/2820),
+  [`e97d132`](https://github.com/ditto-assistant/ditto-subnet/commit/e97d132cd4bb43dd0a6e42ab7ee1786f524f4498))
+
+### Chores
+
+- **tests**: Retain SIGTERM drain failure diagnostics
+  ([#2825](https://github.com/ditto-assistant/ditto-subnet/pull/2825),
+  [`f787190`](https://github.com/ditto-assistant/ditto-subnet/commit/f787190581ec33bb76f3ff9ddd1f74e15dc4143b))
+
+
+## v0.356.16 (2026-10-09)
+
+### Bug Fixes
+
+- **observability**: Accept signed v3 receipt failure context
+  ([#2819](https://github.com/ditto-assistant/ditto-subnet/pull/2819),
+  [`a86cdb3`](https://github.com/ditto-assistant/ditto-subnet/commit/a86cdb33b1abfb2bf5514c145ae25de809330f48))
+
+
+## v0.356.15 (2026-10-09)
+
+### Bug Fixes
+
+- **platform**: Populate validator weight pin and fold provenance
+  ([#2800](https://github.com/ditto-assistant/ditto-subnet/pull/2800),
+  [`8116201`](https://github.com/ditto-assistant/ditto-subnet/commit/81162014349f6189f1c1b27a8c8696aac1fb9bab))
+
+- **receipts**: Allow signed-policy followers to forward evidence
+  ([#2817](https://github.com/ditto-assistant/ditto-subnet/pull/2817),
+  [`f73696d`](https://github.com/ditto-assistant/ditto-subnet/commit/f73696d14c2424bc2d4f65764b896a650f7db711))
+
+
+## v0.356.14 (2026-10-09)
+
+### Bug Fixes
+
+- **infra**: Preserve production collation in backup recovery
+  ([#2816](https://github.com/ditto-assistant/ditto-subnet/pull/2816),
+  [`e2c20a2`](https://github.com/ditto-assistant/ditto-subnet/commit/e2c20a282a79cfb9810f4ec07cd4012525b4c9ad))
+
+- **platform**: Bound overlapping conversation admission polls
+  ([#2810](https://github.com/ditto-assistant/ditto-subnet/pull/2810),
+  [`e4c4ec8`](https://github.com/ditto-assistant/ditto-subnet/commit/e4c4ec8c59b46eacde3389d623a3152abb7b1ce6))
+
+### Performance Improvements
+
+- **platform**: Persist score stderr without audit blob reads
+  ([#2812](https://github.com/ditto-assistant/ditto-subnet/pull/2812),
+  [`b391257`](https://github.com/ditto-assistant/ditto-subnet/commit/b391257f1783a99fa113d05b562036735f4df81c))
+
+
+## v0.356.13 (2026-10-09)
+
+### Bug Fixes
+
+- **infra**: Diagnose restore SQLSTATE without private messages
+  ([#2808](https://github.com/ditto-assistant/ditto-subnet/pull/2808),
+  [`4d08a9f`](https://github.com/ditto-assistant/ditto-subnet/commit/4d08a9fcc985a93541c974d73decb5f7c90a22d9))
+
+- **infra**: Identify restore CHECK failures without row details
+  ([#2811](https://github.com/ditto-assistant/ditto-subnet/pull/2811),
+  [`4ea90ea`](https://github.com/ditto-assistant/ditto-subnet/commit/4ea90ea03e24b3d0d0750f75d172fd9761c32bfd))
+
+- **validator**: Report bounded receipt validation diagnostics
+  ([#2803](https://github.com/ditto-assistant/ditto-subnet/pull/2803),
+  [`9aeb1d2`](https://github.com/ditto-assistant/ditto-subnet/commit/9aeb1d2b053e875d8027da2388d3a0e2d3b3a5bc))
+
+
+## v0.356.12 (2026-10-09)
+
+### Bug Fixes
+
+- **infra**: Report safe PostgreSQL restore failure stages
+  ([#2807](https://github.com/ditto-assistant/ditto-subnet/pull/2807),
+  [`4c82b92`](https://github.com/ditto-assistant/ditto-subnet/commit/4c82b92f81fb2a50d2815bc60fac5969d9ce9be5))
+
+- **protocol**: Expose signed receipt validation diagnostics
+  ([#2802](https://github.com/ditto-assistant/ditto-subnet/pull/2802),
+  [`0b666c5`](https://github.com/ditto-assistant/ditto-subnet/commit/0b666c52d863ffb594fdbf8b317ec0131ff55a8e))
+
+
+## v0.356.11 (2026-10-09)
+
+### Performance Improvements
+
+- **platform**: Skip public display work for finalized admission
+  ([#2806](https://github.com/ditto-assistant/ditto-subnet/pull/2806),
+  [`1b94024`](https://github.com/ditto-assistant/ditto-subnet/commit/1b940248bfc9619e089fafc8fc0cf8f3afb43caa))
+
+
+## v0.356.10 (2026-10-09)
+
+### Bug Fixes
+
+- **infra**: Qualify and enable production PostgreSQL backups
+  ([#2798](https://github.com/ditto-assistant/ditto-subnet/pull/2798),
+  [`5d0e39d`](https://github.com/ditto-assistant/ditto-subnet/commit/5d0e39d630c92dd37e2e6fe9f618da001ea8fb3d))
+
+
+## v0.356.9 (2026-10-09)
+
+### Bug Fixes
+
+- **validator**: Expose safe receipt validation diagnostics
+  ([#2797](https://github.com/ditto-assistant/ditto-subnet/pull/2797),
+  [`963fe24`](https://github.com/ditto-assistant/ditto-subnet/commit/963fe241a130d29a1b2327e4cec4281ab9b3f3a7))
+
+
+## v0.356.8 (2026-10-09)
+
+### Performance Improvements
+
+- **platform**: Bound confirmation median proof hydration
+  ([#2794](https://github.com/ditto-assistant/ditto-subnet/pull/2794),
+  [`2ebf13a`](https://github.com/ditto-assistant/ditto-subnet/commit/2ebf13a50e79f1ef8c9d95da4e5a0003b54556f0))
+
+
+## v0.356.7 (2026-10-09)
+
+### Bug Fixes
+
+- **platform**: Extract partial ledger evidence in one pass
+  ([#2792](https://github.com/ditto-assistant/ditto-subnet/pull/2792),
+  [`a3b7665`](https://github.com/ditto-assistant/ditto-subnet/commit/a3b76653668b32a60f2a208d776c68c5ac6cc273))
+
+
+## v0.356.6 (2026-10-09)
+
+### Bug Fixes
+
+- **platform**: Disable JIT for request-serving database connections
+  ([#2789](https://github.com/ditto-assistant/ditto-subnet/pull/2789),
+  [`bbde01e`](https://github.com/ditto-assistant/ditto-subnet/commit/bbde01e805a51a66eb1a7040201c54c59264edeb))
+
+### Performance Improvements
+
+- **platform**: Reuse decoded treasury runtime metadata
+  ([#2788](https://github.com/ditto-assistant/ditto-subnet/pull/2788),
+  [`f45493f`](https://github.com/ditto-assistant/ditto-subnet/commit/f45493f1ceb9f3f0b1b3562790ae2beafd9f3c7e))
+
+
+## v0.356.5 (2026-10-09)
+
+### Bug Fixes
+
+- **platform**: Expose bounded treasury read failures
+  ([#2784](https://github.com/ditto-assistant/ditto-subnet/pull/2784),
+  [`90212c5`](https://github.com/ditto-assistant/ditto-subnet/commit/90212c59cb28170d81294166e434250155c087c9))
+
+- **platform**: Isolate efficiency materialization transactions
+  ([#2787](https://github.com/ditto-assistant/ditto-subnet/pull/2787),
+  [`d783e0d`](https://github.com/ditto-assistant/ditto-subnet/commit/d783e0d5d55d71329f4dce37356e8a29622d2426))
+
+### Chores
+
+- **ops**: Allow read-only explain of case expressions
+  ([#2783](https://github.com/ditto-assistant/ditto-subnet/pull/2783),
+  [`ccd22fa`](https://github.com/ditto-assistant/ditto-subnet/commit/ccd22fa588b236f6e5ba2285b9eb57b406c9f59e))
+
+### Performance Improvements
+
+- **platform**: Extract scalar ledger stderr once per winner
+  ([#2786](https://github.com/ditto-assistant/ditto-subnet/pull/2786),
+  [`c6fd96b`](https://github.com/ditto-assistant/ditto-subnet/commit/c6fd96b7e52c608553015decb19714cf8cad1609))
+
+
+## v0.356.4 (2026-10-08)
+
+### Performance Improvements
+
+- **platform**: Extract ledger proof evidence in one pass
+  ([#2777](https://github.com/ditto-assistant/ditto-subnet/pull/2777),
+  [`81dee19`](https://github.com/ditto-assistant/ditto-subnet/commit/81dee19574dbbbd6751b0872bea4e080bcfe7eb3))
+
+
+## v0.356.3 (2026-10-08)
+
+### Bug Fixes
+
+- **platform**: Expose epoch pin producer failures
+  ([#2776](https://github.com/ditto-assistant/ditto-subnet/pull/2776),
+  [`bfb2a76`](https://github.com/ditto-assistant/ditto-subnet/commit/bfb2a76d51797fff530909bc0f8375e6b6794c3a))
+
+
+## v0.356.2 (2026-10-08)
+
+### Bug Fixes
+
+- **platform**: Validate treasury heartbeats after database reads
+  ([#2773](https://github.com/ditto-assistant/ditto-subnet/pull/2773),
+  [`baeda00`](https://github.com/ditto-assistant/ditto-subnet/commit/baeda006051d40d196b9f7fdc8017b6cb1949ecf))
+
+
 ## v0.356.1 (2026-10-07)
 
 ### Bug Fixes

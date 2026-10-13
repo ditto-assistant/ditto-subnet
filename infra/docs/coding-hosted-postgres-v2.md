@@ -8,9 +8,16 @@ The [host foundation](coding-hosted-host-v2.md) remains independently default-of
 
 ## Network boundary
 
-`enable_coding_hosted_postgres` requires `enable_coding_hosted_host`. The root
-passes the actual `module.pg_vm.internal_ip`, Platform VPC self-link and existing
-PostgreSQL target tag into the native-host module. The optional `postgres_peer`
+The production native-host invocation and its former activation variables were
+removed under SN-138 after cold snapshot recovery. Its dedicated peerings and
+cloud firewall exceptions are removed by the separately reviewed retirement plan;
+PostgreSQL VM/data are retained. The guest admission flag is false for future
+convergence; existing guest UFW/HBA rows require separate exact-rule cleanup.
+The descriptions below document the reusable module's optional network contract.
+
+When explicitly reinstated through a new reviewed host plan, the caller must pass
+the actual PostgreSQL private IP, Platform VPC self-link and existing PostgreSQL
+target tag into the native-host module. The optional `postgres_peer`
 input defaults null and rejects disabled hosts, another project's/network's
 self-link and addresses outside the current Platform `10.30.0.0/24` IPv4 subnet.
 

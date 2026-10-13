@@ -439,6 +439,7 @@ describe('Backroom MCP tools', () => {
         'set_confirmation_bundle_settings',
         'authorize_confirmation_bundle_retest',
         'read_copy_review_source_diff_file',
+        'get_lineage_source_diff',
         'get_screening_baseline_diff',
         'read_screening_baseline_diff_file',
         'get_screening_quarantine_context',
@@ -659,8 +660,14 @@ describe('Backroom MCP tools', () => {
     // 179,468 bytes before the optional review-posture pin, node cap and
     // expected-value canary guard inputs. Keep operational tutorials in help
     // and retain the existing catalog budget as these inputs evolve.
+    // Main measured 179,967 bytes. The one-tool any-pair lineage source diff
+    // (#2673, manifest or one file by optional path) is paid for by publishing
+    // the artifact-scope source readers' agent ids as plain `format: uuid`
+    // (the services still parse them strictly): measured 179,446 bytes.
     // Measure the serialized UTF-8 catalog, including guarded Gamma controls.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(180_000)
+    // The quarantine batch execute now publishes its real decisions schema
+    // instead of `{}` (about 1.5 KB), which takes the catalog past 180,000.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(182_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1413,6 +1420,7 @@ describe('Backroom MCP tools', () => {
       })
       for (const [name, fragment, scope, readOnly] of [
         ['get_copy_review_source_diff', 'per-file diff manifest', BACKROOM_ARTIFACT_SCOPE, true],
+        ['get_lineage_source_diff', 'rejected ancestor', BACKROOM_ARTIFACT_SCOPE, true],
         ['apply_copy_court_settings', 'complete', BACKROOM_WRITE_SCOPE, false],
         ['expand_benchmark_rollout_cohort', 'exact next ranked suffix', BACKROOM_WRITE_SCOPE, false],
         ['get_ath_review', 'ath_pending_review', undefined, true],
@@ -1448,6 +1456,15 @@ describe('Backroom MCP tools', () => {
       current: revision(3),
       release_gate: {
         version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false,
+        receipt_diagnostics: [{ report: {
+          schema_version: 3, validator_hotkey: 'validator', netuid: 118, timestamp: 100,
+          observation: { submission_status: 'accepted', submission_observed_at: 90,
+            recovery_status: 'validating_claim_failed', recovery_observed_at: 100,
+            page_receipts: 1, page_finalized: 1, page_forwarded: 0, page_deferred: 1,
+            last_validation: { error_count: 1, fields: ['provenance.champion_artifact_sha256:string_pattern_mismatch'] },
+            failure_context: { claimed_schema_version: 1, task_id: 12, claimed_epoch_index: 25017, claimed_commit_block: 9029300, attempt_id: '11111111-1111-4111-8111-111111111111' },
+          },
+        }, received_at: '2026-10-09T02:00:00Z', stale: false }],
         pending_kings: 7,
         confirmed_kings: 0,
         rows_limit: 25,
@@ -1482,7 +1499,12 @@ describe('Backroom MCP tools', () => {
     })
     expect(readJsonResult(currentOnly)).toMatchObject({
       current: { revision: 3 },
-      release_gate: { version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false, pending_kings: 7, confirmed_kings: 0 },
+      release_gate: { version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false, pending_kings: 7, confirmed_kings: 0,
+        receipt_diagnostics: [{ report: { schema_version: 3, observation: {
+          last_validation: { error_count: 1, fields: ['provenance.champion_artifact_sha256:string_pattern_mismatch'] },
+          failure_context: { claimed_schema_version: 1, task_id: 12, claimed_epoch_index: 25017, claimed_commit_block: 9029300, attempt_id: '11111111-1111-4111-8111-111111111111' },
+        } } }],
+      },
       history: [],
       history_count: 3,
       history_limit: 0,
@@ -1580,6 +1602,25 @@ describe('Backroom MCP tools', () => {
       }
       for (const tool of tools) visit(tool.inputSchema, tool.name)
       expect(unportable).toEqual([])
+
+      // An intersection publishes as `{}`: clients then cannot send the
+      // arguments the tool validates, so every write must publish properties.
+      // create_ath_rulings_upload is the one write that takes no arguments.
+      const opaque = tools
+        .filter((tool) => tool.annotations?.readOnlyHint === false)
+        .filter((tool) => tool.name !== 'create_ath_rulings_upload')
+        .filter((tool) => Object.keys(tool.inputSchema?.properties ?? {}).length === 0)
+        .map((tool) => tool.name)
+      expect(opaque).toEqual([])
+      const quarantineExecute = tools.find(
+        (tool) => tool.name === 'execute_screening_quarantine_batch',
+      )?.inputSchema as { properties: Record<string, unknown>; required?: Array<string> }
+      expect(Object.keys(quarantineExecute.properties).sort()).toEqual([
+        'confirmed',
+        'decisions',
+        'previewToken',
+      ])
+      expect(quarantineExecute.required?.sort()).toEqual(['confirmed', 'decisions', 'previewToken'])
 
       for (const name of ['activate_v13_scorer_cohort', 'rotate_v13_scorer_cohort']) {
         const schema = tools.find((tool) => tool.name === name)?.inputSchema as {
@@ -2694,6 +2735,38 @@ describe('Backroom MCP tools', () => {
     )
     await client.close()
     await server.close()
+  })
+
+  it.each(['both', 'elapsed', 'completed', 'neither'] as const)('retains admission diagnostics with %s timestamps in the read tool', async (timestamps) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const diagnostics = {
+      scope: 'process', in_flight: true, attempts: 9, busy_skips: 15,
+      last_outcome: 'idle',
+      ...(timestamps === 'both' || timestamps === 'elapsed' ? { last_elapsed_ms: 1740 } : {}),
+      ...(timestamps === 'both' || timestamps === 'completed' ? { last_completed_at: '2026-10-09T03:00:00Z' } : {}),
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      mode: 'shadow', instrument: 'conversational-continuity-v1', judge_model: 'gpt-6-astra',
+      daily_budget_microusd: 180000000, reserved_last_day_microusd: 0,
+      proposed_submission_fee_rao: 200000000, current_submission_fee_rao: 40000000,
+      fee_change_request: { expected_revision: 0, cooldown_seconds: 3600, fee_amount_rao: 200000000,
+        reason: 'Fund conversation assessment', actor: 'conversation-rollout', confirmation: 'example' },
+      items: [], admission_diagnostics: diagnostics,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_conversation_assessments', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({ admission_diagnostics: diagnostics })
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://platform-api.heyditto.ai/api/v1/admin/conversation-assessments?limit=50',
+        expect.any(Object),
+      )
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('reads private conversation evidence through a read-only tool', async () => {
@@ -4143,31 +4216,73 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('reads the ordinary source-review queue-age SLO', async () => {
+  const ordinaryQueueSloPayload = () => ({
+    generated_at: '2026-09-23T00:00:00Z',
+    backlog_count: 4,
+    active_work_count: 1,
+    capacity_wait_count: 1,
+    infrastructure_backoff_count: 1,
+    escalation_count: 1,
+    p50_age_seconds: 300,
+    p95_age_seconds: 900,
+    oldest_age_seconds: 950,
+    throughput_window_hours: 24,
+    throughput_completed_count: 12,
+    throughput_per_hour: 0.5,
+    stale_running_ghost_count: 1,
+    resolved_quarantine_ghost_count: 0,
+    attempt_status_drift_ghost_count: 0,
+    ghost_count: 1,
+    max_actionable_age_threshold_seconds: null,
+    overdue_count: null,
+    p95_age_threshold_seconds: null,
+    p95_exceeds_threshold: null,
+  })
+
+  const athQueueStats = (queueClass: string | null, backlog: number) => ({
+    queue_class: queueClass,
+    backlog_count: backlog,
+    active_work_count: 0,
+    capacity_wait_count: 0,
+    infrastructure_backoff_count: 0,
+    escalation_count: backlog,
+    p50_age_seconds: backlog > 0 ? 3600 : null,
+    p95_age_seconds: backlog > 0 ? 7200 : null,
+    oldest_age_seconds: backlog > 0 ? 7500 : null,
+    oldest_agent_id: backlog > 0 ? '00000000-0000-4000-8000-000000000001' : null,
+    oldest_reason: backlog > 0 ? 'escalation' : null,
+    throughput_window_hours: 24,
+    throughput_completed_count: 2,
+    throughput_per_hour: 2 / 24,
+    max_actionable_age_threshold_seconds: queueClass === 'copy' ? 3600 : null,
+    overdue_count: queueClass === 'copy' ? 1 : null,
+    p95_age_threshold_seconds: null,
+    p95_exceeds_threshold: null,
+  })
+
+  const athQueueSloPayload = () => ({
+    generated_at: '2026-09-23T00:00:00Z',
+    ath: athQueueStats(null, 2),
+    copy_review: athQueueStats('copy', 2),
+    classes: [
+      athQueueStats('copy', 2),
+      athQueueStats('benchmark_overfit', 0),
+      athQueueStats('deferred_source_review', 0),
+      athQueueStats('integrity_double_check', 0),
+      athQueueStats('anomalous_score', 0),
+    ],
+    stranded_terminal_ghost_count: 1,
+    stranded_hold_ghost_count: 0,
+    held_without_review_ghost_count: 0,
+    ghost_count: 1,
+  })
+
+  it('reads the ordinary and ATH source-review queue-age SLOs', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const fetchMock = vi.fn().mockResolvedValueOnce(
-      Response.json({
-        generated_at: '2026-09-23T00:00:00Z',
-        backlog_count: 4,
-        active_work_count: 1,
-        capacity_wait_count: 1,
-        infrastructure_backoff_count: 1,
-        escalation_count: 1,
-        p50_age_seconds: 300,
-        p95_age_seconds: 900,
-        oldest_age_seconds: 950,
-        throughput_window_hours: 24,
-        throughput_completed_count: 12,
-        throughput_per_hour: 0.5,
-        stale_running_ghost_count: 1,
-        resolved_quarantine_ghost_count: 0,
-        attempt_status_drift_ghost_count: 0,
-        ghost_count: 1,
-        max_actionable_age_threshold_seconds: null,
-        overdue_count: null,
-        p95_age_threshold_seconds: null,
-        p95_exceeds_threshold: null,
-      }),
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input instanceof Request ? input.url : input).includes('/admin/ath-review-queue-slo')
+        ? Response.json(athQueueSloPayload())
+        : Response.json(ordinaryQueueSloPayload()),
     )
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
@@ -4178,13 +4293,46 @@ describe('Backroom MCP tools', () => {
     })
 
     expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toMatchObject({
+    const body = readJsonResult(response)
+    // The ordinary snapshot keeps its existing top-level shape.
+    expect(body).toMatchObject({
       backlog_count: 4,
       escalation_count: 1,
       stale_running_ghost_count: 1,
       overdue_count: null,
       p95_exceeds_threshold: null,
+      ath_review: {
+        ath: { backlog_count: 2, queue_class: null },
+        copy_review: { queue_class: 'copy', overdue_count: 1 },
+        stranded_terminal_ghost_count: 1,
+      },
     })
+    expect(body).not.toHaveProperty('ath_review_error')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    await client.close()
+    await server.close()
+  })
+
+  it('keeps the ordinary queue-age SLO when the ATH read fails', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input instanceof Request ? input.url : input).includes('/admin/ath-review-queue-slo')
+        ? Response.json({ detail: 'Not Found' }, { status: 404 })
+        : Response.json(ordinaryQueueSloPayload()),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_source_review_queue_slo',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    const body = readJsonResult(response)
+    expect(body).toMatchObject({ backlog_count: 4, ath_review: null })
+    expect(body).toHaveProperty('ath_review_error')
 
     await client.close()
     await server.close()
@@ -8781,6 +8929,149 @@ describe('Backroom MCP tools', () => {
     )
     await granted.client.close()
     await granted.server.close()
+  })
+
+  it('diffs any two agents for lineage review only with artifact scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '6c1f0d2e-6c0a-4f0e-9a51-3f3b6a1d2c11'
+    const referenceAgentId = 'b2d4c9a8-1e7f-4b3a-8c2d-5e6f7a8b9c0d'
+    const manifest = {
+      agent_id: agentId,
+      reference_agent_id: referenceAgentId,
+      candidate_sha256: 'a'.repeat(64),
+      reference_sha256: 'b'.repeat(64),
+      files: [
+        {
+          path: 'src/mechanism.rs',
+          status: 'removed',
+          candidate_lines: 0,
+          reference_lines: 4,
+          added_lines: 0,
+          removed_lines: 4,
+          similarity: 0,
+          normalized_identical: false,
+        },
+        {
+          path: 'src/solver.rs',
+          status: 'renamed',
+          candidate_lines: 9,
+          reference_lines: 9,
+          added_lines: 0,
+          removed_lines: 0,
+          similarity: 1,
+          normalized_identical: true,
+          from_path: 'src/old_solver.rs',
+          to_path: 'src/solver.rs',
+        },
+      ],
+      file_count: 2,
+      identical_count: 0,
+      modified_count: 0,
+      added_count: 0,
+      removed_count: 1,
+      renamed_count: 1,
+      truncated: false,
+      omitted_file_count: 0,
+      omitted_paths: [],
+    }
+    const detail = {
+      agent_id: agentId,
+      reference_agent_id: referenceAgentId,
+      path: 'src/mechanism.rs',
+      candidate_present: false,
+      reference_present: true,
+      identical: false,
+      diff_lines: ['--- reference/src/mechanism.rs', '+++ candidate/src/mechanism.rs', '-fn hack() {}'],
+      truncated: false,
+    }
+    const fetchMock = vi.fn().mockImplementation(async (url: string) =>
+      Response.json(String(url).includes('/file?') ? detail : manifest),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const refusedGrant = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    for (const [name, args] of [
+      ['get_lineage_source_diff', { agentId, referenceAgentId }],
+      ['get_lineage_source_diff', { agentId, referenceAgentId, path: 'src/mechanism.rs' }],
+    ] as const) {
+      const refused = await refusedGrant.client.callTool({ name, arguments: args })
+      expect(refused.isError).toBe(true)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+    await refusedGrant.client.close()
+    await refusedGrant.server.close()
+
+    const granted = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const same = await granted.client.callTool({
+        name: 'get_lineage_source_diff',
+        arguments: { agentId, referenceAgentId: agentId.toUpperCase() },
+      })
+      expect(same.isError).toBe(true)
+      // Ids publish as plain `format: uuid`; the service still parses them
+      // strictly, so a malformed id never reaches the Platform.
+      for (const [name, args] of [
+        ['get_lineage_source_diff', { agentId: 'not-a-uuid', referenceAgentId }],
+        ['get_lineage_source_diff', { agentId, referenceAgentId: 'not-a-uuid', path: 'a.rs' }],
+        ['get_copy_review_source_diff', { agentId: 'not-a-uuid' }],
+        ['read_screening_baseline_diff_file', { agentId: 'not-a-uuid', path: 'a.rs' }],
+        ['list_screening_source_files', { agentId: 'not-a-uuid' }],
+      ] as const) {
+        const malformed = await granted.client.callTool({ name, arguments: args })
+        expect(malformed.isError, name).toBe(true)
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+      const tool = (await granted.client.listTools()).tools.find(
+        (entry) => entry.name === 'get_lineage_source_diff',
+      )
+      expect(tool?.inputSchema.required).toEqual(['agentId', 'referenceAgentId'])
+      expect(tool?.inputSchema.properties?.referenceAgentId).toEqual({
+        type: 'string',
+        format: 'uuid',
+      })
+
+      const listed = await granted.client.callTool({
+        name: 'get_lineage_source_diff',
+        arguments: { agentId, referenceAgentId },
+      })
+      expect(listed.isError).not.toBe(true)
+      expect(readJsonResult(listed)).toMatchObject({
+        agent_id: agentId,
+        reference_agent_id: referenceAgentId,
+        removed_count: 1,
+        renamed_count: 1,
+        files: [
+          { path: 'src/mechanism.rs', status: 'removed' },
+          { path: 'src/solver.rs', status: 'renamed', from_path: 'src/old_solver.rs' },
+        ],
+      })
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/lineage-source-diff?reference_agent_id=${referenceAgentId}`,
+        expect.objectContaining({
+          headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        }),
+      )
+
+      const file = await granted.client.callTool({
+        name: 'get_lineage_source_diff',
+        arguments: { agentId, referenceAgentId, path: 'src/mechanism.rs' },
+      })
+      expect(file.isError).not.toBe(true)
+      expect(readJsonResult(file)).toMatchObject({
+        path: 'src/mechanism.rs',
+        candidate_present: false,
+        reference_present: true,
+      })
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/lineage-source-diff/file?reference_agent_id=${referenceAgentId}&path=src%2Fmechanism.rs`,
+        expect.objectContaining({
+          headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        }),
+      )
+    } finally {
+      await granted.client.close()
+      await granted.server.close()
+    }
   })
 
   it('issues an audited artifact URL only with explicit artifact scope', async () => {

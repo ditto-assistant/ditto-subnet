@@ -249,6 +249,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/lineage-source-diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Lineage Source Diff
+         * @description Per-file diff manifest between any two stored agents (reference -> agent).
+         *
+         *     The copy-review diff only pairs a held agent with its matched reference.
+         *     Lineage review needs any pair -- typically a resubmission against the
+         *     rejected ancestor it claims to have fixed -- so this route takes both ids
+         *     explicitly and needs no review row. Same manifest shape, rename handling,
+         *     size bounds, and omitted-path reporting as the copy-review diff, and the
+         *     same two-row artifact-fetch audit under its own endpoint name.
+         */
+        get: operations["get_lineage_source_diff_api_v1_admin_agents__agent_id__lineage_source_diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/agents/{agent_id}/lineage-source-diff/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Lineage Source Diff File
+         * @description Bounded unified diff (reference -> agent) for one file of any agent pair.
+         */
+        get: operations["get_lineage_source_diff_file_api_v1_admin_agents__agent_id__lineage_source_diff_file_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/scoring-readiness": {
         parameters: {
             query?: never;
@@ -299,6 +346,26 @@ export interface paths {
          *     revision and the exact confirmation phrase.
          */
         post: operations["create_settings_revision_api_v1_admin_artifact_release_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ath-review-queue-slo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Ath Review Queue Slo
+         * @description ATH and copy-review queue age, throughput, overdue counts, and ghosts.
+         */
+        get: operations["get_ath_review_queue_slo_api_v1_admin_ath_review_queue_slo_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -14394,6 +14461,122 @@ export interface components {
             sha256: string;
         };
         /**
+         * AthReviewQueueSlo
+         * @description ATH-hold queue age against SLO: the aggregate, each class, and ghosts.
+         *
+         *     Read-only. It enforces nothing: there is no alert and no operator
+         *     escalation action. Both are ditto-subnet#2042 follow-ups.
+         */
+        AthReviewQueueSlo: {
+            /** @description Every pending ATH hold: the ATH review clock. */
+            ath: components["schemas"]["AthReviewQueueStats"];
+            /**
+             * Classes
+             * @description One entry per queue class, always all present.
+             */
+            classes: components["schemas"]["AthReviewQueueStats"][];
+            /** @description The copy-review clock (review_kind=copy, including legacy holds with no kind). The same entry appears in classes. */
+            copy_review: components["schemas"]["AthReviewQueueStats"];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Ghost Count
+             * @description Sum of the three reconciliation counts above.
+             */
+            ghost_count: number;
+            /**
+             * Held Without Review Ghost Count
+             * @description ath_pending_review agents with no pending review row.
+             */
+            held_without_review_ghost_count: number;
+            /**
+             * Stranded Hold Ghost Count
+             * @description Pending reviews whose agent moved to another non-held status. Needs unsticking; resolving it through the API answers 409.
+             */
+            stranded_hold_ghost_count: number;
+            /**
+             * Stranded Terminal Ghost Count
+             * @description Pending reviews whose agent is already banned or rejected. Terminal history, never backlog.
+             */
+            stranded_terminal_ghost_count: number;
+        };
+        /**
+         * AthReviewQueueStats
+         * @description p50, p95, and oldest age, throughput, and overdue count for one clock.
+         *
+         *     Every age and threshold field is in seconds. ``overdue_count`` and
+         *     ``p95_exceeds_threshold`` are ``null`` whenever their threshold is
+         *     unset, never ``0`` and never a computed "healthy" default.
+         */
+        AthReviewQueueStats: {
+            /** Active Work Count */
+            active_work_count: number;
+            /**
+             * Backlog Count
+             * @description Pending holds whose agent is still ath_pending_review. Stranded holds are reported separately as ghosts.
+             */
+            backlog_count: number;
+            /** Capacity Wait Count */
+            capacity_wait_count: number;
+            /**
+             * Escalation Count
+             * @description Holds waiting on an operator decision.
+             */
+            escalation_count: number;
+            /** Infrastructure Backoff Count */
+            infrastructure_backoff_count: number;
+            /**
+             * Max Actionable Age Threshold Seconds
+             * @description Configured overdue threshold, or null when unset.
+             */
+            max_actionable_age_threshold_seconds?: number | null;
+            /** Oldest Age Seconds */
+            oldest_age_seconds?: number | null;
+            /**
+             * Oldest Agent Id
+             * @description Agent behind the oldest actionable hold (operator-only).
+             */
+            oldest_agent_id?: string | null;
+            /** Oldest Reason */
+            oldest_reason?: ("active_work" | "capacity_wait" | "infrastructure_backoff" | "escalation") | null;
+            /**
+             * Overdue Count
+             * @description Actionable holds older than the threshold; null when unset.
+             */
+            overdue_count?: number | null;
+            /**
+             * P50 Age Seconds
+             * @description Median age since the hold last became pending (COALESCE(reopened_at, opened_at)). Null only when the backlog is empty.
+             */
+            p50_age_seconds?: number | null;
+            /** P95 Age Seconds */
+            p95_age_seconds?: number | null;
+            /** P95 Age Threshold Seconds */
+            p95_age_threshold_seconds?: number | null;
+            /**
+             * P95 Exceeds Threshold
+             * @description Null unless a p95 threshold is configured.
+             */
+            p95_exceeds_threshold?: boolean | null;
+            /**
+             * Queue Class
+             * @description Null for the aggregate over every pending ATH hold. integrity_double_check is the top-five deferred_source_review hold; filter the copy-review queue with review_kind=deferred_source_review to list it.
+             */
+            queue_class: ("copy" | "benchmark_overfit" | "deferred_source_review" | "integrity_double_check" | "anomalous_score") | null;
+            /**
+             * Throughput Completed Count
+             * @description Reviews of this class resolved (clear or reject) within the window. Counted by the review's latest resolved_at.
+             */
+            throughput_completed_count: number;
+            /** Throughput Per Hour */
+            throughput_per_hour: number;
+            /** Throughput Window Hours */
+            throughput_window_hours: number;
+        };
+        /**
          * BenchDatasetConfig
          * @description How datasets are generated and pinned.
          */
@@ -18887,6 +19070,40 @@ export interface components {
             scope: string;
             settings: components["schemas"]["ContinualRetestSettings"];
         };
+        /** ConversationAdmissionDiagnostics */
+        ConversationAdmissionDiagnostics: {
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts: number;
+            /**
+             * Busy Skips
+             * @default 0
+             */
+            busy_skips: number;
+            /**
+             * In Flight
+             * @default false
+             */
+            in_flight: boolean;
+            /** Last Completed At */
+            last_completed_at?: string | null;
+            /** Last Elapsed Ms */
+            last_elapsed_ms?: number | null;
+            /**
+             * Last Outcome
+             * @default not_attempted
+             * @enum {string}
+             */
+            last_outcome: "not_attempted" | "claimed" | "idle" | "failed" | "cancelled";
+            /**
+             * Scope
+             * @default process
+             * @constant
+             */
+            scope: "process";
+        };
         /** ConversationClaim */
         ConversationClaim: {
             /**
@@ -19035,6 +19252,7 @@ export interface components {
         };
         /** ConversationObservations */
         ConversationObservations: {
+            admission_diagnostics?: components["schemas"]["ConversationAdmissionDiagnostics"] | null;
             /** Current Submission Fee Rao */
             current_submission_fee_rao: number;
             /** Daily Budget Microusd */
@@ -20262,6 +20480,8 @@ export interface components {
         };
         /** EnforcingTreasuryPin */
         EnforcingTreasuryPin: {
+            /** Allocations */
+            allocations?: components["schemas"]["TreasuryBucketAllocation"][] | null;
             approval: components["schemas"]["TreasuryPolicyApproval"];
             /** Epoch Index */
             epoch_index: number;
@@ -22337,6 +22557,77 @@ export interface components {
              * @description SS58 hotkey of the validator that produced the score.
              */
             validator_hotkey: string;
+        };
+        /**
+         * LedgerPinFailure
+         * @description Fixed error kinds and repository source locations, never exception text.
+         */
+        LedgerPinFailure: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "timeout" | "connection" | "database" | "validation" | "value" | "type" | "key" | "runtime" | "chain" | "other";
+            /** Location */
+            location?: string | null;
+            /** Read Step */
+            read_step?: ("connection" | "connection_close" | "finalized_head" | "finalized_height" | "canonical_hash" | "genesis_hash" | "epoch_storage" | "collector_storage" | "uid_binding" | "permit_vector" | "setter_binding") | null;
+        };
+        /** LedgerPinLoopDiagnostic */
+        LedgerPinLoopDiagnostic: {
+            failure?: components["schemas"]["LedgerPinFailure"] | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /**
+             * In Progress
+             * @default false
+             */
+            in_progress: boolean;
+            /** Stage */
+            stage?: ("settings" | "materializer") | null;
+            /** Started At */
+            started_at?: string | null;
+            /**
+             * Task State
+             * @enum {string}
+             */
+            task_state: "not_started" | "running" | "done" | "cancelled";
+        };
+        /**
+         * LedgerPinProducerDiagnostic
+         * @description Process-local producer evidence; reading it never attempts a build.
+         */
+        LedgerPinProducerDiagnostic: {
+            /** Elapsed Seconds */
+            elapsed_seconds?: number | null;
+            /** Epoch Index */
+            epoch_index?: number | null;
+            failure?: components["schemas"]["LedgerPinFailure"] | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /**
+             * In Progress
+             * @default false
+             */
+            in_progress: boolean;
+            /** Last Success At */
+            last_success_at?: string | null;
+            /** Last Success Epoch */
+            last_success_epoch?: number | null;
+            /** Lock Wait Seconds */
+            lock_wait_seconds?: number | null;
+            /** Outcome */
+            outcome?: ("pinned" | "unavailable" | "error" | "cancelled") | null;
+            /**
+             * Scope
+             * @default this_platform_process
+             * @constant
+             */
+            scope: "this_platform_process";
+            /** Stage */
+            stage?: ("load_or_build" | "runtime" | "ledger_context" | "ledger_snapshot" | "treasury_observation" | "treasury_authorization" | "draft" | "insert") | null;
+            /** Started At */
+            started_at?: string | null;
         };
         /**
          * LedgerPinStatus
@@ -24548,6 +24839,34 @@ export interface components {
             weight_confirmed_at?: string | null;
         };
         /**
+         * PublicAthReview
+         * @description Source-safe ATH-hold clock (ditto-subnet#2042, slice 2).
+         *
+         *     Tells a miner whether their held submission is waiting for a deep-review
+         *     screener, being worked, parked after an infrastructure failure, or waiting
+         *     for an operator, and for how long. It carries no hold evidence, no
+         *     queue class, no reason codes, and no other miner's data.
+         *     ``typical_p50_seconds`` and ``typical_p95_seconds`` cover every pending
+         *     ATH hold across the subnet. They are not a promise about this
+         *     submission.
+         */
+        PublicAthReview: {
+            /**
+             * Age Seconds
+             * @description Time since this hold last became pending. A deep-review retry does not reset it. Only a reopen after a resolution does.
+             */
+            age_seconds: number;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "active_work" | "capacity_wait" | "infrastructure_backoff" | "escalation";
+            /** Typical P50 Seconds */
+            typical_p50_seconds?: number | null;
+            /** Typical P95 Seconds */
+            typical_p95_seconds?: number | null;
+        };
+        /**
          * PublicAuditEntry
          * @description One entry of the append-only, hash-chained public score audit log.
          *
@@ -24606,6 +24925,24 @@ export interface components {
              * @description Scoring validator (null on finalize).
              */
             validator_hotkey?: string | null;
+        };
+        /**
+         * PublicAuditPairCounts
+         * @description One run's reproduce-under-transform audit outcome counts (public).
+         *
+         *     Sufficient statistics: a reader sums them across runs and validators. The
+         *     discordant direction (``base_only`` vs ``transform_only``) is what the
+         *     transform-audit gate factor charges.
+         */
+        PublicAuditPairCounts: {
+            /** Base Only */
+            base_only: number;
+            /** Both Correct */
+            both_correct: number;
+            /** Both Wrong */
+            both_wrong: number;
+            /** Transform Only */
+            transform_only: number;
         };
         /**
          * PublicAuditResponse
@@ -27938,6 +28275,8 @@ export interface components {
              */
             agent_id: string;
             artifact_release: components["schemas"]["PublicArtifactRelease"];
+            /** @description ATH-hold clock and reason while the submission is held for review after scoring; null when it is not held. */
+            ath_review?: components["schemas"]["PublicAthReview"] | null;
             /**
              * Confirmation Sample Composites
              * @description Per-seed retest medians for this agent and active benchmark, sorted by composite without exposing reusable seed identifiers. These are display-only; cohort fold eligibility is authoritative only in the leaderboard.
@@ -28911,6 +29250,8 @@ export interface components {
              * @description How many audit pairs backed ``transform_robustness``, so a value backed by many pairs is distinguishable from one backed by two.
              */
             audit_case_count?: number | null;
+            /** @description This run's transform-audit outcome counts. The direction of the discordant pairs (``base_only`` vs ``transform_only``) is what the transform-audit gate charges, so these counts are what make its multiplier reconstructable. Null for a run that carried no audit pairs or predates the counts. */
+            audit_pairs?: components["schemas"]["PublicAuditPairCounts"] | null;
             /**
              * Bench Version
              * @description DittoBench version this validator's run was scored under. A re-scored agent carries rows from more than one version, and composites compare only within a version. Null for a legacy score recorded before benchmark versioning.
@@ -28927,6 +29268,11 @@ export interface components {
              */
             composite: number;
             composite_breakdown?: components["schemas"]["PublicCompositeBreakdown"] | null;
+            /**
+             * Conversational Sanity
+             * @description Weakest-link pass rate across the conversational-sanity slices, the input to the conversational-sanity gate factor. Null when no conversational case ran.
+             */
+            conversational_sanity?: number | null;
             /** @description Bench v13+ gate verdict for this run: posture, composite with and without the gates, the gate-induced loss and per-gate counts. Aggregates only -- the per-case notes are owner-only (``GET /me/agents/{agent_id}/gate-notes``). Null below v13 and for a scorer that emitted no gate telemetry. */
             gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             /**
@@ -28945,6 +29291,16 @@ export interface components {
              * @description Mean memory recall in [0,1].
              */
             memory_mean: number;
+            /**
+             * Memory Over Call
+             * @description Memory over-call multiplier exactly as the scorer applied it to this run's composite gate. Null for a run scored before the scorer recorded it, or under a contract without a gate.
+             */
+            memory_over_call?: number | null;
+            /**
+             * Metamorphic Consistency
+             * @description Fraction of invariance twin groups answered consistently, the input to the metamorphic-consistency gate factor. Null when no twin group ran.
+             */
+            metamorphic_consistency?: number | null;
             model_use?: components["schemas"]["PublicModelUse"] | null;
             /**
              * N
@@ -28978,6 +29334,11 @@ export interface components {
             ticket_deadline?: string | null;
             token_efficiency?: components["schemas"]["PublicTokenEfficiency"] | null;
             token_usage?: components["schemas"]["PublicTokenUsage"] | null;
+            /**
+             * Tool Efficiency
+             * @description Observed tool-efficiency factor the scorer folded into this run's composite gate. Null when the scorer did not record it.
+             */
+            tool_efficiency?: number | null;
             /**
              * Tool Mean
              * @description Mean tool accuracy in [0,1].
@@ -29156,6 +29517,8 @@ export interface components {
              * @default 0
              */
             conflicts_dropped: number;
+            failure_context?: components["schemas"]["ReceiptFailureContext"] | null;
+            last_validation?: components["schemas"]["ReceiptValidationDiagnostic"] | null;
             /**
              * Page Deferred
              * @default 0
@@ -29199,9 +29562,9 @@ export interface components {
             /**
              * Schema Version
              * @default 1
-             * @constant
+             * @enum {integer}
              */
-            schema_version: 1;
+            schema_version: 1 | 2 | 3;
             /** Timestamp */
             timestamp: number;
             /** Validator Hotkey */
@@ -29217,6 +29580,32 @@ export interface components {
             report: components["schemas"]["ReceiptDiagnosticReport"];
             /** Stale */
             stale: boolean;
+        };
+        /**
+         * ReceiptFailureContext
+         * @description Bounded unverified claim coordinates, never payout authority or payload.
+         */
+        ReceiptFailureContext: {
+            /** Attempt Id */
+            attempt_id?: string | null;
+            /** Claimed Commit Block */
+            claimed_commit_block?: number | null;
+            /** Claimed Epoch Index */
+            claimed_epoch_index?: number | null;
+            /** Claimed Schema Version */
+            claimed_schema_version?: number | null;
+            /** Task Id */
+            task_id?: number | null;
+        };
+        /**
+         * ReceiptValidationDiagnostic
+         * @description Last invalid claim's bounded codes, never the rejected claim's values.
+         */
+        ReceiptValidationDiagnostic: {
+            /** Error Count */
+            error_count: number;
+            /** Fields */
+            fields: string[];
         };
         /**
          * RelayFailure
@@ -33506,6 +33895,67 @@ export interface components {
             managed_validator_hotkeys: string[];
         };
         /**
+         * TreasuryBucketAllocation
+         * @description One epoch's operator-chosen allocation inside a signed bucket range.
+         */
+        TreasuryBucketAllocation: {
+            /** Allocation Bps */
+            allocation_bps: number;
+            /** Bucket Id */
+            bucket_id: string;
+        };
+        /**
+         * TreasuryChainReadDiagnostic
+         * @description Completed read counts and safe last-failure evidence, never authority.
+         */
+        TreasuryChainReadDiagnostic: {
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts: number;
+            /**
+             * Failures
+             * @default 0
+             */
+            failures: number;
+            /** Last Elapsed Seconds */
+            last_elapsed_seconds: number;
+            /** Last Failure At */
+            last_failure_at?: string | null;
+            /** Last Failure Elapsed Seconds */
+            last_failure_elapsed_seconds?: number | null;
+            /** Last Failure Kind */
+            last_failure_kind?: ("timeout" | "connection" | "invalid_evidence" | "unavailable") | null;
+            /** Last Failure Request Id */
+            last_failure_request_id?: string | null;
+            /** Last Failure Stage */
+            last_failure_stage?: ("epoch_schedule" | "identity" | "setter_roster") | null;
+            /** Last Failure Step */
+            last_failure_step?: ("connection" | "connection_close" | "finalized_head" | "finalized_height" | "canonical_hash" | "genesis_hash" | "epoch_storage" | "collector_storage" | "uid_binding" | "permit_vector" | "setter_binding") | null;
+            /**
+             * Last Finished At
+             * Format: date-time
+             */
+            last_finished_at: string;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "epoch_schedule" | "requester_activation";
+            /**
+             * Scope
+             * @default this_platform_process
+             * @constant
+             */
+            scope: "this_platform_process";
+            /**
+             * Successes
+             * @default 0
+             */
+            successes: number;
+        };
+        /**
          * TreasuryCollectorIdentity
          * @description Finalized read values, not a caller's unbound verified=True assertion.
          */
@@ -33556,6 +34006,10 @@ export interface components {
             bucket_id: string;
             /** Holding Coldkey */
             holding_coldkey: string;
+            /** Max Allocation Bps */
+            max_allocation_bps?: number | null;
+            /** Min Allocation Bps */
+            min_allocation_bps?: number | null;
         };
         /**
          * TreasuryEmissionPolicy
@@ -33642,6 +34096,8 @@ export interface components {
              * @default false
              */
             can_enforce_weights: boolean;
+            /** Chain Reads */
+            chain_reads?: components["schemas"]["TreasuryChainReadDiagnostic"][];
             configured_proposal: components["schemas"]["TreasuryEmissionPolicy"] | null;
             /**
              * Enforcement Configured
@@ -33694,6 +34150,8 @@ export interface components {
              * @constant
              */
             offline_policy_verified: false;
+            producer?: components["schemas"]["LedgerPinProducerDiagnostic"] | null;
+            producer_loop?: components["schemas"]["LedgerPinLoopDiagnostic"] | null;
             /**
              * Proposal Approval Status
              * @default not_configured
@@ -34052,9 +34510,9 @@ export interface components {
             /**
              * Weight Effect
              * @default none
-             * @constant
+             * @enum {string}
              */
-            weight_effect: "none";
+            weight_effect: "none" | "next_epoch";
         };
         /** TreasurySettingsRevision */
         TreasurySettingsRevision: {
@@ -37273,6 +37731,79 @@ export interface operations {
             };
         };
     };
+    get_lineage_source_diff_api_v1_admin_agents__agent_id__lineage_source_diff_get: {
+        parameters: {
+            query: {
+                reference_agent_id: string;
+            };
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSourceDiffManifest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_lineage_source_diff_file_api_v1_admin_agents__agent_id__lineage_source_diff_file_get: {
+        parameters: {
+            query: {
+                reference_agent_id: string;
+                path: string;
+            };
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSourceDiffFileDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     scoring_readiness_api_v1_admin_agents__agent_id__scoring_readiness_get: {
         parameters: {
             query?: never;
@@ -37359,6 +37890,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArtifactReleaseSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ath_review_queue_slo_api_v1_admin_ath_review_queue_slo_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AthReviewQueueSlo"];
                 };
             };
             /** @description Validation Error */

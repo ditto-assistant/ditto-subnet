@@ -44,8 +44,8 @@ The pending inputs remain the existing question; do not repeat or invent them.
 - Distinct Registration-only and Transfer-only delegates, immediate grants,
   no fee-sponsorship consent, offline primary revocation evidence.
 - Stable bucket IDs, purposes, distinct holding coldkeys and exact integer split.
-  Collector policy requires exactly 1,000 bps combined; emission policy caps at
-  1,000. A smaller emission proposal cannot silently change the signed
+  Collector policy requires 1–10,000 bps combined; emission policy caps at
+  10,000. A smaller emission proposal cannot silently change the signed
   collector distribution split. Resolve this in the exact approved policy.
 - GM/Bitsec/Bitcast custody and current invoice/payee rules. TAO and stake payees
   are different rules. Private billing references do not enter public evidence.

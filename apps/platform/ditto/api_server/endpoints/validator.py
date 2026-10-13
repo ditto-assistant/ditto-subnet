@@ -2023,7 +2023,9 @@ _qualification_refresh_due = 0.0
 # Reject captured heartbeats outside a short clock-skew/retry window. Workers
 # report every two minutes, so five minutes tolerates normal transient outages.
 _HEARTBEAT_MAX_SKEW_SECONDS = 300
-_HEARTBEAT_MAX_BYTES = 16 * 1024
+HEARTBEAT_MAX_BYTES = 16 * 1024
+RECEIPT_DIAGNOSTICS_MAX_BYTES = 8192
+WEIGHT_RECEIPT_MAX_BYTES = 3 * 1024 * 1024
 
 
 # Object-store key the upload pipeline writes the tarball under.
@@ -2994,7 +2996,7 @@ async def submit_receipt_diagnostics(
     session: SessionDep,
 ) -> dict[str, bool]:
     """Store latest signed observation; never consumed by emission verification."""
-    if len(await request.body()) > 8192:
+    if len(await request.body()) > RECEIPT_DIAGNOSTICS_MAX_BYTES:
         raise HTTPException(status_code=413, detail="diagnostic payload too large")
     report = request_body.report
     now = datetime.now(UTC)
@@ -3047,7 +3049,7 @@ async def submit_weight_receipt(
     session: SessionDep,
 ) -> SubmitWeightReceiptResponse:
     """Durably acknowledge a signed commit claim without granting source release."""
-    if len(await request.body()) > 3 * 1024 * 1024:
+    if len(await request.body()) > WEIGHT_RECEIPT_MAX_BYTES:
         raise HTTPException(status_code=413, detail="weight receipt payload too large")
     receipt = request_body.receipt
     if receipt.validator_hotkey != validator_hotkey:
@@ -3108,8 +3110,8 @@ async def heartbeat(
     except ValueError as error:
         raise HTTPException(status_code=400, detail="invalid Content-Length") from error
     if (
-        claimed_bytes > _HEARTBEAT_MAX_BYTES
-        or len(await request.body()) > _HEARTBEAT_MAX_BYTES
+        claimed_bytes > HEARTBEAT_MAX_BYTES
+        or len(await request.body()) > HEARTBEAT_MAX_BYTES
     ):
         raise HTTPException(status_code=413, detail="heartbeat payload too large")
     if request_body.validator_hotkey != validator_hotkey:
@@ -7943,7 +7945,7 @@ async def _mirror_quorum_transcripts(
                 continue
             if not await storage.object_exists(key=key):
                 continue
-            body = await storage.get_object(key=key, max_bytes=_TRANSCRIPT_MAX_BYTES)
+            body = await storage.get_object(key=key, max_bytes=TRANSCRIPT_MAX_BYTES)
             await storage.put_object(
                 key=key,
                 body=body,
@@ -8016,7 +8018,7 @@ _TRANSCRIPT_KEY_TEMPLATE = "transcripts/{sha256}.json"
 
 # A transcript carries every graded final_text for a full run; cap well above
 # any legitimate size while bounding a hostile body.
-_TRANSCRIPT_MAX_BYTES = 32 << 20
+TRANSCRIPT_MAX_BYTES = 32 << 20
 
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
@@ -8065,7 +8067,7 @@ async def submit_transcript(
     """
     response.headers["Cache-Control"] = "no-store"
     body = await request.body()
-    if len(body) > _TRANSCRIPT_MAX_BYTES:
+    if len(body) > TRANSCRIPT_MAX_BYTES:
         raise HTTPException(status_code=413, detail="transcript exceeds size cap")
     if not body:
         raise HTTPException(status_code=400, detail="empty transcript body")

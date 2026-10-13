@@ -614,7 +614,9 @@ async def test_v467_transition_recovers_on_the_second_archive(
         async def get_block_header(self, **_kwargs):
             return {"header": {"number": cursor_block + 3}}
 
-    async def read(substrate, *, netuid, block, expected_runtime_code_hash=None):
+    async def read(
+        substrate, *, netuid, block, expected_runtime_code_hash=None, **_reads
+    ):
         assert netuid == a["netuid"]
         assert expected_runtime_code_hash is None
         if substrate.url == "pruned":
@@ -713,7 +715,9 @@ async def test_sweep_widens_batch_and_skips_leading_resolution_in_catchup(
     collector = _collector(app, session_maker)
     scanned = []
 
-    async def read(_substrate, *, netuid, block, expected_runtime_code_hash=None):
+    async def read(
+        _substrate, *, netuid, block, expected_runtime_code_hash=None, **_reads
+    ):
         del netuid, expected_runtime_code_hash
         scanned.append(block)
         return _observed(a, block)
@@ -752,7 +756,9 @@ async def test_failed_catchup_scan_still_resolves_pending_payouts(
         cursor.block_hash = _hash(100)
     collector = _collector(app, session_maker)
 
-    async def read(_substrate, *, netuid, block, expected_runtime_code_hash=None):  # noqa: ARG001
+    async def read(
+        _substrate, *, netuid, block, expected_runtime_code_hash=None, **_reads
+    ):  # noqa: ARG001
         del netuid, block, expected_runtime_code_hash
         raise RuntimeError("Historical work rate limit exceeded")
 
@@ -789,7 +795,9 @@ async def test_sweep_keeps_steady_state_batch_and_leading_resolution(
     collector = _collector(app, session_maker)
     scanned = []
 
-    async def read(_substrate, *, netuid, block, expected_runtime_code_hash=None):
+    async def read(
+        _substrate, *, netuid, block, expected_runtime_code_hash=None, **_reads
+    ):
         del netuid, expected_runtime_code_hash
         scanned.append(block)
         return _observed(a, block)
@@ -823,7 +831,9 @@ async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatc
         cursor.block = 100
         cursor.block_hash = _hash(100)
 
-    async def read(_substrate, *, netuid, block, expected_runtime_code_hash=None):
+    async def read(
+        _substrate, *, netuid, block, expected_runtime_code_hash=None, **_reads
+    ):
         del netuid, expected_runtime_code_hash
         return _observed(a, block)
 
@@ -846,6 +856,7 @@ async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatc
             return {"header": {"number": 15000}}
 
     timeouts = []
+    rescheduled = []
 
     import ditto.api_server.source_emission_collector as collector_module
 
@@ -858,7 +869,13 @@ async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatc
             self._inner = real_timeout(seconds)
 
         async def __aenter__(self):
-            return await self._inner.__aenter__()
+            await self._inner.__aenter__()
+            return self
+
+        def reschedule(self, when):
+            loop = collector_module.asyncio.get_running_loop()
+            rescheduled.append(round(when - loop.time()))
+            self._inner.reschedule(when)
 
         async def __aexit__(self, *args):
             return await self._inner.__aexit__(*args)
@@ -875,6 +892,14 @@ async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatc
         _historical_substrate_urls=lambda: ["archive"],
         _safe_rpc_error=lambda error: str(error),
     )
+    # The first sweep opens with the steady-state budget because it has not
+    # measured the backlog yet. Finding a deep one must extend that same sweep
+    # to the catch-up budget its 128-block batch needs, and later sweeps start
+    # there.
     await collector.sweep()
-    assert timeouts == [600.0]
     assert collector._backlog_deep is True
+    assert timeouts == [120.0]
+    assert rescheduled == [600]
+    await collector.sweep()
+    assert timeouts == [120.0, 600.0]
+    assert rescheduled == [600, 600]

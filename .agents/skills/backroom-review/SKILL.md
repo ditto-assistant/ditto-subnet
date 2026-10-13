@@ -70,7 +70,9 @@ Use `list_screening_source_files`, `read_screening_source_file`, and
 Read the Dockerfile, manifests, entrypoint, and every reachable answer- or
 tool-construction path. Use `get_copy_review_source_diff` and
 `read_copy_review_source_diff_file` for suspected copying or same-owner
-resubmits. Use `get_screening_baseline_diff` for starter-kit comparisons.
+resubmits. Use `get_lineage_source_diff` (add `path` for one file) to diff a
+resubmission against its rejected ancestor. Use
+`get_screening_baseline_diff` for starter-kit comparisons.
 Search terms and class labels live in
 [references/techniques.md](references/techniques.md).
 

@@ -204,3 +204,54 @@ func TestAnUnparseableRejectionKeepsTheOldWording(t *testing.T) {
 		t.Fatalf("an unparseable body changed the wording to %q", decoded["error"])
 	}
 }
+
+// The Platform's stale refusal judges the broker's own X-Ditto-Requested-At
+// stamp, not the harness's bytes, so it must never be charged to the agent.
+// Validator 5CFtzzb4 lost 13 tickets in 14 days to exactly this, each one
+// spending a miner's only attempt as inference_request_rejected:stale_session.
+func TestAStaleRefusalIsInfrastructureNotTheAgent(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error_code": 4090,
+			"message":    "inference request is stale",
+		})
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	sourceIP := "192.0.2.106"
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","messages":[{"role":"user","content":"hi"}]}`))
+	request.RemoteAddr = sourceIP + ":4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("harness-visible status=%d, want an unchanged 409", recorder.Code)
+	}
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.AgentRequestRejections != 0 {
+		t.Fatalf("a stale broker timestamp was charged to the agent: %+v", end)
+	}
+	if end.InfrastructureFailures != 1 || end.UsageUnavailable != 1 {
+		t.Fatalf("a stale refusal must fail the run as infrastructure: %+v", end)
+	}
+	if end.Admission["stale_session"].Count != 1 {
+		t.Fatalf("the stale refusal left no admission evidence: %+v", end.Admission)
+	}
+	failure := relayFinalizeFailure(fmt.Errorf("benchmark v7 requires complete provider token usage"))
+	if failure.Kind != "validator_infrastructure" || failure.Code != "model_relay_unavailable" || !failure.Retryable {
+		t.Fatalf("the finalize path no longer lands on a no-fault code: %+v", failure)
+	}
+}

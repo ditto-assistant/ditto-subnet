@@ -15,7 +15,11 @@ from ditto.api_models.treasury_allocation import (
 from ditto.api_models.treasury_settings import TreasurySettings, public_wallet_address
 from ditto.api_server.burn_settings import settings_from_row
 from ditto.api_server.dependencies import get_session
-from ditto.api_server.treasury_runtime import latest_runtime_row, runtime_revision
+from ditto.api_server.treasury_runtime import (
+    latest_runtime_row,
+    runtime_revision,
+    settings_match_policy,
+)
 from ditto.db.models import TreasurySettingsRevision
 from ditto.db.queries.burn_settings import latest_burn_settings_revision
 
@@ -33,21 +37,7 @@ async def public_runtime(
             return PublicTreasuryRuntime()
         settings = runtime_revision(row).settings
         policy = settings.approval.policy
-        matches = allocation.allocation_version == 2 and (
-            allocation.treasury_hotkey,
-            allocation.treasury_coldkey,
-            sorted(
-                (b.bucket_id, b.allocation_bps, b.holding_coldkey)
-                for b in allocation.service_buckets
-            ),
-        ) == (
-            policy.collector_hotkey,
-            policy.collector_coldkey,
-            sorted(
-                (b.bucket_id, b.allocation_bps, b.holding_coldkey)
-                for b in policy.buckets
-            ),
-        )
+        matches = settings_match_policy(allocation, policy)
         return PublicTreasuryRuntime(
             revision=row.revision,
             mode=settings.mode,
