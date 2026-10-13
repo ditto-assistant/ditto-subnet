@@ -71,7 +71,7 @@ _COHORT = (
 # Both advertise v13 on a fresh heartbeat. Neither can ever be issued it.
 _OUTSIDER = "5Cg3DiRfvXyfz4ZrNvkMJE2KfaZQMNcfQbSdtiDmLD1BNqKd"
 _PAUSED = "5CqJAjSjv8fjF9uAQpDLyfN1hZEvBjwpFgcGeLbYpcbSaD1C"
-_OWNER_COLDKEY = "5HarryOwnerColdkey"
+_HARRY_PAYER = "5HarryOwnerColdkey"
 
 
 def _managed(hotkey: str) -> ValidatorHeartbeat:
@@ -240,7 +240,7 @@ async def _seed_generation(
                     extrinsic_index=0,
                     agent_id=agent_id,
                     miner_hotkey=hotkey,
-                    miner_coldkey=_OWNER_COLDKEY,
+                    miner_coldkey=_HARRY_PAYER,
                     amount_rao=1,
                     tao_usd_rate=Decimal("1"),
                     dest_address="5Destination",
