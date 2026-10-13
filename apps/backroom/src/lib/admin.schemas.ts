@@ -5653,20 +5653,28 @@ export const screeningQuarantineBatchDecisionSchema = z.object({
   reason: auditReasonSchema(3),
 })
 
+const screeningQuarantineBatchDecisionsSchema = z
+  .array(screeningQuarantineBatchDecisionSchema)
+  .min(1)
+  .max(50)
+
+function uniqueQuarantineDecisions(
+  value: { decisions: Array<{ quarantineId: string }> },
+  context: z.RefinementCtx,
+) {
+  const ids = value.decisions.map((decision) => decision.quarantineId)
+  if (new Set(ids).size !== ids.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['decisions'],
+      message: 'Each quarantine can appear only once',
+    })
+  }
+}
+
 export const screeningQuarantineBatchPreviewInputSchema = z
-  .object({
-    decisions: z.array(screeningQuarantineBatchDecisionSchema).min(1).max(50),
-  })
-  .superRefine((value, context) => {
-    const ids = value.decisions.map((decision) => decision.quarantineId)
-    if (new Set(ids).size !== ids.length) {
-      context.addIssue({
-        code: 'custom',
-        path: ['decisions'],
-        message: 'Each quarantine can appear only once',
-      })
-    }
-  })
+  .object({ decisions: screeningQuarantineBatchDecisionsSchema })
+  .superRefine(uniqueQuarantineDecisions)
 
 // The exact ruling holding a quarantine's agent terminal (ditto-subnet#2038).
 // The preview token signs it and execution re-derives it under lock.
@@ -5705,13 +5713,16 @@ export const screeningQuarantineBatchPreviewResponseSchema = z.object({
   blocked_count: z.number().int().nonnegative(),
 })
 
-export const screeningQuarantineBatchExecuteInputSchema =
-  screeningQuarantineBatchPreviewInputSchema.and(
-    z.object({
-      previewToken: z.string().min(32).max(256),
-      confirmed: z.literal(true),
-    }),
-  )
+// A plain object, never an intersection: the MCP server publishes an
+// intersection as an empty input schema, and clients then send decisions and
+// confirmed as strings that this schema rejects.
+export const screeningQuarantineBatchExecuteInputSchema = z
+  .object({
+    decisions: screeningQuarantineBatchDecisionsSchema,
+    previewToken: z.string().min(32).max(256),
+    confirmed: z.literal(true),
+  })
+  .superRefine(uniqueQuarantineDecisions)
 
 export const screeningQuarantineBatchExecuteItemSchema = z.object({
   quarantine_id: z.string().uuid(),

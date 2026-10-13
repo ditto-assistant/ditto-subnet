@@ -660,7 +660,9 @@ describe('Backroom MCP tools', () => {
     // expected-value canary guard inputs. Keep operational tutorials in help
     // and retain the existing catalog budget as these inputs evolve.
     // Measure the serialized UTF-8 catalog, including guarded Gamma controls.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(180_000)
+    // The quarantine batch execute now publishes its real decisions schema
+    // instead of `{}` (about 1.5 KB), which takes the catalog past 180,000.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(182_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1594,6 +1596,25 @@ describe('Backroom MCP tools', () => {
       }
       for (const tool of tools) visit(tool.inputSchema, tool.name)
       expect(unportable).toEqual([])
+
+      // An intersection publishes as `{}`: clients then cannot send the
+      // arguments the tool validates, so every write must publish properties.
+      // create_ath_rulings_upload is the one write that takes no arguments.
+      const opaque = tools
+        .filter((tool) => tool.annotations?.readOnlyHint === false)
+        .filter((tool) => tool.name !== 'create_ath_rulings_upload')
+        .filter((tool) => Object.keys(tool.inputSchema?.properties ?? {}).length === 0)
+        .map((tool) => tool.name)
+      expect(opaque).toEqual([])
+      const quarantineExecute = tools.find(
+        (tool) => tool.name === 'execute_screening_quarantine_batch',
+      )?.inputSchema as { properties: Record<string, unknown>; required?: Array<string> }
+      expect(Object.keys(quarantineExecute.properties).sort()).toEqual([
+        'confirmed',
+        'decisions',
+        'previewToken',
+      ])
+      expect(quarantineExecute.required?.sort()).toEqual(['confirmed', 'decisions', 'previewToken'])
 
       for (const name of ['activate_v13_scorer_cohort', 'rotate_v13_scorer_cohort']) {
         const schema = tools.find((tool) => tool.name === name)?.inputSchema as {
