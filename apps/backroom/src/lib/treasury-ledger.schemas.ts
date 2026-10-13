@@ -33,6 +33,8 @@ const policy = z.object({
   collector_coldkey: address,
   collector_policy_digest: digest,
   buckets: z.array(bucket).min(1).max(20),
+}).refine((value) => new Set(value.buckets.map((b) => b.bucket_id)).size === value.buckets.length, {
+  path: ['buckets'], message: 'duplicate treasury bucket',
 }).refine((value) => value.buckets.reduce((total, b) => total + bucketMaximumBps(b), 0) <= 10000, {
   path: ['buckets'], message: 'combined service allocation exceeds 10000 bps',
 }) satisfies z.ZodType<components['schemas']['TreasuryEmissionPolicy']>

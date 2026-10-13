@@ -87,3 +87,11 @@ it.each([
 ])('accepts only an in-range pinned allocation for a ranged policy %#', (allocations, ok) => {
   expect(enforcingTreasuryPinSchema.safeParse(enforcing(allocations)).success).toBe(ok)
 })
+
+it('rejects duplicate bucket IDs, as the protocol does', () => {
+  const dup = structuredClone(ranged)
+  dup.policy.buckets.push({ ...dup.policy.buckets[0], holding_coldkey: '5' + 'd'.repeat(47), max_allocation_bps: 2000, allocation_bps: 0 })
+  const result = publicTreasuryApprovalSchema.safeParse(dup)
+  expect(result.success).toBe(false)
+  if (!result.success) expect(result.error.issues[0].message).toBe('duplicate treasury bucket')
+})
