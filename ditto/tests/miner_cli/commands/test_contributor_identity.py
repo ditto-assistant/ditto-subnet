@@ -224,6 +224,66 @@ def test_github_prints_verified_account_before_loading_private_wallet(capsys):
     live.hotkey.sign.assert_called_once()
 
 
+@pytest.mark.parametrize("stage", ["status", "sign"])
+def test_malformed_successful_cla_responses_fail_cleanly(tmp_path, capsys, stage):
+    api = client()
+    handle, live = wallet()
+    if stage == "status":
+        api.get_cla_status.side_effect = ValueError("malformed fixture response")
+    else:
+        api.sign_cla.side_effect = ValueError("malformed fixture response")
+    v = version()
+    with (
+        patch.object(cla, "ApiClient", return_value=api),
+        patch.object(cla, "load_wallet", return_value=(handle, live)),
+    ):
+        assert (
+            cla.run(
+                args(output=tmp_path / "CLA.md", confirmation=f"SIGN CLA 1 {v.sha256}")
+            )
+            == 1
+        )
+    assert "malformed fixture response" in capsys.readouterr().err
+
+
+def test_github_link_completed_by_another_client_returns_without_signing():
+    api = client()
+    attempt = uuid4()
+    api.start_github_link.return_value = GithubLinkStart(
+        netuid=118,
+        attempt_id=attempt,
+        authorize_url="https://dittobench.ai/fixture#launch=fixture",
+        expires_in=600,
+    )
+    api.get_github_link_attempt.return_value = GithubLinkAttemptStatus(
+        attempt_id=attempt, status="linked"
+    )
+    api.get_github_link.return_value = SimpleNamespace(
+        link=SimpleNamespace(
+            link_attempt_id=attempt,
+            hotkey=KEY.ss58_address,
+            github_login="fixture",
+            github_user_id=100,
+            linked_at=datetime.now(UTC),
+        )
+    )
+    with (
+        patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={"token": "fixture", "hotkey": KEY.ss58_address},
+        ),
+        patch.object(link_github, "load_wallet") as load,
+        patch.object(
+            link_github.time, "sleep", side_effect=AssertionError("must not wait")
+        ),
+    ):
+        assert link_github.run(args()) == 0
+    load.assert_not_called()
+    api.confirm_github_link.assert_not_called()
+
+
 def test_parser_exposes_commands_without_implicit_cla_acceptance():
     parser = _build_parser()
     assert parser.parse_args(["cla", "status"]).cla_command == "status"

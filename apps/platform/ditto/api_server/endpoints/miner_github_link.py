@@ -180,6 +180,7 @@ async def start_link(request: Request, session: SessionDep) -> GithubLinkStart:
             .select_from(MinerGithubLinkAttempt)
             .where(
                 MinerGithubLinkAttempt.hotkey == miner.miner_hotkey,
+                MinerGithubLinkAttempt.netuid == request.app.state.config.chain.netuid,
                 MinerGithubLinkAttempt.expires_at > now,
                 MinerGithubLinkAttempt.status.in_(
                     ("pending", "identity_verified", "accepted")

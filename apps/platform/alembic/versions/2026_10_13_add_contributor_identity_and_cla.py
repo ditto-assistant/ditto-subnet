@@ -174,6 +174,10 @@ def upgrade() -> None:
             f"CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE ON {table} "
             "FOR EACH ROW EXECUTE FUNCTION contributor_identity_immutable()"
         )
+        op.execute(
+            f"CREATE TRIGGER {table}_no_truncate BEFORE TRUNCATE ON {table} "
+            "FOR EACH STATEMENT EXECUTE FUNCTION contributor_identity_immutable()"
+        )
     op.execute("""CREATE FUNCTION github_link_revocation_only()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
@@ -193,6 +197,11 @@ def upgrade() -> None:
         "CREATE TRIGGER miner_github_links_immutable BEFORE UPDATE OR DELETE "
         "ON miner_github_links FOR EACH ROW "
         "EXECUTE FUNCTION github_link_revocation_only()"
+    )
+    op.execute(
+        "CREATE TRIGGER miner_github_links_no_truncate BEFORE TRUNCATE "
+        "ON miner_github_links FOR EACH STATEMENT "
+        "EXECUTE FUNCTION contributor_identity_immutable()"
     )
 
 

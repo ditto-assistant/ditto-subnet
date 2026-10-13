@@ -188,6 +188,12 @@ def run(args: argparse.Namespace) -> int:
                 attempt = client.get_github_link_attempt(
                     token=token, attempt_id=started.attempt_id
                 )
+                if attempt.status == "linked":
+                    link = client.get_github_link(token=token).link
+                    if link is None or link.link_attempt_id != started.attempt_id:
+                        raise MinerCliError("completed link changed; read its status")
+                    _print(link, bool(args.json))
+                    return 0
                 if attempt.status in ("failed", "expired"):
                     raise MinerCliError(
                         f"GitHub link {attempt.status}: "

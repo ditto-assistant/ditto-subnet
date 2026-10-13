@@ -124,6 +124,25 @@ class TestRateLimitKey:
 
 
 class TestPublicRateLimitMiddleware:
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/v1/public/github-link/fixture",
+            "/api/v1/public/github-account/100",
+            "/api/v1/public/cla/status/fixture",
+        ],
+    )
+    async def test_contributor_reads_already_share_public_prefix_budget(self, path):
+        app = _build(_Clock(), per_minute=1)
+
+        @app.get(path)
+        async def contributor_read():
+            return {}
+
+        async with _client(app) as client:
+            assert (await client.get(path)).status_code == 200
+            assert (await client.get(path)).status_code == 429
+
     async def test_limit_answers_429_in_the_error_envelope(self) -> None:
         clock = _Clock()
         before = _refusals("upload")

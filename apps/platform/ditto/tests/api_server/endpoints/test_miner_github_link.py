@@ -656,6 +656,18 @@ async def test_concurrent_starts_cannot_exceed_five_pending_attempts(
     setup(app, session_maker)
     alice = bittensor.Keypair.create_from_uri("//Alice")
     token = await _sign_in(client, alice)
+    async with session_maker() as session, session.begin():
+        for _ in range(5):
+            session.add(
+                MinerGithubLinkAttempt(
+                    netuid=119,
+                    hotkey=alice.ss58_address,
+                    launch_hash=uuid4().hex,
+                    status="pending",
+                    created_at=datetime.now(UTC),
+                    expires_at=datetime.now(UTC) + timedelta(minutes=10),
+                )
+            )
     responses = await asyncio.gather(
         *[
             client.post(
@@ -671,7 +683,9 @@ async def test_concurrent_starts_cannot_exceed_five_pending_attempts(
     async with session_maker() as session:
         assert (
             await session.scalar(
-                select(func.count()).select_from(MinerGithubLinkAttempt)
+                select(func.count())
+                .select_from(MinerGithubLinkAttempt)
+                .where(MinerGithubLinkAttempt.netuid == 118)
             )
             == 5
         )

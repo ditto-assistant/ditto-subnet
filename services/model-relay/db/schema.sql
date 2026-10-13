@@ -10385,10 +10385,24 @@ CREATE TRIGGER agent_cla_bindings_immutable BEFORE DELETE OR UPDATE ON public.ag
 
 
 --
+-- Name: agent_cla_bindings agent_cla_bindings_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER agent_cla_bindings_no_truncate BEFORE TRUNCATE ON public.agent_cla_bindings FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
 -- Name: cla_settings_revisions cla_settings_revisions_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER cla_settings_revisions_immutable BEFORE DELETE OR UPDATE ON public.cla_settings_revisions FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_settings_revisions cla_settings_revisions_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_settings_revisions_no_truncate BEFORE TRUNCATE ON public.cla_settings_revisions FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
 
 
 --
@@ -10399,6 +10413,13 @@ CREATE TRIGGER cla_shadow_uploads_immutable BEFORE DELETE OR UPDATE ON public.cl
 
 
 --
+-- Name: cla_shadow_uploads cla_shadow_uploads_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_shadow_uploads_no_truncate BEFORE TRUNCATE ON public.cla_shadow_uploads FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
 -- Name: cla_signatures cla_signatures_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -10406,10 +10427,24 @@ CREATE TRIGGER cla_signatures_immutable BEFORE DELETE OR UPDATE ON public.cla_si
 
 
 --
+-- Name: cla_signatures cla_signatures_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_signatures_no_truncate BEFORE TRUNCATE ON public.cla_signatures FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
 -- Name: cla_versions cla_versions_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER cla_versions_immutable BEFORE DELETE OR UPDATE ON public.cla_versions FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_versions cla_versions_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_versions_no_truncate BEFORE TRUNCATE ON public.cla_versions FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
 
 
 --
@@ -10679,10 +10714,24 @@ CREATE TRIGGER miner_github_action_nonces_immutable BEFORE DELETE OR UPDATE ON p
 
 
 --
+-- Name: miner_github_action_nonces miner_github_action_nonces_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_action_nonces_no_truncate BEFORE TRUNCATE ON public.miner_github_action_nonces FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
 -- Name: miner_github_links miner_github_links_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER miner_github_links_immutable BEFORE DELETE OR UPDATE ON public.miner_github_links FOR EACH ROW EXECUTE FUNCTION public.github_link_revocation_only();
+
+
+--
+-- Name: miner_github_links miner_github_links_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_links_no_truncate BEFORE TRUNCATE ON public.miner_github_links FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
 
 
 --

@@ -499,7 +499,9 @@ func TestCLAMissingPolicyFailsClosedBeforeAdmission(t *testing.T) {
 	d := uploadDeps(pool, "5Owner", time.Time{})
 	// Deliberately simulate a corrupted/missing migration seed. Default off
 	// requires the immutable audited row; it is never inferred from absence.
+	testutil.SeedSQL(t, pool, "ALTER TABLE cla_settings_revisions DISABLE TRIGGER cla_settings_revisions_no_truncate")
 	testutil.SeedSQL(t, pool, "TRUNCATE cla_settings_revisions")
+	testutil.SeedSQL(t, pool, "ALTER TABLE cla_settings_revisions ENABLE TRIGGER cla_settings_revisions_no_truncate")
 	body := signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), map[string]any{"reserve_submission_slot": true})
 	r := httptest.NewRequest("POST", "/api/v1/upload/check", bytes.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")

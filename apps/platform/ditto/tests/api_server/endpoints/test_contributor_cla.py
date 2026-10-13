@@ -37,9 +37,40 @@ FIXTURE = "TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.\nplaceholder version {versi
 
 async def test_missing_policy_seed_cannot_silently_disable_consent(session_maker):
     async with session_maker() as session, session.begin():
+        await session.execute(
+            text(
+                "ALTER TABLE cla_settings_revisions DISABLE TRIGGER "
+                "cla_settings_revisions_no_truncate"
+            )
+        )
         await session.execute(text("TRUNCATE cla_settings_revisions"))
+        await session.execute(
+            text(
+                "ALTER TABLE cla_settings_revisions ENABLE TRIGGER "
+                "cla_settings_revisions_no_truncate"
+            )
+        )
         with pytest.raises(RuntimeError, match="migration seed is missing"):
             await evaluate_cla_gate(session, netuid=118, hotkey="fixture")
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        "miner_github_action_nonces",
+        "miner_github_links",
+        "cla_versions",
+        "cla_signatures",
+        "cla_settings_revisions",
+        "cla_shadow_uploads",
+        "agent_cla_bindings",
+    ],
+)
+async def test_contributor_history_rejects_truncate(session_maker, table):
+    async with session_maker() as session:
+        with pytest.raises(DBAPIError, match="append-only"):
+            await session.execute(text(f'TRUNCATE "{table}" CASCADE'))
+        await session.rollback()
 
 
 @pytest.mark.parametrize("failure", ["owner_missing", "finalized_missing", "rpc"])
