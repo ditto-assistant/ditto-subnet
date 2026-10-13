@@ -41,8 +41,9 @@ through to the credential-free archives.
 `query` attaches the key as `authorization=...` (the existing Taostats
 convention); `apikey` attaches it as `apikey=...`, as documented by
 [OnFinality's Enhanced API Service](https://onfinality.atlassian.net/wiki/spaces/SUPPORT/pages/1648525360/).
-Both modes encode the key and replace existing instances of their selected
-parameter while preserving unrelated query parameters. `path` appends an
+Both modes encode the key and remove existing `authorization` and `apikey`
+parameters while preserving unrelated query pairs in their original encoded
+form. `path` appends an
 encoded segment; `none` does not attach a key. Keep the configured URL keyless.
 
 ## Recovering stalled champion source releases

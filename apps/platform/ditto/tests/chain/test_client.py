@@ -827,7 +827,10 @@ class TestCheckExtrinsicSuccess:
             value=[make_event_record(3, event_id="ExtrinsicSuccess")]
         )
         config = make_chain_config(
-            archive_rpc_url=f"wss://archive.example/rpc?network=finney&empty=&{parameter}=stale&{parameter}=older",
+            archive_rpc_url=(
+                "wss://archive.example/rpc?network=finney&token=literal+plus%2f&empty=&flag"
+                "&apikey=stale&authorization=older&ap%69key=oldest&auth%6frization=earliest"
+            ),
             archive_rpc_api_key="key +/&?#%",
             archive_rpc_auth_mode=auth_mode,
         )
@@ -837,7 +840,7 @@ class TestCheckExtrinsicSuccess:
 
         substrate_module = sys.modules["async_substrate_interface"]
         substrate_module.AsyncSubstrateInterface.assert_called_once_with(
-            url=f"wss://archive.example/rpc?network=finney&empty=&{parameter}=key%20%2B%2F%26%3F%23%25"
+            url=f"wss://archive.example/rpc?network=finney&token=literal+plus%2f&empty=&flag&{parameter}=key%20%2B%2F%26%3F%23%25"
         )
 
     @pytest.mark.parametrize("auth_mode", ["query", "apikey"])
