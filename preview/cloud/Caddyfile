@@ -12,6 +12,15 @@ dashboard.{$PREVIEW_BASE_DOMAIN} {
   handle {
     reverse_proxy dashboard:80
   }
+
+  handle_errors 413 {
+    header Content-Type application/json
+    header Connection close
+    header X-Request-ID {err.id}
+    respond `{"error_code":3004,"message":"request body exceeds 32MiB","request_id":"{err.id}"}` 413 {
+      close
+    }
+  }
 }
 
 platform.{$PREVIEW_BASE_DOMAIN} {
@@ -23,6 +32,15 @@ platform.{$PREVIEW_BASE_DOMAIN} {
     max_size 32MiB
   }
   reverse_proxy platform:8000
+
+  handle_errors 413 {
+    header Content-Type application/json
+    header Connection close
+    header X-Request-ID {err.id}
+    respond `{"error_code":3004,"message":"request body exceeds 32MiB","request_id":"{err.id}"}` 413 {
+      close
+    }
+  }
 }
 
 backroom.{$PREVIEW_BASE_DOMAIN} {

@@ -34,12 +34,21 @@ def _directive_line(rendered: str, prefix: str) -> int:
     raise AssertionError(prefix)
 
 
+_EDGE_ENVELOPE = (
+    '{"error_code":3004,"message":"request body exceeds 32MiB",'
+    '"request_id":"{err.id}"}'
+)
+
+
 def test_direct_proxy_caps_the_body() -> None:
     rendered = _render()
     assert "max_size 32MiB" in rendered
     assert _directive_line(rendered, "request_body {") < _directive_line(
         rendered, "reverse_proxy "
     )
+    assert rendered.count("handle_errors 413 {") == 1
+    assert _EDGE_ENVELOPE in rendered
+    assert "header Connection close" in rendered
 
 
 def test_relay_handles_each_cap_the_body() -> None:
@@ -49,3 +58,5 @@ def test_relay_handles_each_cap_the_body() -> None:
     )
     assert rendered.count("request_body {") == 3
     assert rendered.count("max_size 32MiB") == 3
+    assert rendered.count("handle_errors 413 {") == 1
+    assert rendered.count(_EDGE_ENVELOPE) == 1

@@ -94,6 +94,19 @@
     reverse_proxy localhost:{{ platform_api_port }}
 {% endif %}
 
+    # request_body answers 413 itself, before reverse_proxy, so the API never
+    # gets to write its error envelope. This covers every cap above. Other
+    # statuses keep Caddy's default error handler. 3004 is the transport body
+    # cap; the route's own tighter cap still answers 3002 from the app.
+    handle_errors 413 {
+        header Content-Type application/json
+        header Connection close
+        header X-Request-ID {err.id}
+        respond `{"error_code":3004,"message":"request body exceeds {{ platform_request_body_max_size }}","request_id":"{err.id}"}` 413 {
+            close
+        }
+    }
+
     log {
         output file /opt/ditto/logs/caddy/platform.log {
             roll_size 50MiB
