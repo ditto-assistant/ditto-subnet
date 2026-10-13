@@ -829,9 +829,34 @@ async def open_copy_review(
     review. Scores remain durable; changing the agent status removes it from
     the emission-eligible ledger until an operator resolves the review.
     """
+    return await open_review(agent_id, payload, session, x_admin_actor=x_admin_actor)
+
+
+def _openable_statuses(*, allow_evaluating: bool) -> tuple[AgentStatus, ...]:
+    if allow_evaluating:
+        return (AgentStatus.SCORED, AgentStatus.LIVE, AgentStatus.EVALUATING)
+    return (AgentStatus.SCORED, AgentStatus.LIVE)
+
+
+async def open_review(
+    agent_id: UUID,
+    payload: AdminCopyReviewOpenRequest,
+    session: AsyncSession,
+    *,
+    x_admin_actor: str | None,
+    allow_evaluating: bool = False,
+) -> AdminCopyReviewOpenResponse:
+    """Open (or reopen) the ATH review behind :func:`open_copy_review`.
+
+    ``allow_evaluating`` admits an agent still below scoring quorum. Only the
+    batch rulings court passes it, and only for a reject that resolves in the
+    same item, so a proven violation stops the remaining validator runs
+    instead of waiting for them. A standalone hold stays scored/live only.
+    """
     actor = x_admin_actor.strip() if x_admin_actor is not None else ""
     if not 1 <= len(actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    openable = _openable_statuses(allow_evaluating=allow_evaluating)
 
     async with session.begin():
         agent = await session.scalar(
@@ -905,9 +930,7 @@ async def open_copy_review(
             reconsidering_rejection = (
                 existing.resolution == "reject" and agent.status == AgentStatus.BANNED
             )
-            if agent.status not in (AgentStatus.SCORED, AgentStatus.LIVE) and not (
-                reconsidering_rejection
-            ):
+            if agent.status not in openable and not reconsidering_rejection:
                 raise HTTPException(
                     status_code=409,
                     detail=f"agent is {agent.status.value}, not scored or live",
@@ -929,6 +952,7 @@ async def open_copy_review(
                 if previous_status not in {
                     AgentStatus.SCORED.value,
                     AgentStatus.LIVE.value,
+                    AgentStatus.EVALUATING.value,
                 }:
                     # Score-finalization copy holds never recorded
                     # previous_status: they fire instead of evaluating→scored.
@@ -971,7 +995,7 @@ async def open_copy_review(
                 reopened=True,
             )
 
-        if agent.status not in (AgentStatus.SCORED, AgentStatus.LIVE):
+        if agent.status not in openable:
             raise HTTPException(
                 status_code=409,
                 detail=f"agent is {agent.status.value}, not scored or live",
@@ -1102,13 +1126,16 @@ async def resolve_copy_review(
         if canonical != "clear":
             await preserve_desired_authority(session, now=datetime.now(UTC))
         now = datetime.now(UTC)
-        agent.status = (
-            AgentStatus.LIVE
-            if canonical == "clear" and previous_status == AgentStatus.LIVE.value
-            else AgentStatus.SCORED
-            if canonical == "clear"
-            else AgentStatus.BANNED
-        )
+        if canonical != "clear":
+            agent.status = AgentStatus.BANNED
+        elif previous_status == AgentStatus.LIVE.value:
+            agent.status = AgentStatus.LIVE
+        elif previous_status == AgentStatus.EVALUATING.value:
+            # Rejected below quorum, then cleared: back to the validator queue,
+            # never to a scored status its score set has not earned.
+            agent.status = AgentStatus.EVALUATING
+        else:
+            agent.status = AgentStatus.SCORED
         if canonical == "reject":
             live_tickets = list(
                 (
