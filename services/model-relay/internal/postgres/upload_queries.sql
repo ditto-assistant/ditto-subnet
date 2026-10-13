@@ -54,6 +54,8 @@ RETURNING miner_coldkey, token, miner_hotkey, sha256, settings_revision,
           legacy_payment_cutoff_at, created_at, expires_at;
 
 -- name: GetClaUploadGate :one
+-- The migration seeds audited mode=off. Missing policy is invalid state and
+-- must fail closed, matching Python, rather than silently disabling consent.
 WITH policy AS (
     SELECT mode FROM cla_settings_revisions ORDER BY revision DESC LIMIT 1
 ), current_version AS (

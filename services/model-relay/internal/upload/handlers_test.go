@@ -1,6 +1,7 @@
 package upload
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -467,5 +468,51 @@ func TestCLAUploadGateParityBeforePayment(t *testing.T) {
 				t.Fatalf("outdated version gate: %+v", outdated)
 			}
 		})
+	}
+}
+
+func TestCLAShadowChecksDoNotFloodWarnings(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	secret, hotkey := newSignedHotkey(t)
+	d := uploadDeps(pool, "5Owner", time.Time{})
+	var logs bytes.Buffer
+	d.Logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+		VALUES (1,0,'shadow','fixture','test rollout',now())`)
+	body := signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), nil)
+	for range 3 {
+		if result := serveCheck(t, d, body); !result.OK {
+			t.Fatalf("shadow check refused: %+v", result)
+		}
+	}
+	if strings.Contains(logs.String(), `"level":"WARN"`) {
+		t.Fatalf("preflight polling emitted warnings: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "unsigned CLA prepayment check") {
+		t.Fatal("debug diagnostic missing")
+	}
+}
+
+func TestCLAMissingPolicyFailsClosedBeforeAdmission(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	secret, hotkey := newSignedHotkey(t)
+	d := uploadDeps(pool, "5Owner", time.Time{})
+	// Deliberately simulate a corrupted/missing migration seed. Default off
+	// requires the immutable audited row; it is never inferred from absence.
+	testutil.SeedSQL(t, pool, "TRUNCATE cla_settings_revisions")
+	body := signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), map[string]any{"reserve_submission_slot": true})
+	r := httptest.NewRequest("POST", "/api/v1/upload/check", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	relayhttp.RequestIDMiddleware(testLogger(), http.HandlerFunc(d.handleCheck)).ServeHTTP(w, r)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("missing policy did not fail closed: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var reservations int
+	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM upload_admission_reservations").Scan(&reservations); err != nil {
+		t.Fatal(err)
+	}
+	if reservations != 0 {
+		t.Fatalf("missing policy created %d admission reservations", reservations)
 	}
 }

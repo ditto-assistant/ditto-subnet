@@ -51,6 +51,8 @@ type GetClaUploadGateRow struct {
 	HasSignature bool        `json:"hasSignature"`
 }
 
+// The migration seeds audited mode=off. Missing policy is invalid state and
+// must fail closed, matching Python, rather than silently disabling consent.
 func (q *Queries) GetClaUploadGate(ctx context.Context, arg GetClaUploadGateParams) (GetClaUploadGateRow, error) {
 	row := q.db.QueryRow(ctx, getClaUploadGate, arg.Netuid, arg.Hotkey, arg.ObservedAt)
 	var i GetClaUploadGateRow

@@ -398,7 +398,7 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 			}
 			appendFailure(&codes, &messages, errorCLARequired, message)
 		} else if consent.Mode == "shadow" && !consent.HasSignature {
-			d.Logger.Warn("unsigned CLA prepayment check in shadow mode", slog.String("hotkey", *payload.Hotkey))
+			d.Logger.Debug("unsigned CLA prepayment check in shadow mode", slog.String("hotkey", *payload.Hotkey))
 		}
 	}
 

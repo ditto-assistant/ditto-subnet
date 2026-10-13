@@ -43,9 +43,6 @@ async def require_verified_bounty_contributor(
     github_login: str,
     github: GithubLinkClient,
 ) -> VerifiedBountyContributor:
-    # Caller records the claim in this same transaction. Link revocation and
-    # policy publication cannot race its authoritative checks.
-    await lock_identity_writes(session, namespace="github-link")
     link = await active_github_link(session, netuid=netuid, hotkey=hotkey)
     if link is None or link.github_login.casefold() != github_login.casefold():
         raise BountyIdentityRejected(
@@ -60,6 +57,19 @@ async def require_verified_bounty_contributor(
         raise BountyIdentityRejected(
             "GitHub login was renamed or reassigned; re-link before claiming"
         )
+    # Do not block link writers on the external request. Caller records the
+    # claim in this transaction, after revalidating the exact proof under lock.
+    await lock_identity_writes(session, namespace="github-link")
+    current_link = await active_github_link(session, netuid=netuid, hotkey=hotkey)
+    if current_link is None or (
+        current_link.link_id,
+        current_link.github_user_id,
+        current_link.github_login,
+    ) != (link.link_id, link.github_user_id, link.github_login):
+        raise BountyIdentityRejected(
+            "verified GitHub link changed during verification; re-link or retry"
+        )
+    link = current_link
     await lock_identity_writes(session, namespace="cla-policy")
     consent = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
     if not consent.allowed:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -567,3 +568,167 @@ async def test_bounty_guard_refuses_false_logins_and_never_selects_payee(
                 github_login=provider.login,
                 github=app.state.github_link,
             )
+
+
+async def test_concurrent_starts_cannot_exceed_five_pending_attempts(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    responses = await asyncio.gather(
+        *[
+            client.post(
+                "/api/v1/me/github-link/start",
+                headers={"authorization": f"Bearer {token}"},
+            )
+            for _ in range(8)
+        ]
+    )
+    assert (
+        sorted(response.status_code for response in responses) == [200] * 5 + [429] * 3
+    )
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(MinerGithubLinkAttempt)
+            )
+            == 5
+        )
+
+
+@pytest.mark.parametrize("expire_during_exchange", [False, True])
+async def test_slow_callback_is_single_use_and_does_not_block_status_polling(
+    app, client, session_maker, monkeypatch, expire_during_exchange
+):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    auth = {"authorization": f"Bearer {token}"}
+    started = (await client.post("/api/v1/me/github-link/start", headers=auth)).json()
+    launch = urlsplit(started["authorize_url"])
+    redirected = await client.get(launch.path + "?" + launch.query)
+    state = parse_qs(urlsplit(redirected.headers["location"]).query)["state"][0]
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = app.state.github_link.exchange
+
+    async def slow_exchange(**kwargs):
+        entered.set()
+        await release.wait()
+        return await original(**kwargs)
+
+    exchange = AsyncMock(side_effect=slow_exchange)
+    monkeypatch.setattr(app.state.github_link, "exchange", exchange)
+    path = "/api/v1/miner-auth/github/callback"
+    params = {"state": state, "code": "fixture-code"}
+    task = asyncio.create_task(client.get(path, params=params))
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        replay = await asyncio.wait_for(client.get(path, params=params), 10)
+        assert replay.status_code == 409, replay.text
+        polling_path = f"/api/v1/me/github-link/attempts/{started['attempt_id']}"
+        polled = await asyncio.wait_for(client.get(polling_path, headers=auth), 10)
+        assert polled.status_code == 200 and polled.json()["status"] == "pending"
+        if expire_during_exchange:
+            async with session_maker() as session, session.begin():
+                attempt = await session.get(
+                    MinerGithubLinkAttempt, UUID(started["attempt_id"])
+                )
+                attempt.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            expired = await asyncio.wait_for(client.get(polling_path, headers=auth), 10)
+            assert expired.json()["status"] == "expired"
+    finally:
+        release.set()
+        result = await asyncio.wait_for(task, 10)
+    assert result.status_code == (409 if expire_during_exchange else 200), result.text
+    exchange.assert_awaited_once()
+
+
+@pytest.mark.parametrize("action", ["unlink", "relink"])
+async def test_bounty_identity_rechecks_link_after_network_io(
+    app, client, session_maker, monkeypatch, action
+):
+    from ditto.api_server.bounty_identity import (
+        BountyIdentityRejected,
+        require_verified_bounty_contributor,
+    )
+
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    auth = {"authorization": f"Bearer {token}"}
+    started, _, _ = await browser_flow(client, token)
+    linked = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers=auth,
+        json=signed_link(alice, started["attempt_id"]),
+    )
+    assert linked.status_code == 200, linked.text
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = app.state.github_link.public_identity
+
+    async def slow_identity(login):
+        identity = await original(login)
+        entered.set()
+        await release.wait()
+        return identity
+
+    monkeypatch.setattr(app.state.github_link, "public_identity", slow_identity)
+
+    async def accept_claim():
+        async with session_maker() as session, session.begin():
+            return await require_verified_bounty_contributor(
+                session,
+                netuid=118,
+                hotkey=alice.ss58_address,
+                github_login="miner-fixture",
+                github=app.state.github_link,
+            )
+
+    task = asyncio.create_task(accept_claim())
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        if action == "unlink":
+            nonce, issued = uuid4(), datetime.now(UTC)
+            link_id = UUID(linked.json()["link_id"])
+            payload = github_unlink_message(
+                netuid=118,
+                hotkey=alice.ss58_address,
+                link_id=link_id,
+                nonce=nonce,
+                issued_at=issued,
+                key_kind="hotkey",
+                signer=alice.ss58_address,
+            )
+            body = {
+                "netuid": 118,
+                "hotkey": alice.ss58_address,
+                "link_id": str(link_id),
+                "nonce": str(nonce),
+                "issued_at": issued.isoformat(),
+                "proof": {
+                    "key_kind": "hotkey",
+                    "signer": alice.ss58_address,
+                    "signature": alice.sign(payload).hex(),
+                },
+            }
+            revoked = await asyncio.wait_for(
+                client.post("/api/v1/me/github-link/unlink", headers=auth, json=body),
+                10,
+            )
+            assert revoked.status_code == 204, revoked.text
+        else:
+            next_attempt, _, _ = await asyncio.wait_for(browser_flow(client, token), 10)
+            relinked = await asyncio.wait_for(
+                client.post(
+                    "/api/v1/me/github-link/confirm",
+                    headers=auth,
+                    json=signed_link(alice, next_attempt["attempt_id"]),
+                ),
+                10,
+            )
+            assert relinked.status_code == 200, relinked.text
+    finally:
+        release.set()
+        with pytest.raises(BountyIdentityRejected, match="changed during verification"):
+            await asyncio.wait_for(task, 10)

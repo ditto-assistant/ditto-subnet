@@ -169,6 +169,9 @@ async def start_link(request: Request, session: SessionDep) -> GithubLinkStart:
     async with session.begin():
         miner, _ = await resolve_miner_session(request, session)
         require_scope(miner, "profile")
+        await lock_identity_writes(
+            session, namespace=f"github-link-start:{miner.miner_hotkey}"
+        )
         pending = await session.scalar(
             select(func.count())
             .select_from(MinerGithubLinkAttempt)
@@ -286,14 +289,38 @@ async def callback(
                 status=409,
             )
         verifier, attempt.code_verifier = attempt.code_verifier, None
-        try:
-            if error or not code:
-                raise GithubLinkRejected("GitHub sign-in was declined")
-            identity = await client.exchange(code=code, verifier=verifier)
-        except GithubLinkRejected as exc:
-            attempt.status, attempt.error = "failed", str(exc)
+        attempt_id = attempt.attempt_id
+    # Consuming the verifier commits before network I/O. A second callback
+    # cannot exchange the code, and CLI polling retains access to the row.
+    failure = None
+    identity = None
+    try:
+        if error or not code:
+            raise GithubLinkRejected("GitHub sign-in was declined")
+        identity = await client.exchange(code=code, verifier=verifier)
+    except GithubLinkRejected as exc:
+        failure = str(exc)
+    async with session.begin():
+        attempt = await session.get(
+            MinerGithubLinkAttempt,
+            attempt_id,
+            with_for_update=True,
+            populate_existing=True,
+        )
+        if attempt is None:
+            return _page("Invalid sign-in", "<p>Start a new link.</p>", status=400)
+        _expire(attempt)
+        if attempt.status != "pending":
             return _page(
-                "GitHub sign-in failed", f"<p>{html.escape(str(exc))}</p>", status=400
+                "Sign-in already used or expired",
+                "<p>Start a new link from the CLI.</p>",
+                status=409,
+            )
+        if failure is not None or identity is None:
+            failure = failure or "GitHub identity verification failed; start again"
+            attempt.status, attempt.error = "failed", failure
+            return _page(
+                "GitHub sign-in failed", f"<p>{html.escape(failure)}</p>", status=400
             )
         attempt.github_user_id, attempt.github_login = identity.user_id, identity.login
         attempt.status = "identity_verified"
@@ -440,6 +467,7 @@ async def confirm(
                     "signer is not the finalized Owner(hotkey)"
                 )
             await lock_identity_writes(session, namespace="github-link")
+            now = datetime.now(UTC)
             previous = await active_github_link(
                 session, netuid=body.netuid, hotkey=body.hotkey
             )

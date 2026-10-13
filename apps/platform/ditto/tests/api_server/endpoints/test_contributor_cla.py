@@ -34,6 +34,13 @@ pytestmark = pytest.mark.asyncio
 FIXTURE = "TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.\nplaceholder version {version}\n"
 
 
+async def test_missing_policy_seed_cannot_silently_disable_consent(session_maker):
+    async with session_maker() as session, session.begin():
+        await session.execute(text("TRUNCATE cla_settings_revisions"))
+        with pytest.raises(RuntimeError, match="migration seed is missing"):
+            await evaluate_cla_gate(session, netuid=118, hotkey="fixture")
+
+
 def setup(app, maker):
     _install(app, maker)
     owner = bittensor.Keypair.create_from_uri("//Bob").ss58_address

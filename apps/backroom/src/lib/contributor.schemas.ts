@@ -37,5 +37,7 @@ export const claPolicyReadInputSchema = z.object({ historyLimit: z.number().int(
 export const claPolicyWriteInputSchema = z.object({ expectedRevision: z.number().int().nonnegative(), mode: claModeSchema,
   reason: z.string().min(8), confirmation: z.string().min(1).max(200) })
 export const claPublishInputSchema = z.object({ version: z.number().int().min(1).max(2147483647), sha256,
-  text: z.string().min(1).max(262144), effectiveAt: z.string().datetime({ offset: true }), reason: z.string().min(8),
+  text: z.string().min(1).max(262144).refine((value) => new TextEncoder().encode(value).length <= 262144,
+    'CLA text exceeds the 262144 UTF-8 byte limit'),
+  effectiveAt: z.string().datetime({ offset: true }), reason: z.string().min(8),
   confirmation: z.string().min(1).max(200) })
