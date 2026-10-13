@@ -35,6 +35,7 @@ const (
 	errorHotkeyBanned       = 1103
 	errorIdentical          = 1104
 	errorCooldown           = 1105
+	errorCLARequired        = 1106
 
 	defaultCooldownSeconds = 3600
 	defaultFeeAmountRao    = int64(40_000_000)
@@ -379,6 +380,26 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	if banned {
 		appendFailure(&codes, &messages, errorHotkeyBanned, "hotkey is banned from submitting")
+	}
+
+	if signatureValid && !banned {
+		consent, qerr := d.Queries.GetClaUploadGate(r.Context(), postgres.GetClaUploadGateParams{
+			Netuid: int32(d.Cfg.Chain.Netuid), Hotkey: *payload.Hotkey,
+			ObservedAt: pgtype.Timestamptz{Time: d.now(), Valid: true},
+		})
+		if qerr != nil {
+			d.dbError(w, r, "CLA gate lookup", qerr)
+			return
+		}
+		if consent.Mode == "enforce" && !consent.HasSignature {
+			message := "No effective contributor agreement is published; contact the operator before submitting."
+			if consent.Version.Valid {
+				message = "Contributor agreement v" + itoa(int(consent.Version.Int32)) + " is required; run `ditto cla sign` before submitting."
+			}
+			appendFailure(&codes, &messages, errorCLARequired, message)
+		} else if consent.Mode == "shadow" && !consent.HasSignature {
+			d.Logger.Warn("unsigned CLA prepayment check in shadow mode", slog.String("hotkey", *payload.Hotkey))
+		}
 	}
 
 	var identicalID, identicalStatus *string

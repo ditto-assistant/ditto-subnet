@@ -73,6 +73,18 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
     ``ditto.tests.db.queries.test_bans``; here we stub it so the endpoint
     tests need no bans row. Ban-specific tests re-stub this to ``True``.
     """
+    # This module isolates existing upload behavior with fake sessions. CLA
+    # policy modes/signatures are covered against PostgreSQL separately.
+    from ditto.api_server.cla import ClaGateDecision
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.evaluate_cla_gate",
+        AsyncMock(return_value=ClaGateDecision("off", True, None, None, "")),
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.lock_identity_writes",
+        AsyncMock(return_value=None),
+    )
     monkeypatch.setattr(
         "ditto.api_server.endpoints.upload.is_hotkey_banned",
         AsyncMock(return_value=False),

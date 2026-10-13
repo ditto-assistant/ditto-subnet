@@ -84,9 +84,17 @@ opt in by renewing against it.
   (payee rebind, and the `from` half of a handoff) must be signed by the
   **recorded payee coldkey**. A hotkey signature can't change where money goes,
   and neither can the hotkey's current owner.
-- **GitHub login.** It is signed into the claim so reviewers can match PRs to
-  claimants. A PR opened by another account is still linkable through a signed
-  `submit` action. A PR opened by the claimed login but never signed-linked is
+- **GitHub identity.** Before a claim is accepted, its `github_login` must
+  match the hotkey's active OAuth-verified, signed account link. The numeric
+  GitHub user id is the stable identity; a login is only its current display
+  label. The acceptance guard revalidates that label against the numeric id,
+  rejecting renamed or reassigned logins until the contributor re-links.
+  Use `ditto link-github` first; see [GitHub links](GITHUB-LINKS.md) and its
+  `require_verified_bounty_contributor` integration contract. The claim engine
+  records the verified link id and user id, never a self-asserted label alone.
+  CLA consent follows the effective rollout mode. Neither identity nor consent
+  changes the signed payee coldkey. A PR opened by another account remains
+  linkable through a signed `submit` action; a matching author login alone is
   not submitted work.
 - **Teams.** A team claim names one payee coldkey and lists its members. Each
   member signs a membership half over the team digest. The payee and the members

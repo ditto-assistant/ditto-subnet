@@ -1,3 +1,8 @@
+import {
+  contributorHotkeyInputSchema, githubAccountInputSchema, githubLinkStatusSchema,
+  claStatusSchema, claControlSchema, claPolicyReadInputSchema, claPolicyWriteInputSchema,
+  claPublishInputSchema, claVersionSchema,
+} from '../lib/contributor.schemas'
 import '@tanstack/react-start/server-only'
 import { manualControlSchema } from '../lib/treasury-manual.schemas'
 
@@ -4126,4 +4131,43 @@ export async function authorizeConversationRetry(actor: string, rawInput: unknow
     method: 'POST', body: { ...input, actor }, actor,
   })
   return conversationObservationsSchema.parse(payload)
+}
+
+// Contributor identity and default-off CLA rollout.
+export async function fetchMinerGithubLink(rawInput: unknown) {
+  const input = contributorHotkeyInputSchema.parse(rawInput)
+  return githubLinkStatusSchema.parse(await platformAdminRequest(`/api/v1/public/github-link/${encodeURIComponent(input.hotkey)}`))
+}
+
+export async function fetchGithubContributor(rawInput: unknown) {
+  const input = githubAccountInputSchema.parse(rawInput)
+  const identity = githubLinkStatusSchema.parse(await platformAdminRequest(`/api/v1/public/github-account/${input.githubUserId}`))
+  return { ...identity, cla: identity.link ? await fetchMinerClaStatus({ hotkey: identity.link.hotkey }) : null }
+}
+
+export async function fetchMinerClaStatus(rawInput: unknown) {
+  const input = contributorHotkeyInputSchema.parse(rawInput)
+  return claStatusSchema.parse(await platformAdminRequest(`/api/v1/public/cla/status/${encodeURIComponent(input.hotkey)}`))
+}
+
+export async function fetchClaPolicy(rawInput: unknown = {}) {
+  const input = claPolicyReadInputSchema.parse(rawInput)
+  const query = new URLSearchParams({ history_limit: String(input.historyLimit), history_offset: String(input.historyOffset) })
+  return claControlSchema.parse(await platformAdminRequest(`/api/v1/admin/cla/settings?${query}`))
+}
+
+export async function updateClaPolicy(actor: string, rawInput: unknown) {
+  const input = claPolicyWriteInputSchema.parse(rawInput)
+  type Body = PlatformOperations['set_policy_api_v1_admin_cla_settings_post']['requestBody']['content']['application/json']
+  const body = { expected_revision: input.expectedRevision, mode: input.mode, reason: input.reason, actor, confirmation: input.confirmation } satisfies Body
+  await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body })
+  return fetchClaPolicy()
+}
+
+export async function publishClaVersion(actor: string, rawInput: unknown) {
+  const input = claPublishInputSchema.parse(rawInput)
+  type Body = PlatformOperations['publish_api_v1_admin_cla_versions_post']['requestBody']['content']['application/json']
+  const body = { version: input.version, sha256: input.sha256, text: input.text, effective_at: input.effectiveAt, actor,
+    reason: input.reason, confirmation: input.confirmation } satisfies Body
+  return claVersionSchema.parse(await platformAdminRequest('/api/v1/admin/cla/versions', { method: 'POST', actor, body }))
 }

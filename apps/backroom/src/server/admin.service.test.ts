@@ -1,3 +1,5 @@
+import { fetchMinerGithubLink, fetchGithubContributor, fetchClaPolicy, updateClaPolicy, publishClaVersion } from './admin.service'
+import { contributorFixture, claStatusFixture, claControlFixture, claVersionFixture } from './contributor.test-fixtures'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   startBenchmarkRollout,
@@ -5947,5 +5949,44 @@ describe('lease revocation ledger', () => {
       total: 0,
       revocations: [],
     })
+  })
+})
+
+
+describe('verified contributors and CLA rollout', () => {
+  it('preserves signed public identity and resolves a numeric account to its hotkey consent', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json(contributorFixture))
+      .mockResolvedValueOnce(Response.json(contributorFixture))
+      .mockResolvedValueOnce(Response.json(claStatusFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await fetchMinerGithubLink({ hotkey: 'fixture' })).toEqual(contributorFixture)
+    expect(await fetchGithubContributor({ githubUserId: 100 })).toEqual({ ...contributorFixture, cla: claStatusFixture })
+    expect(fetchMock.mock.calls[1][0]).toContain('/public/github-account/100')
+  })
+
+  it('pages policy history and reads adoption without synthesizing consent', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ...claControlFixture, history_limit: 10, history_offset: 10 }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await fetchClaPolicy({ historyLimit: 10, historyOffset: 10 })).toMatchObject({ unsigned_active_hotkeys: 1, history_limit: 10, history_offset: 10 })
+    expect(fetchMock.mock.calls[0][0]).toContain('history_limit=10&history_offset=10')
+  })
+
+  it('forwards revision, confirmation and the signed-in operator on policy changes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({})).mockResolvedValueOnce(Response.json(claControlFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    await updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ expected_revision: 0, mode: 'shadow', reason: 'measure consent adoption', actor: 'operator@omniaura.ai', confirmation: 'SET CLA GATE SHADOW' })
+  })
+
+  it('publishes only explicit immutable text metadata with operator attribution', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(claVersionFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    await publishClaVersion('operator@omniaura.ai', { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test-only publication transport', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ actor: 'operator@omniaura.ai', version: 1, sha256: 'ab'.repeat(32), effective_at: '2026-10-14T00:00:00Z' })
   })
 })

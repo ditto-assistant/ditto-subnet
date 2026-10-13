@@ -282,6 +282,16 @@ CREATE FUNCTION public.coding_hosted_private_task_guard() RETURNS trigger
 
 
 --
+-- Name: contributor_identity_immutable(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.contributor_identity_immutable() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN RAISE EXCEPTION 'contributor identity history is append-only'; END $$;
+
+
+--
 -- Name: enforce_v13_ticket_cohort(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -301,6 +311,28 @@ CREATE FUNCTION public.enforce_v13_ticket_cohort() RETURNS trigger
             IF pinned IS NOT NULL AND NOT (pinned ? NEW.validator_hotkey) THEN
               RAISE EXCEPTION 'V13 ticket validator is outside pinned scorer cohort';
             END IF;
+          END IF;
+          RETURN NEW;
+        END $$;
+
+
+--
+-- Name: github_link_revocation_only(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.github_link_revocation_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'GitHub link history cannot be deleted';
+          END IF;
+          IF OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL
+             OR NEW.revoked_at < OLD.linked_at
+             OR (to_jsonb(NEW) - 'revoked_at')
+                IS DISTINCT FROM (to_jsonb(OLD) - 'revoked_at')
+          THEN
+            RAISE EXCEPTION 'GitHub proof is immutable; only revocation is allowed';
           END IF;
           RETURN NEW;
         END $$;
@@ -1144,6 +1176,16 @@ CREATE TABLE public.admin_activity_outcomes (
 
 
 --
+-- Name: agent_cla_bindings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agent_cla_bindings (
+    agent_id uuid NOT NULL,
+    signature_id uuid NOT NULL
+);
+
+
+--
 -- Name: agent_kingship; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1525,6 +1567,70 @@ CREATE SEQUENCE public.burn_settings_revisions_revision_seq
 --
 
 ALTER SEQUENCE public.burn_settings_revisions_revision_seq OWNED BY public.burn_settings_revisions.revision;
+
+
+--
+-- Name: cla_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cla_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    mode text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_cla_settings_revisions_mode CHECK ((mode = ANY (ARRAY['off'::text, 'shadow'::text, 'enforce'::text])))
+);
+
+
+--
+-- Name: cla_shadow_uploads; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cla_shadow_uploads (
+    observation_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    hotkey text NOT NULL,
+    cla_version integer,
+    created_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: cla_signatures; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cla_signatures (
+    signature_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    hotkey text NOT NULL,
+    coldkey text NOT NULL,
+    cla_version integer NOT NULL,
+    cla_sha256 text NOT NULL,
+    signature text NOT NULL,
+    nonce uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    signed_at timestamp with time zone NOT NULL,
+    owner_block bigint NOT NULL,
+    owner_block_hash text NOT NULL
+);
+
+
+--
+-- Name: cla_versions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cla_versions (
+    version integer NOT NULL,
+    sha256 text NOT NULL,
+    text text NOT NULL,
+    published_at timestamp with time zone NOT NULL,
+    effective_at timestamp with time zone NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    CONSTRAINT ck_cla_versions_identity CHECK (((version > 0) AND (length(sha256) = 64)))
+);
 
 
 --
@@ -3571,6 +3677,73 @@ CREATE TABLE public.miner_ditto_links (
     revoked_at timestamp with time zone,
     CONSTRAINT ck_miner_ditto_links_miner_ditto_links_linked_via_check CHECK ((linked_via = ANY (ARRAY['dashboard'::text, 'cli'::text]))),
     CONSTRAINT ck_miner_ditto_links_miner_ditto_links_user_id_len CHECK (((length(ditto_user_id) >= 1) AND (length(ditto_user_id) <= 128)))
+);
+
+
+--
+-- Name: miner_github_action_nonces; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_github_action_nonces (
+    nonce uuid NOT NULL,
+    hotkey text NOT NULL,
+    action text NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    signature text NOT NULL,
+    signer text NOT NULL,
+    key_kind text NOT NULL,
+    link_id uuid NOT NULL,
+    created_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: miner_github_link_attempts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_github_link_attempts (
+    attempt_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    hotkey text NOT NULL,
+    session_id uuid,
+    launch_hash text NOT NULL,
+    state_hash text,
+    code_verifier text,
+    browser_binding_hash text,
+    accept_token_hash text,
+    status text NOT NULL,
+    github_user_id bigint,
+    github_login text,
+    error text,
+    created_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_miner_github_link_attempts_status CHECK ((status = ANY (ARRAY['pending'::text, 'identity_verified'::text, 'accepted'::text, 'linked'::text, 'failed'::text, 'expired'::text])))
+);
+
+
+--
+-- Name: miner_github_links; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_github_links (
+    link_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    hotkey text NOT NULL,
+    coldkey text NOT NULL,
+    github_user_id bigint NOT NULL,
+    github_login text NOT NULL,
+    link_attempt_id uuid NOT NULL,
+    nonce uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    key_kind text NOT NULL,
+    signer text NOT NULL,
+    signature text NOT NULL,
+    linked_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    owner_block bigint NOT NULL,
+    owner_block_hash text NOT NULL,
+    CONSTRAINT ck_miner_github_links_github_id CHECK ((github_user_id > 0)),
+    CONSTRAINT ck_miner_github_links_key_kind CHECK ((key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text])))
 );
 
 
@@ -7350,6 +7523,14 @@ ALTER TABLE ONLY public.admin_activity_outcomes
 
 
 --
+-- Name: agent_cla_bindings pk_agent_cla_bindings; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_cla_bindings
+    ADD CONSTRAINT pk_agent_cla_bindings PRIMARY KEY (agent_id);
+
+
+--
 -- Name: agent_kingship pk_agent_kingship; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7427,6 +7608,38 @@ ALTER TABLE ONLY public.benchmark_rollouts
 
 ALTER TABLE ONLY public.burn_settings_revisions
     ADD CONSTRAINT pk_burn_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: cla_settings_revisions pk_cla_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_settings_revisions
+    ADD CONSTRAINT pk_cla_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: cla_shadow_uploads pk_cla_shadow_uploads; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_shadow_uploads
+    ADD CONSTRAINT pk_cla_shadow_uploads PRIMARY KEY (observation_id);
+
+
+--
+-- Name: cla_signatures pk_cla_signatures; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_signatures
+    ADD CONSTRAINT pk_cla_signatures PRIMARY KEY (signature_id);
+
+
+--
+-- Name: cla_versions pk_cla_versions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_versions
+    ADD CONSTRAINT pk_cla_versions PRIMARY KEY (version);
 
 
 --
@@ -7771,6 +7984,30 @@ ALTER TABLE ONLY public.miner_ditto_link_attempts
 
 ALTER TABLE ONLY public.miner_ditto_links
     ADD CONSTRAINT pk_miner_ditto_links PRIMARY KEY (miner_hotkey);
+
+
+--
+-- Name: miner_github_action_nonces pk_miner_github_action_nonces; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_action_nonces
+    ADD CONSTRAINT pk_miner_github_action_nonces PRIMARY KEY (nonce);
+
+
+--
+-- Name: miner_github_link_attempts pk_miner_github_link_attempts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_link_attempts
+    ADD CONSTRAINT pk_miner_github_link_attempts PRIMARY KEY (attempt_id);
+
+
+--
+-- Name: miner_github_links pk_miner_github_links; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_links
+    ADD CONSTRAINT pk_miner_github_links PRIMARY KEY (link_id);
 
 
 --
@@ -8646,6 +8883,14 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 
 --
+-- Name: cla_signatures uq_cla_signatures_nonce; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_signatures
+    ADD CONSTRAINT uq_cla_signatures_nonce UNIQUE (nonce);
+
+
+--
 -- Name: coding_hosted_assignments uq_coding_hosted_assignments_assignment_sha256; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8739,6 +8984,30 @@ ALTER TABLE ONLY public.coding_hosted_private_tasks
 
 ALTER TABLE ONLY public.coding_hosted_terminal_reservations
     ADD CONSTRAINT uq_coding_hosted_terminal_reservations_identity_sha256 UNIQUE (identity_sha256);
+
+
+--
+-- Name: miner_github_link_attempts uq_miner_github_link_attempts_launch_hash; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_link_attempts
+    ADD CONSTRAINT uq_miner_github_link_attempts_launch_hash UNIQUE (launch_hash);
+
+
+--
+-- Name: miner_github_link_attempts uq_miner_github_link_attempts_state_hash; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_link_attempts
+    ADD CONSTRAINT uq_miner_github_link_attempts_state_hash UNIQUE (state_hash);
+
+
+--
+-- Name: miner_github_links uq_miner_github_links_nonce; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_links
+    ADD CONSTRAINT uq_miner_github_links_nonce UNIQUE (nonce);
 
 
 --
@@ -9007,6 +9276,13 @@ CREATE UNIQUE INDEX benchmark_rollouts_transition_idx ON public.benchmark_rollou
 --
 
 CREATE UNIQUE INDEX burn_settings_scope_revision_idx ON public.burn_settings_revisions USING btree (scope, revision);
+
+
+--
+-- Name: cla_signatures_hotkey_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX cla_signatures_hotkey_version_idx ON public.cla_signatures USING btree (netuid, hotkey, cla_version, signed_at);
 
 
 --
@@ -9483,6 +9759,27 @@ CREATE INDEX miner_ditto_link_attempts_hotkey_idx ON public.miner_ditto_link_att
 --
 
 CREATE INDEX miner_ditto_links_user_idx ON public.miner_ditto_links USING btree (ditto_user_id);
+
+
+--
+-- Name: miner_github_link_attempts_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_github_link_attempts_hotkey_idx ON public.miner_github_link_attempts USING btree (hotkey, expires_at);
+
+
+--
+-- Name: miner_github_links_active_github_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX miner_github_links_active_github_key ON public.miner_github_links USING btree (github_user_id) WHERE (revoked_at IS NULL);
+
+
+--
+-- Name: miner_github_links_active_hotkey_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX miner_github_links_active_hotkey_key ON public.miner_github_links USING btree (hotkey) WHERE (revoked_at IS NULL);
 
 
 --
@@ -10074,6 +10371,41 @@ CREATE INDEX validator_weights_fold_history_lookup_idx ON public.validator_weigh
 
 
 --
+-- Name: agent_cla_bindings agent_cla_bindings_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER agent_cla_bindings_immutable BEFORE DELETE OR UPDATE ON public.agent_cla_bindings FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_settings_revisions cla_settings_revisions_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_settings_revisions_immutable BEFORE DELETE OR UPDATE ON public.cla_settings_revisions FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_shadow_uploads cla_shadow_uploads_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_shadow_uploads_immutable BEFORE DELETE OR UPDATE ON public.cla_shadow_uploads FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_signatures cla_signatures_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_signatures_immutable BEFORE DELETE OR UPDATE ON public.cla_signatures FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_versions cla_versions_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_versions_immutable BEFORE DELETE OR UPDATE ON public.cla_versions FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
 -- Name: coding_catalog_exposures coding_catalog_exposures_append_only_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -10330,6 +10662,20 @@ CREATE TRIGGER efficiency_bonuses_curve_guard BEFORE INSERT OR UPDATE OF agent_i
 --
 
 CREATE TRIGGER efficiency_cohort_snapshots_curve_guard BEFORE INSERT OR UPDATE ON public.efficiency_cohort_snapshots FOR EACH ROW EXECUTE FUNCTION public.guard_efficiency_snapshot_curve();
+
+
+--
+-- Name: miner_github_action_nonces miner_github_action_nonces_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_action_nonces_immutable BEFORE DELETE OR UPDATE ON public.miner_github_action_nonces FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: miner_github_links miner_github_links_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_links_immutable BEFORE DELETE OR UPDATE ON public.miner_github_links FOR EACH ROW EXECUTE FUNCTION public.github_link_revocation_only();
 
 
 --
@@ -10977,6 +11323,22 @@ ALTER TABLE ONLY public.admin_activity_outcomes
 
 
 --
+-- Name: agent_cla_bindings fk_agent_cla_bindings_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_cla_bindings
+    ADD CONSTRAINT fk_agent_cla_bindings_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id);
+
+
+--
+-- Name: agent_cla_bindings fk_agent_cla_bindings_signature_id_cla_signatures; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_cla_bindings
+    ADD CONSTRAINT fk_agent_cla_bindings_signature_id_cla_signatures FOREIGN KEY (signature_id) REFERENCES public.cla_signatures(signature_id);
+
+
+--
 -- Name: agent_kingship fk_agent_kingship_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11062,6 +11424,14 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 ALTER TABLE ONLY public.benchmark_rollout_members
     ADD CONSTRAINT fk_benchmark_rollout_members_rollout_id_benchmark_rollouts FOREIGN KEY (rollout_id) REFERENCES public.benchmark_rollouts(rollout_id) ON DELETE CASCADE;
+
+
+--
+-- Name: cla_signatures fk_cla_signatures_cla_version_cla_versions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_signatures
+    ADD CONSTRAINT fk_cla_signatures_cla_version_cla_versions FOREIGN KEY (cla_version) REFERENCES public.cla_versions(version);
 
 
 --
@@ -11206,6 +11576,30 @@ ALTER TABLE ONLY public.inference_grants
 
 ALTER TABLE ONLY public.inference_requests
     ADD CONSTRAINT fk_inference_requests_grant_id_inference_grants FOREIGN KEY (grant_id) REFERENCES public.inference_grants(grant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: miner_github_link_attempts fk_miner_github_link_attempts_session_id_miner_sessions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_link_attempts
+    ADD CONSTRAINT fk_miner_github_link_attempts_session_id_miner_sessions FOREIGN KEY (session_id) REFERENCES public.miner_sessions(session_id) ON DELETE SET NULL;
+
+
+--
+-- Name: miner_github_links fk_miner_github_links_link_attempt_id_miner_github_link_fb62; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_links
+    ADD CONSTRAINT fk_miner_github_links_link_attempt_id_miner_github_link_fb62 FOREIGN KEY (link_attempt_id) REFERENCES public.miner_github_link_attempts(attempt_id);
+
+
+--
+-- Name: miner_github_links fk_miner_github_links_nonce_miner_github_action_nonces; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_links
+    ADD CONSTRAINT fk_miner_github_links_nonce_miner_github_action_nonces FOREIGN KEY (nonce) REFERENCES public.miner_github_action_nonces(nonce);
 
 
 --

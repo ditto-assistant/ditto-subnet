@@ -45,6 +45,7 @@ from ditto.api_server.embedding import (
     parse_embedding_config_from_env,
 )
 from ditto.api_server.errors import ApiServerConfigError
+from ditto.api_server.github_link import GithubLinkConfig
 from ditto.api_server.pricing import PricingConfig, parse_pricing_config_from_env
 from ditto.api_server.private_benchmark_preparation import (
     PrivatePreparationConfig,
@@ -414,6 +415,9 @@ class ApiServerConfig:
         )
     )
     """Sign in with Ditto relying-party settings; disabled until configured."""
+
+    github_link: GithubLinkConfig = field(default_factory=GithubLinkConfig)
+    """Server-side GitHub OAuth; disabled until an identity-only app is configured."""
 
     coding_catalog_curator_hotkeys: tuple[str, ...] = ()
     """Offline curator keys allowed to register signed coding catalogs.
@@ -963,6 +967,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         inference_proxy=inference_proxy,
         admin_api_token=os.environ.get("DITTO_ADMIN_API_TOKEN") or None,
         ditto_link=parse_ditto_link_config_from_env(),
+        github_link=parse_github_link_config_from_env(),
         coding_catalog_curator_hotkeys=tuple(
             value
             for item in os.environ.get(
@@ -1104,6 +1109,7 @@ def check_config(config: ApiServerConfig) -> None:
     check_hosted_signer_config(config.coding_hosted_signer)
     check_private_preparation_config(config.private_preparation)
     check_ditto_link_config(config.ditto_link)
+    check_github_link_config(config.github_link)
     if not 1 <= config.port <= 65535:
         raise ApiServerConfigError(f"port out of range: {config.port}")
     if config.log_level not in _VALID_LOG_LEVELS:
@@ -1478,4 +1484,54 @@ def check_config(config: ApiServerConfig) -> None:
     if not 0.0 <= efficiency.memory_floor <= 1.0:
         raise ApiServerConfigError(
             "DITTO_EFFICIENCY_BONUS_MEMORY_FLOOR must be in [0, 1]"
+        )
+
+
+def parse_github_link_config_from_env() -> GithubLinkConfig:
+    try:
+        timeout = float(os.environ.get("GITHUB_LINK_TIMEOUT_SECONDS", "10"))
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "GITHUB_LINK_TIMEOUT_SECONDS must be numeric"
+        ) from error
+    return GithubLinkConfig(
+        enabled=os.environ.get("GITHUB_LINK_ENABLED", "false").strip().lower()
+        in _TRUTHY,
+        client_id=os.environ.get("GITHUB_LINK_CLIENT_ID", "").strip() or None,
+        client_secret=os.environ.get("GITHUB_LINK_CLIENT_SECRET", "").strip() or None,
+        redirect_url=os.environ.get("GITHUB_LINK_REDIRECT_URL", "").strip(),
+        timeout_seconds=timeout,
+    )
+
+
+def check_github_link_config(config: GithubLinkConfig) -> None:
+    if not config.enabled:
+        return
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(config.redirect_url)
+        valid_origin = parts.scheme == "https" or (
+            parts.scheme == "http"
+            and parts.hostname in ("localhost", "127.0.0.1", "::1")
+        )
+        valid_path = parts.path == "/api/v1/miner-auth/github/callback"
+        invalid_extra = bool(
+            parts.username or parts.password or parts.query or parts.fragment
+        )
+    except ValueError:
+        raise ApiServerConfigError("GITHUB_LINK_REDIRECT_URL is invalid") from None
+    if not config.client_id or not config.client_secret:
+        raise ApiServerConfigError(
+            "GITHUB_LINK_CLIENT_ID and GITHUB_LINK_CLIENT_SECRET are required "
+            "when linking is enabled"
+        )
+    if not parts.hostname or not valid_origin or not valid_path or invalid_extra:
+        raise ApiServerConfigError(
+            "GITHUB_LINK_REDIRECT_URL must be the HTTPS callback (HTTP is "
+            "allowed only on loopback)"
+        )
+    if not 1 <= config.timeout_seconds <= 60:
+        raise ApiServerConfigError(
+            "GITHUB_LINK_TIMEOUT_SECONDS must be between 1 and 60"
         )

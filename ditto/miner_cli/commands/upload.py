@@ -283,6 +283,17 @@ def _run_upload(
         coldkey_name=args.coldkey_name, hotkey_name=args.hotkey_name
     )
 
+    # Do this before archive packaging/preflight or any registration/payment.
+    # Older Platform releases return 404 while the feature rolls out default-off;
+    # the authoritative upload endpoints still enforce the deployed policy.
+    with ApiClient(base_url=network_api_url) as cla_client:
+        consent = cla_client.get_cla_status(hotkey=handle.hotkey_ss58)
+        if consent is not None and consent.mode == "enforce" and not consent.is_current:
+            raise MinerCliError(
+                "the current contributor agreement is required; run `ditto cla "
+                "sign` before upload"
+            )
+
     agent_name = args.name
     if agent_name is None:
         agent_name = load_agent_name(network=network_name, hotkey=handle.hotkey_ss58)

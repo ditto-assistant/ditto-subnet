@@ -44,6 +44,12 @@ from ditto.api_models.upload import (
     _SIGNATURE_HEX_PATTERN,
     _SS58_PATTERN,
 )
+from ditto.api_server.cla import (
+    CLA_REQUIRED_ERROR_CODE,
+    ClaConsentRequired,
+    evaluate_cla_gate,
+    record_shadow_upload,
+)
 from ditto.api_server.dependencies import (
     get_chain_client,
     get_embedder,
@@ -71,13 +77,14 @@ from ditto.api_server.source_inspect import (
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.upload_feedback import submission_cooldown_message
 from ditto.chain import ChainError
-from ditto.db.models import AgentStatus
+from ditto.db.models import AgentClaBinding, AgentStatus
 from ditto.db.queries.agents import (
     SubmissionCooldownError,
     get_submission_retry_at,
     insert_agent,
 )
 from ditto.db.queries.bans import is_hotkey_banned
+from ditto.db.queries.contributor_identity import lock_identity_writes
 from ditto.db.queries.name_claims import upload_name_is_reserved
 from ditto.db.queries.payments import (
     consume_evaluation_credit,
@@ -257,6 +264,30 @@ async def check(
     if banned:
         codes.append(ERROR_CODE_HOTKEY_BANNED)
         messages.append("hotkey is banned from submitting")
+
+    # Consent is checked before admission or a new payment. An exact retry of
+    # an already accepted artifact is not a new contribution.
+    if signature_valid and not banned:
+        cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=body.hotkey)
+        if not cla.allowed:
+            existing_retry = None
+            if (
+                body.payment_block_hash is not None
+                and body.payment_extrinsic_index is not None
+            ):
+                existing_retry = await get_agent_for_payment_proof(
+                    session,
+                    block_hash=body.payment_block_hash,
+                    extrinsic_index=body.payment_extrinsic_index,
+                )
+            exact_retry = (
+                existing_retry is not None
+                and existing_retry.miner_hotkey == body.hotkey
+                and existing_retry.sha256 == body.sha256
+            )
+            if not exact_retry:
+                codes.append(CLA_REQUIRED_ERROR_CODE)
+                messages.append(cla.message)
 
     # 5. Stop the common accidental duplicate before the miner pays. A second
     # independently seeded run remains available, but it must be explicit.
@@ -592,6 +623,15 @@ async def upload_agent(
             )
         raise PaymentReplayedError("payment proof already used by a different upload")
 
+    cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
+    if not cla.allowed:
+        raise ClaConsentRequired(cla.message)
+    await record_shadow_upload(session, netuid=netuid, hotkey=hotkey, decision=cla)
+    if cla.mode == "shadow" and cla.signature_id is None:
+        # Persist the shadow observation before the read-only transaction is
+        # released for slow archive/payment/storage work.
+        await session.commit()
+
     payment_record = await get_evaluation_payment_for_proof(
         session,
         block_hash=payment_block_hash,
@@ -797,6 +837,12 @@ async def upload_agent(
             )
             if reserved is not None:
                 raise HTTPException(status_code=409, detail=reserved)
+            # Serialize against publication/rollout writes and recheck inside
+            # the artifact commit, closing the slow-upload TOCTOU window.
+            await lock_identity_writes(session, namespace="cla-policy")
+            final_cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
+            if not final_cla.allowed:
+                raise ClaConsentRequired(final_cla.message)
             version = await insert_agent(
                 session,
                 agent_id=agent_id,
@@ -810,6 +856,13 @@ async def upload_agent(
                 code_embedding=code_embedding,
                 code_embed_model=code_embed_model,
             )
+            if final_cla.signature_id is not None:
+                session.add(
+                    AgentClaBinding(
+                        agent_id=agent_id, signature_id=final_cla.signature_id
+                    )
+                )
+                await session.flush()
             if using_credit:
                 locked_credit = await get_evaluation_payment_for_proof(
                     session,

@@ -122,6 +122,7 @@ from ditto.api_server.endpoints import (
     admin_validator_slot_settings_router,
     admin_validator_weights_router,
     attestation_router,
+    contributor_cla_router,
     ditto_callback_challenge_router,
     feedback_track_router,
     health_router,
@@ -130,6 +131,7 @@ from ditto.api_server.endpoints import (
     miner_auth_router,
     miner_avatars_router,
     miner_ditto_link_router,
+    miner_github_link_router,
     miner_mcp_router,
     miner_me_router,
     name_claims_router,
@@ -178,6 +180,7 @@ from ditto.api_server.endpoints.verification_replay import (
     screener_router as screener_verification_replay_router,
 )
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
+from ditto.api_server.github_link import GithubLinkClient
 from ditto.api_server.inference_concurrency_settings import (
     InferenceConcurrencySettingsResolver,
 )
@@ -647,6 +650,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Sign in with Ditto relying party. Inert (every route answers 503) until
     # DITTO_LINK_* names the DittoBench app; tests swap in a mock transport.
     app.state.ditto_link = DittoLinkClient(config.ditto_link)
+    app.state.github_link = GithubLinkClient(config.github_link)
 
     # Starlette inserts each middleware at position 0, so the LAST
     # add_middleware call ends up outermost on the wire. RequestIDMiddleware
@@ -725,6 +729,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(miner_auth_router, prefix="/api/v1")
     app.include_router(miner_me_router, prefix="/api/v1")
     app.include_router(miner_ditto_link_router, prefix="/api/v1")
+    app.include_router(miner_github_link_router, prefix="/api/v1")
+    app.include_router(contributor_cla_router, prefix="/api/v1")
     app.include_router(feedback_track_router, prefix="/api/v1")
     app.include_router(miner_mcp_router)
     # Root path (no /api/v1): Ditto fetches the challenge at the origin root.

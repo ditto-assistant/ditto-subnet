@@ -1,3 +1,11 @@
+import {
+  contributorHotkeyInputSchema, githubAccountInputSchema, claPolicyReadInputSchema,
+  claPolicyWriteInputSchema, claPublishInputSchema,
+} from '../lib/contributor.schemas'
+import {
+  fetchMinerGithubLink, fetchGithubContributor, fetchMinerClaStatus, fetchClaPolicy,
+  updateClaPolicy, publishClaVersion,
+} from './admin.service'
 import { treasuryActivationPreflightInputSchema } from '../lib/treasury-ledger.schemas'
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
@@ -474,6 +482,8 @@ export const WRITE_TOOL_NAMES = new Set([
   'authorize_conversation_retry',
   'unban_hotkey',
   'set_source_release_policy',
+  'set_cla_policy',
+  'publish_cla_version',
   'set_burn_settings',
   'set_confirmation_bundle_settings',
   'authorize_confirmation_bundle_retest',
@@ -841,6 +851,12 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_inference_traces: 'Page trace archive objects by partition.',
   download_inference_trace: 'Presigned trace URL; artifact scope.',
   peek_inference_trace: 'Peek trace records; artifact scope.',
+  get_miner_github_link: 'Read the active OAuth-verified, signed GitHub link for a miner hotkey.',
+  get_github_contributor_status: 'Resolve numeric GitHub account id to linked hotkey and current CLA receipt; never payee authority.',
+  get_miner_cla_status: 'Read current CLA version and the exact hotkey-signed consent receipt.',
+  get_cla_policy: 'Read audited off/shadow/enforce CLA rollout, history and adoption counts.',
+  set_cla_policy: 'Revise CLA rollout with CAS, actor, reason and exact confirmation.',
+  publish_cla_version: 'Publish maintainer-approved immutable CLA text by version and SHA-256; no gate activation.',
   get_owner_attestations:
     'Read signed direct owner links/revocations; non-transitive copy-review evidence.',
   list_lease_revocations:
@@ -1627,6 +1643,42 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     async (input) => result(await fetchV13ReplayPrivateStatistics(input)),
   )
 
+
+  registerTool('get_miner_github_link', {
+    title: 'Get verified miner GitHub link',
+    description: 'Read the active signed link between a miner hotkey and an OAuth-verified numeric GitHub user id. Login is a recorded display label; renames require re-linking. The receipt includes its signature, nonce, issue time, and finalized Owner(hotkey) snapshot. No OAuth state, tokens or secrets are returned. Identity only; never derive payment destinations from this link. Requires backroom:read.',
+    inputSchema: contributorHotkeyInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchMinerGithubLink(input)))
+
+  registerTool('get_github_contributor_status', {
+    title: 'Get GitHub contributor identity and CLA',
+    description: 'Resolve an authenticated GitHub PR author numeric id to its active linked hotkey and current CLA status. Always use the numeric author id, never a login string: logins can be renamed or reused. is_current reports effective-version consent, not a bounty award or payee authorization. An unlinked account returns link=null and cla=null. Requires backroom:read.',
+    inputSchema: githubAccountInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGithubContributor(input)))
+
+  registerTool('get_miner_cla_status', {
+    title: 'Get miner CLA consent',
+    description: 'Read the currently effective immutable CLA version and this hotkey signature receipt. is_current means a matching version/digest receipt exists; a historical signature alone does not meet a newly effective version. A pending future version does not supersede the current one. The signature is consent only and cannot redirect payment. Requires backroom:read.',
+    inputSchema: contributorHotkeyInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchMinerClaStatus(input)))
+
+  registerTool('get_cla_policy', {
+    title: 'Get CLA rollout and adoption',
+    description: 'Read the append-only CLA off/shadow/enforce policy, current effective version, newest-first paged history and adoption counts. active_hotkeys_basis=non_retired_submissions counts distinct hotkeys with a non-rejected, non-retired submission, not current chain registrations. Unsigned includes outdated receipts. unsigned_shadow_uploads counts unsigned requests at the artifact upload endpoint, including later validation failures; exact accepted-artifact retries do not add observations. Requires backroom:read and changes nothing.',
+    inputSchema: claPolicyReadInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchClaPolicy(input)))
+
+  registerTool('set_cla_policy', {
+    title: 'Set CLA rollout mode',
+    description: 'Append a CLA policy revision using the exact expectedRevision, operator reason, and confirmation SET CLA GATE OFF, SET CLA GATE SHADOW or SET CLA GATE ENFORCE. Enforce requires published currently effective maintainer-approved text. Start off, measure adoption in shadow and announce the date before enforcing. Existing scored agents remain unchanged. Requires backroom:write.',
+    inputSchema: claPolicyWriteInputSchema, annotations: toolAnnotations('write'),
+  }, async (input) => write(() => updateClaPolicy(props.session.email, input)))
+
+  registerTool('publish_cla_version', {
+    title: 'Publish approved pinned CLA text',
+    description: 'Publish the exact UTF-8 bytes of maintainer-approved docs/legal/CLA-vN.md with its SHA-256, version, effective date and operator reason. Supply confirmation PUBLISH CLA {version} {sha256}. Text and digest are immutable; versions and effective dates advance monotonically. Never publish test fixtures or draft legal wording. This only publishes the registry entry and does not change rollout mode. Requires backroom:write.',
+    inputSchema: claPublishInputSchema, annotations: toolAnnotations('write'),
+  }, async (input) => write(() => publishClaVersion(props.session.email, input)))
 
   registerTool(
     'get_owner_attestations',

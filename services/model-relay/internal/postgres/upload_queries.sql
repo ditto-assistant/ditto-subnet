@@ -52,3 +52,21 @@ INSERT INTO upload_admission_reservations (
 RETURNING miner_coldkey, token, miner_hotkey, sha256, settings_revision,
           cooldown_seconds, fee_amount_rao, payment_send_address,
           legacy_payment_cutoff_at, created_at, expires_at;
+
+-- name: GetClaUploadGate :one
+WITH policy AS (
+    SELECT mode FROM cla_settings_revisions ORDER BY revision DESC LIMIT 1
+), current_version AS (
+    SELECT version, sha256 FROM cla_versions
+    WHERE effective_at <= sqlc.arg(observed_at)::timestamptz
+    ORDER BY version DESC LIMIT 1
+)
+SELECT policy.mode, current_version.version,
+    EXISTS (
+        SELECT 1 FROM cla_signatures AS signature
+        WHERE signature.netuid = sqlc.arg(netuid)
+          AND signature.hotkey = sqlc.arg(hotkey)
+          AND signature.cla_version = current_version.version
+          AND signature.cla_sha256 = current_version.sha256
+    ) AS has_signature
+FROM policy LEFT JOIN current_version ON true;

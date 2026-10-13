@@ -49,6 +49,18 @@ from ditto.api_models import (
     UploadCheckRequest,
     UploadCheckResponse,
 )
+from ditto.api_models.contributor_identity import (
+    ClaSignatureView,
+    ClaSignRequest,
+    ClaStatus,
+    ClaVersionView,
+    GithubLinkAttemptStatus,
+    GithubLinkRequest,
+    GithubLinkStart,
+    GithubLinkStatus,
+    GithubLinkView,
+    GithubUnlinkRequest,
+)
 from ditto.api_models.miner_ditto_link import (
     MinerDittoLinkAttemptResponse,
     MinerDittoLinkResponse,
@@ -507,6 +519,90 @@ class ApiClient:
         )
         if response.status_code not in (200, 204):
             raise self._ditto_link_error(response)
+
+    def _contributor_response(
+        self, method: str, path: str, *, token: str | None = None, body: Any = None
+    ) -> httpx.Response:
+        kwargs: dict[str, Any] = {}
+        if token is not None:
+            kwargs["headers"] = {"authorization": f"Bearer {token}"}
+        if body is not None:
+            kwargs["json"] = body.model_dump(mode="json")
+        response = self._request(method, path, **kwargs)
+        if not response.is_success:
+            if response.status_code == 401:
+                raise LoginRequiredError(
+                    "miner session is invalid or expired; run `ditto login`"
+                )
+            raise ApiResponseError(_format_error(response, prefix="contributor"))
+        return response
+
+    def get_github_link(self, *, token: str) -> GithubLinkStatus:
+        return GithubLinkStatus.model_validate(
+            self._contributor_response(
+                "GET", "/api/v1/me/github-link", token=token
+            ).json()
+        )
+
+    def start_github_link(self, *, token: str) -> GithubLinkStart:
+        return GithubLinkStart.model_validate(
+            self._contributor_response(
+                "POST", "/api/v1/me/github-link/start", token=token
+            ).json()
+        )
+
+    def get_github_link_attempt(
+        self, *, token: str, attempt_id: UUID
+    ) -> GithubLinkAttemptStatus:
+        return GithubLinkAttemptStatus.model_validate(
+            self._contributor_response(
+                "GET", f"/api/v1/me/github-link/attempts/{attempt_id}", token=token
+            ).json()
+        )
+
+    def confirm_github_link(
+        self, *, token: str, body: GithubLinkRequest
+    ) -> GithubLinkView:
+        return GithubLinkView.model_validate(
+            self._contributor_response(
+                "POST", "/api/v1/me/github-link/confirm", token=token, body=body
+            ).json()
+        )
+
+    def unlink_github(self, *, token: str, body: GithubUnlinkRequest) -> None:
+        self._contributor_response(
+            "POST", "/api/v1/me/github-link/unlink", token=token, body=body
+        )
+
+    def get_cla_status(self, *, hotkey: str | None = None) -> ClaStatus | None:
+        path = f"/api/v1/public/cla/status/{hotkey}" if hotkey else "/api/v1/public/cla"
+        response = self._request("GET", path)
+        if response.status_code == 404:
+            # Rolling upgrade to a server that predates the default-off gate.
+            return None
+        if not response.is_success:
+            raise ApiResponseError(_format_error(response, prefix="cla"))
+        return ClaStatus.model_validate(response.json())
+
+    def get_cla_version(self, *, version: int) -> ClaVersionView:
+        return ClaVersionView.model_validate(
+            self._contributor_response(
+                "GET", f"/api/v1/public/cla/versions/{version}"
+            ).json()
+        )
+
+    def get_cla_text(self, *, version: int) -> bytes:
+        response = self._contributor_response(
+            "GET", f"/api/v1/public/cla/versions/{version}/text"
+        )
+        if len(response.content) > 262144:
+            raise ApiResponseError("CLA document exceeds the size limit")
+        return response.content
+
+    def sign_cla(self, body: ClaSignRequest) -> ClaSignatureView:
+        return ClaSignatureView.model_validate(
+            self._contributor_response("POST", "/api/v1/cla/sign", body=body).json()
+        )
 
     def clear_miner_avatar(self, body: MinerAvatarClearRequest) -> MinerAvatarResponse:
         response = self._request(

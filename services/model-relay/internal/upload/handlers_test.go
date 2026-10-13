@@ -434,3 +434,38 @@ func TestConcurrentReservationsSerializeFirstSubmission(t *testing.T) {
 		t.Fatalf("succeeded=%d blocked=%d", succeeded, blocked)
 	}
 }
+
+func TestCLAUploadGateParityBeforePayment(t *testing.T) {
+	for _, mode := range []string{"off", "shadow", "enforce"} {
+		t.Run(mode, func(t *testing.T) {
+			pool := testutil.NewTestPGPool(t)
+			secret, hotkey := newSignedHotkey(t)
+			d := uploadDeps(pool, "5Owner", time.Time{})
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_versions (version,sha256,text,published_at,effective_at,actor,reason)
+				VALUES (1,$1,'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.',now(),$2,'fixture','test')`, strings.Repeat("a", 64), d.now().Add(-time.Minute))
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+				VALUES (1,0,$1,'fixture','test rollout',now())`, mode)
+			body := signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), map[string]any{"reserve_submission_slot": true})
+			unsigned := serveCheck(t, d, body)
+			if mode == "enforce" {
+				if unsigned.OK || unsigned.PaymentRequired || unsigned.AdmissionToken != nil || len(unsigned.ErrorCodes) != 1 || unsigned.ErrorCodes[0] != 1106 {
+					t.Fatalf("unsigned enforce gate: %+v", unsigned)
+				}
+			} else if !unsigned.OK {
+				t.Fatalf("default/shadow must accept: %+v", unsigned)
+			}
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_signatures (signature_id,netuid,hotkey,coldkey,cla_version,cla_sha256,signature,nonce,issued_at,signed_at,owner_block,owner_block_hash)
+				VALUES ($1,118,$2,'fixture-owner',1,$3,$4,$5,now(),now(),123,$6)`, uuid.New(), hotkey, strings.Repeat("a", 64), strings.Repeat("ab", 64), uuid.New(), "0x"+strings.Repeat("a", 64))
+			accepted := serveCheck(t, d, body)
+			if !accepted.OK {
+				t.Fatalf("current signature must accept: %+v", accepted)
+			}
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_versions (version,sha256,text,published_at,effective_at,actor,reason)
+				VALUES (2,$1,'TEST FIXTURE ONLY V2',now(),$2,'fixture','test')`, strings.Repeat("c", 64), d.now().Add(-time.Second))
+			outdated := serveCheck(t, d, body)
+			if (mode == "enforce") == outdated.OK {
+				t.Fatalf("outdated version gate: %+v", outdated)
+			}
+		})
+	}
+}

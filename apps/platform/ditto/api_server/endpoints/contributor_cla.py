@@ -1,0 +1,347 @@
+"""Pinned public CLA documents, signed receipts, and audited rollout controls."""
+
+from __future__ import annotations
+
+import hashlib
+from datetime import UTC, datetime
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import PlainTextResponse
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ditto.api_models.contributor_identity import (
+    ClaControl,
+    ClaPublishRequest,
+    ClaSettingsRequest,
+    ClaSignatureView,
+    ClaSignRequest,
+    ClaStatus,
+    ClaVersionView,
+    cla_message,
+)
+from ditto.api_models.contributor_identity import (
+    ClaSettingsRevision as SettingsView,
+)
+from ditto.api_server.contributor_identity import (
+    ContributorProofRejected,
+    check_contributor_proof,
+    finalized_owner,
+)
+from ditto.api_server.dependencies import get_session
+from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.endpoints.miner_github_link import no_store
+from ditto.chain import ChainError
+from ditto.db.models import (
+    Agent,
+    AgentStatus,
+    ClaSettingsRevision,
+    ClaShadowUpload,
+    ClaSignature,
+    ClaVersion,
+    SubmissionRetirement,
+)
+from ditto.db.queries.contributor_identity import (
+    current_cla_settings,
+    current_cla_signature,
+    current_cla_version,
+    lock_identity_writes,
+)
+
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
+AdminDep = Annotated[None, Depends(require_admin)]
+router = APIRouter(tags=["contributor-cla"], dependencies=[Depends(no_store)])
+
+
+def version_view(row: ClaVersion) -> ClaVersionView:
+    return ClaVersionView(
+        version=row.version,
+        sha256=row.sha256,
+        published_at=row.published_at,
+        effective_at=row.effective_at,
+    )
+
+
+def signature_view(row: ClaSignature) -> ClaSignatureView:
+    return ClaSignatureView.model_validate(
+        {name: getattr(row, name) for name in ClaSignatureView.model_fields}
+    )
+
+
+def settings_view(row: ClaSettingsRevision) -> SettingsView:
+    return SettingsView.model_validate(
+        {name: getattr(row, name) for name in SettingsView.model_fields}
+    )
+
+
+async def cla_status(
+    session: AsyncSession, *, netuid: int, hotkey: str | None = None
+) -> ClaStatus:
+    settings = await current_cla_settings(session)
+    version = await current_cla_version(session)
+    signature = (
+        await current_cla_signature(
+            session, netuid=netuid, hotkey=hotkey, version=version
+        )
+        if hotkey
+        else None
+    )
+    is_current = signature is not None
+    if hotkey and signature is None:
+        signature = await session.scalar(
+            select(ClaSignature)
+            .where(ClaSignature.netuid == netuid, ClaSignature.hotkey == hotkey)
+            .order_by(ClaSignature.signed_at.desc(), ClaSignature.signature_id)
+            .limit(1)
+        )
+    return ClaStatus(
+        netuid=netuid,
+        mode=settings.mode,
+        current=version_view(version) if version else None,
+        signature=signature_view(signature) if signature else None,
+        is_current=is_current,
+    )
+
+
+@router.get("/public/cla", response_model=ClaStatus)
+async def current_document(request: Request, session: SessionDep) -> ClaStatus:
+    return await cla_status(session, netuid=request.app.state.config.chain.netuid)
+
+
+@router.get("/public/cla/status/{hotkey}", response_model=ClaStatus)
+async def public_status(
+    hotkey: str, request: Request, session: SessionDep
+) -> ClaStatus:
+    return await cla_status(
+        session, netuid=request.app.state.config.chain.netuid, hotkey=hotkey
+    )
+
+
+@router.get("/public/cla/versions/{version}", response_model=ClaVersionView)
+async def public_version(version: int, session: SessionDep) -> ClaVersionView:
+    row = await session.get(ClaVersion, version)
+    if row is None:
+        raise HTTPException(404, "CLA version is not published")
+    return version_view(row)
+
+
+@router.get("/public/cla/versions/{version}/text", response_class=PlainTextResponse)
+async def public_text(version: int, session: SessionDep) -> Response:
+    row = await session.get(ClaVersion, version)
+    if row is None:
+        raise HTTPException(404, "CLA version is not published")
+    return Response(
+        content=row.text.encode("utf-8"),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": f'"{row.sha256}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.post("/cla/sign", response_model=ClaSignatureView)
+async def sign_cla(
+    body: ClaSignRequest, request: Request, session: SessionDep
+) -> ClaSignatureView:
+    now = datetime.now(UTC)
+    if body.netuid != request.app.state.config.chain.netuid:
+        raise HTTPException(400, "CLA netuid does not match this deployment")
+    try:
+        check_contributor_proof(
+            payload=cla_message(
+                netuid=body.netuid,
+                cla_version=body.cla_version,
+                cla_sha256=body.cla_sha256,
+                hotkey=body.hotkey,
+                nonce=body.nonce,
+                issued_at=body.issued_at,
+            ),
+            hotkey=body.hotkey,
+            key_kind="hotkey",
+            signer=body.hotkey,
+            signature=body.signature,
+            issued_at=body.issued_at,
+            now=now,
+        )
+        async with session.begin():
+            version = await session.get(ClaVersion, body.cla_version)
+            if version is None or version.sha256 != body.cla_sha256:
+                raise HTTPException(
+                    409, "CLA version or digest is not the published document"
+                )
+            owner = await finalized_owner(request.app.state.chain, body.hotkey)
+            row = ClaSignature(
+                netuid=body.netuid,
+                hotkey=body.hotkey,
+                coldkey=owner.coldkey,
+                cla_version=body.cla_version,
+                cla_sha256=body.cla_sha256,
+                signature=body.signature,
+                nonce=body.nonce,
+                issued_at=body.issued_at,
+                signed_at=now,
+                owner_block=owner.block,
+                owner_block_hash=owner.block_hash,
+            )
+            session.add(row)
+            await session.flush()
+            view = signature_view(row)
+        return view
+    except ContributorProofRejected as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ChainError:
+        raise HTTPException(
+            503, "finalized ownership unavailable; retry shortly"
+        ) from None
+    except IntegrityError:
+        raise HTTPException(409, "CLA signature nonce already used") from None
+
+
+@router.post("/admin/cla/versions", response_model=ClaVersionView)
+async def publish(
+    body: ClaPublishRequest, _admin: AdminDep, session: SessionDep
+) -> ClaVersionView:
+    raw = body.text.encode("utf-8")
+    if len(raw) > 262144 or hashlib.sha256(raw).hexdigest() != body.sha256:
+        raise HTTPException(
+            400, "CLA text does not match the supplied digest or exceeds the size limit"
+        )
+    if body.confirmation != f"PUBLISH CLA {body.version} {body.sha256}":
+        raise HTTPException(
+            409, "explicit CLA version and digest confirmation is required"
+        )
+    async with session.begin():
+        await lock_identity_writes(session, namespace="cla-policy")
+        previous = await session.scalar(
+            select(ClaVersion).order_by(ClaVersion.version.desc()).limit(1)
+        )
+        if previous and (
+            body.version <= previous.version
+            or body.effective_at < previous.effective_at
+        ):
+            raise HTTPException(
+                409, "CLA versions and effective dates must advance monotonically"
+            )
+        row = ClaVersion(
+            version=body.version,
+            sha256=body.sha256,
+            text=body.text,
+            published_at=datetime.now(UTC),
+            effective_at=body.effective_at,
+            actor=body.actor,
+            reason=body.reason,
+        )
+        session.add(row)
+        await session.flush()
+        return version_view(row)
+
+
+@router.get("/admin/cla/settings", response_model=ClaControl)
+async def control(
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    history_limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    history_offset: Annotated[int, Query(ge=0)] = 0,
+) -> ClaControl:
+    settings = await current_cla_settings(session)
+    version = await current_cla_version(session)
+    history = list(
+        await session.scalars(
+            select(ClaSettingsRevision)
+            .order_by(ClaSettingsRevision.revision.desc())
+            .offset(history_offset)
+            .limit(history_limit)
+        )
+    )
+    total = int(
+        await session.scalar(select(func.count()).select_from(ClaSettingsRevision)) or 0
+    )
+    active = (
+        select(Agent.miner_hotkey.label("hotkey"))
+        .where(
+            Agent.status != AgentStatus.REJECTED,
+            ~select(SubmissionRetirement.agent_id)
+            .where(SubmissionRetirement.agent_id == Agent.agent_id)
+            .exists(),
+        )
+        .distinct()
+        .subquery()
+    )
+    active_count = int(
+        await session.scalar(select(func.count()).select_from(active)) or 0
+    )
+    signed_count = 0
+    if version:
+        signed_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(active)
+                .where(
+                    select(ClaSignature.signature_id)
+                    .where(
+                        ClaSignature.hotkey == active.c.hotkey,
+                        ClaSignature.netuid == request.app.state.config.chain.netuid,
+                        ClaSignature.cla_version == version.version,
+                        ClaSignature.cla_sha256 == version.sha256,
+                    )
+                    .exists()
+                )
+            )
+            or 0
+        )
+    shadow_count = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(ClaShadowUpload)
+            .where(ClaShadowUpload.netuid == request.app.state.config.chain.netuid)
+        )
+        or 0
+    )
+    return ClaControl(
+        current=settings_view(settings),
+        history=[settings_view(row) for row in history],
+        effective_version=version_view(version) if version else None,
+        active_hotkeys=active_count,
+        signed_active_hotkeys=signed_count,
+        unsigned_active_hotkeys=active_count - signed_count,
+        unsigned_shadow_uploads=shadow_count,
+        history_total=total,
+        history_limit=history_limit,
+        history_offset=history_offset,
+        history_has_more=history_offset + len(history) < total,
+    )
+
+
+@router.post("/admin/cla/settings", response_model=SettingsView)
+async def set_policy(
+    body: ClaSettingsRequest, _admin: AdminDep, session: SessionDep
+) -> SettingsView:
+    if body.confirmation != f"SET CLA GATE {body.mode.upper()}":
+        raise HTTPException(409, "explicit CLA gate confirmation is required")
+    async with session.begin():
+        await lock_identity_writes(session, namespace="cla-policy")
+        previous = await current_cla_settings(session)
+        if previous.revision != body.expected_revision:
+            raise HTTPException(
+                409, "CLA policy revision changed; refresh before applying"
+            )
+        if body.mode == "enforce" and await current_cla_version(session) is None:
+            raise HTTPException(
+                409, "publish an effective approved CLA before enforcing"
+            )
+        row = ClaSettingsRevision(
+            revision=previous.revision + 1,
+            parent_revision=previous.revision,
+            mode=body.mode,
+            actor=body.actor,
+            reason=body.reason,
+            created_at=datetime.now(UTC),
+        )
+        session.add(row)
+        await session.flush()
+        return settings_view(row)

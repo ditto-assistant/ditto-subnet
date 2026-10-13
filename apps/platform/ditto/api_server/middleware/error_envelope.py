@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
+from ditto.api_server.cla import CLA_REQUIRED_ERROR_CODE, ClaConsentRequired
 from ditto.api_server.endpoints.inference import InferenceDeclinedError
 from ditto.api_server.endpoints.retrieval import (
     AgentNotFoundError,
@@ -237,6 +238,10 @@ def envelope_response(
 
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach the three envelope handlers to ``app``."""
+
+    @app.exception_handler(ClaConsentRequired)
+    async def _cla_required(_request: Request, exc: ClaConsentRequired) -> JSONResponse:
+        return envelope_response(403, CLA_REQUIRED_ERROR_CODE, str(exc))
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_exception_handler(

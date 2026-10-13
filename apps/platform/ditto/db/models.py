@@ -11713,3 +11713,204 @@ class TreasuryPublicEvent(Base):
         ),
         Index("treasury_public_event_at_idx", "event_at", "id"),
     )
+
+
+class MinerGithubLinkAttempt(Base):
+    """Ephemeral OAuth/PKCE state, never an OAuth access token."""
+
+    __tablename__ = "miner_github_link_attempts"
+    attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    session_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    launch_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    state_hash: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    code_verifier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    browser_binding_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    accept_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    github_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    github_login: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["session_id"], ["miner_sessions.session_id"], ondelete="SET NULL"
+        ),
+        CheckConstraint(
+            "status IN ('pending','identity_verified','accepted',"
+            "'linked','failed','expired')",
+            name="status",
+        ),
+        Index("miner_github_link_attempts_hotkey_idx", "hotkey", "expires_at"),
+    )
+
+
+class MinerGithubActionNonce(Base):
+    __tablename__ = "miner_github_action_nonces"
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    signer: Mapped[str] = mapped_column(Text, nullable=False)
+    key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    link_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+
+class MinerGithubLink(Base):
+    """Immutable link proofs; only one-way revocation metadata may change."""
+
+    __tablename__ = "miner_github_links"
+    link_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    github_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    github_login: Mapped[str] = mapped_column(Text, nullable=False)
+    link_attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    nonce: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False, unique=True
+    )
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    signer: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    owner_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    owner_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["link_attempt_id"], ["miner_github_link_attempts.attempt_id"]
+        ),
+        ForeignKeyConstraint(["nonce"], ["miner_github_action_nonces.nonce"]),
+        CheckConstraint("github_user_id > 0", name="github_id"),
+        CheckConstraint("key_kind IN ('hotkey','coldkey')", name="key_kind"),
+        Index(
+            "miner_github_links_active_hotkey_key",
+            "hotkey",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index(
+            "miner_github_links_active_github_key",
+            "github_user_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+
+class ClaVersion(Base):
+    __tablename__ = "cla_versions"
+    version: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    published_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    effective_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        CheckConstraint("version > 0 AND length(sha256) = 64", name="identity"),
+    )
+
+
+class ClaSignature(Base):
+    __tablename__ = "cla_signatures"
+    signature_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    cla_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    cla_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False, unique=True
+    )
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    signed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    owner_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    owner_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(["cla_version"], ["cla_versions.version"]),
+        Index(
+            "cla_signatures_hotkey_version_idx",
+            "netuid",
+            "hotkey",
+            "cla_version",
+            "signed_at",
+        ),
+    )
+
+
+class ClaSettingsRevision(Base):
+    __tablename__ = "cla_settings_revisions"
+    revision: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=False
+    )
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        CheckConstraint("mode IN ('off','shadow','enforce')", name="mode"),
+    )
+
+
+class ClaShadowUpload(Base):
+    __tablename__ = "cla_shadow_uploads"
+    observation_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    cla_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+
+class AgentClaBinding(Base):
+    """The exact consent receipt bound to an immutable submitted artifact."""
+
+    __tablename__ = "agent_cla_bindings"
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    signature_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"]),
+        ForeignKeyConstraint(["signature_id"], ["cla_signatures.signature_id"]),
+    )

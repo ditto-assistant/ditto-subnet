@@ -20,6 +20,44 @@ func (q *Queries) DeleteUploadAdmission(ctx context.Context, minerColdkey string
 	return err
 }
 
+const getClaUploadGate = `-- name: GetClaUploadGate :one
+WITH policy AS (
+    SELECT mode FROM cla_settings_revisions ORDER BY revision DESC LIMIT 1
+), current_version AS (
+    SELECT version, sha256 FROM cla_versions
+    WHERE effective_at <= $3::timestamptz
+    ORDER BY version DESC LIMIT 1
+)
+SELECT policy.mode, current_version.version,
+    EXISTS (
+        SELECT 1 FROM cla_signatures AS signature
+        WHERE signature.netuid = $1
+          AND signature.hotkey = $2
+          AND signature.cla_version = current_version.version
+          AND signature.cla_sha256 = current_version.sha256
+    ) AS has_signature
+FROM policy LEFT JOIN current_version ON true
+`
+
+type GetClaUploadGateParams struct {
+	Netuid     int32              `json:"netuid"`
+	Hotkey     string             `json:"hotkey"`
+	ObservedAt pgtype.Timestamptz `json:"observedAt"`
+}
+
+type GetClaUploadGateRow struct {
+	Mode         string      `json:"mode"`
+	Version      pgtype.Int4 `json:"version"`
+	HasSignature bool        `json:"hasSignature"`
+}
+
+func (q *Queries) GetClaUploadGate(ctx context.Context, arg GetClaUploadGateParams) (GetClaUploadGateRow, error) {
+	row := q.db.QueryRow(ctx, getClaUploadGate, arg.Netuid, arg.Hotkey, arg.ObservedAt)
+	var i GetClaUploadGateRow
+	err := row.Scan(&i.Mode, &i.Version, &i.HasSignature)
+	return i, err
+}
+
 const getLatestSubmissionDepositAddress = `-- name: GetLatestSubmissionDepositAddress :one
 SELECT payment_address
 FROM submission_deposit_address_revisions

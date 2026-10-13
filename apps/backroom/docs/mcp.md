@@ -521,3 +521,21 @@ artifact-fetch audit row per agent read (`admin.get_lineage_source_diff` or
 The source readers publish their agent ids as plain `format: uuid` rather than
 zod's long uuid regex, also for the byte budget. Each service function still
 parses its input with the strict uuid schema before calling Platform.
+
+
+## Contributor identity and CLA
+
+`get_miner_github_link` reads an active OAuth-verified numeric GitHub id and its
+signed hotkey link. `get_github_contributor_status` resolves a numeric PR author
+id to its linked hotkey and current CLA status; logins alone are not identity.
+`get_miner_cla_status` reads the effective version and exact consent receipt.
+These are identity/consent evidence, never payment routing or bounty awards.
+
+`get_cla_policy` reads the audited off/shadow/enforce mode, paged history,
+effective version and signed/unsigned adoption. Its active-hotkey basis is
+non-rejected, non-retired submissions, not chain registrations. All reads use
+`backroom:read`. `set_cla_policy` and `publish_cla_version` require
+`backroom:write`, the account's live write level, exact confirmation and the
+signed-in operator's audit identity. Publication preserves exact UTF-8 text and
+SHA-256 and never activates enforcement. Maintain approved versioned text in
+`docs/legal`; never publish a test fixture or draft legal wording.

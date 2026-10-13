@@ -630,6 +630,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/cla/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Control */
+        get: operations["control_api_v1_admin_cla_settings_get"];
+        put?: never;
+        /** Set Policy */
+        post: operations["set_policy_api_v1_admin_cla_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/cla/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish */
+        post: operations["publish_api_v1_admin_cla_versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/coding-catalog/releases": {
         parameters: {
             query?: never;
@@ -4389,6 +4424,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/cla/sign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign Cla */
+        post: operations["sign_cla_api_v1_cla_sign_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/feedback-track/contributions": {
         parameters: {
             query?: never;
@@ -4738,6 +4790,91 @@ export interface paths {
         get: operations["my_contributions_api_v1_me_feedback_track_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/github-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Link */
+        get: operations["my_link_api_v1_me_github_link_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/github-link/attempts/{attempt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Attempt Status */
+        get: operations["attempt_status_api_v1_me_github_link_attempts__attempt_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/github-link/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm */
+        post: operations["confirm_api_v1_me_github_link_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/github-link/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Link */
+        post: operations["start_link_api_v1_me_github_link_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/github-link/unlink": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Unlink */
+        post: operations["unlink_api_v1_me_github_link_unlink_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5404,6 +5541,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/cla": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current Document */
+        get: operations["current_document_api_v1_public_cla_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/cla/status/{hotkey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Status */
+        get: operations["public_status_api_v1_public_cla_status__hotkey__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/cla/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Version */
+        get: operations["public_version_api_v1_public_cla_versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/cla/versions/{version}/text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Text */
+        get: operations["public_text_api_v1_public_cla_versions__version__text_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/efficiency/snapshots/{snapshot_id}": {
         parameters: {
             query?: never;
@@ -5442,6 +5647,40 @@ export interface paths {
          * @description Counts by kind for one hotkey. Never names the account.
          */
         get: operations["public_contributions_api_v1_public_feedback_track__hotkey__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/github-account/{github_user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Account Link */
+        get: operations["account_link_api_v1_public_github_account__github_user_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/github-link/{hotkey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Link */
+        get: operations["public_link_api_v1_public_github_link__hotkey__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -15551,6 +15790,194 @@ export interface components {
              */
             std_err: number;
         };
+        /** ClaControl */
+        ClaControl: {
+            /** Active Hotkeys */
+            active_hotkeys: number;
+            /**
+             * Active Hotkeys Basis
+             * @default non_retired_submissions
+             * @constant
+             */
+            active_hotkeys_basis: "non_retired_submissions";
+            current: components["schemas"]["ClaSettingsRevision"];
+            effective_version: components["schemas"]["ClaVersionView"] | null;
+            /** History */
+            history: components["schemas"]["ClaSettingsRevision"][];
+            /** History Has More */
+            history_has_more: boolean;
+            /** History Limit */
+            history_limit: number;
+            /** History Offset */
+            history_offset: number;
+            /** History Total */
+            history_total: number;
+            /** Signed Active Hotkeys */
+            signed_active_hotkeys: number;
+            /** Unsigned Active Hotkeys */
+            unsigned_active_hotkeys: number;
+            /** Unsigned Shadow Uploads */
+            unsigned_shadow_uploads: number;
+        };
+        /** ClaPublishRequest */
+        ClaPublishRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Effective At
+             * Format: date-time
+             */
+            effective_at: string;
+            /** Reason */
+            reason: string;
+            /** Sha256 */
+            sha256: string;
+            /** Text */
+            text: string;
+            /** Version */
+            version: number;
+        };
+        /** ClaSettingsRequest */
+        ClaSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Reason */
+            reason: string;
+        };
+        /** ClaSettingsRevision */
+        ClaSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+        };
+        /** ClaSignRequest */
+        ClaSignRequest: {
+            /** Cla Sha256 */
+            cla_sha256: string;
+            /** Cla Version */
+            cla_version: number;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /** Signature */
+            signature: string;
+        };
+        /** ClaSignatureView */
+        ClaSignatureView: {
+            /** Cla Sha256 */
+            cla_sha256: string;
+            /** Cla Version */
+            cla_version: number;
+            /** Coldkey */
+            coldkey: string;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /** Owner Block */
+            owner_block: number;
+            /** Owner Block Hash */
+            owner_block_hash: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Signature Id
+             * Format: uuid
+             */
+            signature_id: string;
+            /**
+             * Signed At
+             * Format: date-time
+             */
+            signed_at: string;
+        };
+        /** ClaStatus */
+        ClaStatus: {
+            current?: components["schemas"]["ClaVersionView"] | null;
+            /**
+             * Is Current
+             * @default false
+             */
+            is_current: boolean;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Netuid */
+            netuid: number;
+            signature?: components["schemas"]["ClaSignatureView"] | null;
+        };
+        /** ClaVersionView */
+        ClaVersionView: {
+            /**
+             * Effective At
+             * Format: date-time
+             */
+            effective_at: string;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /** Sha256 */
+            sha256: string;
+            /** Version */
+            version: number;
+        };
         /**
          * ClaimProvenanceCase
          * @description One case's persisted gate evidence, as an operator reads it.
@@ -19123,6 +19550,18 @@ export interface components {
             scope: string;
             settings: components["schemas"]["ContinualRetestSettings"];
         };
+        /** ContributorProof */
+        ContributorProof: {
+            /**
+             * Key Kind
+             * @enum {string}
+             */
+            key_kind: "hotkey" | "coldkey";
+            /** Signature */
+            signature: string;
+            /** Signer */
+            signer: string;
+        };
         /** ConversationAdmissionDiagnostics */
         ConversationAdmissionDiagnostics: {
             /**
@@ -20881,6 +21320,150 @@ export interface components {
             source_fixture_v1: boolean;
             /** Version */
             version?: string | null;
+        };
+        /** GithubLinkAttemptStatus */
+        GithubLinkAttemptStatus: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Error */
+            error?: string | null;
+            /** Github Login */
+            github_login?: string | null;
+            /** Github User Id */
+            github_user_id?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "identity_verified" | "accepted" | "linked" | "failed" | "expired";
+        };
+        /** GithubLinkRequest */
+        GithubLinkRequest: {
+            /** Github Login */
+            github_login: string;
+            /** Github User Id */
+            github_user_id: number;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /**
+             * Link Attempt Id
+             * Format: uuid
+             */
+            link_attempt_id: string;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            proof: components["schemas"]["ContributorProof"];
+        };
+        /** GithubLinkStart */
+        GithubLinkStart: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Authorize Url */
+            authorize_url: string;
+            /** Expires In */
+            expires_in: number;
+            /** Netuid */
+            netuid: number;
+        };
+        /** GithubLinkStatus */
+        GithubLinkStatus: {
+            /** Enabled */
+            enabled: boolean;
+            link?: components["schemas"]["GithubLinkView"] | null;
+            /** Netuid */
+            netuid: number;
+        };
+        /** GithubLinkView */
+        GithubLinkView: {
+            /** Coldkey */
+            coldkey: string;
+            /** Github Login */
+            github_login: string;
+            /** Github User Id */
+            github_user_id: number;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /**
+             * Key Kind
+             * @enum {string}
+             */
+            key_kind: "hotkey" | "coldkey";
+            /**
+             * Link Attempt Id
+             * Format: uuid
+             */
+            link_attempt_id: string;
+            /**
+             * Link Id
+             * Format: uuid
+             */
+            link_id: string;
+            /**
+             * Linked At
+             * Format: date-time
+             */
+            linked_at: string;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /** Owner Block */
+            owner_block: number;
+            /** Owner Block Hash */
+            owner_block_hash: string;
+            /** Revoked At */
+            revoked_at?: string | null;
+            /** Signature */
+            signature: string;
+            /** Signer */
+            signer: string;
+        };
+        /** GithubUnlinkRequest */
+        GithubUnlinkRequest: {
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /**
+             * Link Id
+             * Format: uuid
+             */
+            link_id: string;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            proof: components["schemas"]["ContributorProof"];
         };
         /** GradeSheet */
         GradeSheet: {
@@ -38697,6 +39280,110 @@ export interface operations {
             };
         };
     };
+    control_api_v1_admin_cla_settings_get: {
+        parameters: {
+            query?: {
+                history_limit?: number;
+                history_offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaControl"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_policy_api_v1_admin_cla_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_api_v1_admin_cla_versions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaVersionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_coding_catalog_releases_api_v1_admin_coding_catalog_releases_get: {
         parameters: {
             query?: {
@@ -46008,6 +46695,39 @@ export interface operations {
             };
         };
     };
+    sign_cla_api_v1_cla_sign_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaSignRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaSignatureView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     record_contribution_api_v1_feedback_track_contributions_post: {
         parameters: {
             query?: never;
@@ -46621,6 +47341,141 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeedbackTrackMeResponse"];
+                };
+            };
+        };
+    };
+    my_link_api_v1_me_github_link_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubLinkStatus"];
+                };
+            };
+        };
+    };
+    attempt_status_api_v1_me_github_link_attempts__attempt_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubLinkAttemptStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_api_v1_me_github_link_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GithubLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubLinkView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_link_api_v1_me_github_link_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubLinkStart"];
+                };
+            };
+        };
+    };
+    unlink_api_v1_me_github_link_unlink_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GithubUnlinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -47591,6 +48446,119 @@ export interface operations {
             };
         };
     };
+    current_document_api_v1_public_cla_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaStatus"];
+                };
+            };
+        };
+    };
+    public_status_api_v1_public_cla_status__hotkey__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hotkey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_version_api_v1_public_cla_versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaVersionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_text_api_v1_public_cla_versions__version__text_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     efficiency_snapshot_api_v1_public_efficiency_snapshots__snapshot_id__get: {
         parameters: {
             query?: never;
@@ -47647,6 +48615,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicFeedbackTrackResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_link_api_v1_public_github_account__github_user_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                github_user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubLinkStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_link_api_v1_public_github_link__hotkey__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hotkey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubLinkStatus"];
                 };
             };
             /** @description Validation Error */
