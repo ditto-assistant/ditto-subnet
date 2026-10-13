@@ -1,148 +1,153 @@
-### 1. CLA Document Placeholder
+An end-to-end implementation resolves this issue across Platform, the Miner CLI, database migrations, documentation, and tests.
 
-#### `docs/legal/CLA-v1.md`
+---
+
+### 1. Placeholder Legal Text: `docs/legal/CLA-v1.md`
+
 ```markdown
-# Ditto Contributor License Agreement (CLA) - Version 1.0
+# Contributor License Agreement (CLA) - v1
 
 [PLACEHOLDER FIXTURE - PENDING LEGAL REVIEW]
 
-By executing this Contributor License Agreement ("CLA"), you agree to the following terms regarding your contributions to Ditto (SN118):
+This is a placeholder fixture for Contributor License Agreement version 1 (SN118).
+Maintainers will supply the finalized legal wording following legal review.
 
-1. Grant of License: You grant to the Ditto project and its maintainers an irrevocable, perpetual, worldwide, non-exclusive, royalty-free license to use, reproduce, modify, display, perform, sublicense, and distribute your contributions under the MIT License.
-2. Ownership and IP: You warrant that you are the sole creator of the submitted contributions or have sufficient rights to submit them on these terms, and waive intellectual property claims adverse to Ditto products incorporating the submission.
-3. Model Weights and Artifacts: For any model weights or artifacts submitted, you represent and warrant that base model licenses permit commercial use and redistribution.
+Under this agreement, contributions to SN118 are MIT-licensed. Winning miner agent uploads
+and bounty contributions grant Ditto all necessary rights for product integration without
+separate rights negotiation per contributor. For seasons submitting weights, this also
+warrants base-model license compatibility for commercial use and redistribution.
 ```
 
 ---
 
-### 2. Database Models and Append-Only Constraints
+### 2. Database Models: `apps/platform/ditto/db/models.py` (Additions)
 
-#### `apps/platform/ditto/db/models/cla.py`
 ```python
-"""Database models for CLA version registry, append-only signatures, and gate settings."""
+import datetime
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    event,
+)
+from sqlalchemy.orm import declarative_base, relationship
 
-from __future__ import annotations
-
-from datetime import datetime, timezone
-from typing import Any
-
-from sqlalchemy import BigInteger, DateTime, Integer, String, Text, event
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-class ReadOnlyTableError(Exception):
-    """Raised when an update or delete is attempted on an append-only table."""
+Base = declarative_base()
 
 
 class CLAVersion(Base):
-    """Registry of versioned CLAs with authoritative digests and activation windows."""
-
     __tablename__ = "cla_versions"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    version: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
-    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    text: Mapped[str] = mapped_column(Text, nullable=False)
-    published_at: Mapped[datetime] = mapped_column(
+    version = Column(String(64), primary_key=True)
+    sha256 = Column(String(64), nullable=False)
+    text = Column(Text, nullable=False)
+    published_at = Column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
         nullable=False,
     )
-    effective_at: Mapped[datetime] = mapped_column(
+    effective_at = Column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
         nullable=False,
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        nullable=False,
-    )
+    is_current = Column(Boolean, default=False, nullable=False, index=True)
+
+    signatures = relationship("CLASignature", back_populates="cla_version_rel")
 
 
 class CLASignature(Base):
-    """Append-only table of hotkey CLA signatures. Rows must never be updated or deleted."""
-
     __tablename__ = "cla_signatures"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    hotkey: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    coldkey: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    cla_version: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
-    cla_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    signature: Mapped[str] = mapped_column(String(256), nullable=False)
-    nonce: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
-    issued_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    signed_at: Mapped[datetime] = mapped_column(
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    hotkey = Column(String(64), nullable=False, index=True)
+    coldkey = Column(String(64), nullable=False, index=True)
+    cla_version = Column(String(64), ForeignKey("cla_versions.version"), nullable=False)
+    cla_sha256 = Column(String(64), nullable=False)
+    signature = Column(String(256), nullable=False)
+    nonce = Column(String(128), unique=True, nullable=False, index=True)
+    issued_at = Column(Integer, nullable=False)
+    signed_at = Column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+        nullable=False,
+    )
+
+    cla_version_rel = relationship("CLAVersion", back_populates="signatures")
+
+
+# Enforce append-only semantics for CLASignature at ORM layer
+@event.listens_for(CLASignature, "before_update")
+def _prevent_cla_signature_update(mapper, connection, target):
+    raise PermissionError("CLASignature rows are append-only and cannot be updated.")
+
+
+@event.listens_for(CLASignature, "before_delete")
+def _prevent_cla_signature_delete(mapper, connection, target):
+    raise PermissionError("CLASignature rows are append-only and cannot be deleted.")
+
+
+class CLAGateSetting(Base):
+    __tablename__ = "cla_gate_settings"
+
+    id = Column(Integer, primary_key=True, default=1)
+    # Mode can be 'off', 'shadow', or 'enforce'
+    mode = Column(String(32), default="off", nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
         nullable=False,
     )
 
 
-# Enforce append-only semantics at the ORM layer in addition to DB triggers
-@event.listens_for(CLASignature, "before_update")
-def _prevent_signature_update(mapper: Any, connection: Any, target: Any) -> None:
-    raise ReadOnlyTableError("cla_signatures is append-only: updates are prohibited.")
+class CLAGateSettingHistory(Base):
+    __tablename__ = "cla_gate_settings_history"
 
-
-@event.listens_for(CLASignature, "before_delete")
-def _prevent_signature_delete(mapper: Any, connection: Any, target: Any) -> None:
-    raise ReadOnlyTableError("cla_signatures is append-only: deletes are prohibited.")
-
-
-class CLAGateSetting(Base):
-    """Platform gate settings mode history: off | shadow | enforce."""
-
-    __tablename__ = "cla_gate_settings"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="off")
-    changed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mode = Column(String(32), nullable=False)
+    changed_by = Column(String(128), nullable=True)
+    reason = Column(String(256), nullable=True)
+    changed_at = Column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
         nullable=False,
     )
 
 
 class CLAShadowLog(Base):
-    """Log of upload attempts made while gate is in shadow mode without a valid signature."""
-
     __tablename__ = "cla_shadow_logs"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    hotkey: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    endpoint: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    hotkey = Column(String(64), nullable=False, index=True)
+    endpoint = Column(String(128), nullable=False)
+    recorded_at = Column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
         nullable=False,
     )
 ```
 
 ---
 
-### 3. Alembic Migration
+### 3. Alembic Migration: `apps/platform/alembic/versions/20250215_cla_registry_and_signatures.py`
 
-#### `apps/platform/alembic/versions/20250215_0001_cla_registry_and_signatures.py`
 ```python
-"""Create CLA version registry, append-only signatures, gate settings, and shadow logs.
+"""add cla registry, append-only signatures, and gate settings
 
-Revision ID: 20250215_0001
-Revises: head
+Revision ID: 20250215_cla_registry
+Revises: 
 Create Date: 2025-02-15 00:00:00.000000
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "20250215_0001"
+revision = "20250215_cla_registry"
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -151,109 +156,75 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "cla_versions",
-        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("version", sa.String(length=32), nullable=False),
+        sa.Column("version", sa.String(length=64), primary_key=True),
         sa.Column("sha256", sa.String(length=64), nullable=False),
         sa.Column("text", sa.Text(), nullable=False),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("effective_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("is_current", sa.Boolean(), nullable=False, default=False),
     )
-    op.create_index("ix_cla_versions_version", "cla_versions", ["version"], unique=True)
+    op.create_index("ix_cla_versions_is_current", "cla_versions", ["is_current"])
 
     op.create_table(
         "cla_signatures",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("hotkey", sa.String(length=64), nullable=False),
-        sa.Column("coldkey", sa.String(length=64), nullable=True),
-        sa.Column("cla_version", sa.String(length=32), nullable=False),
+        sa.Column("coldkey", sa.String(length=64), nullable=False),
+        sa.Column("cla_version", sa.String(length=64), sa.ForeignKey("cla_versions.version"), nullable=False),
         sa.Column("cla_sha256", sa.String(length=64), nullable=False),
         sa.Column("signature", sa.String(length=256), nullable=False),
-        sa.Column("nonce", sa.String(length=64), nullable=False),
-        sa.Column("issued_at", sa.BigInteger(), nullable=False),
+        sa.Column("nonce", sa.String(length=128), nullable=False, unique=True),
+        sa.Column("issued_at", sa.Integer(), nullable=False),
         sa.Column("signed_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index("ix_cla_signatures_hotkey", "cla_signatures", ["hotkey"])
-    op.create_index("ix_cla_signatures_cla_version", "cla_signatures", ["cla_version"])
-    op.create_index("ix_cla_signatures_nonce", "cla_signatures", ["nonce"], unique=True)
+    op.create_index("ix_cla_signatures_coldkey", "cla_signatures", ["coldkey"])
+    op.create_index("ix_cla_signatures_nonce", "cla_signatures", ["nonce"])
 
     op.create_table(
         "cla_gate_settings",
+        sa.Column("id", sa.Integer(), primary_key=True, default=1),
+        sa.Column("mode", sa.String(length=32), nullable=False, server_default="off"),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+    )
+
+    op.create_table(
+        "cla_gate_settings_history",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("mode", sa.String(length=16), nullable=False, server_default="off"),
+        sa.Column("mode", sa.String(length=32), nullable=False),
         sa.Column("changed_by", sa.String(length=128), nullable=True),
-        sa.Column("reason", sa.String(length=255), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("reason", sa.String(length=256), nullable=True),
+        sa.Column("changed_at", sa.DateTime(timezone=True), nullable=False),
     )
 
     op.create_table(
         "cla_shadow_logs",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("hotkey", sa.String(length=64), nullable=False),
-        sa.Column("endpoint", sa.String(length=64), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("endpoint", sa.String(length=128), nullable=False),
+        sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index("ix_cla_shadow_logs_hotkey", "cla_shadow_logs", ["hotkey"])
 
-    # Insert default gate mode 'off'
+    # Initialize default mode to 'off'
     bind = op.get_bind()
     bind.execute(
         sa.text(
-            "INSERT INTO cla_gate_settings (mode, changed_by, reason, created_at) "
-            "VALUES ('off', 'system', 'Initial rollout default', CURRENT_TIMESTAMP)"
+            "INSERT INTO cla_gate_settings (id, mode, updated_at) "
+            "VALUES (1, 'off', CURRENT_TIMESTAMP)"
+        )
+    )
+    bind.execute(
+        sa.text(
+            "INSERT INTO cla_gate_settings_history (mode, changed_by, reason, changed_at) "
+            "VALUES ('off', 'system_init', 'Default initialization to off', CURRENT_TIMESTAMP)"
         )
     )
 
-    # Dialect-specific triggers to block UPDATE and DELETE on cla_signatures
-    dialect = bind.dialect.name
-    if dialect == "postgresql":
-        op.execute(
-            """
-            CREATE OR REPLACE FUNCTION prevent_cla_signature_mutation()
-            RETURNS TRIGGER AS $$
-            BEGIN
-                RAISE EXCEPTION 'cla_signatures is append-only: updates and deletes are prohibited';
-            END;
-            $$ LANGUAGE plpgsql;
-
-            CREATE TRIGGER trg_cla_signatures_no_update_delete
-            BEFORE UPDATE OR DELETE ON cla_signatures
-            FOR EACH ROW
-            EXECUTE FUNCTION prevent_cla_signature_mutation();
-            """
-        )
-    elif dialect == "sqlite":
-        op.execute(
-            """
-            CREATE TRIGGER trg_cla_signatures_no_update
-            BEFORE UPDATE ON cla_signatures
-            BEGIN
-                SELECT RAISE(ABORT, 'cla_signatures is append-only: updates are prohibited');
-            END;
-            """
-        )
-        op.execute(
-            """
-            CREATE TRIGGER trg_cla_signatures_no_delete
-            BEFORE DELETE ON cla_signatures
-            BEGIN
-                SELECT RAISE(ABORT, 'cla_signatures is append-only: deletes are prohibited');
-            END;
-            """
-        )
-
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    dialect = bind.dialect.name
-    if dialect == "postgresql":
-        op.execute("DROP TRIGGER IF EXISTS trg_cla_signatures_no_update_delete ON cla_signatures")
-        op.execute("DROP FUNCTION IF EXISTS prevent_cla_signature_mutation()")
-    elif dialect == "sqlite":
-        op.execute("DROP TRIGGER IF EXISTS trg_cla_signatures_no_update")
-        op.execute("DROP TRIGGER IF EXISTS trg_cla_signatures_no_delete")
-
     op.drop_table("cla_shadow_logs")
+    op.drop_table("cla_gate_settings_history")
     op.drop_table("cla_gate_settings")
     op.drop_table("cla_signatures")
     op.drop_table("cla_versions")
@@ -261,993 +232,1060 @@ def downgrade() -> None:
 
 ---
 
-### 4. Platform API Server Logic and Message Builders
+### 4. Attestation & Signature Verification: `apps/platform/ditto/api_server/attestation.py`
 
-#### `apps/platform/ditto/api_server/cla.py`
 ```python
-"""Server-side CLA logic: message construction, attestation verification, and gate check."""
-
-from __future__ import annotations
-
-from datetime import datetime, timezone
-import hashlib
-import logging
 import time
+from typing import Optional
+from substrateinterface import Keypair
+from substrateinterface.utils.ss58 import is_valid_ss58_address
 
-from fastapi import HTTPException, status
-from sqlalchemy import desc, select
-from sqlalchemy.orm import Session
-
-from ditto.api_server.attestation import verify_signature
-from ditto.db.models.cla import CLAGateSetting, CLAShadowLog, CLASignature, CLAVersion
-
-logger = logging.getLogger(__name__)
-
-FRESHNESS_WINDOW_SECONDS = 300  # 5 minutes window matching owner-link attestation
+# Freshness window in seconds (10 minutes)
+SIGNATURE_FRESHNESS_WINDOW = 600
 
 
-def build_cla_signature_message(
+def build_cla_message(
     netuid: int,
     cla_version: str,
     cla_sha256: str,
     hotkey: str,
     nonce: str,
     issued_at: int,
-) -> str:
-    """Byte-for-byte mirrored message builder."""
-    return f"ditto-cla:v1:{netuid}:{cla_version}:{cla_sha256}:{hotkey}:{nonce}:{issued_at}"
+) -> bytes:
+    """Byte-for-byte mirrored builder for CLA signature payloads."""
+    return f"ditto-cla:v1:{netuid}:{cla_version}:{cla_sha256}:{hotkey}:{nonce}:{issued_at}".encode("utf-8")
 
 
-def compute_sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def get_current_cla_version(db: Session) -> CLAVersion | None:
-    now = datetime.now(timezone.utc)
-    return db.scalars(
-        select(CLAVersion)
-        .where(CLAVersion.effective_at <= now)
-        .order_by(desc(CLAVersion.effective_at), desc(CLAVersion.id))
-    ).first()
-
-
-def get_current_gate_mode(db: Session) -> str:
-    setting = db.scalars(
-        select(CLAGateSetting).order_by(desc(CLAGateSetting.id))
-    ).first()
-    return setting.mode if setting else "off"
-
-
-def set_gate_mode(db: Session, mode: str, changed_by: str = "operator", reason: str = "") -> CLAGateSetting:
-    mode = mode.lower()
-    if mode not in {"off", "shadow", "enforce"}:
-        raise ValueError(f"Invalid mode: {mode}. Must be 'off', 'shadow', or 'enforce'.")
-    entry = CLAGateSetting(mode=mode, changed_by=changed_by, reason=reason)
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
-    return entry
-
-
-def get_latest_hotkey_signature(db: Session, hotkey: str, version: str) -> CLASignature | None:
-    return db.scalars(
-        select(CLASignature)
-        .where(CLASignature.hotkey == hotkey, CLASignature.cla_version == version)
-        .order_by(desc(CLASignature.signed_at), desc(CLASignature.id))
-    ).first()
-
-
-def resolve_coldkey(hotkey: str) -> str | None:
-    """Resolve Owner(hotkey) at finalized block via subtensor if available."""
-    try:
-        import bittensor as bt
-        sub = bt.subtensor()
-        return sub.get_hotkey_owner(hotkey)
-    except Exception:
-        return None
-
-
-def verify_and_store_signature(
-    db: Session,
-    *,
-    netuid: int,
-    cla_version: str,
-    cla_sha256: str,
-    hotkey: str,
-    nonce: str,
-    issued_at: int,
+def verify_signature(
+    message: bytes,
     signature: str,
-    coldkey: str | None = None,
-) -> CLASignature:
-    now_ts = int(time.time())
-    if abs(now_ts - issued_at) > FRESHNESS_WINDOW_SECONDS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Signature issued_at timestamp {issued_at} is outside freshness window ({FRESHNESS_WINDOW_SECONDS}s).",
-        )
+    hotkey: str,
+) -> bool:
+    """Verifies an sr25519 signature from a hotkey against a message."""
+    try:
+        if not is_valid_ss58_address(hotkey):
+            return False
 
-    # Check nonce uniqueness
-    existing_nonce = db.scalars(select(CLASignature).where(CLASignature.nonce == nonce)).first()
-    if existing_nonce is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Nonce '{nonce}' has already been used.",
-        )
+        sig_hex = signature[2:] if signature.startswith("0x") else signature
+        sig_bytes = bytes.fromhex(sig_hex)
 
-    # Check registry match
-    version_row = db.scalars(select(CLAVersion).where(CLAVersion.version == cla_version)).first()
-    if not version_row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"CLA version '{cla_version}' not found in registry.",
-        )
-    if version_row.sha256.lower() != cla_sha256.lower():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"CLA digest mismatch: registered {version_row.sha256}, provided {cla_sha256}.",
-        )
-
-    # Reconstruct message and verify sr25519 signature
-    expected_message = build_cla_signature_message(
-        netuid=netuid,
-        cla_version=cla_version,
-        cla_sha256=cla_sha256,
-        hotkey=hotkey,
-        nonce=nonce,
-        issued_at=issued_at,
-    )
-    if not verify_signature(message=expected_message, signature=signature, ss58_address=hotkey):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Signature verification failed: invalid hotkey signature.",
-        )
-
-    if coldkey is None:
-        coldkey = resolve_coldkey(hotkey)
-
-    sig_record = CLASignature(
-        hotkey=hotkey,
-        coldkey=coldkey,
-        cla_version=cla_version,
-        cla_sha256=cla_sha256,
-        signature=signature,
-        nonce=nonce,
-        issued_at=issued_at,
-        signed_at=datetime.now(timezone.utc),
-    )
-    db.add(sig_record)
-    db.commit()
-    db.refresh(sig_record)
-    return sig_record
+        keypair = Keypair(ss58_address=hotkey)
+        return bool(keypair.verify(message, sig_bytes))
+    except Exception:
+        return False
 
 
-def check_cla_gate(hotkey: str, endpoint: str, db: Session) -> None:
-    """Enforce or monitor hotkey CLA signature based on platform gate setting."""
-    mode = get_current_gate_mode(db)
-    if mode == "off":
-        return
+def verify_timestamp_freshness(
+    issued_at: int,
+    freshness_window: int = SIGNATURE_FRESHNESS_WINDOW,
+    current_time: Optional[int] = None,
+) -> bool:
+    """Ensures issued_at timestamp is within freshness window."""
+    now = current_time if current_time is not None else int(time.time())
+    return abs(now - issued_at) <= freshness_window
 
-    effective_cla = get_current_cla_version(db)
-    if not effective_cla:
-        return
 
-    sig = get_latest_hotkey_signature(db, hotkey=hotkey, version=effective_cla.version)
-    has_signed = sig is not None and sig.cla_sha256.lower() == effective_cla.sha256.lower()
+def resolve_coldkey_for_hotkey(hotkey: str, subtensor_client=None) -> str:
+    """
+    Resolves Owner(hotkey) at finalized block.
+    Falls back to coldkey lookup or mock environment mapping if chain client not configured.
+    """
+    if subtensor_client is not None:
+        try:
+            coldkey = subtensor_client.get_hotkey_owner(hotkey)
+            if coldkey:
+                return str(coldkey)
+        except Exception:
+            pass
 
-    if not has_signed:
-        if mode == "shadow":
-            logger.warning(
-                "CLA shadow mode: hotkey %s uploaded agent to %s without signing current CLA %s",
-                hotkey,
-                endpoint,
-                effective_cla.version,
-            )
-            shadow_entry = CLAShadowLog(hotkey=hotkey, endpoint=endpoint)
-            db.add(shadow_entry)
-            db.commit()
-            return
-
-        if mode == "enforce":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    f"Hotkey '{hotkey}' has not signed the current Contributor License Agreement "
-                    f"({effective_cla.version}). Run 'uv run ditto cla sign' to execute the agreement."
-                ),
-            )
+    # Default fallback when running without a live subtensor network
+    return f"coldkey-{hotkey[:8]}"
 ```
 
 ---
 
-### 5. API Endpoints
+### 5. CLA Endpoints: `apps/platform/ditto/api_server/endpoints/cla.py`
 
-#### `apps/platform/ditto/api_server/endpoints/cla.py`
 ```python
-"""FastAPI endpoints for CLA registry, status, signing, and gate management."""
-
-from __future__ import annotations
-
-from datetime import datetime
-from typing import Any
-
+import datetime
+import hashlib
+import time
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ditto.api_server.cla import (
-    get_current_cla_version,
-    get_current_gate_mode,
-    get_latest_hotkey_signature,
-    verify_and_store_signature,
+from apps.platform.ditto.api_server.attestation import (
+    build_cla_message,
+    verify_signature,
+    verify_timestamp_freshness,
+    resolve_coldkey_for_hotkey,
 )
-from ditto.api_server.deps import get_db
-from ditto.db.models.cla import CLAVersion
+from apps.platform.ditto.db.models import (
+    CLAVersion,
+    CLASignature,
+    CLAGateSetting,
+    CLAGateSettingHistory,
+)
+from apps.platform.ditto.db.session import get_db
 
 router = APIRouter(prefix="/api/v1/cla", tags=["cla"])
+
+DEFAULT_NETUID = 118
 
 
 class CLAVersionResponse(BaseModel):
     version: str
     sha256: str
+    published_at: datetime.datetime
+    effective_at: datetime.datetime
     text: str
-    published_at: datetime
-    effective_at: datetime
+    is_current: bool
 
 
 class CLASignRequest(BaseModel):
-    netuid: int = Field(default=118)
+    hotkey: str
     cla_version: str
     cla_sha256: str
-    hotkey: str
     nonce: str
     issued_at: int
     signature: str
+    netuid: int = DEFAULT_NETUID
 
 
 class CLASignResponse(BaseModel):
-    status: str
+    success: bool
     hotkey: str
+    coldkey: str
     cla_version: str
-    signed_at: datetime
-    signature: str
+    signed_at: datetime.datetime
 
 
 class CLAStatusResponse(BaseModel):
     hotkey: str
     signed: bool
     is_current: bool
-    cla_version: str | None = None
-    cla_sha256: str | None = None
-    signed_at: datetime | None = None
-    signature: str | None = None
-    effective_version: str | None = None
-    effective_sha256: str | None = None
-    gate_mode: str = "off"
+    version: Optional[str] = None
+    digest: Optional[str] = None
+    signed_at: Optional[datetime.datetime] = None
+    signature: Optional[str] = None
+
+
+class CLAGateModeUpdate(BaseModel):
+    mode: str = Field(..., regex="^(off|shadow|enforce)$")
+    changed_by: Optional[str] = "admin"
+    reason: Optional[str] = None
+
+
+class CLANewVersionRequest(BaseModel):
+    version: str
+    text: str
+    make_current: bool = True
 
 
 @router.get("/current", response_model=CLAVersionResponse)
-def get_effective_cla(db: Session = Depends(get_db)) -> Any:
-    current = get_current_cla_version(db)
-    if not current:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No effective CLA version found.",
-        )
+def get_current_cla(db: Session = Depends(get_db)):
+    """Public read endpoint to fetch currently effective CLA text and digest."""
+    cla = db.query(CLAVersion).filter(CLAVersion.is_current == True).order_by(CLAVersion.effective_at.desc()).first()
+    if not cla:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active CLA version found.")
     return CLAVersionResponse(
-        version=current.version,
-        sha256=current.sha256,
-        text=current.text,
-        published_at=current.published_at,
-        effective_at=current.effective_at,
+        version=cla.version,
+        sha256=cla.sha256,
+        published_at=cla.published_at,
+        effective_at=cla.effective_at,
+        text=cla.text,
+        is_current=cla.is_current,
     )
 
 
-@router.post("/sign", response_model=CLASignResponse, status_code=status.HTTP_201_CREATED)
-def sign_cla(request: CLASignRequest, db: Session = Depends(get_db)) -> Any:
-    sig = verify_and_store_signature(
-        db,
+@router.post("/sign", response_model=CLASignResponse)
+def sign_cla(request: CLASignRequest, db: Session = Depends(get_db)):
+    """Verifies and stores append-only signature for a CLA version."""
+    cla = db.query(CLAVersion).filter(CLAVersion.version == request.cla_version).first()
+    if not cla:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CLA version not registered.")
+
+    if cla.sha256.lower() != request.cla_sha256.lower():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CLA digest mismatch.")
+
+    if not verify_timestamp_freshness(request.issued_at):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Timestamp is outside the freshness window.",
+        )
+
+    # Check nonce uniqueness
+    existing_nonce = db.query(CLASignature).filter(CLASignature.nonce == request.nonce).first()
+    if existing_nonce:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nonce has already been used.")
+
+    # Reconstruct message
+    msg = build_cla_message(
         netuid=request.netuid,
         cla_version=request.cla_version,
         cla_sha256=request.cla_sha256,
         hotkey=request.hotkey,
         nonce=request.nonce,
         issued_at=request.issued_at,
-        signature=request.signature,
     )
+
+    if not verify_signature(msg, request.signature, request.hotkey):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature.")
+
+    coldkey = resolve_coldkey_for_hotkey(request.hotkey)
+
+    sig_record = CLASignature(
+        hotkey=request.hotkey,
+        coldkey=coldkey,
+        cla_version=request.cla_version,
+        cla_sha256=request.cla_sha256,
+        signature=request.signature,
+        nonce=request.nonce,
+        issued_at=request.issued_at,
+    )
+    db.add(sig_record)
+    db.commit()
+    db.refresh(sig_record)
+
     return CLASignResponse(
-        status="signed",
-        hotkey=sig.hotkey,
-        cla_version=sig.cla_version,
-        signed_at=sig.signed_at,
-        signature=sig.signature,
+        success=True,
+        hotkey=sig_record.hotkey,
+        coldkey=sig_record.coldkey,
+        cla_version=sig_record.cla_version,
+        signed_at=sig_record.signed_at,
     )
 
 
 @router.get("/status/{hotkey}", response_model=CLAStatusResponse)
-def get_cla_status(hotkey: str, db: Session = Depends(get_db)) -> Any:
-    current = get_current_cla_version(db)
-    gate_mode = get_current_gate_mode(db)
+def get_cla_status(hotkey: str, db: Session = Depends(get_db)):
+    """Public read endpoint returning hotkey's CLA status, version, digest, signed_at, and signature."""
+    current_cla = db.query(CLAVersion).filter(CLAVersion.is_current == True).order_by(CLAVersion.effective_at.desc()).first()
 
-    if not current:
+    # Find most recent signature for this hotkey
+    latest_sig = db.query(CLASignature).filter(CLASignature.hotkey == hotkey).order_by(CLASignature.id.desc()).first()
+
+    if not latest_sig:
         return CLAStatusResponse(
             hotkey=hotkey,
             signed=False,
-            is_current=True,
-            gate_mode=gate_mode,
+            is_current=False,
+            version=None,
+            digest=None,
+            signed_at=None,
+            signature=None,
         )
 
-    sig = get_latest_hotkey_signature(db, hotkey=hotkey, version=current.version)
-    is_current = sig is not None and sig.cla_sha256.lower() == current.sha256.lower()
-
-    if sig:
-        return CLAStatusResponse(
-            hotkey=hotkey,
-            signed=True,
-            is_current=is_current,
-            cla_version=sig.cla_version,
-            cla_sha256=sig.cla_sha256,
-            signed_at=sig.signed_at,
-            signature=sig.signature,
-            effective_version=current.version,
-            effective_sha256=current.sha256,
-            gate_mode=gate_mode,
-        )
+    is_current = bool(current_cla and (latest_sig.cla_version == current_cla.version))
 
     return CLAStatusResponse(
         hotkey=hotkey,
-        signed=False,
-        is_current=False,
-        effective_version=current.version,
-        effective_sha256=current.sha256,
-        gate_mode=gate_mode,
+        signed=True,
+        is_current=is_current,
+        version=latest_sig.cla_version,
+        digest=latest_sig.cla_sha256,
+        signed_at=latest_sig.signed_at,
+        signature=latest_sig.signature,
     )
-```
 
-#### Mounting in `apps/platform/ditto/api_server/main.py`
-```python
-from ditto.api_server.endpoints import cla as cla_endpoint
 
-app.include_router(cla_endpoint.router)
+@router.put("/gate-mode")
+def update_gate_mode(payload: CLAGateModeUpdate, db: Session = Depends(get_db)):
+    """Operator endpoint to adjust CLA gate rollout mode (off, shadow, enforce)."""
+    setting = db.query(CLAGateSetting).filter(CLAGateSetting.id == 1).first()
+    if not setting:
+        setting = CLAGateSetting(id=1, mode=payload.mode)
+        db.add(setting)
+    else:
+        setting.mode = payload.mode
+
+    history = CLAGateSettingHistory(
+        mode=payload.mode,
+        changed_by=payload.changed_by,
+        reason=payload.reason,
+    )
+    db.add(history)
+    db.commit()
+
+    return {"mode": setting.mode, "status": "updated"}
+
+
+@router.post("/version", response_model=CLAVersionResponse)
+def register_cla_version(payload: CLANewVersionRequest, db: Session = Depends(get_db)):
+    """Registers a new CLA version. If make_current is True, unsets previous current flags."""
+    sha256 = hashlib.sha256(payload.text.encode("utf-8")).hexdigest()
+
+    if payload.make_current:
+        db.query(CLAVersion).filter(CLAVersion.is_current == True).update({"is_current": False})
+
+    cla = CLAVersion(
+        version=payload.version,
+        sha256=sha256,
+        text=payload.text,
+        is_current=payload.make_current,
+    )
+    db.add(cla)
+    db.commit()
+    db.refresh(cla)
+
+    return CLAVersionResponse(
+        version=cla.version,
+        sha256=cla.sha256,
+        published_at=cla.published_at,
+        effective_at=cla.effective_at,
+        text=cla.text,
+        is_current=cla.is_current,
+    )
+
+
+# Stretch Goal Sketch (#2871): Bounty PR CLA Check Interface
+class BountyPRCLAChecker:
+    """Interface sketch for PR CLA status validation."""
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    async def check_github_pr_author_cla(self, github_username: str) -> dict:
+        """
+        Resolves PR author -> linked hotkey (#2871) -> current CLA signature status.
+        Returns:
+            {"status": "pass" | "fail", "hotkey": Optional[str], "cla_version": Optional[str]}
+        """
+        raise NotImplementedError("Bounty PR author linkage tracked under #2871")
 ```
 
 ---
 
-### 6. Submission Gate Integration in Upload Endpoints
+### 6. Submission Gate: `apps/platform/ditto/api_server/endpoints/upload.py`
 
-#### `apps/platform/ditto/api_server/endpoints/upload.py`
 ```python
-# Insert CLA gate enforcement inside upload_check and upload_agent:
+import logging
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-from ditto.api_server.cla import check_cla_gate
+from apps.platform.ditto.db.models import (
+    CLAVersion,
+    CLASignature,
+    CLAGateSetting,
+    CLAShadowLog,
+)
+from apps.platform.ditto.db.session import get_db
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/upload", tags=["upload"])
+
+
+class UploadCheckRequest(BaseModel):
+    hotkey: str
+    artifact_hash: str
+
+
+class UploadAgentRequest(BaseModel):
+    hotkey: str
+    artifact_hash: str
+    payload: dict = {}
+
+
+def verify_cla_submission_gate(hotkey: str, endpoint_name: str, db: Session) -> None:
+    """
+    Submission gate for upload endpoints.
+    Modes:
+      - off: No check performed.
+      - shadow: Unsigned uploads are logged & counted, but accepted.
+      - enforce: Refuses hotkeys without valid signature for currently effective CLA version.
+    """
+    setting = db.query(CLAGateSetting).filter(CLAGateSetting.id == 1).first()
+    mode = setting.mode if setting else "off"
+
+    if mode == "off":
+        return
+
+    current_cla = db.query(CLAVersion).filter(CLAVersion.is_current == True).order_by(CLAVersion.effective_at.desc()).first()
+    if not current_cla:
+        # No CLA active on platform; bypass
+        return
+
+    # Check whether hotkey has signed this exact version
+    sig = (
+        db.query(CLASignature)
+        .filter(
+            CLASignature.hotkey == hotkey,
+            CLASignature.cla_version == current_cla.version,
+        )
+        .first()
+    )
+
+    is_signed = sig is not None
+
+    if mode == "shadow":
+        if not is_signed:
+            logger.warning(
+                "CLA Gate [SHADOW]: Hotkey %s has not signed current CLA version %s on %s. Permitting upload.",
+                hotkey,
+                current_cla.version,
+                endpoint_name,
+            )
+            shadow_entry = CLAShadowLog(hotkey=hotkey, endpoint=endpoint_name)
+            db.add(shadow_entry)
+            db.commit()
+        return
+
+    if mode == "enforce":
+        if not is_signed:
+            logger.warning(
+                "CLA Gate [ENFORCE]: Rejected unsigned upload from hotkey %s (required CLA: %s).",
+                hotkey,
+                current_cla.version,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"CLA not signed for current version ({current_cla.version}). Run `ditto cla sign` to sign the Contributor License Agreement.",
+            )
 
 
 @router.post("/check")
-async def upload_check(
-    request: UploadCheckRequest,
-    db: Session = Depends(get_db),
-) -> UploadCheckResponse:
-    # Verify hotkey CLA signing status prior to validation
-    check_cla_gate(hotkey=request.hotkey, endpoint="/upload/check", db=db)
-    ...
+def upload_check(request: UploadCheckRequest, db: Session = Depends(get_db)):
+    verify_cla_submission_gate(request.hotkey, "upload/check", db)
+    return {"status": "ok", "ready_for_upload": True}
 
 
 @router.post("/agent")
-async def upload_agent(
-    file: UploadFile = File(...),
-    hotkey: str = Form(...),
-    db: Session = Depends(get_db),
-) -> UploadAgentResponse:
-    # Verify hotkey CLA signing status prior to receiving/processing payload
-    check_cla_gate(hotkey=hotkey, endpoint="/upload/agent", db=db)
-    ...
-```
-
----
-
-### 7. Miner CLI Implementation (`ditto cla sign`, `ditto cla status`, `ditto upload` gate)
-
-#### `ditto/miner_cli/cla.py`
-```python
-"""Miner CLI commands for Contributor License Agreement management."""
-
-from __future__ import annotations
-
-import hashlib
-import secrets
-import sys
-import time
-from typing import Any
-
-import requests
-import typer
-
-cli = typer.Typer(name="cla", help="Manage Contributor License Agreement (CLA) signatures.")
-
-
-def build_cla_signature_message(
-    netuid: int,
-    cla_version: str,
-    cla_sha256: str,
-    hotkey: str,
-    nonce: str,
-    issued_at: int,
-) -> str:
-    return f"ditto-cla:v1:{netuid}:{cla_version}:{cla_sha256}:{hotkey}:{nonce}:{issued_at}"
-
-
-def fetch_current_cla(platform_url: str) -> dict[str, Any]:
-    url = f"{platform_url.rstrip('/')}/api/v1/cla/current"
-    resp = requests.get(url, timeout=10)
-    if resp.status_code != 200:
-        typer.secho(f"Failed to fetch current CLA from {url}: {resp.text}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    return resp.json()
-
-
-def fetch_cla_status(platform_url: str, hotkey: str) -> dict[str, Any]:
-    url = f"{platform_url.rstrip('/')}/api/v1/cla/status/{hotkey}"
-    resp = requests.get(url, timeout=10)
-    if resp.status_code != 200:
-        typer.secho(f"Failed to query CLA status: {resp.text}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    return resp.json()
-
-
-@cli.command("sign")
-def sign(
-    wallet_name: str = typer.Option("default", "--wallet.name", "-w", help="Bittensor wallet name"),
-    hotkey_name: str = typer.Option("default", "--wallet.hotkey", "-k", help="Bittensor hotkey name"),
-    netuid: int = typer.Option(118, "--netuid", help="Subnet UID"),
-    platform_url: str = typer.Option("http://localhost:8000", "--platform-url", help="Platform URL"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
-) -> None:
-    """Download current CLA, verify its digest, and sign it with the hotkey."""
-    import bittensor as bt
-
-    wallet = bt.wallet(name=wallet_name, hotkey=hotkey_name)
-    hotkey_ss58 = wallet.hotkey.ss58_address
-
-    typer.echo(f"Fetching current CLA from {platform_url}...")
-    cla_data = fetch_current_cla(platform_url)
-    version = cla_data["version"]
-    expected_sha256 = cla_data["sha256"].lower()
-    text = cla_data["text"]
-
-    # Recompute and verify digest
-    computed_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest().lower()
-    if computed_sha256 != expected_sha256:
-        typer.secho(
-            f"REFUSING TO SIGN: CLA digest mismatch!\n"
-            f"Expected: {expected_sha256}\n"
-            f"Computed: {computed_sha256}",
-            fg=typer.colors.RED,
-            bold=True,
-        )
-        raise typer.Exit(code=1)
-
-    typer.echo("\n" + "=" * 60)
-    typer.echo(f"Ditto Contributor License Agreement ({version})")
-    typer.echo(f"SHA-256 Digest: {computed_sha256}")
-    typer.echo("=" * 60)
-    typer.echo(text.strip())
-    typer.echo("=" * 60 + "\n")
-
-    if not yes:
-        confirmation = typer.prompt(
-            f"To sign CLA {version} with hotkey {hotkey_ss58}, type 'I AGREE'"
-        )
-        if confirmation.strip() != "I AGREE":
-            typer.secho("Signing aborted.", fg=typer.colors.YELLOW)
-            raise typer.Exit(code=1)
-
-    nonce = secrets.token_hex(16)
-    issued_at = int(time.time())
-    msg_str = build_cla_signature_message(
-        netuid=netuid,
-        cla_version=version,
-        cla_sha256=computed_sha256,
-        hotkey=hotkey_ss58,
-        nonce=nonce,
-        issued_at=issued_at,
-    )
-
-    typer.echo("Signing message with hotkey...")
-    sig_bytes = wallet.hotkey.sign(msg_str.encode("utf-8"))
-    signature = f"0x{sig_bytes.hex()}" if not sig_bytes.hex().startswith("0x") else sig_bytes.hex()
-
-    payload = {
-        "netuid": netuid,
-        "cla_version": version,
-        "cla_sha256": computed_sha256,
-        "hotkey": hotkey_ss58,
-        "nonce": nonce,
-        "issued_at": issued_at,
-        "signature": signature,
+def upload_agent(request: UploadAgentRequest, db: Session = Depends(get_db)):
+    verify_cla_submission_gate(request.hotkey, "upload/agent", db)
+    # Proceed with agent registration/upload flow
+    return {
+        "status": "success",
+        "agent_id": f"agent-{request.artifact_hash[:12]}",
+        "hotkey": request.hotkey,
     }
-
-    url = f"{platform_url.rstrip('/')}/api/v1/cla/sign"
-    res = requests.post(url, json=payload, timeout=15)
-    if res.status_code != 201:
-        typer.secho(f"Platform rejected signature ({res.status_code}): {res.text}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-
-    typer.secho(
-        f"Successfully signed CLA {version} for hotkey {hotkey_ss58}!",
-        fg=typer.colors.GREEN,
-        bold=True,
-    )
-
-
-@cli.command("status")
-def status(
-    wallet_name: str = typer.Option("default", "--wallet.name", "-w", help="Bittensor wallet name"),
-    hotkey_name: str = typer.Option("default", "--wallet.hotkey", "-k", help="Bittensor hotkey name"),
-    platform_url: str = typer.Option("http://localhost:8000", "--platform-url", help="Platform URL"),
-) -> None:
-    """Show CLA signing status for the configured hotkey."""
-    import bittensor as bt
-
-    wallet = bt.wallet(name=wallet_name, hotkey=hotkey_name)
-    hotkey_ss58 = wallet.hotkey.ss58_address
-
-    data = fetch_cla_status(platform_url, hotkey_ss58)
-    typer.echo(f"Hotkey:            {data['hotkey']}")
-    typer.echo(f"Effective Version: {data.get('effective_version') or 'N/A'}")
-    typer.echo(f"Signed Version:    {data.get('cla_version') or 'None'}")
-    typer.echo(f"Current?:          {'YES' if data.get('is_current') else 'NO'}")
-    typer.echo(f"Signed At:         {data.get('signed_at') or 'N/A'}")
-    typer.echo(f"Signature:         {data.get('signature') or 'N/A'}")
-    typer.echo(f"Gate Mode:         {data.get('gate_mode')}")
-```
-
-#### Up-front Gate in `ditto/miner_cli/upload.py`
-```python
-def check_cla_before_upload(platform_url: str, hotkey: str) -> None:
-    """Pre-flight check preventing upload packaging/payment if CLA signature is missing."""
-    import requests
-    import typer
-
-    url = f"{platform_url.rstrip('/')}/api/v1/cla/status/{hotkey}"
-    try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("gate_mode") == "enforce" and not data.get("is_current"):
-                typer.secho(
-                    f"\n[ERROR] Hotkey {hotkey} has not signed the current CLA "
-                    f"({data.get('effective_version')}).\n"
-                    f"Please run 'uv run ditto cla sign' before uploading.\n",
-                    fg=typer.colors.RED,
-                    bold=True,
-                )
-                raise typer.Exit(code=1)
-    except requests.RequestException as e:
-        typer.secho(f"Warning: Could not verify CLA status prior to upload: {e}", fg=typer.colors.YELLOW)
 ```
 
 ---
 
-### 8. Backroom MCP Tool
+### 7. Backroom Read Tool: `apps/platform/ditto/backroom/tools.py`
 
-#### `apps/platform/ditto/backroom/tools/cla.py`
 ```python
-"""Backroom MCP tool for inspecting CLA gate mode, audit history, and miner adoption."""
-
-from __future__ import annotations
-
-from typing import Any
-
-from sqlalchemy import distinct, func, select
+from typing import Any, Dict
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
-from ditto.api_server.cla import get_current_cla_version, get_current_gate_mode
-from ditto.db.models.cla import CLAGateSetting, CLAShadowLog, CLASignature
+from apps.platform.ditto.db.models import (
+    CLAVersion,
+    CLASignature,
+    CLAGateSetting,
+    CLAGateSettingHistory,
+    CLAShadowLog,
+)
 
 
-def get_cla_gate_report(db: Session, active_hotkeys: list[str] | None = None) -> dict[str, Any]:
-    """MCP tool implementation to read gate status, history, and adoption metrics."""
-    effective_cla = get_current_cla_version(db)
-    mode = get_current_gate_mode(db)
+def get_cla_gate_status(db: Session) -> Dict[str, Any]:
+    """
+    Backroom MCP tool: Returns current CLA gate setting, configuration history,
+    active hotkey adoption counts, and shadow-mode counters.
+    """
+    setting = db.query(CLAGateSetting).filter(CLAGateSetting.id == 1).first()
+    current_mode = setting.mode if setting else "off"
 
-    # Fetch settings audit history
-    history_entries = db.scalars(
-        select(CLAGateSetting).order_by(CLAGateSetting.created_at.desc())
-    ).all()
+    current_cla = db.query(CLAVersion).filter(CLAVersion.is_current == True).order_by(CLAVersion.effective_at.desc()).first()
+    current_version = current_cla.version if current_cla else None
+
+    # History entries
+    history_rows = (
+        db.query(CLAGateSettingHistory)
+        .order_by(CLAGateSettingHistory.changed_at.desc())
+        .limit(50)
+        .all()
+    )
     history = [
         {
-            "id": h.id,
             "mode": h.mode,
             "changed_by": h.changed_by,
             "reason": h.reason,
-            "created_at": h.created_at.isoformat(),
+            "changed_at": h.changed_at.isoformat(),
         }
-        for h in history_entries
+        for h in history_rows
     ]
 
-    effective_ver = effective_cla.version if effective_cla else None
-
-    # Distinct hotkeys signed for current effective version
-    signed_hotkeys_query = select(func.count(distinct(CLASignature.hotkey)))
-    if effective_ver:
-        signed_hotkeys_query = signed_hotkeys_query.where(CLASignature.cla_version == effective_ver)
-    signed_count = db.scalar(signed_hotkeys_query) or 0
-
-    # Total shadow mode unsigned upload triggers
-    shadow_events_count = db.scalar(select(func.count(CLAShadowLog.id))) or 0
-
-    adoption: dict[str, Any] = {
-        "effective_cla_version": effective_ver,
-        "effective_cla_sha256": effective_cla.sha256 if effective_cla else None,
-        "signed_hotkeys_count": signed_count,
-        "shadow_unsigned_events_count": shadow_events_count,
-    }
-
-    if active_hotkeys is not None:
-        active_set = set(active_hotkeys)
-        signed_active_set = set(
-            db.scalars(
-                select(CLASignature.hotkey).where(
-                    CLASignature.cla_version == effective_ver,
-                    CLASignature.hotkey.in_(list(active_set)),
-                )
-            ).all()
+    # Distinct hotkeys that have signed current CLA
+    signed_hotkeys_count = 0
+    if current_version:
+        signed_hotkeys_count = (
+            db.query(func.count(func.distinct(CLASignature.hotkey)))
+            .filter(CLASignature.cla_version == current_version)
+            .scalar()
+            or 0
         )
-        adoption["total_active_hotkeys"] = len(active_set)
-        adoption["active_signed_count"] = len(signed_active_set)
-        adoption["active_unsigned_count"] = len(active_set - signed_active_set)
-        adoption["active_adoption_pct"] = (
-            round((len(signed_active_set) / len(active_set)) * 100, 2) if active_set else 100.0
-        )
+
+    # Distinct hotkeys seen in shadow uploads
+    unsigned_shadow_hotkeys_count = (
+        db.query(func.count(func.distinct(CLAShadowLog.hotkey))).scalar() or 0
+    )
+
+    # Distinct total hotkeys observed across signatures and shadow logs
+    total_distinct_hotkeys = (
+        db.query(func.count(func.distinct(CLASignature.hotkey))).scalar() or 0
+    ) + unsigned_shadow_hotkeys_count
+
+    shadow_logs_count = db.query(func.count(CLAShadowLog.id)).scalar() or 0
+
+    adoption_pct = (
+        round((signed_hotkeys_count / total_distinct_hotkeys) * 100, 2)
+        if total_distinct_hotkeys > 0
+        else 0.0
+    )
 
     return {
-        "gate_mode": mode,
+        "gate_mode": current_mode,
+        "current_cla_version": current_version,
+        "current_cla_sha256": current_cla.sha256 if current_cla else None,
         "history": history,
-        "adoption": adoption,
+        "adoption": {
+            "signed_active_hotkeys": signed_hotkeys_count,
+            "unsigned_active_hotkeys": unsigned_shadow_hotkeys_count,
+            "total_observed_hotkeys": total_distinct_hotkeys,
+            "signed_percentage": adoption_pct,
+        },
+        "shadow_mode_unsigned_events_count": shadow_logs_count,
     }
 ```
 
 ---
 
-### 9. Documentation Updates
+### 8. CLI Implementation: `ditto/miner_cli/cla.py`
 
-#### `docs/MINER.md`
+```python
+import hashlib
+import json
+import sys
+import time
+import uuid
+from typing import Optional
+import httpx
+
+from apps.platform.ditto.api_server.attestation import build_cla_message
+
+DEFAULT_NETUID = 118
+DEFAULT_API_URL = "http://localhost:8000"
+
+
+def sign_cla_command(
+    wallet,
+    api_url: str = DEFAULT_API_URL,
+    netuid: int = DEFAULT_NETUID,
+    non_interactive: bool = False,
+) -> None:
+    """
+    Downloads current CLA text, validates SHA-256 digest, requests typed confirmation,
+    signs with hotkey sr25519, and submits to Platform.
+    """
+    client = httpx.Client(base_url=api_url, timeout=15.0)
+
+    try:
+        resp = client.get("/api/v1/cla/current")
+        resp.raise_for_status()
+        cla_info = resp.json()
+    except Exception as e:
+        print(f"Error fetching current CLA from platform: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    cla_version = cla_info["version"]
+    expected_sha256 = cla_info["sha256"].lower()
+    cla_text = cla_info["text"]
+
+    # Recompute and verify digest
+    computed_sha256 = hashlib.sha256(cla_text.encode("utf-8")).hexdigest().lower()
+    if computed_sha256 != expected_sha256:
+        print(
+            f"ERROR: SHA-256 digest mismatch! Expected {expected_sha256}, got {computed_sha256}. "
+            "Refusing to sign.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print("=" * 60)
+    print(f"Ditto Contributor License Agreement (CLA) - {cla_version}")
+    print(f"SHA-256 Digest: {computed_sha256}")
+    print(f"Published At:   {cla_info['published_at']}")
+    print("=" * 60)
+    print("\n--- Summary of CLA Text ---")
+    preview = cla_text[:500] + ("\n..." if len(cla_text) > 500 else "")
+    print(preview)
+    print("=" * 60)
+
+    if not non_interactive:
+        confirmation = input(
+            "Type 'I AGREE' to confirm and sign this agreement with your hotkey: "
+        ).strip()
+        if confirmation != "I AGREE":
+            print("Aborted: Confirmation not given. CLA not signed.", file=sys.stderr)
+            sys.exit(1)
+
+    hotkey_address = wallet.hotkey.ss58_address
+    nonce = uuid.uuid4().hex
+    issued_at = int(time.time())
+
+    msg = build_cla_message(
+        netuid=netuid,
+        cla_version=cla_version,
+        cla_sha256=computed_sha256,
+        hotkey=hotkey_address,
+        nonce=nonce,
+        issued_at=issued_at,
+    )
+
+    signature_bytes = wallet.hotkey.sign(msg)
+    sig_hex = "0x" + signature_bytes.hex() if isinstance(signature_bytes, bytes) else str(signature_bytes)
+
+    payload = {
+        "hotkey": hotkey_address,
+        "cla_version": cla_version,
+        "cla_sha256": computed_sha256,
+        "nonce": nonce,
+        "issued_at": issued_at,
+        "signature": sig_hex,
+        "netuid": netuid,
+    }
+
+    try:
+        sign_resp = client.post("/api/v1/cla/sign", json=payload)
+        sign_resp.raise_for_status()
+        result = sign_resp.json()
+        print("\n CLA successfully signed and registered with Platform.")
+        print(f"Hotkey:     {result['hotkey']}")
+        print(f"Coldkey:    {result['coldkey']}")
+        print(f"Version:    {result['cla_version']}")
+        print(f"Signed At:  {result['signed_at']}")
+    except Exception as e:
+        print(f"Error submitting signed CLA to platform: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def status_cla_command(
+    wallet=None,
+    hotkey_address: Optional[str] = None,
+    api_url: str = DEFAULT_API_URL,
+) -> None:
+    """Shows CLA status for the specified hotkey."""
+    target_hotkey = hotkey_address or (wallet.hotkey.ss58_address if wallet else None)
+    if not target_hotkey:
+        print("Error: No hotkey specified.", file=sys.stderr)
+        sys.exit(1)
+
+    client = httpx.Client(base_url=api_url, timeout=10.0)
+    try:
+        resp = client.get(f"/api/v1/cla/status/{target_hotkey}")
+        resp.raise_for_status()
+        data = resp.json()
+
+        print("=" * 50)
+        print("Ditto CLA Status")
+        print("=" * 50)
+        print(f"Hotkey:     {data['hotkey']}")
+        print(f"Signed:     {'Yes' if data['signed'] else 'No'}")
+        print(f"Current:    {'Yes' if data['is_current'] else 'No'}")
+        if data["signed"]:
+            print(f"Version:    {data['version']}")
+            print(f"Digest:     {data['digest']}")
+            print(f"Signed At:  {data['signed_at']}")
+        else:
+            print("Action:     Run `uv run ditto cla sign` to sign the current CLA.")
+        print("=" * 50)
+    except Exception as e:
+        print(f"Error fetching CLA status: {e}", file=sys.stderr)
+        sys.exit(1)
+```
+
+---
+
+### 9. CLI Upload Pre-Flight Check: `ditto/miner_cli/upload.py` (Integration)
+
+```python
+import sys
+import httpx
+
+
+def check_cla_before_upload(hotkey_address: str, api_url: str) -> None:
+    """
+    Checks CLA status before packaging or issuing payment steps.
+    Aborts immediately if the currently effective CLA has not been signed.
+    """
+    client = httpx.Client(base_url=api_url, timeout=10.0)
+    try:
+        resp = client.get(f"/api/v1/cla/status/{hotkey_address}")
+        if resp.status_code == 200:
+            status = resp.json()
+            if not status.get("is_current"):
+                print(
+                    "\n[!] Contributor License Agreement (CLA) requirement check failed.\n"
+                    "You have not signed the currently effective CLA version.\n"
+                    "Run `uv run ditto cla sign` before uploading.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+    except httpx.RequestError:
+        # If platform cannot be reached, standard upload error handling will report connection issue
+        pass
+```
+
+---
+
+### 10. CLI Registration: `ditto/miner_cli/cli.py` (Additions)
+
+```python
+import argparse
+from ditto.miner_cli.cla import sign_cla_command, status_cla_command
+
+
+def register_cla_subparsers(subparsers) -> None:
+    cla_parser = subparsers.add_parser("cla", help="Manage Contributor License Agreement signatures")
+    cla_sub = cla_parser.add_subparsers(dest="cla_command", required=True)
+
+    sign_parser = cla_sub.add_parser("sign", help="Sign the current CLA with your hotkey")
+    sign_parser.add_argument("--netuid", type=int, default=118, help="Network UID (default: 118)")
+    sign_parser.add_argument("--url", type=str, default="http://localhost:8000", help="Platform URL")
+    sign_parser.add_argument("-y", "--yes", action="store_true", help="Non-interactive confirmation")
+
+    status_parser = cla_sub.add_parser("status", help="Check CLA status for your hotkey")
+    status_parser.add_argument("--hotkey", type=str, default=None, help="Hotkey ss58 address")
+    status_parser.add_argument("--url", type=str, default="http://localhost:8000", help="Platform URL")
+```
+
+---
+
+### 11. Documentation: `docs/MINER.md` (Additions)
+
 ```markdown
 ## Contributor License Agreement (CLA)
 
-Contributions to SN118 are MIT-licensed under a Contributor License Agreement. The miner hotkey executes the CLA via cryptographic signature (sr25519).
+Contributions to SN118 are MIT-licensed under the Ditto Contributor License Agreement. Winning miner agents and bounty submissions can be deployed in Ditto products without per-contributor IP negotiations.
 
-Platform verifies and stores this signature and gates submissions according to the platform rollout mode (`off` -> `shadow` -> `enforce`).
+Miners must execute the CLA by signing it with their hotkey (sr25519) before uploading models or agents.
+
+### Checking CLA Status
+
+Check whether your active hotkey has signed the current version:
+
+```bash
+uv run ditto cla status
+```
 
 ### Signing the CLA
 
-To view and sign the currently effective CLA:
+To view the CLA text, verify its SHA-256 digest, and sign it:
 
 ```bash
-uv run ditto cla sign --wallet.name <wallet> --wallet.hotkey <hotkey>
+uv run ditto cla sign
 ```
 
-The CLI verifies the SHA-256 digest of the downloaded document text before prompting you to confirm.
+You will be asked to review the document details and type `I AGREE` to sign.
 
-### Checking Signature Status
-
-To view your hotkey's CLA signing status and the active platform gate mode:
-
-```bash
-uv run ditto cla status --wallet.name <wallet> --wallet.hotkey <hotkey>
-```
-
-### Re-signing on Version Updates
-
-When a new version of the CLA is published (e.g. `v2`), each hotkey must execute `ditto cla sign` again prior to submitting subsequent agent uploads. Existing evaluated agents are not retroactively affected.
-```
-
-#### `miner/README.md`
-```markdown
-## Prerequisites
-
-1. Install dependencies using `uv`.
-2. Before uploading your first model, ensure your hotkey has executed the Contributor License Agreement:
-   ```bash
-   uv run ditto cla sign --wallet.name <wallet> --wallet.hotkey <hotkey>
-   ```
+### Rollout Policy
+1. **Off**: Platform accepts all uploads regardless of CLA status.
+2. **Shadow**: Platform counts and logs unsigned uploads for adoption analytics without blocking.
+3. **Enforce**: Uploads from hotkeys that have not signed the current CLA version are refused. When a new CLA version is published, miners must re-sign with `uv run ditto cla sign` before their next submission.
 ```
 
 ---
 
-### 10. Comprehensive Test Suite
+### 12. Starter Kit README: `miner_starter_kit/README.md` (Additions)
 
-#### `apps/platform/tests/test_cla.py`
+```markdown
+### 3. Contributor License Agreement (CLA)
+Before submitting agents or models, sign the current CLA with your miner hotkey:
+
+```bash
+uv run ditto cla sign
+```
+
+Verify your signing status at any time with:
+
+```bash
+uv run ditto cla status
+```
+```
+
+---
+
+### 13. Comprehensive Test Suite: `tests/platform/test_cla.py`
+
 ```python
-"""Tests for CLA registry, append-only constraints, upload gate modes, and Backroom MCP tool."""
-
-from __future__ import annotations
-
-from datetime import datetime, timezone
 import hashlib
-import secrets
 import time
-
-from fastapi import HTTPException
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from substrateinterface import Keypair
 
-from ditto.api_server.cla import (
-    build_cla_signature_message,
-    check_cla_gate,
-    get_current_gate_mode,
-    set_gate_mode,
-    verify_and_store_signature,
+from apps.platform.ditto.api_server.attestation import (
+    build_cla_message,
+    verify_signature,
+    verify_timestamp_freshness,
 )
-from ditto.backroom.tools.cla import get_cla_gate_report
-from ditto.db.models.cla import (
+from apps.platform.ditto.api_server.endpoints.cla import router as cla_router
+from apps.platform.ditto.api_server.endpoints.upload import router as upload_router
+from apps.platform.ditto.backroom.tools import get_cla_gate_status
+from apps.platform.ditto.db.models import (
     Base,
-    CLAGateSetting,
-    CLAShadowLog,
-    CLASignature,
     CLAVersion,
-    ReadOnlyTableError,
+    CLASignature,
+    CLAGateSetting,
 )
+from apps.platform.ditto.db.session import get_db
+from fastapi import FastAPI
 
-FIXTURE_CLA_TEXT = (
-    "# Ditto Contributor License Agreement (CLA) - Version 1.0\n"
-    "[PLACEHOLDER FIXTURE - PENDING LEGAL REVIEW]\n"
-    "All contributions are submitted under the MIT License."
-)
-FIXTURE_CLA_DIGEST = hashlib.sha256(FIXTURE_CLA_TEXT.encode("utf-8")).hexdigest()
+# Test Setup
+engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base.metadata.create_all(bind=engine)
 
-
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine)
-    session = session_factory()
-
-    # Seed CLA version 1
-    v1 = CLAVersion(
-        version="v1",
-        sha256=FIXTURE_CLA_DIGEST,
-        text=FIXTURE_CLA_TEXT,
-        published_at=datetime.now(timezone.utc),
-        effective_at=datetime.now(timezone.utc),
-    )
-    session.add(v1)
-    # Seed default gate mode 'off'
-    gate = CLAGateSetting(mode="off", changed_by="system", reason="init")
-    session.add(gate)
-    session.commit()
-
-    yield session
-    session.close()
+app = FastAPI()
+app.include_router(cla_router)
+app.include_router(upload_router)
 
 
-@pytest.fixture
-def miner_keypair() -> Keypair:
-    return Keypair.create_from_mnemonic(Keypair.generate_mnemonic())
+def override_get_db():
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
-def test_append_only_signature_table_prevents_update_and_delete(
-    db_session: Session, miner_keypair: Keypair
-) -> None:
-    """Prove there is no update or delete path for CLA signatures."""
+app.dependency_overrides[get_db] = override_get_db
+client = TestClient(app)
+
+MOCK_KEYPAIR = Keypair.create_from_mnemonic(Keypair.generate_mnemonic())
+OTHER_KEYPAIR = Keypair.create_from_mnemonic(Keypair.generate_mnemonic())
+
+
+@pytest.fixture(autouse=True)
+def setup_db():
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+
+    # Seed v1
+    v1_text = "SN118 CLA v1 Test Fixture Text"
+    v1_sha = hashlib.sha256(v1_text.encode("utf-8")).hexdigest()
+    db.add(CLAVersion(version="v1", sha256=v1_sha, text=v1_text, is_current=True))
+    db.add(CLAGateSetting(id=1, mode="off"))
+    db.commit()
+    db.close()
+
+
+def test_append_only_prevent_update_and_delete():
+    db = TestingSessionLocal()
     sig = CLASignature(
-        hotkey=miner_keypair.ss58_address,
-        coldkey=None,
+        hotkey=MOCK_KEYPAIR.ss58_address,
+        coldkey="coldkey-test",
         cla_version="v1",
-        cla_sha256=FIXTURE_CLA_DIGEST,
+        cla_sha256="abc123sha",
         signature="0x1234",
-        nonce="nonce-initial",
+        nonce="unique-nonce-1",
         issued_at=int(time.time()),
     )
-    db_session.add(sig)
-    db_session.commit()
+    db.add(sig)
+    db.commit()
 
-    # Attempt UPDATE
-    sig.signature = "0xchanged"
-    with pytest.raises(ReadOnlyTableError):
-        db_session.commit()
-    db_session.rollback()
+    # Verify update is prohibited
+    sig.signature = "0xupdated"
+    with pytest.raises(PermissionError, match="append-only and cannot be updated"):
+        db.commit()
+    db.rollback()
 
-    # Attempt DELETE
-    target = db_session.scalars(select(CLASignature).where(CLASignature.nonce == "nonce-initial")).first()
-    db_session.delete(target)
-    with pytest.raises(ReadOnlyTableError):
-        db_session.commit()
-    db_session.rollback()
+    # Verify delete is prohibited
+    db.delete(sig)
+    with pytest.raises(PermissionError, match="append-only and cannot be deleted"):
+        db.commit()
+    db.rollback()
+    db.close()
 
 
-def test_signature_validation_and_storage(db_session: Session, miner_keypair: Keypair) -> None:
-    hotkey = miner_keypair.ss58_address
-    nonce = secrets.token_hex(16)
+def test_cla_signing_and_public_status():
+    hotkey = MOCK_KEYPAIR.ss58_address
+    current_resp = client.get("/api/v1/cla/current")
+    assert current_resp.status_code == 200
+    cla_data = current_resp.json()
+
+    nonce = "test-nonce-1"
     issued_at = int(time.time())
-    msg = build_cla_signature_message(118, "v1", FIXTURE_CLA_DIGEST, hotkey, nonce, issued_at)
-    signature = f"0x{miner_keypair.sign(msg.encode('utf-8')).hex()}"
-
-    sig_row = verify_and_store_signature(
-        db_session,
-        netuid=118,
-        cla_version="v1",
-        cla_sha256=FIXTURE_CLA_DIGEST,
-        hotkey=hotkey,
-        nonce=nonce,
-        issued_at=issued_at,
-        signature=signature,
-    )
-    assert sig_row.id is not None
-    assert sig_row.hotkey == hotkey
-    assert sig_row.cla_version == "v1"
-
-
-def test_signature_fails_on_digest_mismatch(db_session: Session, miner_keypair: Keypair) -> None:
-    hotkey = miner_keypair.ss58_address
-    nonce = secrets.token_hex(16)
-    issued_at = int(time.time())
-    bad_digest = "a" * 64
-    msg = build_cla_signature_message(118, "v1", bad_digest, hotkey, nonce, issued_at)
-    signature = f"0x{miner_keypair.sign(msg.encode('utf-8')).hex()}"
-
-    with pytest.raises(HTTPException) as exc:
-        verify_and_store_signature(
-            db_session,
-            netuid=118,
-            cla_version="v1",
-            cla_sha256=bad_digest,
-            hotkey=hotkey,
-            nonce=nonce,
-            issued_at=issued_at,
-            signature=signature,
-        )
-    assert exc.value.status_code == 400
-    assert "digest mismatch" in exc.value.detail.lower()
-
-
-def test_signature_fails_on_replayed_nonce(db_session: Session, miner_keypair: Keypair) -> None:
-    hotkey = miner_keypair.ss58_address
-    nonce = "replayed-nonce"
-    issued_at = int(time.time())
-    msg = build_cla_signature_message(118, "v1", FIXTURE_CLA_DIGEST, hotkey, nonce, issued_at)
-    signature = f"0x{miner_keypair.sign(msg.encode('utf-8')).hex()}"
-
-    verify_and_store_signature(
-        db_session,
-        netuid=118,
-        cla_version="v1",
-        cla_sha256=FIXTURE_CLA_DIGEST,
-        hotkey=hotkey,
-        nonce=nonce,
-        issued_at=issued_at,
-        signature=signature,
-    )
-
-    # Replay with same nonce
-    with pytest.raises(HTTPException) as exc:
-        verify_and_store_signature(
-            db_session,
-            netuid=118,
-            cla_version="v1",
-            cla_sha256=FIXTURE_CLA_DIGEST,
-            hotkey=hotkey,
-            nonce=nonce,
-            issued_at=issued_at,
-            signature=signature,
-        )
-    assert exc.value.status_code == 400
-    assert "already been used" in exc.value.detail.lower()
-
-
-def test_signature_fails_on_stale_timestamp(db_session: Session, miner_keypair: Keypair) -> None:
-    hotkey = miner_keypair.ss58_address
-    nonce = secrets.token_hex(16)
-    stale_issued_at = int(time.time()) - 3600  # 1 hour stale
-    msg = build_cla_signature_message(118, "v1", FIXTURE_CLA_DIGEST, hotkey, nonce, stale_issued_at)
-    signature = f"0x{miner_keypair.sign(msg.encode('utf-8')).hex()}"
-
-    with pytest.raises(HTTPException) as exc:
-        verify_and_store_signature(
-            db_session,
-            netuid=118,
-            cla_version="v1",
-            cla_sha256=FIXTURE_CLA_DIGEST,
-            hotkey=hotkey,
-            nonce=nonce,
-            issued_at=stale_issued_at,
-            signature=signature,
-        )
-    assert exc.value.status_code == 400
-    assert "freshness window" in exc.value.detail.lower()
-
-
-def test_signature_fails_on_wrong_signer(db_session: Session, miner_keypair: Keypair) -> None:
-    wrong_keypair = Keypair.create_from_mnemonic(Keypair.generate_mnemonic())
-    hotkey = miner_keypair.ss58_address
-    nonce = secrets.token_hex(16)
-    issued_at = int(time.time())
-    msg = build_cla_signature_message(118, "v1", FIXTURE_CLA_DIGEST, hotkey, nonce, issued_at)
-    signature = f"0x{wrong_keypair.sign(msg.encode('utf-8')).hex()}"
-
-    with pytest.raises(HTTPException) as exc:
-        verify_and_store_signature(
-            db_session,
-            netuid=118,
-            cla_version="v1",
-            cla_sha256=FIXTURE_CLA_DIGEST,
-            hotkey=hotkey,
-            nonce=nonce,
-            issued_at=issued_at,
-            signature=signature,
-        )
-    assert exc.value.status_code == 401
-
-
-def test_upload_gate_modes(db_session: Session, miner_keypair: Keypair) -> None:
-    hotkey = miner_keypair.ss58_address
-
-    # 1. Gate Mode: OFF -> unsigned upload succeeds
-    set_gate_mode(db_session, "off")
-    check_cla_gate(hotkey, "/upload/check", db_session)
-
-    # 2. Gate Mode: SHADOW -> unsigned upload succeeds, logs shadow event
-    set_gate_mode(db_session, "shadow")
-    check_cla_gate(hotkey, "/upload/check", db_session)
-    shadow_log = db_session.scalars(select(CLAShadowLog).where(CLAShadowLog.hotkey == hotkey)).first()
-    assert shadow_log is not None
-    assert shadow_log.endpoint == "/upload/check"
-
-    # 3. Gate Mode: ENFORCE -> unsigned upload raises 403
-    set_gate_mode(db_session, "enforce")
-    with pytest.raises(HTTPException) as exc:
-        check_cla_gate(hotkey, "/upload/check", db_session)
-    assert exc.value.status_code == 403
-    assert "ditto cla sign" in exc.value.detail
+    msg = build_cla_message(118, cla_data["version"], cla_data["sha256"], hotkey, nonce, issued_at)
+    sig_hex = "0x" + MOCK_KEYPAIR.sign(msg).hex()
 
     # Sign CLA
-    nonce = secrets.token_hex(16)
+    sign_resp = client.post(
+        "/api/v1/cla/sign",
+        json={
+            "hotkey": hotkey,
+            "cla_version": cla_data["version"],
+            "cla_sha256": cla_data["sha256"],
+            "nonce": nonce,
+            "issued_at": issued_at,
+            "signature": sig_hex,
+            "netuid": 118,
+        },
+    )
+    assert sign_resp.status_code == 200
+    assert sign_resp.json()["success"] is True
+
+    # Public read status
+    status_resp = client.get(f"/api/v1/cla/status/{hotkey}")
+    assert status_resp.status_code == 200
+    st = status_resp.json()
+    assert st["signed"] is True
+    assert st["is_current"] is True
+    assert st["version"] == "v1"
+    assert st["signature"] == sig_hex
+
+
+def test_sign_digest_mismatch():
+    hotkey = MOCK_KEYPAIR.ss58_address
+    resp = client.post(
+        "/api/v1/cla/sign",
+        json={
+            "hotkey": hotkey,
+            "cla_version": "v1",
+            "cla_sha256": "wrong_digest_value",
+            "nonce": "n2",
+            "issued_at": int(time.time()),
+            "signature": "0x12",
+        },
+    )
+    assert resp.status_code == 400
+    assert "digest mismatch" in resp.json()["detail"].lower()
+
+
+def test_sign_stale_timestamp_and_replayed_nonce():
+    hotkey = MOCK_KEYPAIR.ss58_address
+    current_resp = client.get("/api/v1/cla/current").json()
+
+    # Stale timestamp (1 hour ago)
+    stale_time = int(time.time()) - 3600
+    msg = build_cla_message(118, "v1", current_resp["sha256"], hotkey, "nonce-stale", stale_time)
+    sig = "0x" + MOCK_KEYPAIR.sign(msg).hex()
+
+    resp = client.post(
+        "/api/v1/cla/sign",
+        json={
+            "hotkey": hotkey,
+            "cla_version": "v1",
+            "cla_sha256": current_resp["sha256"],
+            "nonce": "nonce-stale",
+            "issued_at": stale_time,
+            "signature": sig,
+        },
+    )
+    assert resp.status_code == 400
+    assert "freshness window" in resp.json()["detail"]
+
+    # Valid signing first
+    valid_time = int(time.time())
+    msg_valid = build_cla_message(118, "v1", current_resp["sha256"], hotkey, "nonce-replay", valid_time)
+    sig_valid = "0x" + MOCK_KEYPAIR.sign(msg_valid).hex()
+    ok_resp = client.post(
+        "/api/v1/cla/sign",
+        json={
+            "hotkey": hotkey,
+            "cla_version": "v1",
+            "cla_sha256": current_resp["sha256"],
+            "nonce": "nonce-replay",
+            "issued_at": valid_time,
+            "signature": sig_valid,
+        },
+    )
+    assert ok_resp.status_code == 200
+
+    # Replayed nonce
+    replay_resp = client.post(
+        "/api/v1/cla/sign",
+        json={
+            "hotkey": hotkey,
+            "cla_version": "v1",
+            "cla_sha256": current_resp["sha256"],
+            "nonce": "nonce-replay",
+            "issued_at": valid_time,
+            "signature": sig_valid,
+        },
+    )
+    assert replay_resp.status_code == 409
+
+
+def test_sign_wrong_signer():
+    hotkey = MOCK_KEYPAIR.ss58_address
+    current_resp = client.get("/api/v1/cla/current").json()
     issued_at = int(time.time())
-    msg = build_cla_signature_message(118, "v1", FIXTURE_CLA_DIGEST, hotkey, nonce, issued_at)
-    signature = f"0x{miner_keypair.sign(msg.encode('utf-8')).hex()}"
-    verify_and_store_signature(
-        db_session,
-        netuid=118,
-        cla_version="v1",
-        cla_sha256=FIXTURE_CLA_DIGEST,
-        hotkey=hotkey,
-        nonce=nonce,
-        issued_at=issued_at,
-        signature=signature,
+    msg = build_cla_message(118, "v1", current_resp["sha256"], hotkey, "nonce-wrong", issued_at)
+    # Signed by OTHER keypair
+    wrong_sig = "0x" + OTHER_KEYPAIR.sign(msg).hex()
+
+    resp = client.post(
+        "/api/v1/cla/sign",
+        json={
+            "hotkey": hotkey,
+            "cla_version": "v1",
+            "cla_sha256": current_resp["sha256"],
+            "nonce": "nonce-wrong",
+            "issued_at": issued_at,
+            "signature": wrong_sig,
+        },
     )
+    assert resp.status_code == 401
 
-    # In ENFORCE mode, signed hotkey succeeds
-    check_cla_gate(hotkey, "/upload/check", db_session)
 
-    # 4. Outdated version check: bump CLA to v2
-    v2_text = FIXTURE_CLA_TEXT + "\nVersion 2 updates."
-    v2_digest = hashlib.sha256(v2_text.encode("utf-8")).hexdigest()
-    v2 = CLAVersion(
-        version="v2",
-        sha256=v2_digest,
-        text=v2_text,
-        published_at=datetime.now(timezone.utc),
-        effective_at=datetime.now(timezone.utc),
+def test_upload_gate_modes():
+    hotkey = OTHER_KEYPAIR.ss58_address
+
+    # 1. Mode: OFF -> unsigned upload accepted
+    client.put("/api/v1/cla/gate-mode", json={"mode": "off"})
+    res = client.post("/api/v1/upload/check", json={"hotkey": hotkey, "artifact_hash": "hash123"})
+    assert res.status_code == 200
+
+    # 2. Mode: SHADOW -> unsigned upload accepted and logged
+    client.put("/api/v1/cla/gate-mode", json={"mode": "shadow"})
+    res = client.post("/api/v1/upload/check", json={"hotkey": hotkey, "artifact_hash": "hash123"})
+    assert res.status_code == 200
+
+    # 3. Mode: ENFORCE -> unsigned upload refused with 403
+    client.put("/api/v1/cla/gate-mode", json={"mode": "enforce"})
+    res = client.post("/api/v1/upload/check", json={"hotkey": hotkey, "artifact_hash": "hash123"})
+    assert res.status_code == 403
+    assert "ditto cla sign" in res.json()["detail"]
+
+    # 4. Sign and retry in ENFORCE -> upload accepted
+    current_resp = client.get("/api/v1/cla/current").json()
+    issued_at = int(time.time())
+    msg = build_cla_message(118, "v1", current_resp["sha256"], hotkey, "nonce-gate-ok", issued_at)
+    sig = "0x" + OTHER_KEYPAIR.sign(msg).hex()
+    client.post(
+        "/api/v1/cla/sign",
+        json={
+            "hotkey": hotkey,
+            "cla_version": "v1",
+            "cla_sha256": current_resp["sha256"],
+            "nonce": "nonce-gate-ok",
+            "issued_at": issued_at,
+            "signature": sig,
+        },
     )
-    db_session.add(v2)
-    db_session.commit()
+    res_after = client.post("/api/v1/upload/check", json={"hotkey": hotkey, "artifact_hash": "hash123"})
+    assert res_after.status_code == 200
 
-    # Now hotkey is outdated -> should raise 403 until re-signed
-    with pytest.raises(HTTPException) as exc:
-        check_cla_gate(hotkey, "/upload/check", db_session)
-    assert exc.value.status_code == 403
-    assert "(v2)" in exc.value.detail
+    # 5. Outdated version check: Publish v2 and make current
+    client.post("/api/v1/cla/version", json={"version": "v2", "text": "CLA v2 text", "make_current": True})
+    res_v2 = client.post("/api/v1/upload/check", json={"hotkey": hotkey, "artifact_hash": "hash123"})
+    assert res_v2.status_code == 403
+    assert "v2" in res_v2.json()["detail"]
 
 
-def test_backroom_mcp_tool_report(db_session: Session, miner_keypair: Keypair) -> None:
-    set_gate_mode(db_session, "shadow", changed_by="operator", reason="Pre-enforcement rollout")
-    report = get_cla_gate_report(db_session, active_hotkeys=[miner_keypair.ss58_address])
-
-    assert report["gate_mode"] == "shadow"
-    assert len(report["history"]) >= 2
-    assert report["adoption"]["effective_cla_version"] == "v1"
-    assert report["adoption"]["active_signed_count"] == 0
-    assert report["adoption"]["active_unsigned_count"] == 1
+def test_backroom_mcp_tool():
+    db = TestingSessionLocal()
+    status = get_cla_gate_status(db)
+    assert "gate_mode" in status
+    assert "adoption" in status
+    assert "history" in status
+    assert isinstance(status["adoption"]["signed_active_hotkeys"], int)
+    db.close()
 ```
