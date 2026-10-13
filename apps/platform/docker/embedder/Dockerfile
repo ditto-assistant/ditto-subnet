@@ -17,9 +17,13 @@
 # TEI base pinned to cpu-1.8.2+: fixes an Intel-MKL crash on AMD hosts (TEI issues
 # #636 / #667) that also affects a Qwen3 build; a scale-to-zero cold start can land
 # on any CPU, so an older tag would risk a crash-loop.
+#
+# Both bases are digest-pinned (multi-arch index digests) so a rebuild cannot
+# silently pick up repointed tag bytes; Dependabot (`docker` on this directory)
+# proposes digest and tag updates for review.
 
 # --- stage 1: fetch the weights with the HF CLI (not present in the TEI image) ---
-FROM python:3.11-slim AS fetch
+FROM python:3.11-slim@sha256:0dd364ba7e10242f07755449e3a3d0e35f9efd987952737b90def6709ab0c5ce AS fetch
 
 ARG MODEL_ID=jinaai/jina-embeddings-v2-base-code
 ARG MODEL_REVISION=main
@@ -34,7 +38,7 @@ RUN huggingface-cli download "$MODEL_ID" \
     --local-dir-use-symlinks False
 
 # --- stage 2: the TEI runtime with the model already on disk ---
-FROM ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3
+FROM ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07
 
 COPY --from=fetch /model /model
 

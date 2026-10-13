@@ -9735,10 +9735,10 @@ class ArtifactFetchAudit(Base):
     the question this column answers is "which door did they come through"."""
 
     requester_kind: Mapped[str] = mapped_column(Text, nullable=False)
-    """``validator`` | ``screener`` | ``admin`` | ``public``."""
+    """``validator`` | ``screener`` | ``admin`` | ``public`` | ``miner``."""
 
     requester_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    """Hotkey (validator/screener) or admin actor. NULL only for ``public``."""
+    """Hotkey (validator/screener/miner) or admin actor. NULL only for ``public``."""
 
     requester_instance_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Screener worker instance within the shared-hotkey fleet, when known.
@@ -9773,7 +9773,7 @@ class ArtifactFetchAudit(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "requester_kind IN ('validator', 'screener', 'admin', 'public')",
+            "requester_kind IN ('validator', 'screener', 'admin', 'public', 'miner')",
             name="artifact_fetch_audit_requester_kind_check",
         ),
         CheckConstraint(

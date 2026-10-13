@@ -9,12 +9,13 @@ import secrets
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from urllib.parse import urlencode
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ditto.api_server.dependencies import get_session
+from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.miner_auth import (
     _network_for_command,
     _origin,
@@ -23,6 +24,7 @@ from ditto.api_server.endpoints.miner_auth import (
     resolve_miner_session,
 )
 from ditto.api_server.endpoints.miner_me import _handle_for_hotkey, miner_commands
+from ditto.api_server.miner_artifact import prepare_owned_artifact_download
 from ditto.api_server.miner_avatar import public_avatar_path
 from ditto.api_server.miner_session import (
     ALL_SCOPES,
@@ -42,7 +44,9 @@ from ditto.api_server.miner_session import (
     validate_redirect_uri,
 )
 from ditto.api_server.name_claim import expected_netuid
+from ditto.api_server.storage import S3StorageClient
 from ditto.db.models import AthReview
+from ditto.db.queries.artifact_fetch_audit import ENDPOINT_MINER_MCP_ARTIFACT
 from ditto.db.queries.miner_avatars import get_miner_avatar
 from ditto.db.queries.miner_sessions import (
     MinerGrantConflictError,
@@ -65,6 +69,7 @@ from ditto.db.queries.name_claims import active_handle_claims
 
 router = APIRouter(tags=["miner-mcp"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+StorageDep = Annotated[S3StorageClient, Depends(get_storage_client)]
 
 MCP_NAME = "SN118 Miner"
 MCP_VERSION = "1.0.0"
@@ -416,7 +421,20 @@ def _tools() -> list[dict[str, Any]]:
                 "additionalProperties": False,
             },
         ),
-        _tool("list_my_submissions", "List this hotkey's submissions.", empty),
+        _tool(
+            "list_my_submissions", "List this hotkey's submissions and versions.", empty
+        ),
+        _tool(
+            "get_my_submission_artifact",
+            "Create a private five-minute download link for one of this miner's "
+            "original submissions, including rejected or held submissions.",
+            {
+                "type": "object",
+                "properties": {"agent_id": {"type": "string", "format": "uuid"}},
+                "required": ["agent_id"],
+                "additionalProperties": False,
+            },
+        ),
         _tool(
             "get_my_harness_logs",
             "Return validator-reported harness diagnostics for one of this "
@@ -627,6 +645,7 @@ async def _call_tool(
             {
                 "agent_id": str(agent.agent_id),
                 "name": agent.name,
+                "version": agent.version,
                 "status": str(agent.status),
                 "created_at": agent.created_at.isoformat(),
             }
@@ -681,7 +700,9 @@ async def miner_mcp_probe() -> Response:
 
 
 @router.post("/mcp")
-async def miner_mcp(request: Request, session: SessionDep) -> Response:
+async def miner_mcp(
+    request: Request, session: SessionDep, storage: StorageDep
+) -> Response:
     if not (request.headers.get("authorization") or "").lower().startswith("bearer "):
         return Response(
             status_code=401,
@@ -726,8 +747,25 @@ async def miner_mcp(request: Request, session: SessionDep) -> Response:
         raw_args = params.get("arguments")
         arguments = raw_args if isinstance(raw_args, dict) else {}
         try:
-            async with session.begin():
-                result = await _call_tool(request, session, name, arguments)
+            if name == "get_my_submission_artifact":
+                try:
+                    agent_id = UUID(str(arguments.get("agent_id") or ""))
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=400, detail="agent_id is not a UUID"
+                    ) from exc
+                # This read owns its auth transaction and audits after it commits.
+                artifact = await prepare_owned_artifact_download(
+                    request,
+                    session,
+                    storage,
+                    agent_id=agent_id,
+                    endpoint=ENDPOINT_MINER_MCP_ARTIFACT,
+                )
+                result = artifact.model_dump(mode="json")
+            else:
+                async with session.begin():
+                    result = await _call_tool(request, session, name, arguments)
         except HTTPException as exc:
             return _json(
                 _rpc_result(

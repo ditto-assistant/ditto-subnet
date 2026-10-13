@@ -4510,6 +4510,23 @@ export interface paths {
         patch: operations["update_me_api_v1_me_patch"];
         trace?: never;
     };
+    "/api/v1/me/agents/{agent_id}/artifact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Artifact */
+        get: operations["my_artifact_api_v1_me_agents__agent_id__artifact_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/agents/{agent_id}/gate-notes": {
         parameters: {
             query?: never;
@@ -23042,6 +23059,28 @@ export interface components {
             confirmation_digest: string;
             envelope: components["schemas"]["ManualEnvelope"];
         };
+        /**
+         * MinerArtifactDownload
+         * @description A private download of the signed-in miner's original submission.
+         */
+        MinerArtifactDownload: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Download Url */
+            download_url: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Sha256 */
+            sha256: string;
+            /** Version */
+            version?: number | null;
+        };
         /** MinerAvatarClearRequest */
         MinerAvatarClearRequest: {
             /**
@@ -27387,6 +27426,8 @@ export interface components {
             name_handle?: components["schemas"]["PublicNameHandle"] | null;
             /** Status */
             status: string;
+            /** Version */
+            version?: number | null;
         };
         /**
          * PublicModelUse
@@ -46021,6 +46062,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MinerMeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_artifact_api_v1_me_agents__agent_id__artifact_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerArtifactDownload"];
                 };
             };
             /** @description Validation Error */

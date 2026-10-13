@@ -445,6 +445,12 @@ async def test_null_sha_historical_clear_replay_rehashes_at_claim(
         assert storage.presigned_get_url.await_count == 1  # type: ignore[attr-defined]
 
 
+# One timestamp per test session: the lease evidence digest is recomputed at
+# schedule, claim and report time, so a per-call clock read makes the digests
+# disagree whenever a second boundary falls between those calls.
+_PACKET_OBSERVED_AT = int(datetime.now(UTC).timestamp())
+
+
 def _packet(attempt_id, sha: str) -> ScoredRuntimeEvidenceLease:
     revision = "a" * 40
     keys = ("SAFE_KEY",)
@@ -462,7 +468,7 @@ def _packet(attempt_id, sha: str) -> ScoredRuntimeEvidenceLease:
         scorer_env_sha256=digest,
         injected_keys=keys,
         validator_count=3,
-        observed_at=int(datetime.now(UTC).timestamp()),
+        observed_at=_PACKET_OBSERVED_AT,
     )
 
 
