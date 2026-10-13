@@ -21,7 +21,11 @@ from ditto.api_models.contributor_identity import (
     github_link_message,
     github_unlink_message,
 )
-from ditto.api_server.github_link import GithubLinkClient, GithubLinkConfig
+from ditto.api_server.github_link import (
+    GithubLinkClient,
+    GithubLinkConfig,
+    GithubLinkRejected,
+)
 from ditto.chain.models import BlockInfo
 from ditto.db.models import (
     MinerGithubActionNonce,
@@ -604,6 +608,46 @@ async def test_bounty_guard_refuses_false_logins_and_never_selects_payee(
     provider.user_id = 200
     with pytest.raises(BountyIdentityRejected, match="renamed or reassigned"):
         await verify(provider.login)
+    app.state.github_link.public_identity = AsyncMock(
+        side_effect=GithubLinkRejected("fixture provider unavailable")
+    )
+    with pytest.raises(BountyIdentityRejected, match="provider unavailable") as caught:
+        await verify(provider.login)
+    assert isinstance(caught.value.__cause__, GithubLinkRejected)
+
+
+@pytest.mark.parametrize("failure", ["origin", "binding", "token", "decision"])
+async def test_browser_consent_failures_provide_html_recovery(
+    app, client, session_maker, failure
+):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    started, _, consent = await browser_flow(client, token, accept=False)
+    origin = "http://localhost"
+    decision = "accept"
+    expected = 403
+    if failure == "origin":
+        origin = "https://untrusted.invalid"
+    elif failure == "binding":
+        client.cookies.clear()
+    elif failure == "token":
+        consent, expected = "x" * 43, 409
+    else:
+        decision, expected = "invalid", 400
+    response = await client.post(
+        "/api/v1/miner-auth/github/accept",
+        data={
+            "attempt_id": started["attempt_id"],
+            "accept_token": consent,
+            "decision": decision,
+        },
+        headers={"origin": origin},
+    )
+    assert response.status_code == expected
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["cache-control"] == "no-store"
+    assert "Start a new link from the CLI" in response.text
 
 
 async def test_concurrent_starts_cannot_exceed_five_pending_attempts(

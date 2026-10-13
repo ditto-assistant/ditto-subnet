@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from ditto.api_server.cla import ClaConsentRequired, evaluate_cla_gate
+from ditto.api_server.github_link import GithubLinkRejected
 from ditto.db.queries.contributor_identity import (
     active_github_link,
     lock_identity_writes,
@@ -73,7 +74,10 @@ async def prepare_bounty_identity(
             link.github_user_id,
             link.github_login,
         )
-    identity = await github.public_identity(recorded_login)
+    try:
+        identity = await github.public_identity(recorded_login)
+    except GithubLinkRejected as exc:
+        raise BountyIdentityRejected(str(exc)) from exc
     if (
         identity.user_id != user_id
         or identity.login.casefold() != github_login.casefold()

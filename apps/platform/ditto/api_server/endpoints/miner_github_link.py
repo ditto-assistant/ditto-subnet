@@ -385,13 +385,21 @@ async def accept(
 ) -> Response:
     client = _client(request)
     if request.headers.get("origin") != client.config.origin:
-        raise HTTPException(403, "same-origin consent is required")
+        return _page(
+            "Consent failed",
+            "<p>Start a new link from the CLI in this browser.</p>",
+            status=403,
+        )
     async with session.begin():
         attempt = await session.get(
             MinerGithubLinkAttempt, attempt_id, with_for_update=True
         )
         if attempt is None or not _has_binding(request, attempt):
-            raise HTTPException(403, "browser consent does not match this attempt")
+            return _page(
+                "Consent failed",
+                "<p>Start a new link from the CLI in this browser.</p>",
+                status=403,
+            )
         _expire(attempt)
         if (
             attempt.status != "identity_verified"
@@ -400,9 +408,17 @@ async def accept(
                 hash_state(accept_token), attempt.accept_token_hash
             )
         ):
-            raise HTTPException(409, "consent is expired, invalid, or already used")
+            return _page(
+                "Consent expired or invalid",
+                "<p>Start a new link from the CLI.</p>",
+                status=409,
+            )
         if decision not in ("accept", "cancel"):
-            raise HTTPException(400, "unknown consent decision")
+            return _page(
+                "Consent failed",
+                "<p>Start a new link from the CLI and choose Approve or Cancel.</p>",
+                status=400,
+            )
         attempt.accept_token_hash = None
         attempt.status = "accepted" if decision == "accept" else "failed"
         attempt.error = (
