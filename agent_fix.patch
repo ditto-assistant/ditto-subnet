@@ -1,14 +1,222 @@
-An error occurred while executing the tool: System.InvalidOperationException: Invalid state, expected this.runningTask to be null, but was not null.
-   at System.CommandLine.Rendering.TerminalStreamOutput.<StartExecutingTask>g__StartTask|6_0(Func`1 task)
-   at System.CommandLine.Rendering.TerminalStreamOutput.StartExecutingTask(Func`1 task)
-   at System.CommandLine.Rendering.TerminalStreamOutput.Write(Byte[] buffer, Int32 offset, Int32 count)
-   at System.IO.StreamWriter.Flush(Boolean flushStream, Boolean flushEncoder)
-   at System.IO.StreamWriter.Write(Char[] buffer, Int32 index, Int32 count)
-   at System.IO.TextWriter.SyncTextWriter.Write(Char[] buffer, Int32 index, Int32 count)
-   at System.IO.TextWriter.Write(String value)
-   at System.IO.TextWriter.SyncTextWriter.Write(String value)
-   at System.Console.Write(String value)
-   at AgentInterface.Cli.ExecuteTool(CommandLineArgs args) in /home/runner/work/agent-cli/agent-cli/AgentInterface/Cli.cs:line 279
-   at AgentInterface.Cli.Run(CommandLineArgs args) in /home/runner/work/agent-cli/agent-cli/AgentInterface/Cli.cs:line 97
-   at AgentInterface.Program.Main(String[] args) in /home/runner/work/agent-cli/agent-cli/AgentInterface/Program.cs:line 92
-   at AgentInterface.Program.<Main>(String[] args)
+An inspection of the codebase is required before generating the solution. Since interactive shell tools are not directly called here, let's examine existing patterns and files in the repository:
+- `apps/platform/ditto/api_server/attestation.py`
+- `apps/platform/ditto/api_server/endpoints/upload.py`
+- `ditto/miner_cli/name_claim.py` and `miner_avatar.py`
+- alembic migrations under `apps/platform`
+- Backroom MCP tools under `apps/platform` or similar
+
+Let's locate where these files are. Note that in this assistant mode, we can inspect or write the code. Wait, can I execute bash tools? I am in non-tool mode or tool mode? Let's check if tools are available: No tools are provided in the environment (system prompt does not provide tool definitions, just "You are an expert autonomous software engineer... Provide valid, clean code fixes. Reply ONLY with the code changes or implementation needed to resolve the issue. No conversational filler.").
+
+Wait! Let me double check if I have tools or if I must output code diffs/files directly.
+The system prompt only has `SPECIAL INSTRUCTION: think silently if needed. EFFORT LEVEL: 0.50.`. There are no tool schemas provided. So I must directly provide the complete and correct code changes / files.
+
+Wait, let's carefully review the exact paths and conventions mentioned in the prompt:
+1. `docs/legal/CLA-v1.md`
+2. `ditto/miner_cli/name_claim.py`, `ditto/miner_cli/miner_avatar.py` -> so CLI is in `ditto/miner_cli/`
+3. `apps/platform/ditto/api_server/attestation.py`
+4. `apps/platform/ditto/api_server/endpoints/upload.py`
+5. Alembic migrations in platform
+6. Backroom MCP tool
+7. `docs/MINER.md`, miner starter kit README
+
+Let's deduce the architecture and structure:
+
+Signed action format:
+In `ditto/miner_cli/name_claim.py` and `miner_avatar.py`:
+Payload format specified:
+```
+ditto-cla:v1:<netuid>:<cla_version>:<cla_sha256>:<hotkey>:<nonce>:<issued_at>
+```
+Let's see: `issued_at` is an ISO timestamp or unix epoch?
+Let's check `attestation.py` or standard ditto signed-action formats:
+Typically in ditto:
+`nonce = uuid.uuid4().hex` or random hex string.
+`issued_at = int(time.time())` or ISO8601 string.
+Wait! Let's check how `name_claim` or `miner_avatar` formats their payload.
+In similar ditto implementations:
+Usually:
+`f"ditto-name:v1:{netuid}:{hotkey}:{name}:{nonce}:{issued_at}"` or `issued_at = int(time.time())` or ISO format `datetime.now(timezone.utc).isoformat()`.
+Wait, let's see how `attestation.py` does signature verification:
+Usually `verify_signature(message: bytes | str, signature: str, ss58_address: str) -> bool` or similar using `substrateinterface.Keypair(ss58_address=..., crypto_type=KeypairType.SR25519)`.
+And freshness window: `abs(now - issued_at) <= FRESHNESS_WINDOW` (e.g. 300s or 600s).
+
+Let's check the database models and migrations:
+Platform uses SQLAlchemy with Alembic.
+Models are likely in `apps/platform/ditto/db/models.py` or `apps/platform/ditto/api_server/models.py` or `apps/platform/ditto/models/`.
+Let's look closely at `apps/platform/ditto/api_server/endpoints/upload.py`:
+`POST /api/v1/upload/check`
+`POST /api/v1/upload/agent`
+And we need:
+- CLA version registry table: e.g. `cla_versions` with columns:
+  - `version` (str, primary key)
+  - `sha256` (str, not null)
+  - `published_at` (datetime, not null)
+  - `effective_at` (datetime, not null)
+  - `created_at` (datetime)
+- CLA signatures append-only table: e.g. `cla_signatures` with columns:
+  - `id` (int/uuid pk)
+  - `hotkey` (str, not null, indexed)
+  - `coldkey` (str, nullable/not null)
+  - `cla_version` (str, foreign key to cla_versions.version)
+  - `cla_sha256` (str, not null)
+  - `signature` (str, not null)
+  - `nonce` (str, not null, unique)
+  - `issued_at` (datetime or int)
+  - `signed_at` (datetime, default now)
+Wait, the prompt says:
+"Tests prove there is no update or delete path."
+In PostgreSQL / SQLAlchemy, how can an append-only table be enforced?
+A trigger on UPDATE or DELETE that raises an exception:
+`BEFORE UPDATE OR DELETE ON cla_signatures FOR EACH ROW EXECUTE FUNCTION prevent_update_or_delete();` or in SQLAlchemy ORM event listener / database trigger.
+A DB trigger in the migration ensures at the database level that UPDATE or DELETE raises an exception!
+For SQLite (if tests use sqlite):
+`CREATE TRIGGER prevent_cla_signatures_update BEFORE UPDATE ON cla_signatures BEGIN SELECT RAISE(ABORT, 'cla_signatures is append-only'); END;`
+`CREATE TRIGGER prevent_cla_signatures_delete BEFORE DELETE ON cla_signatures BEGIN SELECT RAISE(ABORT, 'cla_signatures is append-only'); END;`
+For Postgres:
+`CREATE OR REPLACE FUNCTION cla_signatures_prevent_update_or_delete() RETURNS trigger AS ...`
+If we handle both or use an ORM before_update/before_delete listener plus DB trigger, it ensures test suite passes whether running on SQLite or Postgres!
+
+Let's check the Platform setting with three modes:
+`cla_gate_mode` in settings/config:
+Modes: `off`, `shadow`, `enforce`. Start in `off`.
+Setting history:
+"Make the setting and its history readable through a Backroom MCP tool, along with the counts of signed and unsigned active hotkeys, so operators can watch adoption before enforcing."
+Wait, setting and its history:
+Is there a settings table or settings history table? E.g., `platform_settings` / `cla_gate_history` or similar?
+Or a table `cla_gate_settings_history` / `platform_config`?
+Let's see: "Make the setting and its history readable through a Backroom MCP tool, along with the counts of signed and unsigned active hotkeys, so operators can watch adoption before enforcing."
+If we store gate mode changes in a table (e.g. `cla_gate_settings`: id, mode, changed_at, changed_by, reason) or if there's an existing configuration table, or both:
+A table `cla_gate_settings` / `cla_gate_history`:
+columns: `id`, `mode`, `changed_at`, `notes`/`changed_by`.
+Initial row in migration: mode='off', changed_at=now.
+And a setting in config/env (e.g. `CLA_GATE_MODE` default "off") or reading from db with fallback to env.
+
+Let's check the endpoints:
+1. `GET /api/v1/cla/current`: returns currently effective CLA version info:
+   `{ "version": "v1", "sha256": "...", "text": "...", "published_at": "...", "effective_at": "..." }`
+   Wait, the prompt says:
+   "1. Versioned, pinned text. The CLA lives at docs/legal/CLA-v<N>.md. Platform holds a registry of {version, sha256, published_at, effective_at}. The CLI downloads the text, recomputes the SHA-256, and refuses to sign on a mismatch."
+   "2. ditto cla sign ... Follow the existing signed-action format ... ditto cla status, which shows the signed version, whether it is current, and the signed_at time."
+   "3. Verification and storage. Platform verifies the signature with verify_signature ... resolves coldkey = Owner(hotkey) at a finalized block and stores {hotkey, coldkey, cla_version, cla_sha256, signature, nonce, issued_at, signed_at} append-only."
+   "4. Submission gate. POST /api/v1/upload/check and POST /api/v1/upload/agent refuse a hotkey that has no valid signature for the currently effective version. Error tells the miner to run ditto cla sign. ditto upload should check this up front, before packaging or any payment step."
+   "Public read endpoint returns a hotkey's CLA status: version, digest, signed_at, and signature." E.g.:
+   `GET /api/v1/cla/status/{hotkey}` or `GET /api/v1/cla/{hotkey}`:
+   returns `{ "hotkey": ..., "signed": true/false, "version": ..., "sha256": ..., "signed_at": ..., "signature": ..., "is_current": ... }`
+   And endpoint to sign:
+   `POST /api/v1/cla/sign`:
+   payload: `{ "hotkey": ..., "cla_version": ..., "cla_sha256": ..., "signature": ..., "nonce": ..., "issued_at": ... }`
+   Response: `{ "status": "ok", "hotkey": ..., "cla_version": ..., "signed_at": ... }`
+
+Let's check `Backroom MCP tool`:
+Where are Backroom MCP tools in the repo?
+Let's check files matching `backroom` or `mcp`.
+In ditto-subnet:
+Usually `apps/platform/ditto/api_server/mcp/` or `apps/platform/ditto/backroom/` or `ditto/backroom/mcp/` or similar.
+Wait, let's think: what is the structure of MCP tools in this repo?
+Let's search mental model or typical repository layout for ditto:
+`apps/platform/ditto/backroom/` or `apps/platform/ditto/api_server/backroom/` or `apps/platform/ditto/api_server/mcp/server.py` or `apps/platform/ditto/mcp/`.
+Wait, let's look at the imports and paths.
+In ditto subnet:
+CLI:
+`ditto/cli.py` or `ditto/miner_cli/`
+In `ditto/miner_cli/`:
+- `name_claim.py`
+- `miner_avatar.py`
+- `upload.py`
+- `cla.py` (new)
+And in `apps/platform/ditto/`:
+- `api_server/`
+  - `endpoints/`
+    - `upload.py`
+    - `cla.py` (new)
+  - `attestation.py`
+  - `models/` or `db/models.py`
+  - `settings.py` or `config.py`
+  - `backroom/` or `mcp/`
+
+Let's verify the message format strictly:
+```
+ditto-cla:v1:<netuid>:<cla_version>:<cla_sha256>:<hotkey>:<nonce>:<issued_at>
+```
+Let's check this exact string:
+`f"ditto-cla:v1:{netuid}:{cla_version}:{cla_sha256}:{hotkey}:{nonce}:{issued_at}"`
+Notice:
+- `v1` is the message protocol version prefix (like `ditto-name:v1:...`)
+- `<netuid>`
+- `<cla_version>`
+- `<cla_sha256>`
+- `<hotkey>`
+- `<nonce>`
+- `<issued_at>`
+
+Let's check the CLI commands:
+`ditto cla sign`
+`ditto cla status`
+
+Let's check what `ditto cla sign` should do:
+1. Contact platform to get current CLA text and metadata (or read `docs/legal/CLA-<version>.md` if local/bundled or fetch from `GET /api/v1/cla/current`).
+Wait! "1. Versioned, pinned text. The CLA lives at `docs/legal/CLA-v<N>.md`. Platform holds a registry of `{version, sha256, published_at, effective_at}`. The CLI downloads the text, recomputes the SHA-256, and refuses to sign on a mismatch."
+If CLI downloads the text:
+`GET /api/v1/cla/current` (or `GET /api/v1/cla/{version}`) returns:
+```json
+{
+  "version": "v1",
+  "sha256": "<expected_sha256>",
+  "text": "...",
+  "published_at": "...",
+  "effective_at": "..."
+}
+```
+CLI downloads text, recomputes `hashlib.sha256(text.encode('utf-8')).hexdigest()`.
+If `recomputed != expected_sha256`, it prints an error and refuses to sign on a mismatch.
+2. The CLI shows the CLA (or the path to it plus its digest), and asks for explicit typed confirmation:
+e.g. `confirm = prompt("Type 'I AGREE' to confirm and sign the CLA: ")`
+If not matching, abort.
+3. It loads the miner's hotkey wallet (using bittensor or substrate Keypair), signs:
+`payload = f"ditto-cla:v1:{netuid}:{cla_version}:{cla_sha256}:{hotkey}:{nonce}:{issued_at}"`
+with `wallet.hotkey.sign(payload.encode("utf-8"))` (hex encoded `0x...` or hex string).
+4. Sends `POST /api/v1/cla/sign`:
+```json
+{
+  "hotkey": hotkey,
+  "cla_version": cla_version,
+  "cla_sha256": cla_sha256,
+  "signature": signature,
+  "nonce": nonce,
+  "issued_at": issued_at
+}
+```
+5. Displays success.
+
+`ditto cla status`:
+Queries `GET /api/v1/cla/status/{hotkey}`:
+Shows:
+- Signed version
+- Whether it is current (is_current)
+- Signed at time
+- Digest / hotkey
+
+Let's check `ditto upload`:
+"4. Submission gate. `POST /api/v1/upload/check` and `POST /api/v1/upload/agent` refuse a hotkey that has no valid signature for the currently effective version. The error tells the miner to run `ditto cla sign`. `ditto upload` should check this up front, before packaging or any payment step."
+In `ditto upload` CLI:
+Before packaging/payment, check status with Platform `GET /api/v1/cla/status/{hotkey}` (or check endpoint), and if gate is enforced or status is unsigned/not current, abort early and instruct miner to run `ditto cla sign`.
+
+Let's check the gate rollout:
+"The gate sits behind a Platform setting with three modes: `off`, then `shadow` (log and count unsigned uploads, but accept them), then `enforce`. Start in `off`."
+In `POST /api/v1/upload/check` and `POST /api/v1/upload/agent`:
+When gate mode is:
+- `off`: do not check or block for CLA.
+- `shadow`: check if hotkey has signed the current effective CLA version. If not signed, log a warning and increment unsigned uploads metric / count (or log), but allow the upload to proceed.
+- `enforce`: check if hotkey has signed the current effective CLA version. If not signed, raise HTTP 403 Forbidden with detail e.g.:
+`"Contributor License Agreement (CLA) signature required for current version {version}. Please run 'ditto cla sign' before submitting."`
+
+Let's check acceptance criteria and tests:
+- Alembic migration for the CLA version registry and the append-only signature table. Tests prove there is no update or delete path.
+- `uv run ditto cla sign` and `uv run ditto cla status` work against a local Platform. Signing refuses on a digest mismatch.
+- A public read endpoint returns a hotkey's CLA status: version, digest, signed_at, and signature.
+- Upload gate tests cover each mode (`off`, `shadow`, `enforce`), an unsigned hotkey, an outdated version, a replayed nonce, a stale `issued_at`, and a wrong signer.
+- A Backroom read tool covers the gate setting, its history, and adoption counts.
+- `docs/MINER.md` documents the flow, and the miner starter kit README mentions `ditto cla sign`.
+- CI is green repo-wide (ruff, mypy, pytest).
+
+Let's write clean, production-grade implementations for each part.
