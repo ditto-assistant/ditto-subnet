@@ -134,7 +134,13 @@ async def test_status_counts_are_zero_filled(
         )
     async with session_maker() as session:
         counts = await count_reranker_submissions_by_status(session)
-    assert counts == {"accepted": 1, "invalid": 1, "scored": 0, "failed": 0}
+    assert counts == {
+        "accepted": 1,
+        "scoring": 0,
+        "invalid": 1,
+        "scored": 0,
+        "failed": 0,
+    }
 
 
 async def test_status_check_constraint_rejects_unknown_status(

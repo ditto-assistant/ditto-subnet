@@ -32,6 +32,10 @@ type GeneratedAdminRerankerSubmission =
   PlatformComponents['schemas']['AdminRerankerSubmission']
 type GeneratedAdminRerankerSubmissionList =
   PlatformComponents['schemas']['AdminRerankerSubmissionList']
+type GeneratedRerankerChampionEntry = PlatformComponents['schemas']['RerankerChampionEntry']
+type GeneratedRerankerIncumbent = PlatformComponents['schemas']['RerankerIncumbent']
+type GeneratedAdminRerankerChampionList =
+  PlatformComponents['schemas']['AdminRerankerChampionList']
 type GeneratedAdminHotkeyUnbanResponse =
   PlatformComponents['schemas']['AdminHotkeyUnbanResponse']
 type GeneratedScoredPolicyRescreenView =
@@ -1391,7 +1395,13 @@ export const hotkeyBanListSchema = z.object({
 
 const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/)
 
-export const RERANKER_SUBMISSION_STATUSES = ['accepted', 'invalid', 'scored', 'failed'] as const
+export const RERANKER_SUBMISSION_STATUSES = [
+  'accepted',
+  'scoring',
+  'invalid',
+  'scored',
+  'failed',
+] as const
 
 // Season 2 reranker shadow intake (SN-207). Read-only: no tarball URL is ever
 // part of the payload, and nothing here pays or sets weights.
@@ -1413,7 +1423,49 @@ export const rerankerSubmissionSchema = z.object({
   score: z.record(z.string(), z.unknown()).nullable(),
   scored_at: z.string().datetime({ offset: true }).nullable(),
   created_at: z.string().datetime({ offset: true }),
+  // Trusted scorer (SN-209): the finalized block the seed came from, a short
+  // failure code, and the scorer lease.
+  seed_block: z.number().int().nonnegative().nullable().optional(),
+  failure_reason: z.string().nullable().optional(),
+  scoring_attempts: z.number().int().nonnegative(),
+  scoring_lease_expires_at: z.string().datetime({ offset: true }).nullable().optional(),
 } satisfies PlatformResponseShape<GeneratedAdminRerankerSubmission>)
+
+// Shadow crown (SN-209). A crown pays nothing and sets no weight.
+export const rerankerChampionEntrySchema = z.object({
+  submission_id: z.string().uuid(),
+  miner_hotkey: z.string().min(1),
+  artifact_sha256: sha256HexSchema,
+  previous_submission_id: z.string().uuid().nullable(),
+  crowned_at: z.string().datetime({ offset: true }),
+  superseded_at: z.string().datetime({ offset: true }).nullable(),
+  contract_sha256: sha256HexSchema,
+  pools_sha256: sha256HexSchema,
+  comparison: z.record(z.string(), z.unknown()),
+} satisfies PlatformResponseShape<GeneratedRerankerChampionEntry>)
+
+export const rerankerIncumbentSchema = z.object({
+  base_model: z.string().min(1),
+  quantization: z.string().min(1),
+  model_sha256: sha256HexSchema,
+  vocab_sha256: sha256HexSchema,
+} satisfies PlatformResponseShape<GeneratedRerankerIncumbent>)
+
+export const rerankerChampionListSchema = z.object({
+  contract_id: z.string().min(1),
+  contract_sha256: sha256HexSchema,
+  incumbent: rerankerIncumbentSchema,
+  current: rerankerChampionEntrySchema.nullable(),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  history: z.array(rerankerChampionEntrySchema).max(200),
+} satisfies PlatformResponseShape<GeneratedAdminRerankerChampionList>)
+
+export const rerankerChampionsInputSchema = z.object({
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().min(0).default(0),
+})
 
 export const rerankerSubmissionListSchema = z.object({
   contract_id: z.string().min(1),
@@ -1425,6 +1477,7 @@ export const rerankerSubmissionListSchema = z.object({
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
   submissions: z.array(rerankerSubmissionSchema).max(200),
+  champion: rerankerChampionEntrySchema.nullable().optional(),
 } satisfies PlatformResponseShape<GeneratedAdminRerankerSubmissionList>)
 
 export const rerankerSubmissionsInputSchema = z.object({

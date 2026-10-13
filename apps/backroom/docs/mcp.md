@@ -467,7 +467,7 @@ the signed-in operator identity plus the previous ban evidence to
 returns the post-write state so a successful call proves `banned=false` and
 surfaces the new audit entry.
 
-## Season 2 reranker shadow intake
+## Season 2 reranker shadow intake and scoring
 
 `get_reranker_submissions` reads `GET /api/v1/admin/reranker-submissions`, the
 intake behind `POST /api/v1/upload/reranker` (SN-207). It returns a
@@ -481,6 +481,26 @@ scored. Optional `status` and `hotkey` filters narrow the rows and `total`.
 The track is shadow only: these rows never reach the screener queue,
 validators, the leaderboard, payments or weights, and no tarball URL is
 returned. The tool is read-only.
+
+Once the trusted scorer worker (SN-209) runs, rows pass through `scoring`
+(with `scoring_attempts` and `scoring_lease_expires_at`) to `scored`,
+`invalid` or `failed` (`failure_reason` is a short code such as
+`chain_unavailable` or `attempts_exhausted`). `seed_block` and
+`seed_block_hash` let anyone re-derive the seed. `score` records the worker's
+non-secret policy (`policy`: pool generator digest, seed count, run size,
+bench version, whether the transfer gate is required), the challenger and
+champion summaries on the same pools, the paired comparison, the latency
+report and the crown decision (`crowned`, `crown_blocked_by`). The response
+also carries `champion`, the current shadow champion or null while the
+incumbent holds it. The held surface salt never appears anywhere.
+
+`get_reranker_champions` reads `GET /api/v1/admin/reranker-champions`: the
+pinned incumbent, the current shadow champion and the append-only crown
+history newest first. A challenger is crowned only when it dethrones, passes
+latency and passes the transfer gate (SN-226); until that gate exists nobody
+is crowned unless the scorer runs with
+`DITTO_RERANKER_REQUIRE_TRANSFER_GATE=false`. A crown pays nothing and sets no
+weight. The tool is read-only.
 
 ## Reading miner source
 

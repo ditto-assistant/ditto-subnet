@@ -1728,6 +1728,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/reranker-champions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Reranker Champions
+         * @description Append-only shadow crown history, newest first, plus the incumbent.
+         *
+         *     ``current`` is null while the pinned incumbent holds the crown. Shadow
+         *     only: no crown pays or sets a weight.
+         */
+        get: operations["admin_reranker_champions_api_v1_admin_reranker_champions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/reranker-submissions": {
         parameters: {
             query?: never;
@@ -5519,6 +5542,29 @@ export interface paths {
          * @description Atomic dashboard snapshot for submission pipeline and validator fleet health.
          */
         get: operations["operations_api_v1_public_operations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/reranker/champion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Public Reranker Champion
+         * @description The shadow champion (``champion`` is null while the incumbent holds it).
+         *
+         *     Shadow only: a crown pays nothing and sets no weight. Until the transfer
+         *     gate (SN-226) is in force the scorer crowns nobody by default.
+         */
+        get: operations["get_public_reranker_champion_api_v1_public_reranker_champion_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11509,6 +11555,26 @@ export interface components {
             idempotent: boolean;
         };
         /**
+         * AdminRerankerChampionList
+         * @description Backroom read of the append-only crown history, newest first.
+         */
+        AdminRerankerChampionList: {
+            /** Contract Id */
+            contract_id: string;
+            /** Contract Sha256 */
+            contract_sha256: string;
+            current: components["schemas"]["RerankerChampionEntry"] | null;
+            /** History */
+            history: components["schemas"]["RerankerChampionEntry"][];
+            incumbent: components["schemas"]["RerankerIncumbent"];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
          * AdminRerankerSubmission
          * @description Operator view: adds the owner coldkey and the uploaded tarball digest.
          */
@@ -11526,6 +11592,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Failure Reason */
+            failure_reason?: string | null;
             /** Invalid Reason */
             invalid_reason: string | null;
             /** Miner Coldkey */
@@ -11538,8 +11606,17 @@ export interface components {
             } | null;
             /** Scored At */
             scored_at: string | null;
+            /**
+             * Scoring Attempts
+             * @default 0
+             */
+            scoring_attempts: number;
+            /** Scoring Lease Expires At */
+            scoring_lease_expires_at?: string | null;
             /** Seed */
             seed: string | null;
+            /** Seed Block */
+            seed_block?: number | null;
             /** Seed Block Hash */
             seed_block_hash: string | null;
             /** Size Bytes */
@@ -11548,7 +11625,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "accepted" | "invalid" | "scored" | "failed";
+            status: "accepted" | "scoring" | "invalid" | "scored" | "failed";
             /**
              * Submission Id
              * Format: uuid
@@ -11562,6 +11639,7 @@ export interface components {
          * @description Backroom read: recent rows plus a zero-filled count per status.
          */
         AdminRerankerSubmissionList: {
+            champion?: components["schemas"]["RerankerChampionEntry"] | null;
             /** Contract Id */
             contract_id: string;
             /** Contract Sha256 */
@@ -29677,6 +29755,69 @@ export interface components {
             signed_heartbeat_fresh: boolean;
         };
         /**
+         * RerankerChampionEntry
+         * @description One shadow crown. Shadow only: a crown pays nothing and sets no weight.
+         */
+        RerankerChampionEntry: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Comparison */
+            comparison: {
+                [key: string]: unknown;
+            };
+            /** Contract Sha256 */
+            contract_sha256: string;
+            /**
+             * Crowned At
+             * Format: date-time
+             */
+            crowned_at: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Pools Sha256 */
+            pools_sha256: string;
+            /** Previous Submission Id */
+            previous_submission_id: string | null;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Superseded At */
+            superseded_at: string | null;
+        };
+        /**
+         * RerankerChampionResponse
+         * @description ``GET /public/reranker/champion``: who holds the shadow crown.
+         */
+        RerankerChampionResponse: {
+            champion: components["schemas"]["RerankerChampionEntry"] | null;
+            /** Contract Id */
+            contract_id: string;
+            /** Contract Sha256 */
+            contract_sha256: string;
+            incumbent: components["schemas"]["RerankerIncumbent"];
+            /**
+             * Shadow
+             * @default true
+             */
+            shadow: boolean;
+        };
+        /**
+         * RerankerIncumbent
+         * @description The pinned product model every challenger is measured against.
+         */
+        RerankerIncumbent: {
+            /** Base Model */
+            base_model: string;
+            /** Model Sha256 */
+            model_sha256: string;
+            /** Quantization */
+            quantization: string;
+            /** Vocab Sha256 */
+            vocab_sha256: string;
+        };
+        /**
          * RerankerSubmission
          * @description Public view of one submission. ``score`` is null until scored.
          */
@@ -29694,6 +29835,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Failure Reason */
+            failure_reason?: string | null;
             /** Invalid Reason */
             invalid_reason: string | null;
             /** Miner Hotkey */
@@ -29706,6 +29849,8 @@ export interface components {
             scored_at: string | null;
             /** Seed */
             seed: string | null;
+            /** Seed Block */
+            seed_block?: number | null;
             /** Seed Block Hash */
             seed_block_hash: string | null;
             /** Size Bytes */
@@ -29714,7 +29859,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "accepted" | "invalid" | "scored" | "failed";
+            status: "accepted" | "scoring" | "invalid" | "scored" | "failed";
             /**
              * Submission Id
              * Format: uuid
@@ -29752,7 +29897,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "accepted" | "invalid" | "scored" | "failed";
+            status: "accepted" | "scoring" | "invalid" | "scored" | "failed";
             /**
              * Submission Id
              * Format: uuid
@@ -40651,11 +40796,45 @@ export interface operations {
             };
         };
     };
+    admin_reranker_champions_api_v1_admin_reranker_champions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRerankerChampionList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     admin_reranker_submissions_api_v1_admin_reranker_submissions_get: {
         parameters: {
             query?: {
                 hotkey?: string | null;
-                status?: ("accepted" | "invalid" | "scored" | "failed") | null;
+                status?: ("accepted" | "scoring" | "invalid" | "scored" | "failed") | null;
                 limit?: number;
                 offset?: number;
             };
@@ -47491,11 +47670,31 @@ export interface operations {
             };
         };
     };
+    get_public_reranker_champion_api_v1_public_reranker_champion_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerankerChampionResponse"];
+                };
+            };
+        };
+    };
     list_public_reranker_submissions_api_v1_public_reranker_submissions_get: {
         parameters: {
             query?: {
                 hotkey?: string | null;
-                status?: ("accepted" | "invalid" | "scored" | "failed") | null;
+                status?: ("accepted" | "scoring" | "invalid" | "scored" | "failed") | null;
                 limit?: number;
                 offset?: number;
             };

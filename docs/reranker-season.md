@@ -98,15 +98,80 @@ shadow.
 
 An accepted submission is stored and recorded with status `accepted`. Its
 `seed` and `seed_block_hash` stay null at intake. The trusted scorer worker
-(SN-209) derives them after the commit from a finalized block, scores the
-artifact, and moves it to `scored`, `invalid` (for example the latency gate)
-or `failed`. Status and score are public at
+(SN-209, below) derives them after the commit from a finalized block, scores
+the artifact, and moves it through `scoring` to `scored`, `invalid` (for
+example the latency gate) or `failed`. Status and score are public at
 `GET /api/v1/public/reranker/submissions?hotkey=…` and
 `GET /api/v1/public/reranker/submissions/{id}`; no tarball URL is published.
 
 Reranker submissions live in their own table. They never enter the memory
 track's screener queue, validator allocation, leaderboard, anti-copy checks or
 payments.
+
+## Scoring (shadow, SN-209)
+
+A trusted Platform worker, `python -m ditto.reranker_scoring_worker`, scores
+submissions one at a time, oldest first. It is not part of the API process and
+does nothing unless `DITTO_RERANKER_SCORING_ENABLED=true`.
+
+1. **Lease.** The worker commits `accepted → scoring` with an opaque token and
+   a lease (`DITTO_RERANKER_SCORING_LEASE_SECONDS`, default 3600) before any
+   slow work. An expired lease is reclaimed by the next worker, at most
+   `DITTO_RERANKER_SCORING_MAX_ATTEMPTS` (default 3) times; after that the row
+   is `failed` with `attempts_exhausted`. Infrastructure trouble (chain, object
+   storage, the pool generator) returns the row to `accepted` for a later
+   attempt.
+2. **Seed.** After the claim commits, the worker reads the latest
+   **finalized** block and derives
+   `seed = int(SHA-256("reranker-season-v1:" + block_hash + ":" + submission_id)[:8]) & (2^62 − 1)`
+   (`derive_reranker_seed`, the memory track's construction with the contract
+   id as a domain prefix). `seed_block`, `seed_block_hash` and `seed` are
+   pinned on the row and reused on every retry, so anyone can re-derive the
+   seed and the Platform cannot re-roll it.
+3. **Pools.** The worker runs the `rerank-pools` binary pinned by
+   `DITTO_RERANKER_POOLGEN_SHA256` (it refuses to start, and claims nothing,
+   on a mismatch) for seeds `seed … seed + N − 1`
+   (`DITTO_RERANKER_POOL_SEED_COUNT`, default 4) under the held surface salt
+   (`DITTO_RERANKER_SURFACE_SALT`). The salt reaches the generator only through
+   an owner-only file (`-surface-salt-file`); it is never on a command line, in
+   the child's environment, in logs, in a score, or on any API.
+4. **Score.** The challenger and the current shadow champion (the pinned
+   incumbent while nobody holds the crown, verified against
+   `CONTRACT.incumbent` byte for byte) are scored on the same pools with one
+   intra-op thread and compared with the paired dethrone test. Latency is the
+   challenger timed against the incumbent side by side with four threads.
+5. **Record.** The submission's `score` holds the contract and pool digests,
+   the seed and its block, the worker's non-secret policy, the challenger and
+   champion summaries (no per-pool rows), the comparison, the latency report,
+   the transfer gate status and the crown decision. A failed latency gate
+   makes the row `invalid` with the score kept.
+
+A challenger takes the **shadow** crown only when it dethrones the champion,
+passes the latency gate, **and** passes the LongMemEval-S transfer gate
+(SN-226). The transfer gate is not implemented yet, so it is recorded as
+`not_evaluated` and, with the default
+`DITTO_RERANKER_REQUIRE_TRANSFER_GATE=true`, **nobody is crowned until SN-226
+lands.** Setting it to `false` crowns on score and latency alone, still in
+shadow. Crowns are an append-only history (`reranker_champions`), readable at
+`GET /api/v1/public/reranker/champion` and, for operators, Backroom
+`get_reranker_champions`. A crown pays nothing and sets no weight.
+
+| Worker setting | Default |
+|---|---|
+| `DITTO_RERANKER_SCORING_ENABLED` | `false` |
+| `DITTO_RERANKER_POOLGEN_EXECUTABLE`, `DITTO_RERANKER_POOLGEN_SHA256` | required |
+| `DITTO_RERANKER_SURFACE_SALT` (secret, decimal uint64) | required |
+| `DITTO_RERANKER_WORK_ROOT` (absolute, owner-only `0700`) | required |
+| `DITTO_RERANKER_INCUMBENT_PATH` (the starter kit's `incumbent/`) | required |
+| `DITTO_RERANKER_POOL_SEED_COUNT` / `POOL_RUN_SIZE` / `POOL_BENCH_VERSION` | `4` / `full` / `13` |
+| `DITTO_RERANKER_REQUIRE_TRANSFER_GATE` | `true` |
+| `DITTO_RERANKER_SCORING_LEASE_SECONDS` / `SCORING_MAX_ATTEMPTS` | `3600` / `3` |
+| `DITTO_RERANKER_POOLGEN_TIMEOUT_SECONDS` | `1800` |
+
+The worker also needs the ordinary Platform database, `STORAGE_*` and chain
+configuration, and the inference runtime from
+`uv sync --group reranker-scorer`. Nothing deploys or enables it yet; that is
+a separate, authorized infrastructure change.
 
 ## Score
 

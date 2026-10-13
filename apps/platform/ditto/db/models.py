@@ -11685,8 +11685,22 @@ class RerankerSubmission(Base):
             "artifact_sha256", name="reranker_submissions_artifact_sha256_key"
         ),
         CheckConstraint(
-            "status IN ('accepted', 'invalid', 'scored', 'failed')",
+            "status IN ('accepted', 'scoring', 'invalid', 'scored', 'failed')",
             name="status",
+        ),
+        CheckConstraint(
+            "(status = 'scoring') = "
+            "(scoring_token IS NOT NULL AND scoring_lease_expires_at IS NOT NULL)",
+            name="scoring_lease",
+        ),
+        CheckConstraint("scoring_attempts >= 0", name="scoring_attempts"),
+        CheckConstraint(
+            "seed_block IS NULL OR (seed_block >= 0 AND seed_block_hash IS NOT NULL)",
+            name="seed_block",
+        ),
+        CheckConstraint(
+            "failure_reason IS NULL OR length(failure_reason) BETWEEN 1 AND 200",
+            name="failure_reason",
         ),
         CheckConstraint(
             "upload_sha256 ~ '^[0-9a-f]{64}$' AND "
@@ -11730,4 +11744,77 @@ class RerankerSubmission(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    # Scorer lease (SN-209): set exactly while status is 'scoring'.
+    scoring_token: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    scoring_lease_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    scoring_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    # Short allowlisted code for 'failed' rows; never paths or secrets.
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Finalized block number the seed was derived from (beside its hash).
+    seed_block: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class RerankerChampion(Base):
+    """Append-only shadow crown history for the Season 2 reranker (SN-209).
+
+    At most one row has ``superseded_at`` null: the current shadow champion.
+    No row means the pinned incumbent holds the crown. A trigger rejects
+    DELETE and every UPDATE except stamping ``superseded_at`` once. Nothing
+    reads this for weights, emissions or payments.
+    """
+
+    __tablename__ = "reranker_champions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["reranker_submissions.id"],
+            name="reranker_champions_submission_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["previous_submission_id"],
+            ["reranker_submissions.id"],
+            name="reranker_champions_previous_submission_id_fkey",
+        ),
+        UniqueConstraint("submission_id", name="reranker_champions_submission_id_key"),
+        CheckConstraint(
+            "contract_sha256 ~ '^[0-9a-f]{64}$' AND pools_sha256 ~ '^[0-9a-f]{64}$'",
+            name="digests",
+        ),
+        CheckConstraint(
+            "superseded_at IS NULL OR superseded_at >= crowned_at",
+            name="superseded_after_crowned",
+        ),
+        CheckConstraint(
+            "previous_submission_id IS DISTINCT FROM submission_id",
+            name="not_self",
+        ),
+        Index(
+            "reranker_champions_one_current_idx",
+            text("(superseded_at IS NULL)"),
+            unique=True,
+            postgresql_where=text("superseded_at IS NULL"),
+        ),
+        Index("reranker_champions_crowned_idx", "crowned_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    previous_submission_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    crowned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    contract_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    pools_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    comparison: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
     )

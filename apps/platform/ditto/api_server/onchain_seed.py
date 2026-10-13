@@ -71,3 +71,28 @@ def derive_validator_seed(
         f"{normalize_block_hash(block_hash)}:{agent_id}:{validator_hotkey}".encode()
     ).digest()
     return int.from_bytes(digest[:8], "big") & _INT63_MASK
+
+
+# The reranker scorer generates pools for ``seed .. seed + count - 1`` and the
+# pool generator takes a signed int64, so the base seed keeps one bit of
+# headroom below the int63 range: any count up to 2**62 cannot overflow.
+_INT62_MASK = (1 << 62) - 1
+
+
+def derive_reranker_seed(
+    block_hash: str, submission_id: UUID, *, contract_id: str
+) -> int:
+    """Derive the Season 2 reranker pool seed for one submission (SN-209).
+
+    ``seed = int(SHA-256(contract_id || ":" || normalized_block_hash || ":" ||
+    submission_id)[:8]) & (2**62-1)``.
+
+    The same construction as :func:`derive_seed`, domain-separated by the
+    reranker contract id so a reranker seed can never equal a memory-track
+    dataset seed derived from the same block and a colliding id. The block is
+    read after the submission commits, so the miner could not know it.
+    """
+    digest = hashlib.sha256(
+        f"{contract_id}:{normalize_block_hash(block_hash)}:{submission_id}".encode()
+    ).digest()
+    return int.from_bytes(digest[:8], "big") & _INT62_MASK

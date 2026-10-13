@@ -236,7 +236,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --locked --group dev --python 3.12
+        run: uv sync --locked --group dev --group reranker-scorer --python 3.12
 
       - name: Set up Go for hosted start integration
         if: matrix.suite == 'api-server'

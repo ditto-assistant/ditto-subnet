@@ -557,10 +557,12 @@ async def test_admin_read_requires_the_admin_token_and_counts_statuses(
     assert body["contract_id"] == CONTRACT_ID
     assert body["status_counts"] == {
         "accepted": 1,
+        "scoring": 0,
         "invalid": 0,
         "scored": 1,
         "failed": 0,
     }
+    assert body["champion"] is None
     assert body["total"] == 2
     assert body["upload_window_seconds"] == 3600
     assert body["uploads_per_window"] == 1
@@ -574,3 +576,72 @@ async def test_admin_read_requires_the_admin_token_and_counts_statuses(
         headers=_ADMIN,
     )
     assert filtered.json()["total"] == 1
+
+
+async def test_champion_reads_show_the_incumbent_then_the_shadow_crown(
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.db.models import RerankerChampion
+
+    empty = await client.get("/api/v1/public/reranker/champion")
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["champion"] is None
+    assert empty.json()["shadow"] is True
+    assert empty.json()["incumbent"]["model_sha256"] == (
+        CONTRACT.incumbent.model_sha256
+    )
+
+    submission_id = uuid4()
+    async with session_maker() as session, session.begin():
+        session.add(
+            RerankerSubmission(
+                id=submission_id,
+                miner_hotkey=_BOB.ss58_address,
+                miner_coldkey="cold-bob",
+                upload_sha256="3" * 64,
+                artifact_sha256="4" * 64,
+                contract_sha256=CONTRACT.digest(),
+                size_bytes=10,
+                base_model="none",
+                base_model_license="mit",
+                status="scored",
+                seed=7,
+                seed_block=11,
+                seed_block_hash="ab" * 32,
+                score={"crowned": True},
+            )
+        )
+        await session.flush()
+        session.add(
+            RerankerChampion(
+                submission_id=submission_id,
+                contract_sha256=CONTRACT.digest(),
+                pools_sha256="5" * 64,
+                comparison={"dethrones": True},
+            )
+        )
+
+    public = (await client.get("/api/v1/public/reranker/champion")).json()
+    assert public["champion"]["submission_id"] == str(submission_id)
+    assert public["champion"]["miner_hotkey"] == _BOB.ss58_address
+    assert public["champion"]["previous_submission_id"] is None
+    assert "miner_coldkey" not in public["champion"]
+    one = (
+        await client.get(f"/api/v1/public/reranker/submissions/{submission_id}")
+    ).json()
+    assert one["seed_block"] == 11 and one["failure_reason"] is None
+
+    denied = await client.get("/api/v1/admin/reranker-champions")
+    history = await client.get("/api/v1/admin/reranker-champions", headers=_ADMIN)
+    assert denied.status_code == 401
+    assert history.status_code == 200, history.text
+    body = history.json()
+    assert body["total"] == 1
+    assert body["current"]["submission_id"] == str(submission_id)
+    assert [h["submission_id"] for h in body["history"]] == [str(submission_id)]
+    listing = (
+        await client.get("/api/v1/admin/reranker-submissions", headers=_ADMIN)
+    ).json()
+    assert listing["champion"]["submission_id"] == str(submission_id)
+    assert listing["submissions"][0]["scoring_attempts"] == 0

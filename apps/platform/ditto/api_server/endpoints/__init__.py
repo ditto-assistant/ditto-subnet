@@ -105,6 +105,9 @@ from ditto.api_server.endpoints.admin_queue_policy_settings import (
     router as admin_queue_policy_settings_router,
 )
 from ditto.api_server.endpoints.admin_reranker_submissions import (
+    champions_router as admin_reranker_champions_router,
+)
+from ditto.api_server.endpoints.admin_reranker_submissions import (
     router as admin_reranker_submissions_router,
 )
 from ditto.api_server.endpoints.admin_retirement import (
@@ -255,6 +258,7 @@ __all__ = [
     "admin_scoring_lease_settings_router",
     "admin_traces_router",
     "admin_queue_policy_settings_router",
+    "admin_reranker_champions_router",
     "admin_reranker_submissions_router",
     "admin_efficiency_bonus_settings_router",
     "admin_inference_routes_router",

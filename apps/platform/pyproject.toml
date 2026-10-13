@@ -53,6 +53,13 @@ dev = [
     "pre-commit>=3.7",
     "httpx>=0.27",
 ]
+# Only the trusted reranker scorer worker (python -m
+# ditto.reranker_scoring_worker) needs the inference runtime. A separate group
+# keeps onnxruntime out of the API's default `uv sync`; install it on the
+# scorer host and in CI with `uv sync --group reranker-scorer`.
+reranker-scorer = [
+    "dittobench-reranker[score]==0.1.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["ditto"]

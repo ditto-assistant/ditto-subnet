@@ -1021,6 +1021,35 @@ CREATE FUNCTION public.reject_verification_replay_receipt_change() RETURNS trigg
 
 
 --
+-- Name: reranker_champions_append_only(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reranker_champions_append_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                RAISE EXCEPTION 'reranker_champions is append-only';
+            END IF;
+            IF OLD.superseded_at IS NOT NULL
+               OR NEW.superseded_at IS NULL
+               OR NEW.id IS DISTINCT FROM OLD.id
+               OR NEW.submission_id IS DISTINCT FROM OLD.submission_id
+               OR NEW.previous_submission_id
+                    IS DISTINCT FROM OLD.previous_submission_id
+               OR NEW.crowned_at IS DISTINCT FROM OLD.crowned_at
+               OR NEW.contract_sha256 IS DISTINCT FROM OLD.contract_sha256
+               OR NEW.pools_sha256 IS DISTINCT FROM OLD.pools_sha256
+               OR NEW.comparison IS DISTINCT FROM OLD.comparison THEN
+                RAISE EXCEPTION
+                    'reranker_champions rows only gain superseded_at, once';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+
+
+--
 -- Name: scores_stderr_projection_refresh(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -3869,6 +3898,39 @@ ALTER SEQUENCE public.queue_policy_settings_revisions_revision_seq OWNED BY publ
 
 
 --
+-- Name: reranker_champions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.reranker_champions (
+    id bigint NOT NULL,
+    submission_id uuid NOT NULL,
+    previous_submission_id uuid,
+    crowned_at timestamp with time zone DEFAULT now() NOT NULL,
+    contract_sha256 text NOT NULL,
+    pools_sha256 text NOT NULL,
+    comparison jsonb NOT NULL,
+    superseded_at timestamp with time zone,
+    CONSTRAINT ck_reranker_champions_digests CHECK (((contract_sha256 ~ '^[0-9a-f]{64}$'::text) AND (pools_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_reranker_champions_not_self CHECK ((previous_submission_id IS DISTINCT FROM submission_id)),
+    CONSTRAINT ck_reranker_champions_superseded_after_crowned CHECK (((superseded_at IS NULL) OR (superseded_at >= crowned_at)))
+);
+
+
+--
+-- Name: reranker_champions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.reranker_champions ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.reranker_champions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: reranker_submissions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3889,11 +3951,20 @@ CREATE TABLE public.reranker_submissions (
     score jsonb,
     scored_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    scoring_token uuid,
+    scoring_lease_expires_at timestamp with time zone,
+    scoring_attempts integer DEFAULT 0 NOT NULL,
+    failure_reason text,
+    seed_block bigint,
     CONSTRAINT ck_reranker_submissions_base_model CHECK ((((length(base_model) >= 1) AND (length(base_model) <= 256)) AND ((length(base_model_license) >= 1) AND (length(base_model_license) <= 64)))),
     CONSTRAINT ck_reranker_submissions_digests CHECK (((upload_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (contract_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_reranker_submissions_failure_reason CHECK (((failure_reason IS NULL) OR ((length(failure_reason) >= 1) AND (length(failure_reason) <= 200)))),
+    CONSTRAINT ck_reranker_submissions_scoring_attempts CHECK ((scoring_attempts >= 0)),
+    CONSTRAINT ck_reranker_submissions_scoring_lease CHECK (((status = 'scoring'::text) = ((scoring_token IS NOT NULL) AND (scoring_lease_expires_at IS NOT NULL)))),
     CONSTRAINT ck_reranker_submissions_seed CHECK (((seed IS NULL) OR (seed >= 0))),
+    CONSTRAINT ck_reranker_submissions_seed_block CHECK (((seed_block IS NULL) OR ((seed_block >= 0) AND (seed_block_hash IS NOT NULL)))),
     CONSTRAINT ck_reranker_submissions_size CHECK ((size_bytes > 0)),
-    CONSTRAINT ck_reranker_submissions_status CHECK ((status = ANY (ARRAY['accepted'::text, 'invalid'::text, 'scored'::text, 'failed'::text])))
+    CONSTRAINT ck_reranker_submissions_status CHECK ((status = ANY (ARRAY['accepted'::text, 'scoring'::text, 'invalid'::text, 'scored'::text, 'failed'::text])))
 );
 
 
@@ -8280,6 +8351,22 @@ ALTER TABLE ONLY public.queue_policy_settings_revisions
 
 
 --
+-- Name: reranker_champions reranker_champions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reranker_champions
+    ADD CONSTRAINT reranker_champions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: reranker_champions reranker_champions_submission_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reranker_champions
+    ADD CONSTRAINT reranker_champions_submission_id_key UNIQUE (submission_id);
+
+
+--
 -- Name: reranker_submissions reranker_submissions_artifact_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9542,6 +9629,20 @@ CREATE UNIQUE INDEX queue_policy_settings_scope_revision_idx ON public.queue_pol
 
 
 --
+-- Name: reranker_champions_crowned_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX reranker_champions_crowned_idx ON public.reranker_champions USING btree (crowned_at);
+
+
+--
+-- Name: reranker_champions_one_current_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX reranker_champions_one_current_idx ON public.reranker_champions USING btree (((superseded_at IS NULL))) WHERE (superseded_at IS NULL);
+
+
+--
 -- Name: reranker_submissions_coldkey_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -10358,6 +10459,13 @@ CREATE TRIGGER private_benchmark_dataset_immutable BEFORE DELETE OR UPDATE ON pu
 --
 
 CREATE TRIGGER private_benchmark_preparation_identity BEFORE DELETE OR UPDATE ON public.private_benchmark_preparations FOR EACH ROW EXECUTE FUNCTION public.protect_private_benchmark_preparation_identity();
+
+
+--
+-- Name: reranker_champions reranker_champions_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER reranker_champions_append_only BEFORE DELETE OR UPDATE ON public.reranker_champions FOR EACH ROW EXECUTE FUNCTION public.reranker_champions_append_only();
 
 
 --
@@ -11652,6 +11760,22 @@ ALTER TABLE ONLY public.miner_session_tokens
 
 ALTER TABLE ONLY public.name_claim_endorsements
     ADD CONSTRAINT name_claim_endorsements_claim_id_fkey FOREIGN KEY (claim_id) REFERENCES public.name_claims(claim_id) ON DELETE CASCADE;
+
+
+--
+-- Name: reranker_champions reranker_champions_previous_submission_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reranker_champions
+    ADD CONSTRAINT reranker_champions_previous_submission_id_fkey FOREIGN KEY (previous_submission_id) REFERENCES public.reranker_submissions(id);
+
+
+--
+-- Name: reranker_champions reranker_champions_submission_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reranker_champions
+    ADD CONSTRAINT reranker_champions_submission_id_fkey FOREIGN KEY (submission_id) REFERENCES public.reranker_submissions(id);
 
 
 --

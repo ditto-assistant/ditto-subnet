@@ -331,6 +331,7 @@ import {
   updateArtifactReleaseSettings,
   updateSubmissionSettings,
   fetchHotkeyBans,
+  fetchRerankerChampions,
   fetchRerankerSubmissions,
   unbanHotkey,
   fetchConfirmationBundleSettings,
@@ -932,6 +933,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_hotkey_bans: 'Hotkey bans.',
   get_reranker_submissions:
     'Read Season 2 reranker shadow intake: status counts, upload window, recent rows. No payment.',
+  get_reranker_champions: 'Read Season 2 reranker shadow crown history. No payment.',
   unban_hotkey: 'Unban.',
   get_confirmation_bundle_settings:
     'Read issuance/history; shadow cannot confirm or activate rewards.',
@@ -2304,11 +2306,37 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_reranker_champions',
+    {
+      title: 'Get Season 2 reranker shadow champions',
+      description:
+        'Read the Season 2 reranker shadow crown history (GET /api/v1/admin/reranker-champions, SN-209): the pinned incumbent, the current shadow champion (null while the incumbent holds the crown) and the append-only crown history newest first, each with the submission, owner hotkey, artifact digest, previous holder, crown and supersede times, contract and pool digests and the paired comparison that won it. The trusted scorer crowns only when a challenger dethrones the champion, passes latency and passes the transfer gate (SN-226); until that gate exists nobody is crowned unless the scorer runs with DITTO_RERANKER_REQUIRE_TRANSFER_GATE=false. Shadow only: a crown pays nothing and sets no weight. Requires backroom:read and changes nothing.',
+      inputSchema: {
+        ...MCP_PAGINATION_INPUT,
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => {
+      const value = await fetchRerankerChampions(input)
+      return result(
+        compacted(
+          {
+            ...value,
+            returned: value.history.length,
+            has_more: value.offset + value.history.length < value.total,
+          },
+          { history: { pin: ['submission_id', 'crowned_at'] } },
+        ),
+      )
+    },
+  )
+
+  registerTool(
     'get_reranker_submissions',
     {
       title: 'Get Season 2 reranker submissions',
       description:
-        'Read the Season 2 reranker shadow intake (POST /api/v1/upload/reranker, SN-207): a zero-filled count per status (accepted, invalid, scored, failed) over the whole table, the effective per-owner upload window that explains a miner 429, the season contract id and digest, and recent submissions newest first with owner hotkey/coldkey, artifact and upload digests, base model and licence, seed (null until the trusted scorer derives it post-commit), and score (null until scored). Optional status and hotkey filters; total matches the filters. The track is shadow only: these rows never enter the screener queue, validator allocation, leaderboard, payments or weights, and no tarball URL is returned. Requires backroom:read and changes nothing.',
+        'Read the Season 2 reranker shadow intake (POST /api/v1/upload/reranker, SN-207): a zero-filled count per status (accepted, scoring, invalid, scored, failed) over the whole table, the effective per-owner upload window that explains a miner 429, the season contract id and digest, the current shadow champion (null while the incumbent holds it), and recent submissions newest first with owner hotkey/coldkey, artifact and upload digests, base model and licence, seed and seed block (null until the trusted scorer derives them post-commit), scorer attempts and lease, failure code, and score (null until scored; it records the worker policy, champion comparison, latency and crown decision). Optional status and hotkey filters; total matches the filters. The track is shadow only: these rows never enter the screener queue, validator allocation, leaderboard, payments or weights, and no tarball URL is returned. Requires backroom:read and changes nothing.',
       inputSchema: {
         ...MCP_PAGINATION_INPUT,
         status: z.enum(RERANKER_SUBMISSION_STATUSES).optional(),

@@ -64,6 +64,9 @@ from pydantic import UUID4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.reranker import (
+    RerankerChampionEntry,
+    RerankerChampionResponse,
+    RerankerIncumbent,
     RerankerSubmission,
     RerankerSubmissionList,
     RerankerSubmissionStatus,
@@ -81,12 +84,14 @@ from ditto.api_server.dependencies import (
 )
 from ditto.api_server.storage import S3StorageClient
 from ditto.chain import ChainError
+from ditto.db.models import RerankerChampion as RerankerChampionRow
 from ditto.db.models import RerankerSubmission as RerankerSubmissionRow
 from ditto.db.queries.bans import is_hotkey_banned
 from ditto.db.queries.reranker import (
     DuplicateRerankerArtifactError,
     count_recent_reranker_submissions,
     count_reranker_submissions,
+    get_current_reranker_champion,
     get_reranker_submission,
     get_reranker_submission_by_artifact,
     insert_reranker_submission,
@@ -353,7 +358,50 @@ def to_public(row: RerankerSubmissionRow) -> RerankerSubmission:
         score=row.score,
         scored_at=row.scored_at,
         created_at=row.created_at,
+        seed_block=row.seed_block,
+        failure_reason=row.failure_reason,
     )
+
+
+def incumbent_view() -> RerankerIncumbent:
+    incumbent = CONTRACT.incumbent
+    return RerankerIncumbent(
+        base_model=incumbent.base_model,
+        quantization=incumbent.quantization,
+        model_sha256=incumbent.model_sha256,
+        vocab_sha256=incumbent.vocab_sha256,
+    )
+
+
+def champion_entry(
+    crown: RerankerChampionRow, submission: RerankerSubmissionRow
+) -> RerankerChampionEntry:
+    return RerankerChampionEntry(
+        submission_id=crown.submission_id,
+        miner_hotkey=submission.miner_hotkey,
+        artifact_sha256=submission.artifact_sha256,
+        previous_submission_id=crown.previous_submission_id,
+        crowned_at=crown.crowned_at,
+        superseded_at=crown.superseded_at,
+        contract_sha256=crown.contract_sha256,
+        pools_sha256=crown.pools_sha256,
+        comparison=crown.comparison,
+    )
+
+
+async def current_champion_entry(
+    session: AsyncSession,
+) -> RerankerChampionEntry | None:
+    """The current shadow champion, or ``None`` while the incumbent holds it."""
+    crown = await get_current_reranker_champion(session)
+    if crown is None:
+        return None
+    submission = await get_reranker_submission(
+        session, submission_id=crown.submission_id
+    )
+    if submission is None:  # FK makes this unreachable
+        return None
+    return champion_entry(crown, submission)
 
 
 @router.post(
@@ -557,3 +605,24 @@ async def get_public_reranker_submission(
         raise HTTPException(status_code=404, detail="reranker submission not found")
     response.headers["Cache-Control"] = _PUBLIC_CACHE_CONTROL
     return to_public(row)
+
+
+@router.get(
+    "/public/reranker/champion",
+    response_model=RerankerChampionResponse,
+)
+async def get_public_reranker_champion(
+    response: Response, session: SessionDep
+) -> RerankerChampionResponse:
+    """The shadow champion (``champion`` is null while the incumbent holds it).
+
+    Shadow only: a crown pays nothing and sets no weight. Until the transfer
+    gate (SN-226) is in force the scorer crowns nobody by default.
+    """
+    response.headers["Cache-Control"] = _PUBLIC_CACHE_CONTROL
+    return RerankerChampionResponse(
+        contract_id=CONTRACT_ID,
+        contract_sha256=CONTRACT.digest(),
+        incumbent=incumbent_view(),
+        champion=await current_champion_entry(session),
+    )

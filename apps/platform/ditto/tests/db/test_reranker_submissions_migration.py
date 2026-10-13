@@ -67,6 +67,8 @@ async def test_downgrade_drops_and_upgrade_restores_the_table(
 
     alembic("upgrade", REVISION)
     assert await _table_exists(engine)
+    # Later revisions (SN-209 scoring) extend this table; compare at head.
+    alembic("upgrade", "head")
     assert await _shape(engine) == before
 
     names = {name for name, _ in before}

@@ -476,6 +476,7 @@ describe('Backroom MCP tools', () => {
         'apply_copy_court_settings',
         'list_hotkey_bans',
         'get_reranker_submissions',
+        'get_reranker_champions',
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
         'get_agent_coding_certifications',
@@ -662,8 +663,10 @@ describe('Backroom MCP tools', () => {
     // and retain the existing catalog budget as these inputs evolve.
     // The Season 2 reranker shadow-intake read (SN-207) adds one bounded
     // page/status/hotkey input and a one-line summary; measured 180,675 bytes.
+    // The reranker crown-history read (SN-209) adds one page input and a
+    // one-line summary; measured 181,228 bytes.
     // Measure the serialized UTF-8 catalog, including guarded Gamma controls.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(181_200)
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(181_700)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1707,6 +1710,7 @@ describe('Backroom MCP tools', () => {
       list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
       list_hotkey_bans: { maxLimit: 200, maxDefault: 50 },
       get_reranker_submissions: { maxLimit: 200, maxDefault: 50 },
+      get_reranker_champions: { maxLimit: 200, maxDefault: 50 },
       get_leaderboard: { maxLimit: 200, maxDefault: 50 },
       get_validator_fleet: { maxLimit: 200, maxDefault: 50 },
       list_validator_assignments: { maxLimit: 200, maxDefault: 50 },
@@ -7562,18 +7566,23 @@ describe('Backroom MCP tools', () => {
       score: { ndcg_at_10: 0.831 },
       scored_at: '2026-10-13T12:00:00Z',
       created_at: '2026-10-13T11:00:00Z',
+      seed_block: 4242424,
+      failure_reason: null,
+      scoring_attempts: 1,
+      scoring_lease_expires_at: null,
     }
     const fetchMock = vi.fn().mockResolvedValueOnce(
       Response.json({
         contract_id: 'reranker-season-v1',
         contract_sha256: 'e'.repeat(64),
         total: 3,
-        status_counts: { accepted: 2, invalid: 0, scored: 1, failed: 0 },
+        status_counts: { accepted: 2, scoring: 0, invalid: 0, scored: 1, failed: 0 },
         upload_window_seconds: 3600,
         uploads_per_window: 1,
         limit: 1,
         offset: 0,
         submissions: [row],
+        champion: null,
       }),
     )
     vi.stubGlobal('fetch', fetchMock)
@@ -7599,6 +7608,62 @@ describe('Backroom MCP tools', () => {
       expect(url).toContain('/api/v1/admin/reranker-submissions?')
       expect(url).toContain('status=scored')
       expect(url).not.toContain('hotkey=')
+      expect(fetchMock.mock.calls[0][1]?.method ?? 'GET').toBe('GET')
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('reads the Season 2 reranker shadow crown history read-only', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const crown = {
+      submission_id: '6f1c9a52-7d3e-4b8a-9c2f-1e5d7a3b9c40',
+      miner_hotkey: '5FKbkmKbJHTgsELVPigLJqbmovaviDN7dHZzX7UJ6xoqG4fx',
+      artifact_sha256: 'a'.repeat(64),
+      previous_submission_id: null,
+      crowned_at: '2026-10-13T12:00:00Z',
+      superseded_at: null,
+      contract_sha256: 'c'.repeat(64),
+      pools_sha256: 'd'.repeat(64),
+      comparison: { dethrones: true, mean_diff: 0.031, threshold: 0.005 },
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        contract_id: 'reranker-season-v1',
+        contract_sha256: 'e'.repeat(64),
+        incumbent: {
+          base_model: 'cross-encoder/ms-marco-TinyBERT-L2-v2',
+          quantization: 'int8-dynamic',
+          model_sha256: 'f'.repeat(64),
+          vocab_sha256: '0'.repeat(64),
+        },
+        current: crown,
+        total: 1,
+        limit: 50,
+        offset: 0,
+        history: [crown],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_reranker_champions',
+        arguments: {},
+      })
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as Record<string, unknown>
+      expect(body).toMatchObject({
+        total: 1,
+        returned: 1,
+        has_more: false,
+        current: { submission_id: crown.submission_id },
+      })
+      const url = String(fetchMock.mock.calls[0][0])
+      expect(url).toContain('/api/v1/admin/reranker-champions?')
+      expect(url).toContain('limit=50')
       expect(fetchMock.mock.calls[0][1]?.method ?? 'GET').toBe('GET')
     } finally {
       await client.close()
