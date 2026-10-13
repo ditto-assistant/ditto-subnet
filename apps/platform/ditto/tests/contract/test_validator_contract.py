@@ -31,11 +31,13 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import latest_benchmark_contract
 from ditto.tests.contract._schema import (
     CONFIRMATION_MODELS,
+    RERANKER_MODELS,
     ROUTER_MODELS,
     SHARED_MODELS,
     compute_bench_versions,
     compute_confirmation_contract,
     compute_contract,
+    compute_reranker_contract,
     compute_router_contract,
 )
 
@@ -48,6 +50,7 @@ from screening_protocol_freshness import hint as stale_install_hint  # noqa: E40
 _GOLDEN = Path(__file__).parent / "validator_contract.json"
 _CONFIRMATION_GOLDEN = Path(__file__).parent / "confirmation_contract.json"
 _ROUTER_GOLDEN = Path(__file__).parent / "router_contract.json"
+_RERANKER_GOLDEN = Path(__file__).parent / "reranker_contract.json"
 
 _BENCH_VERSIONS_GOLDEN = Path(__file__).parent / "bench_versions.json"
 _VALIDATOR_CONTRACT_DIR = Path(__file__).resolve().parents[5] / "ditto/tests/contract"
@@ -140,6 +143,7 @@ def test_monorepo_validator_goldens_match_validator_byte_for_byte() -> None:
         "validator_contract.json",
         "confirmation_contract.json",
         "router_contract.json",
+        "reranker_contract.json",
         "bench_versions.json",
     ):
         local = (Path(__file__).parent / filename).read_bytes()
@@ -216,6 +220,26 @@ def test_router_models_match_committed_contract() -> None:
         f"`uv run python ../../scripts/gen_validator_contract.py` -- one run "
         f"also refreshes the byte-identical ditto-subnet copy -- and commit "
         f"both with the change.{stale_install_hint()}"
+    )
+
+
+def test_reranker_models_match_committed_contract() -> None:
+    """Guard: the shadow reranker-ledger wire models keep a stable structure.
+
+    ``reranker_ledger.py`` is a hand-maintained twin of the validator's copy;
+    ``weight_eligible``/``combined_score`` carry the shadow invariant.
+    """
+    golden = json.loads(_RERANKER_GOLDEN.read_text())
+    actual = compute_reranker_contract()
+    assert set(actual) == set(golden) == set(RERANKER_MODELS), (
+        "shared reranker model set changed; update RERANKER_MODELS + golden"
+    )
+    mismatched = [name for name in RERANKER_MODELS if actual[name] != golden[name]]
+    assert not mismatched, (
+        f"reranker wire model(s) {mismatched} drifted from the committed "
+        "contract. If intended, regenerate this golden with "
+        "`uv run python ../../scripts/gen_validator_contract.py` and commit "
+        f"both copies with the change.{stale_install_hint()}"
     )
 
 

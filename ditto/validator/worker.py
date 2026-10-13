@@ -39,6 +39,7 @@ from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
     ConfirmationProgressStage,
 )
+from ditto.api_models.reranker_ledger import RerankerLedgerResponse
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.validator import (
@@ -115,6 +116,7 @@ from ditto.validator.telemetry import (
 )
 from ditto.validator.tracks import (
     TRACK_MEMORY,
+    TRACK_RERANKER,
     MemoryFoldParams,
     TrackFoldInputs,
     TrackRegistry,
@@ -734,6 +736,46 @@ class PlatformRouterLedgerSource:
             return RouterLedgerResponse()
 
 
+@runtime_checkable
+class RerankerLedgerSource(Protocol):
+    """Where the Season 2 reranker shadow ledger comes from (SN-209).
+
+    The reranker is scored by Platform's trusted worker, never here. The
+    validator only reads the ledger and logs it; the reranker track is
+    hard-coded shadow, so nothing read here can change the weight vector.
+    """
+
+    async def fetch(self) -> RerankerLedgerResponse: ...
+
+
+class EmptyRerankerLedgerSource:
+    """Default: no read at all, an empty ledger (zero reranker emission)."""
+
+    async def fetch(self) -> RerankerLedgerResponse:
+        return RerankerLedgerResponse()
+
+
+class PlatformRerankerLedgerSource:
+    """Reads ``GET /scoring/reranker-ledger``; any error folds an empty ledger.
+
+    Enabled only by ``VALIDATOR_RERANKER_LEDGER_READ_ENABLED``. Fail-closed so
+    a Platform outage or a malformed response can never disturb ``put_weights``.
+    """
+
+    def __init__(self, read: Callable[[], Awaitable[RerankerLedgerResponse]]) -> None:
+        self._read = read
+
+    async def fetch(self) -> RerankerLedgerResponse:
+        try:
+            return await self._read()
+        except Exception:
+            logger.warning(
+                "reranker ledger read failed; folding an empty ledger this epoch",
+                exc_info=True,
+            )
+            return RerankerLedgerResponse()
+
+
 class ValidatorWorker:
     """Owns one scoring sweep and the long-lived loop around it."""
 
@@ -751,6 +793,7 @@ class ValidatorWorker:
         heartbeat_clock: _HeartbeatClock | None = None,
         after_score: Callable[[UUID, int], None] | None = None,
         router_ledger_source: RouterLedgerSource | None = None,
+        reranker_ledger_source: RerankerLedgerSource | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -787,6 +830,10 @@ class ValidatorWorker:
         # reads the offloaded scorer's published ledger. See RouterLedgerSource.
         self._router_ledger_source: RouterLedgerSource = (
             router_ledger_source or EmptyRouterLedgerSource()
+        )
+        # Season 2 reranker shadow ledger: read-and-log only (SN-209).
+        self._reranker_ledger_source: RerankerLedgerSource = (
+            reranker_ledger_source or EmptyRerankerLedgerSource()
         )
         self._platform_accepted = False
         self._bootstrap_resume_ready = False
@@ -2240,6 +2287,7 @@ class ValidatorWorker:
             router_weight_eligible=self._config.router_weight_eligible,
         )
         router_ledger = await self._get_router_ledger()
+        reranker_ledger = await self._reranker_ledger_source.fetch()
         fold_inputs = TrackFoldInputs(
             memory_entries=registered_entries,
             memory_params=MemoryFoldParams(
@@ -2262,6 +2310,7 @@ class ValidatorWorker:
                 or e.miner_hotkey != treasury_pin.policy.collector_hotkey
             ),
             router_rank_shares=self._config.router_rank_shares,
+            reranker_champion=reranker_ledger.champion,
         )
         track_vectors = {
             track.track_id: track.fold(fold_inputs) for track in registry.tracks
@@ -2287,7 +2336,7 @@ class ValidatorWorker:
                 provisional.agent_id if provisional is not None else None,
                 (1.0 - paid_fraction) * 100.0,
             )
-        self._log_shadow_tracks(registry, track_vectors, router_ledger)
+        self._log_shadow_tracks(registry, track_vectors, router_ledger, reranker_ledger)
         # The burn is operator policy served on the ledger, not a compiled-in
         # constant; the config value is the fallback for a platform that does not
         # carry the field and for anything that fails validation.
@@ -2446,6 +2495,7 @@ class ValidatorWorker:
         registry: TrackRegistry,
         track_vectors: dict[str, dict[str, float]],
         router_ledger: RouterLedgerResponse,
+        reranker_ledger: RerankerLedgerResponse | None = None,
     ) -> None:
         """Log every non-memory track's folded vector for shadow observability.
 
@@ -2459,6 +2509,15 @@ class ValidatorWorker:
             logger.warning(
                 "router ledger is STALE (scorer served a last-known-good "
                 "snapshot); folding it for shadow observation only"
+            )
+        if reranker_ledger is not None and reranker_ledger.champion is not None:
+            champion = reranker_ledger.champion
+            logger.info(
+                "track %s shadow champion: %s (%d recent scored, %d crowned)",
+                TRACK_RERANKER,
+                champion.miner_hotkey if champion.kind == "submission" else "incumbent",
+                len(reranker_ledger.entries),
+                sum(1 for entry in reranker_ledger.entries if entry.crowned),
             )
         for track in registry.tracks:
             if track.track_id == TRACK_MEMORY:

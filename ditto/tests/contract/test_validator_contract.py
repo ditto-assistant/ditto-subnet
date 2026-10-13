@@ -22,12 +22,14 @@ from ditto.api_models import validator_confirmation
 from ditto.api_models.agent_status import AgentStatus
 from ditto.tests.contract._schema import (
     CONFIRMATION_MODELS,
+    RERANKER_MODELS,
     ROUTER_MODELS,
     SHARED_MODELS,
     compute_bench_versions,
     compute_confirmation_contract,
     compute_contract,
     compute_miner_contract,
+    compute_reranker_contract,
     compute_router_contract,
 )
 
@@ -41,6 +43,7 @@ _GOLDEN = Path(__file__).parent / "validator_contract.json"
 _MINER_GOLDEN = Path(__file__).parent / "miner_contract.json"
 _CONFIRMATION_GOLDEN = Path(__file__).parent / "confirmation_contract.json"
 _ROUTER_GOLDEN = Path(__file__).parent / "router_contract.json"
+_RERANKER_GOLDEN = Path(__file__).parent / "reranker_contract.json"
 
 _BENCH_VERSIONS_GOLDEN = Path(__file__).parent / "bench_versions.json"
 _PLATFORM_CONTRACT_DIR = (
@@ -133,6 +136,7 @@ def test_monorepo_validator_goldens_match_platform_byte_for_byte() -> None:
         "validator_contract.json",
         "confirmation_contract.json",
         "router_contract.json",
+        "reranker_contract.json",
         "bench_versions.json",
     ):
         local = (Path(__file__).parent / filename).read_bytes()
@@ -194,6 +198,39 @@ def test_router_models_match_platform_contract() -> None:
         f"If intended, regenerate ditto/tests/contract/router_contract.json from "
         f"ditto-platform via scripts/gen_validator_contract.py and commit it "
         f"with the change.{stale_install_hint()}"
+    )
+
+
+def test_reranker_models_match_platform_contract() -> None:
+    """Guard: the shadow reranker-ledger wire models match Platform's contract.
+
+    ``reranker_ledger.py`` is a hand-maintained twin. ``weight_eligible`` and
+    ``combined_score`` carry the shadow invariant (False / 0 on every served
+    entry); a one-sided rename or retype would let a served value fold
+    differently without anything noticing.
+    """
+    golden = json.loads(_RERANKER_GOLDEN.read_text())
+    actual = compute_reranker_contract()
+    assert set(actual) == set(golden) == set(RERANKER_MODELS), (
+        "shared reranker model set changed; update RERANKER_MODELS + golden"
+    )
+    mismatched = [name for name in RERANKER_MODELS if actual[name] != golden[name]]
+    assert not mismatched, (
+        f"reranker wire model(s) {mismatched} drifted from the platform "
+        "contract. If intended, regenerate reranker_contract.json from "
+        "apps/platform via scripts/gen_validator_contract.py and commit it "
+        f"with the change.{stale_install_hint()}"
+    )
+
+
+def test_reranker_ledger_twin_sources_are_byte_identical() -> None:
+    """The two hand-maintained copies are one file, not two similar ones."""
+    repo = Path(__file__).resolve().parents[3]
+    validator = (repo / "ditto/api_models/reranker_ledger.py").read_bytes()
+    platform = (repo / "apps/platform/ditto/api_models/reranker_ledger.py").read_bytes()
+    assert validator == platform, (
+        "ditto/api_models/reranker_ledger.py and its apps/platform twin "
+        "diverged; copy one onto the other and regenerate the golden"
     )
 
 

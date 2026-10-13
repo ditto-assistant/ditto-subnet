@@ -242,6 +242,21 @@ def test_reranker_workflow_is_release_owned(components, ignored_paths) -> None:
     }
 
 
+def test_reranker_ledger_model_releases_the_validator_like_the_router_ledger(
+    components, ignored_paths
+) -> None:
+    # The validator reads the reranker shadow ledger (SN-209) through its own
+    # twin of the wire model; a change to it must ship the validator image,
+    # exactly as the router ledger twin does. The model does not import the
+    # reranker package, so the season contract still does not select it.
+    path = "ditto/api_models/reranker_ledger.py"
+    assert selected(components, ignored_paths, path) == selected(
+        components, ignored_paths, "ditto/api_models/router_ledger.py"
+    )
+    assert {"validator", "validator_stack"} <= selected(components, ignored_paths, path)
+    assert "dittobench_reranker" not in selected(components, ignored_paths, path)
+
+
 def test_coding_starter_workflow_is_release_owned(components, ignored_paths) -> None:
     assert selected(
         components,

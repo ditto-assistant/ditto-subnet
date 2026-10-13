@@ -80,6 +80,7 @@ from ditto.api_models.receipt_diagnostics import (
     SubmitReceiptDiagnostics,
     diagnostic_signing_message,
 )
+from ditto.api_models.reranker_ledger import RerankerLedgerResponse
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.validator import (
     ArtifactResponse,
@@ -2080,6 +2081,41 @@ class PlatformClient:
             return RouterLedgerResponse.model_validate(resp.json())
         except (ValidationError, ValueError) as e:
             raise PlatformError("router ledger response was invalid") from e
+
+    async def get_reranker_ledger(self) -> RerankerLedgerResponse:
+        """Pull the Season 2 reranker shadow ledger (SN-209).
+
+        ``GET /scoring/reranker-ledger`` behind the same signed proof as
+        :meth:`get_ledger`. Best-effort: :class:`PlatformRerankerLedgerSource`
+        degrades any failure to an empty ledger. The reranker track is
+        hard-coded shadow, so even a served ledger contributes zero weight.
+        """
+        url = f"{self._base}{_SCORING_PREFIX}/reranker-ledger"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Ledger-Nonce": str(nonce),
+            "X-Validator-Ledger-Requested-At": requested_at.isoformat(),
+            "X-Validator-Ledger-Signature": sign_ledger_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
+        try:
+            resp = await self._client.get(url, headers=proof_headers)
+        except httpx.HTTPError as e:
+            raise PlatformError(f"reranker ledger fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"reranker ledger rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            return RerankerLedgerResponse.model_validate(resp.json())
+        except (ValidationError, ValueError) as e:
+            raise PlatformError("reranker ledger response was invalid") from e
 
     async def get_private_dataset(
         self, agent_id: UUID, *, dataset_sha256: str, deadline: datetime

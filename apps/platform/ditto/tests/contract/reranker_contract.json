@@ -1,0 +1,402 @@
+{
+  "RerankerLedgerChampion": {
+    "properties": {
+      "artifact_sha256": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "combined_score": {
+        "default": 0.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "crowned_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "kind": {
+        "enum": [
+          "incumbent",
+          "submission"
+        ],
+        "type": "string"
+      },
+      "miner_hotkey": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "submission_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "weight_eligible": {
+        "default": false,
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "kind"
+    ],
+    "type": "object"
+  },
+  "RerankerLedgerEntry": {
+    "properties": {
+      "artifact_sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "champion_kind": {
+        "enum": [
+          "incumbent",
+          "submission"
+        ],
+        "type": "string"
+      },
+      "champion_score": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "combined_score": {
+        "default": 0.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "crowned": {
+        "type": "boolean"
+      },
+      "dethrones": {
+        "type": "boolean"
+      },
+      "latency_passed": {
+        "type": "boolean"
+      },
+      "mean_diff": {
+        "type": "number"
+      },
+      "miner_hotkey": {
+        "type": "string"
+      },
+      "pools_sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "scored_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "shadow_score": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "status": {
+        "enum": [
+          "scored",
+          "invalid"
+        ],
+        "type": "string"
+      },
+      "submission_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "threshold": {
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "transfer_gate": {
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "weight_eligible": {
+        "default": false,
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "submission_id",
+      "miner_hotkey",
+      "artifact_sha256",
+      "status",
+      "shadow_score",
+      "champion_score",
+      "champion_kind",
+      "mean_diff",
+      "threshold",
+      "dethrones",
+      "latency_passed",
+      "transfer_gate",
+      "crowned",
+      "pools_sha256",
+      "scored_at"
+    ],
+    "type": "object"
+  },
+  "RerankerLedgerResponse": {
+    "$defs": {
+      "RerankerLedgerChampion": {
+        "properties": {
+          "artifact_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "combined_score": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "crowned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "kind": {
+            "enum": [
+              "incumbent",
+              "submission"
+            ],
+            "type": "string"
+          },
+          "miner_hotkey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "submission_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "weight_eligible": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "RerankerLedgerEntry": {
+        "properties": {
+          "artifact_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "champion_kind": {
+            "enum": [
+              "incumbent",
+              "submission"
+            ],
+            "type": "string"
+          },
+          "champion_score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "combined_score": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "crowned": {
+            "type": "boolean"
+          },
+          "dethrones": {
+            "type": "boolean"
+          },
+          "latency_passed": {
+            "type": "boolean"
+          },
+          "mean_diff": {
+            "type": "number"
+          },
+          "miner_hotkey": {
+            "type": "string"
+          },
+          "pools_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "scored_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "shadow_score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "scored",
+              "invalid"
+            ],
+            "type": "string"
+          },
+          "submission_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "threshold": {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "transfer_gate": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "weight_eligible": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "submission_id",
+          "miner_hotkey",
+          "artifact_sha256",
+          "status",
+          "shadow_score",
+          "champion_score",
+          "champion_kind",
+          "mean_diff",
+          "threshold",
+          "dethrones",
+          "latency_passed",
+          "transfer_gate",
+          "crowned",
+          "pools_sha256",
+          "scored_at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "champion": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/RerankerLedgerChampion"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "contract_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "contract_sha256": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "count": {
+        "default": 0,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/$defs/RerankerLedgerEntry"
+        },
+        "type": "array"
+      },
+      "generated_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "type": "object"
+  }
+}

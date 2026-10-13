@@ -173,6 +173,24 @@ configuration, and the inference runtime from
 `uv sync --group reranker-scorer`. Nothing deploys or enables it yet; that is
 a separate, authorized infrastructure change.
 
+## Validator shadow track (SN-209)
+
+Platform serves the shadow crown and the most recent scores to permitted
+validators at `GET /api/v1/scoring/reranker-ledger`, behind the same signed
+proof-of-possession as the memory ledger. Every entry and the champion are
+clamped to `weight_eligible=false` and `combined_score=0` before serving; the
+measured NDCG rides `shadow_score` and `champion_score`.
+
+The validator registers a `reranker` track that is **hard-coded** `SHADOW` and
+not weight-eligible: no configuration, environment variable or served
+`track_shares_bps` can promote it, and its compiled share is 0 bps. A served
+`reranker` share is recorded but never joins the paying split, so it cannot
+shrink the memory track. Validators read the ledger only when
+`VALIDATOR_RERANKER_LEDGER_READ_ENABLED=true` (default off); a read failure
+folds an empty ledger. Either way the submitted weight vector is byte-identical
+to one with no reranker track. Paying the track is a later code change gated
+on the transfer gate (SN-226).
+
 ## Score
 
 For each pool:

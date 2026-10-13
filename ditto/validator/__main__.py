@@ -49,6 +49,7 @@ from ditto.validator.update_control import (
     write_update_state,
 )
 from ditto.validator.worker import (
+    PlatformRerankerLedgerSource,
     PlatformRouterLedgerSource,
     ValidatorWorker,
 )
@@ -183,6 +184,15 @@ async def _amain() -> int:
                     if config.router_ledger_read_enabled
                     else None
                 )
+                # Season 2 reranker shadow ledger (SN-209). Default-off: unless
+                # VALIDATOR_RERANKER_LEDGER_READ_ENABLED is set nothing is read.
+                # When on, the ledger is only logged; the reranker track is
+                # hard-coded shadow, so this changes no chain output.
+                reranker_ledger_source = (
+                    PlatformRerankerLedgerSource(read=platform.get_reranker_ledger)
+                    if config.reranker_ledger_read_enabled
+                    else None
+                )
                 worker = ValidatorWorker(
                     config=config,
                     platform=platform,
@@ -196,6 +206,7 @@ async def _amain() -> int:
                         coding_canary.offer if coding_canary is not None else None
                     ),
                     router_ledger_source=router_ledger_source,
+                    reranker_ledger_source=reranker_ledger_source,
                 )
                 async with AsyncExitStack() as coding_resources:
                     coding_worker = await _create_coding_shadow_worker(

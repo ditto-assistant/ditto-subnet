@@ -45,6 +45,7 @@ from ditto.api_models.continual_retest_settings import (
     ContinualRetestSettings,
 )
 from ditto.api_models.emission_eligibility import AgentEmissionEligibility
+from ditto.api_models.reranker_ledger import RerankerLedgerResponse
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.upload import _SS58_PATTERN
 from ditto.api_models.validator import (
@@ -76,6 +77,7 @@ from ditto.api_server.endpoints.validator import (
     _assert_validator_permitted,
     _verify_signature,
 )
+from ditto.api_server.reranker_ledger import build_reranker_ledger
 from ditto.api_server.treasury_read_diagnostics import treasury_read_failure_kind
 from ditto.chain.errors import (
     ChainTreasuryActivationReadError,
@@ -1525,6 +1527,56 @@ async def router_ledger(
         logger.warning("router ledger read failed; serving empty ledger", exc_info=True)
         return RouterLedgerResponse()
     return _clamp_router_ledger_to_shadow(ledger)
+
+
+@router.get(
+    "/reranker-ledger",
+    response_model=RerankerLedgerResponse,
+    responses={
+        401: {"description": "Missing/invalid validator auth."},
+        409: {"description": "Stale or replayed ledger request proof."},
+        503: {"description": "Chain unavailable, or nonce store unavailable."},
+    },
+)
+async def reranker_ledger(
+    request: Request,
+    response: Response,
+    chain: ChainDep,
+    session: SessionDep,
+    x_validator_hotkey: Annotated[str | None, Header()] = None,
+    x_validator_ledger_nonce: Annotated[UUID | None, Header()] = None,
+    x_validator_ledger_requested_at: Annotated[datetime | None, Header()] = None,
+    x_validator_ledger_signature: Annotated[str | None, Header()] = None,
+) -> RerankerLedgerResponse:
+    """Serve the Season 2 reranker shadow ledger (SN-209) to a validator.
+
+    Same signed proof-of-possession as :func:`scores`. The ledger holds the
+    shadow champion (the pinned incumbent until a crown is recorded) and the
+    most recently scored submissions with their champion comparison.
+
+    Shadow only: every entry and the champion are clamped to
+    ``weight_eligible=False`` and ``combined_score=0`` before serving, so the
+    ledger folds to zero emission. A read failure serves an empty ledger,
+    which folds identically; a reranker problem can never distort the memory
+    fold or the on-chain weight vector.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    await _authorize_ledger_request(
+        request,
+        chain,
+        session,
+        x_validator_hotkey=x_validator_hotkey,
+        x_validator_ledger_nonce=x_validator_ledger_nonce,
+        x_validator_ledger_requested_at=x_validator_ledger_requested_at,
+        x_validator_ledger_signature=x_validator_ledger_signature,
+    )
+    try:
+        return await build_reranker_ledger(session)
+    except SQLAlchemyError:
+        logger.warning(
+            "reranker ledger read failed; serving empty ledger", exc_info=True
+        )
+        return RerankerLedgerResponse()
 
 
 def _clamp_router_ledger_to_shadow(

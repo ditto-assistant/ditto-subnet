@@ -1,10 +1,11 @@
 """Scalable, retirable competition-track registry for the SN118 weight fold.
 
 The subnet is splitting from a single competition into several independent ones
-(memory, coding, router — with room for more). The chain accepts exactly **one**
-weight vector per validator, so "independent tracks" is realized by folding each
-track separately and blending the results by per-track emission share into one
-``put_weights`` (see :func:`ditto.validator.weights.blend_track_weights`).
+(memory, coding, router, reranker — with room for more). The chain accepts
+exactly **one** weight vector per validator, so "independent tracks" is realized
+by folding each track separately and blending the results by per-track emission
+share into one ``put_weights`` (see
+:func:`ditto.validator.weights.blend_track_weights`).
 
 This module owns only the *static* description of the tracks — their id, state,
 basis-point share, weight eligibility, and pure fold function — plus the
@@ -37,6 +38,7 @@ from ditto.validator.config import BASIS_POINT_SCALE
 from ditto.validator.weights import compute_router_weights, compute_weights
 
 if TYPE_CHECKING:
+    from ditto.api_models.reranker_ledger import RerankerLedgerChampion
     from ditto.api_models.router_ledger import RouterLedgerEntry
     from ditto.api_models.validator import LedgerEntry
 
@@ -51,6 +53,9 @@ logger = logging.getLogger(__name__)
 TRACK_MEMORY = "memory"
 TRACK_CODING = "coding"
 TRACK_ROUTER = "router"
+# Season 2 reranker competition (SN-209). Hard-coded SHADOW and never weight
+# eligible in this release: see ``_build_registry``.
+TRACK_RERANKER = "reranker"
 
 
 class TrackState(StrEnum):
@@ -96,6 +101,7 @@ class TrackFoldInputs:
     memory_params: MemoryFoldParams | None = None
     router_entries: Sequence[RouterLedgerEntry] = ()
     router_rank_shares: tuple[float, ...] = ()
+    reranker_champion: RerankerLedgerChampion | None = None
 
 
 TrackFold = Callable[[TrackFoldInputs], dict[str, float]]
@@ -129,6 +135,26 @@ def router_fold(inputs: TrackFoldInputs) -> dict[str, float]:
     return compute_router_weights(
         inputs.router_entries, rank_shares=inputs.router_rank_shares
     )
+
+
+def reranker_fold(inputs: TrackFoldInputs) -> dict[str, float]:
+    """Fold the reranker track: king of the hill, the champion takes the slice.
+
+    Only a champion the ledger marks weight-eligible with a positive
+    ``combined_score`` earns anything. Platform clamps both to shadow values,
+    so in this release the fold is always ``{}``; the track is also hard-coded
+    shadow, so even a non-empty vector would contribute zero emission.
+    """
+    champion = inputs.reranker_champion
+    if (
+        champion is None
+        or champion.kind != "submission"
+        or not champion.miner_hotkey
+        or not champion.weight_eligible
+        or champion.combined_score <= 0.0
+    ):
+        return {}
+    return {champion.miner_hotkey: 1.0}
 
 
 def reserved_fold(_inputs: TrackFoldInputs) -> dict[str, float]:
@@ -242,6 +268,19 @@ def _build_registry(
                 weight_eligible=router_weight_eligible,
                 fold=router_fold,
             ),
+            # Deliberately not configurable: no config field, environment
+            # variable or served ``track_shares_bps`` can promote this track.
+            # Its served bps are recorded for observability but, being SHADOW
+            # and not eligible, it draws 0 bps, never joins the paying split
+            # and cannot trip the cap fallback. Promotion is a code change.
+            Track(
+                track_id=TRACK_RERANKER,
+                name="Reranker",
+                state=TrackState.SHADOW,
+                emission_share_bps=track_shares_bps.get(TRACK_RERANKER, 0),
+                weight_eligible=False,
+                fold=reranker_fold,
+            ),
         )
     )
 
@@ -253,6 +292,7 @@ _SAFE_TRACK_SHARES_BPS = {
     TRACK_MEMORY: BASIS_POINT_SCALE,
     TRACK_CODING: 0,
     TRACK_ROUTER: 0,
+    TRACK_RERANKER: 0,
 }
 
 
@@ -264,10 +304,11 @@ def build_default_registry(
     coding_state: TrackState = TrackState.SHADOW,
     coding_weight_eligible: bool = False,
 ) -> TrackRegistry:
-    """The shipped three-track registry.
+    """The shipped four-track registry.
 
     Memory is ``ACTIVE`` and eligible (the existing competition); coding and
-    router default to ``SHADOW`` / not-eligible so v1 touches no emissions. The
+    router default to ``SHADOW`` / not-eligible so v1 touches no emissions.
+    The reranker track is always ``SHADOW`` / not-eligible (no parameter). The
     per-track bps come from the resolved ``track_shares_bps`` (compiled fallback
     or, later, the platform governance field).
 
@@ -308,6 +349,7 @@ __all__ = [
     "BASIS_POINT_SCALE",
     "TRACK_CODING",
     "TRACK_MEMORY",
+    "TRACK_RERANKER",
     "TRACK_ROUTER",
     "MemoryFoldParams",
     "Track",
@@ -316,6 +358,7 @@ __all__ = [
     "TrackState",
     "build_default_registry",
     "memory_fold",
+    "reranker_fold",
     "reserved_fold",
     "router_fold",
 ]

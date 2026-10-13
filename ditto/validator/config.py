@@ -94,7 +94,14 @@ BASIS_POINT_SCALE = 10_000
 # override this the same way ``burn_share`` overrides ``MINER_EMISSION_SHARE``
 # (see ``weights.resolve_track_shares``); a missing or malformed field folds back
 # to exactly this dict. The eligible sum must never exceed ``BASIS_POINT_SCALE``.
-TRACK_SHARES_BPS = {"memory": BASIS_POINT_SCALE, "coding": 0, "router": 0}
+# The reranker track (Season 2, SN-209) is registered shadow and hard-coded
+# not weight-eligible in ``tracks._build_registry``; its 0 here is the record.
+TRACK_SHARES_BPS = {
+    "memory": BASIS_POINT_SCALE,
+    "coding": 0,
+    "router": 0,
+    "reranker": 0,
+}
 # Router track rank shares: the relative emission slice each ranked router miner
 # receives (champion first). Only ratios matter -- ``blend_track_weights``
 # normalizes the router vector to the track's bps share -- so these need not sum
@@ -535,6 +542,15 @@ class ValidatorConfig:
     ``router_track_state`` — because turning the read on changes no chain output,
     only which ledger the (already zero-weighted) router fold logs and measures."""
 
+    reranker_ledger_read_enabled: bool = False
+    """Whether the worker reads the Season 2 reranker shadow ledger.
+
+    ``False`` (default) keeps :class:`EmptyRerankerLedgerSource`, so nothing is
+    fetched. ``VALIDATOR_RERANKER_LEDGER_READ_ENABLED=true`` reads
+    ``GET /scoring/reranker-ledger`` (fail-closed to empty) and logs the shadow
+    champion. It changes no chain output: the reranker track is hard-coded
+    shadow and not weight-eligible, and Platform clamps every served entry."""
+
     def __post_init__(self) -> None:
         """Fail loud at boot on a genuinely misconfigured router split.
 
@@ -863,6 +879,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         coding_canary_poll_seconds=coding_canary_poll_seconds,
         router_ledger_read_enabled=(
             os.environ.get("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", "false").lower()
+            in _truthy
+        ),
+        reranker_ledger_read_enabled=(
+            os.environ.get("VALIDATOR_RERANKER_LEDGER_READ_ENABLED", "false").lower()
             in _truthy
         ),
     )

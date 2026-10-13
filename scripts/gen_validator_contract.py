@@ -56,6 +56,7 @@ _DEFAULT_OUT = _CONTRACT_DIR / "validator_contract.json"
 _DEFAULT_MINER_OUT = _CONTRACT_DIR / "miner_contract.json"
 _DEFAULT_CONFIRMATION_OUT = _CONTRACT_DIR / "confirmation_contract.json"
 _DEFAULT_ROUTER_OUT = _CONTRACT_DIR / "router_contract.json"
+_DEFAULT_RERANKER_OUT = _CONTRACT_DIR / "reranker_contract.json"
 
 _DEFAULT_BENCH_VERSIONS_OUT = _CONTRACT_DIR / "bench_versions.json"
 
@@ -132,6 +133,12 @@ def main() -> None:
         help="destination shadow router-ledger contract golden",
     )
     parser.add_argument(
+        "--reranker-out",
+        type=Path,
+        default=_DEFAULT_RERANKER_OUT,
+        help="destination shadow reranker-ledger contract golden",
+    )
+    parser.add_argument(
         "--mirror-dir",
         type=Path,
         default=_PLATFORM_CONTRACT_DIR,
@@ -175,12 +182,14 @@ def main() -> None:
         ("router", args.router_out, []),
         ("bench_versions", args.bench_versions_out, []),
         ("miner", args.miner_out, []),
+        ("reranker", args.reranker_out, []),
     ]
     if mirror_dir is not None:
         plan[0][2].append(mirror_dir / "validator_contract.json")
         plan[1][2].append(mirror_dir / "confirmation_contract.json")
         plan[2][2].append(mirror_dir / "router_contract.json")
         plan[3][2].append(mirror_dir / "bench_versions.json")
+        plan[5][2].append(mirror_dir / "reranker_contract.json")
 
     compute = {
         "validator": schema.compute_contract,
@@ -188,6 +197,7 @@ def main() -> None:
         "router": schema.compute_router_contract,
         "bench_versions": schema.compute_bench_versions,
         "miner": schema.compute_miner_contract,
+        "reranker": schema.compute_reranker_contract,
     }
     for kind, out, mirrors in plan:
         contract = compute[kind]()

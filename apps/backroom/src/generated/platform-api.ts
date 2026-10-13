@@ -5857,6 +5857,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/scoring/reranker-ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reranker Ledger
+         * @description Serve the Season 2 reranker shadow ledger (SN-209) to a validator.
+         *
+         *     Same signed proof-of-possession as :func:`scores`. The ledger holds the
+         *     shadow champion (the pinned incumbent until a crown is recorded) and the
+         *     most recently scored submissions with their champion comparison.
+         *
+         *     Shadow only: every entry and the champion are clamped to
+         *     ``weight_eligible=False`` and ``combined_score=0`` before serving, so the
+         *     ledger folds to zero emission. A read failure serves an empty ledger,
+         *     which folds identically; a reranker problem can never distort the memory
+         *     fold or the on-chain weight vector.
+         */
+        get: operations["reranker_ledger_api_v1_scoring_reranker_ledger_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scoring/router-ledger": {
         parameters: {
             query?: never;
@@ -29818,6 +29848,129 @@ export interface components {
             vocab_sha256: string;
         };
         /**
+         * RerankerLedgerChampion
+         * @description Who holds the shadow crown: the pinned incumbent or a submission.
+         */
+        RerankerLedgerChampion: {
+            /** Artifact Sha256 */
+            artifact_sha256?: string | null;
+            /**
+             * Combined Score
+             * @description The folded weight input. Forced 0 in shadow.
+             * @default 0
+             */
+            combined_score: number;
+            /** Crowned At */
+            crowned_at?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "incumbent" | "submission";
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
+            /** Submission Id */
+            submission_id?: string | null;
+            /**
+             * Weight Eligible
+             * @description False in shadow. The validator's reranker track state is the authority; this is a defensive echo.
+             * @default false
+             */
+            weight_eligible: boolean;
+        };
+        /**
+         * RerankerLedgerEntry
+         * @description One scored submission: its comparison against the champion it faced.
+         */
+        RerankerLedgerEntry: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Champion Kind
+             * @enum {string}
+             */
+            champion_kind: "incumbent" | "submission";
+            /**
+             * Champion Score
+             * @description Champion mean NDCG@10, same pools.
+             */
+            champion_score: number;
+            /**
+             * Combined Score
+             * @description The folded weight input. 0 in shadow.
+             * @default 0
+             */
+            combined_score: number;
+            /** Crowned */
+            crowned: boolean;
+            /** Dethrones */
+            dethrones: boolean;
+            /** Latency Passed */
+            latency_passed: boolean;
+            /** Mean Diff */
+            mean_diff: number;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Pools Sha256 */
+            pools_sha256: string;
+            /**
+             * Scored At
+             * Format: date-time
+             */
+            scored_at: string;
+            /**
+             * Shadow Score
+             * @description Challenger mean NDCG@10 (measured).
+             */
+            shadow_score: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "scored" | "invalid";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Threshold */
+            threshold: number;
+            /** Transfer Gate */
+            transfer_gate: string;
+            /**
+             * Weight Eligible
+             * @description False in shadow (defensive echo).
+             * @default false
+             */
+            weight_eligible: boolean;
+        };
+        /**
+         * RerankerLedgerResponse
+         * @description ``GET /scoring/reranker-ledger``: the shadow crown and recent scores.
+         *
+         *     Empty (the default, or an older Platform that lacks the route) folds to
+         *     zero reranker emission, identical to the shadow state.
+         */
+        RerankerLedgerResponse: {
+            champion?: components["schemas"]["RerankerLedgerChampion"] | null;
+            /** Contract Id */
+            contract_id?: string | null;
+            /** Contract Sha256 */
+            contract_sha256?: string | null;
+            /**
+             * Count
+             * @default 0
+             */
+            count: number;
+            /**
+             * Entries
+             * @description Most recently scored submissions, newest first.
+             */
+            entries?: components["schemas"]["RerankerLedgerEntry"][];
+            /** Generated At */
+            generated_at?: string | null;
+        };
+        /**
          * RerankerSubmission
          * @description Public view of one submission. ``score`` is null until scored.
          */
@@ -48034,6 +48187,61 @@ export interface operations {
             };
             /** @description Malformed UUID path parameter. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reranker_ledger_api_v1_scoring_reranker_ledger_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+                "x-validator-ledger-nonce"?: string | null;
+                "x-validator-ledger-requested-at"?: string | null;
+                "x-validator-ledger-signature"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerankerLedgerResponse"];
+                };
+            };
+            /** @description Missing/invalid validator auth. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale or replayed ledger request proof. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Chain unavailable, or nonce store unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

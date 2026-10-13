@@ -67,6 +67,17 @@ ROUTER_MODELS = [
     "RouterLedgerResponse",
 ]
 
+# The Season 2 reranker shadow ledger (SN-209): Platform builds it from its
+# scorer state and the validator only reads and logs it. Like the router
+# ledger it is a hand-maintained twin on both sides, so pin its structure:
+# a one-sided rename of ``weight_eligible``/``combined_score`` would silently
+# break the shadow invariant the validator relies on.
+RERANKER_MODELS = [
+    "RerankerLedgerChampion",
+    "RerankerLedgerEntry",
+    "RerankerLedgerResponse",
+]
+
 # The miner-CLI request/response models that cross the same boundary, keyed by
 # the module each lives in. Guarded for the same reason as the validator models
 # and learned the same way: the platform added ``payment_required``,
@@ -135,6 +146,11 @@ def compute_confirmation_contract() -> dict[str, Any]:
 def compute_router_contract() -> dict[str, Any]:
     """Return the normalized structure of the shadow router-ledger wire models."""
     return compute_contract(ROUTER_MODELS, module="ditto.api_models.router_ledger")
+
+
+def compute_reranker_contract() -> dict[str, Any]:
+    """Return the normalized structure of the shadow reranker-ledger models."""
+    return compute_contract(RERANKER_MODELS, module="ditto.api_models.reranker_ledger")
 
 
 def compute_miner_contract(
