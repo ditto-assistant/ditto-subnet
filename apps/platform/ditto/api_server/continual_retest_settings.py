@@ -67,6 +67,19 @@ def statistical_band_cap_is_active(
     return settings.statistical_band_mode == "fleet_ready" and fleet_protocol_ready
 
 
+def dethrone_seed_full_set_is_active(
+    settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
+) -> bool:
+    """Resolve the operator-selected protocol-31 fold only for a ready fleet.
+
+    Same rule as tie weighting and crown incumbency: policy cannot override
+    fleet readiness, because a fold-changing ledger field visible to only part
+    of the fleet makes validators submit two different champions for identical
+    evidence.
+    """
+    return settings.dethrone_seed_mode == "fleet_ready" and fleet_protocol_ready
+
+
 def crown_incumbent_is_active(
     settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
 ) -> bool:

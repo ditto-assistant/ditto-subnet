@@ -73,6 +73,27 @@ const statisticalBandModes: Array<{
   },
 ]
 
+type DethroneSeedMode = 'disabled' | 'fleet_ready'
+
+const dethroneSeedModes: Array<{
+  value: DethroneSeedMode
+  label: string
+  detail: string
+}> = [
+  {
+    value: 'fleet_ready',
+    label: 'Require full seed set to dethrone (fleet ready)',
+    detail:
+      'After protocol 31 fleet readiness, a paired dethrone must cover the whole confirmation seed window; a partial window defers the crown decision instead of deciding it.',
+  },
+  {
+    value: 'disabled',
+    label: 'Legacy partial-seed dethrone (rollback)',
+    detail:
+      'Keep the pre-protocol-31 rule: a quorum of finished shared seeds may dethrone the crown at once.',
+  },
+]
+
 const ledgerPinModes: Array<{ value: LedgerPinMode; label: string; detail: string }> = [
   {
     value: 'epoch',
@@ -200,6 +221,9 @@ export function ContinualRetestControlPanel({
   const [statisticalBandMode, setStatisticalBandMode] = useState<StatisticalBandMode>(
     initialState.effective.settings.statistical_band_mode,
   )
+  const [dethroneSeedMode, setDethroneSeedMode] = useState<DethroneSeedMode>(
+    initialState.effective.settings.dethrone_seed_mode,
+  )
   const [ledgerPinMode, setLedgerPinMode] = useState<LedgerPinMode>(
     initialState.effective.settings.ledger_pin_mode,
   )
@@ -240,6 +264,7 @@ export function ContinualRetestControlPanel({
   const membershipSupported = state.field_support.wave_membership
   const tieWeightingSupported = state.field_support.tie_weighting_mode
   const statisticalBandSupported = state.field_support.statistical_band_mode
+  const dethroneSeedSupported = state.field_support.dethrone_seed_mode
   const ledgerPinSupported = state.field_support.ledger_pin_mode
   const crownIncumbentSupported = state.field_support.crown_incumbent_mode
   const eligibilitySupported =
@@ -281,6 +306,8 @@ export function ContinualRetestControlPanel({
       tieWeightingMode !== effective.settings.tie_weighting_mode) ||
     (statisticalBandSupported &&
       statisticalBandMode !== effective.settings.statistical_band_mode) ||
+    (dethroneSeedSupported &&
+      dethroneSeedMode !== effective.settings.dethrone_seed_mode) ||
     (ledgerPinSupported && ledgerPinMode !== effective.settings.ledger_pin_mode) ||
     (crownIncumbentSupported &&
       crownIncumbentMode !== effective.settings.crown_incumbent_mode) ||
@@ -308,6 +335,7 @@ export function ContinualRetestControlPanel({
     setMode(next.effective.settings.aggregate_mode)
     setTieWeightingMode(next.effective.settings.tie_weighting_mode)
     setStatisticalBandMode(next.effective.settings.statistical_band_mode)
+    setDethroneSeedMode(next.effective.settings.dethrone_seed_mode)
     setLedgerPinMode(next.effective.settings.ledger_pin_mode)
     setCrownIncumbentMode(next.effective.settings.crown_incumbent_mode)
     setIdleRetests(next.effective.settings.idle_retests_enabled)
@@ -354,6 +382,9 @@ export function ContinualRetestControlPanel({
             tie_weighting_mode: tieWeightingSupported ? tieWeightingMode : 'disabled',
             statistical_band_mode: state.field_support.statistical_band_mode
               ? statisticalBandMode
+              : 'disabled',
+            dethrone_seed_mode: state.field_support.dethrone_seed_mode
+              ? dethroneSeedMode
               : 'disabled',
             ledger_pin_mode: ledgerPinSupported ? ledgerPinMode : 'live',
             crown_incumbent_mode: crownIncumbentSupported ? crownIncumbentMode : 'disabled',
@@ -418,6 +449,7 @@ export function ContinualRetestControlPanel({
           <div><dt className="text-[var(--muted)]">Aggregate fold</dt><dd className="mt-1 font-semibold">{effective.aggregate_active ? 'Active' : 'Inactive'}</dd></div>
           <div><dt className="text-[var(--muted)]">Tie + ceiling payout</dt><dd className="mt-1 font-semibold">{effective.tie_weighting_active ? 'Active' : effective.settings.tie_weighting_mode === 'fleet_ready' ? 'Waiting for fleet' : 'Disabled'}</dd></div>
           <div><dt className="text-[var(--muted)]">Statistical cap</dt><dd className="mt-1 font-semibold">{effective.statistical_band_active ? 'Active' : effective.settings.statistical_band_mode === 'fleet_ready' ? 'Waiting for fleet' : 'Disabled'}</dd></div>
+          <div><dt className="text-[var(--muted)]">Full-seed dethrone</dt><dd className="mt-1 font-semibold">{effective.dethrone_seed_active ? 'Active' : effective.settings.dethrone_seed_mode === 'fleet_ready' ? 'Waiting for fleet' : 'Disabled'}</dd></div>
           <div>
             <dt className="text-[var(--muted)]">Retest lane</dt>
             <dd
@@ -499,6 +531,37 @@ export function ContinualRetestControlPanel({
                 onClick={() => setStatisticalBandMode(item.value)}
                 className={`min-h-16 rounded-lg border p-3 text-left disabled:opacity-45 ${
                   statisticalBandMode === item.value
+                    ? 'border-[var(--amber)]/40 bg-[var(--amber-dim)]'
+                    : 'border-[var(--line)] bg-[var(--panel)] hover:border-[var(--line-strong)]'
+                }`}
+              >
+                <span className="block text-sm font-semibold">{item.label}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-[var(--muted)]">
+                  {item.detail}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
+          <h3 className="text-xs font-semibold text-[var(--muted-strong)]">Full-seed-set dethrone gate</h3>
+          <p className="mt-1 text-[11px] leading-4 text-[var(--muted)]">
+            Requires a paired dethrone comparison to cover the whole confirmation seed window
+            before it may decide the crown: neither entry may hold a window seed the other has not
+            been scored on. A partial window defers the decision until the outstanding seeds
+            finish. Fleet ready waits for every recently-live weight setter to report protocol{' '}
+            {effective.dethrone_seed_required_protocol}; the next epoch pin activates the fold.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {dethroneSeedModes.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                disabled={readOnly || loading || !dethroneSeedSupported}
+                onClick={() => setDethroneSeedMode(item.value)}
+                className={`min-h-16 rounded-lg border p-3 text-left disabled:opacity-45 ${
+                  dethroneSeedMode === item.value
                     ? 'border-[var(--amber)]/40 bg-[var(--amber-dim)]'
                     : 'border-[var(--line)] bg-[var(--panel)] hover:border-[var(--line-strong)]'
                 }`}

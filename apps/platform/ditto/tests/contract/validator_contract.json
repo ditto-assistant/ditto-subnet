@@ -5852,6 +5852,18 @@
         ],
         "default": null
       },
+      "dethrone_seed_mode": {
+        "anyOf": [
+          {
+            "const": "full_set",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "tie_weighting_mode": {
         "anyOf": [
           {

@@ -574,6 +574,7 @@ def compute_weights(
     tie_pooling: bool = False,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
     incumbent_agent_id: UUID | None = None,
     unpaid_agent_id: UUID | None = None,
 ) -> dict[str, float]:
@@ -651,6 +652,7 @@ def compute_weights(
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
         incumbent_agent_id=incumbent_agent_id,
     )
     if len(rank_shares) != tail_size + 1:
@@ -668,6 +670,7 @@ def compute_weights(
             dethrone_z=dethrone_z,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            dethrone_seed_full_set=dethrone_seed_full_set,
         )
         if tie_pooling
         else []
@@ -776,6 +779,7 @@ def _score_ceiling_cohort(
     dethrone_z: float,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> list[LedgerEntry]:
     """Return the uncapped best-score cohort when KOTH cannot be dethroned.
 
@@ -798,6 +802,7 @@ def _score_ceiling_cohort(
         dethrone_z=dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
     ):
         return []
 
@@ -840,6 +845,7 @@ def select_champion(
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
     incumbent_agent_id: UUID | None = None,
 ) -> LedgerEntry | None:
     """Return the deterministic KOTH champion, or ``None`` for an empty pool."""
@@ -851,6 +857,7 @@ def select_champion(
             dethrone_z,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            dethrone_seed_full_set=dethrone_seed_full_set,
             incumbent_agent_id=incumbent_agent_id,
         )
         if scored
@@ -1509,6 +1516,32 @@ def _paired_dethrone(
     return mean_diff, champ_ref, se_diff
 
 
+def _seed_coverage_complete(
+    challenger: LedgerEntry, champion: LedgerEntry, *, full_set: bool
+) -> bool:
+    """Whether the pair's shared confirmation seeds span the whole window.
+
+    Protocol 31 pairs the dethrone decision with the sample it was sized for:
+    the paired band assumes every seed in the two entries' confirmation windows
+    contributes, so a decision made while either side is missing seeds the
+    other holds is a decision on a partial draw. The paired intersection over
+    both maps must equal the UNION of the two windows -- i.e. neither entry
+    holds a seed the other has not been scored on. When the mode is off, or
+    either map is absent (the ledger carries no confirmation evidence at all,
+    the historical pre-P5 fold), coverage is trivially complete and the fold is
+    byte-identical. Pure and deterministic over the same seed maps
+    :func:`_paired_dethrone` reads, so every validator reaches the same
+    verdict.
+    """
+    if not full_set:
+        return True
+    chall_map = _entry_seed_composites(challenger)
+    champ_map = _entry_seed_composites(champion)
+    if chall_map is None or champ_map is None:
+        return True
+    return set(chall_map) & set(champ_map) == set(chall_map) | set(champ_map)
+
+
 def _beats(
     challenger: LedgerEntry,
     champion: LedgerEntry,
@@ -1517,6 +1550,7 @@ def _beats(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> bool:
     """Whether ``challenger`` dethrones ``champion``. The lead must exceed the
     **indifference band** = max(fixed composite-point margin, statistical band).
@@ -1547,7 +1581,17 @@ def _beats(
 
     Protocol-21 quality-primary compares authoritative quality, not the
     efficiency-adjusted projection, so a 0.001 official lead cannot skip
-    hysteresis merely because a factor is present."""
+    hysteresis merely because a factor is present.
+
+    When ``dethrone_seed_full_set`` is active (protocol 31, ``dethrone_seed_mode:
+    full_set``), a decision made on the PAIRED branch additionally requires the
+    two entries' shared-seed intersection to cover every seed EITHER side holds
+    in the served confirmation window. A crown decided on a subset of the
+    window is not apples-to-apples: the band was sized for the full sample, so
+    a partial-seed dethrone can flip on evidence the remaining seeds then
+    contradict and never revisit. Under the gate a partial pairing falls back
+    to the unpaired comparison, which partial confirmations cannot win while
+    any unshared seed is still outstanding."""
     observed_score, required_score = _dethrone_scores(
         challenger,
         champion,
@@ -1555,6 +1599,7 @@ def _beats(
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
     )
     return observed_score > required_score
 
@@ -1567,9 +1612,21 @@ def _dethrone_scores(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> tuple[float, float]:
-    """Return the observed and strictly-exceeded required challenger scores."""
+    """Return the observed and strictly-exceeded required challenger scores.
+
+    Under ``dethrone_seed_full_set`` (protocol 31), an incomplete seed-coverage
+    pair returns an unreachable requirement (the challenger's own ceiling,
+    which ``observed <= required`` can never clear) so the crown decision
+    defers until the confirmation window completes and the lane re-decides it
+    on the next round."""
     quality_primary = _quality_primary_efficiency_active((challenger, champion))
+    if not _seed_coverage_complete(
+        challenger, champion, full_set=dethrone_seed_full_set
+    ):
+        ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
+        return -math.inf, ceiling
     paired = _paired_dethrone(challenger, champion, dethrone_z)
     if paired is not None:
         mean_diff, champ_ref, se_diff = paired
@@ -1605,8 +1662,12 @@ def _score_ceiling_deadlocked(
     dethrone_z: float,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
 ) -> bool:
-    """Whether even the challenger's maximum score cannot clear the crown."""
+    """Whether even the challenger's maximum score cannot clear the crown.
+
+    A protocol-31 deferred decision (incomplete seed coverage) is not a
+    deadlock: the window may still complete, so the cohort gate ignores it."""
     observed_score, required_score = _dethrone_scores(
         challenger,
         champion,
@@ -1614,7 +1675,12 @@ def _score_ceiling_deadlocked(
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
     )
+    if observed_score == -math.inf:
+        # Deferred protocol-31 decision: the window may still complete, so
+        # this is reachability-pending, not a ceiling deadlock.
+        return False
     quality_primary = _quality_primary_efficiency_active((challenger, champion))
     ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
     return observed_score <= required_score and required_score >= ceiling
@@ -1627,6 +1693,7 @@ def _champion(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
     incumbent_agent_id: UUID | None = None,
 ) -> LedgerEntry:
     """The KOTH champion of a positive-composite entry set: fold in first-seen
@@ -1672,6 +1739,7 @@ def _champion(
             dethrone_z,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            dethrone_seed_full_set=dethrone_seed_full_set,
         ):
             champ = e
     return champ
@@ -1721,6 +1789,7 @@ def agents_needing_rescore(
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
     incumbent_agent_id: UUID | None = None,
 ) -> list[LedgerEntry]:
     """The champion + participation-tail entries scored under an **older**
@@ -1743,6 +1812,7 @@ def agents_needing_rescore(
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
         incumbent_agent_id=incumbent_agent_id,
     )
     rewarded = [champion, *_tail(scored, champion, tail_size)]
@@ -1809,6 +1879,7 @@ def contested_confirmation_set(
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    dethrone_seed_full_set: bool = False,
     incumbent_agent_id: UUID | None = None,
 ) -> list[LedgerEntry]:
     """The champion plus the current-version challengers whose crown decision
@@ -1854,6 +1925,7 @@ def contested_confirmation_set(
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        dethrone_seed_full_set=dethrone_seed_full_set,
         incumbent_agent_id=incumbent_agent_id,
     )
     if _entry_version(champion) != current_version:

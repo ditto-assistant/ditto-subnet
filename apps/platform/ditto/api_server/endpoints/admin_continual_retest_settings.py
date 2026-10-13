@@ -26,6 +26,7 @@ from ditto.api_server.continual_retest_settings import (
     ContinualRetestSettingsResolver,
     aggregate_is_active,
     crown_incumbent_is_active,
+    dethrone_seed_full_set_is_active,
     rollout_standdown_reason,
     settings_from_row,
     statistical_band_cap_is_active,
@@ -200,6 +201,9 @@ async def get_settings(
     statistical_fleet_ready = await live_weight_setter_fleet_supports_protocol(
         session, minimum_protocol=29, now=datetime.now(UTC), freshness=_FRESHNESS
     )
+    dethrone_seed_fleet_ready = await live_weight_setter_fleet_supports_protocol(
+        session, minimum_protocol=31, now=datetime.now(UTC), freshness=_FRESHNESS
+    )
     crown_fleet_ready = await _crown_incumbent_fleet_ready(session)
     rollout = await open_rollout(session)
     desired_version = rollout.desired_version if rollout is not None else None
@@ -238,6 +242,10 @@ async def get_settings(
             statistical_band_fleet_ready=statistical_fleet_ready,
             statistical_band_active=statistical_band_cap_is_active(
                 settings, fleet_protocol_ready=statistical_fleet_ready
+            ),
+            dethrone_seed_fleet_ready=dethrone_seed_fleet_ready,
+            dethrone_seed_active=dethrone_seed_full_set_is_active(
+                settings, fleet_protocol_ready=dethrone_seed_fleet_ready
             ),
             crown_incumbent_fleet_ready=crown_fleet_ready,
             crown_incumbent_active=crown_incumbent_is_active(

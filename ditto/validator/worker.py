@@ -218,6 +218,11 @@ def _ledger_statistical_band_cap(ledger: LedgerResponse) -> bool:
     return getattr(ledger, "statistical_band_mode", None) == "capped"
 
 
+def _ledger_dethrone_seed_full_set(ledger: LedgerResponse) -> bool:
+    """Use the protocol-31 full-seed-set gate only when the pin activates it."""
+    return getattr(ledger, "dethrone_seed_mode", None) == "full_set"
+
+
 def _ledger_crown_incumbent(ledger: LedgerResponse) -> UUID | None:
     """The served incumbent the fold defends, or ``None`` for the classic walk.
 
@@ -2250,6 +2255,7 @@ class ValidatorWorker:
                 tie_pooling=ledger.tie_weighting_mode == "pool",
                 ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
                 statistical_band_cap=_ledger_statistical_band_cap(ledger),
+                dethrone_seed_full_set=_ledger_dethrone_seed_full_set(ledger),
                 incumbent_agent_id=_ledger_crown_incumbent(ledger),
                 unpaid_agent_id=(
                     provisional.agent_id if provisional is not None else None
@@ -2365,6 +2371,7 @@ class ValidatorWorker:
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
             statistical_band_cap=_ledger_statistical_band_cap(ledger),
+            dethrone_seed_full_set=_ledger_dethrone_seed_full_set(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         if not miner_weights:
@@ -3280,6 +3287,7 @@ class ValidatorWorker:
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
             statistical_band_cap=_ledger_statistical_band_cap(ledger),
+            dethrone_seed_full_set=_ledger_dethrone_seed_full_set(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         if not stale:
@@ -3400,6 +3408,7 @@ class ValidatorWorker:
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
             statistical_band_cap=_ledger_statistical_band_cap(ledger),
+            dethrone_seed_full_set=_ledger_dethrone_seed_full_set(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         if not contested:

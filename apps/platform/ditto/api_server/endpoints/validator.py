@@ -300,6 +300,7 @@ from ditto.db.queries.desired_era_backlog import desired_era_work_outstanding
 from ditto.db.queries.heartbeats import (
     HeartbeatProgressRegressionError,
     _validate_same_lease_progress,
+    live_weight_setter_fleet_supports_protocol,
     upsert_validator_heartbeat,
 )
 from ditto.db.queries.inference import (
@@ -4611,6 +4612,7 @@ async def _current_retest_cohort(
     efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
     snapshot: _KothLaneSnapshot | None = None,
+    dethrone_seed_full_set: bool = False,
 ) -> tuple[
     tuple[KothEntry, ...],
     tuple[KothEntry, ...],
@@ -4656,7 +4658,7 @@ async def _current_retest_cohort(
             now=now,
         )
     entries = snapshot.folded_entries
-    projection = project_koth(entries)
+    projection = project_koth(entries, dethrone_seed_full_set=dethrone_seed_full_set)
     # Public-board top five, owner-deduped on canonical scores. Stripping
     # confirmation off the *folded* list cannot recover a newer UUID that
     # confirmation-enriched owner-dedupe already dropped (aceron_v23 vs v20).
@@ -5494,6 +5496,14 @@ async def request_top5_confirmation_job(
             settings=continual_settings,
             efficiency_config=efficiency_config,
             now=now,
+            dethrone_seed_full_set=(
+                continual_settings.dethrone_seed_mode == "fleet_ready"
+                and await live_weight_setter_fleet_supports_protocol(
+                    session,
+                    minimum_protocol=31,
+                    now=now,
+                )
+            ),
         )
         # These sets answer different questions and must not be conflated:
         #

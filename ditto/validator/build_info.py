@@ -131,7 +131,14 @@ from ditto import __version__
 # v30 adds signed exact-policy treasury pin/queued-dispatch capability. Only
 # a crypto-approved validator whose actual transport implements both guards
 # advertises it. V1 shadow ledgers retain the historical weight fold.
-HEARTBEAT_PROTOCOL_VERSION = 30
+# v31 consumes ``LedgerResponse.dethrone_seed_mode=full_set``: a paired
+# dethrone comparison must cover the whole confirmation seed window before it
+# may decide the crown, so a quorum of finished seeds can no longer flip the
+# crown on evidence the remaining seeds then contradict. A v30 validator
+# ignores the additive marker and would still crown on a partial pairing, so
+# Platform must withhold it until every recently-live weight setter reports
+# v31+. Heartbeat signing bytes are unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 31
 
 
 @dataclass(frozen=True)
