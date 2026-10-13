@@ -1228,7 +1228,7 @@ CREATE TABLE public.artifact_fetch_audit (
     detail jsonb,
     fetched_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_artifact_fetch_audit_artifact_fetch_audit_bench_vers_dafe CHECK (((bench_version IS NULL) OR (bench_version > 0))),
-    CONSTRAINT ck_artifact_fetch_audit_artifact_fetch_audit_requester__148f CHECK ((requester_kind = ANY (ARRAY['validator'::text, 'screener'::text, 'admin'::text, 'public'::text]))),
+    CONSTRAINT ck_artifact_fetch_audit_artifact_fetch_audit_requester__148f CHECK ((requester_kind = ANY (ARRAY['validator'::text, 'screener'::text, 'admin'::text, 'public'::text, 'miner'::text]))),
     CONSTRAINT ck_artifact_fetch_audit_artifact_fetch_audit_requester__901e CHECK (((requester_kind = 'public'::text) = (requester_id IS NULL)))
 );
 
