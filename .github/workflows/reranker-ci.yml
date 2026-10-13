@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - packages/dittobench-reranker/**
+      - research/dittobench-datagen/**
       - .github/workflows/reranker-ci.yml
 
 permissions:
@@ -43,3 +44,29 @@ jobs:
 
       - name: Test
         run: uv run --group dev pytest -q
+
+  pools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: packages/dittobench-reranker/poolgen
+    steps:
+      - name: Check out the pull request source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.23"
+          cache-dependency-path: packages/dittobench-reranker/poolgen/go.mod
+
+      - name: Gofmt
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./...

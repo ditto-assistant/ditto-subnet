@@ -144,6 +144,7 @@ def test_datagen_change_rebuilds_scorer_and_validator_stack(
     ) == {
         "dittobench_datagen",
         "dittobench_api",
+        "dittobench_reranker",
         "validator_stack",
     }
 
@@ -188,6 +189,11 @@ def test_reranker_season_change_is_isolated(components, ignored_paths) -> None:
     path = "packages/dittobench-reranker/dittobench_reranker/contract.py"
     assert selected(components, ignored_paths, path) == {"dittobench_reranker"}
     assert root_verification(components, ignored_paths, path) == "none"
+
+
+def test_reranker_pool_generator_is_isolated(components, ignored_paths) -> None:
+    path = "packages/dittobench-reranker/poolgen/rerankpool/rerankpool.go"
+    assert selected(components, ignored_paths, path) == {"dittobench_reranker"}
 
 
 def test_reranker_workflow_is_release_owned(components, ignored_paths) -> None:
