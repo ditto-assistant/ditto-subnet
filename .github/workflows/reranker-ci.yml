@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - packages/dittobench-reranker/**
+      - miners/dittobench-reranker-starter-kit/**
       - research/dittobench-datagen/**
       - .github/workflows/reranker-ci.yml
 
@@ -70,3 +71,48 @@ jobs:
 
       - name: Test
         run: go test -count=1 ./...
+
+  # End to end: real pools from the generator, scored with the product's own
+  # model through the season scorer. Catches drift between the three layers.
+  incumbent-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the pull request source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.23"
+          cache-dependency-path: packages/dittobench-reranker/poolgen/go.mod
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Generate one seed of pools
+        working-directory: packages/dittobench-reranker/poolgen
+        run: go run ./cmd/rerank-pools -seed 1 -count 1 -out "$RUNNER_TEMP/pools.json"
+
+      - name: Starter-kit tests and incumbent score
+        working-directory: packages/dittobench-reranker
+        env:
+          KIT: ${{ github.workspace }}/miners/dittobench-reranker-starter-kit
+        run: |
+          uv run --group dev --extra score pytest -q "$KIT/tests"
+          uv run --extra score dittobench-reranker score \
+            --artifact "$KIT/incumbent" --pools "$RUNNER_TEMP/pools.json" \
+            --summary --out "$RUNNER_TEMP/report.json"
+          uv run python - "$RUNNER_TEMP/report.json" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          print(json.dumps(r, indent=2))
+          assert r["pools"] >= 200, r["pools"]
+          assert r["lift"] > 0.02, "the incumbent should beat the BM25 base order"
+          PY

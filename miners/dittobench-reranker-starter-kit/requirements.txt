@@ -1,0 +1,8 @@
+# Training and export. Verified together on linux/amd64, Python 3.13
+# (2026-10-13). Scoring uses packages/dittobench-reranker[score], which pins
+# onnxruntime to the product's 1.22.0.
+# CPU-only torch: pip install --index-url https://download.pytorch.org/whl/cpu torch
+torch>=2.2
+sentence-transformers==3.4.1
+transformers==4.49.0
+optimum[onnxruntime]==2.1.0

@@ -1,0 +1,1 @@
+{"contract": "reranker-season-v1", "base_model": "cross-encoder/ms-marco-TinyBERT-L2-v2", "base_model_license": "apache-2.0"}
